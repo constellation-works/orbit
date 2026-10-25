@@ -16,7 +16,7 @@ import {
   bindTaskLink, DASHBOARD_WINDOWS,
 } from './common.js';
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
-import { fetchTokens, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
+import { fetchTokens, isCurrentTokensPayload, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -139,6 +139,9 @@ export function fetchAndRenderMetrics() {
     fetchTokens(selectedWindow),
   ]), ([durations, completions, outcome, defects, tokens]) => {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
+    // A refresh started before a token-filter change (or a retired visit)
+    // must not replace the newer token result, unavailable replies included.
+    if (!isCurrentTokensPayload(tokens, selectedWindow)) return;
     if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (!tokens.unavailable && windowKey(tokens) !== selectedWindow) || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
@@ -365,10 +368,16 @@ function shownKey() {
 }
 
 // A tokens refetch after a filter change; `undefined` only redraws the
-// controls. A reply for a window no longer selected is dropped.
+// controls and `null` clears the chart to loading until the refetch answers.
+// A reply whose fence (visit, window, filter query, generation) is stale is
+// dropped, unavailable and error replies included.
 function applyTokens(payload) {
   if (!lastPayload) return;
-  if (payload !== undefined) {
+  if (payload === null) {
+    lastPayload.tokens = null;
+    view.hover = null;
+  } else if (payload !== undefined) {
+    if (!isCurrentTokensPayload(payload, lastPayload.windowKey)) return;
     if (!payload.unavailable && windowKey(payload) !== lastPayload.windowKey) return;
     lastPayload.tokens = payload;
     view.hover = null;

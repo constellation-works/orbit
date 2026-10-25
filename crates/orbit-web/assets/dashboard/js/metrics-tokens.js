@@ -7,7 +7,7 @@
 // comes from the shared selector with the rest of the Metrics panel. Chart
 // drawing and tooltips stay in metrics.js, which passes its helpers in.
 
-import { el, fetchJson } from './common.js';
+import { el, fetchJson, getWorkspaceRevision } from './common.js';
 
 const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
 const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
@@ -26,25 +26,41 @@ export function tokensQuery(windowKey) {
 
 /// Fetch the trend for `windowKey`. A failed read, or a host whose Orbit
 /// predates the endpoint, answers `{ unavailable }` so the other trends still
-/// render.
+/// render. Every result carries a fence (generation, workspace/host visit
+/// revision, window and complete query) captured at request time; both the
+/// filter refetch and the full-panel refresh share `sequence`, so whichever
+/// starts later retires the other.
 export function fetchTokens(windowKey) {
-  const query = tokensQuery(windowKey);
+  const fence = { generation: ++sequence, revision: getWorkspaceRevision(), windowKey, query: tokensQuery(windowKey) };
+  const query = fence.query;
   return fetchJson(query).then(
     (payload) => (payload && payload.window && Array.isArray(payload.series)
-      ? { ...payload, query }
-      : { query, unavailable: "This host answered without a tokens-per-task trend." }),
+      ? { ...payload, query, tokenFence: fence }
+      : { query, unavailable: "This host answered without a tokens-per-task trend.", tokenFence: fence }),
     (error) => ({
       query,
       unavailable: error.status === 404 ? "This host's Orbit does not report tokens per task yet. Upgrade it to see this trend." : error.message,
+      tokenFence: fence,
     }),
   );
 }
 
-/// Refetch after a filter change; `apply` runs only for the newest request.
+/// True only when `payload` is the newest tokens request and its visit,
+/// window and complete filter query still match current state. Unavailable
+/// and error replies carry the fence too, so they are gated the same way.
+export function isCurrentTokensPayload(payload, windowKey) {
+  const fence = payload && payload.tokenFence;
+  if (!fence) return false;
+  return fence.generation === sequence
+    && fence.revision === getWorkspaceRevision()
+    && fence.windowKey === windowKey
+    && fence.query === tokensQuery(windowKey);
+}
+
+/// Refetch after a filter change; `apply` runs only for a current request.
 function refetch(windowKey, apply) {
-  const ticket = ++sequence;
   fetchTokens(windowKey).then((payload) => {
-    if (ticket === sequence) apply(payload);
+    if (isCurrentTokensPayload(payload, windowKey)) apply(payload);
   });
 }
 
@@ -83,11 +99,12 @@ function tokenScale(max) {
 
 /// The filter row: outcome, scope, implementing model and the tag picker.
 export function tokensTools({ segGroup, windowKey, payload, onChange }) {
-  // Redraw the controls at once; the chart keeps its payload until the
-  // refetch answers.
+  // Redraw the controls at once and clear the chart to its loading state, so
+  // the visible data never describes the previous filter while the refetch
+  // is in flight.
   const apply = (update) => {
     Object.assign(filters, update);
-    onChange(undefined);
+    onChange(null);
     refetch(windowKey, onChange);
   };
   const models = (payload && payload.available_models) || [];
