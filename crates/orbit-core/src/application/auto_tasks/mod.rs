@@ -76,6 +76,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
     ),
     (
+        "ci-budget-watch",
+        include_str!("../../../assets/auto_tasks/ci-budget-watch.yaml"),
+    ),
+    (
         "code-health-sweep",
         include_str!("../../../assets/auto_tasks/code-health-sweep.yaml"),
     ),

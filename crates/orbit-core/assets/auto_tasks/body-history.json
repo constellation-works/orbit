@@ -201,7 +201,65 @@
       }
     }
   ],
-  "code-health-sweep": [],
+  "ci-budget-watch": [
+    {
+      "comments": [
+        "## Decide",
+        "## Discover the documented budget",
+        "## Discover the measured job",
+        "## Measure and compare",
+        "## Report",
+        "## Rules and command surfaces"
+      ],
+      "digest": "2fe771ef6e0837fe1a027156abe722a7a1c9306b96d79d037065e2f00506dbf4",
+      "revision": "60303c5cf814995408196a49351585b96107d7eb",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "45 1 * * *"
+        },
+        "tags": [
+          "ci-budget-watch",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
+  "code-health-sweep": [
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Pass A — dead code, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pass C — compatibility retirement, whole repository, every run",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What other work owns"
+      ],
+      "digest": "29ca3bbc99952fc85648e5f4decfb2be37a7c5dc9dcdc4b24ce1af5541be4b04",
+      "revision": "e89c62b5bb1ff838ad8724269c3d21cf258d38b7",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "code-health-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    }
+  ],
   "code-review": [
     {
       "comments": [

@@ -1,0 +1,207 @@
+schemaVersion: 1
+name: ci-budget-watch
+description: Daily measurement of the hosted CI test job elapsed time against the repository's documented CI budget; keeps exactly one open ci-budget repair task when over budget, otherwise only records a report artifact
+enabled: false
+schedule:
+  cron: 45 1 * * *
+template:
+  title: CI budget watch — measure the main hosted test job against the documented budget
+  description: |-
+    Measure the elapsed wall time of this repository's main hosted test job
+    on its integration branch, compare it with the repository's documented
+    CI time budget, and keep exactly one actionable repair task open when
+    the measurement is over that budget. This task measures and files work;
+    it does not edit source, CI configuration, or tests, and it does not
+    dispatch, merge, or release. The durable outputs are the
+    `ci-budget-watch/report.md` artifact and, only when over budget, the one
+    open repair task; the execution summary is the audit trail.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface, never direct lifecycle CLI
+      subcommands for task writes (they skip agent provenance). Find the
+      previous run with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["ci-budget-watch","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`,
+      list that task's artifacts with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
+      and fetch a listed previous report with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"ci-budget-watch/report.md","model":"<agent-family>"}'`.
+      List open repair work with
+      `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"ci-budget","limit":200,"model":"<agent-family>"}'`
+      and inspect a candidate with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      Search titles as a backstop with
+      `orbit tool run orbit.search --input '{"query":"ci-budget","kind":"task","all":true,"model":"<agent-family>"}'`
+      (lexical search matches one substring; never treat a 0-hit
+      multi-word query as proof that nothing is open).
+    - Read hosted run history only through the granted run tools. After
+      discovering the workflow and documented run population, call
+      `github.run.list` with `status:"completed"`, the discovered workflow
+      name or file, `limit:20`, and `event` or `branch` filters that match
+      that population. For a population scoped to integration-branch pushes,
+      use `event:"push"` and `branch:"__ORBIT_BASE_BRANCH__"`; for a pull
+      request population, use `event:"pull_request"` and any documented
+      target-branch filter. Inspect returned run metadata when a population
+      filter is not available, and state a gap if the tool cannot identify or
+      return enough runs from the documented population. With no documented
+      budget, use integration-branch push runs for a descriptive trend only.
+      Then call
+      `orbit tool run github.run.view --input '{"run":"<run id>"}'`
+      for each listed run to read its jobs. A tool error, an empty list, or
+      a run whose job timestamps are absent is a stated gap, never a pass.
+    - Before filing, read the installed `orbit` skill's task-authoring
+      reference completely and follow it for task shape, provenance, and
+      lifecycle rules. File the repair task (tool-created tasks start
+      `proposed`) with
+      `orbit tool run orbit.task.add --input '{"title":"Restore the hosted test job to the documented CI budget: <job name> at <measured value> against <documented budget>","description":"<markdown: measured table, chosen job and how it was chosen, documented budget with its source, trend, and the phases or areas that grew>","acceptance_criteria":["The named hosted test job meets the documented budget under the documented statistic and population over the documented run window, shown in a before/after elapsed-seconds table attached to this task.","No fix relies on retries, sleeps, hidden skips, weaker assertions, or dropped required checks, and no change removes the only guard of a security invariant, recovery path, or known incident.","The repository gate commands discovered from its tracked CI configuration and agent guides pass for the affected areas."],"context_files":["file:<verified workflow file that defines the measured job>","file:<verified source or test path the evidence names as the likely change target>"],"complexity":"medium","tags":["ci-budget"],"type":"chore","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Set `complexity` to `hard` instead when the evidence shows no single
+      identified regression explains the overrun. Use only verified
+      `context_files` that the repair would modify; never add a file that
+      is only background reading. Read the filed task back with
+      `orbit.task.show` before recording it as delivered.
+    - When an open repair task already exists, update only that task with
+      `orbit tool run orbit.task.update --input '{"id":"<open repair task ID>","comment":"<new measurements: chosen job, documented budget, latest elapsed values, trend, and this run report summary>","model":"<agent-family>"}'`
+      and leave its scope and status alone. Do not file a second one.
+    - Put the report draft under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) and
+      attach it on every completed run, including every no-op below, with
+      `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/ci-budget-watch-report.md","path":"ci-budget-watch/report.md","model":"<agent-family>"}'`.
+    - Fail open. A run that cannot measure, has no documented budget, or is
+      within budget is a successful no-op when its report states the reason
+      and the gaps. Do not invent a budget, a job, or work to justify the
+      run, and do not edit any file in the checkout.
+
+    ## Discover the measured job
+
+    1. **Hosted CI presence.** List the tracked files under
+       `.github/workflows/` (or the equivalent hosted-CI configuration
+       directory this repository actually uses, named in the report). When
+       no such directory or workflow file exists, attach the report stating
+       "no hosted CI configuration found" with the paths checked, record
+       the same reason in the execution summary, and stop as a successful
+       no-op.
+    2. **Choose the main test job.** Among the workflow files that trigger
+       on pushes to `__ORBIT_BASE_BRANCH__` or on pull requests, read every
+       job and choose the main required test job by the first rule that
+       applies: (a) a gate job that waits on (`needs`) the test jobs or
+       test shards and runs the final required checks; (b) otherwise the
+       job whose steps run the repository's test suite; (c) otherwise the
+       longest-running test-bearing job among the last measured runs.
+       Record the workflow file, the job id, the job display name, and the
+       rule used. When no job runs tests, attach the report stating that
+       reason and stop as a successful no-op.
+
+    ## Discover the documented budget
+
+    Search the repository's agent guides, contributing guide, README, and
+    documentation tree for a documented CI time budget for that job: an
+    elapsed or wall-time figure, the statistic it uses (for example a
+    percentile, a per-run maximum, or an all-runs rule), and the run
+    population it covers. Record the exact figure in seconds, the
+    statistic, the population, and the source as `file:line`. Apply the
+    budget exactly as documented; never substitute a figure from this
+    template or from another repository. When no budget is documented,
+    still measure and record the trend in the report, file nothing, and
+    stop as a successful no-op that states "no documented CI budget".
+
+    ## Measure and compare
+
+    1. List the last 20 completed runs of the chosen workflow that match the
+       documented population with `github.run.list`, then read each run with
+       `github.run.view`. Use `event:"pull_request"` for a PR population; use
+       `event:"push"` and `branch:"__ORBIT_BASE_BRANCH__"` when the population
+       is integration-branch pushes. Apply other documented filters from run
+       metadata where needed. For the chosen job in each run record the
+       head SHA, the run id, the conclusion, and the elapsed seconds
+       (job completion time minus job start time; use the full job elapsed
+       time only, never a filtered step timing or a sum of test times).
+       Runs without that job or without both timestamps are listed as gaps
+       with the reason. If the history cannot identify or return enough runs
+       from the documented population, report that measurement gap and do
+       not decide whether the budget was met. When the run tools error or
+       return no completed runs, attach the report stating that run history
+       was unreachable
+       (naming the tool and the error or empty result), record it in the
+       execution summary, and stop as a successful no-op.
+    2. **Trend.** Fetch the previous run's `ci-budget-watch/report.md`
+       when one exists (see above) and compare the same job's elapsed
+       values: count measured, minimum, median, maximum, and the
+       documented statistic, each against the previous report's values.
+       Name any merged commits in the window whose timing grew when the
+       job logs or history show them. Absent or unreadable means this is
+       the baseline report; say so.
+
+    ## Decide
+
+    - **No documented budget:** record the trend, file nothing, stop.
+    - **Unreachable history or no hosted CI:** state the reason, file
+      nothing, stop as a successful no-op.
+    - **Within budget:** the measured runs satisfy the documented budget
+      under its documented statistic and population. Record the evidence
+      in the report and execution summary, file nothing, and stop.
+    - **Over budget:** list the open `ci-budget` tasks (see above) and
+      re-check by title search before filing.
+      - If exactly one is open, update it with the new measurements
+        through `orbit.task.update` (comment only) and record its ID.
+      - If more than one is already open, update the most recently
+        updated one, file none, and name every open duplicate ID in the
+        report so an operator can consolidate them.
+      - If none is open, file exactly one repair task with the
+        `orbit.task.add` payload above and read it back.
+      In every over-budget case the report names the created or updated
+      task ID, and afterwards exactly one newly ensured open `ci-budget`
+      task is attributable to this run.
+
+    ## Report
+
+    Write `.orbit/tmp/ci-budget-watch-report.md` and attach it as
+    `ci-budget-watch/report.md` on every completed run. It contains:
+
+    - the chosen workflow file, job id and display name, and the rule
+      that chose it;
+    - the documented budget (figure in seconds, statistic, population,
+      and `file:line` source), or the statement that none is documented;
+    - a table of the last 20 completed runs: head SHA, run id,
+      conclusion, and elapsed seconds for the chosen job;
+    - the trend against the previous report (count, minimum, median,
+      maximum, and the documented statistic, before and after), or the
+      baseline statement;
+    - the decision (within budget, over budget, no documented budget, no
+      hosted CI, or history unreachable) and any created or updated task
+      ID;
+    - every measurement gap: runs missing the job or timestamps, tools
+      that errored, unreadable previous reports, and populations the
+      history could not cover.
+
+    The execution summary repeats the chosen job and how it was chosen,
+    the documented budget or its absence, the headline elapsed values,
+    the trend, the decision, and any created or updated task ID.
+  acceptance_criteria:
+  - The run attaches `ci-budget-watch/report.md` listing the chosen workflow file, job id and display name with the rule that chose it, and a table of the last 20 completed runs in the documented population with head SHA, run id, conclusion and full elapsed seconds per run, plus every run the table could not measure and why. When no budget is documented, the trend uses integration-branch pushes selected with `__ORBIT_BASE_BRANCH__` and is not used to file a task.
+  - The report states the documented CI budget as figure, statistic, population and `file:line` source, or states that no budget is documented; with no documented budget the run records the trend and files no task.
+  - With no hosted CI configuration, no test-bearing job, or unreachable run history, the run attaches the report stating that reason, files no task, and succeeds as a no-op.
+  - The report compares count, minimum, median, maximum and the documented statistic against the previous `ci-budget-watch/report.md`, or states that this run is the baseline when no readable previous report exists.
+  - When the measured runs exceed the documented budget, exactly one open `ci-budget` task is ensured — a single existing open task is updated with a comment carrying the new measurements and no second task is filed, or one new `proposed` task is filed with acceptance criteria, verified `context_files` and a `spawned_from` relation to this task and read back.
+  - When the measured runs satisfy the documented budget, no repair task is filed or updated and the report and execution summary record the measured values that show it.
+  - No source, CI configuration, or test file is edited by this run, and no recorded fix direction relies on retries, sleeps, hidden skips, weaker assertions, or dropped required checks.
+  task_type: chore
+  tags:
+  - ci-budget-watch
+  - no-diff-expected
+  required_tools:
+  - github.run.list
+  - github.run.view
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.task.update
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-24T00:00:00Z
+updated_by: system
+updated_at: 2026-10-24T00:00:00Z
