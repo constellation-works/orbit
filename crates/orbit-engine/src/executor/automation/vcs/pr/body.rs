@@ -151,6 +151,42 @@ fn heading(line: &str) -> Option<(usize, &str)> {
     Some((level, name))
 }
 
+/// A fenced code block's delimiter run: the marker character and its length.
+/// A block closes only on a run of the same marker at least as long.
+#[derive(Clone, Copy)]
+struct Fence {
+    marker: char,
+    len: usize,
+}
+
+/// The fence a template line opens. A backtick fence's info string cannot
+/// hold a backtick, else the line is inline code.
+fn opens_fence(line: &str) -> Option<Fence> {
+    let (fence, info) = fence_run(line)?;
+    (fence.marker != '`' || !info.contains('`')).then_some(fence)
+}
+
+/// Whether a template line closes the open fence: the same marker, a run at
+/// least as long as the opener, and nothing but whitespace after the run.
+fn closes_fence(line: &str, open: Fence) -> bool {
+    fence_run(line).is_some_and(|(fence, info)| {
+        fence.marker == open.marker && fence.len >= open.len && info.trim().is_empty()
+    })
+}
+
+/// The delimiter run a line starts with and the text after it, when the line
+/// indents at most three spaces, as an ATX heading does.
+fn fence_run(line: &str) -> Option<(Fence, &str)> {
+    let line = line.trim_end_matches(['\r', '\n']);
+    let trimmed = line.trim_start_matches(' ');
+    if line.len() - trimmed.len() > 3 {
+        return None;
+    }
+    let marker = trimmed.chars().next().filter(|c| matches!(c, '`' | '~'))?;
+    let len = trimmed.chars().take_while(|c| *c == marker).count();
+    (len >= 3).then(|| (Fence { marker, len }, &trimmed[len..]))
+}
+
 /// Render a body template. Each agent-filled heading keeps its heading line
 /// and takes the implementer's content in place of the template text under
 /// it (up to the next heading of the same or a higher level); an unfilled
@@ -170,7 +206,7 @@ fn render_template_body(
     // The level of the agent-filled heading being replaced, while its text
     // is skipped.
     let mut replacing: Option<usize> = None;
-    let mut in_fence = false;
+    let mut open_fence: Option<Fence> = None;
     let flush = |pending: &mut String, out: &mut String| -> Result<(), OrbitError> {
         if !pending.is_empty() {
             out.push_str(&render_text(pending, values)?);
@@ -179,11 +215,23 @@ fn render_template_body(
         Ok(())
     };
     for line in template.split_inclusive('\n') {
-        let fence = line.trim_start().starts_with("```") || line.trim_start().starts_with("~~~");
-        if fence {
-            in_fence = !in_fence;
-        }
-        let opened = (!in_fence && !fence).then(|| heading(line)).flatten();
+        // Fenced code, its delimiters included, is literal: a heading inside
+        // it is a sample, not a section.
+        let opened = match open_fence {
+            Some(fence) => {
+                if closes_fence(line, fence) {
+                    open_fence = None;
+                }
+                None
+            }
+            None => match opens_fence(line) {
+                Some(fence) => {
+                    open_fence = Some(fence);
+                    None
+                }
+                None => heading(line),
+            },
+        };
         if let Some(level) = replacing {
             match opened {
                 Some((next, _)) if next <= level => replacing = None,
