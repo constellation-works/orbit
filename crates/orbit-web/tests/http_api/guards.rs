@@ -106,6 +106,9 @@ const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("POST", "/tasks/:id/approve"),
     ("POST", "/tasks/:id/reject"),
     ("POST", "/tasks/:id/archive"),
+    // A decision answer is the dashboard's human write like approve and
+    // reject: it applies through the same human funnel in core.
+    ("POST", "/decisions/:id/answer"),
     ("POST", "/frictions"),
     ("PATCH", "/frictions/:id"),
     ("POST", "/frictions/:id/resolve"),

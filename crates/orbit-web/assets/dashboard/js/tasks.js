@@ -1617,6 +1617,68 @@ function buildReviewGate(review) {
   return wrap;
 }
 
+// Open human decision requests on this task, one row per request with a
+// button per allowed answer. Answering posts to the decisions API, which
+// applies the answer in core as the human writer — the same apply step as
+// `orbit decision answer` — and the detail then re-reads the task, whose
+// request now reads answered and drops out of `open_decisions`.
+function buildOpenDecisions(task, detail, context) {
+  const wrap = el("div", { class: "decision-requests" });
+  const mutable = canMutateTask(task);
+  for (const request of task.open_decisions) {
+    const row = el("div", { class: "decision-request" });
+    row.appendChild(el("div", {
+      text: `${request.gate} decision needed (${request.id}), expires ${request.expires_at}`,
+    }));
+    const note = el("input", {
+      class: "decision-note",
+      type: "text",
+      placeholder: "note / evidence (optional)",
+    });
+    row.appendChild(note);
+    const buttons = el("div", { class: "actions decision-answers" });
+    for (const answerId of request.answers || []) {
+      const btn = el("button", {
+        class: "action decision-answer",
+        text: String(answerId).replaceAll("_", " "),
+        title: `Answer ${request.id} with ${answerId}`,
+      });
+      btn.disabled = !mutable;
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        answerDecision(task, detail, request.id, String(answerId), note.value.trim(), btn, context);
+      });
+      buttons.appendChild(btn);
+    }
+    row.appendChild(buttons);
+    wrap.appendChild(row);
+  }
+  return wrap;
+}
+
+async function answerDecision(task, detail, requestId, answer, note, btnNode, context) {
+  const visit = captureWorkspaceVisit();
+  if (!canMutateTask(task)) return;
+  const requestPath = visit.path(
+    taskWorkspacePath(task, `/api/decisions/${encodeURIComponent(requestId)}/answer`),
+  );
+  const prior = detail.querySelector(".action-error");
+  if (prior) prior.remove();
+  btnNode.disabled = true;
+  try {
+    await postJson(requestPath, note ? { answer, note } : { answer });
+  } catch (error) {
+    if (!visit.isCurrent()) return;
+    btnNode.disabled = false;
+    detail.prepend(actionErrorNode(`decision answer: ${error.message || String(error)}`));
+    return;
+  }
+  if (!visit.isCurrent()) return;
+  taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
+  forgetTaskDetailLoad(task.id);
+  await refreshTasks(context);
+}
+
 function buildOwedCriteria(owed) {
   const wrap = el("div", { class: "owed-criteria" });
   for (const entry of owed) {
@@ -3191,6 +3253,12 @@ function buildTaskDetail(task, context, drain = null) {
   if (Array.isArray(task.owed_criteria) && task.owed_criteria.length) {
     addField(disclosures, "Owed after deploy", buildOwedCriteria(task.owed_criteria), true, false, {
       count: task.owed_criteria.length,
+    });
+  }
+
+  if (Array.isArray(task.open_decisions) && task.open_decisions.length) {
+    addField(disclosures, "Decision needed", buildOpenDecisions(task, detail, context), true, false, {
+      count: task.open_decisions.length,
     });
   }
 

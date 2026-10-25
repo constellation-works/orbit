@@ -1696,3 +1696,11 @@ input.field-editor-input {
   white-space: pre-wrap;
 }
 .pilot-warning-findings li + li { margin-top: 8px; }
+
+.decision-requests { display: grid; gap: 12px; }
+.decision-request { display: grid; gap: 8px; }
+.decision-note {
+  background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 2px;
+  padding: 4px 8px; font-size: 12px; width: 100%; box-sizing: border-box;
+}
+.decision-answers { display: flex; flex-wrap: wrap; gap: 6px; }

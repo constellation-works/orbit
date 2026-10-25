@@ -426,6 +426,11 @@ impl Commands {
             Commands::Friction(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Friction))
             }
+            // Decision requests are registry-driven like friction; the
+            // answer verb's write effect makes its runtime need required.
+            Commands::Decision(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Decision))
+            }
             Commands::Audit(command) => {
                 use super::super::audit::AuditSubcommand;
                 // `audit` emits no command-level audit row (it would audit

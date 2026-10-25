@@ -1235,6 +1235,32 @@ fn an_enabled_pilot_hold_raises_one_open_decision_request() {
     );
 }
 
+fn answering_a_pilot_request_records_the_verdict_and_releases_the_hold() {
+    let workspace = decision_channel_workspace();
+    let task = backlog_task(&workspace);
+    assess(&workspace, &task, Some("duplicate_of"));
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    let request = decision_requests(&workspace, &task).pop().unwrap();
+    let answered = workspace
+        .runtime
+        .answer_decision_request_as_human(
+            &request.id,
+            "approve_anyway",
+            Some("Not a duplicate: the deliverables differ.".into()),
+            "human:fixture".into(),
+            Some("dashboard".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        answered.state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+    assert_eq!(answered.resolution.unwrap().answer_id, "approve_anyway");
+    // The verdict comment the human path recorded is what admission reads:
+    // the hold is released without a new assessment.
+    assert_admission(&workspace, &task, None);
+}
+
 fn a_disabled_pilot_hold_writes_no_decision_request() {
     let workspace = Workspace::new();
     let task = backlog_task(&workspace);
@@ -1316,6 +1342,7 @@ fn a_second_pilot_hold_supersedes_the_first() {
 crate::scenario_table!(
     decision_channel_pilot_hold_scenarios,
     an_enabled_pilot_hold_raises_one_open_decision_request,
+    answering_a_pilot_request_records_the_verdict_and_releases_the_hold,
     a_disabled_pilot_hold_writes_no_decision_request,
     a_second_pilot_hold_supersedes_the_first,
     a_changed_pilot_hold_supersedes_its_request_without_a_new_request

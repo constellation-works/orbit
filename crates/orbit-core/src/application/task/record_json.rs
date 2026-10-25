@@ -111,6 +111,16 @@ pub fn task_show_json(
     if let Some(owed) = super::owed_criteria_json(&row.history) {
         object.insert("owed_criteria".to_string(), owed);
     }
+    if row
+        .history
+        .iter()
+        .any(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
+    {
+        let open = runtime.open_decisions_json(&row.task.id)?;
+        if open.as_array().is_some_and(|items| !items.is_empty()) {
+            object.insert("open_decisions".to_string(), open);
+        }
+    }
     Ok(object)
 }
 
@@ -135,6 +145,7 @@ pub fn task_show_field_json(
             &|id: &str| task_is_done(runtime, status_by_id, id),
         ))),
         "os_requirement" => Ok(TaskOsReadout::new(runtime)?.requirement(task)),
+        "open_decisions" => runtime.open_decisions_json(&task.id),
         "comments" => serde_json::to_value(runtime.get_task_comments(&task.id)?)
             .map_err(serialize_error("comments")),
         "history" => serde_json::to_value(runtime.get_task_history(&task.id)?)

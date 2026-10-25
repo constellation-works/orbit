@@ -631,6 +631,39 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.decision.answer",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.decision.list",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.decision.show",
+    "required_any": [],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.drain.claim.bind",
     "required_any": [
       "agent",

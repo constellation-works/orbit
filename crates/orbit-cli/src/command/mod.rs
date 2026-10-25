@@ -5,6 +5,7 @@ pub mod browser_kit;
 pub mod clock;
 pub mod codebase;
 pub mod config;
+pub mod decision;
 pub mod doctor;
 pub mod friction;
 pub mod gc;
@@ -90,6 +91,7 @@ Environment:
 
 Knowledge:
   task        Create, update, and manage tasks
+  decision    List, show and answer human decision requests on held work
   friction    Report, list, and triage friction records
   search      Search tasks and frictions
 
@@ -154,6 +156,7 @@ pub enum Commands {
 
     // ── Knowledge ──
     Task(Box<task::TaskCommand>),
+    Decision(decision::DecisionCommand),
     Friction(friction::FrictionCommand),
     Search(search::SearchCommand),
 

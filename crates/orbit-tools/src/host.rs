@@ -6,6 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::governance::agents::AgentsVerb;
 use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
+use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
@@ -107,6 +108,8 @@ pub enum OrbitBuiltinAction {
     /// Read-only codebase analytics verbs.
     Codebase(CodebaseVerb),
     CommandExec,
+    /// Human decision-request verbs.
+    Decision(DecisionVerb),
     DesktopRead,
     DesktopAutomation,
     DesktopTaskSnapshot,
@@ -129,6 +132,12 @@ pub enum OrbitBuiltinAction {
     Workflow(WorkflowVerb),
     /// Workspace coordination-hold verbs.
     WorkspaceClaim(WorkspaceClaimVerb),
+}
+
+impl From<DecisionVerb> for OrbitBuiltinAction {
+    fn from(verb: DecisionVerb) -> Self {
+        Self::Decision(verb)
+    }
 }
 
 impl From<CodebaseVerb> for OrbitBuiltinAction {
