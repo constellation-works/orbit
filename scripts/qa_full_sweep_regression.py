@@ -119,12 +119,82 @@ if mode == "seatbelt":
 '''
 
 
+# A fixture child that outlives its test can write into the harness scratch
+# tree while TemporaryDirectory cleanup removes it (observed OSError 66,
+# Directory not empty, from host-resource-pressure.json). The hook below
+# plants those exact leftovers at cleanup time and, unless the harness
+# ignores cleanup errors, raises the observed OSError like the real race.
+RACY_CLEANUP_HOOK = '''
+import os as _os
+if _os.environ.get("QA_SWEEP_RACY_CLEANUP") == "1":
+    _RealTemporaryDirectory = qa.tempfile.TemporaryDirectory
+    class _RacyCleanupTemporaryDirectory(_RealTemporaryDirectory):
+        def cleanup(self):
+            name = getattr(self, "name", None)
+            if name and _os.path.basename(name).startswith("orbit-qa-full-"):
+                leaf = Path(name) / "tmp/.tmpRACY/home/.orbit/cache/host-resource-pressure.json"
+                leaf.parent.mkdir(parents=True, exist_ok=True)
+                leaf.write_text('{"pressure": 1}')
+                leaf.with_name(leaf.name + ".lock").write_text("lock")
+                if not getattr(self, "_ignore_cleanup_errors", False):
+                    raise OSError(66, "Directory not empty")
+                return
+            super().cleanup()
+    qa.tempfile.TemporaryDirectory = _RacyCleanupTemporaryDirectory
+'''
+
+
+def scratch_cleanup_race_self_test(harness, scratch):
+    """A cleanup failure in the harness scratch dir must not lose the report."""
+    with tempfile.TemporaryDirectory(prefix="qa-scratch-cleanup-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        for directory in ["bin", "scripts", ".orbit/tmp"]:
+            (repo / directory).mkdir(parents=True, exist_ok=True)
+        driver = repo / "driver.py"
+        driver.write_text(DRIVER.replace("qa.main()", RACY_CLEANUP_HOOK + "qa.main()", 1))
+        cargo = repo / "bin/cargo"
+        cargo.write_text(f"#!{sys.executable}\n" + CARGO)
+        cargo.chmod(0o755)
+        orbit = repo / "bin/orbit"
+        orbit.write_text(f"#!{sys.executable}\nprint('fixture orbit')\n")
+        orbit.chmod(0o755)
+        git = repo / "bin/git"
+        git.write_text(f"#!{sys.executable}\nprint('" + "a" * 40 + "')\n")
+        git.chmod(0o755)
+        (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
+        command = ["cargo", "test", "-p", "fixture", "--test", "boundary", "boundary::", "--", "--show-output"]
+        rust = {"id": "rust", "required": True, "capability": "local", "kind": "cargo-test",
+                "command": command, "assertions": ["original-boundary"],
+                "required_tests": ["boundary::contracts"], "required_rows": ["original_boundary"]}
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps({"scenarios": [rust]}))
+        (repo / "mode.json").write_text(json.dumps("complete"))
+        child = subprocess.run([sys.executable, str(driver), str(harness), str(repo), "--run-commands"],
+                               cwd=repo,
+                               env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}",
+                                    "QA_SWEEP_RACY_CLEANUP": "1"},
+                               capture_output=True, text=True, timeout=60)
+        report_path = repo / ".orbit/tmp/report.json"
+        if not report_path.is_file():
+            raise AssertionError(f"scratch cleanup failure lost the report: {child.stdout}\n{child.stderr}")
+        report = json.loads(report_path.read_text())
+        cleanup = report.get("scratch_cleanup", {})
+        expected = "tmp/.tmpRACY/home/.orbit/cache/host-resource-pressure.json"
+        if expected not in cleanup.get("leftover_paths", []):
+            raise AssertionError(f"report omits scratch leftovers: {cleanup}")
+        if not cleanup.get("warning"):
+            raise AssertionError(f"report records no scratch cleanup warning: {cleanup}")
+        result = next(item for item in report["results"] if item["scenario"] == "rust")
+        if child.returncode != 0 or report["decision"] != "PASS" or result["outcome"] != "PASS":
+            raise AssertionError(f"scratch cleanup warning failed a passing sweep: {child.returncode} {report['decision']} {result}")
+
+
 def self_test():
     harness = Path(os.environ.get("QA_SWEEP_HARNESS_UNDER_TEST", Path(__file__).with_name("test-qa-full-sweep.py"))).resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
     native_recorder_prefix_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
+    scratch_cleanup_race_self_test(harness, scratch)
     with tempfile.TemporaryDirectory(prefix="qa-evidence-regression-", dir=scratch) as tmp:
         repo = Path(tmp)
         for directory in ["bin", "scripts", ".orbit/tmp", "browsers"]:
