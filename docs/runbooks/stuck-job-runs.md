@@ -1412,8 +1412,49 @@ For the full persisted pass, including every skip and any `pass_error`, run
 
 A write-free pass reports `hold_reason: "write_free"` and does not scan or
 persist candidates. A stopped drain or a host shutdown hold also starts no
-scan. A drain without `--auto-fix` never repairs out of run. Repair such a pull request
-yourself, or requeue the task.
+scan. A drain without `--auto-fix` never repairs out of run. To repair one
+task's pull request without starting a drain, use **Fix PR** in the dashboard
+(below). Otherwise repair the pull request yourself, or requeue the task.
+
+### Fix PR from the dashboard
+
+The task details panel shows **Fix PR** beside approve, reject and archive on a
+`review` task that records a pull request. It starts the hand-back described
+above for that one task, through the same checks, ledger, budget, footprint
+locks and `pr_auto_fix_out_of_run` record, with no drain. The record and the
+resumed run's `out_of_run_auto_fix` input name no `drain_run_id`. When the panel
+opens, it reads the pull request's state from GitHub once
+(`GET /api/tasks/<task>/auto-fix`), skipping the drain's five-minute recheck.
+The button is enabled only when the pull request conflicts with its base or a
+required check failed on its head. Otherwise it is disabled, and its title names
+the reason: no blocker, mergeability still being calculated, budget spent, a
+repair already running, and so on.
+
+The action needs an operator session, governed as `auto_drain.auto_fix`. It
+grants repair only. The resumed leaf keeps its own `completion`, so a pull
+request whose leaf lacked `--complete` stays in `review` after the repair. A
+leaf started with `--complete` is resumed only when the session also holds
+`auto_drain.complete`; without it the reason is `authority`.
+
+A refused start (`POST /api/tasks/<task>/auto-fix`) answers `409` with
+`code: "task_auto_fix_<reason>"`, `reason` and `error`, and starts nothing. The
+reasons are those listed above, except `no_capacity` and `checked_recently`,
+which a single-task start never reports. These are added:
+
+- `no_delivery_leaf`: the task has no `task_pr_pipeline` run of its own;
+- `leaf_not_stopped`: the newest delivery finished or was cancelled;
+- `live_run`: also when the newest delivery, or an earlier repair, is still
+  running;
+- `task_status` or `no_pull_request`: the task is not delivered, or records no
+  pull request;
+- `write_free`: the dashboard is read-only;
+- `replica_checkout`: this checkout is a replica, so repair on its owner;
+- `claimed_execution`: also when the task is bound to another machine's run (a
+  follower);
+- `resource_throttled`: host resource pressure holds new runs.
+
+A session without the operator capability gets `403` `authorization_denied`
+naming `auto_drain.auto_fix`. An unknown task gets `404`.
 
 ## A delivery pull request merged outside Orbit
 

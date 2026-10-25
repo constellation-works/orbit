@@ -140,6 +140,16 @@ const PILOT_REFUSAL_MS = 20000;
 const PILOT_POLL_MS = 3000;
 const PILOT_POLL_LIMIT = 600;
 const PILOT_TERMINAL_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held"]);
+// Fix PR: whether the server would start an out-of-run auto-fix of a review
+// task's pull request, keyed like the ship guard. Read once when the panel
+// shows the task and again after FIX_PR_READINESS_MS or a start, so a list
+// refresh never fans out forge reads.
+const fixPrReadiness = new Map();
+// A Fix PR start's outcome ({ ok, text }), kept with the action like a refused
+// Run pilot so the panel's re-read after the start does not drop it.
+const fixPrFeedback = new Map();
+const FIX_PR_READINESS_MS = 60000;
+const FIX_PR_FEEDBACK_MS = 20000;
 // Row shortcuts (Approve on proposed or review tasks, Ship on backlog): the
 // pending or failed state of each, keyed by task id, so a refresh repaints it.
 let quickActionState = new Map();
@@ -4079,6 +4089,7 @@ function buildActionsRow(task, detail, context, { includeLifecycle = true, inclu
     });
     actions.appendChild(btn);
   }
+  if (includeLifecycle && task.status === "review" && taskPullRequestNumber(task)) appendFixPrControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status === "proposed") appendPilotControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
@@ -4534,6 +4545,155 @@ async function watchPilotRun(task, key, runId, visit, context) {
   pilotRunsByTask.delete(key);
   if (!visit.isCurrent()) return;
   if (state) taskActionNotice = `${task.id}: pilot run ${runId} ${state}`;
+  await refreshTasks(context);
+}
+
+// The pull request number a task records, linked or not.
+function taskPullRequestNumber(task) {
+  const refs = Array.isArray(task.external_refs) ? task.external_refs : [];
+  const ref = refs.find((candidate) => candidate && candidate.system === GITHUB_PR_REF_SYSTEM && candidate.id);
+  if (ref) return String(ref.id);
+  return task.pr_number ? String(task.pr_number) : "";
+}
+
+// Fix PR refusals in the operator's words; the server's detail follows.
+const FIX_PR_REASONS = {
+  not_authorized: "needs an operator session with auto-fix authority",
+  no_blocker: "nothing to repair: the pull request is mergeable and no required check failed",
+  mergeability_unknown: "GitHub is still calculating whether the pull request is mergeable; try again shortly",
+  budget_exhausted: "the pull request's auto-fix repair budget is spent",
+  already_repaired: "a repair already ran for this head and blocker",
+  already_started: "a repair was already started for this head and blocker",
+  live_run: "a run is already delivering or repairing this task",
+  pull_request_not_open: "the pull request is no longer open",
+  not_orbit_pull_request: "the pull request was not opened by an Orbit delivery on this task's branch",
+  no_delivery_leaf: "the task has no delivery run of its own to hand the pull request back to",
+  leaf_not_stopped: "the task's newest delivery did not stop with its pull request unfinished",
+  operator_hold: "an operator holds the task",
+  opted_out: "the task is tagged no-auto-approve; a person decides its delivery",
+  authority: "its delivery was started with completion authority this session lacks",
+  write_free: "this dashboard is read-only",
+  replica_checkout: "this checkout is a replica; repair the pull request on its owner",
+  claimed_execution: "the task's delivery runs on another machine",
+  resource_throttled: "host resource pressure holds new runs",
+  forge_unreadable: "GitHub could not be read",
+  not_resumable: "its delivery cannot be resumed at its completion step",
+};
+
+function fixPrReasonText(reason, detail) {
+  const words = FIX_PR_REASONS[reason];
+  if (words && detail) return `${words} (${detail})`;
+  return words || detail || reason || "unavailable";
+}
+
+// The readiness entry for the task's pull request, fetching it when it is
+// missing, stale or for another pull request. Never more than one read in
+// flight per task.
+function fixPrState(task, context) {
+  const key = taskDispatchIdentity(task);
+  const prNumber = taskPullRequestNumber(task);
+  const entry = fixPrReadiness.get(key);
+  const fresh = entry && entry.prNumber === prNumber && (entry.pending || Date.now() - entry.at < FIX_PR_READINESS_MS);
+  if (!fresh) loadFixPrReadiness(task, key, prNumber, context);
+  return fixPrReadiness.get(key);
+}
+
+async function loadFixPrReadiness(task, key, prNumber, context) {
+  const visit = captureWorkspaceVisit();
+  const entry = { pending: true, at: Date.now(), prNumber, data: null, error: "" };
+  fixPrReadiness.set(key, entry);
+  try {
+    entry.data = await fetchJson(visit.path(taskMutationPath(task, "/auto-fix")));
+  } catch (error) {
+    entry.error = error.message || String(error);
+  }
+  entry.pending = false;
+  entry.at = Date.now();
+  if (fixPrReadiness.get(key) !== entry || !visit.isCurrent()) return;
+  renderTasks(taskList(context), context);
+}
+
+// Why Fix PR is disabled, or "" when it is offered.
+function fixPrDisabledReason(task, mutable, entry) {
+  if (!mutable) return aggregateRefusalTitle("Fix PR", "repair a pull request");
+  if (!entry || entry.pending) return "Fix PR — checking the pull request…";
+  if (entry.error) return `Fix PR — could not check the pull request: ${entry.error}`;
+  const data = entry.data || {};
+  if (data.available) return "";
+  return `Fix PR unavailable — ${fixPrReasonText(data.reason, data.detail)}`;
+}
+
+// Fix PR on a review task: hand its conflicting or red pull request back to
+// its own delivery for an auto-fix, as an --auto-fix drain would, without one.
+function appendFixPrControls(actions, task, detail, context, mutable) {
+  const entry = fixPrState(task, context);
+  const reason = fixPrDisabledReason(task, mutable, entry);
+  const data = entry && entry.data ? entry.data : {};
+  const blocker = data.blocker === "conflict" ? "its merge conflict" : "its failed required checks";
+  const btn = el("button", {
+    class: "action fix-pr",
+    text: "fix PR",
+    title: reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to repair ${blocker}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
+  });
+  btn.disabled = Boolean(reason);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    runFixPr(task, detail, btn, context, data);
+  });
+  actions.appendChild(btn);
+  const feedback = fixPrFeedback.get(taskDispatchIdentity(task));
+  if (feedback) {
+    const note = feedback.ok
+      ? el("div", { class: "task-action-notice", text: feedback.text, role: "status" })
+      : actionErrorNode(feedback.text);
+    note.style.flexBasis = "100%";
+    actions.appendChild(note);
+  }
+}
+
+function fixPrSignature(task) {
+  const key = taskDispatchIdentity(task);
+  const entry = fixPrReadiness.get(key);
+  const state = entry ? `${entry.pending}|${entry.error}|${JSON.stringify(entry.data)}` : "";
+  const feedback = fixPrFeedback.get(key);
+  return `${state}|${feedback ? feedback.text : ""}`;
+}
+
+function showFixPrFeedback(key, feedback, context) {
+  fixPrFeedback.set(key, feedback);
+  renderTasks(taskList(context), context);
+  setTimeout(() => {
+    if (fixPrFeedback.get(key) !== feedback) return;
+    fixPrFeedback.delete(key);
+    renderTasks(taskList(context), context);
+  }, FIX_PR_FEEDBACK_MS);
+}
+
+async function runFixPr(task, detail, btnNode, context, readiness) {
+  const visit = captureWorkspaceVisit();
+  const key = taskDispatchIdentity(task);
+  if (!canMutateTask(task)) return;
+  const number = readiness.pr_number || taskPullRequestNumber(task);
+  if (!window.confirm(`Hand pull request #${number} back to its delivery for an auto-fix? A repair agent pushes to the same branch; the pull request is merged only if its delivery was started to complete it.`)) return;
+  const requestPath = visit.path(taskMutationPath(task, "/auto-fix"));
+  fixPrFeedback.delete(key);
+  const prior = detail.querySelector(".action-error");
+  if (prior) prior.remove();
+  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  btnNode.innerHTML = `<span class="spinner"></span>wait`;
+  let result;
+  try {
+    result = await postJson(requestPath, {});
+  } catch (error) {
+    if (!visit.isCurrent()) return;
+    fixPrReadiness.delete(key);
+    showFixPrFeedback(key, { ok: false, text: `fix PR refused: ${error.message || String(error)}` }, context);
+    return;
+  }
+  if (!visit.isCurrent()) return;
+  fixPrReadiness.delete(key);
+  const runId = result && result.resumed_run_id ? String(result.resumed_run_id) : "";
+  showFixPrFeedback(key, { ok: true, text: `Repair of pull request #${number} started${runId ? ` in run ${runId}` : ""}` }, context);
   await refreshTasks(context);
 }
 
@@ -5587,7 +5747,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${fixPrSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;

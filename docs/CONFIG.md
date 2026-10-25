@@ -1482,6 +1482,21 @@ observation time). Blockers are null when a refusal preceded the forge read.
 pass in `step_output`, including `auto_fix.skipped`. See
 [a conflicting or red pull request no run is watching](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching).
 
+The dashboard's **Fix PR** action on a `review` task starts the same repair for
+that one task without a drain (`POST /api/tasks/<task>/auto-fix`). It runs the
+drain pass's checks and start: the same attempt ledger and budget, footprint
+locks and `pr_auto_fix_out_of_run` record. It needs an operator session, governed
+as `auto_drain.auto_fix`. It grants repair only: the resumed leaf keeps its own
+`completion`, and a leaf started with `--complete` is resumed only when the
+session also holds completion authority (`auto_drain.complete`). The button
+shows only when the task records a pull request. It is enabled only when that
+pull request conflicts with its base or a required check failed on its head;
+otherwise it is disabled with the reason in its title. A refused start answers
+`409` with code `task_auto_fix_<reason>`, using the drain's reasons plus the
+single-task ones; nothing starts. See the
+[runbook](runbooks/stuck-job-runs.md#a-conflicting-or-red-pull-request-no-run-is-watching)
+for the reasons.
+
 The crew comes from the existing pool resolution, in this order:
 
 1. `--allow-crew` restricts which crews the draw may pick, as for every
