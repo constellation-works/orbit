@@ -295,18 +295,12 @@ impl ConventionTemplate {
     }
 
     /// Whether `branch` is a branch this template names for `task_id` under
-    /// `prefix`. The template is matched up to and including the literal text
-    /// right after `{{task_id}}`, so `ORB-1` never owns `ORB-10`'s branches
-    /// and a suffix the template appends later is not required.
+    /// `prefix`. The complete template must match, including the eight-digit
+    /// hash and any suffix, so a task token inside an external ref or a prefix
+    /// of the owning task id does not establish ownership.
     pub fn branch_names_task(&self, branch: &str, prefix: &str, task_id: &str) -> bool {
         !task_id.is_empty()
-            && match_owner(
-                self.owner_segments(),
-                branch,
-                prefix,
-                &TaskMatch::Exact(task_id),
-            )
-            .is_some()
+            && match_owner(&self.segments, branch, prefix, &TaskMatch::Exact(task_id)).is_some()
     }
 
     /// The task id `branch` names under this template and `prefix`: the
@@ -317,27 +311,7 @@ impl ConventionTemplate {
         prefix: &str,
         accept: &dyn Fn(&str) -> bool,
     ) -> Option<String> {
-        match_owner(
-            self.owner_segments(),
-            branch,
-            prefix,
-            &TaskMatch::Capture(accept),
-        )
-    }
-
-    fn owner_segments(&self) -> &[Segment] {
-        let Some(task) = self
-            .segments
-            .iter()
-            .position(|segment| matches!(segment, Segment::Placeholder(Placeholder::TaskId)))
-        else {
-            return &[];
-        };
-        let end = match self.segments.get(task + 1) {
-            Some(Segment::Literal(_)) => task + 2,
-            _ => task + 1,
-        };
-        &self.segments[..end]
+        match_owner(&self.segments, branch, prefix, &TaskMatch::Capture(accept))
     }
 }
 
@@ -350,8 +324,9 @@ fn is_id_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '-' || c == '_'
 }
 
-/// Match `segments` against the start of `text`, returning the task id
-/// matched. A trailing `{{task_id}}` must end at an id boundary.
+/// Match the complete rendered shape, returning the task id matched. Fixed
+/// literals and the hash length establish the task boundary even when the
+/// template puts digits or the hash immediately after the task id.
 fn match_owner(
     segments: &[Segment],
     text: &str,
@@ -366,7 +341,7 @@ fn match_owner(
         captured: Option<&str>,
     ) -> Option<String> {
         let Some((first, rest)) = segments.split_first() else {
-            return captured.map(ToOwned::to_owned);
+            return captured.filter(|_| text.is_empty()).map(ToOwned::to_owned);
         };
         match first {
             Segment::Literal(literal) => go(
@@ -385,24 +360,19 @@ fn match_owner(
                     .all(|c| c.is_ascii_hexdigit())
                     .then(|| go(rest, &text[BRANCH_HASH_LEN..], prefix, task, captured))?
             }
-            Segment::Placeholder(Placeholder::TaskId) => {
-                let at_boundary =
-                    |tail: &str| !rest.is_empty() || !tail.chars().next().is_some_and(is_id_char);
-                match task {
-                    TaskMatch::Exact(id) => {
-                        let tail = text.strip_prefix(id)?;
-                        at_boundary(tail).then(|| go(rest, tail, prefix, task, Some(id)))?
-                    }
-                    TaskMatch::Capture(accept) => {
-                        let run = text.find(|c: char| !is_id_char(c)).unwrap_or(text.len());
-                        (1..=run).find_map(|end| {
-                            let (candidate, tail) = text.split_at(end);
-                            (at_boundary(tail) && accept(candidate))
-                                .then(|| go(rest, tail, prefix, task, Some(candidate)))?
-                        })
-                    }
+            Segment::Placeholder(Placeholder::TaskId) => match task {
+                TaskMatch::Exact(id) => {
+                    let tail = text.strip_prefix(id)?;
+                    go(rest, tail, prefix, task, Some(id))
                 }
-            }
+                TaskMatch::Capture(accept) => {
+                    let run = text.find(|c: char| !is_id_char(c)).unwrap_or(text.len());
+                    (1..=run).find_map(|end| {
+                        let (candidate, tail) = text.split_at(end);
+                        accept(candidate).then(|| go(rest, tail, prefix, task, Some(candidate)))?
+                    })
+                }
+            },
             Segment::Placeholder(_) => {
                 let run = text.find('/').unwrap_or(text.len());
                 (0..=run)
