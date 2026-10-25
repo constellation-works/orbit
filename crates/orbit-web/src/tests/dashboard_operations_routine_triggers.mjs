@@ -5,14 +5,17 @@ const { setWorkspace } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations, peekRoutineFailures } = await import('./js/operations.js');
 const get = id => document.getElementById(id);
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
-const response = payload => ({ ok: true, status: 200, json: async () => payload, text: async () => JSON.stringify(payload) });
+const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
 const allowed = { authorized: true, reason: null };
-const capabilities = { routine_toggle: allowed, job_run: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
+const capabilities = { routine_toggle: allowed, routine_trigger: allowed, job_run: allowed, clock_service: allowed, clock_cadence: allowed, auto_task_toggle: allowed, auto_task_mint: allowed };
 // The strip starts at :48, so `*/20` is due at :00, :20 and :40 and not again at :48.
 const frozenNow = Date.parse('2026-10-08T12:48:00Z');
 Date.now = () => frozenNow;
 let streakCount = 3;
 let truncated = false;
+let missedRunPolicy = 'skip';
+let triggerPost = null;
+let triggerPostError = '';
 const recentFires = ['failed', 'error', 'timed_out', 'succeeded', 'dispatched', 'skipped'].map((state, i) => ({
   state, attempt: 1, run_id: state === 'error' ? null : `jrun-strip-${i}`,
   slot: new Date(frozenNow - 4 * 60_000 - i * 20 * 60_000).toISOString(),
@@ -20,8 +23,14 @@ const recentFires = ['failed', 'error', 'timed_out', 'succeeded', 'dispatched', 
 const routine = (name, extra) => ({
   name, source: 'one', target: 'job:fixture', enabled: true, effective: true, cron: '', trigger: {}, last_fire: null, ...extra,
 });
-globalThis.fetch = async (path) => {
+globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
+  if (url.pathname === '/api/routines/trigger' && options.method === 'POST') {
+    triggerPost = JSON.parse(options.body);
+    if (triggerPostError) return response({ error: triggerPostError }, 409);
+    missedRunPolicy = triggerPost.trigger.missed_run;
+    return response({ message: 'Saved' });
+  }
   if (url.pathname === '/api/routines') return response({
     machine_name: 'fixture-host', capabilities, controls_authorized: true, cron_zone: { name: null, offset_seconds: 0 },
     routines: [
@@ -31,6 +40,7 @@ globalThis.fetch = async (path) => {
       }),
       routine('daily-digest', {
         recent_fires: [], failure_streak: { count: 1, since: '2026-10-08T10:00:00Z', truncated: false },
+        trigger: { cron: '30 13 * * *', missed_run: missedRunPolicy },
         cron: '30 13 * * *', next_evaluation: { state: 'scheduled', at: '2026-10-08T13:30:00Z', hypothetical: false },
       }),
       routine('task-pilot-orbit', {
@@ -147,4 +157,46 @@ await older;
 assert(!badge.hidden && badge.title.includes('ci-failure-sweep-orbit'), 'an older read cannot clear a newer warning in the same visit');
 globalThis.fetch = originalFetch;
 await fetchAndRenderOperations('routines');
+
+// The routine trigger editor recalculates Save after missed-slot policy edits,
+// posts the unchanged cron with the selected policy, and clears a refusal on
+// the next valid edit.
+const digestCard = () => Array.from(get('routines-body').querySelectorAll('.routine-card'))
+  .find(card => card.querySelector('.operation-identity strong')?.textContent === 'daily-digest');
+const editor = () => digestCard()?.querySelector('.schedule-editor');
+const editTrigger = () => digestCard()?.querySelector('.schedule-edit');
+const missedSlots = () => Array.from(editor()?.querySelectorAll('.schedule-field') || [])
+  .find(field => field.querySelector('.schedule-field-label')?.textContent === 'Missed slots')?.querySelector('select');
+const saveTrigger = () => editor()?.querySelector('.schedule-editor-controls button');
+const chooseMissedRun = value => {
+  missedSlots().value = value;
+  missedSlots().dispatchEvent(new Event('change', { bubbles: true }));
+};
+editTrigger().click();
+assert(editor() && saveTrigger().disabled && saveTrigger().title === 'No change to save', 'a valid unchanged trigger starts with Save disabled');
+chooseMissedRun('catch_up_once');
+assert(!saveTrigger().disabled, 'changing only Missed slots enables Save');
+chooseMissedRun('skip');
+assert(saveTrigger().disabled && saveTrigger().title === 'No change to save', 'reverting Missed slots restores the unchanged Save state');
+chooseMissedRun('catch_up_once');
+assert(!saveTrigger().disabled, 'the policy-only change can be saved again');
+saveTrigger().click();
+for (let i = 0; i < 10 && editor(); i++) await new Promise(resolve => setTimeout(resolve, 0));
+assert(!editor() && triggerPost?.trigger?.cron === '30 13 * * *' && triggerPost?.trigger?.missed_run === 'catch_up_once', `Save posts the unchanged cron and selected policy: ${JSON.stringify(triggerPost)}`);
+await fetchAndRenderOperations('routines');
+assert(missedRunPolicy === 'catch_up_once', 'the routine readback retains the saved missed-slot policy');
+
+editTrigger().click();
+assert(missedSlots().value === 'catch_up_once' && saveTrigger().disabled, 'reopening reads the persisted policy');
+triggerPostError = 'Fixture trigger refusal';
+chooseMissedRun('skip');
+assert(!saveTrigger().disabled, 'a valid missed-slot edit remains saveable before refusal');
+saveTrigger().click();
+for (let i = 0; i < 10 && !editor()?.querySelector('.schedule-error')?.textContent; i++) await new Promise(resolve => setTimeout(resolve, 0));
+assert(editor()?.querySelector('.schedule-error')?.textContent === 'Fixture trigger refusal' && !saveTrigger().disabled, 'a refused changed trigger keeps Save available for retry');
+triggerPostError = '';
+chooseMissedRun('catch_up_once');
+assert(!editor().querySelector('.schedule-error').textContent && saveTrigger().disabled && saveTrigger().title === 'No change to save', 'changing Missed slots after refusal clears the message and restores the unchanged state');
+chooseMissedRun('skip');
+assert(!editor().querySelector('.schedule-error').textContent && !saveTrigger().disabled, 'a subsequent valid policy edit is revalidated and saveable');
 globalThis.routineTriggerTestsPassed = true;

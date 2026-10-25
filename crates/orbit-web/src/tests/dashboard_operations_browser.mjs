@@ -1455,6 +1455,11 @@ try {
   await triggerPage.addScriptTag({ type: 'module', url: '/routine-triggers.mjs' });
   await triggerPage.waitForFunction(() => globalThis.routineTriggerTestsPassed, undefined, { timeout: 15000 });
   await triggerPage.screenshot({ path: path.join(evidence, 'routine-triggers-browser.png') });
+  await triggerPage.locator('.schedule-editor').scrollIntoViewIfNeeded();
+  await triggerPage.screenshot({ path: path.join(evidence, 'routine-trigger-editor-dark-1440.png'), animations: 'disabled' });
+  await triggerPage.setViewportSize({ width: 375, height: 812 });
+  await triggerPage.locator('.schedule-editor').scrollIntoViewIfNeeded();
+  await triggerPage.screenshot({ path: path.join(evidence, 'routine-trigger-editor-dark-375.png'), animations: 'disabled' });
   // Relative times carry a minute remainder that rounds to 60 into the hour (ORB-17853).
   const relativePage = await browser.newPage({ viewport: { width: 1440, height: 1000 }, timezoneId: 'UTC' });
   relativePage.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
