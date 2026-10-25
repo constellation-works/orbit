@@ -384,17 +384,17 @@ pub(crate) fn prepare(
     // Selection read the holders before any work. This re-check and this
     // run's reservation are one critical section of the commit boundary, so
     // of two runs preparing one task at once exactly one keeps it.
-    let held = crate::application::automation::pilot_reservation::reserve(
-        runtime,
-        run_id,
-        &retained
-            .iter()
-            .map(|(task_id, _, _)| task_id.clone())
-            .collect::<Vec<_>>(),
-    )
-    .map_err(|error| {
-        DispatchError::action_failed(action, format!("reserve pilot tasks: {error}"))
-    })?;
+    let held = runtime
+        .reserve_pilot_tasks(
+            run_id,
+            &retained
+                .iter()
+                .map(|(task_id, _, _)| task_id.clone())
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|error| {
+            DispatchError::action_failed(action, format!("reserve pilot tasks: {error}"))
+        })?;
     let held_reason = if explicit_mode {
         "already_preparing"
     } else {

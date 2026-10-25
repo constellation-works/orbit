@@ -13,7 +13,7 @@ mod job_port;
 pub(crate) mod members;
 mod ownership;
 mod pilot_presence;
-pub(crate) mod pilot_reservation;
+mod pilot_reservation;
 mod pins;
 pub(crate) mod preparation;
 mod provider;

@@ -11,7 +11,7 @@ summary: Directional runtime, application, adapter, bootstrap, and composition b
 tags: [orbit-core, orbit-cmd, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-cmd/**", "crates/orbit-registry/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936, ORB-17937, ORB-17938, ORB-17939, ORB-17972]
+related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936, ORB-17937, ORB-17938, ORB-17939, ORB-17943, ORB-17972]
 ---
 
 # Orbit Core — Overview
@@ -96,7 +96,7 @@ source scan, enforces the runtime direction.
 | Kernel re-export, `OrbitRuntime` wrapper and application port | `crates/orbit-core/src/runtime.rs` | [ORB-17906] |
 | Application operations and DTOs | `crates/orbit-core/src/application/` | [ORB-10886] |
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
-| Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs` | [ORB-17924] |
+| Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
 | Job review-admission hook | `crates/orbit-core/src/application/job/review_hook.rs` | [ORB-17924] |
 | Job-owned drain and pull-settlement ports | `crates/orbit-core/src/application/job/drain_port.rs`, implemented in `distributed/job_port.rs` and `pull_drain/job_port.rs` | [ORB-17937] |
@@ -129,12 +129,12 @@ other in a direction too. Nine of them (`task`, `automation`, `job`, `review`,
 `distributed`, `admission`, `workspace_auto`, `pull_drain` and
 `sweep_filing`) used to form one strongly connected component. That cycle has
 to go before any of them can become its own crate (bearing 5 in
-[the decisions](4_decisions.md)). [ORB-17924] cut three edge families, and
-[ORB-17936] cut task's remaining upward edges except the two automation
-callers below, [ORB-17937] cut job's edges to `distributed` and
-`pull_drain`, [ORB-17938] cut job's remaining upward edges, so job now
-names only `task` and `contracts`, and [ORB-17939] cut the back edges among
-the modules above job:
+[the decisions](4_decisions.md)). [ORB-17924] cut three edge families,
+[ORB-17936], [ORB-17972] and [ORB-17943] cut task's remaining upward edges,
+so task now names only `contracts`, [ORB-17937] cut job's edges to
+`distributed` and `pull_drain`, [ORB-17938] cut job's remaining upward
+edges, so job now names only `task` and `contracts`, and [ORB-17939] cut
+the back edges among the modules above job:
 
 - **Contracts.** `application::contracts` holds the constants and DTOs that
   several of these modules name: the job names `PULL_DRAIN_JOB`,
@@ -164,11 +164,9 @@ the modules above job:
   runtime binds it, and the lower module never names the higher one.
   `task::TaskAutomationPort` gives task-pilot, finding-verification and
   escalation-triage steps the state claim, staleness, fingerprints and live
-  holders, and `automation` implements it. Two task-pilot callers that
-  [ORB-17924] did not list still call `automation` directly, by the owner's
-  stop-and-report ruling: the bounded `Source` Git reader in
-  `task/pilot/no_diff.rs` and `pilot_reservation::reserve` in
-  `task/pilot/prepare.rs`. `job::ReviewAdmissionHook` gives job submission, replay and
+  holders, and since [ORB-17943] also atomic pilot task reservation and a
+  bounded Git reader (`task::SourceGit`, which `automation`'s `Source`
+  implements), and `automation` implements it. `job::ReviewAdmissionHook` gives job submission, replay and
   resume the review admission they install and compare, and `review`
   implements it. [ORB-17936] added one task-owned port per remaining upper
   module, each implemented in that module's `task_port.rs`:
@@ -214,8 +212,8 @@ the modules above job:
   admission's backlog listing takes the tasks live `run auto` leaves carry
   through `task::TaskWorkspaceAutoPort`.
 - **Guard.** `scripts/check-dependency-direction.sh`, run by
-  `make ci-guards`, fails when `task` names `automation` (outside those two
-  exact lines), when `task` names `job`, `review`, `distributed`,
+  `make ci-guards`, fails when `task` names `automation`, when `task` names
+  `job`, `review`, `distributed`,
   `sweep_filing` or `workspace_auto` by path, grouped tree or `super::` chain
   or calls the inherent methods and functions its ports wrap, when `task`
   calls any of `job`'s remaining inherent methods (`get_job_run_backend`,
@@ -237,14 +235,10 @@ automation < review < distributed < pull_drain < admission < workspace_auto <
 sweep_filing`. A module map that counts `crate::` paths, grouped trees,
 `super::` chains and calls on an `OrbitRuntime` receiver into another
 module's inherent methods (a lowercase `module::name(` path is a free
-function, not a method call) shows that every edge out of `job` and the
-seven modules above it runs down that order, and since [ORB-17972] no
-task → job edge remains. One back edge, out of `task`, still holds `task`,
-`job` and `automation` in one strongly connected component:
-
-| Cluster | Remaining back edges | Task |
-|---|---|---|
-| Task's unlisted pilot callers | task → automation (`Source`, `pilot_reservation::reserve`) | [ORB-17943] |
+function, not a method call) shows that every edge among the nine modules
+runs down that order: since [ORB-17972] no task → job edge remains, and
+since [ORB-17943] no task → automation edge remains, making `task` the
+lowest of the nine modules above `contracts`.
 
 ## Task References
 
@@ -259,6 +253,6 @@ task → job edge remains. One back edge, out of `task`, still holds `task`,
 - [ORB-17938] — cut job's edges to admission, automation, review, sweep_filing and workspace_auto through job-owned automation, admission and auto-concurrency ports and the local-route, filing-tag and published-delivery contracts, and guarded them.
 - [ORB-17939] — cut the back edges among automation, review, distributed, admission and workspace_auto through ports the lower modules own and the distributed mutation gate contract, and guarded the order above job.
 - [ORB-17972] — routed task's remaining inherent calls to `job` through `task::TaskJobPort` and guarded them; no task → job edge remains.
-- [ORB-17943] — follow-up for task's remaining back edge to automation.
+- [ORB-17943] — routed task-pilot's bounded `Source` reader and atomic pilot reservation through `task::TaskAutomationPort` and `task::SourceGit`, dropping the guard allowlist; no task → automation edge remains.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

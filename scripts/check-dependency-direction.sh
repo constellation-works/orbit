@@ -285,20 +285,6 @@ if rg -n "crate::application::(${app_modules})\\b|\\bsuper::super\\b" \
   fail=1
 fi
 
-# Two task-pilot callers the cut did not list keep their direct edge, by the
-# owner's stop-and-report ruling on ORB-17924; each is allowed only as that
-# exact line.
-task_automation_allowed='^[^:]*/task/pilot/no_diff\.rs:[0-9]+:use crate::application::automation::source::Source;$|^[^:]*/task/pilot/prepare\.rs:[0-9]+:    let held = crate::application::automation::pilot_reservation::reserve\($'
-if {
-  rg -n 'crate::application::automation\b|(super::)+automation\b' \
-    "$app_src/task" -g '*.rs' -g '!**/tests/**' || true
-  rg -n -U 'crate::application::\{[^}]*\bautomation\b' \
-    "$app_src/task" -g '*.rs' -g '!**/tests/**' || true
-} | grep -Ev "$task_automation_allowed"; then
-  echo "orbit-core task must reach automation through task::TaskAutomationPort"
-  fail=1
-fi
-
 # Print every `super::` path or use-tree in production code under application module
 # `$2` that climbs out of it to `application` and names one of the
 # `|`-separated modules `$3`; exit nonzero when one is found.
@@ -400,6 +386,18 @@ for path in sorted((app / module).rglob("*.rs")):
 sys.exit(1 if failed else 0)
 PY
 }
+
+# [ORB-17924], [ORB-17943] `task` reaches the state scheduler and its bounded
+# `Source` Git reader only through `task::TaskAutomationPort` and
+# `task::SourceGit`, with no allowlist.
+if rg -n 'crate::application::automation\b|(super::)+automation\b' \
+  "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
+  rg -n -U 'crate::application::\{[^}]*\bautomation\b' \
+    "$app_src/task" -g '*.rs' -g '!**/tests/**' ||
+  ! super_chains_into "$app_src" task automation; then
+  echo "orbit-core task must reach automation through task::TaskAutomationPort"
+  fail=1
+fi
 
 # [ORB-17936] `task` is the lowest of the nine modules above contracts. It
 # reaches `job`, `review`, `distributed`, `sweep_filing` and `workspace_auto`
