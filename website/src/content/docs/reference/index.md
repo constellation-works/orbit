@@ -20,6 +20,10 @@ sidebar:
     <h3>Policy format</h3>
     <p>Filesystem profiles and global deny rules.</p>
   </a>
+  <a class="orbit-card" href="./plugin-manifest/">
+    <h3>Plugin manifest</h3>
+    <p>Author tools, permissions, conformance cases and dashboard panels.</p>
+  </a>
   <a class="orbit-card" href="./config/">
     <h3>Configuration</h3>
     <p><code>config.toml</code> layering, crews, and every settable key.</p>
