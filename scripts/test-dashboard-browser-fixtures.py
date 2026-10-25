@@ -133,6 +133,39 @@ class DashboardBrowserFixtureTests(unittest.TestCase):
                     f"missing {kind} hook '{hook}'",
                     result.stderr)
 
+    def test_empty_interpolations_are_accepted(self):
+        assets = (
+            "<script>\n"
+            "node.id = `panel-${task.id}-crew`;\n"
+            "node.className = `chip-${tone}-badge`;\n"
+            "node.id = `run-${a}-${b}-done`;\n"
+            "</script>\n")
+        for line in [
+            "page.locator('#panel--crew');\n",
+            "page.locator('#panel-ABC-1-crew');\n",
+            "page.locator('.chip--badge');\n",
+            "page.locator('.chip-warn-badge');\n",
+            "page.locator('#run---done');\n",
+            "page.locator('#run-A-B-done');\n",
+        ]:
+            with self.subTest(control=line):
+                result = self.run_checker(line, assets=assets)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        cases = [
+            ("id", "page.locator('#panel-ABC-1');\n", "panel-ABC-1"),
+            ("id", "page.locator('#panel--operator');\n", "panel--operator"),
+            ("class", "page.locator('.chip--other');\n", "chip--other"),
+            ("class", "page.locator('.panel--crew');\n", "panel--crew"),
+        ]
+        for kind, line, hook in cases:
+            with self.subTest(kind=kind, hook=hook):
+                result = self.run_checker(f"const keep = 1;\n{line}", assets=assets)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(
+                    f"crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                    f"missing {kind} hook '{hook}'",
+                    result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
