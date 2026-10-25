@@ -42,7 +42,7 @@ use orbit_types::workflow::automation::recovery::OsExcludedCrew;
 
 use crate::OrbitRuntime;
 use crate::application::contracts::CrewCandidate;
-use crate::application::job::crew_pools::CrewPoolDraw;
+use crate::application::contracts::CrewPoolDraw;
 
 /// How each review picks from a pool, as `orbit config show` and `orbit
 /// doctor` state it.

@@ -351,7 +351,7 @@ impl OrbitRuntime {
         // the complexity pool. A draw that already lists the pool is left
         // alone. The run allowlist is applied by the caller.
         if source.starts_with(PURPOSE_SOURCE_PREFIX)
-            && let Some((pool, pool_source)) = self.purpose_assignment_candidates(task)?
+            && let Some((pool, pool_source)) = self.purpose_candidates(task)?
         {
             let permitted = pool
                 .into_iter()

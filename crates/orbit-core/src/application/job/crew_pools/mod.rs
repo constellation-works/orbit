@@ -31,7 +31,6 @@ mod types;
 
 pub(crate) use admission::strip_auto_crew_admission;
 pub(crate) use draw::{
-    CrewPoolDraw, complexity_crews_key, complexity_of_crews_key, random_crew_ticket,
-    seeded_crew_ticket,
+    complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
 };
 pub(crate) use types::CapturedCrewPools;

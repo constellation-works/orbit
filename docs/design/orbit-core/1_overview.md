@@ -11,7 +11,7 @@ summary: Directional runtime, application, adapter, bootstrap, and composition b
 tags: [orbit-core, orbit-cmd, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-cmd/**", "crates/orbit-registry/**"]
 related_features: [orbit-core]
-related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936, ORB-17937, ORB-17938]
+related_artifacts: [ORB-10016, ORB-10886, ORB-17906, ORB-17924, ORB-17936, ORB-17937, ORB-17938, ORB-17972]
 ---
 
 # Orbit Core — Overview
@@ -171,7 +171,11 @@ names only `task` and `contracts`:
   forge check, routine run submission, run-owner liveness, the candidate's
   validation gates and unbound owner publications; the pools and the forge
   check are associated types, so task passes them through without naming
-  job's types), `task::TaskReviewPort` (the review projection, the evidence
+  job's types; since [ORB-17972] also the stored run and pipeline-state
+  reads, the published-owner and failure-handoff preservation records,
+  inspection-capable pools and default crew, crew re-rating, purpose-pool
+  candidates and delivery observation, under port names distinct from the
+  inherent `job` methods they wrap, with `CrewPoolDraw` in `contracts`), `task::TaskReviewPort` (the review projection, the evidence
   hold resume and the merged-head reconciliation refusal),
   `task::TaskDistributedPort` (the crew a pilot run drew),
   `task::TaskSweepFilingPort` (CI-sweep admission) and
@@ -195,7 +199,11 @@ names only `task` and `contracts`:
   `make ci-guards`, fails when `task` names `automation` (outside those two
   exact lines), when `task` names `job`, `review`, `distributed`,
   `sweep_filing` or `workspace_auto` by path, grouped tree or `super::` chain
-  or calls the inherent methods and functions its ports wrap, when `job`
+  or calls the inherent methods and functions its ports wrap, when `task`
+  calls any of `job`'s remaining inherent methods (`get_job_run_backend`,
+  `read_run_state`, the requeue preservation records, the crew-pool draws
+  and candidates, or delivery observation) on any receiver (store reads
+  through `stores().jobs()` excepted) [ORB-17972], when `job`
   names `distributed`, `pull_drain`, `admission`, `automation`, `review`,
   `sweep_filing` or `workspace_auto` the same ways or calls the inherent
   methods and functions its ports wrap (except the review hook's, whose
@@ -227,6 +235,7 @@ chained follow-ups:
 - [ORB-17936] — cut task's edges to job, review, distributed, sweep_filing and workspace_auto through task-owned ports and crew-draw contracts, and guarded them.
 - [ORB-17937] — cut job's edges to distributed and pull_drain through job-owned drain and pull-settlement ports and the claimed-leaf and host-hold contracts, and guarded them.
 - [ORB-17938] — cut job's edges to admission, automation, review, sweep_filing and workspace_auto through job-owned automation, admission and auto-concurrency ports and the local-route, filing-tag and published-delivery contracts, and guarded them.
+- [ORB-17972] — routed task's remaining inherent calls to `job` through `task::TaskJobPort` and guarded them; no task → job edge remains.
 - [ORB-17939], [ORB-17943] — follow-ups for the application-layer back edges that remain.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

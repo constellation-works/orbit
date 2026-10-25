@@ -221,7 +221,7 @@ impl OrbitRuntime {
         };
         let task = self.get_task(&input.task_id)?;
         let failed_run = match &episode.failed_run_id {
-            Some(run_id) if self.task_run_is_local(&task) => self.get_job_run_backend(run_id)?,
+            Some(run_id) if self.task_run_is_local(&task) => self.stored_job_run(run_id)?,
             _ => None,
         };
         let failed_step = failed_run.as_ref().and_then(|run| {
@@ -289,7 +289,7 @@ impl OrbitRuntime {
         };
         let failed_run = match &input.failed_run_id {
             Some(run_id) if self.task_run_is_local(&task) => {
-                self.get_job_run_backend(run_id).unwrap_or_default()
+                self.stored_job_run(run_id).unwrap_or_default()
             }
             _ => None,
         };

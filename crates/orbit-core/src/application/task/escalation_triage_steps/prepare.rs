@@ -19,7 +19,7 @@ use crate::application::task::pilot::input::{
 };
 use crate::application::task::pilot::requested_base_branch;
 use crate::application::task::pilot::source::{SourceSnapshot, resolve_source_snapshot};
-use crate::application::task::{TaskAutomationPort, TaskDistributedPort};
+use crate::application::task::{TaskAutomationPort, TaskDistributedPort, TaskJobPort};
 use crate::application::task::{TaskListFilter, VerifierAssignment};
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
@@ -356,7 +356,7 @@ fn assessment_author(
         return Ok(None);
     };
     Ok(runtime
-        .read_run_state(run_id)?
+        .stored_run_state(run_id)?
         .as_ref()
         .and_then(|state| runtime.pilot_assessment_crew(state)))
 }
@@ -375,7 +375,7 @@ fn triager(
     if let Some(assignment) = runtime.draw_finding_verifier(task, TRIAGE_TIER, &avoid)? {
         return Ok(assignment);
     }
-    let crew = runtime.inspection_capable_default_crew(TRIAGE_TIER)?;
+    let crew = runtime.inspection_default_crew(TRIAGE_TIER)?;
     Ok(VerifierAssignment {
         crew: crew.name,
         tier: TRIAGE_TIER,

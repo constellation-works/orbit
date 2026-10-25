@@ -133,7 +133,7 @@ impl OrbitRuntime {
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(None);
         };
-        let Some(state) = self.read_run_state(run_id)? else {
+        let Some(state) = self.stored_run_state(run_id)? else {
             return Ok(None);
         };
         let Some(checkpoint) = state.failure_activity_checkpoint else {
@@ -180,7 +180,7 @@ impl OrbitRuntime {
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(false);
         };
-        Ok(self.read_run_state(run_id)?.is_some_and(|state| {
+        Ok(self.stored_run_state(run_id)?.is_some_and(|state| {
             ["push", "pr_open"].iter().any(|key| {
                 state
                     .pipeline
@@ -275,7 +275,7 @@ impl OrbitRuntime {
         let Some(run_id) = task.job_run_id.as_deref() else {
             return Ok(None);
         };
-        let Some(run) = self.get_job_run_backend(run_id)? else {
+        let Some(run) = self.stored_job_run(run_id)? else {
             // Not in this store: a follower's leaf, fenced by its settled claim.
             return Ok(None);
         };
@@ -682,11 +682,9 @@ impl OrbitRuntime {
             }
             // Every authentication refusal (an interrupted or timed-out
             // run, a newer execution, a foreign source, ...) has the same exit.
-            let authenticated =
-                self.failure_handoff_requeue_record(task)
-                    .and_then(|(entry, binding)| {
-                        Ok((self.preservation_to_append(task, entry)?, binding))
-                    });
+            let authenticated = self
+                .failure_handoff_preservation(task)
+                .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
             return authenticated.map(Some).map_err(|error| match error {
                 OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
                     "{refusal}. Nothing was changed. To {discard_hint}."

@@ -11,6 +11,7 @@ use orbit_store::RegisteredTaskResolution;
 use super::listing::{list_task_metadata_in, metadata_task};
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskJobPort;
 
 impl OrbitRuntime {
     pub fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
@@ -217,7 +218,7 @@ impl OrbitRuntime {
     /// so one that starts nothing does not read as an empty backlog.
     pub fn host_os_backlog_waits(&self) -> Result<Vec<String>, OrbitError> {
         let limits = self.executor_host_os_limits()?;
-        let pools = self.auto_crew_pools_for_input(&serde_json::Value::Null)?;
+        let pools = self.crew_pools_for_input(&serde_json::Value::Null)?;
         let mut waits = Vec::new();
         for task in self.list_task_metadata()? {
             if task.status != orbit_types::task::TaskStatus::Backlog {
@@ -269,7 +270,7 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         let limits = self.executor_host_os_limits()?;
-        let pools = self.auto_crew_pools_for_input(&serde_json::Value::Null)?;
+        let pools = self.crew_pools_for_input(&serde_json::Value::Null)?;
         Ok(candidates
             .into_iter()
             .filter(|task| self.task_host_os_wait(task, &pools, &limits).is_none())
@@ -464,9 +465,7 @@ impl OrbitRuntime {
         if self.worker_invocation().is_some() {
             return self.list_tasks_filtered(None, None, None, Some(run_id), None, None);
         }
-        let executed_on = self
-            .get_job_run_backend(run_id)?
-            .and_then(|run| run.executed_on);
+        let executed_on = self.stored_job_run(run_id)?.and_then(|run| run.executed_on);
         let mut tasks = self.list_tasks_filtered(None, None, None, Some(run_id), None, None)?;
         tasks.retain(|task| match &task.job_run_machine {
             Some(bound) => executed_on

@@ -489,7 +489,7 @@ impl OrbitRuntime {
     ) -> Result<Option<VerifierAssignment>, OrbitError> {
         let Some(InspectionPool {
             tier, candidates, ..
-        }) = self.inspection_capable_pool(tier)?
+        }) = self.inspection_pool(tier)?
         else {
             return Ok(None);
         };
@@ -510,7 +510,7 @@ impl OrbitRuntime {
         let source = format!("pool:{tier}");
         let mut ticket =
             self.seeded_crew_draw_tickets(format!("{FINDING_VERIFICATION_JOB}:{}:{tier}", task.id));
-        let draw = self.draw_crew_pool(candidates, &source, &mut ticket)?;
+        let draw = self.crew_pool_draw(candidates, &source, &mut *ticket)?;
         Ok(Some(VerifierAssignment {
             crew: draw.crew.name,
             tier,
@@ -531,7 +531,7 @@ impl OrbitRuntime {
         if let Some(assignment) = self.draw_finding_verifier(task, tier, &[filer])? {
             return Ok(assignment);
         }
-        let crew = self.inspection_capable_default_crew(tier)?;
+        let crew = self.inspection_default_crew(tier)?;
         Ok(VerifierAssignment {
             crew: crew.name,
             tier,

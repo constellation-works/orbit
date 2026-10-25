@@ -9,7 +9,9 @@ use orbit_types::{
 };
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskUpdateParams, lifecycle::ensure_status_change_allowed};
+use crate::application::task::{
+    TaskJobPort, TaskUpdateParams, lifecycle::ensure_status_change_allowed,
+};
 
 use super::validation::{criteria, invalid};
 
@@ -107,7 +109,7 @@ impl OrbitRuntime {
             if !visited.insert(run_id.clone()) {
                 continue;
             }
-            let run = self.get_job_run_backend(&run_id)?.ok_or_else(|| {
+            let run = self.stored_job_run(&run_id)?.ok_or_else(|| {
                 invalid(
                     "linked review run is unavailable; completion cannot verify stopped execution",
                 )
@@ -122,7 +124,7 @@ impl OrbitRuntime {
                     "linked review run is not stopped; pending, running and retrying execution cannot be completed",
                 ));
             }
-            if let Some(state) = self.read_run_state(&run_id)? {
+            if let Some(state) = self.stored_run_state(&run_id)? {
                 pending.extend(
                     state
                         .child_dispatches

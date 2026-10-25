@@ -4,6 +4,7 @@
 
 use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
+use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
 
 /// Prefix of the provenance a task records when its crew was drawn from its
 /// purpose's pool, as `purpose:<purpose>`.
@@ -43,6 +44,23 @@ pub(crate) struct CreationCrewAssignment {
 pub(crate) struct CrewCandidate {
     pub(crate) crew: Crew,
     pub(crate) weight: u32,
+}
+
+/// A selected crew and the exact eligible weights used for this draw.
+pub(crate) struct CrewPoolDraw {
+    pub(crate) crew: Crew,
+    pub(crate) source: String,
+    pub(crate) eligible_pool: Vec<ActivityCrewPoolMember>,
+}
+
+impl CrewPoolDraw {
+    pub(crate) fn into_activity_draw(self) -> ActivityCrewDraw {
+        ActivityCrewDraw {
+            crew: self.crew.name,
+            source: self.source,
+            eligible_pool: self.eligible_pool,
+        }
+    }
 }
 
 /// The members of one complexity pool that can inspect pinned source natively
