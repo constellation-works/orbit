@@ -525,6 +525,16 @@ plugin being removed.
   `no-diff-expected` and never builds or runs tests. A test-reduction
   task keeps that file's coverage — every scenario survives or is named
   with a reason — and reports the test count before and after.
+- **`agent-guidance-audit`** (`medium`) — every 3 days. Audits agent guidance
+  (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`, `.agents/skills/`,
+  `copilot-instructions.md` under `.github`, and Cursor rule files) at one pinned
+  commit, least-recently audited first, at most 8 files and about 2,000 lines.
+  A generated skills mirror is reviewed only at its source. Each run attaches
+  `agent-guidance-audit.json` for the next run to read, and files at most 3
+  `proposed` tasks for claims that are stale or contradictory, each with the
+  file, line, claim, and evidence. Stylistic rewrites are not filed. The
+  minted chore is tagged `no-diff-expected` and does not edit the repository.
+  A workspace-authored `skill-validation` definition is left in place.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.

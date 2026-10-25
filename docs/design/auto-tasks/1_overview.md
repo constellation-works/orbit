@@ -313,6 +313,20 @@ definition of the same name.
   and never builds or runs tests. A test-reduction task keeps that file's
   coverage — every scenario survives or is named with a reason — and
   reports the test count before and after.
+- `agent-guidance-audit` — disabled-by-default audit every 3 days of agent
+  guidance files: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`,
+  `.agents/skills/`, `copilot-instructions.md` under `.github`, and Cursor rule
+  files. A generated skills mirror is reviewed once, at its source. Each run
+  pins one integration-branch commit, audits a rolling batch of at most 8
+  files and about 2,000 lines ordered least-recently audited first, and
+  attaches `agent-guidance-audit.json` (pinned SHA, paths audited, and a
+  cumulative `state` map) for the next run to read. It files at most 3
+  `proposed` bugs, each naming the file, line, claim, and the `--help`,
+  tracked-path, or tool-registry evidence that the claim is stale or
+  contradictory, with `context_files` and a `spawned_from` relation to the
+  minted chore. Stylistic rewrites are not filed. The chore is tagged
+  `no-diff-expected` and does not edit the repository. A workspace-authored
+  `skill-validation` definition is left in place.
 
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
@@ -385,6 +399,9 @@ encode this repository's branches and gates. Re-init preserves them:
   per run, largest first and grouped by package or subsystem. A
   test-reduction task keeps that file's coverage and reports the test
   count before and after.
+- ORB-18129 — Added the disabled, portable `agent-guidance-audit` default
+  (3-day cadence): a least-recently-audited batch of agent guidance files,
+  checked at one pinned commit, with at most 3 proposed findings per run.
 - ORB-18125 — Added the disabled, portable `architecture-audit` default
   (14-day cadence): graph discovery from the ecosystem's metadata tool or an
   import scan, documented-architecture layering checks with an

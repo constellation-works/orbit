@@ -1,4 +1,5 @@
 {
+  "agent-guidance-audit": [],
   "architecture-audit": [
     {
       "comments": [
@@ -659,6 +660,35 @@
   "comment-hygiene": [
     {
       "comments": [
+        "# No context_files and proposed on purpose: the batch is known only after",
+        "# backlog. The executing run never writes its own scope.",
+        "# operator) persists the selected file: selectors and it is approved to",
+        "# selection, so the instance waits in proposed — never a backlog",
+        "# whole-tree holder — until pre-admission preparation (task pilot or",
+        "## Attach the ledger",
+        "## Check and record",
+        "## Comment-only diffs",
+        "## Select a batch (preparation, before admission)",
+        "## The standard",
+        "## Use the prepared footprint"
+      ],
+      "digest": "bdcf4d046362ca4d2466873e0056501dc3d29a1e795c31949fcc99eacaafd2d4",
+      "revision": "5d0634f6ac62d38e85797172b1dfb075d0f5f6ee",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "cron": "45 6 * * *"
+        },
+        "tags": [
+          "comment-hygiene"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# No context_files on purpose: the batch is only known at run time, and a",
         "# context_files to the selected files before editing.",
         "# minted task without selectors holds no workspace lock. The body narrows",
@@ -1095,7 +1125,34 @@
       }
     }
   ],
-  "dependency-freshness": [],
+  "dependency-freshness": [
+    {
+      "comments": [
+        "## Detect ecosystems and inventory",
+        "## Handoff",
+        "## No network",
+        "## Prioritize and file",
+        "## Read the changelog before filing",
+        "## Rules and command surfaces",
+        "## Security exclusion"
+      ],
+      "digest": "db1e6e89e42fed92821964c272344cb94e77a954896fc6a3313ed8a353eef704",
+      "revision": "8cfbbaa89a3f93bb4cf8af57ac8ec943004464e1",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "dependency-freshness",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "doc-duties": [
     {
       "comments": [

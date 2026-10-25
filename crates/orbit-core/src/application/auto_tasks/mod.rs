@@ -64,6 +64,10 @@ pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cur
 /// [`retired::RETIRED_AUTO_TASK_FILES`].
 pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
+        "agent-guidance-audit",
+        include_str!("../../../assets/auto_tasks/agent-guidance-audit.yaml"),
+    ),
+    (
         "architecture-audit",
         include_str!("../../../assets/auto_tasks/architecture-audit.yaml"),
     ),
