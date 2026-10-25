@@ -136,6 +136,74 @@ dashboard's status menu, which asks you to confirm first. Both record a
 Friction reports are separate records under `orbit friction`, not task
 statuses.
 
+## File reservations
+
+Orbit locks files for you while tasks run. A task holds the files its selectors
+cover while it is `in-progress` or `review`, and a task that overlaps those
+files waits. These task footprint locks are automatic, and you don't manage them.
+
+Reserve a surface yourself when work runs outside the pipeline and needs the
+same protection: an editor session, a manual migration, a long refactor. A
+reservation is all or nothing. Orbit grants the whole surface or grants nothing,
+and a denial exits 3 and names who holds the overlap.
+
+```bash
+orbit task locks reserve \
+  --task <TASK_ID>
+
+orbit task locks reserve \
+  --file dir:src/billing \
+  --ttl 2h
+
+orbit task locks reserve \
+  --file file:README.md,dir:docs \
+  --ttl 45m --json
+```
+
+- `--task` reserves the task's declared context surface, expanded the way
+  conflict admission expands it.
+- `--file` takes `file:` or `dir:` selectors. Repeat the flag or comma-separate
+  selectors to claim several.
+- `--ttl` takes a duration such as `45m` or `2h`. It defaults to `30m`, and its
+  maximum is `2h`.
+- Selectors stay inside the workspace. Symbol, module and command selectors are
+  refused.
+
+Reserving and releasing need the `operator` or `runner` capability, because a
+reservation blocks other work from its surface until it expires or is released.
+From a plain shell, prefix the command with `ORBIT_OPERATOR=1`.
+
+Reservations expire on their own. The TTL is the safety net if a session dies
+while holding one, so pick a TTL that covers the work. Once it passes, the
+reservation no longer blocks anything. Orbit clears expired reservations
+automatically.
+
+To release a reservation before its TTL, find its ID with
+`orbit task locks list --json` and pass `--confirm`. Release is an operator
+escape hatch for a stale reservation, so use it only when the session that holds
+it is gone.
+
+```bash
+orbit task locks release \
+  <reservation_id> --confirm
+```
+
+To see which files pending tasks collide on, run contention:
+
+```bash
+orbit task locks contention \
+  --limit 25
+```
+
+Contention counts pending backlog tasks only, not running ones. `TASKS` lists
+each selector that pending tasks overlap, and `GROUPS` counts clusters of linked
+tasks. Tasks in different groups never block each other, so the group count is a
+lower bound on how many tasks dispatch can admit at once, not an exact limit. A
+task that declares no selectors locks nothing and is counted apart.
+
+To see which waiting tasks these locks hold back, see
+[Check what will actually start](../../how-to/continuous-delivery/#3-check-what-will-actually-start).
+
 ## Quality bar
 
 A good task states:
