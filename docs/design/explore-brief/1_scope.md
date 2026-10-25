@@ -151,9 +151,22 @@ forge one.
 
 - **Revision key.** The brief is keyed by its `inspection_revision` (the pilot's pinned
   `source_revision`, proven by `observed_revision`/`observed_tree`) together with its
-  `material_fingerprint` and `receipt_operation_id`. A brief is **current** only when its
-  `receipt_operation_id` matches the newest task-pilot receipt and its `material_fingerprint`
-  equals that receipt's `applied_material.material[0]`. Otherwise it is ignored as superseded.
+  `material_fingerprint` and `receipt_operation_id`. A brief is **current** only when all
+  three hold: its `receipt_operation_id` matches the newest task-pilot receipt, its
+  `material_fingerprint` equals that receipt's `applied_material.material[0]`, and its
+  `material_fingerprint` equals the task's **current** material fingerprint. The current
+  fingerprint is recomputed at dispatch under the pilot policy (the task's resolved
+  `material_fields`), at the brief's `inspection_revision` — not at `base_sha` — by the
+  same comparison `fresh_task_pilot_assessment`
+  (`crates/orbit-core/src/application/task/pilot/freshness.rs`) already makes for
+  pilot-routine admission: the receipt-certified fingerprint against the consumer's
+  current fingerprint, failing closed when either cannot be read or recomputed.
+  Receipt/fingerprint self-consistency alone is not currency: a material task edit
+  (title, description, criteria, plan or selectors under the default `material_fields`)
+  with no intervening re-pilot leaves the receipt and the stored fingerprint mutually
+  consistent while the task has moved on. Otherwise (receipt mismatch or superseded
+  fingerprint) the brief is ignored as superseded; a current-fingerprint mismatch is
+  classified at admission as `dropped: material_changed` (see Staleness).
 - **Replacement.** Re-piloting after a task edit upserts the same path. A re-pilot that
   produces no brief leaves the old file in place, but the old file no longer matches the new
   receipt and is never delivered. The store has no artifact delete, and none is needed.
@@ -177,9 +190,19 @@ run. **Covered paths** are the anchor files of every brief target. A `dir:` targ
 prefix and a `symbol:` target through its file, the same semantics as
 `source_sensitivity = "context_files"` and `members/stale.rs::stale_tasks`.
 
+**Material currency is checked first, before any code-drift check, for owner and claimed
+runs alike.** At dispatch the task's current material fingerprint is recomputed under the
+pilot policy at the brief's `inspection_revision` (see Storage). If the brief's stored
+`material_fingerprint` differs from that current fingerprint — for example after a material
+task edit with no intervening pilot receipt — the brief is not delivered and is recorded as
+`dropped: material_changed`. If the current fingerprint cannot be recomputed or read, the
+check fails closed with the same outcome. Only a brief that passes this check reaches the
+code-drift classification below.
+
 | Condition | Outcome |
 |---|---|
-| No `explore-brief.json`, or not current (see Storage) | `absent`: no brief, the run proceeds cold |
+| No `explore-brief.json`, or not current by receipt (see Storage) | `absent`: no brief, the run proceeds cold |
+| Stored `material_fingerprint` differs from the task's current material fingerprint recomputed at dispatch, or that recomputation fails | `dropped: material_changed`: no brief, the run proceeds cold |
 | `inspection_revision` is not an ancestor of `base_sha`, or the diff cannot be read | `dropped: revision_unrelated` |
 | No covered path changed in `inspection_revision..base_sha` | `fresh`: delivered as stored |
 | 1–3 covered files changed, ≤ 200 changed lines across them, and no `change` target deleted or renamed | `drifted`: delivered with the changed paths, their `--numstat`, and the range to diff |
@@ -192,7 +215,10 @@ prefix and a `symbol:` target through its file, the same semantics as
   every stale run. The pilot routine only covers `proposed`/`backlog` tasks, and a workspace
   that wants briefs refreshed before admission can already set
   `source_sensitivity = "context_files"`. Phase 2 reports how often briefs drop. A high drop
-  rate is a reason to revisit, not a reason to build re-piloting first.
+  rate is a reason to revisit, not a reason to build re-piloting first. Recomputing the
+  current material fingerprint at dispatch is not a re-pilot: it is the deterministic
+  fingerprint comparison `fresh_task_pilot_assessment` already performs, with no pilot
+  invocation, and it is required even though no re-pilot runs.
 - **Constants, not config.** 3 files and 200 lines are constants in phase 3. The trial reports
   `fresh`/`drifted`/`dropped` counts, and a setting is added only if the readout shows a
   threshold matters.
@@ -412,6 +438,12 @@ config change only.
   written, the drop reason is in the receipt, and no repair pass is spent on it.
 - Given an implement dispatch, `orbit run show` reports `fresh`, `drifted`, `dropped: <reason>`
   or `absent`, and the prompt carries the brief only in the first two cases.
+- Given a material task edit after the pilot with no intervening pilot receipt, an implement
+  dispatch (owner or claimed) does not deliver the brief, records
+  `activity.explore_brief_applied` as `dropped: material_changed`, and proceeds cold; given
+  no material edit, the same brief is still classified `fresh`/`drifted` by code drift and
+  delivered. A regression test at the `agent_implement` brief-delivery (admission/task-context)
+  boundary covers both cases.
 - Given an agent or operator `orbit.task.artifact.put` to `explore-brief.json`, Orbit refuses
   it.
 - Given a claimed run on a follower, the implementer receives the same brief, subject to the
@@ -428,8 +460,8 @@ and orchestrator tasks. Anchors are `path::symbol`, not line numbers.
 |---|---|---|---|---|
 | S1 | Checked-in dashboard map for implementers | — | A new `dashboard-map.md` under `docs/agents/` names, by path and symbol, where dashboard views, API routes and assets live, how a view is registered and served, the pattern a new panel or series copies, and the screenshot and goldens obligations. It contains no line numbers. The workspace guide links it. The generated docs index is updated if a row changes | new `dashboard-map.md` under `docs/agents/`; `crates/orbit-web/assets/dashboard/`; `crates/orbit-web/src/api/`; root `CLAUDE.md` link |
 | S2 | Pilot produces and stores briefs (shadow) | — | Under the three `workflow.explore_brief.*` keys, prepare marks the requested tasks. `task_pilot` returns `tasks[].explore_brief` for them. Apply validates the brief (schema, 8 KiB cap, no line numbers, anchors at the revision, `change` inside the footprint) and writes `explore-brief.json` through the system writer before the receipt. An invalid brief is dropped with its reason in the audit note and does not make the task `invalid`. The repair pass returns a brief. Agent and operator writes to the name are refused. CONFIG.md documents the keys. A regression test at the pilot apply boundary covers one valid brief and one dropped brief | `crates/orbit-core/assets/activities/task_pilot.yaml` (output schema, new "Explore brief" instruction section, Repair attempt); `crates/orbit-core/assets/activities/prepare_task_pilot.yaml`; `crates/orbit-core/src/application/task/pilot/prepare.rs::prepare`; `pilot/apply/task.rs::settle_task`; `pilot/assessment.rs`; `pilot/persist/apply_task.rs::apply_task`; `crates/orbit-core/src/application/task/update/artifacts.rs::admit_agent_artifact`; `crates/orbit-config/src/registry/settings/table/keys_tail.inc`; `crates/orbit-config/src/registry/settings/snapshot.rs`; `crates/orbit-cli/src/command/task/pilot_comment.rs::assessment_summary`; `docs/CONFIG.md` |
-| S3 | Owner runs receive a fresh or drifted brief | S2 | An `agent_implement` dispatch reads the current brief, classifies it against `base_sha` with the thresholds in this doc, and injects `explore_brief` and `explore_brief_instruction` only for `fresh`/`drifted`. It records `activity.explore_brief_applied`, including `absent`. `orbit run show` prints the `Explore brief:` line. Review and recovery activities never receive the brief. `deliver = false` suppresses delivery but not the audit record | `crates/orbit-core/src/adapter/engine_host/actions/task_context.rs::task_context_for_agent_input`; `crates/orbit-core/assets/activities/agent_implement.yaml`; `crates/orbit-types/src/workflow/activity_job/activity_v2.rs::AgentLoopSpec`; `crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs::run_cli_backend_for_step`; `crates/orbit-cli/src/command/run/show.rs` |
-| S4 | Claimed runs receive the same brief | S3 | The owner captures the current brief and its revision into the admission claim, alongside the captured tag instructions. The follower classifies it against the claim base and injects it as S3 does, with no owner artifact read at dispatch | `crates/orbit-core/src/application/tag_instructions.rs::captured_tag_instructions` (pattern to copy); `crates/orbit-store/src/contracts/task/coordination/admission.rs`; `crates/orbit-store/src/repository/task/coordination/admission.rs` |
+| S3 | Owner runs receive a fresh or drifted brief | S2 | An `agent_implement` dispatch reads the current brief, first recomputes the task's current material fingerprint at the brief's `inspection_revision` under the pilot policy and drops the brief as `dropped: material_changed` (recorded in `activity.explore_brief_applied`, no delivery) when it differs from the stored `material_fingerprint` or cannot be recomputed, then classifies a passing brief against `base_sha` with the thresholds in this doc, and injects `explore_brief` and `explore_brief_instruction` only for `fresh`/`drifted`. It records `activity.explore_brief_applied`, including `absent`. `orbit run show` prints the `Explore brief:` line. Review and recovery activities never receive the brief. `deliver = false` suppresses delivery but not the audit record. A regression test at the admission/task-context boundary covers delivery refusal after a material task edit with no intervening pilot receipt, and delivery of an unchanged task's brief | `crates/orbit-core/src/adapter/engine_host/actions/task_context.rs::task_context_for_agent_input`; `crates/orbit-core/assets/activities/agent_implement.yaml`; `crates/orbit-types/src/workflow/activity_job/activity_v2.rs::AgentLoopSpec`; `crates/orbit-engine/src/activity_job/cli_runner/orchestrator/dispatch.rs::run_cli_backend_for_step`; `crates/orbit-cli/src/command/run/show.rs`; `crates/orbit-core/src/application/task/pilot/freshness.rs::fresh_task_pilot_assessment` (pattern to copy) |
+| S4 | Claimed runs receive the same brief | S3 | The owner captures the current brief and its revision into the admission claim, alongside the captured tag instructions. The follower recomputes the current material fingerprint and applies the same `dropped: material_changed` check, then classifies it against the claim base and injects it as S3 does, with no owner artifact read at dispatch. The same regression coverage applies to the claimed path (material edit with no new receipt drops, unchanged task delivers) | `crates/orbit-core/src/application/tag_instructions.rs::captured_tag_instructions` (pattern to copy); `crates/orbit-store/src/contracts/task/coordination/admission.rs`; `crates/orbit-store/src/repository/task/coordination/admission.rs` |
 | S5 | Turns-to-first-edit series | — | A diagnostics endpoint and an Analytics › Metrics series report, per trend bucket, complexity and tag cohort, the count of tool calls and summed `result_bytes` before the first file-mutating call of each task's first implement invocation. Invocations without a detectable edit are excluded and counted. Low-count buckets are marked. Screenshots are attached | `crates/orbit-types/src/telemetry/invocation.rs::ToolCallTrace`; `crates/orbit-store/src/contracts/invocation.rs::InvocationRecord`; `crates/orbit-web/src/api/diagnostics/trend.rs`; `crates/orbit-web/assets/dashboard/js/metrics.js` |
 | S6 | Brief accuracy report | S2 | For done tasks with a brief, a diagnostics endpoint reports recall and precision of `change` file targets against the delivered diff's files, and the brief outcome mix (`fresh`/`drifted`/`dropped`/`absent`) | `crates/orbit-web/src/api/diagnostics/`; `crates/orbit-core/src/application/job/explore_analytics.rs::explore_comparison` (pattern to copy) |
 | S7 | Trial started (operator, `ws_constellation`) | S1, S3, S4, S5, [ORB-18364] | Box `ws_orbit` config maps `[workflow.tag_instructions.explore-first]` and sets `workflow.explore_brief = {enabled = true, tags = ["explore-brief"]}`. The orchestration skill records the assignment rule. The start date is commented on the assignment task | box `ws_orbit` `.orbit/config.toml`; `.claude/skills/orchestration-session/SKILL.md` (constellation) |
