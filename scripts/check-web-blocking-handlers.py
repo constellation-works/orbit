@@ -13,12 +13,14 @@ from __future__ import annotations
 
 import re
 import sys
+import tempfile
 from pathlib import Path
 
 
-# Every module directly under crates/orbit-web/src/api is scanned, so a new
-# handler file is covered by default. Sibling `tests/` is a subdirectory and is
-# not matched; the Ws extractor in state.rs is a separate task.
+# Every module under crates/orbit-web/src/api is scanned, including nested
+# modules such as runs/ and diagnostics/, so a new handler file is covered by
+# default. Any `tests/` directory is test code and is not scanned; the Ws
+# extractor in state.rs is a separate task.
 
 SKIP_ASYNC_FNS = {"blocking"}
 
@@ -246,7 +248,11 @@ def handler_paths(repo_root: Path) -> list[Path]:
     api = repo_root / "crates/orbit-web/src/api"
     health = repo_root / "crates/orbit-web/src/health.rs"
     if api.is_dir():
-        paths.extend(sorted(api.glob("*.rs")))
+        paths.extend(
+            path
+            for path in sorted(api.rglob("*.rs"))
+            if "tests" not in path.relative_to(api).parts
+        )
     if health.is_file():
         paths.append(health)
     return paths
@@ -303,10 +309,31 @@ pub(super) async fn after_lifetime_handler(State(state): State<DashboardState>) 
         raise RuntimeError(f"fixture flagged an offloaded pin: {hits!r}")
 
 
+def verify_nested_discovery() -> None:
+    fixture = """
+pub(super) async fn nested_handler(State(state): State<DashboardState>) -> Response {
+    let pinned = state.pin();
+    Json(pinned).into_response()
+}
+"""
+    with tempfile.TemporaryDirectory() as tmp:
+        api = Path(tmp) / "crates/orbit-web/src/api"
+        for relative in ("runs/nested.rs", "tests/excluded.rs"):
+            path = api / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(fixture, encoding="utf-8")
+        hits = scan_tree(Path(tmp))
+    if len(hits) != 1 or "runs/nested.rs" not in hits[0] or "nested_handler" not in hits[0]:
+        raise RuntimeError(
+            f"nested api module was not scanned, or tests/ was not excluded: {hits!r}"
+        )
+
+
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
     try:
         verify_fixture_reporting()
+        verify_nested_discovery()
         hits = scan_tree(repo_root)
     except (OSError, RuntimeError) as error:
         print(f"check-web-blocking-handlers: {error}", file=sys.stderr)
