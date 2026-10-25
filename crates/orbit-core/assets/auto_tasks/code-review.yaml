@@ -49,8 +49,9 @@ template:
       responsible for, and say why in the description; keep every grouped
       finding listed in the description, including findings that share a
       culprit; when grouped findings sharing a culprit have conflicting nature
-      or escape classifications, note them in the description and classify the
-      single `regression_from` link `unclassified`). In either payload, omit
+      or escape classifications, state the differing classifications in the
+      description and classify the single `regression_from` link
+      `unclassified`). In either payload, omit
       the `regression_from` relation only when no landed task can be held
       responsible. Derive canonical `file:` selectors from every evidenced
       source path, removing the line suffix, and add the matching
