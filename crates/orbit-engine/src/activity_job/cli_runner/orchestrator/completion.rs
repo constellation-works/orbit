@@ -758,49 +758,29 @@ pub(super) fn project_completion(exit: ProviderExit<'_>) -> Result<DispatchOutco
 ///
 /// A slice `StreamDeserializer` truncates its input at the first parse error,
 /// so a stray non-JSON line or a lone-surrogate escape would hide every later
-/// frame. On an error, resume at the line after the one that failed.
+/// frame. Parse one value at a time to preserve valid multiline frames. On an
+/// error, skip the malformed record's first line, since the parser may have
+/// read into a following valid frame before discovering the error.
 pub(super) fn stdout_frames(stdout: &[u8]) -> impl Iterator<Item = Value> + '_ {
     let mut rest = stdout;
-    let mut pending: std::vec::IntoIter<Value> = Vec::new().into_iter();
     std::iter::from_fn(move || {
         loop {
-            if let Some(frame) = pending.next() {
-                return Some(frame);
-            }
-            if rest.is_empty() {
-                return None;
-            }
-            let mut frames = Vec::new();
+            rest = rest.trim_ascii_start();
             let mut stream = serde_json::Deserializer::from_slice(rest).into_iter::<Value>();
-            let mut failed_line = None;
-            for item in stream.by_ref() {
-                match item {
-                    Ok(frame) => frames.push(frame),
-                    Err(err) => {
-                        failed_line = Some(err.line().max(1));
-                        break;
-                    }
+            match stream.next()? {
+                Ok(frame) => {
+                    rest = &rest[stream.byte_offset()..];
+                    return Some(frame);
+                }
+                Err(_) => {
+                    rest = rest
+                        .iter()
+                        .position(|byte| *byte == b'\n')
+                        .map_or(&[], |newline| &rest[newline + 1..]);
                 }
             }
-            rest = match failed_line {
-                Some(line) => skip_lines(rest, line),
-                None => &[],
-            };
-            pending = frames.into_iter();
         }
     })
-}
-
-/// `bytes` after its first `lines` newline-terminated lines.
-fn skip_lines(bytes: &[u8], lines: usize) -> &[u8] {
-    let mut remaining = bytes;
-    for _ in 0..lines {
-        match remaining.iter().position(|b| *b == b'\n') {
-            Some(newline) => remaining = &remaining[newline + 1..],
-            None => return &[],
-        }
-    }
-    remaining
 }
 
 /// The failure a provider wrote in its own control-plane `frame`, never

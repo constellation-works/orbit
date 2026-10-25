@@ -132,17 +132,37 @@ fn a_terminal_failure_frame_is_classified_after_an_undecodable_stdout_line() {
         r#"{"type":"result","is_error":true,"api_error_status":401,"result":"Invalid API key"}"#;
     let refusal =
         r#"{"type":"result","is_error":false,"stop_reason":"refusal","result":"declined"}"#;
-    for noise in ["not json at all", r#"{"type":"assistant","text":"\ud83d"}"#] {
-        for (frame, expected) in [
-            (limit, "usage limit"),
-            (auth, "authentication failure (HTTP 401)"),
-            (refusal, "declined"),
+    let mut failures = Vec::new();
+    for noise in [
+        "",
+        "not json at all",
+        r#"{"type":"assistant","text":"\ud83d"}"#,
+        "{",
+        r#"{"partial":"#,
+    ] {
+        for (frame, expected, marker) in [
+            (limit, "usage limit", "[provider_limit]"),
+            (
+                auth,
+                "authentication failure (HTTP 401)",
+                "[provider_unavailable]",
+            ),
+            (refusal, "declined", "[provider_refusal]"),
         ] {
-            let stdout = format!("{noise}\n{frame}\n");
-            let outcome = project_stdout("claude", stdout.as_bytes(), true, false, false);
-            assert!(!outcome.success, "{noise} / {frame}");
-            let message = outcome.message.expect("provider failure message");
-            assert!(message.contains(expected), "{noise} / {frame}: {message}");
+            let multiline = serde_json::to_string_pretty(
+                &serde_json::from_str::<serde_json::Value>(frame).expect("terminal frame"),
+            )
+            .expect("multiline terminal frame");
+            for frame in [frame, multiline.as_str()] {
+                let stdout =
+                    format!("{{\"type\":\"assistant\",\"text\":\"working\"}}\n{noise}\n{frame}\n");
+                let outcome = project_stdout("claude", stdout.as_bytes(), true, false, false);
+                let message = outcome.message.unwrap_or_default();
+                if outcome.success || !message.contains(expected) || !message.contains(marker) {
+                    failures.push(format!("{noise} / {frame}: {message}"));
+                }
+            }
         }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
