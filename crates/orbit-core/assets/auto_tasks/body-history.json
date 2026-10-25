@@ -27,6 +27,34 @@
           "no-diff-expected"
         ]
       }
+    },
+    {
+      "comments": [
+        "## Discover guidance files",
+        "## Duplicates",
+        "## Filing",
+        "## Generated mirrors",
+        "## Handoff",
+        "## Pin one commit",
+        "## Rolling batch",
+        "## Rules and command surfaces",
+        "## What to check"
+      ],
+      "digest": "c7da7d1ac3f28f5379f0daa67f1639838af5070faed9014a4e92dcfd2672f931",
+      "revision": "fba85e3aff95642842b1b9145e09a4821b7c6815",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "agent-guidance-audit",
+          "no-diff-expected"
+        ]
+      }
     }
   ],
   "architecture-audit": [
@@ -1512,6 +1540,31 @@
     },
     {
       "comments": [
+        "# A batch edits only docs/ and the tracked top-level README/CONTRIBUTING",
+        "# documents its brief validates, so the minted task locks just that scope",
+        "# instead of the whole tree (a dir:. lock starves on a busy drain).",
+        "## Attach the ledger",
+        "## Select a batch",
+        "## Validate and record"
+      ],
+      "digest": "cb7ee8891058765c89ee0c0c1eb7931c87e01549dc2e72b84197f567c64caecf",
+      "revision": "4aef4eb55b9c1b6bad4d54c0990775d8955fb728",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "30 6 * * *"
+        },
+        "tags": [
+          "doc-duties",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# A batch may edit docs/ and root or workspace-specific documentation.",
         "# Reserve the workspace until the batch's concrete paths are known.",
         "## Attach the ledger",
@@ -1562,7 +1615,32 @@
       }
     }
   ],
-  "flaky-test-hunt": [],
+  "flaky-test-hunt": [
+    {
+      "comments": [
+        "## Discover hosted CI and pin the window",
+        "## File at most 4 fix tasks",
+        "## Find the 2 flake signals",
+        "## Record the run",
+        "## Rules and command surfaces"
+      ],
+      "digest": "0039901cc29d71a3126e482f5826257d03cf8b0745c21f049cce519600cad694",
+      "revision": "a0075f49c278f2c14ff35198f3a69fa6d3b8a5c7",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "15 8 * * 1"
+        },
+        "tags": [
+          "flaky-test-hunt",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "friction-curation": [
     {
       "comments": [

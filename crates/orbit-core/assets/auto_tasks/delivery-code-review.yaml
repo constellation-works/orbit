@@ -13,7 +13,7 @@ schedule:
 template:
   title: Review a frozen delivery batch
   description: |-
-    Review the entire captured code range for correctness, concurrency, error handling and repository standards. Verify findings against the pinned source, search for duplicates and file confirmed findings with precise evidence.
+    Review the entire captured code range for correctness, concurrency, error handling and repository standards. For each documentation or skill sentence in the range that states a limit, default, config key, flag, ordering, or error behavior, open the source it describes and confirm the sentence, and for each behavior change search `docs/`, `website/`, and `crates/orbit-core/assets/skills/` for the old claim. Verify findings against the pinned source, search for duplicates and file confirmed findings with precise evidence.
     Use only the frozen automation input appended to this task. Examine every
     captured commit, including unattributed neighbors. Findings may remain open.
     Attribute every finding to the task that introduced it: locate the commit
