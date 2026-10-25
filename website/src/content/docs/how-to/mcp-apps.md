@@ -149,7 +149,7 @@ The panel has a rail with a workspace selector and four views.
 | **Tasks** | Tasks grouped by status, with search and a priority filter. It opens on In progress, Review, Blocked and Backlog; **Active work** restores that set and **All** includes every status. Selecting a row opens its detail with comments, history and artifact metadata, each paged. |
 | **Runs** | Workflow runs with a state filter. A run's detail has its state and paged log excerpts. In-progress task rows link to their run. |
 | **Auto-drain** | Readiness of the backlog, the current delivery window and its workers. |
-| **Automation** | Routines, auto-tasks and jobs defined in the workspace, with their next scheduled slot. |
+| **Automation** | Routines and auto-tasks show a next evaluation time only when their state is scheduled and a next due time is available; otherwise they show their state. Job rows show their step count and parallel-run limit. |
 
 The selected host, workspace and task or run stay visible. Switching
 workspace or view discards late replies from the previous one, so a slow read
