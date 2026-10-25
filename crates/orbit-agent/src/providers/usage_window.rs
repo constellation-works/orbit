@@ -3,9 +3,9 @@
 //!
 //! Codex writes windows to its session rollout under `CODEX_HOME`; Claude
 //! reports them in stdout `rate_limit_event` frames, and Muse in stdout
-//! `status` records whose payload kind is `run_usage`. Grok's windows come
-//! from its CLI billing API response; Antigravity's from its `/usage` command.
-//! Other providers record no usage windows.
+//! `status` or `run.usage` records whose payload kind is `run_usage`. Grok's
+//! windows come from its CLI billing API response; Antigravity's from its
+//! `/usage` command. Other providers record no usage windows.
 
 use std::path::Path;
 
