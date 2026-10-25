@@ -72,6 +72,7 @@ pub use pipeline::{
     PipelineInvokeResult, PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus,
     PipelineWorkerLogSnapshot, SubmissionKind, SubmissionNotices,
 };
+pub use pr_repair::{TaskAutoFixError, TaskAutoFixRefusal};
 pub(crate) use resume::PublishedResume;
 pub(in crate::application) use review_hook::ReviewAdmissionHook;
 pub(crate) use run::CodebaseDeliveryScan;

@@ -56,6 +56,10 @@ pub struct RuntimeKernel {
     /// dispatch may append an audit row through a separate migration-free path.
     write_free: bool,
     workspace_binding: Option<Arc<WorkspaceRuntimeBinding>>,
+    /// The workspace was named by an explicit selector rather than discovered
+    /// from the caller's working directory. Supplied by the composition layer
+    /// that resolved the selector; never inferred by the kernel.
+    workspace_explicitly_selected: bool,
     /// A higher-level registry may mark this local checkout as a replica. Core
     /// stays registry-neutral; it only carries the refusal supplied by that
     /// owner so every task-record writer shares one fail-closed gate.

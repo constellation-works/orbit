@@ -946,9 +946,12 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `orbit.search` and `orbit.task.list` against the owner workspace the claim
   is bound to (a federated scope is refused, and neither is carried to any
   other workspace), `orbit.task.add` of a task `spawned_from` the claimed task
-  and related to nothing else (a claimed `delivery-code-review` or `code-review` task's
-  finding may also name its culprit as `regression_from`, which the owner
-  checks), `orbit.friction.add` (during the claimed task, if it names
+  and related to nothing else (a claimed `delivery-code-review`, `code-review`, `qa-sweep`
+  or `qa-full-sweep` auto-task's finding may also name its culprit as
+  `regression_from`; area tasks qualify through `no-diff-expected` together
+  with `full-code-review` or `qa-full-sweep`. The owner checks that the culprit
+  belongs to the claimed workspace and the claim is active),
+  `orbit.friction.add` (during the claimed task, if it names
   one), and `orbit.task.artifact.get`/`put` on the claimed task. Its nested
   `orbit`, from the CLI or MCP, hands those calls over; the coordinator takes
   the task and claim from its own records, applies the activity's tool

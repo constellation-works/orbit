@@ -2250,6 +2250,23 @@ fn canonicalize_or_original(path: &Path) -> PathBuf {
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+fn registered_workspace_id(fixture: &Fixture, repo: &Path) -> String {
+    let listed = fixture.json(repo, &["workspace", "list", "--format", "json"]);
+    let repo = canonicalize_or_original(repo);
+    listed
+        .as_array()
+        .expect("workspace list rows")
+        .iter()
+        .find(|row| {
+            row["repo_root"]
+                .as_str()
+                .is_some_and(|root| canonicalize_or_original(Path::new(root)) == repo)
+        })
+        .and_then(|row| row["id"].as_str())
+        .unwrap_or_else(|| panic!("registered workspace for {}: {listed}", repo.display()))
+        .to_string()
+}
+
 struct ConfigStamp {
     bytes: Vec<u8>,
     modified: std::time::SystemTime,
@@ -2431,6 +2448,129 @@ fn empty_nested_orbit_in_linked_worktree_does_not_rewrite_main_workspace() {
         "global home keeps its existing refusal: {home_stderr}"
     );
     assert_config_unchanged(&main_config, &stamp, "global home workspace init");
+}
+
+/// An explicit `--workspace` selector names its target directly: a nested
+/// empty `.orbit/` (or one holding a malformed config) in the caller's
+/// working directory must not refuse the write, while an implicitly
+/// selected write from the same directory stays refused.
+#[test]
+fn config_set_explicit_workspace_selector_bypasses_indirect_refusal() {
+    #[cfg(unix)]
+    if crate::isolated_test::run_in_child(
+        "worktree_resolution::config_set_explicit_workspace_selector_bypasses_indirect_refusal",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::seeded("repo");
+    let main_repo = fixture.repo.as_path();
+    fixture.init(main_repo);
+    fixture.success(
+        main_repo,
+        &[
+            "config",
+            "set",
+            "--fresh",
+            "workflow.base_branch",
+            "agent-main",
+        ],
+    );
+    let repo_b = canonicalize_or_original(&fixture.temp.path().join("repo-b"));
+    Fixture::seed_repo(&repo_b);
+    fixture.init(&repo_b);
+    fixture.success(
+        &repo_b,
+        &[
+            "config",
+            "set",
+            "--fresh",
+            "workflow.base_branch",
+            "b-before",
+        ],
+    );
+    let id_a = registered_workspace_id(&fixture, main_repo);
+    let id_b = registered_workspace_id(&fixture, &repo_b);
+    let config_a = main_repo.join(".orbit/config.toml");
+    let config_b = repo_b.join(".orbit/config.toml");
+
+    let nested = main_repo.join("nested");
+    fs::create_dir_all(nested.join(".orbit")).expect("empty caller .orbit");
+
+    let stamp_a = config_stamp(&config_a);
+    let stamp_b = config_stamp(&config_b);
+    let implicit = fixture.output(
+        &nested,
+        &["config", "set", "workflow.base_branch", "implicit"],
+    );
+    assert!(
+        !implicit.status.success(),
+        "implicit config set from an empty nested .orbit must be refused: {}",
+        String::from_utf8_lossy(&implicit.stderr)
+    );
+    assert_config_unchanged(&config_a, &stamp_a, "implicit config set");
+    assert_config_unchanged(&config_b, &stamp_b, "implicit config set");
+
+    fixture.success(
+        &nested,
+        &[
+            "--workspace",
+            &id_a,
+            "config",
+            "set",
+            "workflow.base_branch",
+            "explicit-a",
+        ],
+    );
+    assert!(
+        fs::read_to_string(&config_a)
+            .expect("workspace A config")
+            .contains("explicit-a"),
+        "explicit selector must update the named workspace"
+    );
+    assert_config_unchanged(&config_b, &stamp_b, "explicit A config set");
+
+    // A malformed config in the caller's own .orbit is unrelated to the
+    // explicitly selected workspace and must not block its write either.
+    fs::write(
+        nested.join(".orbit/config.toml"),
+        "[workflow\nbase_branch = [",
+    )
+    .expect("malformed caller config");
+    let stamp_a = config_stamp(&config_a);
+    fixture.success(
+        &nested,
+        &[
+            "--workspace",
+            &id_b,
+            "config",
+            "set",
+            "workflow.base_branch",
+            "explicit-b",
+        ],
+    );
+    let written_b = fs::read_to_string(&config_b).expect("workspace B config");
+    assert!(
+        written_b.contains("explicit-b"),
+        "explicit selector must update workspace B despite the caller config: {written_b}"
+    );
+    assert_config_unchanged(&config_a, &stamp_a, "explicit B config set");
+
+    let implicit = fixture.output(
+        &nested,
+        &["config", "set", "workflow.base_branch", "implicit"],
+    );
+    assert!(
+        !implicit.status.success(),
+        "implicit config set must stay refused: {}",
+        String::from_utf8_lossy(&implicit.stderr)
+    );
+    assert!(
+        !fs::read_to_string(&config_b)
+            .expect("workspace B config")
+            .contains("implicit"),
+        "a refused implicit write must not change workspace B"
+    );
 }
 
 // Keep failure output tied to the historical scenario name, including assertions in shared helpers.

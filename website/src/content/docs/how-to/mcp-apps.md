@@ -125,9 +125,13 @@ For a run, pass the run ID Orbit returned, for example from
 ```
 
 Both tools reject any other argument, such as a `status` or `actor`, with
-`invalid_input`. A missing `workspace` or `id`, an empty string or a value over
-2048 characters is refused the same way. A task or run that does not exist in
-the selected workspace is an error; nothing falls back to another workspace.
+`invalid_input`. `orbit_ui_open` with no arguments or with only `workspace` is
+accepted. `orbit_ui_inspect` requires `id`; `orbit_ui_open` requires `id` only
+when `id` or `kind` is supplied. `kind` requires both `workspace` and `id`.
+Any supplied `workspace`, `id` or `kind` must be a string that is not empty or
+whitespace-only and is no longer than 2048 UTF-8 bytes, or the call returns
+`invalid_input`. A task or run that does not exist in the selected workspace
+is an error; nothing falls back to another workspace.
 Inspecting a run needs a session that may read runs, which means operator
 authority (see [Connect your agent](../mcp-integration/#observe-the-run)).
 
@@ -145,7 +149,7 @@ The panel has a rail with a workspace selector and four views.
 | **Tasks** | Tasks grouped by status, with search and a priority filter. It opens on In progress, Review, Blocked and Backlog; **Active work** restores that set and **All** includes every status. Selecting a row opens its detail with comments, history and artifact metadata, each paged. |
 | **Runs** | Workflow runs with a state filter. A run's detail has its state and paged log excerpts. In-progress task rows link to their run. |
 | **Auto-drain** | Readiness of the backlog, the current delivery window and its workers. |
-| **Automation** | Routines, auto-tasks and jobs defined in the workspace, with their next scheduled slot. |
+| **Automation** | Routines and auto-tasks show a next evaluation time only when their state is scheduled and a next due time is available; otherwise they show their state. Job rows show their step count and parallel-run limit. |
 
 The selected host, workspace and task or run stay visible. Switching
 workspace or view discards late replies from the previous one, so a slow read
@@ -168,10 +172,11 @@ Everything the panel can change goes through the ordinary Orbit tools, under
 the session's own authority, workspace policy and audit:
 
 - **Tasks.** **New task** files a proposed task that needs acceptance criteria;
-  nothing runs until it is dispatched. Edit changes one field at a time, and
-  comments are appended separately. Edits carry the revision they were read at
-  and are refused if the task changed. A retried write with the same request ID
-  does not repeat the mutation.
+  nothing runs until it is dispatched. One guarded task edit may include
+  title, description, acceptance criteria, priority, crew, and status
+  together, and a comment or a review verdict is a separate write. Edits
+  carry the revision they were read at and are refused if the task changed.
+  A retried write with the same request ID does not repeat the mutation.
 - **Review.** A review records criterion outcomes and evidence against the
   current revision and the run or pull-request head. Requesting changes and
   recording acceptance keep the task in review. **Accept and mark done**

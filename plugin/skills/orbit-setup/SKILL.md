@@ -20,7 +20,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | User need | Reference |
 |---|---|
 | First installation or another repository | [First run](references/first-run.md); for an agent lane, continue with [Provider setup](references/providers.md#provider-setup) |
-| Add a Copilot, Cursor, Pi, Antigravity, OpenCode or Muse crew; fix provider authentication | [Configuration — Provider setup](references/providers.md#provider-setup) |
+| Add a Copilot, Antigravity or Muse crew; fix provider authentication | [Configuration — Provider setup](references/providers.md#provider-setup) |
 | Explain crew selection, provider aliases or a dispatch refusal | [Configuration — Provider identity and resolution](references/providers.md#provider-identity-and-resolution) |
 | Crews, policies, workspace settings, generated-file conflict recovery, prose-only validation, executor admission order, host pressure, stalled providers, command timeouts and per-tag instruction files | [Configuration](references/configuration.md) |
 | Linux execution prerequisites or sandbox failure | [Linux sandbox](references/linux-sandbox.md) |

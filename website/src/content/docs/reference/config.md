@@ -315,7 +315,6 @@ supported value is passed through the provider's documented flag.
 |---|---|---|
 | `claude` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` |
 | `codex` | `low`, `medium`, `high`, `xhigh`, `max` | `--config model_reasoning_effort` |
-| `pi` | `low`, `medium`, `high`, `xhigh`, `max` | `--thinking` |
 | `muse` | `low`, `medium`, `high`, `xhigh`, `max` | `--reasoning-effort` |
 | `antigravity` | `low`, `medium`, `high` | `--effort` |
 | `grok` with `grok-4.6` or `grok-4.7` | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
@@ -331,9 +330,7 @@ write a value that loading would drop. A missing `provider` or `model`, a
 retired backend, or an unknown pool reference still fails config loading.
 
 The narrower sets follow each CLI. `agy --effort` defines no `xhigh` or `max`.
-OpenCode forwards `--variant` verbatim to whichever model provider `--model`
-selects and publishes no provider-independent values, so Orbit accepts only
-`high` and `max`. Grok effort is verified only for `grok-4.5`, `grok-4.6`, and
+Grok effort is verified only for `grok-4.5`, `grok-4.6`, and
 `grok-4.7`; on any other Grok model it is ignored with a warning. The provider
 can still reject a value for a particular model.
 

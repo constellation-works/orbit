@@ -46,30 +46,25 @@
 //! GitHub's `UNKNOWN` mergeability answer skips only that pull request.
 //! Nothing here ends the drain: each refusal is reported in the step output
 //! and a later pass reconsiders it.
+//!
+//! The dashboard's Fix PR action starts the same repair for one task through
+//! [`OrbitRuntime::start_task_pr_auto_fix`] (`task_auto_fix`): the same
+//! verdict, plan, start and history record, with no drain behind it.
 
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
-use orbit_types::task::{
-    NO_AUTO_APPROVE_TAG, TaskHistoryEntry, TaskStatus, names_task_delivery_pull_request,
-};
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskStatus, names_task_delivery_pull_request};
 use orbit_types::workflow::{DEFAULT_BRANCH_PREFIX, JobRun, JobRunState, PrAutoFixBlocker};
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::super::orphan_adoption::AdoptionAuthority;
 use super::super::resume::{OUT_OF_RUN_AUTO_FIX_KEY, shelving_run_id};
 use super::super::{RunOwnerLiveness, run_owner_liveness};
-use super::ledger::{ledger_admits, run_recency};
+use super::ledger::{OutOfRunStart, ledger_admits, run_recency};
 use crate::OrbitRuntime;
-use crate::application::task::SYSTEM_ACTOR_LABEL;
 use crate::runtime::run_input::carried_task_ids;
-
-/// Task history event recording one out-of-run auto-fix the drain started.
-pub(crate) const PR_AUTO_FIX_OUT_OF_RUN_EVENT: &str = "pr_auto_fix_out_of_run";
 
 /// The delivery leaf that opens and watches a pull request.
 pub(super) const DELIVERY_LEAF_JOB: &str = "task_pr_pipeline";
@@ -82,30 +77,6 @@ pub(super) const TASK_LEAF_SCAN: usize = 8;
 /// How long a pull request found without a blocker is not read again.
 pub(super) const CLEAN_RECHECK: Duration = Duration::from_secs(300);
 
-/// One out-of-run auto-fix, as recorded in the task's history.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) struct OutOfRunStart {
-    pub(super) pr_number: String,
-    pub(super) head_sha: String,
-    pub(super) blocker: PrAutoFixBlocker,
-    pub(super) source_run_id: String,
-    pub(super) resumed_run_id: String,
-    pub(super) drain_run_id: String,
-}
-
-/// Every out-of-run auto-fix recorded for `pr_number`.
-pub(super) fn out_of_run_starts(
-    history: &[TaskHistoryEntry],
-    pr_number: &str,
-) -> Vec<OutOfRunStart> {
-    history
-        .iter()
-        .filter(|entry| entry.event == PR_AUTO_FIX_OUT_OF_RUN_EVENT)
-        .filter_map(|entry| serde_json::from_str::<OutOfRunStart>(entry.note.as_deref()?).ok())
-        .filter(|start| start.pr_number == pr_number)
-        .collect()
-}
-
 /// A repair the pass decided to start.
 pub(super) struct Repair {
     task_id: String,
@@ -117,19 +88,47 @@ pub(super) struct Repair {
     marker: Value,
 }
 
+impl Repair {
+    /// The decided repair of `run`'s pull request, before it starts.
+    pub(super) fn summary(&self, run: &JobRun) -> Value {
+        json!({
+            "task_id": self.task_id,
+            "source_run_id": run.run_id,
+            "pr_number": self.pr_number,
+            "head_sha": self.head_sha,
+            "blocker": self.blocker.as_str(),
+        })
+    }
+}
+
 /// What one pass does with one task's newest delivery leaf.
 pub(super) enum Verdict {
-    /// Not this pass's to report: the task has no Orbit pull request at
-    /// rest, or its leaf is live, finished or someone else's.
-    Ignore,
+    /// Not a drain pass's to report: the task has no Orbit pull request at
+    /// rest, or its leaf is live, finished or someone else's. The reason is
+    /// reported only when one task's repair was asked for.
+    Ignore(&'static str, String),
     Skip(&'static str, String),
     Repair(Box<Repair>),
     Started(Value),
 }
 
+/// Who starts a repair, and the completion authority it holds.
+pub(super) struct RepairAuthority<'a> {
+    /// The drain run, recorded as the resume's actor; `None` for a start
+    /// that no drain makes.
+    pub(super) drain_run_id: Option<&'a str>,
+    /// The resume's actor when no drain makes it.
+    pub(super) actor: Option<&'a str>,
+    pub(super) completion_done: bool,
+}
+
 /// Reads one pass shares across its candidates.
 #[derive(Default)]
 pub(super) struct PassReads {
+    /// Read the forge even for a pull request found unblocked within
+    /// [`CLEAN_RECHECK`]: an operator asking about one task wants a fresh
+    /// answer.
+    fresh: bool,
     /// The first forge read failure of this pass.
     forge_error: Option<String>,
     /// The delivery identities, once read.
@@ -142,8 +141,18 @@ pub(super) struct PassReads {
 /// the forge read, so a missing blocker must remain unknown.
 #[derive(Default)]
 pub(super) struct RepairObservation {
-    pr_number: Option<String>,
-    blocker: Option<PrAutoFixBlocker>,
+    pub(super) pr_number: Option<String>,
+    pub(super) blocker: Option<PrAutoFixBlocker>,
+}
+
+impl PassReads {
+    /// Reads for one operator request, which ignore [`CLEAN_RECHECK`].
+    pub(super) fn fresh() -> Self {
+        Self {
+            fresh: true,
+            ..Self::default()
+        }
+    }
 }
 
 pub(super) enum BlockerRead {
@@ -172,6 +181,11 @@ impl OrbitRuntime {
             return json!({ "started": [], "skipped": [], "hold_reason": "write_free" });
         }
         let throttled = self.resource_admission().throttle.is_some();
+        let repair_authority = RepairAuthority {
+            drain_run_id: Some(authority.drain_run_id),
+            actor: Some(authority.drain_run_id),
+            completion_done: authority.completion_done,
+        };
         let tasks = {
             let _span = tracing::debug_span!("pr_repair_candidates").entered();
             // A repair needs a stopped delivery. Project task IDs from all
@@ -266,16 +280,19 @@ impl OrbitRuntime {
             let verdict = match self.repair_verdict(
                 &run,
                 task_id,
-                authority,
+                &repair_authority,
                 &mut reads,
                 &mut observation,
                 hold,
             ) {
-                Verdict::Repair(repair) => self.start_repair(&run, authority, *repair),
+                Verdict::Repair(repair) => match self.plan_repair(&run, *repair, &mut reads) {
+                    Verdict::Repair(repair) => self.start_repair(&run, &repair_authority, *repair),
+                    verdict => verdict,
+                },
                 verdict => verdict,
             };
             match verdict {
-                Verdict::Ignore | Verdict::Repair(_) => {}
+                Verdict::Ignore(..) | Verdict::Repair(_) => {}
                 Verdict::Started(entry) => started.push(entry),
                 Verdict::Skip(reason, detail) => {
                     tracing::debug!(
@@ -303,7 +320,10 @@ impl OrbitRuntime {
     /// The newest `task_pr_pipeline` run that carries only `task_id`, whatever
     /// its state: a later finished run speaks for the task, so the verdict
     /// never resumes an older stopped one.
-    fn newest_own_delivery_leaf(&self, task_id: &str) -> Result<Option<JobRun>, OrbitError> {
+    pub(super) fn newest_own_delivery_leaf(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<JobRun>, OrbitError> {
         Ok(self
             .stores()
             .jobs()
@@ -323,12 +343,13 @@ impl OrbitRuntime {
     }
 
     /// Whether the pull request of `task_id`'s newest leaf `run` is repaired,
-    /// and if not, why.
-    fn repair_verdict(
+    /// and if not, why. A repair still has to be planned
+    /// ([`Self::plan_repair`]) before it starts.
+    pub(super) fn repair_verdict(
         &self,
         run: &JobRun,
         task_id: &str,
-        authority: &AdoptionAuthority<'_>,
+        authority: &RepairAuthority<'_>,
         reads: &mut PassReads,
         observation: &mut RepairObservation,
         hold: Option<(&'static str, &str)>,
@@ -336,29 +357,56 @@ impl OrbitRuntime {
         let skip = |reason, detail: String| Verdict::Skip(reason, detail);
         // A live leaf watches its own pull request; a finished or cancelled
         // one is not resumed.
+        if !run.state.is_terminal() {
+            return Verdict::Ignore(
+                "live_run",
+                format!("its delivery run {} is still {}", run.run_id, run.state),
+            );
+        }
         if !matches!(
             run.state,
             JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
         ) {
-            return Verdict::Ignore;
+            return Verdict::Ignore(
+                "leaf_not_stopped",
+                format!(
+                    "its newest delivery run {} ended {}; only a failed, timed-out or \
+                     interrupted delivery is handed back",
+                    run.run_id, run.state
+                ),
+            );
         }
         let input = run.input.clone().unwrap_or(Value::Null);
         if input.get("claimed").and_then(Value::as_bool) == Some(true) {
-            return Verdict::Ignore;
+            return Verdict::Ignore(
+                "claimed_execution",
+                "its newest delivery ran as a claimed execution on another machine".to_string(),
+            );
         }
         let task = match self.get_task(task_id) {
             Ok(task) => task,
-            Err(OrbitError::NotFound { .. }) => return Verdict::Ignore,
+            Err(OrbitError::NotFound { .. }) => {
+                return Verdict::Ignore("not_found", "the task does not exist".to_string());
+            }
             Err(error) => return skip("store_unreadable", format!("read the task: {error}")),
         };
         if !matches!(
             task.status,
             TaskStatus::Review | TaskStatus::Blocked | TaskStatus::Backlog
         ) {
-            return Verdict::Ignore;
+            return Verdict::Ignore(
+                "task_status",
+                format!(
+                    "the task is {}; only a delivered task is repaired",
+                    task.status
+                ),
+            );
         }
         let Some(pr_number) = task.github_pr_number().map(str::to_string) else {
-            return Verdict::Ignore;
+            return Verdict::Ignore(
+                "no_pull_request",
+                "the task records no pull request".to_string(),
+            );
         };
         observation.pr_number = Some(pr_number.clone());
         // Report held candidates without spending forge reads or admitting
@@ -484,12 +532,13 @@ impl OrbitRuntime {
                 format!("'{head}' is not one of the task's Orbit branches"),
             );
         }
-        if self
-            .pr_repair_checks
-            .lock()
-            .ok()
-            .and_then(|checks| checks.get(&pull_number).copied())
-            .is_some_and(|at| at.elapsed() < CLEAN_RECHECK)
+        if !reads.fresh
+            && self
+                .pr_repair_checks
+                .lock()
+                .ok()
+                .and_then(|checks| checks.get(&pull_number).copied())
+                .is_some_and(|at| at.elapsed() < CLEAN_RECHECK)
         {
             return skip(
                 "checked_recently",
@@ -569,19 +618,6 @@ impl OrbitRuntime {
         if let Err(skipped) = ledger_admits(&history, &number, &blockers.head_sha, blocker) {
             return skipped;
         }
-        // Resume planning reports an unloadable activity catalog as a
-        // validation refusal; load it first so that case reads as one.
-        let catalog = reads.catalog.get_or_insert_with(|| {
-            self.v2_activity_catalog()
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        });
-        if let Err(error) = catalog {
-            return skip(
-                "resume_unplannable",
-                format!("load the activity catalog: {error}"),
-            );
-        }
         let marker = json!({
             "task_id": task_id,
             "pr_number": number,
@@ -591,17 +627,42 @@ impl OrbitRuntime {
             "source_run_id": run.run_id,
             "drain_run_id": authority.drain_run_id,
         });
-        match self.plan_completion_repair_resume(&run.run_id, &marker) {
-            Ok(_) => Verdict::Repair(Box::new(Repair {
-                task_id: task_id.to_string(),
-                status: task.status,
-                pr_number: number,
-                head_sha: blockers.head_sha,
-                blocker,
-                marker,
-            })),
-            Err(error @ OrbitError::JobValidation(_)) => skip("not_resumable", error.to_string()),
-            Err(error) => skip("resume_unplannable", error.to_string()),
+        Verdict::Repair(Box::new(Repair {
+            task_id: task_id.to_string(),
+            status: task.status,
+            pr_number: number,
+            head_sha: blockers.head_sha,
+            blocker,
+            marker,
+        }))
+    }
+
+    /// Whether checkpoint resume accepts `run` rewound for `repair`.
+    pub(super) fn plan_repair(
+        &self,
+        run: &JobRun,
+        repair: Repair,
+        reads: &mut PassReads,
+    ) -> Verdict {
+        // Resume planning reports an unloadable activity catalog as a
+        // validation refusal; load it first so that case reads as one.
+        let catalog = reads.catalog.get_or_insert_with(|| {
+            self.v2_activity_catalog()
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        });
+        if let Err(error) = catalog {
+            return Verdict::Skip(
+                "resume_unplannable",
+                format!("load the activity catalog: {error}"),
+            );
+        }
+        match self.plan_completion_repair_resume(&run.run_id, &repair.marker) {
+            Ok(_) => Verdict::Repair(Box::new(repair)),
+            Err(error @ OrbitError::JobValidation(_)) => {
+                Verdict::Skip("not_resumable", error.to_string())
+            }
+            Err(error) => Verdict::Skip("resume_unplannable", error.to_string()),
         }
     }
 
@@ -636,10 +697,10 @@ impl OrbitRuntime {
 
     /// Resume `run` to repair `repair`, re-checking first that its task has
     /// not moved and nothing of it started since the verdict.
-    fn start_repair(
+    pub(super) fn start_repair(
         &self,
         run: &JobRun,
-        authority: &AdoptionAuthority<'_>,
+        authority: &RepairAuthority<'_>,
         repair: Repair,
     ) -> Verdict {
         match self.get_task(&repair.task_id) {
@@ -658,14 +719,11 @@ impl OrbitRuntime {
                 return Verdict::Skip("store_unreadable", format!("read the task: {error}"));
             }
         }
-        let invoke = match self.submit_completion_repair_run(
-            &run.run_id,
-            &repair.marker,
-            Some(authority.drain_run_id),
-        ) {
-            Ok(invoke) => invoke,
-            Err(error) => return Verdict::Skip("resume_failed", error.to_string()),
-        };
+        let invoke =
+            match self.submit_completion_repair_run(&run.run_id, &repair.marker, authority.actor) {
+                Ok(invoke) => invoke,
+                Err(error) => return Verdict::Skip("resume_failed", error.to_string()),
+            };
         tracing::info!(
             target: "orbit.core.drain",
             source_run_id = %run.run_id,
@@ -673,17 +731,18 @@ impl OrbitRuntime {
             task_id = %repair.task_id,
             pr = %repair.pr_number,
             blocker = repair.blocker.as_str(),
-            "drain handed a blocked pull request back to its delivery for an auto-fix",
+            drain_run_id = authority.drain_run_id,
+            "handed a blocked pull request back to its delivery for an auto-fix",
         );
         self.record_out_of_run_start(
-            &repair,
+            &repair.task_id,
             &OutOfRunStart {
                 pr_number: repair.pr_number.clone(),
                 head_sha: repair.head_sha.clone(),
                 blocker: repair.blocker,
                 source_run_id: run.run_id.clone(),
                 resumed_run_id: invoke.run_id.clone(),
-                drain_run_id: authority.drain_run_id.to_string(),
+                drain_run_id: authority.drain_run_id.map(str::to_string),
             },
         );
         Verdict::Started(json!({
@@ -694,42 +753,6 @@ impl OrbitRuntime {
             "head_sha": repair.head_sha,
             "blocker": repair.blocker.as_str(),
         }))
-    }
-
-    /// Record `start` in the task's history, which bounds later passes. A
-    /// lost record is logged: the resumed run's own ledger admission still
-    /// bounds its repair.
-    fn record_out_of_run_start(&self, repair: &Repair, start: &OutOfRunStart) {
-        let result = serde_json::to_string(start)
-            .map_err(|error| OrbitError::Execution(error.to_string()))
-            .and_then(|note| {
-                self.apply_task_automation_update(
-                    &repair.task_id,
-                    TaskAutomationUpdate {
-                        append_history: vec![TaskHistoryEntry {
-                            at: Utc::now(),
-                            by: SYSTEM_ACTOR_LABEL.to_string(),
-                            event: PR_AUTO_FIX_OUT_OF_RUN_EVENT.to_string(),
-                            note: Some(note),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                        }],
-                        ..TaskAutomationUpdate::default()
-                    },
-                )
-                .map(|_| ())
-            });
-        if let Err(error) = result {
-            tracing::warn!(
-                target: "orbit.core.drain",
-                task_id = %repair.task_id,
-                resumed_run_id = %start.resumed_run_id,
-                error = %error,
-                "could not record the out-of-run auto-fix in task history",
-            );
-        }
     }
 
     /// The out-of-run auto-fixes live now, for readiness: each pending or

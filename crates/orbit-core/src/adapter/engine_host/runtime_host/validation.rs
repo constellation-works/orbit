@@ -126,3 +126,31 @@ pub(super) fn validated_tree(
         .get(run_id)
         .cloned())
 }
+
+pub(super) fn unlocked_path_validation(
+    runtime: &OrbitRuntime,
+) -> orbit_engine::UnlockedPathValidation {
+    let settings = runtime.context.settings();
+    orbit_engine::UnlockedPathValidation {
+        paths: settings.unlocked_context_paths().patterns().to_vec(),
+        commands: settings.unlocked_path_validation_commands().to_vec(),
+    }
+}
+
+pub(super) fn generated_paths(runtime: &OrbitRuntime) -> Vec<orbit_engine::GeneratedPath> {
+    runtime
+        .context
+        .settings()
+        .generated_paths()
+        .iter()
+        .map(|(path, command)| orbit_engine::GeneratedPath {
+            path: path.clone(),
+            command: command.clone(),
+        })
+        .collect()
+}
+
+pub(super) fn agent_stall_window(runtime: &OrbitRuntime) -> Option<std::time::Duration> {
+    let minutes = runtime.context.agent_stall_minutes();
+    (minutes > 0).then(|| std::time::Duration::from_secs(u64::from(minutes) * 60))
+}

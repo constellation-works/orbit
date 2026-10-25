@@ -99,6 +99,10 @@ impl OrbitRuntime {
         Self::from_kernel(self.kernel.with_coordination_write_owner(owner_machine_id))
     }
 
+    pub fn with_workspace_explicitly_selected(self, selected: bool) -> Self {
+        Self::from_kernel(self.kernel.with_workspace_explicitly_selected(selected))
+    }
+
     pub fn with_workspace_catalog(
         self,
         catalog: Arc<dyn workspace::catalog::WorkspaceCatalog>,

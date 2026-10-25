@@ -7,8 +7,8 @@ doc_role: scope
 type: design
 summary: "Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative)"
 tags: [crew-performance, crews, crew-pools, agent-scorecards, admission]
-last_updated: 2026-10-24
-last_validated: 2026-10-24
+last_updated: 2026-10-25
+last_validated: 2026-10-25
 ---
 
 # Scope: performance-weighted crew selection
@@ -204,12 +204,37 @@ combination.
   record separately as static. The dashboard gets no new section: the scorecard tab stays as
   it is, and a call without the switches keeps the ranking.
 
+### Offline type discovery
+
+`orbit agents scorecard --role implementers --per-task --json` exports one row per
+implemented task in the window: its crew, model, tier, currently configured type, tags,
+context-file selectors and top-level path prefixes, and its per-term counts under the
+existing term definitions and weights. Summed per `(crew, model, tier, type)`, those rows
+reproduce the `--by-type` cells' `n` and raw values on the same scan. The export is
+read-only: it writes no snapshot and refreshes no cache beyond the scan the scorecard
+already makes.
+
+The standalone script in `tools/crew-type-discovery` (not part of the workspace build)
+reads that export from a file or stdin and, per `(crew, model, tier)` (or per tier with
+`--group-by tier`), fits a shallow regression tree on each task's score relative to its
+crew's own tier mean — the comparative-advantage target above. Features are tags and
+top-level path prefixes. It prints each leaf with its `n`, mean relative score and the
+predicate that reaches it, then a ready-to-paste `[[workflow.crew_performance_types]]`
+block for each leaf that passes its thresholds: at least `--min-leaf` tasks (default 30,
+the sparse-cell floor) and a mean at least `--margin` points from its parent (default 8).
+`--max-depth` (default 3) bounds the tree, and `--json` emits the same report as JSON.
+
+Read a suggested type as a hypothesis, not a finding: check it in the `--by-type` report
+before adopting it. The report suggests candidate splits and never applies them — it
+changes no draws, pools, weights or configuration, and no routine runs it.
+
 ## Non-goals
 
 - **Changing pool membership or complexity routing.** A hard task never goes to a crew outside
   the hard pool.
-- **Choosing types automatically.** No clustering of tasks into types. The operator writes the
-  list and the report shows whether each type earns its place.
+- **Choosing types automatically.** No clustering of tasks into types and no automatic
+  adoption. The offline discovery report suggests candidate splits; the operator writes
+  the list and the report shows whether each type earns its place.
 - **Scoring reviewers, orchestrators or pilots for routing.** Only implementer draws.
 - **Cost.** Cost stays shown, never scored
   ([§4.5](../agent-scorecards/2_design.md#45-cost-is-shown-never-scored)).
