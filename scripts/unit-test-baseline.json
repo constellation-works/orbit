@@ -211,7 +211,7 @@
         "application/job/run/tests/owner.rs::same_pid_namespace_still_detects_a_genuinely_dead_owner",
         "application/job/run/tests/owner.rs::signal_owner_after_exit_returns_already_exited",
         "application/job/run/tests/owner.rs::signal_owner_in_foreign_pid_namespace_never_signals_the_local_process",
-        "application/job/tests/agent_invoke.rs::invocation_audit_failure_preserves_admission_retry_and_original_error",
+        "application/job/tests/agent/invoke.rs::invocation_audit_failure_preserves_admission_retry_and_original_error",
         "application/job/tests/crew_pools/activity.rs::empty_final_recovery_pool_refuses_to_draw",
         "application/job/tests/crew_pools/activity.rs::final_recovery_crew_draw_honours_the_run_allowlist",
         "application/job/tests/crew_pools/activity.rs::final_recovery_crew_is_drawn_once_and_frozen_for_the_run",

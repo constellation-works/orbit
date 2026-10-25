@@ -52,7 +52,7 @@ use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission
 use crate::runtime::audit::run::RunProviderProcess;
 use crate::runtime::authorization::{AgentInvokeAdmission, AgentInvokeAuthorizer};
 
-use super::agent_explore::{AgentInvocation, EXPLORE_JOB_ID};
+use super::explore::{AgentInvocation, EXPLORE_JOB_ID};
 
 /// Catalog job that carries one agent invocation.
 pub const AGENT_INVOKE_JOB_ID: &str = "agent_invoke_pipeline";
