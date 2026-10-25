@@ -242,6 +242,56 @@ Sync updates managed files, not workspace ownership or task publication. The
 plugin skill bundle updates through its plugin distribution; global skill
 symlinks and a plugin installation are distinct delivery paths.
 
+## Removing or re-targeting a workspace
+
+Choose by intent:
+
+- To stop tracking a checkout but keep its data, use
+  `orbit workspace remove <workspace>`. It removes the workspace and checkout
+  records and the local task-publication binding. It keeps the checkout's
+  `.orbit/` directory and task-store partition, including task bundles; the
+  publication Git repository is not changed. This command has no `--confirm`
+  or `--dry-run` option. Require the user's explicit authorization before
+  running it.
+- To delete Orbit data for a checkout, use
+  `orbit workspace teardown <workspace> --confirm`. It deletes the task-store
+  partitions bound to that checkout, Orbit-owned skill links under
+  `.agents/skills/` and `.claude/skills/`, and its `.orbit/` directory, then
+  deregisters the workspace. It leaves the source checkout and global Orbit
+  data directory itself in place. Without `--confirm`, it prints the resolved
+  deletion plan and
+  refuses; there is no `--dry-run` option. Require the user's explicit
+  authorization and a verified backup or task export before teardown.
+- If the repository moved, use
+  `orbit workspace source-remote rebind --remote <URL>`. First inspect and
+  save the current identity with `orbit workspace source-remote show --json`,
+  then validate the proposed change with
+  `orbit workspace source-remote rebind --remote <URL> --dry-run --json`.
+  After reviewing that result, apply the same command without `--dry-run` and
+  update the checkout's Git `origin` separately. The new URL must be portable;
+  credentials, local paths and remote aliases are refused. Rebinding changes
+  the registered source remote and repository identity, not Git configuration.
+  It refuses to rewrite an existing publication binding or its lineage and
+  snapshots; remove and recreate that binding explicitly around the move.
+  See [Publication](publication.md) and [Multi-host](multi-host.md) before
+  moving state between hosts.
+
+Before `remove` or `teardown`, manually confirm there are no live drains, runs,
+or claims, and identify any unpublished tasks. The commands do not enforce
+these checks. Inspect `orbit task publication status --json`; a `current`
+status does not prove that every recent task change is published. Preserve the
+task data you need with a verified publication or export, and back up required
+host configuration separately, following [Publication](publication.md),
+before teardown.
+
+Capture `orbit workspace show --json` and
+`orbit workspace source-remote show --json` before a change. After removal or
+teardown, use `orbit workspace list --json` to confirm the workspace is no
+longer registered on this host. After a rebind, use
+`orbit workspace list --json`, `orbit workspace show --json` and
+`orbit workspace source-remote show --json` to verify the registration and
+new source identity.
+
 ## Persistent MCP clients during upgrades
 
 `orbit update --contract --json` describes candidate protocol support without
