@@ -170,7 +170,7 @@ fn completion_replay_finishes_side_effects_after_a_post_lock_read_failure() {
     // #17 is the reviewed landing, kept open; #12 is an earlier stale one.
     let open_prs = [17, 12].map(|number| ForgePullRequest {
         number,
-        head_branch: format!("orbit/{}-delivery-{number}", task.id),
+        head_branch: format!("orbit/{}-{number:08x}", task.id),
         body: format!("Task {}", task.id),
         author: "orbit-bot".to_string(),
     });
