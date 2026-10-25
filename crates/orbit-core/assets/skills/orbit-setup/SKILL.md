@@ -19,8 +19,10 @@ shared workspace. Preserve the user's installation method and existing config.
 
 | User need | Reference |
 |---|---|
-| First installation or another repository | [First run](references/first-run.md) |
-| Providers, crews, policies, workspace settings and per-tag instruction files | [Configuration](references/configuration.md) |
+| First installation or another repository | [First run](references/first-run.md); for an agent lane, continue with [Provider setup](references/providers.md#provider-setup) |
+| Add a Copilot, Cursor, Pi, Antigravity, OpenCode or Muse crew; fix provider authentication | [Configuration — Provider setup](references/providers.md#provider-setup) |
+| Explain crew selection, provider aliases or a dispatch refusal | [Configuration — Provider identity and resolution](references/providers.md#provider-identity-and-resolution) |
+| Crews, policies, workspace settings and per-tag instruction files | [Configuration](references/configuration.md) |
 | Linux execution prerequisites or sandbox failure | [Linux sandbox](references/linux-sandbox.md) |
 | Windows host (Orbit runs inside WSL2) | [Windows through WSL2](references/windows-wsl2.md) |
 | macOS: Claude worker token and the clock env file | [macOS](references/macos.md) |
