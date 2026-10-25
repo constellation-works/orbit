@@ -52,6 +52,104 @@ orbit clock tick --dry-run --verbose     # what would fire; writes nothing
 orbit --workspace <name> clock tick      # only that workspace's schedules
 ```
 
+## Scheduled credentials
+
+Use this when a scheduled run needs a credential you normally export in your
+login shell — a provider token, an API key, or a `GITHUB_TOKEN`. The clock
+does not inherit that environment: launchd (macOS) or a systemd user timer
+(Linux) starts `orbit clock tick` with no login shell, so a variable you
+exported interactively never reaches the tick or the runs it starts. The
+installed unit file never contains a secret.
+
+Instead, the tick reads one machine-global file, `~/.orbit/clock.env`, beside
+the global `config.toml`. It is not per-workspace, not in any checkout, and
+never synced. Installing the clock creates it comment-only and owner-only;
+reinstalling never overwrites an existing file:
+
+```bash
+orbit routine init --install-clock   # creates ~/.orbit/clock.env if absent
+chmod 600 ~/.orbit/clock.env         # owner read/write only; the tick requires this
+```
+
+Edit it with one `NAME=value` per line, using placeholders here and real
+values only in the file itself:
+
+```ini
+# ~/.orbit/clock.env — never commit or share this file
+CLAUDE_CODE_OAUTH_TOKEN=<token-from-claude-setup-token>
+ANTHROPIC_CREDITS_API_KEY_1=<api-key-for-the-credits-crew>
+GITHUB_TOKEN=<github-token>
+```
+
+A name in the file reaches a run only when Orbit admits it, in one of two
+ways:
+
+- **Shared `pass` list.** Add the name to the effective
+  [`execution.env.pass`](../../reference/config/#settable-keys) for the
+  workspace. That list replaces the default rather than extending it, so
+  restate the baseline names:
+
+  ```bash
+  orbit config set execution.env.pass \
+    '["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "CLAUDE_CODE_OAUTH_TOKEN", "GITHUB_TOKEN"]'
+  ```
+
+  `execution.env.pass` is a security key: once a workspace `config.toml`
+  exists, its list is the one that counts for that workspace, not the global
+  one. A token stored under a name no workspace's `pass` admits is loaded
+  for nobody.
+- **Per-crew source names.** A crew's `env` entry (global config only) names
+  a source the tick also reads from `clock.env`, without adding it to `pass`.
+  With `env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]` on a crew,
+  that crew's agents receive `ANTHROPIC_API_KEY` from the
+  `ANTHROPIC_CREDITS_API_KEY_1` line above; they never receive the source
+  name itself, and other crews are unaffected. Set it with
+  `orbit config set --global crews.<name>.env '["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]'`.
+  See [the `clock.env` reference](../../reference/config/#scheduled-credentials-clockenv).
+
+Service and login environments combine like this: a non-empty value already
+in the tick's process environment wins, an empty or absent one is filled
+from `clock.env`, and the tick never changes its own environment — values
+pass only as defaults to the child runs it starts. A dry run loads nothing,
+so `orbit clock tick --dry-run` never reports loaded credentials. By
+contrast, a drain or ship run you start by hand does not read `clock.env`:
+start it from a login shell, or expect unset-name warnings on the run.
+
+Verify with names only — no command prints a value:
+
+```bash
+orbit clock tick --json   # a real tick; its clock_env_loaded lists loaded names
+orbit doctor              # env-pass and, on macOS, claude-worker-token rows
+```
+
+`orbit doctor`'s `env-pass` row checks the environment doctor itself runs
+in. A refused `clock.env` — a symlink, a file owned by another user, or one
+readable by group or others — is a load error on the tick: the tick still
+runs, but loads nothing from the file, and the error tells you to
+`chmod 600` it. Sandboxed agents cannot read `clock.env` itself; they only
+receive the admitted names as environment variables.
+
+### Claude on macOS
+
+On macOS, give scheduled Claude runs a dedicated credential. Create a
+long-lived token and store it as `CLAUDE_CODE_OAUTH_TOKEN`:
+
+```bash
+claude setup-token   # requires a Claude subscription; prints the token once
+```
+
+Put that token in `~/.orbit/clock.env` and admit `CLAUDE_CODE_OAUTH_TOKEN`
+in `execution.env.pass`, as above. An `ANTHROPIC_API_KEY` admitted the same
+way, or a per-crew `env` mapping that supplies either name, also satisfies
+this. A Claude activity that receives neither is refused before `claude`
+starts, rather than falling back to the Claude Desktop login, which the
+Desktop revokes mid-run; a drain on such a host excludes those Claude crews
+instead of claiming work it cannot run. `orbit doctor`'s
+`claude-worker-token` row warns ahead of time, naming the `pass` list or
+`clock.env` that lacks the token, or a crew credential source `clock.env`
+lacks. On Linux this row is skipped: only macOS shares a Desktop login with
+the `claude` CLI.
+
 ## 2. Turn on routines
 
 `orbit workspace init` seeds six routines into `.orbit/routines/`, all
@@ -234,6 +332,10 @@ Check in this order:
 2. This checkout is registered as an owner: `orbit workspace list`.
 3. The definition has `enabled: true`.
 4. The routine is not paused on this machine: `orbit routine list`.
+5. Fires start but fail on a missing credential: check
+   [Scheduled credentials](#scheduled-credentials) — `orbit doctor` names
+   the unset `pass` names, and `orbit clock tick --json` lists the names
+   `clock_env_loaded` from `~/.orbit/clock.env`.
 
 `orbit clock tick --dry-run --verbose` shows the decision for every routine
 and auto-task, and `orbit doctor` runs the host health checks. The
