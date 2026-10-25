@@ -116,7 +116,7 @@ def main():
                 status, conclusion, url = job["status"], job.get("conclusion"), job.get("html_url")
                 started, completed = job.get("started_at") or "", job.get("completed_at") or ""
                 step = next((step for step in job.get("steps") or [] if step.get("name") == args.step), None)
-                if status != "completed" and step is not None and step.get("status") == "completed":
+                if step is not None and step.get("status") == "completed":
                     if step.get("conclusion") != "success":
                         print(f"ci-await: {name} step '{args.step}' concluded "
                               f"{step.get('conclusion') or 'without a conclusion'}: {url}", file=sys.stderr)

@@ -36,6 +36,8 @@ class GuardrailTests(unittest.TestCase):
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
                         GUARD_TEST_CALLS=str(self.guard_calls))
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"):
+            self.env.pop(key, None)
         # Pin the guard pool's width and ignore any host build-budget file.
         self.env.update(ORBIT_CARGO_JOBS="4", ORBIT_BUILD_BUDGET_DIR=str(self.root / "budget"))
         self.targets = self.root / "targets.json"

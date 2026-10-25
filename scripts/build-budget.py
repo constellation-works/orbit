@@ -337,7 +337,12 @@ def main() -> None:
         if low_priority:
             # This process becomes the command, so the lowered priority carries over exec.
             lower_own_priority()
-        os.execvpe(launched[0], launched, environment)
+        try:
+            os.execvpe(launched[0], launched, environment)
+        except FileNotFoundError:
+            fail(f"command not found: {command[0]}", 127)
+        except OSError as error:
+            fail(f"could not execute {command[0]}: {error}", 126)
 
     slot, descriptor = acquire_slot(lock_directory(), slots)
     environment["ORBIT_BUILD_BUDGET_HELD"] = "1"

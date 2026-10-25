@@ -55,7 +55,7 @@ for ((i=0; i<${#args[@]}; i++)); do
   if [[ "$arg" == "--disable-fetch" || "$arg" == "-d" || "$arg" == "--offline" ]]; then
     has_disable_fetch=true
   fi
-  if [[ "$arg" == "--config" || "$arg" == "-c" ]]; then
+  if [[ "$arg" == "--config" || "$arg" == "-c" || "$arg" == --config=* || "$arg" == -c* ]]; then
     has_config=true
   fi
 done

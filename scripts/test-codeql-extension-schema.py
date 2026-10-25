@@ -255,8 +255,8 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
 
     def test_generated_style_yaml_discovery_includes_extension(self):
         data_file = self.write_pack(TWO_VALID_ROWS)
-        discovered = list(data_file.parent.rglob("*.yaml"))
-        self.assertEqual(discovered, [data_file])
+        discovered = CHECK.discover_packs(self.root)
+        self.assertEqual(discovered, [data_file.parent / CHECK.PACK_FILENAME])
         self.assertEqual(self.errors(), [])
 
     def test_yml_extension_fails_generated_discovery_gate(self):
