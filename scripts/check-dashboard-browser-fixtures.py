@@ -421,7 +421,7 @@ def _item_regex(items, named, depth=0):
             parts.append(resolved)
             constrained = True
         else:
-            parts.append(".+")
+            parts.append(".*")
     return "".join(parts) if constrained else None
 
 
