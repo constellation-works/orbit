@@ -6,7 +6,7 @@ import path from 'node:path';
 import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
-import { assertRunTaskLabels, assertTaskLinkScopeHistory, assertTaskLookupClear } from './dashboard_run_tasks_browser.mjs';
+import { assertRunTaskLabels, assertTaskLinkScopeHistory, assertTaskLookupClear, assertFixPrReadinessRefresh } from './dashboard_run_tasks_browser.mjs';
 import { assertClockRepaint } from './dashboard_clock_browser.mjs';
 import { assertTaskTitleLayout } from '../../tests/http_api/dashboard_task_titles_browser.mjs';
 import { assertPullRequestLinks } from '../../tests/http_api/dashboard_pull_request_links_browser.mjs';
@@ -1521,6 +1521,7 @@ try {
   if (!locksOnly && !authExclusionsOnly) await assertClockRepaint(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (clockOnly) console.log('Dashboard clock switch repainted kept task detail and run rows in place.');
   if (!locksOnly && !authExclusionsOnly && !clockOnly) await assertTaskLookupClear(browser, `http://127.0.0.1:${server.address().port}`, evidence);
+  if (!locksOnly && !authExclusionsOnly && !clockOnly) await assertFixPrReadinessRefresh(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   if (process.argv[4] === '--task-lookup') {
     console.log('Dashboard task lookup dismissal browser checks passed.');
   }

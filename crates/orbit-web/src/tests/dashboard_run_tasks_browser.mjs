@@ -515,3 +515,142 @@ export async function assertTaskLookupClear(browser, origin, evidence) {
     await page.close();
   }
 }
+
+// An unchanged review task must re-read Fix PR readiness once the cache
+// interval has passed when the dashboard refreshes, without duplicate reads
+// inside the interval or while a read is pending. Drives the shipped
+// dashboard through its real Refresh button and render path.
+export async function assertFixPrReadinessRefresh(browser, origin, evidence) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const check = (condition, message) => { if (!condition) throw new Error(message); };
+  const tasks = [
+    { id: 'FIXPR-1', title: 'Review task with a pull request', status: 'review', priority: 'medium', pr_number: 42 },
+    { id: 'FIXPR-2', title: 'Running task with a pull request', status: 'in-progress', priority: 'medium', pr_number: 43 },
+    { id: 'FIXPR-3', title: 'Review task without a pull request', status: 'review', priority: 'medium' },
+  ];
+  const readinessRequests = [];
+  let readiness = { available: false, reason: 'no_blocker', pr_number: 42 };
+  let holdReadiness = false;
+  const held = [];
+  const filters = 'review,in-progress';
+  const base = `${origin}/?workspace=ws_orbit&window=24h#tasks?status=${encodeURIComponent(filters)}`;
+  const fixPrButton = page.locator('#task-detail-body .action.fix-pr');
+  const counts = () => ({
+    total: readinessRequests.length,
+    forTask: id => readinessRequests.filter(entry => entry === id).length,
+  });
+  const buttonState = () => page.evaluate(() => {
+    const btn = document.querySelector('#task-detail-body .action.fix-pr');
+    return btn ? { disabled: btn.disabled, title: btn.getAttribute('title') || '' } : null;
+  });
+  const refreshAndSettle = async () => {
+    const before = await page.evaluate(() => globalThis.__fixPrTaskListRequests || 0);
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(previous => (globalThis.__fixPrTaskListRequests || 0) > previous, before);
+    await page.evaluate(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); });
+  };
+  try {
+    await page.route('**/api/**', async route => {
+      const url = new URL(route.request().url());
+      const pathname = url.pathname.replace(/^\/api\/on\/[^/]+/, '/api');
+      let status = 200;
+      let body = { items: [], total: 0, limit: 50 };
+      if (pathname === '/api/hosts') body = { hosts: [{ name: 'dk-server-2', local: true, reachable: true }] };
+      else if (pathname === '/api/workspaces') body = [{ id: 'ws_orbit', name: 'orbit', status: 'active', is_default: true }];
+      else if (pathname === '/api/diagnostics/friction') body = [];
+      else if (pathname === '/api/crews') body = { default_crew: null, crews: [] };
+      else if (pathname === '/api/tasks') body = { items: tasks, total: tasks.length, limit: 50 };
+      else if (/^\/api\/tasks\/FIXPR-\d+\/auto-fix$/.test(pathname)) {
+        const id = pathname.split('/')[3];
+        readinessRequests.push(id);
+        if (holdReadiness) {
+          held.push({ fulfill: () => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(readiness) }) });
+          return;
+        }
+        body = readiness;
+      } else if (/^\/api\/tasks\/FIXPR-\d+$/.test(pathname)) {
+        body = tasks.find(task => task.id === pathname.split('/').pop());
+      }
+      await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
+    });
+    await page.goto(base);
+    await page.evaluate(async () => {
+      globalThis.setInterval = () => 0;
+      globalThis.EventSource = class { close() {} };
+      const realNow = Date.now;
+      globalThis.__fixPrClockOffset = 0;
+      Date.now = () => realNow() + globalThis.__fixPrClockOffset;
+      const realFetch = globalThis.fetch;
+      globalThis.fetch = async (input, options) => {
+        const url = new URL(typeof input === 'string' ? input : input.url, window.location.href);
+        if (url.pathname.replace(/^\/api\/on\/[^/]+/, '/api') === '/api/tasks') globalThis.__fixPrTaskListRequests = (globalThis.__fixPrTaskListRequests || 0) + 1;
+        return realFetch(input, options);
+      };
+      await import('/app.js');
+    });
+    const row = id => page.locator(`#tasks-body .row[data-key="task-${id}"]`);
+    await row('FIXPR-1').waitFor({ state: 'visible' });
+    await row('FIXPR-1').locator('.title').click();
+    await fixPrButton.waitFor({ state: 'visible' });
+    await page.waitForFunction(() => {
+      const btn = document.querySelector('#task-detail-body .action.fix-pr');
+      return btn && btn.disabled && (btn.getAttribute('title') || '').includes('nothing to repair');
+    });
+    check(counts().total === 1 && counts().forTask('FIXPR-1') === 1, `Opening the review task must read readiness once: ${JSON.stringify(readinessRequests)}`);
+    await page.screenshot({ path: path.join(evidence, 'fix-pr-disabled-1440.png') });
+    // A refresh inside the cache interval reuses the detail and the reading.
+    await refreshAndSettle();
+    check(counts().total === 1, `A refresh inside the cache interval must not re-read readiness: ${JSON.stringify(readinessRequests)}`);
+    check((await buttonState()).disabled, 'Fix PR must stay disabled while readiness is unchanged inside the interval');
+    // The pull request becomes repairable on GitHub; the task itself does not
+    // change. After the interval, the real Refresh button must fetch again.
+    readiness = { available: true, pr_number: 42, blocker: 'conflict' };
+    await page.evaluate(() => { globalThis.__fixPrClockOffset += 61000; });
+    await refreshAndSettle();
+    await page.waitForFunction(() => {
+      const btn = document.querySelector('#task-detail-body .action.fix-pr');
+      return btn && !btn.disabled && (btn.getAttribute('title') || '').includes('Hand pull request #42');
+    });
+    check(counts().total === 2, `A refresh after the cache interval must re-read readiness exactly once: ${JSON.stringify(readinessRequests)}`);
+    await page.screenshot({ path: path.join(evidence, 'fix-pr-enabled-1440.png') });
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.screenshot({ path: path.join(evidence, 'fix-pr-enabled-375.png') });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    // While the next post-expiry read is pending, repeated refreshes must not
+    // issue a duplicate request for the same task.
+    readiness = { available: false, reason: 'no_blocker', pr_number: 42 };
+    holdReadiness = true;
+    await page.evaluate(() => { globalThis.__fixPrClockOffset += 61000; });
+    await refreshAndSettle();
+    await page.waitForFunction(() => {
+      const btn = document.querySelector('#task-detail-body .action.fix-pr');
+      return btn && btn.disabled && (btn.getAttribute('title') || '').includes('checking the pull request');
+    });
+    check(counts().total === 3, `Expiry must start exactly one new readiness read: ${JSON.stringify(readinessRequests)}`);
+    await refreshAndSettle();
+    await refreshAndSettle();
+    check(counts().total === 3, `Refreshes while a readiness read is pending must not duplicate it: ${JSON.stringify(readinessRequests)}`);
+    holdReadiness = false;
+    for (const entry of held.splice(0)) await entry.fulfill();
+    await page.waitForFunction(() => {
+      const btn = document.querySelector('#task-detail-body .action.fix-pr');
+      return btn && btn.disabled && (btn.getAttribute('title') || '').includes('nothing to repair');
+    });
+    await page.setViewportSize({ width: 375, height: 812 });
+    await page.screenshot({ path: path.join(evidence, 'fix-pr-disabled-375.png') });
+    // Tasks outside the Fix PR gate never read readiness when selected.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await row('FIXPR-2').locator('.title').click();
+    await page.waitForFunction(() => document.querySelector('#task-detail-body #detail-FIXPR-2'));
+    await row('FIXPR-3').locator('.title').click();
+    await page.waitForFunction(() => document.querySelector('#task-detail-body #detail-FIXPR-3'));
+    check(counts().forTask('FIXPR-2') === 0 && counts().forTask('FIXPR-3') === 0, `Non-review and no-PR tasks must not read readiness: ${JSON.stringify(readinessRequests)}`);
+    check(errors.length === 0, errors.join('\n'));
+    fs.writeFileSync(path.join(evidence, 'fix-pr-readiness-result.json'), JSON.stringify({ passed: true, initialRead: 1, withinIntervalReads: 1, afterExpiryReads: 2, pendingReads: 3, gatedTasksRead: 0, widths: [1440, 375] }, null, 2));
+  } finally {
+    for (const entry of held.splice(0)) await entry.fulfill().catch(() => {});
+    await page.close();
+  }
+}

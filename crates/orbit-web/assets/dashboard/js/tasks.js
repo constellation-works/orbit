@@ -5822,6 +5822,14 @@ function buildListTaskDetail(t, drafts, existing, context) {
     return draft;
   }
   const drain = taskDrainState(t, context);
+  // Refresh expired Fix PR readiness before the reuse decision: a pull
+  // request's checks and mergeability change on GitHub without any task
+  // field changing, so an unchanged detail would otherwise keep a stale
+  // button forever. fixPrState starts at most one read and only when the
+  // cached entry is missing, stale or for another pull request; its pending
+  // flag then changes fixPrSignature below and the detail rebuilds.
+  const shownTask = state.task;
+  if (shownTask && shownTask.status === "review" && taskPullRequestNumber(shownTask)) fixPrState(shownTask, context);
   // Diff by full task object stringified, plus the feedback the detail's own
   // controls render (the row hash only covers the crew). A placeholder diffs on
   // its read state instead; a detail rendered from the cached projection must
