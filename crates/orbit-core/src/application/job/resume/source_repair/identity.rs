@@ -107,9 +107,7 @@ impl OrbitRuntime {
                 .automation_machine_identity()
                 .ok_or_else(|| refuse("local identity missing"))?
                 .into(),
-            source_digest: digest(
-                &json!({"run":source,"steps":source.steps,"checkpoints":state,"definition":definition}),
-            )?,
+            source_digest: run_evidence_digest(&source, &state, &definition)?,
             task_digest: task_digest(&task)?,
             repository,
             remote_url,

@@ -88,10 +88,7 @@ impl OrbitRuntime {
             .read_run_state(&binding.source_run_id)?
             .ok_or_else(|| refuse("prior repair source checkpoints missing"))?;
         let definition = self.source_repair_definition(&predecessor)?;
-        if digest(
-            &json!({"run":predecessor,"steps":predecessor.steps,"checkpoints":prior_state,"definition":definition}),
-        )? != binding.source_digest
-        {
+        if run_evidence_digest(&predecessor, &prior_state, &definition)? != binding.source_digest {
             return Err(refuse("immutable prior repair source changed"));
         }
         if field(adopted, "phase")? != "candidate_resume"

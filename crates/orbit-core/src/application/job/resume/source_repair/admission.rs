@@ -8,9 +8,9 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
-    JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, ReviewAdmission, SOURCE_REPAIR_KEY,
-    SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission, SourceRepairBinding,
-    pr_auto_fix_attempts,
+    JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, PipelineState, ReviewAdmission,
+    SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
+    SourceRepairBinding, pr_auto_fix_attempts,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -48,6 +48,17 @@ pub(super) fn digest(value: &impl serde::Serialize) -> Result<String, OrbitError
     serde_json::to_vec(value)
         .map(|bytes| sha256_hex(&bytes))
         .map_err(|error| refuse(format!("unreadable evidence: {error}")))
+}
+
+/// The persisted evidence digest of a repair source run. Its key order is part
+/// of the digest bytes (`serde_json/preserve_order`), so changing it would
+/// refuse every repair whose binding was written under the old order.
+pub(super) fn run_evidence_digest(
+    run: &JobRun,
+    checkpoints: &PipelineState,
+    definition: &JobV2,
+) -> Result<String, OrbitError> {
+    digest(&json!({"run":run,"steps":run.steps,"checkpoints":checkpoints,"definition":definition}))
 }
 
 pub(super) fn task_digest(task: &Task) -> Result<String, OrbitError> {
@@ -190,10 +201,7 @@ impl OrbitRuntime {
                 "{prefix}: original checkpoint owner changed"
             )));
         }
-        if digest(
-            &json!({"run":source,"steps":source.steps,"checkpoints":state,"definition":definition}),
-        )? != binding.source_digest
-        {
+        if run_evidence_digest(&source, &state, &definition)? != binding.source_digest {
             return Err(refuse(format!("{prefix}: source evidence changed")));
         }
         if super::adoption::admitted_task_digest(
