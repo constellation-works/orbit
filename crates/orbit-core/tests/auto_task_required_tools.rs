@@ -47,6 +47,10 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
         include_str!("../assets/auto_tasks/full-code-review.yaml"),
     ),
     (
+        "path-risk-review",
+        include_str!("../assets/auto_tasks/path-risk-review.yaml"),
+    ),
+    (
         "qa-full-sweep",
         include_str!("../assets/auto_tasks/qa-full-sweep.yaml"),
     ),

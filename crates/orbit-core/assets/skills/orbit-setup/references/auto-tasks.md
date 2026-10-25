@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The thirteen seeded definitions
+## The fourteen seeded definitions
 
-`orbit workspace init` seeds all thirteen, disabled, except any you deleted (see
+`orbit workspace init` seeds all fourteen, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -501,6 +501,15 @@ plugin being removed.
   changes that apply from upstream release notes. It never bumps the
   repository's own version, tags, or publishes, and with no network or
   registry access it finishes as a successful no-op stating why.
+- **`path-risk-review`** (`medium`) — every 3 days. Reads the codebase
+  analytics for paths that keep regressing, land outside their declared
+  footprint, block, get rejected, or contend for locks, and follows the tasks
+  behind the riskiest. It files at most three `proposed` fixes per run, each
+  tagged `path-risk-review` and `no-auto-approve`, and each changes a
+  mechanism (a footprint or lock rule, a generator check, or a split of a
+  coupling hotspot) rather than patching one regression. A run where every
+  ranking sits below `min_support` is a successful no-op that reports each
+  ranking's below-support counts and files nothing.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.

@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18125]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18125, ORB-18128]
 ---
 
 # Auto-tasks — Overview
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These thirteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These fourteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -286,6 +286,20 @@ definition of the same name.
   tagged `no-diff-expected`, never bumps the repository's own version,
   tags, or publishes, and with no network or registry access finishes as a
   successful no-op stating why.
+- `path-risk-review` — disabled-by-default review every 3 days of the paths
+  the codebase analytics rank as regressing, missing from their declared
+  footprint, blocking, rejected, or contending for locks. It reads the 30-day
+  and 90-day rankings, follows the tasks behind each rate, investigates at most
+  five paths, and names one dominant cause per path with task and code
+  evidence, carrying the record between runs in a `path-risk.json` artifact.
+  Each run files at most 3 `proposed` fixes, tagged `path-risk-review` and
+  `no-auto-approve`, with `context_files` and a `spawned_from` relation to the
+  minted chore. A fix changes the mechanism behind its path class (a footprint
+  or lock rule, a generator check, or a split of a coupling hotspot), never one
+  regression. A workspace whose rankings all sit below `min_support` is a
+  successful no-op that reports each ranking's below-support counts and files
+  nothing.
+  The minted chore is tagged `no-diff-expected` and never builds or runs tests.
 
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
@@ -355,6 +369,11 @@ encode this repository's branches and gates. Re-init preserves them:
   inferred-layers fallback that files only cycles and up-calls, and
   measurement-first split, merge, and move filing capped at 3 improvement
   tasks per run.
+- ORB-18128 — Added the disabled `path-risk-review` default (3-day cadence)
+  over the codebase analytics rankings: min-support no-op reporting each
+  ranking's below-support counts, at most five paths investigated, and fixes capped at 3
+  proposed tasks per run that change a footprint or lock rule, a generator
+  check, or a coupling hotspot.
 - ORB-17245 — Added the disabled hourly `blocked-task-triage` default and the
   `skip_unless_blocked_candidates` precondition.
 - ORB-17744 — Retired the `blocked-task-triage` default in favour of the
