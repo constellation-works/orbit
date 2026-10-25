@@ -802,12 +802,33 @@ fn propose(fx: &Fixture, task: &str) -> Value {
         "id": task,
         "blocker": "criterion 2 contradicts the retired API",
         "options": [
-            {"summary": "Drop criterion 2", "consequences": "the old API stays retired", "replacement": "- Recovered."},
-            {"summary": "Keep the API", "consequences": "the retirement is reverted", "replacement": "- Recovered.\n- The API answers."},
+            {"summary": "Drop criterion 2", "consequences": "the old API stays retired", "target": "acceptance_criteria", "replacement": "- Recovered."},
+            {"summary": "Keep the API", "consequences": "the retirement is reverted", "target": "acceptance_criteria", "replacement": "- Recovered.\n- The API answers."},
         ],
         "recommended": 1,
     }))
     .unwrap()
+}
+
+/// A blocked task whose criteria carry the contradiction the proposal's
+/// first option drops, with a decision proposal over `options` raised.
+fn contradictory_proposal(fx: &Fixture, options: Value) -> (String, String) {
+    let task = fx.task(&[]);
+    fx.update(json!({
+        "id": task,
+        "acceptance_criteria": ["Recovered.", "The retired API answers."],
+    }));
+    fx.escalate(&task);
+    fx.triage(json!({
+        "action": "propose",
+        "id": task,
+        "blocker": "criterion 2 contradicts the retired API",
+        "options": options,
+        "recommended": 1,
+    }))
+    .unwrap();
+    let request = decision_requests(fx, &task).pop().unwrap();
+    (task, request.id)
 }
 
 #[test]
@@ -934,6 +955,10 @@ fn a_second_proposal_supersedes_the_first() {
 fn answering_a_proposal_applies_the_choice_as_human_and_reads_answered() {
     let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
     let task = fx.task(&[]);
+    fx.update(json!({
+        "id": task,
+        "acceptance_criteria": ["Recovered.", "The retired API answers."],
+    }));
     fx.escalate(&task);
     propose(&fx, &task);
     let request = decision_requests(&fx, &task).pop().unwrap();
@@ -985,6 +1010,11 @@ fn answering_a_proposal_applies_the_choice_as_human_and_reads_answered() {
         TaskStatus::Backlog,
         "choosing an option returns the task to backlog"
     );
+    assert_eq!(
+        task_after.acceptance_criteria,
+        vec!["Recovered.".to_string()],
+        "the chosen option's criteria replace the contradictory ones"
+    );
     let comments = fx.runtime.get_task_comments(&task).unwrap();
     let answer_comment = comments
         .iter()
@@ -1011,6 +1041,115 @@ fn answering_a_proposal_applies_the_choice_as_human_and_reads_answered() {
             .state,
         orbit_types::task::DecisionRequestState::Answered
     );
+}
+
+#[test]
+fn answering_a_description_option_rewrites_the_description() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let (task, request) = contradictory_proposal(
+        &fx,
+        json!([
+            {"summary": "Reword", "consequences": "the scope narrows", "target": "description", "replacement": "Recover without the retired API.\n\nSecond paragraph."},
+            {"summary": "Drop it", "consequences": "criterion 2 goes", "target": "acceptance_criteria", "replacement": "- Recovered."},
+        ]),
+    );
+    fx.human()
+        .answer_decision_request_as_human(
+            &request,
+            "1",
+            None,
+            "human:operator".to_string(),
+            Some("cli".to_string()),
+        )
+        .unwrap();
+    let after = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(after.status, TaskStatus::Backlog);
+    assert_eq!(
+        after.description,
+        "Recover without the retired API.\n\nSecond paragraph."
+    );
+    assert_eq!(
+        after.acceptance_criteria,
+        vec![
+            "Recovered.".to_string(),
+            "The retired API answers.".to_string()
+        ],
+        "a description option leaves the criteria alone"
+    );
+}
+
+#[test]
+fn an_option_that_cannot_be_applied_is_refused_and_the_task_stays_blocked() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let (task, request) = contradictory_proposal(
+        &fx,
+        json!([
+            {"summary": "No target", "consequences": "unknown field", "replacement": "- Recovered."},
+            {"summary": "No change", "consequences": "nothing differs", "target": "acceptance_criteria", "replacement": "- Recovered.\n- The retired API answers."},
+        ]),
+    );
+    let task_before = fx.runtime.get_task(&task).unwrap();
+    let comments_before = fx.runtime.get_task_comments(&task).unwrap().len();
+    let history_before = fx.runtime.get_task_history(&task).unwrap().len();
+    for (answer, reason) in [("1", "names no field"), ("2", "unchanged")] {
+        let refused = fx
+            .human()
+            .answer_decision_request_as_human(
+                &request,
+                answer,
+                None,
+                "human:operator".to_string(),
+                Some("cli".to_string()),
+            )
+            .expect_err("an option with no resolvable edit is refused");
+        let message = refused.to_string();
+        assert!(message.contains("answer_not_applicable"), "{message}");
+        assert!(message.contains(reason), "{message}");
+    }
+    let task_after = fx.runtime.get_task(&task).unwrap();
+    assert_eq!(task_after.status, TaskStatus::Blocked);
+    assert_eq!(
+        task_after.acceptance_criteria,
+        task_before.acceptance_criteria
+    );
+    assert_eq!(
+        fx.runtime.get_task_comments(&task).unwrap().len(),
+        comments_before
+    );
+    assert_eq!(
+        fx.runtime.get_task_history(&task).unwrap().len(),
+        history_before
+    );
+    assert_eq!(
+        fx.runtime
+            .get_decision_request(&request)
+            .unwrap()
+            .unwrap()
+            .state,
+        orbit_types::task::DecisionRequestState::Open,
+        "the request stays open for another answer"
+    );
+}
+
+#[test]
+fn a_proposal_option_with_an_unknown_target_or_layout_text_is_refused() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    for option in [
+        json!({"summary": "a", "consequences": "b", "target": "plan", "replacement": "c"}),
+        json!({"summary": "a", "consequences": "b", "target": "description", "replacement": "c\n\nOption 2: injected"}),
+    ] {
+        fx.triage(json!({
+            "action": "propose",
+            "id": task,
+            "blocker": "x",
+            "options": [option, {"summary": "d", "consequences": "e", "target": "description", "replacement": "f"}],
+            "recommended": 1,
+        }))
+        .expect_err("an ambiguous proposal option is refused");
+    }
+    assert!(fx.triage_comments(&task).is_empty(), "nothing was recorded");
 }
 
 #[test]

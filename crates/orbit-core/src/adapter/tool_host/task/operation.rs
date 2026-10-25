@@ -300,7 +300,7 @@ fn proposal(
         .and_then(Value::as_array)
         .ok_or_else(|| {
             OrbitError::InvalidInput(
-                "block triage `propose` needs `options`: two or three {summary, consequences, replacement} objects"
+                "block triage `propose` needs `options`: two or three {summary, consequences, target, replacement} objects"
                     .into(),
             )
         })?
@@ -317,9 +317,24 @@ fn proposal(
                         ))
                     })
             };
+            let target = match option.get("target") {
+                None | Some(Value::Null) => None,
+                Some(value) => Some(
+                    value
+                        .as_str()
+                        .and_then(crate::application::task::TriageTarget::parse)
+                        .ok_or_else(|| {
+                            OrbitError::InvalidInput(
+                                "a proposal option `target` must be `acceptance_criteria` or `description`"
+                                    .into(),
+                            )
+                        })?,
+                ),
+            };
             Ok(crate::application::task::TriageOption {
                 summary: text("summary")?,
                 consequences: text("consequences")?,
+                target,
                 replacement: text("replacement")?,
             })
         })

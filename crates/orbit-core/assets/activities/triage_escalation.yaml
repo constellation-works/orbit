@@ -163,10 +163,18 @@ spec:
 
     Proposals. A `propose` call carries two or three
     `"options":[{"summary":"<what the option decides>","consequences":"<what
-    choosing it leads to>","replacement":"<replacement text>"}, ...]` and
-    `"recommended":<1-based index>`. Make each replacement complete: name
-    each changed description section or criterion and give its whole new
-    text, ready to paste.
+    choosing it leads to>","target":"acceptance_criteria|description","replacement":"<the
+    complete new value of that field>"}, ...]` and `"recommended":<1-based
+    index>`. Each option rewrites exactly one field, named by `target`, and
+    an operator's answer applies the replacement as that field's whole new
+    value, so make it complete and ready to apply: for
+    `acceptance_criteria`, every criterion the task should keep or gain, one
+    per line (a dropped criterion is simply left out); for `description`,
+    the whole new description. An option with no `target`, or whose
+    replacement equals the field as it is, cannot be applied and is refused
+    when the operator picks it. Option text must not contain a blank line
+    followed by `Option `, `Recommended:`, or a line starting
+    `Consequences: `, `Applies to: ` or `Replacement text:`.
 
     ## Subject `pilot_warning`
 
