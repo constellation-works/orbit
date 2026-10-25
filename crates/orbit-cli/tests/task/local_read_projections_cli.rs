@@ -82,7 +82,7 @@ fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest
         "--json",
     ]);
     let before = fixture.json(&["task", "show", id, "--json"]);
-    let manifest = fixture.json(&["artifacts", id, "--task", "--json"]);
+    let manifest = &before["artifacts"];
     assert_eq!(manifest[0]["path"], stored["artifacts"][0]["path"]);
     assert_eq!(
         manifest[0]["media_type"],
@@ -92,10 +92,13 @@ fn local_read_projections_return_registered_keys_task_flow_and_artifact_manifest
         manifest[0]["created_by"],
         stored["artifacts"][0]["created_by"]
     );
-    assert_eq!(manifest[0]["size"], stored["artifacts"][0]["size_bytes"]);
+    assert_eq!(
+        manifest[0]["size_bytes"],
+        stored["artifacts"][0]["size_bytes"]
+    );
     assert_eq!(manifest.as_array().unwrap().len(), 1);
     assert_eq!(manifest[0]["path"], "reports/fixture.txt");
-    assert_eq!(manifest[0]["size"], 17);
+    assert_eq!(manifest[0]["size_bytes"], 17);
     assert_eq!(fixture.json(&["task", "show", id, "--json"]), before);
 }
 

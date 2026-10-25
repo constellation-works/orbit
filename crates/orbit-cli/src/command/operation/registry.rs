@@ -680,17 +680,6 @@ impl Commands {
                     runtime_dispatch!(Skill),
                 )
             }
-            Commands::Artifacts(command) => CommandOperation::new(
-                RuntimeNeed::Required,
-                Some(admin_meta(
-                    "artifacts",
-                    None,
-                    Some(if command.task { "task" } else { "job_run" }),
-                    Some(&command.id),
-                )),
-                None,
-                runtime_dispatch!(Artifacts),
-            ),
         }
     }
 }

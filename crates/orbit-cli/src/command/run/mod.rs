@@ -27,5 +27,3 @@ mod worktree_gc;
 
 pub use command::{RunCommand, RunSubcommand};
 pub use job::{JobReplayArgs, JobResumeArgs, JobRunArgs, JobRunPipelineWorkerArgs};
-pub(crate) use show::run_show_payload;
-pub(crate) use steps::RunRead;
