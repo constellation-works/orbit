@@ -669,16 +669,29 @@ fn entry_candidate_identity(entry: &TaskHistoryEntry) -> Option<String> {
         .filter(|candidate| !candidate.is_empty())
 }
 
+/// Whether an approval raised in `status` binds to the candidate under review.
+/// Only `review` approvals do, matching the raise: a `proposed` approval is
+/// raised without a candidate, so a candidate that history carries from an
+/// earlier review must not read as a change to it.
+fn binds_candidate(status: TaskStatus) -> bool {
+    status == TaskStatus::Review
+}
+
 /// Whether `history` records a change after `request` was raised that
 /// permanently invalidates its [`DecisionBinding::TaskRevision`]: an edit to
-/// the description or acceptance criteria, a status move, or a different
-/// candidate. Superseded is terminal, so restoring the earlier text, status or
-/// candidate does not revive the request. The request's own raise and
-/// bookkeeping entries (comments, plan or summary writes) change none of these.
+/// the description or acceptance criteria, a status move, or, for a review
+/// approval, a different candidate. Superseded is terminal, so restoring the
+/// earlier text, status or candidate does not revive the request. The
+/// request's own raise and bookkeeping entries (comments, plan or summary
+/// writes) change none of these.
 fn task_revision_changed_since(request: &DecisionRequest, history: &[TaskHistoryEntry]) -> bool {
-    let DecisionBinding::TaskRevision { candidate, .. } = &request.binding else {
+    let DecisionBinding::TaskRevision {
+        status, candidate, ..
+    } = &request.binding
+    else {
         return false;
     };
+    let binds_candidate = binds_candidate(*status);
     history
         .iter()
         .filter(|entry| entry.at > request.raised_at)
@@ -691,8 +704,9 @@ fn task_revision_changed_since(request: &DecisionRequest, history: &[TaskHistory
                                 || *document == ACCEPTANCE_CRITERIA_DOCUMENT
                         })
                     }))
-                || entry_candidate_identity(entry)
-                    .is_some_and(|identity| candidate.as_deref() != Some(identity.as_str()))
+                || (binds_candidate
+                    && entry_candidate_identity(entry)
+                        .is_some_and(|identity| candidate.as_deref() != Some(identity.as_str())))
         })
 }
 
@@ -896,8 +910,9 @@ impl PilotAdmissionVerdict {
 /// `superseded` when its binding is no longer current or a newer request
 /// for the same task follows it. At most one request per task reads as `open`.
 /// An approval ([`DecisionBinding::TaskRevision`]) is superseded for good by a
-/// description or criteria edit, status move or candidate change after its
-/// raise, so restoring the earlier state does not reopen it.
+/// description or criteria edit, status move or, for a review approval, a
+/// candidate change after its raise, so restoring the earlier state does not
+/// reopen it.
 ///
 /// Supply the current task and its history. `pilot_operation` is the latest
 /// assessment operation id only while its admission hold still applies;
@@ -937,7 +952,8 @@ pub fn decision_requests_from_history(
                         && (revision == &task.spec_digest()
                             || chrono::DateTime::parse_from_rfc3339(revision)
                                 .is_ok_and(|revision| revision == task.updated_at))
-                        && candidate.as_deref() == current_candidate.as_deref()
+                        && (!binds_candidate(*status)
+                            || candidate.as_deref() == current_candidate.as_deref())
                 }
             }
     };
