@@ -1,0 +1,215 @@
+schemaVersion: 1
+name: agent-guidance-audit
+description: Every 3 days, audit a rolling batch of agent guidance files for stale commands, flags, paths, tool names and task-state rules, and for contradictions, and file at most 3 proposed fixes
+enabled: false
+schedule:
+  every_minutes: 4320
+template:
+  title: Agent guidance audit — check cited commands, paths, tools and task-state rules
+  description: |-
+    Audit this repository's agent guidance at one pinned commit. This run edits
+    nothing. It files a proposed task for each stale or contradictory claim and
+    attaches `agent-guidance-audit.json` so the next run can continue the
+    rolling batch. A batch with nothing stale or contradictory is a successful
+    no-op when that artifact is attached. Do not invent work to justify the run.
+
+    A workspace-authored definition named `skill-validation` is a separate
+    file. Do not rename it, replace it, or treat it as this definition.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface, never direct lifecycle CLI
+      subcommands (they skip agent provenance). Find the previous pass with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["agent-guidance-audit","no-diff-expected","auto-task:agent-guidance-audit"],"limit":1,"model":"<agent-family>"}'`.
+      The tag filter is AND. That provenance tag is carried only by a task
+      minted from this definition. Fetch the artifact with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"agent-guidance-audit.json","model":"<agent-family>"}'`.
+      List artifacts first with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
+      and skip a get when the path is absent.
+    - Search coverage with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`.
+      Lexical search matches one substring: use a single distinctive token,
+      never a multi-word phrase, and never treat a 0-hit multi-word query as
+      proof that nothing covers a finding.
+    - Before filing, read the installed `orbit` skill's task-authoring
+      reference and follow it. File a finding (tool-created tasks start
+      `proposed`) with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown with the file, the line, the claim and the evidence>","acceptance_criteria":["The cited claim matches the command --help text, the tracked path list, or the tool registry at the pinned commit"],"context_files":["file:<verified path>"],"complexity":"<low|medium>","tags":["agent-guidance-audit"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Read each filed task back with
+      `orbit tool run orbit.task.show --input '{"id":"<filed task ID>","model":"<agent-family>"}'`
+      and count it only when `status` is `proposed`, `context_files` is
+      non-empty, and `relations` contains `spawned_from` targeting this task.
+      Never file a finding without verified `context_files`.
+    - Do not tag a finding `auto-task:agent-guidance-audit` or
+      `no-diff-expected`. The provenance tag is added only to this minted
+      chore. A finding that carried it could skip review for a guidance fix.
+    - Put throwaway notes under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`). Do not
+      edit, create, or delete any tracked file.
+
+    ## Pin one commit
+
+    Resolve `__ORBIT_BASE_BRANCH__` with `git rev-parse` and record the full
+    40-character SHA. Read every audited file with `git show <sha>:<path>`.
+    Do not audit the worktree copy. If the ref does not resolve, stop and
+    say so; do not fall back to another branch.
+
+    ## Discover guidance files
+
+    List tracked paths at the pinned SHA with
+    `git ls-tree -r --name-only <sha>`. That is the listing `git ls-files`
+    would produce with the index at that commit. Keep a path when any of
+    these hold:
+
+    - The final component is `AGENTS.md`, `CLAUDE.md`, or `GEMINI.md`,
+      compared case-insensitively, at any directory.
+    - The path equals `.github/copilot-instructions.md` or ends with
+      `/.github/copilot-instructions.md`.
+    - The path contains `/.claude/skills/` or `/.agents/skills/`, or starts
+      with `.claude/skills/` or `.agents/skills/`, and ends with `.md`.
+    - Cursor rule files: the final component is `.cursorrules`, or the path
+      is under `.cursor/rules/` (at the root or nested) and ends with `.md`
+      or `.mdc`.
+
+    Ignore every other tracked path.
+
+    ## Generated mirrors
+
+    A generated mirror is a guidance directory a tracked file says is
+    copied, synced, or generated from another directory. Review that tree
+    once, at the source the statement names. Record the mirror and the
+    source in the artifact and do not audit the mirror's files. When the
+    statement is ambiguous, audit the directory and record the uncertainty;
+    do not guess a source.
+    Example: `plugin/skills/` synced from `crates/orbit-core/assets/skills/` is reviewed only at that source.
+
+    ## Rolling batch
+
+    Read the previous pass's `agent-guidance-audit.json`. Its `state` map
+    holds `audited_at` (UTC RFC3339) and `audited_sha` per path. Absent,
+    unreadable, or without `state` means this is the baseline pass; say so
+    and start with an empty map.
+
+    Order the discovered files that are not under an excluded mirror:
+
+    1. Paths with no `state` entry, sorted by path.
+    2. Then the remaining paths, oldest `audited_at` first, then by path.
+
+    Take a prefix of at most 8 files and at most 2000 lines, always taking
+    at least the first file even when it alone exceeds 2000 lines. Count
+    lines from `git show <sha>:<path>`. Stop before a later file that would
+    exceed 2000 lines. This ordering is the whole selection rule; do not
+    reorder by severity or by leftover findings from an earlier run.
+
+    ## What to check
+
+    At the pinned SHA, check every command, flag, path, tool name, and
+    task-state rule the batch cites. A task-state rule is a named status,
+    transition, or tag rule the file tells an agent to follow.
+
+    - Command or flag: run the cited command's `--help`, and the subcommand
+      help when the citation names one. Absent from that help means stale.
+      Quote the help line or state that it is absent.
+    - Path: when `git rev-parse HEAD` equals the pinned SHA, require
+      `git ls-files --error-unmatch -- <path>` to succeed. Otherwise require
+      the path in `git ls-tree -r --name-only <sha>`. A missing path is stale.
+    - Tool name: `orbit tool list` when the citation is an Orbit tool;
+      otherwise the registry, manifest, or help the guidance names. Absent
+      from that registry means stale.
+    - Task-state rule: stale when the named status or transition is absent
+      from the command help or from the tracked source that defines those
+      states.
+
+    Also flag a contradiction:
+
+    - Two discovered provider files state incompatible facts about the same
+      command, flag, path, tool name, or task-state rule. Different detail
+      is not a contradiction when both can be true.
+    - A `SKILL.md` frontmatter `description` (the YAML block between the
+      first two `---` lines) names a command, flag, path, tool, or outcome
+      the body does not, or the body states a requirement the description
+      denies. A shorter summary that is still true is not a contradiction.
+
+    Not a finding: wording, tone, grammar, heading style, ordering, or a
+    synonym swap. A claim whose ground truth is not observable from this
+    checkout is unverified: record it and do not file it.
+
+    ## Duplicates
+
+    Before filing, list open work with
+    `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"agent-guidance-audit","limit":200,"model":"<agent-family>"}'`
+    and search each finding's distinctive token. Also list rejected work
+    with
+    `orbit tool run orbit.task.list --input '{"status":["rejected"],"tag":"agent-guidance-audit","limit":200,"model":"<agent-family>"}'`.
+    Skip a finding an open task already covers. Refile a rejected one only
+    when the evidence has changed, and say what changed. When a duplicate
+    needs the new evidence, add one comment with
+    `orbit tool run orbit.task.update --input '{"id":"<existing task ID>","comment":"<file, line, claim, evidence>","model":"<agent-family>"}'`.
+
+    ## Filing
+
+    File at most 3 findings per run. Rank a cited command, flag, path, or
+    tool that does not exist first, then a contradiction, then a task-state
+    rule that does not exist. Record the rest as `overflow` in the artifact.
+    Each filed task uses the `orbit.task.add` payload above:
+
+    - `type` is `bug`. Tags are exactly `agent-guidance-audit`.
+    - `complexity` is `low` for one file and `medium` when the contradiction
+      spans more than one file. `priority` is `low` or `medium`.
+    - `context_files` lists a verified `file:` selector for every guidance
+      file the finding cites.
+    - The description names the file, the line, the claim, and the evidence
+      (`--help` text, `git ls-files` or `git ls-tree` result, or the tool
+      registry) that shows the claim is stale or contradictory, plus the
+      pinned SHA.
+    - Acceptance criteria require the cited claim to match that evidence
+      after the fix, and they exclude a stylistic-only rewrite.
+    - `relations` is `spawned_from` targeting this task. Do not approve the
+      task.
+
+    ## Handoff
+
+    Write `.orbit/tmp/agent-guidance-audit.json` and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/agent-guidance-audit.json","path":"agent-guidance-audit.json","model":"<agent-family>"}'`.
+    The document contains:
+
+    - `schema_version` 1 and `pinned_sha` (the full 40-character SHA).
+    - `audited`: every path read this run, with its line count.
+    - `excluded_mirrors`: each mirror path and the source it names.
+    - `state`: the previous map, plus this run's audited paths with
+      `audited_at` (one UTC timestamp for the run) and `audited_sha`. Drop
+      paths that are no longer discovered. Rewrite the whole map.
+    - `findings`: file, line, claim, evidence, and disposition (`filed` with
+      the new task id, `duplicate` with the existing id, `unverified`,
+      `overflow`, or `rejected` with the reason).
+
+    The execution summary records the pinned SHA, whether this pass is the
+    baseline, every path audited, every excluded mirror, and every finding's
+    disposition. A batch with no filed task still attaches the artifact.
+  acceptance_criteria:
+  - The run records one full 40-character SHA of `__ORBIT_BASE_BRANCH__` in `agent-guidance-audit.json` and reads every audited file with `git show` at that SHA.
+  - The run reads the previous done chore's `agent-guidance-audit.json` when that artifact exists, or records that this pass is the baseline, and selects at most 8 files and 2000 lines least-recently audited first.
+  - The batch is drawn only from discovered `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`, `.agents/skills/`, `.github/copilot-instructions.md` and Cursor rule files, and each generated mirror is recorded under `excluded_mirrors` with its source instead of being audited.
+  - Each filed finding names the file, the line, the claim, and the `--help`, `git ls-files` or `git ls-tree`, or tool-registry evidence that the claim is stale or contradictory, and no filed task is only a stylistic rewrite.
+  - At most 3 findings are filed, each with status `proposed`, tag `agent-guidance-audit`, a `spawned_from` relation to this task, and non-empty `context_files`; duplicates and unverified claims are recorded and not filed again.
+  - The run attaches `agent-guidance-audit.json` with `schema_version` 1, `pinned_sha`, `audited`, and the cumulative `state` map the next run reads, and it edits no tracked file.
+  task_type: chore
+  tags:
+  - agent-guidance-audit
+  - no-diff-expected
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.task.update
+  priority: low
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-25T00:00:00Z
+updated_by: system
+updated_at: 2026-10-25T00:00:00Z

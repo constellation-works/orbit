@@ -35,6 +35,9 @@ sandbox = "danger-full-access"
 # tag, and only for documentation/CI paths. Keep finding tags such as
 # code-review, delivery-code-review, security-review and qa-sweep unmapped so
 # code fixes filed by those reviews still receive agent review.
+[workflow.review_skip_tags."auto-task:agent-guidance-audit"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
 [workflow.review_skip_tags."auto-task:auto-task-yield-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 

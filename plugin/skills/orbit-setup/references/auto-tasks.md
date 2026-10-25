@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The twenty-one seeded definitions
+## The twenty-two seeded definitions
 
-`orbit workspace init` seeds all twenty-one, disabled, except any you deleted (see
+`orbit workspace init` seeds all twenty-two, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -605,6 +605,16 @@ plugin being removed.
   reason. When over budget it keeps exactly one open `ci-budget` task,
   updating an existing one instead of filing a second. The chore itself
   is tagged `no-diff-expected` and never edits source, CI, or tests.
+- **`agent-guidance-audit`** (`medium`) — every 3 days. Audits agent guidance
+  (`AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`, `.agents/skills/`,
+  `copilot-instructions.md` under `.github`, and Cursor rule files) at one pinned
+  commit, least-recently audited first, at most 8 files and about 2,000 lines.
+  A generated skills mirror is reviewed only at its source. Each run attaches
+  `agent-guidance-audit.json` for the next run to read, and files at most 3
+  `proposed` tasks for claims that are stale or contradictory, each with the
+  file, line, claim, and evidence. Stylistic rewrites are not filed. The
+  minted chore is tagged `no-diff-expected` and does not edit the repository.
+  A workspace-authored `skill-validation` definition is left in place.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.

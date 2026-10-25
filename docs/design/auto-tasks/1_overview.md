@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128, ORB-18134]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18124, ORB-18125, ORB-18126, ORB-18127, ORB-18128, ORB-18129, ORB-18134]
 ---
 
 # Auto-tasks — Overview
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These twenty-one YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These twenty-two YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -368,6 +368,20 @@ definition of the same name.
   hosted CI or unreachable run history it is a successful no-op that
   states the reason. The minted chore is tagged `no-diff-expected`
   and never builds or runs tests.
+- `agent-guidance-audit` — disabled-by-default audit every 3 days of agent
+  guidance files: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/skills/`,
+  `.agents/skills/`, `copilot-instructions.md` under `.github`, and Cursor rule
+  files. A generated skills mirror is reviewed once, at its source. Each run
+  pins one integration-branch commit, audits a rolling batch of at most 8
+  files and about 2,000 lines ordered least-recently audited first, and
+  attaches `agent-guidance-audit.json` (pinned SHA, paths audited, and a
+  cumulative `state` map) for the next run to read. It files at most 3
+  `proposed` bugs, each naming the file, line, claim, and the `--help`,
+  tracked-path, or tool-registry evidence that the claim is stale or
+  contradictory, with `context_files` and a `spawned_from` relation to the
+  minted chore. Stylistic rewrites are not filed. The chore is tagged
+  `no-diff-expected` and does not edit the repository. A workspace-authored
+  `skill-validation` definition is left in place.
 - `structure-sweep` — disabled-by-default weekly scan in one pass over
   source files and test files. It records the thresholds in every run
   summary (a non-test source file over 1,000 lines, a module index file
@@ -511,6 +525,9 @@ encode this repository's branches and gates. Re-init preserves them:
   `flaky-test-hunt.json` artifact diffed against the previous run, and
   at most 4 proposed `ci-flake` tasks per run that reject silent
   retries or quarantine without an exit plan.
+- ORB-18129 — Added the disabled, portable `agent-guidance-audit` default
+  (3-day cadence): a least-recently-audited batch of agent guidance files,
+  checked at one pinned commit, with at most 3 proposed findings per run.
 - ORB-18128 — Added the disabled `path-risk-review` default (3-day cadence)
   over the codebase analytics rankings: min-support no-op reporting each
   ranking's below-support counts, at most five paths investigated, and fixes capped at 3
