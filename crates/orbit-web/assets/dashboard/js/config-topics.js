@@ -78,6 +78,11 @@ export function parseDraft(row, text) {
   if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) return text.split('\n').map((s) => s.trim()).filter(Boolean);
   return text;
 }
+// A bare TOML integer token must fit signed 64-bit. String() writes a whole number
+// from 2^63 up to 1e21 as an integer token, so those use exponent (float) form.
+function numberLiteral(n) {
+  return Number.isInteger(n) && Math.abs(n) >= 2 ** 63 ? n.toExponential() : String(n);
+}
 export function cliCmd(row, scope, text) {
   const t = row.value_type || '';
   let v;
@@ -87,7 +92,7 @@ export function cliCmd(row, scope, text) {
     const trimmed = text.trim();
     const n = Number(trimmed);
     if (trimmed !== '' && Number.isFinite(n)) {
-      v = String(n);
+      v = numberLiteral(n);
     } else {
       v = trimmed === '' ? "''" : shellWord(trimmed);
     }

@@ -11,7 +11,8 @@
 //     read arrives last, and a failed read that is superseded never replaces a
 //     newer success. The block names the file it shows.
 // (e) a number row's CLI preview passes a numeric TOML literal matching the
-//     value Save PUTs and admitted by `orbit config set`.
+//     value Save PUTs and admitted by `orbit config set`, including a whole
+//     number beyond signed 64-bit (a bare integer token there is out of range).
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -349,7 +350,32 @@ try {
   assert.equal(typeof capturedPuts[0].body.value, 'number');
   assert.equal(capturedPuts[0].body.scope, 'workspace');
 
-  // Re-open drawer to test other drafts: .5, 5., +2.5, 1e3, 2
+  // Draft 1e20 is past signed 64-bit. The preview must stay a float literal, and
+  // Save PUTs the number 1e20. Drawer screenshots are taken before the preview check
+  // so a failing run still leaves the evidence of what the drawer showed.
+  await numRow.locator('button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+  await numTextarea.fill('1e20');
+  await drawer.screenshot({ path: path.join(evidence, 'config-topics-number-drawer-1e20-dark-1440.png') });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await drawer.screenshot({ path: path.join(evidence, 'config-topics-number-drawer-1e20-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const bigCliText = (await numCliNode.textContent()).trim();
+  assert.equal(bigCliText, 'orbit config set workflow.usage_pressure_cap 1e+20');
+  const parsedBig = parseTomlLiteralFromCli(bigCliText);
+  assert.equal(parsedBig.typeName, 'float');
+  assert.equal(parsedBig.value, 1e20);
+
+  capturedPuts.length = 0;
+  await drawer.locator('button.config-action:has-text("Save")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  assert.equal(capturedPuts.length, 1);
+  assert.equal(capturedPuts[0].key, 'workflow.usage_pressure_cap');
+  assert.equal(capturedPuts[0].body.value, 1e20);
+  assert.equal(typeof capturedPuts[0].body.value, 'number');
+  const bigSavedValue = capturedPuts[0].body.value;
+
+  // Re-open drawer to test other drafts: .5, 5., +2.5, 1e3, 2, and whole numbers past 2^63
   await numRow.locator('button.config-action:has-text("Edit")').click();
   await drawer.waitFor({ state: 'visible' });
 
@@ -359,6 +385,7 @@ try {
     { draft: '+2.5', expectedCli: 'orbit config set workflow.usage_pressure_cap 2.5', expectedType: 'float', expectedVal: 2.5 },
     { draft: '1e3', expectedCli: 'orbit config set workflow.usage_pressure_cap 1000', expectedType: 'int', expectedVal: 1000 },
     { draft: '2', expectedCli: 'orbit config set workflow.usage_pressure_cap 2', expectedType: 'int', expectedVal: 2 },
+    { draft: '9223372036854775808', expectedCli: 'orbit config set workflow.usage_pressure_cap 9.223372036854776e+18', expectedType: 'float', expectedVal: 2 ** 63 },
   ];
 
   for (const c of draftCases) {
@@ -488,6 +515,12 @@ try {
   const numGetParsed2 = JSON.parse(numGetOutput2.toString());
   assert.equal(numGetParsed2.value, 2.0);
 
+  // Run the 1e20 preview through the real CLI: it must apply the value Save PUT
+  execFileSync('bash', ['-c', bigCliText], { cwd: fixtureWork, env });
+  const bigGetOutput = execFileSync('orbit', ['config', 'get', 'workflow.usage_pressure_cap', '--json'], { cwd: fixtureWork, env });
+  const bigGetParsed = JSON.parse(bigGetOutput.toString());
+  assert.equal(bigGetParsed.value, bigSavedValue);
+
   assert.equal(pageErrors.length, 0, `Page errors encountered: ${pageErrors.join('; ')}`);
 
   fs.writeFileSync(path.join(evidence, 'dashboard-config-topics-result.json'), JSON.stringify({
@@ -503,8 +536,10 @@ try {
       'raw-block-names-the-file-it-shows',
       'number-row-save-and-cli-preview-match-numeric-toml-literal',
       'number-row-draft-variants-render-valid-numeric-literals',
+      'number-row-draft-beyond-i64-saves-and-previews-float-literal',
       'cleared-or-invalid-number-refused-before-request',
       'cli-admits-whole-number-literal-for-f64-row',
+      'cli-applies-beyond-i64-number-as-saved',
     ],
   }, null, 2));
 
