@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-21
-last_validated: 2026-10-20
+last_updated: 2026-10-25
+last_validated: 2026-10-25
 status: Accepted
 feature: auto-tasks
 doc_role: design
@@ -289,6 +289,54 @@ is bounded by the finite discovered workspace and definition collections. Its
 sidecar lock remains the per-workspace exclusion boundary. No scheduler routine,
 job, activity, or job run is created, and fires do not appear on
 `GET /api/routines`; the tick report and Operations auto-task panel expose them.
+
+### 4d. The shipped whole-tree reviews: `code-review` rotation, `full-code-review` on demand
+
+`code-review` is the steady whole-tree review, run as a **module rotation**.
+It no longer reviews the commits merged since its last cursor — per-delivery
+diff review is owned by `delivery-code-review` — because that window re-read
+recent changes and never re-read stable code. Each fired run pins one
+integration-branch SHA, partitions the tracked tree into modules with the
+partition rule below, and reads in full the **2 modules reviewed least
+recently**. The partition rule is the one `full-code-review` uses, so both
+definitions agree on what a module is: directory boundaries first, at most
+25,000 tracked text lines per module, disjoint modules, and every exclusion
+named, with no language- or toolchain-specific rule. A module's ID is its
+selectors; a module that grows past the bound is split, and its children
+inherit its last-reviewed time.
+
+The rotation state is durable and artifact-carried. Each completed run
+attaches `reviewed-modules.json` (`schema_version`, the pinned SHA, and per
+reviewed module its ID/selectors, line count and filed finding IDs). The next
+run builds its last-reviewed map only from those artifacts on done chores
+carrying `auto-task:code-review`, taking each module's most recent review; a
+sweep without the artifact — including every legacy merged-window sweep —
+counts as reviewing nothing. Selection is never-reviewed first, then oldest
+last-reviewed time, with ties broken by more commits since the last review
+and then the smaller module ID. Both selected modules are read in full at
+the pinned SHA (partitions or subagents for large modules, every line, no
+sampling), so the rotation also surfaces defects older than any recent
+change. Each confirmed high or critical finding is filed as its own task; a
+module's medium and low findings are grouped into at most one cleanup `bug`
+per module, listing each finding with its file:line evidence, unioning their
+`context_files`, and carrying a classified `regression_from` for each
+attributable finding. The run also still attaches `sweep-cursor.json` with
+the pinned SHA, and its `skip_if_unchanged` gate (§4b) is unchanged, so the
+scheduler still skips a tick on a quiet tree. At two modules per fired
+six-hourly run, a tree of about 55 modules is covered in about a week of
+fired runs.
+
+`full-code-review` is the **on-demand snapshot** review, not a scheduled one.
+It ships `enabled: false` and is meant to be run by a manual mint
+(`orbit auto-task mint full-code-review`, §5b) — for example before a release
+or for a newly onboarded repository — even though the definition carries a
+cron expression for an operator who chooses otherwise. A scheduled full
+review is deliberately not the steady state: one run fans the whole tree out
+as one area chore per 25,000-line area in a single mint (about 55 area chores
+on a 1.3M-line tree), which floods the backlog, while the `code-review`
+rotation already provides steady whole-tree coverage a little at a time. The
+snapshot stays available for the moments a complete, single-SHA reading of
+the entire tree is worth that fan-out.
 
 ## 5. CRUD surfaces
 
