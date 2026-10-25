@@ -360,6 +360,293 @@ fn owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations() {
     }
 }
 
+fn owner_host(workspace: &Path) -> CommitTestHost {
+    let mut task = task_with_file("T-OWNER", "Add a crate guide", "unused", "grok");
+    task.execution_summary = "Outcome: success\nChanges:\n- added a crate guide".to_string();
+    task.context_files = vec!["file:crates/new-crate/CLAUDE.md".to_string()];
+    CommitTestHost::new(vec![task], workspace.to_path_buf())
+}
+
+fn owner_commit_input(workspace: &Path) -> Value {
+    json!({
+        "scope": "all",
+        "job_run_id": "batch-1",
+        "workspace_path": workspace,
+    })
+}
+
+#[cfg(unix)]
+fn symlink_at(workspace: &Path, path: &str, target: &str) {
+    let path = workspace.join(path);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(target, &path).unwrap();
+}
+
+#[cfg(unix)]
+fn assert_symlink_mode_120000(workspace: &Path, path: &str) {
+    let listing = git_output(workspace, &["ls-tree", "HEAD", path]).unwrap();
+    assert!(
+        listing.starts_with("120000 blob "),
+        "{path} must be committed as a symlink: {listing}"
+    );
+    let blob = listing
+        .split_whitespace()
+        .nth(2)
+        .unwrap_or_else(|| panic!("{path} listing has no blob: {listing}"));
+    assert_eq!(
+        git_output(workspace, &["cat-file", "-p", blob]).unwrap(),
+        "CLAUDE.md",
+        "{path} must store the literal sibling target"
+    );
+    assert!(
+        fs::symlink_metadata(workspace.join(path))
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "{path} stays a worktree symlink after the commit"
+    );
+}
+
+/// Owner delivery commits a new crate guide and its `AGENTS.md -> CLAUDE.md`
+/// sibling, including when the guide is already tracked. The link is mode
+/// 120000 and its blob is the literal target `CLAUDE.md`.
+#[cfg(unix)]
+fn owner_delivery_commits_crate_guide_symlinks_as_mode_120000() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::owner_delivery_commits_crate_guide_symlinks_as_mode_120000"
+    )) {
+        return;
+    }
+
+    let temp = claimed_worktree();
+    let workspace = temp.path();
+    write(workspace, "crates/new-crate/CLAUDE.md", "# guide\n");
+    symlink_at(workspace, "crates/new-crate/AGENTS.md", "CLAUDE.md");
+    git_commit(&owner_host(workspace), &owner_commit_input(workspace))
+        .expect("a new crate guide symlink is delivered");
+    assert_eq!(
+        git_output(workspace, &["show", "--format=", "--name-only", "HEAD"]).unwrap(),
+        "crates/new-crate/AGENTS.md\ncrates/new-crate/CLAUDE.md"
+    );
+    assert_symlink_mode_120000(workspace, "crates/new-crate/AGENTS.md");
+    let guide = git_output(
+        workspace,
+        &["ls-tree", "HEAD", "crates/new-crate/CLAUDE.md"],
+    )
+    .unwrap();
+    assert!(
+        guide.starts_with("100644 blob "),
+        "the guide itself stays a regular file: {guide}"
+    );
+
+    let tracked = claimed_worktree();
+    let workspace = tracked.path();
+    write(workspace, "crates/new-crate/CLAUDE.md", "# guide\n");
+    git_success(workspace, &["add", "crates/new-crate/CLAUDE.md"]).unwrap();
+    git_success(workspace, &["commit", "-m", "guide"]).unwrap();
+    symlink_at(workspace, "crates/new-crate/AGENTS.md", "CLAUDE.md");
+    git_commit(&owner_host(workspace), &owner_commit_input(workspace))
+        .expect("a symlink to an already tracked guide is delivered");
+    assert_eq!(
+        git_output(workspace, &["show", "--format=", "--name-only", "HEAD"]).unwrap(),
+        "crates/new-crate/AGENTS.md"
+    );
+    assert_symlink_mode_120000(workspace, "crates/new-crate/AGENTS.md");
+}
+
+/// Neighbouring irregular candidates stay on the existing refusal, and a
+/// claimed leaf still refuses protected untracked paths. Nothing is staged.
+#[cfg(unix)]
+fn owner_delivery_still_refuses_neighbouring_irregular_paths() {
+    if !super::super::run_isolated(concat!(
+        module_path!(),
+        "::owner_delivery_still_refuses_neighbouring_irregular_paths"
+    )) {
+        return;
+    }
+
+    type OwnerRefusal = (&'static str, &'static str, fn(&Path));
+    let cases: &[OwnerRefusal] = &[
+        (
+            "other symlink name",
+            "crates/new-crate/README.md",
+            |workspace| {
+                write(workspace, "crates/new-crate/CLAUDE.md", "# guide\n");
+                symlink_at(workspace, "crates/new-crate/README.md", "CLAUDE.md");
+            },
+        ),
+        ("other directory", "docs/AGENTS.md", |workspace| {
+            write(workspace, "docs/CLAUDE.md", "# guide\n");
+            symlink_at(workspace, "docs/AGENTS.md", "CLAUDE.md");
+        }),
+        (
+            "crate root is not a crate guide",
+            "crates/AGENTS.md",
+            |workspace| {
+                write(workspace, "crates/CLAUDE.md", "# guide\n");
+                symlink_at(workspace, "crates/AGENTS.md", "CLAUDE.md");
+            },
+        ),
+        (
+            "dot-slash link text",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                write(workspace, "crates/new-crate/CLAUDE.md", "# guide\n");
+                symlink_at(workspace, "crates/new-crate/AGENTS.md", "./CLAUDE.md");
+            },
+        ),
+        (
+            "other link text",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                write(workspace, "crates/new-crate/README.md", "# readme\n");
+                symlink_at(workspace, "crates/new-crate/AGENTS.md", "README.md");
+            },
+        ),
+        (
+            "absolute target",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                write(workspace, "crates/new-crate/CLAUDE.md", "# guide\n");
+                let target = workspace.join("crates/new-crate/CLAUDE.md");
+                symlink_at(
+                    workspace,
+                    "crates/new-crate/AGENTS.md",
+                    target.to_str().expect("utf-8 fixture path"),
+                );
+            },
+        ),
+        (
+            "escaping sibling target",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                write(workspace, "crates/CLAUDE.md", "# guide\n");
+                symlink_at(workspace, "crates/new-crate/AGENTS.md", "../CLAUDE.md");
+            },
+        ),
+        (
+            "escaping absolute-looking relative target",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                symlink_at(workspace, "crates/new-crate/AGENTS.md", "../../etc/passwd");
+            },
+        ),
+        (
+            "dangling target",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                symlink_at(workspace, "crates/new-crate/AGENTS.md", "CLAUDE.md");
+            },
+        ),
+        (
+            "directory target",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                fs::create_dir_all(workspace.join("crates/new-crate/CLAUDE.md")).unwrap();
+                symlink_at(workspace, "crates/new-crate/AGENTS.md", "CLAUDE.md");
+            },
+        ),
+        (
+            "symlink target",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                write(workspace, "crates/new-crate/guide.md", "# guide\n");
+                symlink_at(workspace, "crates/new-crate/CLAUDE.md", "guide.md");
+                symlink_at(workspace, "crates/new-crate/AGENTS.md", "CLAUDE.md");
+            },
+        ),
+        (
+            "gitignored guide is not part of the delivery",
+            "crates/new-crate/AGENTS.md",
+            |workspace| {
+                write(workspace, ".gitignore", "crates/new-crate/CLAUDE.md\n");
+                write(workspace, "crates/new-crate/CLAUDE.md", "# guide\n");
+                symlink_at(workspace, "crates/new-crate/AGENTS.md", "CLAUDE.md");
+            },
+        ),
+        ("nested repository", "nested/", |workspace| {
+            let nested = workspace.join("nested");
+            fs::create_dir_all(&nested).unwrap();
+            git_success(&nested, &["init"]).unwrap();
+            git_success(&nested, &["config", "user.email", "local@example.test"]).unwrap();
+            git_success(&nested, &["config", "user.name", "Local User"]).unwrap();
+            fs::write(nested.join("inside.txt"), "x\n").unwrap();
+            git_success(&nested, &["add", "inside.txt"]).unwrap();
+            git_success(&nested, &["commit", "-m", "nested"]).unwrap();
+        }),
+        (
+            "tracked path replaced by a directory",
+            "README.md",
+            |workspace| {
+                fs::remove_file(workspace.join("README.md")).unwrap();
+                fs::create_dir(workspace.join("README.md")).unwrap();
+                write(workspace, "README.md/inside.txt", "inside\n");
+            },
+        ),
+        (".git component", "notes/.GIT", |workspace| {
+            write(workspace, "notes/.GIT", "not a repository\n");
+        }),
+    ];
+
+    for (label, needle, setup) in cases {
+        let temp = claimed_worktree();
+        let workspace = temp.path();
+        let head = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
+        setup(workspace);
+        let before = untracked_status(workspace);
+        let error = git_commit(&owner_host(workspace), &owner_commit_input(workspace))
+            .expect_err(label)
+            .to_string();
+        assert!(
+            error.contains("task delivery refused non-regular candidate paths"),
+            "{label}: {error}"
+        );
+        assert!(
+            error.contains(needle),
+            "{label} must name {needle}: {error}"
+        );
+        assert_eq!(
+            git_output(workspace, &["rev-parse", "HEAD"]).unwrap(),
+            head,
+            "{label} does not commit"
+        );
+        assert_eq!(
+            untracked_status(workspace),
+            before,
+            "{label} leaves the worktree"
+        );
+    }
+
+    for path in [".env", ".orbit/private.json", ".envrc", "nested/.GIT/HEAD"] {
+        let temp = claimed_worktree();
+        let workspace = temp.path();
+        let head = git_output(workspace, &["rev-parse", "HEAD"]).unwrap();
+        write(workspace, path, "secret\n");
+        let before = untracked_status(workspace);
+        let host = CommitTestHost::new(vec![claimed_task(&["dir:."])], workspace.to_path_buf())
+            .with_claim_binding(CLAIMED_TASK_ID);
+        let error = git_commit(&host, &claimed_commit_input(workspace))
+            .expect_err(path)
+            .to_string();
+        assert!(
+            error.contains("task delivery refused protected untracked paths"),
+            "{path}: {error}"
+        );
+        assert!(error.contains(path), "{path} must be named: {error}");
+        assert_eq!(
+            git_output(workspace, &["rev-parse", "HEAD"]).unwrap(),
+            head,
+            "{path} does not commit"
+        );
+        assert_eq!(
+            untracked_status(workspace),
+            before,
+            "{path} leaves the worktree"
+        );
+    }
+}
+
 #[test]
 fn candidate_path_authority_contracts() {
     super::super::run_family(
@@ -386,6 +673,16 @@ fn candidate_path_authority_contracts() {
             (
                 "owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations",
                 owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations,
+            ),
+            #[cfg(unix)]
+            (
+                "owner_delivery_commits_crate_guide_symlinks_as_mode_120000",
+                owner_delivery_commits_crate_guide_symlinks_as_mode_120000,
+            ),
+            #[cfg(unix)]
+            (
+                "owner_delivery_still_refuses_neighbouring_irregular_paths",
+                owner_delivery_still_refuses_neighbouring_irregular_paths,
             ),
         ],
     );
