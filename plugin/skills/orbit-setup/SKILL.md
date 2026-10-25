@@ -34,7 +34,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Owner/replica roles and multiple machines | [Multi-host](references/multi-host.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |
-| Upgrade, resource sync, doctor or worktree GC | [Maintenance](references/maintenance.md) |
+| Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding | [Maintenance](references/maintenance.md#removing-or-re-targeting-a-workspace) |
 | Scheduler/service logs and host incidents | [Operational logs](references/operational-logs.md) |
 
 Task tracking alone does not require a provider, PR credentials, a scheduler or
