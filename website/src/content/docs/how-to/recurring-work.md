@@ -152,10 +152,14 @@ the `claude` CLI.
 
 ## 2. Turn on routines
 
-`orbit workspace init` seeds six routines into `.orbit/routines/`, all
-disabled: task pilot, ship sweep, worktree GC, store GC (daily audit and
-run-state retention), and the CI-failure and dependency-alert sweeps. `orbit workspace sync` refreshes them after an
-upgrade and keeps your edits.
+`orbit workspace init` seeds ten routines into `.orbit/routines/`: task
+pilot, finding verification, pilot-warning triage, blocked-task triage, ship
+sweep, worktree GC, store GC (daily audit and run-state retention), the
+CI-failure and dependency-alert sweeps, and crew-performance refresh.
+All start disabled except `crew_performance_refresh`, which runs hourly.
+With `workflow.crew_performance` set to `off`, that routine skips its scan and
+writes no snapshot, but still records a job run. `orbit workspace sync`
+refreshes the routines after an upgrade and keeps your edits.
 
 Turn one on with its switch in **Automation → Routines**, or set
 `enabled: true` in its YAML. Git ignores `.orbit/`, so the change applies to

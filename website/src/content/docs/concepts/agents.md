@@ -78,6 +78,7 @@ head:
       }
       .orbit-setup-explorer:has(#ose-p-claude:checked) #ose-panel-claude,
       .orbit-setup-explorer:has(#ose-p-codex:checked) #ose-panel-codex,
+      .orbit-setup-explorer:has(#ose-p-muse:checked) #ose-panel-muse,
       .orbit-setup-explorer:has(#ose-p-antigravity:checked) #ose-panel-antigravity,
       .orbit-setup-explorer:has(#ose-p-gemini:checked) #ose-panel-gemini,
       .orbit-setup-explorer:has(#ose-p-grok:checked) #ose-panel-grok,
@@ -253,6 +254,7 @@ JavaScript.
 <div class="ose-choices">
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-claude" value="claude" checked><label for="ose-p-claude">claude</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-codex" value="codex"><label for="ose-p-codex">codex</label></span>
+<span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-muse" value="muse"><label for="ose-p-muse">muse</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-antigravity" value="antigravity"><label for="ose-p-antigravity">antigravity</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-grok" value="grok"><label for="ose-p-grok">grok</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-copilot" value="copilot"><label for="ose-p-copilot">copilot</label></span>
@@ -330,6 +332,42 @@ model = "gpt-6.1-sol"
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
 <div class="ose-note"><p>Codex sandbox mode and approval policy are separate settings — see <a href="../../reference/config/#settable-keys"><code>execution.codex.*</code></a>.</p></div>
+</div>
+<div class="ose-panel" id="ose-panel-muse">
+<dl class="ose-facts">
+<dt>Binary on <code>PATH</code></dt><dd><code>muse</code></dd>
+<dt>Example model</dt><dd><code>muse-spark-1.3</code></dd>
+<dt>Reasoning effort</dt><dd>Supported — the full crew vocabulary, rendered as <code>muse exec --reasoning-effort &lt;value&gt;</code>.</dd>
+</dl>
+<fieldset class="ose-field">
+<legend>2. Reasoning effort (optional)</legend>
+<div class="ose-choices">
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-none" value="none" checked><label for="ose-e-muse-none">omit</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-low" value="low"><label for="ose-e-muse-low">low</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-medium" value="medium"><label for="ose-e-muse-medium">medium</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-high" value="high"><label for="ose-e-muse-high">high</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-xhigh" value="xhigh"><label for="ose-e-muse-xhigh">xhigh</label></span>
+<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-muse" id="ose-e-muse-max" value="max"><label for="ose-e-muse-max">max</label></span>
+</div>
+</fieldset>
+<div class="ose-snippet">
+
+<pre class="ose-code"><code>[workflow]
+default_crew = "muse-spark"
+
+[crews.muse-spark]
+provider = "muse"
+model = "muse-spark-1.3"
+<span class="ose-eff" data-effort="low">effort = "low"
+</span><span class="ose-eff" data-effort="medium">effort = "medium"
+</span><span class="ose-eff" data-effort="high">effort = "high"
+</span><span class="ose-eff" data-effort="xhigh">effort = "xhigh"
+</span><span class="ose-eff" data-effort="max">effort = "max"
+</span></code></pre>
+
+<div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
+</div>
+<div class="ose-note"><p>Muse Code runs on macOS and Linux. Omit <code>effort</code> to keep the model's default; Orbit then passes no reasoning-effort argument.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-antigravity">
 <dl class="ose-facts">

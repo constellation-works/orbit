@@ -35,10 +35,6 @@
   --sl-color-hairline: #26262b;
   --sl-color-hairline-shade: #17171a;
 
-  /* Failure state for the copy controls. Not a Starlight role, so it carries
-     the project prefix; tuned for AA contrast on the surface colour above. */
-  --orbit-color-danger: #ff9d9d;
-
   /* Caution panels (changelog breaking changes). */
   --orbit-caution-bg: #1a140c;
   --orbit-caution-line: #5a4225;
@@ -68,7 +64,6 @@
   --sl-color-hairline: #eceef3;
   --sl-color-hairline-shade: #f4f5f8;
 
-  --orbit-color-danger: #b3261e;
   --orbit-caution-bg: #fff6ea;
   --orbit-caution-line: #f0cf9f;
   --orbit-caution-text: #8a4b00;
@@ -749,10 +744,6 @@ html:not([data-has-sidebar]) header.header {
 .orbit-section {
   border-top: 1px solid var(--sl-color-hairline);
   padding: 4rem 0;
-}
-
-.orbit-section:last-of-type {
-  padding-bottom: 0;
 }
 
 .orbit-section-head {
