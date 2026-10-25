@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18125]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18125, ORB-18131]
 ---
 
 # Auto-tasks — Overview
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These twelve YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These thirteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -270,6 +270,22 @@ definition of the same name.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore, which is itself tagged `no-diff-expected` and never
   builds or runs tests.
+- `escape-to-guard` — disabled-by-default weekly pass that turns recurring
+  regression classes into prevention. It classifies `unclassified` and
+  absent escapes from the regression task and the culprit's landed diff,
+  recording each classification through the supported `orbit.task.update`
+  relations write (or, when that write cannot change an existing link, in
+  its artifact plus one deduplicated gap task), clusters regressions by
+  nature × escape × layer plus a one-line mechanism, and files at most
+  3 `proposed` guard tasks for clusters of 3 or more regressions in
+  30 days. A guard is a mechanical check inside the gates that already
+  exist — a lint, a type, a static guard script, a generator check, a
+  skill or review-instruction line for `review_missed`, or a regression
+  test for `no_test` — never a new required status check or merge gate.
+  Each run attaches `escape-to-guard.json` (clusters, classification
+  counts before and after, and whether each earlier landed guard's class
+  recurred after its landing date) and diffs it against the previous
+  run; a workspace with no regression links is a successful no-op.
 
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
@@ -339,6 +355,12 @@ encode this repository's branches and gates. Re-init preserves them:
   inferred-layers fallback that files only cycles and up-calls, and
   measurement-first split, merge, and move filing capped at 3 improvement
   tasks per run.
+- ORB-18131 — Added the disabled weekly `escape-to-guard` default:
+  classification of `unclassified` and absent escapes through the
+  supported relations write with an artifact-plus-gap fallback, clustering
+  by nature × escape × layer plus mechanism, mechanical guards inside
+  existing gates only (never a new required status check or merge gate),
+  and an `escape-to-guard.json` artifact carried between runs.
 - ORB-17245 — Added the disabled hourly `blocked-task-triage` default and the
   `skip_unless_blocked_candidates` precondition.
 - ORB-17744 — Retired the `blocked-task-triage` default in favour of the

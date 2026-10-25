@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The twelve seeded definitions
+## The thirteen seeded definitions
 
-`orbit workspace init` seeds all twelve, disabled, except any you deleted (see
+`orbit workspace init` seeds all thirteen, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -486,6 +486,21 @@ plugin being removed.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore. The chore itself is tagged `no-diff-expected` and never
   builds or runs tests.
+- **`escape-to-guard`** (`medium`) — weekly. Classifies `unclassified` and
+  absent regression escapes from the regression task and the culprit's
+  landed diff, records each classification through the supported
+  `orbit.task.update` relations write (or in its artifact plus one
+  deduplicated gap task when that write cannot change an existing link),
+  clusters regressions by nature × escape × layer plus a one-line
+  mechanism, and files at most 3 `proposed` guard tasks for clusters of
+  3 or more regressions in 30 days. A guard is a mechanical check inside
+  the gates that already exist — a lint, a type, a static guard script, a
+  generator check, a skill or review-instruction line for `review_missed`,
+  or a regression test for `no_test` — never a new required status check
+  or merge gate. Each run attaches `escape-to-guard.json` with the
+  clusters, classification counts before and after, and recurrence after
+  earlier guards landed, diffed against the previous run; a workspace
+  with no regression links is a successful no-op.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.

@@ -1,5 +1,37 @@
 {
-  "architecture-audit": [],
+  "architecture-audit": [
+    {
+      "comments": [
+        "## Discover the repository's shape",
+        "## Duplicate and conflict safety",
+        "## Filing",
+        "## Handoff",
+        "## Layering: documented, or inferred",
+        "## Lenses and bars",
+        "## Pass A — structure metrics, whole repository, every run",
+        "## Pass B — one area, read in full",
+        "## Pin and cursor",
+        "## Rules and command surfaces",
+        "## What this sweep owns"
+      ],
+      "digest": "a3058f2258d3b6e1037ffbd27a507bd3f2c7700d8bf90bc984d8c37c3ff07c9e",
+      "revision": "db16b243746de9f0d4f9455ec3562f41b4bd60b6",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 20160
+        },
+        "tags": [
+          "architecture-audit",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    }
+  ],
   "backlog-hygiene": [
     {
       "comments": [
@@ -1258,6 +1290,7 @@
       }
     }
   ],
+  "escape-to-guard": [],
   "friction-curation": [
     {
       "comments": [

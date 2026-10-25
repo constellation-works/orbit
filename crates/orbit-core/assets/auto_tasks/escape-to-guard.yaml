@@ -1,0 +1,236 @@
+schemaVersion: 1
+name: escape-to-guard
+description: Weekly classification and clustering of recent regressions, filing at most 3 proposed mechanical guard tasks for classes of 3 or more regressions in 30 days that share one mechanism
+enabled: false
+schedule:
+  cron: 40 7 * * 1
+template:
+  title: Turn recurring regression classes into mechanical guards
+  description: |-
+    Classify this workspace's recent regressions, cluster them by
+    nature, escape and layer plus one shared mechanism, and file at most
+    3 proposed guard tasks for clusters of 3 or more regressions in
+    30 days. The durable outputs are the classifications recorded on the
+    regression links, the filed guard tasks, and the
+    `escape-to-guard.json` artifact; the execution summary is the audit
+    trail. A workspace with no regression links is a successful no-op.
+
+    ## Rules and command surfaces
+
+    - Use only Orbit's own analytics, task and search tools, plus git.
+      Never read or edit Orbit state files, the Orbit database, or task
+      files by hand, and never change a task's status. Read regression
+      evidence with
+      `orbit tool run orbit.codebase.analytics --input '{"window":"7d","min_support":1,"model":"<agent-family>"}'`,
+      again with `"window":"30d"`, and once per escape value that needs
+      isolation with `"escape":"unclassified"` and `"escape":"absent"`
+      in the 30d call. Inspect a task with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      Search with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"all","all":true,"model":"<agent-family>"}'`
+      (lexical search matches one case-insensitive substring: pass a
+      single distinctive token, never a multi-word phrase, and never
+      treat a 0-hit multi-word query as proof that nothing covers a
+      cluster). Find the previous run with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["escape-to-guard","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
+      (tag filters use AND semantics) and read its artifact with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"escape-to-guard.json","model":"<agent-family>"}'`.
+    - Before filing a task, read the installed `orbit` skill's
+      task-authoring reference (`references/task-authoring.md`) and
+      follow it for task shape. Tool-created tasks start `proposed`;
+      leave them `proposed` and never approve one.
+    - Fail open. A window with no regression links, or with no cluster
+      at the bar below, is a successful no-op. Do not invent work to
+      justify the run.
+
+    ## Classify unclassified and absent escapes
+
+    From the 30d analytics payload, take every `regression_from` link
+    whose escape is `unclassified` or absent and whose regression task
+    falls in the last 7 days; use the 7d payload to bound that set and
+    the 30d payload for context. Count links by escape before any
+    classification and record the counts for the artifact. For each
+    such link:
+
+    1. Read the regression (fix) task and the culprit task it links to
+       with `orbit.task.show`. The regression task's description, its
+       landed paths, and its tags name what broke and where the fix
+       sits.
+    2. Read the culprit's landed diff. Resolve its landing commit with
+       `git log --all --oneline --grep=<culprit task ID>` and read the
+       diff with `git show <commit>`. When no commit names the culprit,
+       read the delivery record through
+       `orbit tool run orbit.task.show --input '{"id":"<culprit task ID>","field":"delivery","model":"<agent-family>"}'`
+       and show the landed SHA it names. Labelled example only: a diff
+       that changes a serialized field's default with no migration of
+       stored values points at a `contract_drift` nature and a
+       `no_test` escape when no test covers stored-value reads.
+    3. Pick one nature and one escape from the lists below, from that
+       evidence alone. Choose `unclassified` rather than guess.
+
+    `nature` is what kind of regression the link records:
+    - `broke_existing`: the culprit broke behavior that worked before it landed.
+    - `defect_in_new`: the defect is in code the culprit itself introduced.
+    - `incomplete`: the culprit shipped without part of what its task required.
+    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
+    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
+    - `unclassified`: the evidence does not settle the nature.
+    `escape` is why the delivery gates missed it:
+    - `no_test`: no test covered the broken behavior.
+    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    - `platform_only`: it shows only on a platform or host the gates did not exercise.
+    - `review_missed`: it was visible in the diff and review did not flag it.
+    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
+    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
+    - `unclassified`: the evidence does not settle the escape.
+
+    Record each settled classification through the supported relation
+    write: read the regression task's current `relations`, then send
+    the full replacement list, preserving every existing relation and
+    adding `"regression":{"nature":"<nature>","escape":"<escape>"}` to
+    its `regression_from` entry, with
+    `orbit tool run orbit.task.update --input '{"id":"<regression task ID>","relations":[{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"model":"<agent-family>"}'`
+    (the payload shows the one classified entry; send every existing
+    relation, not only that entry). Read the task back and confirm the
+    classification took effect. If that write refuses, or the read-back
+    shows the stored classification did not change, no supported write
+    can re-classify an existing link in this workspace: record each
+    unsettled classification in `escape-to-guard.json` instead, and
+    file the gap once. Search first with one distinctive token from
+    the gap (for example `re-classify`) and inspect every plausible
+    hit; when no open or proposed task already tracks it, file one
+    with
+    `orbit tool run orbit.task.add --input '{"title":"Support re-classifying an existing regression_from link","description":"<markdown naming the refused write, the read-back evidence, and the classifications held in escape-to-guard.json>","acceptance_criteria":["1 task update call changes the nature and escape stored on 1 named existing regression_from link and a task read-back shows the new values"],"context_files":["file:<verified path the write surface lives in>"],"complexity":"medium","tags":["escape-to-guard"],"type":"chore","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    File that gap at most once across all runs: a later run that finds
+    it already tracked records the tracking task ID in the artifact
+    and files nothing. The gap task does not count toward the guard
+    cap below.
+
+    ## Cluster by nature, escape, layer and mechanism
+
+    Group every regression link in the 30d window, classified or not,
+    by nature x escape x layer. The layer is the fix layer the
+    analytics payload reports for the regression task (its landed
+    paths, else its declared footprint, else `unknown`). Inside each
+    group, split by mechanism: read enough of each regression task and
+    culprit diff to state the shared mechanism in one line, for
+    example (labelled examples only) a serialized default changed
+    without a migration, path normalization that differs on one host
+    operating system, or a command-output golden that was not
+    regenerated. A group whose members share no one-line mechanism is
+    several clusters, not one. Record every cluster in the artifact
+    with its nature, escape, layer, mechanism line, 7d and 30d counts,
+    and every regression task ID in it.
+
+    ## File guards for clusters at the bar
+
+    A cluster gets one proposed guard task when it holds 3 or more
+    regressions in 30 days sharing the one mechanism. File at most
+    3 guard tasks per run. Rank qualifying clusters by 30d count, then
+    by 7d count, and record clusters past the cap in the artifact as
+    overflow for the next run.
+
+    The guard is one mechanical check inside the gates that already
+    exist, chosen from:
+    - a lint rule or lint configuration entry the existing lint gate runs;
+    - a type, newtype or other compile-time shape the existing build rejects when violated;
+    - a static guard script invoked by an existing gate command;
+    - a generator check that fails when generated output is stale;
+    - a skill or review-instruction line, only for a `review_missed` cluster;
+    - a regression test at the public boundary the broken behavior crosses, only for a `no_test` cluster (that task is a bug fix).
+
+    Never propose a new required GitHub status check, a new merge
+    gate, a new CI job that a merge waits on, or a human-only review
+    step. Orbit ships with no merge gates on purpose: the guard must
+    fail through a command the workspace already runs before landing.
+
+    Before filing, search for duplicates: list open work with
+    `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"escape-to-guard","limit":200,"model":"<agent-family>"}'`,
+    then search one distinctive token from the mechanism per candidate
+    cluster and inspect every plausible hit. A cluster already covered
+    by an open or proposed task gets no new task; record the covering
+    task ID in the artifact. Check rejected guard tasks the same way
+    and refile only when the evidence has materially changed, saying
+    what changed in the new task's description.
+
+    File each guard (tool-created tasks start `proposed`) with
+    `orbit tool run orbit.task.add --input '{"title":"Guard: <mechanism in one line>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"medium","tags":["escape-to-guard","no-auto-approve"],"type":"feature","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Set `type` to `bug` for a `no_test` regression-test guard and to
+    `chore` for a `review_missed` skill or review-instruction guard;
+    keep `feature` for the other guard kinds. The `no-auto-approve`
+    tag keeps the task `proposed` for human approval. The description
+    names:
+    - at least 3 regression task IDs from the cluster as evidence, with each regression's culprit task ID;
+    - the one-line mechanism and the cluster's nature, escape and layer;
+    - the guard: the exact check, the existing gate command that runs it, and the violation it now rejects;
+    - verified `context_files` naming every file the guard adds or edits, read back with `orbit.task.show` after filing.
+
+    ## Follow up earlier guards
+
+    List guard tasks filed by earlier runs with
+    `orbit tool run orbit.task.list --input '{"status":["done"],"tag":"escape-to-guard","limit":200,"model":"<agent-family>"}'`
+    and keep the ones without the `no-diff-expected` tag (those are
+    earlier instances of this chore, not guards). For each landed
+    guard, read its landing date from the `done` entry in its history
+    through `orbit.task.show`, then count regressions in its cluster
+    (same nature, escape, layer and mechanism) whose regression task
+    was created after that date, from the 30d analytics payload and
+    the regression tasks themselves. Record per guard: guard task ID,
+    landed date, cluster, recurrence count after landing, and the
+    recurring regression task IDs. A guard with 1 or more recurrences
+    is evidence its check does not cover the mechanism: say so in the
+    summary and let the cluster compete for this run's guard cap as a
+    strengthened guard, naming the landed guard task in the new task's
+    description.
+
+    ## Record the run
+
+    Write `.orbit/tmp/escape-to-guard.json` (`$ORBIT_SCRATCH_DIR`) with:
+    - `schema_version: 1`, the scan timestamp, and the 7d and 30d window bounds;
+    - `classification_counts`: links counted before classification and after it, per escape value, with `unclassified` and `absent` shown separately;
+    - `clusters`: every cluster row (nature, escape, layer, one-line mechanism, 7d count, 30d count, regression task IDs, disposition: filed task ID, covering task ID, overflow, or below the 3-in-30-days bar);
+    - `guard_follow_up`: one row per landed earlier guard (guard task ID, landed date, cluster, recurrence count after landing, recurring regression task IDs);
+    - `filed_guard_ids`, the gap task ID when one was filed or already tracked, and the overflow list.
+
+    Diff this run against the previous run's `escape-to-guard.json`
+    (found through the previous-instance query above; absent or
+    unreadable means this is the baseline run, so say so): name
+    clusters that are new, clusters that persisted, clusters that
+    dropped below the bar, and how the `unclassified` plus `absent`
+    count moved. Attach the file with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/escape-to-guard.json","path":"escape-to-guard.json","model":"<agent-family>"}'`.
+    Write and attach it on every completed run, including a no-op run.
+    The execution summary reports the window bounds, the before and
+    after classification counts, every cluster with its disposition,
+    the guard follow-up rows, the filed versus already-covered IDs,
+    and the diff against the previous run.
+  acceptance_criteria:
+  - The run counted regression links in the 7d and 30d `orbit.codebase.analytics` windows and recorded per-escape counts before classification in `escape-to-guard.json`, with `unclassified` and `absent` shown as separate values.
+  - Each `unclassified` or `absent` link from the last 7 days was classified from its regression task and the culprit landed diff shown by `git show`, and the classification was recorded by an `orbit.task.update` relations write read back on the regression task, or held in `escape-to-guard.json` with 1 deduplicated gap task filed for the refused write.
+  - Regressions were clustered by nature x escape x layer plus a 1-line mechanism in `escape-to-guard.json`, and a guard task was filed only for a cluster holding 3 or more regressions in 30 days sharing that mechanism.
+  - Each filed guard task names 3 or more regression task IDs with their culprit task IDs, the 1-line mechanism, and the exact guard check with the existing gate command that runs it.
+  - Every guard is a lint, type, static guard script, generator check, skill or review-instruction line for a `review_missed` cluster, or a regression test for a `no_test` cluster, and no filed task proposes a new required status check or merge gate.
+  - At most 3 guard tasks were filed, each left `proposed` with a `spawned_from` relation to this task and non-empty `context_files`, and open plus rejected `escape-to-guard` tasks were searched before each filing with no duplicate filed.
+  - The `escape-to-guard.json` artifact was attached on every completed run and holds the cluster rows, classification counts before and after, and 1 follow-up row per landed earlier guard with its recurrence count after its landing date, diffed against the previous run artifact or recorded as the baseline run.
+  - A workspace whose analytics payload holds 0 regression links ended as a successful no-op with the zero-count `escape-to-guard.json` attached.
+  task_type: chore
+  tags:
+  - escape-to-guard
+  - no-diff-expected
+  required_tools:
+  - orbit.codebase.analytics
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.task.update
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-25T00:00:00Z
+updated_by: system
+updated_at: 2026-10-25T00:00:00Z
