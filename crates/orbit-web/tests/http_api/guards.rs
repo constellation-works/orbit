@@ -101,21 +101,21 @@ fn task_mutations_redact_prose_before_persistence() {
 /// Resume and auto-drain are ordinary only when the request does not ask for completion.
 const ORDINARY_WRITES: &[(&str, &str)] = &[
     ("POST", "/tasks"),
-    ("PATCH", "/tasks/:id"),
-    ("POST", "/tasks/:id/comments"),
-    ("POST", "/tasks/:id/approve"),
-    ("POST", "/tasks/:id/reject"),
-    ("POST", "/tasks/:id/archive"),
+    ("PATCH", "/tasks/{id}"),
+    ("POST", "/tasks/{id}/comments"),
+    ("POST", "/tasks/{id}/approve"),
+    ("POST", "/tasks/{id}/reject"),
+    ("POST", "/tasks/{id}/archive"),
     // A decision answer is the dashboard's human write like approve and
     // reject: it applies through the same human funnel in core.
-    ("POST", "/decisions/:id/answer"),
+    ("POST", "/decisions/{id}/answer"),
     ("POST", "/frictions"),
-    ("PATCH", "/frictions/:id"),
-    ("POST", "/frictions/:id/resolve"),
-    ("POST", "/job-runs/:id/resume"),
+    ("PATCH", "/frictions/{id}"),
+    ("POST", "/frictions/{id}/resolve"),
+    ("POST", "/job-runs/{id}/resume"),
     ("POST", "/workflows/auto"),
     ("POST", "/workflows/ship"),
-    ("POST", "/runs/:id/cancel"),
+    ("POST", "/runs/{id}/cancel"),
     ("POST", "/metrics/invocations"),
 ];
 
@@ -139,12 +139,12 @@ fn registered_paths() -> impl Iterator<Item = &'static str> {
 
 fn body(path: &str) -> Value {
     match path {
-        "/distributed/handoffs/:id/retry" => {
+        "/distributed/handoffs/{id}/retry" => {
             json!({"expected_candidate_commit":"a","expected_base_commit":"b","expected_latest_attempt":1,"expected_latest_state":"stopped","reason":"HTTP guard check","request_key":"guard-fixture"})
         }
-        "/runs/:id/replay" => json!({}),
-        "/config/keys/:key" => json!({"value":"agent-main","init":"fresh"}),
-        "/config/crews/:name" => json!({"fields":{}}),
+        "/runs/{id}/replay" => json!({}),
+        "/config/keys/{key}" => json!({"value":"agent-main","init":"fresh"}),
+        "/config/crews/{name}" => json!({"fields":{}}),
         "/routines/clock" => json!({
             "action":"disable", "machine_name":"fixture", "expected_enabled":true,
             "expected_cadence_seconds":300,
@@ -187,7 +187,7 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
             let mut mutations = BTreeSet::new();
             for (path, id) in registered_paths().flat_map(|path| {
                 // Resume inherits completion from saved input, not the HTTP body.
-                let ids: &[&str] = if path == "/job-runs/:id/resume" {
+                let ids: &[&str] = if path == "/job-runs/{id}/resume" {
                     &["jrun-resume-review", "jrun-resume-done"]
                 } else {
                     &["missing"]
@@ -195,15 +195,15 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                 ids.iter().map(move |&id| (path, id))
             }) {
                 let concrete = path
-                    .replace(":id", id)
-                    .replace(":key", "workflow.base_branch")
-                    .replace(":name", "missing")
-                    .replace(":namespace", "missing")
-                    .replace(":panel", "missing")
-                    .replace(":kind", "routine")
-                    .replace(":batch", "missing")
-                    .replace("*path", "missing")
-                    .replace("*rest", "tasks");
+                    .replace("{id}", id)
+                    .replace("{key}", "workflow.base_branch")
+                    .replace("{name}", "missing")
+                    .replace("{namespace}", "missing")
+                    .replace("{panel}", "missing")
+                    .replace("{kind}", "routine")
+                    .replace("{batch}", "missing")
+                    .replace("{*path}", "missing")
+                    .replace("{*rest}", "tasks");
                 let uri = format!("/api{concrete}?workspace=ws_http_fixture");
                 let discovery = operator.request("OPTIONS", &uri).send().unwrap();
                 assert_eq!(discovery.status().as_u16(), 405, "route discovery: {path}");
@@ -262,7 +262,7 @@ fn every_router_mutation_enforces_origin_and_operator_policy() {
                         let status = response.status().as_u16();
                         let payload: Value = response.json().unwrap();
                         let completion_resume =
-                            path == "/job-runs/:id/resume" && id == "jrun-resume-done";
+                            path == "/job-runs/{id}/resume" && id == "jrun-resume-done";
                         let completion_auto =
                             path == "/workflows/auto" && probe_body["complete"] == true;
                         let approve_auto =

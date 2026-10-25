@@ -382,9 +382,9 @@ pub(super) fn bad_request(message: String) -> Response {
 
 /// JSON body that is optional only when it is absent or empty.
 ///
-/// `Option<Json<T>>` turns every extractor rejection into `None` (axum-core
-/// implements `FromRequest for Option<T>` as `T::from_request(..).await.ok()`).
-/// On these routes `T::default()` is a real action: an empty ship selection
+/// `Option<Json<T>>` yields `None` only when the request has no `Content-Type`
+/// and rejects an empty body that does carry one, so it cannot express "empty
+/// body means the default" on its own. On these routes `T::default()` is a real action: an empty ship selection
 /// discovers the whole backlog, and a missing `force` is a graceful cancel.
 /// A zero-length body still becomes [`Default`]. Any non-empty body is parsed
 /// as JSON, and a wrong content type, syntax error, unknown field, or type
@@ -394,7 +394,6 @@ pub(super) struct OptionalJson<T>(
     pub T,
 );
 
-#[axum::async_trait]
 impl<T, S> FromRequest<S> for OptionalJson<T>
 where
     T: DeserializeOwned + Default,

@@ -60,7 +60,7 @@ missing_docs = "warn"
 [workspace.dependencies]
 assert_cmd = "2"
 base64 = "0.22"
-axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio"] }
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = "0.10"
 # `string` lets a command or argument be built from an owned `String`, which

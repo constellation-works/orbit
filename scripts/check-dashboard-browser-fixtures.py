@@ -373,7 +373,7 @@ def route_matches(path, patterns, assets_text):
 def _segments_match(segments, pattern, is_prefix):
     index = 0
     for part in pattern:
-        if part.startswith("*"):  # *rest swallows the remainder, even empty
+        if part.startswith("{*"):  # {*rest} swallows the remainder, even empty
             return True
         if index >= len(segments):
             # The fixture path is a strict prefix of this route (it
@@ -381,7 +381,7 @@ def _segments_match(segments, pattern, is_prefix):
             # as startsWith('/api/tasks/') is served by the route.
             return is_prefix
         segment = segments[index]
-        if part.startswith(":") or part.startswith("{"):
+        if part.startswith("{"):
             pass  # route parameter accepts any one segment
         elif SENTINEL in segment:
             pass  # templated fixture segment accepts any one segment
