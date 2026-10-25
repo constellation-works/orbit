@@ -505,6 +505,22 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "force-releasing a workspace claim displaces the operator currently driving dispatch",
     },
+    // The delegated-human decision channel (design
+    // `docs/design/human-decision-channel/2_design.md` §3.3). The row is
+    // operator-only for every capability-resolved caller — an agent session
+    // is refused here. A plugin backend's callback session holds no
+    // capability this registry can name, so the runtime chokepoint admits
+    // an *identified* callback past this row instead, and the submit
+    // handler's channel-binding and token checks decide it: the callback
+    // allowlist (the plugin must be granted this tool) and the registration
+    // (this channel must be bound to that plugin) are both re-read per
+    // call, so the bypass never widens past the operator's registration.
+    GovernedOperation {
+        id: "orbit.decision.submit",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "submitting a decision applies a human's answer to held work, so only the operator testing a channel — or the registered channel's own plugin callback, which the handler binds to the registration — may call it; an agent session never answers for a human",
+    },
     GovernedOperation {
         id: "workspace teardown",
         surface: OperationSurface::CliCommand,

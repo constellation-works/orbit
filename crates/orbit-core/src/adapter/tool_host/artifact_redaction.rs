@@ -353,7 +353,14 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         // List and show persist nothing; the answer verb never reaches
         // dispatch as a tool, and its note redacts per its declared class.
         OrbitBuiltinAction::Decision(verb) => match verb {
-            DecisionVerb::List | DecisionVerb::Show | DecisionVerb::Answer => ActionPolicy {
+            DecisionVerb::List
+            | DecisionVerb::Show
+            | DecisionVerb::Answer
+            | DecisionVerb::Submit
+            | DecisionVerb::ChannelRegister
+            | DecisionVerb::ChannelList
+            | DecisionVerb::ChannelRevoke
+            | DecisionVerb::ChannelRotateKey => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },

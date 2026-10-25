@@ -458,6 +458,11 @@ impl CodeScanningAlertEvidence {
 pub const DECISION_REQUESTED_EVENT: &str = "decision_requested";
 /// History event that records an applied answer to a [`DecisionRequest`].
 pub const DECISION_ANSWERED_EVENT: &str = "decision_answered";
+/// History event that records a decision token consumed by a refused
+/// submission that had already authenticated (design
+/// `docs/design/human-decision-channel/2_design.md` §2.3). The note names
+/// the request and the token's SHA-256 fingerprint, never the token.
+pub const DECISION_TOKEN_CONSUMED_EVENT: &str = "decision_token_consumed";
 /// Default lifetime of a decision request, in hours.
 pub const DEFAULT_DECISION_REQUEST_TTL_HOURS: i64 = 72;
 

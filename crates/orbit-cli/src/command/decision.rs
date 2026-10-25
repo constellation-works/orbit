@@ -4,6 +4,13 @@
 //! is the operator's and never goes through the tool surface: it applies
 //! the answer in core as this CLI's human writer. That is why an agent
 //! session can list a request it is waiting on but cannot answer it.
+//! `submit` goes through the governed `orbit.decision.submit` tool so the
+//! operator tests a channel on exactly the path its plugin uses.
+//! `channel …` administers this host's registrations in core directly;
+//! registering, revoking and rotating are refused from an agent envelope
+//! here, and the CLI's pre-dispatch gate already refuses every plain
+//! command to a plugin callback, so no running code can mint itself a
+//! human.
 
 use std::fmt::Write as _;
 
@@ -28,14 +35,25 @@ impl Execute for DecisionCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let Invocation { spec, input } = self.command;
         match spec.verb {
-            DecisionVerb::List | DecisionVerb::Show => {
+            DecisionVerb::List | DecisionVerb::Show | DecisionVerb::Submit => {
                 let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
                 let blocks = match spec.verb {
                     DecisionVerb::List => list_blocks(&value),
+                    DecisionVerb::Submit => vec![Block::text(format!(
+                        "Submitted `{}` for {}; the request on {} now reads {}.",
+                        text(&value["resolution"]["answer_id"]),
+                        text(&value["id"]),
+                        text(&value["task_id"]),
+                        text(&value["state"]),
+                    ))],
                     _ => show_blocks(&value),
                 };
                 Ok(Payload::blocks(value, blocks).into())
             }
+            DecisionVerb::ChannelRegister
+            | DecisionVerb::ChannelList
+            | DecisionVerb::ChannelRevoke
+            | DecisionVerb::ChannelRotateKey => channel_execute(runtime, spec.verb, &input),
             DecisionVerb::Answer => {
                 let id = required(&input, "id")?;
                 let answer = required(&input, "answer")?;
@@ -68,6 +86,93 @@ impl Execute for DecisionCommand {
                 Ok(Payload::blocks(value, blocks).into())
             }
         }
+    }
+}
+
+fn channel_execute(
+    runtime: &OrbitRuntime,
+    verb: DecisionVerb,
+    input: &serde_json::Map<String, Value>,
+) -> CommandOut {
+    if !matches!(verb, DecisionVerb::ChannelList)
+        && orbit_common::governance::authorization::agent_context_declared()
+    {
+        return Err(OrbitError::PolicyDenied(
+            "registering, revoking or rotating a decision channel is the operator's: it is refused from an agent envelope, so no running code can mint itself a human".into(),
+        ));
+    }
+    fn serialize<T: serde::Serialize>(value: &T) -> Result<Value, OrbitError> {
+        serde_json::to_value(value)
+            .map_err(|error| OrbitError::Execution(format!("serialize decision channels: {error}")))
+    }
+    match verb {
+        DecisionVerb::ChannelRegister => {
+            let channel = required(input, "channel")?;
+            let human = required(input, "human")?;
+            let plugin = required(input, "plugin")?;
+            let allowed_senders = input
+                .get("allowed_senders")
+                .and_then(Value::as_array)
+                .map(|senders| {
+                    senders
+                        .iter()
+                        .filter_map(|sender| sender.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default();
+            let info =
+                runtime.register_decision_channel(&channel, &human, &plugin, allowed_senders)?;
+            let blocks = vec![Block::text(format!(
+                "Registered decision channel `{}` for {} via plugin {} (key epoch {}, fingerprint sha256:{}).",
+                info.channel, info.human, info.plugin, info.epoch, info.key_fingerprint
+            ))];
+            Ok(Payload::blocks(serialize(&info)?, blocks).into())
+        }
+        DecisionVerb::ChannelList => {
+            let channels = runtime.list_decision_channels()?;
+            let value = serialize(&channels)?;
+            let mut table = Table::new(vec![
+                Column::new("CHANNEL").fixed(),
+                Column::new("HUMAN").fixed(),
+                Column::new("PLUGIN").fixed(),
+                Column::new("EPOCH").fixed(),
+                Column::new("STATE").fixed(),
+                Column::new("SENDERS"),
+            ])
+            .empty_message("no decision channels registered on this host");
+            for channel in &channels {
+                table.add_row(vec![
+                    channel.channel.clone(),
+                    channel.human.clone(),
+                    channel.plugin.clone(),
+                    channel.epoch.to_string(),
+                    if channel.revoked { "revoked" } else { "active" }.to_string(),
+                    channel.allowed_senders.join(", "),
+                ]);
+            }
+            Ok(Payload::blocks(value, vec![Block::table(table)]).into())
+        }
+        DecisionVerb::ChannelRevoke => {
+            let channel = required(input, "channel")?;
+            let info = runtime.revoke_decision_channel(&channel)?;
+            let blocks = vec![Block::text(format!(
+                "Revoked decision channel `{}`; its outstanding tokens no longer verify.",
+                info.channel
+            ))];
+            Ok(Payload::blocks(serialize(&info)?, blocks).into())
+        }
+        DecisionVerb::ChannelRotateKey => {
+            let channel = required(input, "channel")?;
+            let info = runtime.rotate_decision_channel_key(&channel)?;
+            let blocks = vec![Block::text(format!(
+                "Rotated decision channel `{}` to key epoch {} (fingerprint sha256:{}); every outstanding token is invalidated.",
+                info.channel, info.epoch, info.key_fingerprint
+            ))];
+            Ok(Payload::blocks(serialize(&info)?, blocks).into())
+        }
+        _ => Err(OrbitError::Execution(
+            "decision channel dispatch reached a non-channel verb".into(),
+        )),
     }
 }
 
