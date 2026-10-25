@@ -67,6 +67,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Set Up a Distributed Drain</h3>
     <p>Spread one backlog across machines: one owner, replica checkouts, SSH access.</p>
   </a>
+  <a class="orbit-card" href="./friction/">
+    <h3>Report and Triage Friction</h3>
+    <p>Record what made work harder than it should have been, then search, triage, resolve, and rehome the record.</p>
+  </a>
   <a class="orbit-card" href="./plugins/">
     <h3>Install and Grant Plugins</h3>
     <p>Add a plugin to this machine, grant only the permissions it requests, enable it per workspace, and upgrade or remove it.</p>
