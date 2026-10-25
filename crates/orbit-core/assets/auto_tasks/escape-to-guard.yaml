@@ -1,17 +1,18 @@
 schemaVersion: 1
 name: escape-to-guard
-description: Weekly classification and clustering of recent regressions, filing at most 3 proposed mechanical guard tasks for classes of 3 or more regressions in 30 days that share one mechanism
+description: Weekly classification and clustering of recent regressions, filing at most 3 proposed remedies for recurring regression mechanisms and at most 3 instruction-retirement tasks
 enabled: false
 schedule:
   cron: 40 7 * * 1
 template:
-  title: Turn recurring regression classes into mechanical guards
+  title: Turn recurring regression classes into prevention
   description: |-
     Classify this workspace's recent regressions, cluster them by
     nature, escape and layer plus one shared mechanism, and file at most
-    3 proposed guard tasks for clusters of 3 or more regressions in
-    30 days. The durable outputs are the classifications recorded on the
-    regression links, the filed guard tasks, and the
+    3 proposed remedy tasks for clusters of 3 or more regressions in
+    30 days, plus at most 3 instruction-retirement tasks. The durable
+    outputs are the classifications recorded on the regression links,
+    the filed tasks, and the
     `escape-to-guard.json` artifact; the execution summary is the audit
     trail. A workspace with no regression links is a successful no-op.
 
@@ -167,88 +168,164 @@ template:
     with its nature, escape, layer, mechanism line, 7d and 30d counts,
     and every regression task ID in it.
 
-    ## File guards for clusters at the bar
+    ## File remedies for clusters at the bar
 
-    A cluster gets one proposed guard task when it holds 3 or more
-    distinct regression tasks in 30 days sharing the one mechanism (several
-    culprit links from one regression count once toward the bar). File at most
-    3 guard tasks per run. Rank qualifying clusters by 30d count, then
-    by 7d count, and record clusters past the cap in the artifact as
-    overflow for the next run.
+    A cluster qualifies when it holds 3 or more distinct regression tasks
+    in 30 days sharing one mechanism (several culprit links from one
+    regression count once). File at most 3 remedy tasks per run, including
+    strengthened guards. Rank by 30d count, then 7d count; record overflow.
+    Evaluate earlier remedies below before selecting this run's filings.
 
-    The guard is one mechanical check inside the gates that already
-    exist, chosen from:
-    - a lint rule or lint configuration entry the existing lint gate runs;
-    - a type, newtype or other compile-time shape the existing build rejects when violated;
-    - a static guard script invoked by an existing gate command;
-    - a generator check that fails when generated output is stale;
-    - a skill or review-instruction line, only for a `review_missed` cluster;
-    - a regression test at the public boundary the broken behavior crosses, only for a `no_test` cluster (that task is a bug fix).
+    Pick the highest-reliability rung that can express the mechanism, in
+    this order. Each filed task names its rung and explains separately
+    why every higher rung cannot express the mechanism:
+    1. Mechanical guard (`remedy:guard`): a lint, type or compile-time
+       shape, static guard script, or generator check inside an existing
+       gate; or a public-boundary regression test only for `no_test`
+       (that task is a bug fix). Name the check, existing gate command
+       and violation it rejects. This is the default.
+    2. In-line comment (`remedy:comment`): at the hazard site in code an
+       agent must touch to repeat the mistake; name the hazard and safe
+       pattern. Existing comment-hygiene keeps it honest.
+    3. Nested directory guide (`remedy:nested-guide`): an
+       `AGENTS.md`/`CLAUDE.md` pair in the directory owning the hazard,
+       following the repository's existing pair convention. These are
+       loaded by Codex and Claude when working there; no Orbit delivery
+       machinery is needed.
+    4. Tag instruction (`remedy:tag-instruction`): a `docs/agents/<name>.md`
+       delivered through `workflow.tag_instructions`. The task must say
+       how affected tasks receive the tag (for example an authoring or
+       task-pilot rule). Host-config tag mapping is an operator step,
+       explicitly excluded from the remedy task's acceptance criteria.
+    5. Global instruction (`remedy:global`): root `AGENTS.md`/`CLAUDE.md`
+       or an activity prompt. Last resort: show that the mechanism spans
+       directories and task kinds, beyond what rungs 2–4 can cover.
 
-    Never propose a new required GitHub status check, a new merge
-    gate, a new CI job that a merge waits on, or a human-only review
-    step. Orbit ships with no merge gates on purpose: the guard must
-    use a command the workspace already runs before landing; a skill or
-    review-instruction line belongs to the existing review procedure.
+    A skill or review-instruction line remains available only for
+    `review_missed`, marked `remedy:review-instruction`. It is an instruction
+    remedy subject to the same budget and retirement rules. For ordering,
+    use its delivery surface (rung 3, 4 or 5) and reject every higher rung
+    separately, including mechanical and hazard-site remedies.
+    Use ordinary reviewed guidance, never a new learning-delivery subsystem.
 
-    Before filing, search for duplicates: list open work with
+    For every rung 3–5 and review-instruction remedy, add one, remove one:
+    name at least one existing rule removed or merged in each edited file,
+    and give its before and proposed after word counts (whitespace-delimited)
+    with no net growth per file. Read the file and draft the replacement
+    to measure these counts. If nothing is removable in a file, say so,
+    record its current count and leave the choice to the operator; never
+    authorize growth through the task's acceptance criteria. New guide files
+    have a zero-word baseline, so require this operator choice. Rung 2
+    in-line comments are exempt. Never edit guidance during this run:
+    draft and file proposed tasks only.
+
+    Never propose a new required status check, merge gate, CI job a merge
+    waits on, or human-only step. Mechanical checks use existing gates;
+    instruction remedies use existing code, guide or review surfaces.
+
+    Before each filing, list open work with
     `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"escape-to-guard","limit":200,"model":"<agent-family>"}'`,
-    then search one distinctive token from the mechanism per candidate
-    cluster and inspect every plausible hit. A cluster already covered
-    by an open or proposed task gets no new task; record the covering
-    task ID in the artifact. Check rejected guard tasks the same way
-    and refile only when the evidence has materially changed, saying
-    what changed in the new task's description.
+    then search one distinctive mechanism token and inspect every plausible
+    hit in every status. Record covering task IDs instead of duplicates.
+    Check rejected tasks too; refile only with materially changed evidence,
+    explaining the change. Exhaust truncated lists as for the link ledger.
 
-    File each guard (tool-created tasks start `proposed`) with
-    `orbit tool run orbit.task.add --input '{"title":"Guard: <mechanism in one line>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"medium","tags":["escape-to-guard","no-auto-approve"],"type":"feature","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
-    Set `type` to `bug` for a `no_test` regression-test guard and to
-    `chore` for a `review_missed` skill or review-instruction guard;
-    keep `feature` for the other guard kinds. The `no-auto-approve`
-    tag keeps the task `proposed` for human approval. The description
-    names:
-    - at least 3 regression task IDs from the cluster as evidence, with each regression's culprit task ID;
-    - the one-line mechanism and the cluster's nature, escape and layer;
-    - the guard: the exact check, the existing gate command that runs it, and the violation it now rejects;
-    - verified `context_files` naming every file the guard adds or edits, read back with `orbit.task.show` after filing.
+    File each remedy (tool-created tasks start `proposed`) with
+    `orbit tool run orbit.task.add --input '{"title":"Guard: <mechanism in one line>","description":"<markdown including remedy_metadata JSON>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"medium","tags":["escape-to-guard","no-auto-approve","remedy:<chosen rung>"],"type":"feature","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Use `bug` for a `no_test` regression-test guard, `chore` for instruction
+    remedies (including comments), and `feature` for other mechanical guards.
+    The description names at least 3 regression IDs and their culprit IDs,
+    the mechanism, rung, higher-rung rejections, precise remedy and verified
+    files (read `context_files` back after filing). Add a fenced JSON object
+    under the `remedy_metadata` key to the description, mirrored in the artifact:
+    `{"remedy_metadata":{"rung":"<marker suffix>","cluster_key":{"nature":"...","escape":"...","layer":"...","mechanism":"..."},"pre_landing_30d_count":3,"filing_scan_at":"<timestamp>"}}`.
+    Use the actual distinct-regression 30d count at filing, not the example
+    value. Preserve this baseline and stable cluster key in later artifacts;
+    never replace them with a later rolling count. The rung tag plus this
+    structured record lets later runs discover and judge remedies without
+    interpreting prose.
 
-    ## Follow up earlier guards
+    ## Follow up earlier remedies
 
-    List guard tasks filed by earlier runs with
-    `orbit tool run orbit.task.list --input '{"status":["done"],"tag":"escape-to-guard","limit":200,"model":"<agent-family>"}'`
-    and keep only guard tasks (the `Guard:` title and mechanism identify
-    them), excluding earlier `no-diff-expected` chores and the capability-gap
-    task. For each landed
-    guard, read its actual landed commit and timestamp through
-    `orbit.task.show` with `field: "delivery"`, checking the landed commit
-    with git. A `done` history timestamp alone is not landing evidence;
-    report unavailable landing evidence as unknown. Then count regressions in its cluster
-    (same nature, escape, layer and mechanism) whose regression task
-    was created after that date, from the pinned 30d ledger and
-    the regression tasks themselves. Record per guard: guard task ID,
-    landed date, cluster, recurrence count after landing, and the
-    recurring regression task IDs, and the observation window (only the
-    available 30d window, not a claim about all time). A guard with 1 or more recurrences
-    is evidence its check does not cover the mechanism: say so in the
-    summary and let the cluster compete for this run's guard cap as a
-    strengthened guard, naming the landed guard task in the new task's
-    description.
+    Enumerate all `escape-to-guard` tasks without a status filter via
+    `orbit.task.list` (complete, `--full` for CLI), inspecting their tags
+    and `remedy_metadata`. Include every rung marker above, excluding scan
+    chores and capability-gap tasks. Do not require `done`: a delivered
+    task may still be in review. Resolve verified landing date and commit
+    using `orbit.task.show` with `field: "delivery"`, and check with git;
+    `done` timestamps are never landing evidence. Unavailable delivery or
+    baseline evidence is an explicit gap with null values and verdict,
+    never an invented date, zero count or effectiveness judgment.
+
+    Bootstrap pre-marker remedies too: inspect earlier `Guard:` tasks and
+    their originating run artifacts, including version 1. Recover the rung
+    from the verified remedy and the cluster key and filing count from
+    that run's cluster row; retain the normalized metadata and provenance
+    in this run's artifact for reuse. This includes the first run's
+    review-instruction remedy. Do not try to tag immutable terminal tasks.
+    Missing legacy metadata stays an evidence gap, not an ignored remedy.
+
+    For each verified landing L, count distinct regression tasks created
+    in [L, L + 30 days), capped at the pinned scan time while observing,
+    with the same nature, escape, layer and mechanism. Use the complete
+    task ledger retained before filtering to the current 30d scan window,
+    and inspect the matching tasks and diffs: an old remedy's first month
+    must remain measurable after it leaves the rolling window. Record the
+    exact bounds, recurring IDs and baseline count at filing (the
+    `pre_landing_30d_count`, not a recomputed pre-landing count).
+
+    Before a full 30 days have elapsed since L, verdict is `observing`;
+    no strengthening or retirement is triggered. After the full window:
+    zero recurrences means `effective`; fewer than the filing count means
+    `partial` (keep it and note the result); the same or more means
+    `ineffective`. An incomplete recurrence census is an evidence gap,
+    not a verdict. Keep effective and partial remedies.
+
+    An ineffective mechanical guard competes for the normal cap of 3 as
+    a strengthened guard, naming the earlier remedy. An ineffective
+    instruction remedy (comments, nested guides, tag instructions, global
+    instructions and review-instruction lines) instead gets one proposed
+    retirement task to remove the guidance. Where a higher-reliability
+    rung can now express the mechanism, propose that replacement in the
+    same retirement task, with its rung and higher-rung rejections; any
+    replacement instruction still obeys the budget. Do not file a separate
+    normal remedy for the same retirement replacement.
+
+    Retirement has its own cap of 3 per run, ranked by post-landing count
+    then filing count; record overflow for later runs. Deduplicate exactly
+    as for remedies, also searching all prior retirement tasks for the
+    original remedy ID: one retirement per remedy, even across runs.
+    Use `orbit.task.add` with `chore`, `proposed`, verified `context_files`,
+    `spawned_from` this run, `related_to` the original remedy, and tags
+    `escape-to-guard`, `no-auto-approve`, `remedy-retirement`. Record a
+    structured `retirement_metadata` JSON object with `remedy_task_id`,
+    `cluster_key` and optional replacement `rung` in its description and
+    artifact. Exclude retirement tasks from remedy discovery unless they
+    also install a replacement: those carry its rung tag and fresh
+    `remedy_metadata` with the count and timestamp at replacement filing.
+    A covered or already completed retirement gets no duplicate; rejected
+    retirements require materially changed evidence before refiling.
 
     ## Record the run
 
     Write `.orbit/tmp/escape-to-guard.json` (`$ORBIT_SCRATCH_DIR`) with:
-    - `schema_version: 1`, the scan timestamp, and the 7d and 30d window bounds;
+    - `schema_version: 2`, the scan timestamp, and the 7d and 30d window bounds;
     - `classification_counts`: stored ledger links counted before classification and after it, per escape value, with `unclassified` and `absent` shown separately, plus separately labelled analytics counts;
     - `classifications`: per-link before and after values, proposed nature and escape, evidence, persistence source, and any unsettled write refusal or read-back value;
-    - `clusters`: every cluster row (nature, escape, layer, one-line mechanism, 7d count, 30d count, regression task IDs, disposition: filed task ID, covering task ID, overflow, or below the 3-in-30-days bar);
-    - `guard_follow_up`: one row per landed earlier guard (guard task ID, landed date, cluster, recurrence count after landing, recurring regression task IDs);
-    - `filed_guard_ids`, the gap task ID when one was filed or already tracked, and the overflow list;
+    - `clusters`: every cluster row (stable `cluster_key`, nature, escape, layer, one-line mechanism, 7d and 30d counts, regression IDs, disposition: filed ID, covering ID, overflow or below bar), plus `rung` and `higher_rung_rejections` (one rung/reason entry per rejected higher rung); use null rung and an explicit reason when no remedy was selected; include filed `remedy_metadata`;
+    - `guard_follow_up`: one row per earlier remedy, retaining the array name for continuity: `remedy_task_id`, `rung`, `cluster_key`, `landed_commit`, `landing_date`, `pre_landing_30d_count`, `post_landing_30d_count`, observation bounds/completeness, recurring regression IDs, `verdict` (`observing`, `effective`, `partial`, `ineffective`, or null with an evidence gap), metadata provenance, and `retirement_task_id` (filed or covering, else null);
+    - `filed_guard_ids` (all new remedies under the normal cap), `filed_retirement_ids`, retirement metadata and overflow, the gap task ID when filed or already tracked, and the normal overflow list;
     - `previous_run_diff`: previous task ID or baseline reason, new and persistent clusters, those dropping below the bar, and the unclassified-plus-absent count change.
 
     Exhaust `truncated` task lists used for duplicate checks and follow-up
     too; a first page is not proof that no guard exists.
 
-    Diff this run against the previous run's `escape-to-guard.json`
+    Accept a version-1 previous artifact without failing: compare its
+    existing cluster dimensions, counts and classification fields, deriving
+    cluster keys from nature, escape, layer and mechanism. Mark missing
+    rung, baseline and verdict fields as unavailable, never zero; recover
+    legacy remedy metadata as above where evidence permits. Diff this
+    run against the previous run's `escape-to-guard.json`
     (found through the previous-instance query above; absent or
     unreadable means this is the baseline run, so say so): name
     clusters that are new, clusters that persisted, clusters that
@@ -258,16 +335,21 @@ template:
     Write and attach it on every completed run, including a no-op run.
     The execution summary reports the window bounds, the before and
     after classification counts, every cluster with its disposition,
-    the guard follow-up rows, the filed versus already-covered IDs,
+    each chosen rung and higher-rung rejections, every remedy follow-up
+    row (rung, landing date, both 30d counts, verdict and retirement ID),
+    evidence gaps, budget/operator choices, filed versus already-covered IDs,
     and the diff against the previous run.
   acceptance_criteria:
   - The run read the 7d and 30d `orbit.codebase.analytics` windows, enumerated 1 complete task-link ledger for the pinned windows, and recorded per-escape counts before classification in `escape-to-guard.json`, with `unclassified` and `absent` shown separately and analytics populations labelled separately.
   - Each `unclassified` or `absent` link from the last 7 days was classified from its regression task and the culprit landed diff shown by `git show`, and the classification was recorded by an `orbit.task.update` relations write read back on the regression task, or held in `escape-to-guard.json` with evidence and 1 deduplicated gap task when the supported surface cannot change an existing link; link-specific failures are recorded as unsettled.
-  - Regressions were clustered by nature x escape x layer plus a 1-line mechanism in `escape-to-guard.json`, and a guard task was filed only for a cluster holding 3 or more regressions in 30 days sharing that mechanism.
-  - Each filed guard task names 3 or more regression task IDs with their culprit task IDs, the 1-line mechanism, and the exact guard check with the existing gate command that runs it.
-  - Every guard is a lint, type, static guard script, generator check, skill or review-instruction line for a `review_missed` cluster, or a regression test for a `no_test` cluster, and no filed task proposes a new required status check or merge gate.
-  - At most 3 guard tasks were filed, each left `proposed` with a `spawned_from` relation to this task and non-empty `context_files`, and open plus rejected `escape-to-guard` tasks were searched before each filing with no duplicate filed.
-  - The `escape-to-guard.json` artifact was attached on every completed run and holds the cluster rows, classification counts before and after, and 1 follow-up row per landed earlier guard with its recurrence count after its landing date, diffed against the previous run artifact or recorded as the baseline run.
+  - Regressions were clustered by nature x escape x layer plus a 1-line mechanism; new remedies require 3 or more distinct regressions in 30 days, and every task names at least 3 regression IDs and their culprit IDs, its durable rung tag, structured remedy_metadata cluster key and 30d count at filing.
+  - Each remedy chooses the highest-reliability expressive rung in order (mechanical guard, in-line hazard comment, nested AGENTS.md/CLAUDE.md pair, tag instruction, global instruction), names why every higher rung cannot express the mechanism, and obeys the ban on new required status checks, merge gates, merge-blocking CI jobs and human-only steps. Mechanical guards name the check, existing gate and rejected violation; regression-test guards are only for no_test; skill or review-instruction remedies remain available only for review_missed.
+  - Rungs 3–5 and review-instruction remedies name a removed or merged existing rule in each edited file and measured before/after word counts with no growth, or explicitly leave an unremovable file to the operator without authorizing growth; in-line comments are exempt. No guidance was edited by this run.
+  - Tag-instruction remedies explain how affected tasks receive the tag and identify host-config mapping as an operator step excluded from the remedy task acceptance criteria; global remedies demonstrate a mechanism spanning directories and task kinds that rungs 2–4 cannot cover.
+  - At most 3 normal remedy tasks and separately at most 3 instruction-retirement tasks were filed, left proposed with spawned_from this run and verified non-empty context_files; open, completed and rejected work was checked for duplicates and overflow recorded.
+  - Every earlier remedy was discovered by its rung marker and structured metadata (legacy guards bootstrapped from originating artifacts), with verified delivery landing evidence; before 30 days it is observing, then zero recurrences is effective, fewer than at filing is partial and kept, and the same or more is ineffective. Missing evidence is recorded as a gap without a verdict.
+  - Ineffective mechanical guards compete for strengthened guards under the normal cap; ineffective instruction remedies receive one deduplicated retirement proposal per remedy under the separate cap of 3, removing the guidance and proposing a higher-reliability replacement in the same task where possible.
+  - The schema_version 2 escape-to-guard.json artifact was attached on every completed run with cluster rungs and higher-rung rejection reasons, classification counts, and follow-up rung, landing date, pre/post 30d counts, verdict and retirement ID, all reported in the execution summary; a version-1 previous artifact was compared on shared fields without failing or inventing missing data.
   - A workspace whose complete task ledger holds 0 regression links ended as a successful no-op with the zero-count `escape-to-guard.json` attached.
   task_type: chore
   tags:

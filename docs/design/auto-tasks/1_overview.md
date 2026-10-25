@@ -280,15 +280,29 @@ definition of the same name.
   relations write (or, when that write cannot change an existing link, in
   its artifact plus one deduplicated gap task), clusters regressions by
   nature × escape × layer plus a one-line mechanism, and files at most
-  3 `proposed` guard tasks for clusters of 3 or more regressions in
-  30 days. A guard is a mechanical check inside the gates that already
-  exist — a lint, a type, a static guard script, a generator check, a
-  skill or review-instruction line for `review_missed`, or a regression
-  test for `no_test` — never a new required status check or merge gate.
-  Each run attaches `escape-to-guard.json` (clusters, classification
-  counts before and after, and whether each earlier landed guard's class
-  recurred after its landing date) and diffs it against the previous
-  run; a workspace with no regression links is a successful no-op.
+  3 `proposed` remedy tasks for clusters of 3 or more regressions in
+  30 days. Each task names the highest-reliability expressive rung and why
+  higher rungs cannot cover it: mechanical guard in an existing gate,
+  in-line hazard comment, nested `AGENTS.md`/`CLAUDE.md` pair, tag instruction,
+  then global instruction. Review-instruction remedies remain available for
+  `review_missed`. Rungs 3–5 and review instructions remove or merge an
+  existing rule with no word-count growth per file, or leave the choice to
+  the operator; comments are exempt. Tag remedies specify tag assignment;
+  host-config mapping is an operator step outside task acceptance criteria.
+  The run never edits guidance or proposes new required status checks,
+  merge gates or human-only steps. Durable rung tags and structured cluster
+  keys/counts at filing identify remedies, including legacy review
+  instructions. Follow-up waits 30 days from verified delivery landing:
+  `observing` before then, `effective` for zero recurrences in that first
+  month, `partial` for fewer than at filing (kept), and `ineffective` for
+  the same or more. Ineffective mechanical guards compete for strengthening;
+  ineffective instructions get deduplicated retirement proposals under a
+  separate cap of 3, with a higher-reliability replacement where possible.
+  Each run attaches schema-version-2 `escape-to-guard.json` with cluster
+  rungs and higher-rung rejections, classification counts, landing dates,
+  filing/post-landing counts, verdicts and retirement IDs, diffed against
+  the previous run (including version 1). A workspace with no regression
+  links is a successful no-op.
 - `code-health-sweep` — disabled-by-default sweep every 3 days of dead code,
   compatibility paths, and one churn-selected area read in full for
   duplication, simplification and architectural drift. Repository shape
