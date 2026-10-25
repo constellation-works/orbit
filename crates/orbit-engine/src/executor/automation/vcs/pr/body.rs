@@ -80,11 +80,57 @@ pub(super) fn build_batch_pr_body(
         body.push_str("\n\n");
         body.push_str(&trailer);
     }
+    // A repository template need not mention the task. Readers still require
+    // the id as a whole token, and the signature and orchestration trailer
+    // do not carry it, so a generated comment does — independent of the
+    // template text.
+    if inputs.template.is_some()
+        && let [task] = tasks
+        && !task.id.is_empty()
+    {
+        if !body.is_empty() {
+            body.push_str("\n\n");
+        }
+        body.push_str(&delivery_task_identity_footer(&task.id));
+    }
 
     Ok(RenderedBody {
         body: bound_pr_body(body, tasks),
         missing_required,
     })
+}
+
+/// Identity comment appended to a templated delivery body. The task id is a
+/// whole token, so `ORB-1` does not match `ORB-10`, and the line is short
+/// enough to reserve inside GitHub's body limit.
+fn delivery_task_identity_footer(task_id: &str) -> String {
+    format!("<!-- orbit-delivery-task: {task_id} -->")
+}
+
+/// Split off the generated identity comment, when this body carries one, so
+/// truncation and later sections cannot drop it. Only the last copy is
+/// moved; a template that already contains the same comment keeps its own.
+fn detach_delivery_identity(body: String, tasks: &[Task]) -> (String, String) {
+    let [task] = tasks else {
+        return (body, String::new());
+    };
+    if task.id.is_empty() {
+        return (body, String::new());
+    }
+    let footer = delivery_task_identity_footer(&task.id);
+    let Some(index) = body.rfind(&footer) else {
+        return (body, String::new());
+    };
+    let mut end = index;
+    if body[..end].ends_with("\n\n") {
+        end -= 2;
+    } else if body[..end].ends_with('\n') {
+        end -= 1;
+    }
+    let mut content = String::with_capacity(body.len());
+    content.push_str(&body[..end]);
+    content.push_str(&body[index + footer.len()..]);
+    (content.trim_end().to_string(), footer)
 }
 
 /// The ATX heading a template line opens, as `(level, name)`.
@@ -217,8 +263,27 @@ fn filled_content<'a>(filled: &'a BTreeMap<String, String>, section: &str) -> Op
 
 /// Projects a PR body into GitHub's UTF-8 byte limit while keeping the
 /// complete task artifacts as the durable source of execution detail.
+/// A generated delivery-identity comment stays intact at the end.
 pub(super) fn bound_pr_body(body: String, tasks: &[Task]) -> String {
-    if body.len() <= GITHUB_PR_BODY_BYTE_LIMIT {
+    let (body, footer) = detach_delivery_identity(body, tasks);
+    let footer_suffix = if footer.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{footer}")
+    };
+    let limit = GITHUB_PR_BODY_BYTE_LIMIT.saturating_sub(footer_suffix.len());
+    let bounded = project_pr_body(body, tasks, limit);
+    if footer_suffix.is_empty() {
+        bounded
+    } else if bounded.is_empty() {
+        footer
+    } else {
+        format!("{bounded}{footer_suffix}")
+    }
+}
+
+fn project_pr_body(body: String, tasks: &[Task], limit: usize) -> String {
+    if body.len() <= limit {
         return body;
     }
 
@@ -235,10 +300,10 @@ pub(super) fn bound_pr_body(body: String, tasks: &[Task]) -> String {
     let audit_note = format!(
         "\n\n> **Audit note:** GitHub limits PR bodies to {GITHUB_PR_BODY_BYTE_LIMIT} bytes. This projection is truncated; complete task artifacts remain the durable record in {durable_record}."
     );
-    let retained_body_bytes = GITHUB_PR_BODY_BYTE_LIMIT.saturating_sub(audit_note.len());
+    let retained_body_bytes = limit.saturating_sub(audit_note.len());
 
     if retained_body_bytes == 0 {
-        return truncate_utf8(&audit_note, GITHUB_PR_BODY_BYTE_LIMIT).to_string();
+        return truncate_utf8(&audit_note, limit).to_string();
     }
 
     format!(

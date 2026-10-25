@@ -5172,6 +5172,12 @@ impl DeliveryHost {
     fn set_conventions(&self, conventions: orbit_types::workflow::DeliveryConventions) {
         locked(&self.pr_config).conventions = conventions;
     }
+    /// `pr.delivery_authors` and whether `pr_open` closes earlier delivery PRs.
+    fn set_delivery_identity(&self, authors: &[&str], close_superseded: bool) {
+        let mut config = locked(&self.pr_config);
+        config.delivery_authors = authors.iter().map(|author| (*author).to_string()).collect();
+        config.close_superseded = close_superseded;
+    }
     fn put_artifact(&self, task_id: &str, path: &str, content: &str) {
         locked(&self.artifacts).insert((task_id.into(), path.into()), content.into());
     }
@@ -6195,6 +6201,17 @@ if [ -f "$forge/gates" ]; then
 fi
 case "$1 ${2:-}" in
     "pr list")
+        # An unfiltered listing (the one that asks for `body`) can be planted
+        # so a delivery's earlier pull requests are visible. Head lookups stay
+        # on the single pull request this substitute creates.
+        case "$*" in
+            *body*)
+                if [ -f "$forge/open-prs.json" ]; then
+                    cat "$forge/open-prs.json"
+                    exit
+                fi
+                ;;
+        esac
         if [ -f "$forge/pr-head" ]; then
             printf '[{"number":%s,"title":"Landing","headRefName":"%s","author":{"login":"orbit"}}]\n' "$number_json" "$(cat "$forge/pr-head")"
         else

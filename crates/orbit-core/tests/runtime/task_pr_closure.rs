@@ -830,3 +830,53 @@ fn leaving_a_terminal_status_or_unshelving_closes_nothing() {
     fx.update(json!({ "id": shelved, "status": "backlog", "model": "codex" }));
     assert!(fx.forge.still_open().contains(&40));
 }
+
+/// A body published from a repository template that has no task placeholder
+/// still closes on a terminal decision, because of the generated identity
+/// comment. A human author, another branch, a body with no task token and a
+/// longer lookalike id stay open.
+#[test]
+fn a_template_body_without_a_task_placeholder_still_closes_on_terminal() {
+    let fx = Fixture::new();
+    let task_id = fx.add_task("Fix the widget");
+    let other = fx.add_task("Unrelated task");
+    let identity = format!("<!-- orbit-delivery-task: {task_id} -->");
+    let body = format!("## Summary\n\nFix the widget\n\n{identity}");
+    fx.forge
+        .open_pr(11, &format!("orbit/{task_id}-0123abcd"), &body, BOT);
+    fx.forge
+        .open_pr(20, &format!("orbit/{task_id}-aaaaaaaa"), &body, "alice");
+    fx.forge
+        .open_pr(21, &format!("orbit/{other}-cccccccc"), &body, BOT);
+    fx.forge.open_pr(
+        22,
+        &format!("orbit/{task_id}-dddddddd"),
+        "## Summary\n\nFix the widget",
+        BOT,
+    );
+    fx.forge.open_pr(
+        23,
+        &format!("orbit/{task_id}-eeeeeeee"),
+        &format!("## Summary\n\nFix the widget\n\n<!-- orbit-delivery-task: {task_id}0 -->"),
+        BOT,
+    );
+    fx.forge
+        .open_pr(24, &format!("orbit/{task_id}0-ffffffff"), &body, BOT);
+    fx.record_prs(&task_id, &[11]);
+    fx.move_to_review(&task_id);
+
+    fx.runtime
+        .reject_task(&task_id, "superseded by a redesign".to_string(), None)
+        .expect("reject the task");
+
+    assert_eq!(fx.forge.closed_numbers(), vec![11]);
+    assert!(
+        fx.forge.comment_for(11).contains("rejected"),
+        "the comment names the terminal state"
+    );
+    assert_eq!(
+        fx.forge.still_open(),
+        vec![20, 21, 22, 23, 24],
+        "author, branch and whole-token checks still hold"
+    );
+}

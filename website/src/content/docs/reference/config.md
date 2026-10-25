@@ -558,7 +558,13 @@ the key and the placeholder.
 at the delivery's base revision, never from the candidate branch. Orbit looks
 for `pull_request_template.md` (any letter case) in `.github/`, the
 repository root and `docs/`, in that order, and uses its own layout when none
-exists. A repository-relative path must exist at the base revision.
+exists. A repository-relative path must exist at the base revision. When a
+template is used, Orbit appends an HTML comment naming the task
+(`<!-- orbit-delivery-task: <TASK-ID> -->`). A repository template does not
+have to contain `{{task_id}}`. Delivery still recognizes the pull request
+from its branch, an Orbit author, and that task id as a whole token in the
+body; the comment supplies the token. The template's own text is left as
+rendered.
 
 The implementer fills agent and required sections by attaching a
 `pr-sections.json` task artifact shaped
