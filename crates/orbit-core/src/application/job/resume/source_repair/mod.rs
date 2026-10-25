@@ -3,6 +3,7 @@
 mod admission;
 mod adoption;
 mod completion;
+mod escalated_publication;
 mod handoff;
 mod identity;
 mod observation;

@@ -985,7 +985,12 @@ fn reviewer_handoffs_refuse_unproven_transitions_without_writes() {
     refused_without_writes(&f, &f.source.run_id, &binding, "arbitrary descendant");
 }
 
-fn escalated_completion_receipt_is_not_a_blocked_publication_receipt() {
+/// A run that pushed and opened its PR through its own pipeline steps, then
+/// failed completion: its failure handoff kept the PR open and unmerged, and
+/// final recovery escalated, leaving the task blocked. Returns the run's
+/// retained checkout and the fixture's illustrative binding, inspected before
+/// the publication replaced its source.
+pub(super) fn escalated_completion_fixture() -> (Fixture, PathBuf, Value) {
     let mut f = Fixture::new();
     let binding = f.inspect();
     let checkout = published_owner::publication(&mut f);
@@ -1009,6 +1014,12 @@ fn escalated_completion_receipt_is_not_a_blocked_publication_receipt() {
     f.source.pid = None;
     f.source.finished_at = Some(Utc::now());
     published_owner::save_run(&f, &f.source);
+    f.state = state;
+    (f, checkout, binding)
+}
+
+fn escalated_completion_receipt_is_not_a_blocked_publication_receipt() {
+    let (f, _, binding) = escalated_completion_fixture();
     // A real completion-preservation receipt has a distinct contract. It is
     // retained, never rewritten into a blocked-publication receipt for admission.
     refused_without_writes(&f, &f.source.run_id, &binding, "completion receipt variant");

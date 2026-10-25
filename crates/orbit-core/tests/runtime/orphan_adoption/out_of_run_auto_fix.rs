@@ -223,6 +223,8 @@ impl Fixture {
                 head_sha: head_sha.to_string(),
                 conflicting: conflict,
                 failed_required_checks: failed.iter().map(|name| name.to_string()).collect(),
+                pending_required_checks: Vec::new(),
+                passed_required_checks: Vec::new(),
             },
         );
     }

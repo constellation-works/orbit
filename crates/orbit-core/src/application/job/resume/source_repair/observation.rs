@@ -9,6 +9,29 @@ impl OrbitRuntime {
         task: Task,
         explicit: bool,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
+        self.observe_publication_checkpoints(source, task, explicit, false)
+    }
+
+    /// [`Self::observe_published_source`] for an operator requeue of the
+    /// escalation `source`'s final recovery recorded. The requeue
+    /// authenticates the run's completion-failure receipt first and records
+    /// the `requeued` decision that supersedes the escalation, so the next
+    /// run's adoption passes the guard this skips.
+    pub(super) fn observe_escalated_publication(
+        &self,
+        source: JobRun,
+        task: Task,
+    ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
+        self.observe_publication_checkpoints(source, task, false, true)
+    }
+
+    fn observe_publication_checkpoints(
+        &self,
+        source: JobRun,
+        task: Task,
+        explicit: bool,
+        escalation_requeue: bool,
+    ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
         let source_id = source.run_id.as_str();
         let task_id = task.id.as_str();
         let state = self
@@ -26,7 +49,8 @@ impl OrbitRuntime {
         {
             return self.observe_handoff_publication(source, task, state, definition);
         }
-        if source.state == JobRunState::Failed
+        if !escalation_requeue
+            && source.state == JobRunState::Failed
             && matches!(
                 self.recorded_final_recovery(task_id, source_id)?,
                 Some(crate::application::task::FinalRecoveryOutcome::Escalated { .. })

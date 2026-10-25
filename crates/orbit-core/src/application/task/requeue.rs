@@ -27,6 +27,15 @@
 //! command (`orbit task requeue`, `orbit.task.requeue`) and the cleared-infra
 //! requeue of a transient infrastructure block (`transient_infra`).
 //!
+//! A run that published its own pull request through its pipeline steps and
+//! then escalated has no handoff receipt: its failure handoff kept that pull
+//! request open (`review_completion_failure`, `landing_review_failure`). A
+//! requeue resumes it the same way, once the completion-failure receipt names
+//! the run, the task and its unchanged specification, the checkpoints
+//! authenticate the pull request open and unmerged at the recorded head, and
+//! every required check on that head has passed. Anything else is refused
+//! with nothing written, naming the exit that applies.
+//!
 //! A requeue waits for the task's run to stop: final recovery blocks the task
 //! before the run's failure handoff publishes, and a requeue in between would
 //! bind nothing to the pull request the handoff then opens. A task with a
@@ -465,7 +474,9 @@ impl OrbitRuntime {
         });
         let resumes = match (&resume, &kept) {
             (Some((_, binding)), _) => Some(json!({
-                "source": "failure_handoff",
+                // The receipt is the `[BLOCKED]` PR; without one the run's
+                // own pipeline published the PR its failure handoff kept.
+                "source": if receipt.is_some() { "failure_handoff" } else { "pipeline" },
                 "pull_request": binding.pull_request,
                 "branch": binding.branch,
                 "head_sha": binding.head_sha,
@@ -692,13 +703,24 @@ impl OrbitRuntime {
                 error => error,
             });
         }
+        // The run pushed and opened its pull request itself, then failed
+        // completion and was escalated: the requeue resumes that pull request,
+        // as a final-recovery requeue would, once it is still open at the
+        // recorded head with every required check passed.
         if self.run_published_through_pipeline(task)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "the task's stopped run published through its own pipeline steps with no \
-                 failure-handoff receipt to authenticate, so a requeue cannot resume it. \
-                 Nothing was changed. Inspect it with explicit source repair \
-                 (`orbit.workflow.run.resume` with `source_repair`), or {discard_hint}."
-            )));
+            let authenticated = self
+                .escalated_publication_preservation(task)
+                .and_then(|(entry, binding)| Ok((self.preservation_append(task, entry)?, binding)));
+            return authenticated.map(Some).map_err(|error| match error {
+                OrbitError::JobValidation(refusal) => OrbitError::InvalidInput(format!(
+                    "{refusal}. Nothing was changed. The requeue resumes the pull request its \
+                     run published once it is open at the recorded head with every required \
+                     check passed: requeue again when they pass. If the pull request already \
+                     merged, settle the task with `orbit task settle-merged`. Otherwise, \
+                     {discard_hint}."
+                )),
+                error => error,
+            });
         }
         if self.unbound_publication(task)? {
             return Err(OrbitError::InvalidInput(format!(

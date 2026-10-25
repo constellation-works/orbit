@@ -110,7 +110,7 @@ fn tick(f: &Fixture) {
     assert!(!sweep.lock_busy);
 }
 
-fn requeue(f: &Fixture, discard: bool) -> Result<Value, orbit_core::OrbitError> {
+pub(super) fn requeue(f: &Fixture, discard: bool) -> Result<Value, orbit_core::OrbitError> {
     f.runtime.run_tool_as_human(
         "orbit.task.requeue",
         json!({"id": f.task, "workspace": f.repo, "reason": "the publication is sound; resume it",
@@ -139,7 +139,7 @@ fn step_index(f: &Fixture, id: &str) -> u32 {
 
 /// The next run adopts the published candidate and carries it, unchanged,
 /// through commit, validation, push and the same pull request.
-fn assert_next_run_resumes_the_published_candidate(f: &Fixture) {
+pub(super) fn assert_next_run_resumes_the_published_candidate(f: &Fixture) {
     let before = serde_json::to_value(f.runtime.read_run_state(&f.source.run_id).unwrap()).unwrap();
     let (run, setup) = next(f);
     let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
@@ -198,7 +198,7 @@ fn assert_next_run_resumes_the_published_candidate(f: &Fixture) {
 
 /// A refused requeue leaves the task, its history and the run's receipts as
 /// they were.
-fn refused(f: &Fixture, discard: bool, case: &str) -> String {
+pub(super) fn refused(f: &Fixture, discard: bool, case: &str) -> String {
     let task = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
     let history = serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
     let state = serde_json::to_value(f.runtime.read_run_state(&f.source.run_id).unwrap()).unwrap();

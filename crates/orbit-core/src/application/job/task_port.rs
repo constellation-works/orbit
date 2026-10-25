@@ -130,6 +130,13 @@ impl TaskJobPort for OrbitRuntime {
         self.failure_handoff_requeue_record(task)
     }
 
+    fn escalated_publication_preservation(
+        &self,
+        task: &Task,
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
+        self.escalated_publication_requeue_record(task)
+    }
+
     fn preservation_append(
         &self,
         task: &Task,

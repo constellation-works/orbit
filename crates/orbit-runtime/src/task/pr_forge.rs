@@ -53,6 +53,12 @@ pub struct PullRequestBlockers {
     pub conflicting: bool,
     /// Required checks on the head that failed, by name.
     pub failed_required_checks: Vec<String>,
+    /// Required checks on the head that have not finished, by name.
+    pub pending_required_checks: Vec<String>,
+    /// Required checks on the head that passed, skipped or ended neutral, by
+    /// name. With the other two lists empty, an empty list means the head
+    /// reports no required check at all.
+    pub passed_required_checks: Vec<String>,
 }
 
 /// Forge operations behind closing a task's PRs on a terminal decision,
@@ -373,6 +379,8 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
         return None;
     }
     let mut failed_required_checks = Vec::new();
+    let mut pending_required_checks = Vec::new();
+    let mut passed_required_checks = Vec::new();
     if let Some(contexts) = commit
         .get("statusCheckRollup")
         .filter(|rollup| !rollup.is_null())
@@ -386,15 +394,18 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
             if context.get("isRequired").and_then(Value::as_bool) != Some(true) {
                 continue;
             }
+            let name = context
+                .get("name")
+                .or_else(|| context.get("context"))
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed check")
+                .to_string();
             if required_context_failed(context) {
-                failed_required_checks.push(
-                    context
-                        .get("name")
-                        .or_else(|| context.get("context"))
-                        .and_then(Value::as_str)
-                        .unwrap_or("unnamed check")
-                        .to_string(),
-                );
+                failed_required_checks.push(name);
+            } else if required_context_passed(context) {
+                passed_required_checks.push(name);
+            } else {
+                pending_required_checks.push(name);
             }
         }
     }
@@ -412,6 +423,8 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
         head_sha,
         conflicting,
         failed_required_checks,
+        pending_required_checks,
+        passed_required_checks,
     })
 }
 
@@ -433,5 +446,19 @@ fn required_context_failed(context: &Value) -> bool {
                     | "STARTUP_FAILURE"
                     | "STALE"
             )
+        )
+}
+
+/// Whether a required status context passed: a status `SUCCESS`, or a
+/// completed check run that succeeded, skipped or ended neutral. A context
+/// neither failed nor passed has not finished.
+fn required_context_passed(context: &Value) -> bool {
+    if let Some(state) = context.get("state").and_then(Value::as_str) {
+        return state == "SUCCESS";
+    }
+    context.get("status").and_then(Value::as_str) == Some("COMPLETED")
+        && matches!(
+            context.get("conclusion").and_then(Value::as_str),
+            Some("SUCCESS" | "SKIPPED" | "NEUTRAL")
         )
 }

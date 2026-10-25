@@ -494,6 +494,12 @@ the failed leaf whenever one can be resumed (`orbit job resume <leaf>`); the lea
 the worktree and checkpoints, and on success it hands the task to `review` like the
 original run would have.
 
+A resume reuses the worktree its checkpoints recorded. When that worktree no longer
+exists, the resume is refused before the task or the run lineage changes, since the steps
+it would rerun cannot start there. A blocked task whose run published a pull request is
+requeued instead (`orbit task requeue`); its next run sets up a fresh worktree on the
+published branch.
+
 A **claimed** leaf cannot use this path, whether its claim is still live or
 has settled. Resume would mint a different run that cannot inherit the
 claim/run binding, so the command refuses and names deliberate recovery.
@@ -741,8 +747,9 @@ publication (an interrupted or timed-out run, a newer execution, a foreign
 source) offers the same discard exit. Also refused, with
 the same discard exit:
 
-- a run that published through its own push and `pr_open` steps with no
-  handoff receipt; use explicit source repair (below) or discard;
+- a run that published through its own push and `pr_open` steps whose
+  pull request is not ready to land (see
+  [An escalated run that published its own pull request](#an-escalated-run-that-published-its-own-pull-request));
 - a task last delivered by an owner pull-request run, with no handoff receipt,
   that still has a pull request or preserved candidate on record, which its
   next run would refuse to start from. A claimed delivery keeps its own
@@ -754,6 +761,54 @@ the same discard exit:
   meaning, required tools, crew or complexity). That record no longer
   describes the task, and a second one would make the next run refuse, so use
   discard.
+
+### An escalated run that published its own pull request
+
+A run can push and open its pull request through its own `push` and `pr_open`
+steps and then fail completion, for example on a required check that later
+passes on a rerun. Its failure handoff keeps that pull request open and
+unmerged (`review_completion_failure` or `landing_review_failure`), and when
+final recovery escalates the task stays `blocked` with no `[BLOCKED]` pull
+request. Explicit source repair refuses this run and names requeue: there is
+no failure-handoff publication to repair.
+
+Once every required check has passed on the recorded head, requeue the task:
+
+```bash
+orbit task requeue <task-id> --reason '<why the published head can land>'
+```
+
+A plain `orbit task update <task-id> --status backlog` applies the same check.
+The requeue resumes the pull request only when all of these hold, and
+otherwise refuses with nothing written:
+
+- the failure handoff's receipt names this run and the task, and its
+  recorded task specification still matches the task;
+- the stopped run is this machine's own single-task delivery, conclusively
+  stopped, still the task's newest execution, and its candidate was not
+  discarded;
+- the run's checkpoints authenticate the branch, and the pull request is open
+  and unmerged at the head they record, with that head still on the local
+  branch and the remote;
+- the forge reports every required check on exactly that head as passed: none
+  failed, none unfinished, and at least one reported. Checks on another head
+  describe a different candidate and are refused.
+
+It writes the same `requeued` decision and publication-preservation record a
+final-recovery requeue writes, and the answer's `resumes.source` is
+`pipeline`. The next run sets up a fresh worktree, adopts the branch and pull
+request without re-implementing (`resumed_carried`), then validates, reviews,
+pushes and lands it afresh. The stopped run's worktree does not have to exist.
+
+When checks fail or have not finished, requeue again once they pass. A pull
+request that already merged is settled with `orbit task settle-merged
+<task-id>`; a closed one, a moved head or a changed specification leaves
+`--discard-candidate` as the exit. A run whose receipt was written before the
+receipt named its run and specification is refused the same way.
+
+Do not resume such a run with `orbit job resume`. Its checkpoints reuse the
+stopped run's worktree, and a resume whose recorded worktree no longer exists
+is refused before the task or the lineage changes.
 
 ### A task blocked on transient infrastructure
 
@@ -971,7 +1026,10 @@ alone provides no validation. Inspection checks the original PR, branch and
 remote lease; submission requires fresh validation and configured review and
 grants no merge approval. Source receipts stay unchanged. Completion-preservation
 receipts are a distinct contract and cannot substitute for blocked-publication
-evidence; a direct final-recovery requeue suppresses the terminal hook.
+evidence; a direct final-recovery requeue suppresses the terminal hook. Such a
+run is requeued instead, as
+[An escalated run that published its own pull request](#an-escalated-run-that-published-its-own-pull-request)
+describes.
 
 A generic resume whose own final-recovery repair was refused at the commit
 boundary, and whose terminal hook then pushed that repair and opened or kept

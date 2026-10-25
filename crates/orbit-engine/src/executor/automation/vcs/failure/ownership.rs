@@ -15,6 +15,7 @@ use super::super::freshness::{commit_sha, rebase_belongs_to_attempt, rebase_prov
 use super::super::push::push_batch_changes_inner;
 use super::super::resume::ensure_retry_descends_from;
 use super::conflict::{pipeline_checkpoint_string, pipeline_step};
+use super::preserve::recorded_spec_digest;
 use super::{FOREIGN_REBASE_EVENT, LANDING_REVIEW_STEPS, REVIEW_ADMISSION_STEPS};
 
 pub(super) fn ensure_failure_handoff_ownership<H: RuntimeHost + ?Sized>(
@@ -188,6 +189,11 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
         },
         "reason": landing_review,
         "reviewer_push": reviewer_push,
+        // An operator requeue of the task this run's final recovery blocked
+        // resumes the kept PR only for the run and specification named here.
+        "task_id": task.id,
+        "handoff_run_id": run_id,
+        "task_spec_digest": recorded_spec_digest(host, &task.id)?,
         "failed_step_id": failed_step_id,
         "pr_number": pr_number,
         "pr_url": pr_url,
