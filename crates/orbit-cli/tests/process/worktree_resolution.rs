@@ -2303,6 +2303,13 @@ fn assert_indirect_workspace_refusal(output: &std::process::Output, live_root: &
 /// resolves to itself, and ordinary reads keep the shared main root.
 #[test]
 fn empty_nested_orbit_in_linked_worktree_does_not_rewrite_main_workspace() {
+    #[cfg(unix)]
+    if crate::isolated_test::run_in_child(
+        "worktree_resolution::empty_nested_orbit_in_linked_worktree_does_not_rewrite_main_workspace",
+    ) {
+        return;
+    }
+
     let fixture = Fixture::seeded("repo");
     let main_repo = fixture.repo.as_path();
     let linked = fixture.init_worktree("repo-worktree", Some("orbit-empty-nested-orbit"));
