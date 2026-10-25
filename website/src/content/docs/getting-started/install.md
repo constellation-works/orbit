@@ -39,7 +39,9 @@ Releases also attach a desktop app, a native window for the dashboard, to the
 and `.AppImage` bundles for Linux on x64 and arm64. The app starts
 `orbit web serve` from your installed `orbit`, so it needs the CLI install
 above. macOS bundles are attached only when the release was built with Apple
-signing credentials, so a release may have none.
+signing credentials, so a release may have none. See
+[Use the desktop app](../../how-to/desktop/) for first launch, tray controls,
+and fleet notifications.
 
 ## Install as an agent plugin
 
