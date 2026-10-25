@@ -73,17 +73,17 @@
             <div class="rail-group-label">Observe</div>
           <button class="tab" data-tab="diagnostics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12l4-6 3 4 3-6 4 8"/><path d="M2 16h14"/></svg><span class="rail-label">Health</span><span class="rail-count" id="rail-count-diagnostics"></span><span class="rail-count alert" id="rail-count-denials" hidden></span><span class="rail-count alert" id="rail-count-routine-failures" hidden></span></button>
             <nav class="subtabs rail-subtabs" id="diag-subtabs" aria-label="Health views">
-              <button class="subtab" data-subtab="incidents" type="button">Incidents<span class="rail-count" id="rail-count-diag-incidents"></span></button>
-              <button class="subtab" data-subtab="doctor" type="button">Doctor</button>
+              <button class="subtab" data-subtab="incidents" type="button"><span class="rail-label" title="Incidents">Incidents</span><span class="rail-count" id="rail-count-diag-incidents"></span></button>
+              <button class="subtab" data-subtab="doctor" type="button"><span class="rail-label" title="Doctor">Doctor</span></button>
             </nav>
           <button class="tab" data-tab="analytics" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 16V10M10 16V4M15 16v-8"/><path d="M2.5 16.5h15"/></svg><span class="rail-label">Analytics</span></button>
             <nav class="subtabs rail-subtabs" id="analytics-subtabs" aria-label="Analytics views">
-              <button class="subtab" data-subtab="metrics" type="button">Metrics</button>
-              <button class="subtab" data-subtab="reliability" type="button">Reliability</button>
-              <button class="subtab" data-subtab="codebase" type="button">Codebase</button>
-              <button class="subtab" data-subtab="resources" type="button">Resources</button>
-              <button class="subtab" data-subtab="cost" type="button">Cost</button>
-              <button class="subtab" data-subtab="agents" type="button">Agents</button>
+              <button class="subtab" data-subtab="metrics" type="button"><span class="rail-label" title="Metrics">Metrics</span></button>
+              <button class="subtab" data-subtab="reliability" type="button"><span class="rail-label" title="Reliability">Reliability</span></button>
+              <button class="subtab" data-subtab="codebase" type="button"><span class="rail-label" title="Codebase">Codebase</span></button>
+              <button class="subtab" data-subtab="resources" type="button"><span class="rail-label" title="Resources">Resources</span></button>
+              <button class="subtab" data-subtab="cost" type="button"><span class="rail-label" title="Cost">Cost</span></button>
+              <button class="subtab" data-subtab="agents" type="button"><span class="rail-label" title="Agents">Agents</span></button>
             </nav>
           </div>
 
@@ -91,20 +91,20 @@
             <div class="rail-group-label">Manage</div>
           <button class="tab" data-tab="operations" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="10" cy="10" r="7"/><path d="M10 6v4l3 2"/></svg><span class="rail-label">Automation</span><span class="rail-count" id="rail-count-operations"></span></button>
             <nav class="subtabs rail-subtabs" id="operations-subtabs" aria-label="Automation views">
-              <button class="subtab active" data-subtab="routines" type="button">Routines<span class="rail-count" id="rail-count-ops-routines"></span></button>
-              <button class="subtab" data-subtab="auto-tasks" type="button">Auto-tasks<span class="rail-count" id="rail-count-ops-auto-tasks"></span></button>
+              <button class="subtab active" data-subtab="routines" type="button"><span class="rail-label" title="Routines">Routines</span><span class="rail-count" id="rail-count-ops-routines"></span></button>
+              <button class="subtab" data-subtab="auto-tasks" type="button"><span class="rail-label" title="Auto-tasks">Auto-tasks</span><span class="rail-count" id="rail-count-ops-auto-tasks"></span></button>
             </nav>
           <button class="tab" data-tab="knowledge" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h5a2 2 0 0 1 2 2v10a2 2 0 0 0-2-2H4z"/><path d="M16 4h-5a2 2 0 0 0-2 2v10a2 2 0 0 1 2-2h5z"/></svg><span class="rail-label">Knowledge</span><span class="rail-count" id="rail-count-knowledge"></span></button>
           <button class="tab" data-tab="plugins" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 3v3M13 3v3"/><rect x="4" y="6" width="12" height="7" rx="1.5"/><path d="M10 13v4"/></svg><span class="rail-label">Plugins</span><span class="rail-count" id="rail-count-plugins"></span></button>
           <button class="tab" data-tab="config" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h12M4 10h12M4 14h12"/><circle cx="8" cy="6" r="1.6"/><circle cx="13" cy="10" r="1.6"/><circle cx="7" cy="14" r="1.6"/></svg><span class="rail-label">Settings</span><span class="rail-count" id="rail-count-config"></span></button>
             <nav class="subtabs rail-subtabs" id="config-subtabs" aria-label="Settings views">
-              <button class="subtab active" data-subtab="workflow" type="button">Workflow</button>
-              <button class="subtab" data-subtab="execution" type="button">Execution</button>
-              <button class="subtab" data-subtab="review" type="button">Review</button>
-              <button class="subtab" data-subtab="crews" type="button">Crews</button>
-              <button class="subtab" data-subtab="machine" type="button">Machine</button>
-              <button class="subtab" data-subtab="hosts" type="button">Hosts</button>
-              <button class="subtab" data-subtab="all-keys" type="button">All keys</button>
+              <button class="subtab active" data-subtab="workflow" type="button"><span class="rail-label" title="Workflow">Workflow</span></button>
+              <button class="subtab" data-subtab="execution" type="button"><span class="rail-label" title="Execution">Execution</span></button>
+              <button class="subtab" data-subtab="review" type="button"><span class="rail-label" title="Review">Review</span></button>
+              <button class="subtab" data-subtab="crews" type="button"><span class="rail-label" title="Crews">Crews</span></button>
+              <button class="subtab" data-subtab="machine" type="button"><span class="rail-label" title="Machine">Machine</span></button>
+              <button class="subtab" data-subtab="hosts" type="button"><span class="rail-label" title="Hosts">Hosts</span></button>
+              <button class="subtab" data-subtab="all-keys" type="button"><span class="rail-label" title="All keys">All keys</span></button>
             </nav>
           </div>
         </div>

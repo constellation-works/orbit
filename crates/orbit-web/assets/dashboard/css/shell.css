@@ -181,6 +181,8 @@
 }
 .rail-subtabs.dimmed { display: none; }
 
+/* ORB-18095: rail sub-item labels stay on one 30px line. The label span
+   reuses the top-level .rail-label ellipsis; the count never shrinks. */
 .rail-subtabs .subtab {
   display: flex;
   align-items: center;
@@ -191,9 +193,11 @@
   font-size: 13px;
   color: var(--fg-dim);
   text-align: left;
+  white-space: nowrap;
 }
 .rail-subtabs .subtab:hover { color: var(--fg); background: var(--bg-hover); }
 .rail-subtabs .subtab.active { color: var(--fg); background: var(--bg-selected); font-weight: 600; }
+.rail-subtabs .subtab .rail-count { flex: none; }
 
 /* The host and workspace pickers read as one scope card at the head of the
    rail: host above, workspace below. */
