@@ -10,7 +10,9 @@ use std::sync::Mutex;
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::execute_deterministic_action;
-use orbit_types::task::{Task, TaskArtifact, TaskComment, TaskPriority, TaskStatus, TaskType};
+use orbit_types::task::{
+    ExternalRef, Task, TaskArtifact, TaskComment, TaskPriority, TaskStatus, TaskType,
+};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -27,6 +29,7 @@ struct VerifierHost {
     worker: Option<orbit_types::tool::WorkerInvocation>,
     unknown_artifact_read: Mutex<Option<(String, usize)>>,
     bulk_reads: Mutex<usize>,
+    pr_config: Mutex<orbit_engine::PrConfig>,
 }
 
 impl VerifierHost {
@@ -39,7 +42,12 @@ impl VerifierHost {
             worker: None,
             unknown_artifact_read: Mutex::default(),
             bulk_reads: Mutex::default(),
+            pr_config: Mutex::default(),
         }
+    }
+
+    fn set_conventions(&self, conventions: orbit_types::workflow::DeliveryConventions) {
+        self.pr_config.lock().unwrap().conventions = conventions;
     }
 
     fn set_comments(&self, task_id: &str, comments: Vec<TaskComment>) {
@@ -58,6 +66,10 @@ impl VerifierHost {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        self.pr_config.lock().unwrap().clone()
+    }
+
     fn worker_invocation(&self) -> Option<orbit_types::tool::WorkerInvocation> {
         self.worker.clone()
     }
@@ -320,6 +332,148 @@ fn per_task_commit_delivers_both_sides_of_a_staged_rename() {
     assert!(
         git_output(repo, &["status", "--porcelain", "--untracked-files=all"]).is_empty(),
         "ORB-14097: no staged deletion may leak into a later task's commit"
+    );
+}
+
+/// A long non-title placeholder must not cut the `[{{task_id}}]` marker away:
+/// the templated commit keeps the complete marker within the subject budget
+/// and is accepted as already-landed evidence for its own delivery.
+fn templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands() {
+    use orbit_types::workflow::{ConventionTemplate, DeliveryConventions};
+
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path();
+    init_git_repo(repo);
+    let mut task = fixture_task();
+    task.title = "Fix the widget".to_string();
+    task.external_refs = vec![ExternalRef {
+        system: "jira".to_string(),
+        id: "X".repeat(80),
+        url: None,
+    }];
+    let host = VerifierHost::new(repo, task.clone());
+    host.set_conventions(DeliveryConventions {
+        commit_subject: Some(
+            ConventionTemplate::parse_commit_subject(
+                "commit.subject_template",
+                "{{type}}({{ext.jira}}): {{title}} [{{task_id}}]",
+            )
+            .expect("documented subject template parses"),
+        ),
+        ..DeliveryConventions::default()
+    });
+    fs::write(repo.join("README.md"), "widget fix\n").expect("write README");
+
+    let result = action(
+        &host,
+        &json!({
+            "scope": "per_task",
+            "job_run_id": RUN_ID,
+            "workspace_path": repo,
+            "completed_task_ids": [TASK_ID],
+        }),
+    )
+    .expect("deliver templated commit with a long external reference");
+    assert_eq!(result["committed_task_ids"], json!([TASK_ID]));
+
+    let subject = git_output(repo, &["log", "-1", "--format=%s"]);
+    assert!(
+        subject.chars().count() <= 72,
+        "templated subject must stay within the budget, got {subject:?}"
+    );
+    assert!(
+        subject.contains(&format!("[{TASK_ID}]")),
+        "templated subject must preserve the complete delivery marker, got {subject:?}"
+    );
+    let message = git_output(repo, &["log", "-1", "--format=%B"]);
+    assert!(
+        message.contains("Fix the widget"),
+        "shortened subject must keep the full title in the body, got {message:?}"
+    );
+
+    // The commit just produced is acceptable as already-landed evidence.
+    let head = git_head(repo);
+    let report = json!({
+        "schema_version": 1,
+        "task_id": TASK_ID,
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "covering_commit": head,
+        "covering_task_id": TASK_ID,
+        "scope": orbit_types::workflow::handoff::already_landed_scope(&task, &[]),
+        "required_commands": ["make test"],
+        "validation": [{
+            "command": "make test",
+            "outcome": "passed",
+            "role": "required",
+            "log_artifact": "validation.json"
+        }],
+        "criteria_evidence": ["Verified criterion"]
+    });
+    let log = json!({
+        "run_id": RUN_ID,
+        "tested_head": head,
+        "command": "make test",
+        "exit_code": 0,
+        "output": "ok"
+    });
+    host.set_artifacts(
+        TASK_ID,
+        vec![
+            artifact("already-landed.json", report),
+            artifact("validation.json", log),
+        ],
+    );
+    let verified = action(&host, &commit_input(repo, &head))
+        .expect("a marker-preserving templated commit must verify as already landed");
+    assert_eq!(verified["decision"], "verified_already_landed");
+    assert_eq!(verified["committed"], false);
+
+    // Normal title shortening still respects the budget and keeps the marker.
+    let temp = tempdir().expect("create tempdir");
+    let repo = temp.path();
+    init_git_repo(repo);
+    let long_title = format!("Fix {}", "the very long widget ".repeat(8))
+        .trim_end()
+        .to_string();
+    let mut task = fixture_task();
+    task.title = long_title.clone();
+    let host = VerifierHost::new(repo, task);
+    host.set_conventions(DeliveryConventions {
+        commit_subject: Some(
+            ConventionTemplate::parse_commit_subject(
+                "commit.subject_template",
+                "{{type}}: {{title}} [{{task_id}}]",
+            )
+            .expect("subject template parses"),
+        ),
+        ..DeliveryConventions::default()
+    });
+    fs::write(repo.join("README.md"), "long title fix\n").expect("write README");
+    let result = action(
+        &host,
+        &json!({
+            "scope": "per_task",
+            "job_run_id": RUN_ID,
+            "workspace_path": repo,
+            "completed_task_ids": [TASK_ID],
+        }),
+    )
+    .expect("deliver commit with a long title");
+    assert_eq!(result["committed_task_ids"], json!([TASK_ID]));
+    let subject = git_output(repo, &["log", "-1", "--format=%s"]);
+    assert!(
+        subject.chars().count() <= 72,
+        "title-shortened subject must stay within the budget, got {subject:?}"
+    );
+    assert!(
+        subject.contains(&format!("[{TASK_ID}]")),
+        "title-shortened subject must preserve the marker, got {subject:?}"
+    );
+    let message = git_output(repo, &["log", "-1", "--format=%B"]);
+    assert!(
+        message.contains(&long_title),
+        "title-shortened commit must keep the full title in the body, got {message:?}"
     );
 }
 
@@ -1463,6 +1617,10 @@ fn commit_evidence_contracts_1() {
             (
                 "commit_verifier_accepts_valid_no_diff_evidence",
                 commit_verifier_accepts_valid_no_diff_evidence,
+            ),
+            (
+                "templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands",
+                templated_commit_with_long_non_title_placeholder_preserves_marker_and_lands,
             ),
         ]);
     });
