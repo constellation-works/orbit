@@ -19,3 +19,37 @@ pass = [
 sandbox = "danger-full-access"
 
 [workflow]
+
+# Review skips apply only to the minted auto-task carrying each provenance
+# tag, and only for documentation/CI paths. Keep finding tags such as
+# code-review, delivery-code-review, security-review and qa-sweep unmapped so
+# code fixes filed by those reviews still receive agent review.
+[workflow.review_skip_tags."auto-task:backlog-hygiene"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:delivery-code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:doc-duties"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:friction-curation"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:full-code-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:qa-full-sweep"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:qa-sweep"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:run-failure-patterns"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:security-review"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
