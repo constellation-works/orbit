@@ -174,15 +174,18 @@ fn operator_record_routes_gate_refusals_and_success() {
                 409,
                 "pilot_admission_no_matching_hold",
             );
-            error_code(
-                operator.send(
-                    "POST",
-                    &deploy(&owed),
-                    json!({"criterion":1,"evidence":"measured"}),
-                ),
-                409,
-                "post_deploy_criterion_not_owed",
-            );
+            let owed_history = fixture.runtime.get_task_history(&owed).unwrap().len();
+            for criterion in [0, 1] {
+                error_code(
+                    operator.send(
+                        "POST",
+                        &deploy(&owed),
+                        json!({"criterion":criterion,"evidence":"measured"}),
+                    ),
+                    409,
+                    "post_deploy_criterion_not_owed",
+                );
+            }
             error_code(
                 operator.send(
                     "POST",
@@ -191,6 +194,10 @@ fn operator_record_routes_gate_refusals_and_success() {
                 ),
                 409,
                 "post_deploy_criterion_not_owed",
+            );
+            assert_eq!(
+                fixture.runtime.get_task_history(&owed).unwrap().len(),
+                owed_history
             );
             assert_eq!(
                 fixture.runtime.get_task_history(&plain).unwrap().len(),

@@ -1084,7 +1084,9 @@ async fn record_post_deploy_met(
     if let Err(denial) = authorized_caller(&DASHBOARD_TASK_POST_DEPLOY, state.operator_session()) {
         return authorization_denied(denial);
     }
-    let Some(criterion) = criterion.filter(|criterion| *criterion > 0) else {
+    // Index 0 names no criterion, so it is refused as not owed (409) below,
+    // not as a malformed request.
+    let Some(criterion) = criterion else {
         return (
             StatusCode::BAD_REQUEST,
             Json(json!({
@@ -1165,18 +1167,20 @@ pub(super) async fn post_deploy_task_action(
 pub(super) async fn post_deploy_met_task_action(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
-    Path((id, criterion)): Path<(String, usize)>,
+    Path((id, criterion)): Path<(String, String)>,
     OptionalJson(body): OptionalJson<PostDeployBody>,
 ) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
+    // Parsed here rather than by the extractor, so the operator check runs
+    // before a malformed index is refused.
     record_post_deploy_met(
         state,
         runtime,
         id,
-        Some(criterion),
+        criterion.parse().ok(),
         body.evidence.or(body.reason),
     )
     .await
