@@ -9,6 +9,7 @@
 
 mod claimed_leaf;
 mod crew_draw;
+mod distributed_gate;
 mod drain_entry;
 mod filing_tags;
 mod host_provider_hold;
@@ -24,6 +25,7 @@ pub(crate) use crew_draw::{
     CreationCrewAssignment, CrewCandidate, InspectionPool, PROVIDER_LIMIT_REASSIGNMENT_PREFIX,
     PURPOSE_SOURCE_PREFIX, auto_task_minted, automatic_crew_source,
 };
+pub use distributed_gate::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 pub use drain_entry::DrainEntryPoint;
 pub(crate) use filing_tags::{
     CI_FAILURE_TAG, CODE_SCANNING_TAG, DEPENDABOT_TAG, RECONCILIATION_FOLLOW_UP_TAG_PREFIX,

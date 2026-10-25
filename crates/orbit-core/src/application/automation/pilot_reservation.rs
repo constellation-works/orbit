@@ -17,6 +17,7 @@ use orbit_common::fs::io::{atomic_write_text, open_read_only_no_follow};
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
+use crate::application::job::JobDrainPort;
 
 use super::preparation::active_task_pilot_preparations;
 
@@ -62,7 +63,7 @@ pub(crate) fn reserve(
     if task_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
-    runtime.admission_boundary()?.with_admission(|| {
+    runtime.owner_commit_boundary()?.with_admission(|| {
         let mut held = active_task_pilot_preparations(runtime)?;
         held.retain(|task_id, holders| {
             if let Some(run_id) = run_id {

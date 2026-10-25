@@ -21,7 +21,9 @@ use serde_json::{Value as JsonValue, json};
 use super::crew::{
     REVIEW_CREW_SELECTION_RULE, configured_pool_members, pre_landing_review_crew_unset,
 };
-use super::{local_route_before_landing_conflict, local_route_before_pr_conflict};
+use super::{
+    ReviewDistributedPort, local_route_before_landing_conflict, local_route_before_pr_conflict,
+};
 use crate::OrbitRuntime;
 use crate::application::automation::{
     AfterLandingHealth, after_landing_health, after_landing_switch,
@@ -298,7 +300,7 @@ fn review_switches_under(
         // The listed hosts' claims are what reviews here, admitted under the
         // owner's claim ship mode; a follower resolves the crew itself, but
         // an unset one refuses every claim.
-        if runtime.owner_ship_contract().mode == "local" {
+        if runtime.owner_delivery_ship().mode == "local" {
             before_landing_problems.push(format!(
                 "review.before_landing_hosts ({}) lists machines, but this workspace ships \
                  locally and opens no pull request to review, so their claims are refused",
@@ -312,7 +314,7 @@ fn review_switches_under(
             ));
         }
     }
-    if let Some(owner) = runtime.distributed_owner_machine_id()
+    if let Some(owner) = runtime.drain_owner_machine()
         && hosts.value.contains(&owner)
     {
         before_landing_warnings.push(format!(

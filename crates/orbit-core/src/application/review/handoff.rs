@@ -16,6 +16,8 @@ use orbit_types::workflow::handoff::{
 };
 
 use crate::OrbitRuntime;
+use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
+use crate::application::job::JobDrainPort;
 use crate::application::landing::dispatch_recorded_authority;
 
 impl OrbitRuntime {
@@ -84,7 +86,7 @@ impl OrbitRuntime {
     /// back through the claim journal's digest check.
     fn record_handoff_review_certificate(&self, claim_id: &str) -> Result<(), OrbitError> {
         let Some(certificate) = self
-            .admission_boundary()?
+            .owner_commit_boundary()?
             .accepted_review_certificate(claim_id)?
         else {
             return Ok(());
@@ -280,7 +282,7 @@ impl OrbitRuntime {
                 "refusal": HandoffConsoleRefusal::ReplicaCheckout.code(),
                 "refusal_detail": error.to_string(),
                 "distributed_execution_enabled":
-                    crate::application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED,
+                    DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED,
                 "claims": Vec::<serde_json::Value>::new(),
             }));
         }
@@ -367,7 +369,7 @@ impl OrbitRuntime {
             "refusal": serde_json::Value::Null,
             "refusal_detail": serde_json::Value::Null,
             "distributed_execution_enabled":
-                crate::application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED,
+                DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED,
             "claims": rows,
         }))
     }
@@ -393,7 +395,7 @@ impl OrbitRuntime {
             footprint_widening: accepted.handoff.footprint_widening.clone(),
             candidate: accepted.handoff.candidate.clone(),
             required_commands: accepted.required_commands.clone(),
-            owner_completion_authority: self.owner_completion_authority(),
+            owner_completion_authority: self.handoff_completion_authority(),
             // Acceptance observed the review's base and repository; the store
             // rechecks the review evidence the handoff pinned without them.
             review: None,

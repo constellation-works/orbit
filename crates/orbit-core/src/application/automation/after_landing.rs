@@ -27,12 +27,11 @@ use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule};
 use serde::Serialize;
 
 use super::{
-    inspect,
+    AutomationReviewPort, inspect,
     source::{RemoteObservation, Source},
 };
 use crate::OrbitRuntime;
 use crate::application::job::crew_pools::seeded_crew_ticket;
-use crate::application::review::crew::configured_pool_members;
 use orbit_types::task::TaskOsRequirement;
 use orbit_types::workflow::ReviewCrewPoolMember;
 use orbit_types::workflow::automation::recovery::{CrewOsHold, OsExcludedCrew};
@@ -91,8 +90,8 @@ fn eligible_review_pool(
     if pool.is_empty() {
         return Ok((Vec::new(), Vec::new()));
     }
-    let members = configured_pool_members(runtime, &pool, orbit_config::REVIEW_CREW_KEY)?;
-    runtime.review_pool_by_os(members, &minted_tags(runtime, definition))
+    let members = runtime.review_pool_members(&pool, orbit_config::REVIEW_CREW_KEY)?;
+    runtime.review_pool_split_by_os(members, &minted_tags(runtime, definition))
 }
 
 /// The tags a review task minted for `definition` carries.
@@ -162,7 +161,7 @@ pub(super) fn minted_review_crew(
     }
     let implementers = delivery_implementers(runtime, &attempt.batch.deliveries);
     runtime
-        .select_review_crew(
+        .draw_after_landing_reviewer(
             &eligible,
             &implementers,
             &mut seeded_crew_ticket(format!("review:{}", attempt.action_key)),
@@ -528,7 +527,7 @@ pub fn after_landing_health(
                 crew_hold = crew_os_hold(runtime, &definition, &eligible, excluded);
                 match crew_hold {
                     Some(_) => Ok(Vec::new()),
-                    None => runtime.review_crew_candidates(&eligible),
+                    None => runtime.review_pool_candidates(&eligible),
                 }
             });
         if let Err(error) = candidates {
