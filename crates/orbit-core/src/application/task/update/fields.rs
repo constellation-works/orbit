@@ -162,11 +162,24 @@ impl OrbitRuntime {
             params.tags = Some(tags);
         }
         // A replacement label requirement must be one some registered
-        // serving host carries, together with the tags this write leaves.
+        // serving host carries, together with the tags this write leaves. A
+        // tags edit re-checks the stored requirement too, so retagging a
+        // labelled task cannot strand it [ORB-18347].
         if let Some(labels) = params.requires_labels.take() {
-            let labels = normalize_host_labels(labels, REQUIRES_LABELS_FIELD)?;
-            self.refuse_unservable_labels(params.tags.as_deref().unwrap_or(&task.tags), &labels)?;
-            params.requires_labels = Some(labels);
+            params.requires_labels = Some(normalize_host_labels(labels, REQUIRES_LABELS_FIELD)?);
+        }
+        let tags_changed = params
+            .tags
+            .as_deref()
+            .is_some_and(|tags| tags != task.tags.as_slice());
+        if tags_changed || params.requires_labels.is_some() {
+            self.refuse_unservable_labels(
+                params.tags.as_deref().unwrap_or(&task.tags),
+                params
+                    .requires_labels
+                    .as_deref()
+                    .unwrap_or(&task.requires_labels),
+            )?;
         }
         // [ORB-12717] Clearing the crew is "no crew supplied", so the pools
         // decide again for the complexity this write leaves the task with —

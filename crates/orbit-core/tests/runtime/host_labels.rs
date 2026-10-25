@@ -259,9 +259,76 @@ fn an_unservable_label_requirement_is_refused_on_add_and_update() {
     }
 }
 
+/// A tags-only update re-checks the stored `requires_labels` against the tags
+/// it leaves: a Linux `gpu` task retagged `os:macos` has no serving host, so
+/// the update is refused and stores nothing. A tags edit the requirement
+/// survives, a combined edit that stays servable, and clearing the requirement
+/// still succeed. Bookkeeping that touches neither placement input is not
+/// re-checked against the fleet.
+fn a_tags_only_update_rechecks_the_stored_label_requirement() {
+    let (root, runtime) = runtime_on(HostOs::Linux, &["gpu"]);
+    let workspace = root.path().join("repo").to_string_lossy().into_owned();
+    let labelled = task(&runtime, "labelled", &["os:linux"], &["gpu"]);
+
+    let retagged = runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": labelled.id, "tags": ["os:macos"], "model": "codex",
+                "workspace": workspace}),
+        )
+        .expect_err("no host carries gpu with os:macos");
+    assert!(
+        matches!(&retagged, OrbitError::InvalidInput(message)
+            if message.contains("no single host carries all of them together")),
+        "{retagged}"
+    );
+    let stored = runtime.get_task(&labelled.id).unwrap();
+    assert_eq!(stored.tags, vec!["os:linux".to_string()]);
+    assert_eq!(stored.requires_labels, vec!["gpu".to_string()]);
+
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": labelled.id, "tags": ["os:linux", "triage"], "model": "codex",
+                "workspace": workspace}),
+        )
+        .expect("a tags edit the requirement survives is stored");
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": labelled.id, "tags": ["os:linux"], "requires_labels": ["GPU"],
+                "model": "codex", "workspace": workspace}),
+        )
+        .expect("a combined edit that stays servable is stored");
+    assert_eq!(
+        runtime.get_task(&labelled.id).unwrap().requires_labels,
+        vec!["gpu".to_string()]
+    );
+
+    let mac = runtime.clone().with_host_os(Some(HostOs::Macos));
+    mac.run_tool(
+        "orbit.task.update",
+        json!({"id": labelled.id, "title": "renamed", "model": "codex",
+            "workspace": workspace}),
+    )
+    .expect("bookkeeping does not re-check the fleet");
+
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": labelled.id, "tags": ["os:macos"], "requires_labels": [],
+                "model": "codex", "workspace": workspace}),
+        )
+        .expect("clearing the requirement with the retag is stored");
+    let cleared = runtime.get_task(&labelled.id).unwrap();
+    assert!(cleared.requires_labels.is_empty());
+    assert_eq!(cleared.tags, vec!["os:macos".to_string()]);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_host_without_the_labels_withholds_the_task_and_names_the_wait_scenarios,
     a_host_without_the_labels_withholds_the_task_and_names_the_wait,
-    an_unservable_label_requirement_is_refused_on_add_and_update
+    an_unservable_label_requirement_is_refused_on_add_and_update,
+    a_tags_only_update_rechecks_the_stored_label_requirement
 );
