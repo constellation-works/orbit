@@ -21,7 +21,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::path::workspace_relative_paths_overlap;
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_types::workflow::{ChildDispatch, PipelineState};
 use serde_json::{Value, json};
 
@@ -192,7 +192,12 @@ pub(crate) fn read_leaf_occupancy(
     Ok(leaf_runs
         .iter()
         .map(|(run_id, task_ids)| {
-            let resolved = resolve_phase(run_id, &lineage, lock_holders);
+            let resolved = resolve_phase(
+                run_id,
+                &lineage,
+                lock_holders,
+                runtime.footprint_lock_modes(),
+            );
             LeafRunOccupancy {
                 run_id: run_id.clone(),
                 task_ids: task_ids.clone(),
@@ -246,6 +251,7 @@ fn resolve_phase(
     wrapper_run_id: &str,
     lineage: &BTreeMap<String, PipelineState>,
     lock_holders: &BTreeMap<String, Vec<String>>,
+    lock_modes: &FootprintLockModes,
 ) -> ResolvedPhase {
     let Some(wrapper) = lineage.get(wrapper_run_id) else {
         return unknown("no readable pipeline state for this leaf run");
@@ -264,7 +270,7 @@ fn resolve_phase(
     // slot is doing.
     gates
         .into_iter()
-        .map(|gate| resolve_gate_phase(gate, lineage, lock_holders))
+        .map(|gate| resolve_gate_phase(gate, lineage, lock_holders, lock_modes))
         .max_by_key(|resolved| resolved.phase.rank())
         .unwrap_or_else(|| unknown("leaf run has not recorded a gate dispatch yet"))
 }
@@ -273,6 +279,7 @@ fn resolve_gate_phase(
     gate: &ChildDispatch,
     lineage: &BTreeMap<String, PipelineState>,
     lock_holders: &BTreeMap<String, Vec<String>>,
+    lock_modes: &FootprintLockModes,
 ) -> ResolvedPhase {
     let Some(state) = lineage.get(&gate.child_run_id) else {
         return unknown("no readable pipeline state for this gate run");
@@ -303,6 +310,7 @@ fn resolve_gate_phase(
             gate.child_run_id.clone(),
             selectors,
             lock_holders,
+            lock_modes,
         )),
     )
 }
@@ -319,6 +327,7 @@ fn resolve_lock_wait(
     gate_run_id: String,
     selectors: Vec<String>,
     lock_holders: &BTreeMap<String, Vec<String>>,
+    lock_modes: &FootprintLockModes,
 ) -> LockWait {
     let mut blockers = Vec::new();
     let mut unresolved_selectors = Vec::new();
@@ -326,7 +335,7 @@ fn resolve_lock_wait(
     for selector in &selectors {
         let holder_task_ids = lock_holders
             .iter()
-            .filter(|(held_selector, _)| workspace_relative_paths_overlap(selector, held_selector))
+            .filter(|(held_selector, _)| lock_modes.selectors_block(selector, held_selector))
             .flat_map(|(_, holder_task_ids)| holder_task_ids.iter().cloned())
             .collect::<BTreeSet<_>>()
             .into_iter()

@@ -382,6 +382,26 @@ impl OverlapScope {
             _ => false,
         }
     }
+
+    /// Where two overlapping anchored scopes meet: the common anchor when
+    /// they are equal, else the narrower (descendant) one. `None` when either
+    /// side is anchor-less or they do not overlap.
+    pub fn overlap_point<'a>(&'a self, other: &'a Self) -> Option<&'a str> {
+        match (self, other) {
+            (Self::Anchored { path: left, .. }, Self::Anchored { path: right, .. })
+                if self.overlaps(other) =>
+            {
+                // Overlapping unequal anchors are an ancestor and its
+                // descendant; the descendant is the narrower one.
+                Some(if is_path_ancestor(left, right) {
+                    right.as_str()
+                } else {
+                    left.as_str()
+                })
+            }
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

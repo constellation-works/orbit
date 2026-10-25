@@ -72,11 +72,15 @@ pub(crate) fn build_context_from_roots(
     let write_free = access == StateAccess::WriteFree;
     let persistence = &runtime_config.persistence;
 
+    // Every footprint-overlap check this handle makes (reservations, claims,
+    // owner admission) applies the owner's `workflow.lock_modes`.
+    let footprint_lock_modes = runtime_config.snapshot.footprint_lock_modes()?;
     let store = if write_free {
         Store::open_read_only(&persistence.audit_db)?
     } else {
         Store::open(&persistence.audit_db)?
-    };
+    }
+    .with_footprint_lock_modes(footprint_lock_modes.clone());
 
     // workspace_root IS the .orbit dir. A cwd checkout binding is authoritative.
     // Without one, an explicit data dir must not mint parent(orbit-dir) as a
@@ -363,6 +367,7 @@ pub(crate) fn build_context_from_roots(
             crate::task::locks::UnlockedContextPaths::new(
                 &runtime_config.snapshot.workflow_unlocked_context_paths,
             )?,
+            footprint_lock_modes,
             runtime_config
                 .snapshot
                 .workflow_unlocked_path_validation_commands

@@ -295,6 +295,7 @@ impl OrbitRuntime {
         let tasks = list_task_metadata_in(self.stores().tasks())?;
         let workspace_root = self.paths().repo_root.as_path();
         let unlocked = self.unlocked_context_paths();
+        let lock_modes = self.footprint_lock_modes();
         let lock_holders = active_task_lock_holders(&tasks, workspace_root, unlocked);
         let holder_index = lock_holder_index(&lock_holders);
         let mut candidates: Vec<&Task> = tasks
@@ -313,7 +314,8 @@ impl OrbitRuntime {
 
         let mut eligibility = TaskEligibility::default();
         for task in candidates {
-            let overlaps = task_lock_overlaps(task, &holder_index, workspace_root, unlocked);
+            let overlaps =
+                task_lock_overlaps(task, &holder_index, workspace_root, unlocked, lock_modes);
             if !overlaps.is_empty() {
                 eligibility.conflicting.push(TaskEligibilityConflict {
                     task: task.clone(),

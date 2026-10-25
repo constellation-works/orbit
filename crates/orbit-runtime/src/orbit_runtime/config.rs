@@ -199,6 +199,12 @@ impl RuntimeKernel {
         self.context.settings().unlocked_context_paths()
     }
 
+    /// `workflow.lock_modes` as admitted: the paths where a footprint
+    /// overlap is shared rather than blocking.
+    pub fn footprint_lock_modes(&self) -> &orbit_common::fs::lock_mode::FootprintLockModes {
+        self.context.settings().footprint_lock_modes()
+    }
+
     /// `workflow.light_delivery_paths`: the paths a candidate may change
     /// and keep its `skip-review` or `skip-validation` tag [ORB-16855].
     pub fn workflow_light_delivery_paths(&self) -> &[String] {

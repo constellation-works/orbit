@@ -456,6 +456,9 @@ pub struct OrbitRuntimeSettings {
     /// `workflow.unlocked_context_paths`: declared context that takes no
     /// context lock.
     unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
+    /// `workflow.lock_modes`: the paths where a footprint overlap is shared
+    /// rather than blocking.
+    footprint_lock_modes: orbit_common::fs::lock_mode::FootprintLockModes,
     /// `workflow.unlocked_path_validation_commands`: what a candidate that
     /// changed only unlocked paths since its run's last full validation runs.
     unlocked_path_validation_commands: Vec<String>,
@@ -513,6 +516,7 @@ impl OrbitRuntimeSettings {
         tag_instructions: orbit_config::TagInstructionSettings,
         review_skip_tags: orbit_config::ReviewSkipSettings,
         unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
+        footprint_lock_modes: orbit_common::fs::lock_mode::FootprintLockModes,
         unlocked_path_validation_commands: Vec<String>,
         generated_paths: std::collections::BTreeMap<String, String>,
         light_delivery_paths: Vec<String>,
@@ -555,6 +559,7 @@ impl OrbitRuntimeSettings {
             tag_instructions,
             review_skip_tags,
             unlocked_context_paths,
+            footprint_lock_modes,
             unlocked_path_validation_commands,
             generated_paths,
             light_delivery_paths,
@@ -600,6 +605,10 @@ impl OrbitRuntimeSettings {
 
     pub fn unlocked_context_paths(&self) -> &crate::task::locks::UnlockedContextPaths {
         &self.unlocked_context_paths
+    }
+
+    pub fn footprint_lock_modes(&self) -> &orbit_common::fs::lock_mode::FootprintLockModes {
+        &self.footprint_lock_modes
     }
 
     pub fn unlocked_path_validation_commands(&self) -> &[String] {

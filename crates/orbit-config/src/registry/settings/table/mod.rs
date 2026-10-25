@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::lock_mode::FootprintLockModeEntry;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::{MaterialField, SourceSensitivity};
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
@@ -30,6 +31,7 @@ use super::resolve::{
     resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use crate::crew_performance::CrewPerformanceType;
+use crate::lock_modes::RawLockModeEntry;
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
 

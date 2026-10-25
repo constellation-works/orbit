@@ -8,7 +8,6 @@ use crate::{
 };
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, params};
 use std::collections::BTreeSet;
@@ -200,6 +199,7 @@ pub(super) fn find_reservation_conflicts(
          ORDER BY created_at ASC, reservation_id ASC",
         reservation_scope_clause(TaskReservationScope::Files),
     );
+    let lock_modes = tx.lock_modes.clone();
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(params![workspace_id, workspace_orbit_dir, now], |row| {
@@ -214,7 +214,7 @@ pub(super) fn find_reservation_conflicts(
         for requested_file in &requested_files {
             if reserved_files
                 .iter()
-                .any(|held_file| workspace_relative_paths_overlap(requested_file, held_file))
+                .any(|held_file| lock_modes.selectors_block(requested_file, held_file))
             {
                 conflicts.push(TaskLockConflict {
                     file: requested_file.clone(),
@@ -403,6 +403,7 @@ pub(super) fn find_owned_reservation_conflicts(
         select_reservation_columns(),
         reservation_scope_clause(TaskReservationScope::Files),
     );
+    let lock_modes = tx.lock_modes.clone();
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(
@@ -418,7 +419,7 @@ pub(super) fn find_owned_reservation_conflicts(
         let overlaps = requested_files.iter().any(|requested_file| {
             reserved_files
                 .iter()
-                .any(|held_file| workspace_relative_paths_overlap(requested_file, held_file))
+                .any(|held_file| lock_modes.selectors_block(requested_file, held_file))
         });
         if overlaps {
             reservations.push(row.into_active()?);

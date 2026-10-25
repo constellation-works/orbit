@@ -20,6 +20,17 @@ sandbox = "danger-full-access"
 
 [workflow]
 
+# Footprint lock modes. Any overlap between two tasks' context selectors keeps
+# the second task waiting. A path in `shared` mode lets overlapping tasks run
+# together, and a conflict between them is resolved when the second one lands.
+# Each `pattern` is a regex searched for in the workspace-relative path, so
+# anchor it with ^ and $. The first matching entry wins, and an unmatched path
+# is `exclusive`. Example: share every append-only `mod.rs`.
+#
+# [[workflow.lock_modes]]
+# pattern = '(^|/)mod\.rs$'
+# mode = "shared"
+
 # Review skips apply only to the minted auto-task carrying each provenance
 # tag, and only for documentation/CI paths. Keep finding tags such as
 # code-review, delivery-code-review, security-review and qa-sweep unmapped so

@@ -6,7 +6,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{Task, TaskComment, TaskHistoryEntry, TaskStatus};
@@ -73,10 +72,6 @@ pub(super) fn canonical_footprint(
         .collect::<Result<BTreeSet<_>, _>>()
         .map(|files| files.into_iter().collect())
 }
-pub(super) fn overlaps(left: &[String], right: &[String]) -> bool {
-    left.iter()
-        .any(|a| right.iter().any(|b| workspace_relative_paths_overlap(a, b)))
-}
 impl TaskCommitBoundary {
     pub(crate) fn guard_ordinary_footprint(
         &self,
@@ -98,8 +93,10 @@ impl TaskCommitBoundary {
             return Ok(());
         } // legacy no-context chore semantics
         let canonical = canonical_footprint(files, &checkout.repo_root)?;
+        let lock_modes = self.store.footprint_lock_modes();
         if let Some(conflicting_claim) = claims.iter().find(|claim| {
-            claim.phase.protects_footprint() && overlaps(&canonical, &claim.footprint)
+            claim.phase.protects_footprint()
+                && lock_modes.footprints_block(&canonical, &claim.footprint)
         }) {
             return Err(OrbitError::InvalidInput(format!(
                 "task footprint overlaps an execution claim (task {}, run {})",
@@ -123,6 +120,7 @@ impl TaskCommitBoundary {
         &self,
         files: &[String],
     ) -> Result<Vec<TaskLockConflict>, OrbitError> {
+        let lock_modes = self.store.footprint_lock_modes();
         Ok(self
             .execution_claims()?
             .iter()
@@ -130,7 +128,9 @@ impl TaskCommitBoundary {
             .flat_map(|claim| {
                 files
                     .iter()
-                    .filter(|file| overlaps(std::slice::from_ref(*file), &claim.footprint))
+                    .filter(|file| {
+                        lock_modes.footprints_block(std::slice::from_ref(*file), &claim.footprint)
+                    })
                     .map(|file| TaskLockConflict {
                         file: file.clone(),
                         held_by: TaskLockHolder::Task,
@@ -360,6 +360,7 @@ impl TaskCommitBoundary {
             in_flight: &in_flight.footprints,
             reservations: &reservations,
             owner_wave: &owner_wave,
+            lock_modes: self.store.footprint_lock_modes(),
             executor_host_os,
             census,
         };
