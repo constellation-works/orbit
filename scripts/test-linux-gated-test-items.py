@@ -113,6 +113,19 @@ class LinuxGatedTestItemTests(unittest.TestCase):
         self.check_tree({SUITE: "use serde::Serialize;\n#[derive(Serialize)]\nstruct Row;\n"
                          "use std::fs;\n" + linux_test("fs::read(\"x\");")}, 1, "import `fs`")
 
+    def test_raw_string_format_captures_are_uses_and_linux_only_captures_are_reported(self):
+        for literal in ('r#"{LIMIT}"#', 'r##"{LIMIT}"##'):
+            with self.subTest(literal=literal):
+                portable = '#[test]\nfn portable() { assert_eq!(format!(' + literal + '), "7"); }\n'
+                self.check_tree({SUITE: "const LIMIT: u32 = 7;\n"
+                                 + linux_test("assert_eq!(LIMIT, 7);") + portable}, 0)
+
+        self.check_tree({SUITE: 'const LIMIT: u32 = 7;\n' + linux_test('println!(r#"{LIMIT}"#);')},
+                        1, "test helper const")
+        self.check_tree({SUITE: 'const LIMIT: u32 = 7;\n' + linux_test("assert_eq!(LIMIT, 7);")
+                         + '#[test]\nfn portable() { let _ = r#"LIMIT"#; }\n'},
+                        1, "test helper const")
+
     def test_cfg_test_modules_in_source_files_are_test_code(self):
         body = "    use std::fs;\n\n    " + linux_test('fs::read("x");').replace("\n", "\n    ")
         source = "pub fn run() {}\n\n#[cfg(test)]\nmod tests {\n" + body + "}\n"

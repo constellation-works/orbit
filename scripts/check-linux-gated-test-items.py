@@ -319,8 +319,10 @@ class Unit:
         for k, value in enumerate(values):
             if self.inert[k]:
                 continue
-            if value.endswith('"') and len(value) >= 2:
-                for name in FORMAT_CAPTURE.findall(value):
+            raw_literal = self.source.items[k].raw_literal
+            capture_text = raw_literal or value
+            if raw_literal is not None or (value.endswith('"') and len(value) >= 2):
+                for name in FORMAT_CAPTURE.findall(capture_text):
                     if name in names:
                         sites.setdefault(name, []).append(k)
             elif value in names and self.reference(k):
