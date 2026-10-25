@@ -33,7 +33,9 @@ use crate::application::task::{PILOT_VERIFIED_NO_DIFF, UNVERIFIED_REVIEW_FINDING
 
 use super::apply::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
-use super::promotion::{PromotionFindings, auto_approval_opted_out, promotion_findings};
+use super::promotion::{
+    PromotionFindings, auto_approval_opted_out, promotion_findings, promotion_task_ids,
+};
 
 const DRAIN_JOB: &str = "workspace_auto_pipeline";
 const PILOT_JOB: &str = "task_pilot_pipeline";
@@ -275,7 +277,7 @@ pub(super) fn approve(
     for attempt in 0..4 {
         let mut lock_ids = vec![task_id.to_string()];
         lock_ids.extend(runtime.get_task(task_id)?.dependencies());
-        let named = crate::application::task::pilot_blocker_task_ids(&validated.assessment);
+        let named = promotion_task_ids(&validated.assessment);
         // A prerequisite that was done at the pilot write has no stored edge.
         // Lock those named local tasks too before checking completion again.
         for id in &named {

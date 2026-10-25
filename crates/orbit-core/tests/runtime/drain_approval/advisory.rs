@@ -75,9 +75,7 @@ fn both_promotion_authorities_keep_real_warning_holds() {
                 "adr_conflicts",
                 json!("The current contract conflicts with this task."),
             ),
-            // A prerequisite no dependency edge enforces still holds; one
-            // naming a recorded dependency is covered by the new rule and
-            // has its own regression check in the pilot unit tests.
+            // A prerequisite no dependency edge enforces still holds.
             ("blocked_by", json!("Wait for ORB-999999999 to land")),
         ];
         for (index, (field, finding)) in cases.into_iter().enumerate() {
@@ -217,6 +215,145 @@ fn malformed_advisories_are_rejected_without_approval() {
     }
 }
 
+fn dependency_warnings_agree_across_promotion_projection_and_triage() {
+    for sweep in [false, true] {
+        let workspace = Workspace::new();
+        let dependency = workspace.task(
+            "prerequisite",
+            &[],
+            &["file:README.md"],
+            TaskComplexity::Low,
+        );
+        let unfinished =
+            workspace.task("unrecorded", &[], &["file:README.md"], TaskComplexity::Low);
+        let done = workspace
+            .runtime
+            .add_task(TaskAddParams {
+                title: "landed prerequisite".into(),
+                description: "Already landed.".into(),
+                acceptance_criteria: vec!["Done.".into()],
+                plan: "Nothing remains.".into(),
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            })
+            .unwrap();
+        for field in ["utility_warnings", "surface_warnings"] {
+            for (case, text, holds) in [
+                (
+                    "dependencies",
+                    format!("Wait for {} to land", dependency.id),
+                    false,
+                ),
+                (
+                    "relations",
+                    format!("Wait for {} to land", dependency.id),
+                    false,
+                ),
+                ("done", format!("Wait for {} to land", done.id), false),
+                (
+                    "unrecorded",
+                    format!("Wait for {} to land", unfinished.id),
+                    true,
+                ),
+                (
+                    "mixed",
+                    format!("Wait for {} and {} to land", dependency.id, unfinished.id),
+                    true,
+                ),
+                ("no ID", "A prerequisite has not landed".into(), true),
+            ] {
+                let task = workspace.task(
+                    &format!("{field} {case}"),
+                    &["ci-failure-sweep", "ci-failure:fixture-key"],
+                    &["file:README.md"],
+                    TaskComplexity::Low,
+                );
+                workspace.edit(
+                    &task,
+                    TaskUpdateParams {
+                        dependencies: (case != "relations").then(|| vec![dependency.id.clone()]),
+                        relations: (case == "relations").then(|| {
+                            vec![TaskRelation {
+                                relation_type: TaskRelationType::BlockedBy,
+                                target: dependency.id.clone(),
+                                regression: None,
+                            }]
+                        }),
+                        ..Default::default()
+                    },
+                );
+                let mut assessed = assessment(&task);
+                assessed[field] = json!([{"text": text, "holds_promotion": true}]);
+
+                // First persist without promotion authority: warning projection
+                // and triage must agree while the task is still proposed.
+                let pilot = workspace.running("task_pilot_pipeline", json!({}));
+                let applied = workspace
+                    .apply(&pilot, vec![assessed.clone()], json!({}))
+                    .unwrap();
+                assert_eq!(applied["status"], "succeeded", "{applied}");
+                assert_eq!(workspace.status(&task), TaskStatus::Proposed);
+                let shown = workspace
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": task.id}))
+                    .unwrap();
+                assert_eq!(
+                    shown["pilot_warnings"].as_array().unwrap().len(),
+                    usize::from(holds),
+                    "{field} {case}: {shown}"
+                );
+                let triage = workspace.runtime.pilot_warning_candidates_json().unwrap();
+                assert_eq!(
+                    triage["qualifying"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|candidate| candidate["task_id"] == task.id.as_str()),
+                    holds,
+                    "{field} {case}: {triage}"
+                );
+
+                let applied = apply_authority(&workspace, &task, assessed, sweep);
+                let key = if sweep {
+                    "ci_sweep_admission"
+                } else {
+                    "drain_approval"
+                };
+                assert_eq!(applied["status"], "succeeded", "{applied}");
+                assert_eq!(
+                    applied[key][0]["decision"],
+                    if holds { "withhold" } else { "promote" },
+                    "{field} {case}: {applied}"
+                );
+                if !sweep {
+                    assert_eq!(applied[key][0]["approved"] == true, !holds, "{applied}");
+                }
+                assert_eq!(
+                    workspace.status(&task),
+                    if holds {
+                        TaskStatus::Proposed
+                    } else {
+                        TaskStatus::Backlog
+                    }
+                );
+                // Warnings never invent an edge for an unfinished named task.
+                assert_eq!(
+                    workspace.runtime.get_task(&task.id).unwrap().dependencies(),
+                    [dependency.id.as_str()]
+                );
+                if !sweep {
+                    let selection = workspace.select(applied["fixture_drain"].as_str().unwrap());
+                    assert_eq!(
+                        held_reason(&selection, &task),
+                        holds.then_some("warnings"),
+                        "{field} {case}: {selection}"
+                    );
+                }
+            }
+        }
+    }
+}
+
 fn apply_authority(workspace: &Workspace, task: &Task, assessed: Value, sweep: bool) -> Value {
     if sweep {
         let run = workspace.running("ci_failure_sweep_pipeline", json!({}));
@@ -244,5 +381,6 @@ crate::scenario_table!(
     advisory_promotion_scenarios,
     advisory_findings_are_approved_and_reach_the_worker,
     both_promotion_authorities_keep_real_warning_holds,
-    malformed_advisories_are_rejected_without_approval
+    malformed_advisories_are_rejected_without_approval,
+    dependency_warnings_agree_across_promotion_projection_and_triage
 );

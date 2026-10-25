@@ -207,9 +207,10 @@ task and retries matching tasks that a prior pilot left proposed, carrying
 explicit promotion authority into its deterministic apply boundary. Invalid or
 empty selectors, pilot failure, duplicates, already-landed
 work, conflicts, holding warnings and a `no-auto-approve` tag leave that task
-proposed without blocking other pilot children. A `blocked_by` finding holds
-unless it names prerequisites and every one is already done in this workspace
-or is enforced by a stored dependency edge. Free text, missing tasks and
+proposed without blocking other pilot children. A `blocked_by` finding, or a
+holding utility or surface finding, holds unless it names prerequisites and every
+one is already done in this workspace or is enforced by a stored dependency edge.
+Free text, missing tasks and
 other-workspace prerequisites still hold. Admission decides from the edges in the atomic pilot
 write and completion statuses read under the dependency locks; replay uses
 only already stored edges. A drain rechecks named prerequisites under their
@@ -218,7 +219,8 @@ locks before approval. `adr_conflicts` and deterministic
 utility findings use `{text, holds_promotion}`: true holds for wrong behavior,
 contract conflicts or an unreachable validation requirement; false preserves an
 advisory observation without holding promotion or showing it as held. Legacy
-plain-string surface and utility warnings still hold. Advisory findings remain
+plain-string surface and utility warnings still hold unless they name only
+recorded dependencies or done tasks. Advisory findings remain
 in the assessment comment shown by `orbit task show` and the worker's brief. An
 `orbit run auto --approve-proposed` drain hands the same apply boundary a drain-scoped authority instead, verified
 against the drain that dispatched the pilot. A standalone task-pilot run has no

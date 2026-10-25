@@ -477,7 +477,10 @@ spec:
 
     ## Findings
 
-    - `blocked_by`: real IDs of other tasks, never the task itself.
+    - `blocked_by`: real IDs of other tasks, never the task itself. Report waiting
+      for another task's delivery only here, never in utility or surface warnings.
+      Prerequisites already in `dependencies` or `blocked_by` relations need no
+      holding finding.
     - `adr_conflicts`: only concrete conflicts with current code or a current
       contract; a historical ADR alone is no reason to block or reshape work.
     - `blocked_by` and `adr_conflicts` are arrays of plain strings, never

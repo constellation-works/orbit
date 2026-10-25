@@ -22,10 +22,10 @@
 //! history), an assessment superseded by a later one with no scope edit in
 //! between, one made outside `proposed`, and one still pending.
 //!
-//! `blocked_by` findings are judged against the task's current dependency
-//! edges, never against which prerequisites are done now: the assessment-time
-//! done state is not stored, and a finished prerequisite must not turn a
-//! historical hold clean.
+//! `blocked_by`, utility and surface findings are judged against the task's
+//! current dependency edges, never against which prerequisites are done now: the
+//! assessment-time done state is not stored, and a finished prerequisite must not
+//! turn a historical hold clean.
 
 use std::collections::BTreeMap;
 
