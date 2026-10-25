@@ -46,17 +46,18 @@ impl Host<'_> {
             ..Default::default()
         };
         // With a shared cache, one snapshot of the workspace's observed
-        // statuses serves every routine in the request: each page (statuses,
-        // type, cursor, limit, canonical order) is derived from it in
-        // memory, exactly as the store's in-memory selection derives it.
-        // Every observed status is in the snapshot's status set.
+        // statuses serves every routine in a status inspection: each page
+        // (statuses, type, cursor, limit, canonical order) is derived from
+        // it in memory, exactly as the store's in-memory selection derives
+        // it. Every observed status is in the snapshot's status set. A real
+        // evaluation keeps its per-evaluation candidate read, as at base.
         let workspace_key = self.runtime.shared_root().display().to_string();
         let tasks = match self.inspection_cache {
             Some(cache)
-                if filter
-                    .statuses
-                    .as_ref()
-                    .is_some_and(|values| values.iter().all(|s| SNAPSHOT_STATUSES.contains(s))) =>
+                if self.dry_run
+                    && filter.statuses.as_ref().is_some_and(|values| {
+                        values.iter().all(|s| SNAPSHOT_STATUSES.contains(s))
+                    }) =>
             {
                 let snapshot = cache.task_snapshot(&workspace_key, || {
                     self.snapshot_envelopes(cache, &workspace_key)
@@ -116,27 +117,29 @@ impl Host<'_> {
 
         let active_preparations = match self.trigger.kind {
             StateTriggerKind::PreparationEligible => match self.inspection_cache {
-                Some(cache) => cache.preparations(&workspace_key, "task_pilot", || {
-                    preparation::active_task_pilot_preparations(self.runtime)
-                })?,
-                None => preparation::active_task_pilot_preparations(self.runtime)?,
+                Some(cache) if self.dry_run => {
+                    cache.preparations(&workspace_key, "task_pilot", || {
+                        preparation::active_task_pilot_preparations(self.runtime)
+                    })?
+                }
+                _ => preparation::active_task_pilot_preparations(self.runtime)?,
             },
             StateTriggerKind::FindingUnverified => match self.inspection_cache {
-                Some(cache) => {
+                Some(cache) if self.dry_run => {
                     cache.preparations(&workspace_key, "finding_verification", || {
                         preparation::active_finding_verifications(self.runtime)
                     })?
                 }
-                None => preparation::active_finding_verifications(self.runtime)?,
+                _ => preparation::active_finding_verifications(self.runtime)?,
             },
             StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
                 match self.inspection_cache {
-                    Some(cache) => {
+                    Some(cache) if self.dry_run => {
                         cache.preparations(&workspace_key, "escalation_triage", || {
                             preparation::active_escalation_triages(self.runtime)
                         })?
                     }
-                    None => preparation::active_escalation_triages(self.runtime)?,
+                    _ => preparation::active_escalation_triages(self.runtime)?,
                 }
             }
             StateTriggerKind::ExecutionFailed | StateTriggerKind::DecisionRequested => {
@@ -151,10 +154,10 @@ impl Host<'_> {
 
         for envelope in tasks.items {
             let task = match self.inspection_cache {
-                Some(cache) => cache.task(&workspace_key, &envelope.id, || {
+                Some(cache) if self.dry_run => cache.task(&workspace_key, &envelope.id, || {
                     self.runtime.get_task(&envelope.id)
                 })?,
-                None => self.runtime.get_task(&envelope.id)?,
+                _ => self.runtime.get_task(&envelope.id)?,
             };
 
             match self.trigger.kind {
