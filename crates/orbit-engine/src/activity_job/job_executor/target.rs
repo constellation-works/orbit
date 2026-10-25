@@ -334,7 +334,8 @@ fn reject_malformed_implementer_findings(
         Err(defect) => (
             false,
             Some(format!(
-                "{}: {defect}. Return `regression_from` as `[\"<culprit task ID>\"]`.",
+                "{}: {defect}. Return `regression_from` as `[\"<culprit task ID>\"]` \
+                 when a culprit relation is filed.",
                 orbit_types::workflow::CONTRACT_REFUSAL_MARKER
             )),
         ),

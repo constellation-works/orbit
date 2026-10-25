@@ -1575,6 +1575,89 @@ fn malformed_unfiled_findings_fail_implement_one_before_delivery() {
     }
 }
 
+/// An implementer whose `regression_from` is prose instead of culprit task
+/// IDs fails at `implement_one` [ORB-17993]. The refusal still rejects the
+/// value, and it now tells the implementer to omit the field (or `null` it)
+/// when no culprit relation is filed, while keeping the culprit-list shape
+/// for the case where one is. Absent, `null` and `[]` still deliver; entries
+/// that are not task IDs, non-string entries, and object or number values
+/// still fail before any delivery step runs.
+fn malformed_regression_from_fails_implement_one_before_delivery() {
+    for regression_from in [
+        json!("not filed; no captured task"),
+        json!(["ORB-1", "not a task"]),
+        json!(["ORB-1", 42]),
+        json!([42]),
+        json!({ "target": "ORB-1" }),
+        json!(7),
+    ] {
+        let host = ScriptedHost {
+            implement_output: json!({ "summary": "done", "regression_from": regression_from }),
+            calls: Mutex::new(Vec::new()),
+        };
+        let (outcome, events) = try_run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+        let actions = host.actions();
+
+        // The step fails, retries and recovers like any failed step; the job
+        // ends in error once those are spent.
+        let failure = match outcome {
+            Ok(outcome) => {
+                assert!(
+                    !outcome.success,
+                    "{regression_from}: malformed regression_from does not deliver: {outcome:?}"
+                );
+                outcome.message.unwrap_or_default()
+            }
+            Err(error) => error.to_string(),
+        };
+        assert!(
+            failure.contains("regression_from"),
+            "{regression_from}: the failure names the field [ORB-17993]: {failure}"
+        );
+        // The wording pin is warranted by F2026-10-567: the old refusal told
+        // the implementer to return a culprit task ID even when the right
+        // answer was to file no relation.
+        assert!(
+            failure.contains("omit") && failure.contains("null"),
+            "{regression_from}: the refusal names the empty case [ORB-17993]: {failure}"
+        );
+        assert!(
+            failure.contains("<culprit task ID>"),
+            "{regression_from}: the refusal keeps the culprit-list shape [ORB-17993]: {failure}"
+        );
+        assert!(
+            !actions.iter().any(|action| action == "commit"),
+            "{regression_from}: no delivery step runs for the attempt: {actions:?}"
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                &event.kind,
+                V2AuditEventKind::StepFinished { step_id, outcome, .. }
+                    if step_id == "implement_one" && outcome == "error"
+            )),
+            "{regression_from}: implement_one itself ends in error"
+        );
+    }
+
+    for output in [
+        json!({ "summary": "no culprit" }),
+        json!({ "summary": "done", "regression_from": Value::Null }),
+        json!({ "summary": "done", "regression_from": [] }),
+        json!({ "summary": "done", "regression_from": ["ORB-1"] }),
+    ] {
+        let host = ScriptedHost {
+            implement_output: output.clone(),
+            calls: Mutex::new(Vec::new()),
+        };
+        let (outcome, _) = run_blocker_job(&host, json!({ "tasks": ["one", "two"] }));
+        assert!(
+            outcome.success,
+            "{output}: an empty or valid regression_from delivers: {outcome:?}"
+        );
+        assert!(host.actions().iter().any(|action| action == "commit"));
+    }
+}
+
 struct ScriptedHost {
     implement_output: Value,
     calls: Mutex<Vec<(String, Value)>>,
@@ -2180,6 +2263,10 @@ fn runtime_contracts_4() {
             (
                 "malformed_unfiled_findings_fail_implement_one_before_delivery",
                 malformed_unfiled_findings_fail_implement_one_before_delivery,
+            ),
+            (
+                "malformed_regression_from_fails_implement_one_before_delivery",
+                malformed_regression_from_fails_implement_one_before_delivery,
             ),
         ]);
     });
