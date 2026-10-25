@@ -143,15 +143,33 @@ passing an ID initiates preflight checks.
 
 ### Preflight checks
 
-Before shipping, the mod runs `orbit run readiness <id>` to verify:
+Opening the Ship pane for a task computes its preflight once and lists the
+results in the pane. The first three rows come from the local snapshot; the
+remaining rows come from `orbit run readiness <id>`:
 
-1. **Backlog status**: the task is approved in `backlog`.
-2. **Dependencies**: all required dependency tasks are marked `done`.
-3. **No concurrent ship**: no other ship run is currently in progress for the task.
-4. **File locks**: workspace files touched by the task are not locked by other active runs.
+1. **Task is in backlog**: the task is approved in `backlog`.
+2. **Dependencies are done**: all required dependency tasks are marked `done`.
+3. **No ship already running**: from the snapshot's run ID and status; shown for
+   context and always passes for a backlog task.
+4. **Files are free to lock** (when readiness reports the task): red when
+   another task holds a conflicting lock (detail names the holder, such as
+   `held by ORB-9`); green otherwise (`no conflicting task`).
+5. **Ready to start** (when readiness reports the task): green when the
+   readiness row is eligible (`eligible now`); red otherwise, with the readiness
+   reason as detail (underscores shown as spaces).
 
-If checks pass, the **Launch** button (`l`) activates. If any check fails, the
-pane highlights the blocker in red and prevents launching.
+Only the first two rows gate the **Launch** button (`l`): it appears when
+**Task is in backlog** and **Dependencies are done** both pass. The remaining
+rows are advisory — a red lock or readiness row does not remove **Launch**.
+When readiness cannot be reported (the command fails, returns non-JSON, or has
+no row for the task), the pane shows a green **Readiness** row reading
+`not reported; the run waits for locks if needed`, and **Launch** is unaffected.
+
+Checks are computed once when the preflight loads; they are not re-run before
+launch. **Launch** still asks for confirmation
+(`Ship <id> through the PR pipeline?`) and then runs `orbit run ship`. This
+section describes only what the pane shows; it makes no promise about whether
+the ship coordinator itself enforces file locks.
 
 ### Launch confirmation and tracking
 
