@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     JobRun, JobRunState, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt,
@@ -161,90 +160,44 @@ fn is_live(run: &JobRun) -> bool {
 }
 
 impl OrbitRuntime {
-    /// Attention for one task row (detail projection).
+    /// Attention for one task row, using the same lookup and projection as lists.
     pub fn delivery_attention(&self, row: &TaskRow) -> Result<Option<Value>, OrbitError> {
-        if !eligible(&row.task) {
-            return Ok(None);
-        }
-        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(DELIVERY_JOB.to_string()),
-            task_id: Some(row.task.id.clone()),
-            order_by: JobRunOrder::Recency,
-            limit: Some(8),
-            include_steps: true,
-            ..JobRunQuery::default()
-        })?;
-        let newest = runs.iter().find(|run| {
-            let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
-            carried.len() == 1 && carried.contains(&row.task.id)
-        });
-        let repairing = runs.iter().any(|run| {
-            is_live(run)
-                && run
-                    .input
-                    .as_ref()
-                    .map(carried_task_ids)
-                    .unwrap_or_default()
-                    .contains(&row.task.id)
-        });
-        let failed = newest.filter(|run| {
-            matches!(
-                run.state,
-                JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
-            )
-        });
-        let step = failed.and_then(|run| failed_step_id(self, run));
-        Ok(delivery_attention_value(
-            &row.task,
-            &row.history,
-            newest,
-            step.as_deref(),
-            repairing,
-        ))
+        Ok(self.delivery_attention_map([row])?.remove(&row.task.id))
     }
 
-    /// Attention for a list page: one batched delivery-run query for the
-    /// whole page, plus audit reads only for flagged rows. No forge calls.
+    /// Attention for a list page: chunked indexed ownership seeks, with an
+    /// independent eight-run recency window per eligible task and batched step
+    /// reads. Audit reads are only for flagged rows. No forge calls.
     pub fn delivery_attention_map<'a>(
         &self,
         rows: impl IntoIterator<Item = &'a TaskRow>,
     ) -> Result<BTreeMap<String, Value>, OrbitError> {
-        let rows: Vec<&TaskRow> = rows.into_iter().collect();
-        let eligible_ids: std::collections::BTreeSet<&str> = rows
+        let rows: Vec<&TaskRow> = rows.into_iter().filter(|row| eligible(&row.task)).collect();
+        let ids = rows
             .iter()
-            .filter(|row| eligible(&row.task))
-            .map(|row| row.task.id.as_str())
-            .collect();
-        if eligible_ids.is_empty() {
+            .map(|row| row.task.id.clone())
+            .collect::<Vec<_>>();
+        if ids.is_empty() {
             return Ok(BTreeMap::new());
         }
-        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(DELIVERY_JOB.to_string()),
-            order_by: JobRunOrder::Recency,
-            limit: Some(500),
-            include_steps: true,
-            ..JobRunQuery::default()
-        })?;
-        let mut newest: BTreeMap<String, JobRun> = BTreeMap::new();
-        let mut repairing: std::collections::BTreeSet<String> = Default::default();
-        for run in &runs {
-            let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
-            if carried.len() == 1 {
-                let task_id = carried.iter().next().map(String::as_str).unwrap_or("");
-                if eligible_ids.contains(task_id) {
-                    newest
-                        .entry(task_id.to_string())
-                        .or_insert_with(|| run.clone());
-                    if is_live(run) {
-                        repairing.insert(task_id.to_string());
-                    }
-                }
-            }
-        }
+        let runs = self
+            .stores()
+            .jobs()
+            .recent_job_runs_for_tasks(DELIVERY_JOB, &ids, 8)?;
         let mut map = BTreeMap::new();
-        for row in rows.iter().filter(|row| eligible(&row.task)) {
-            let run = newest.get(&row.task.id);
-            let failed = run.filter(|run| {
+        for row in rows {
+            let runs = runs
+                .get(&row.task.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            let newest = runs.iter().find(|run| {
+                let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
+                carried.len() == 1 && carried.contains(&row.task.id)
+            });
+            // Detail has always treated any carried live run, including a
+            // multi-task repair, as repairing within this task's window.
+            let repairing = runs.iter().any(is_live);
+            let failed = newest.filter(|run| {
                 matches!(
                     run.state,
                     JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
@@ -254,9 +207,9 @@ impl OrbitRuntime {
             if let Some(value) = delivery_attention_value(
                 &row.task,
                 &row.history,
-                run,
+                newest,
                 step.as_deref(),
-                repairing.contains(&row.task.id),
+                repairing,
             ) {
                 map.insert(row.task.id.clone(), value);
             }

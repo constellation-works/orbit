@@ -342,6 +342,20 @@ impl JobRunStoreBackend for SqliteJobRunStore {
             .list_job_runs_for_workspace(&self.workspace_id, query)
     }
 
+    fn recent_job_runs_for_tasks(
+        &self,
+        job_id: &str,
+        task_ids: &[String],
+        per_task_limit: usize,
+    ) -> Result<std::collections::BTreeMap<String, Vec<JobRun>>, OrbitError> {
+        self.store.recent_job_runs_for_tasks_for_workspace(
+            &self.workspace_id,
+            job_id,
+            task_ids,
+            per_task_limit,
+        )
+    }
+
     fn job_run_task_ids(
         &self,
         query: &JobRunQuery,

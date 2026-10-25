@@ -439,6 +439,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0058".to_string(),
                 "crew_performance_snapshot".to_string(),
             ),
+            (
+                "migration.v0059".to_string(),
+                "job_run_task_recency".to_string(),
+            ),
         ]
     );
 }

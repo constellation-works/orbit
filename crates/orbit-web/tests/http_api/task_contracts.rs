@@ -637,6 +637,127 @@ fn body_json(response: Response) -> Value {
 }
 
 #[test]
+fn delivery_attention_survives_unrelated_run_history() {
+    isolated(
+        "task_contracts::delivery_attention_survives_unrelated_run_history",
+        || {
+            use orbit_core::JobRunState;
+            let fixture = Fixture::new();
+            let seed_task = |title: &str| {
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: title.into(),
+                        description: "Delivery history regression".into(),
+                        status: Some(TaskStatus::Review),
+                        ..Default::default()
+                    })
+                    .expect("seed review task")
+            };
+            let tasks = [
+                seed_task("Failed review"),
+                seed_task("Timeout review"),
+                seed_task("Interrupted review"),
+            ];
+            let unrelated = seed_task("Healthy unrelated review");
+            let base = chrono::Utc::now();
+            let seed_run = |id: &str, task_ids: &[&str], state, offset| {
+                let mut run = fixture.seed_run(id, "task_pr_pipeline", state);
+                let at = base + chrono::Duration::seconds(offset);
+                run.input = Some(json!({"task_ids": task_ids}));
+                run.created_at = at;
+                run.started_at = Some(at);
+                run.finished_at = state.is_terminal().then_some(at);
+                fixture.save_run(&run);
+            };
+            for (task, state) in tasks.iter().zip([
+                JobRunState::Failed,
+                JobRunState::Timeout,
+                JobRunState::Interrupted,
+            ]) {
+                seed_run(&format!("jrun-old-{}", task.id), &[&task.id], state, 0);
+            }
+            let server = fixture.server(true);
+            let attention = |page: &Value, id: &str| {
+                page["items"]
+                    .as_array()
+                    .expect("items")
+                    .iter()
+                    .find(|row| row["id"] == id)
+                    .expect("task row")["delivery_attention"]
+                    .clone()
+            };
+            let before = body_json(request(&server, "/tasks"));
+            let expected: Vec<_> = tasks
+                .iter()
+                .map(|task| {
+                    let value = attention(&before, &task.id);
+                    assert!(value.is_object(), "old failure must be visible");
+                    value
+                })
+                .collect();
+            for index in 1..=500 {
+                seed_run(
+                    &format!("jrun-unrelated-{index:04}"),
+                    &[&unrelated.id],
+                    JobRunState::Success,
+                    index,
+                );
+            }
+            let check = |expected: &[Value]| {
+                for page in [body_json(request(&server, "/tasks")), tasks_all(&server)] {
+                    assert!(
+                        attention(&page, &unrelated.id).is_null(),
+                        "successful unrelated task stays healthy"
+                    );
+                    for (task, expected) in tasks.iter().zip(expected) {
+                        assert_eq!(
+                            attention(&page, &task.id),
+                            *expected,
+                            "list retains old delivery for {}",
+                            task.id
+                        );
+                        let detail = body_json(request(&server, &format!("/tasks/{}", task.id)));
+                        assert_eq!(
+                            detail["delivery_attention"], *expected,
+                            "detail/list parity"
+                        );
+                    }
+                }
+            };
+            check(&expected);
+            // A multi-task live repair must preserve detail/list repairing parity.
+            seed_run(
+                "jrun-live-repair",
+                &[&tasks[0].id, &unrelated.id],
+                JobRunState::Running,
+                501,
+            );
+            let mut repairing = expected.clone();
+            repairing[0]["repairing"] = json!(true);
+            check(&repairing);
+            // Updating a run's ownership and recency must update the lookup too.
+            seed_run(
+                "jrun-live-repair",
+                &[&unrelated.id],
+                JobRunState::Success,
+                502,
+            );
+            check(&expected);
+            for task in &tasks {
+                seed_run(
+                    &format!("jrun-recovered-{}", task.id),
+                    &[&task.id],
+                    JobRunState::Success,
+                    503,
+                );
+            }
+            check(&[Value::Null, Value::Null, Value::Null]);
+        },
+    );
+}
+
+#[test]
 fn delivery_attention_flags_failed_review_and_omits_healthy() {
     isolated(
         "task_contracts::delivery_attention_flags_failed_review_and_omits_healthy",
