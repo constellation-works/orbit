@@ -1290,7 +1290,33 @@
       }
     }
   ],
-  "escape-to-guard": [],
+  "escape-to-guard": [
+    {
+      "comments": [
+        "## Classify unclassified and absent escapes",
+        "## Cluster by nature, escape, layer and mechanism",
+        "## File guards for clusters at the bar",
+        "## Follow up earlier guards",
+        "## Record the run",
+        "## Rules and command surfaces"
+      ],
+      "digest": "aa122124d38fa17466bd4600c52f1ba5981e705a8377d59c35f0e36825976f40",
+      "revision": "624b728b7c309a7a2efc48601c86a1b670fd7949",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 7 * * 1"
+        },
+        "tags": [
+          "escape-to-guard",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "friction-curation": [
     {
       "comments": [

@@ -28,10 +28,11 @@ template:
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
       Search with
       `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"all","all":true,"model":"<agent-family>"}'`
-      (lexical search matches one case-insensitive substring: pass a
-      single distinctive token, never a multi-word phrase, and never
-      treat a 0-hit multi-word query as proof that nothing covers a
-      cluster). Find the previous run with
+      (task search matches the query's terms in any order, and friction
+      search matches one case-insensitive substring: pass a single
+      distinctive token, never a multi-word phrase, and never treat a
+      0-hit multi-word query as proof that nothing covers a cluster).
+      Find the previous run with
       `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["escape-to-guard","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
       (tag filters use AND semantics) and read its artifact with
       `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"escape-to-guard.json","model":"<agent-family>"}'`.
@@ -93,10 +94,12 @@ template:
     (the payload shows the one classified entry; send every existing
     relation, not only that entry). Read the task back and confirm the
     classification took effect. If that write refuses, or the read-back
-    shows the stored classification did not change, no supported write
-    can re-classify an existing link in this workspace: record each
-    unsettled classification in `escape-to-guard.json` instead, and
-    file the gap once. Search first with one distinctive token from
+    shows the stored classification did not change, record that link as
+    unsettled in `escape-to-guard.json` with the refusal or the read-back
+    value. Only when every write this run attempts fails, with at least
+    one attempted, is the gap real: no supported write can re-classify an
+    existing link in this workspace. Then file the gap once. Search first
+    with one distinctive token from
     the gap (for example `re-classify`) and inspect every plausible
     hit; when no open or proposed task already tracks it, file one
     with
@@ -105,6 +108,12 @@ template:
     it already tracked records the tracking task ID in the artifact
     and files nothing. The gap task does not count toward the guard
     cap below.
+
+    After the classification loop, re-run `orbit.codebase.analytics` with
+    `{"window":"30d","min_support":1,"model":"<agent-family>"}`, then again
+    with `"escape":"unclassified"` and `"escape":"absent"`, to take the
+    after counts for the artifact. Cluster from this refreshed payload, so
+    each settled link counts under its new nature and escape.
 
     ## Cluster by nature, escape, layer and mechanism
 
