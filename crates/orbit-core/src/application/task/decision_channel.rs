@@ -366,15 +366,20 @@ impl OrbitRuntime {
         let presented = params
             .sender
             .as_deref()
-            .map(|sender| sender.trim().to_ascii_lowercase());
+            .map(|sender| sender.trim().to_ascii_lowercase())
+            .filter(|sender| !sender.is_empty());
         if transport && presented.is_none() {
             return Err(OrbitError::PolicyDenied(format!(
                 "sender_not_allowed: the transport presented no sender for decision channel `{}`; nothing was applied",
                 params.channel
             )));
         }
-        if !registration.allowed_senders.is_empty()
-            && presented.is_none_or(|sender| !registration.allowed_senders.contains(&sender))
+        if let Some(sender) = presented.as_deref()
+            && !registration.allowed_senders.is_empty()
+            && !registration
+                .allowed_senders
+                .iter()
+                .any(|allowed| allowed == sender)
         {
             return Err(OrbitError::PolicyDenied(format!(
                 "sender_not_allowed: the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
