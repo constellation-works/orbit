@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.32.0 — 2026-10-25
+
+### Breaking Changes
+
+- **Crew performance snapshot migration**: opening a workspace applies SQLite v58 (`crew_performance_snapshot`). The migration is additive (two new tables older binaries never touch) but changes persisted storage; upgrade hosts together. ([ORB-17816])
+- **Pull protocol fingerprint**: follower pull requests now carry per-crew usage pressure, which changes the distributed-drain protocol fingerprint.
+  Mixed-version pull drains → upgrade the owner and followers together. ([ORB-17773])
+- **Blocked-task triage auto-task retired**: `orbit workspace sync` removes seeded copies of the `blocked-task-triage` auto-task, even enabled ones, and keeps edited copies.
+  `blocked-task-triage` auto-task removed → set `enabled: true` on the `blocked_task_triage` routine. ([ORB-17744])
+- **`workspace init --refresh-defaults` removed**: the hidden no-op flag is gone, so scripts passing it now fail.
+  `--refresh-defaults` removed → drop the flag. ([ORB-17868])
+- **Rust API**: `AgentFamily::Muse` and `StateTriggerKind::{PilotWarningsHeld, BlockEscalated}` are new variants; `OrbitError::RemoteTool.code` is `RemoteToolCode`, `AutomationError::Deferred` carries `DeferredReason`, and `PolicyDecision` is removed. Unused `orbit-store` and `orbit-common` items are deleted.
+  Downstream exhaustive matches and constructors → update them. ([ORB-17620])
+
+### Highlights
+
+- **Usage-pressure crew selection**: with `workflow.crew_selection = "usage_pressure"`, draws favour crews whose weekly allowance would otherwise go unused, and admission re-draws system-chosen crews. Pull followers weigh their own readings; the dashboard and `orbit run readiness` show pressure per account and crew. ([ORB-17770])
+- **Performance-weighted crew draws**: `workflow.crew_performance` weights draws by an hourly per-task-type implementer snapshot. `orbit agents scorecard --by-type` shows the cells, and `--shadow` compares recorded shares with what the factor would give. Off by default. ([ORB-17817])
+- **Escalation triage routines**: new `pilot_warning_triage` and `blocked_task_triage` routines, disabled by default, send pilot-held proposed tasks and escalated blocks to a hard-tier triager that records one requeue, proposal or human-action report per episode. ([ORB-17743])
+- **Wider provider usage coverage**: Grok, Antigravity and Muse runs now record usage-window readings, so provider limits, holds and usage pressure cover them, and Muse crews run on Linux hosts. An auto-task whose crew hits a usage limit is reassigned within its complexity pool before it runs. ([ORB-17774])
+- **Built-in `argon` crew**: Gemini 4 Argon through `agy` is a built-in crew, and `orbit init` adds it to the hard complexity pool when `agy` is installed. ([ORB-17942])
+- **Dashboard refresh**: Settings is split into per-topic tabs, task History reads as a timeline, Context files group by crate or folder, and provider usage chips open a detail dropdown. Edits to `config.toml` now show without restarting the server. ([ORB-17974])
+
 ## 0.31.0 — 2026-10-22
 
 ### Breaking Changes
