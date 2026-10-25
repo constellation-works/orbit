@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+## 0.33.0 — 2026-10-25
+
+### Breaking Changes
+
+- **Job-run task recency migration**: opening a workspace applies SQLite v59 (`job_run_task_recency`). The migration is additive (a new table, index and triggers older binaries never touch) but changes persisted storage; upgrade hosts together. ([ORB-18182])
+- **Cursor, Pi and OpenCode lanes retired**: configuration and dispatch now reject the `cursor`, `pi` and `opencode` providers; recorded history still displays them.
+  Crews on those providers → move them to a supported provider. ([ORB-18096])
+- **New task history decision**: tag edits record a `tags_changed` decision, which v0.32.0 and older cannot read, and the distributed admission contract now carries review-skip tags.
+  Mixed-version hosts → upgrade the owner and followers together. ([ORB-18078])
+- **`orbit tool run --pretty` removed**: the hidden error-formatting alias is gone, so scripts passing it now fail.
+  `--pretty` removed → drop the flag. ([ORB-17997])
+
+### Highlights
+
+- **Decision channel**: Orbit records decision requests on held work and raises them through a new state trigger. Operators list and answer them from `orbit decision`, MCP or the dashboard, and registered plugins can submit authenticated answers. ([ORB-18176])
+- **Why stuck**: a dashboard card links each blocked or held task to the run or finding that stopped it, with one-click requeue, settle-merged and pilot-admission actions. ([ORB-18232])
+- **Workspace delivery conventions**: configure pull request titles, labels, commit messages and branch names per workspace so automated deliveries follow the repository's conventions. ([ORB-17982])
+- **Review-skip tags and default review**: workspaces can map a task tag to the paths whose changes skip agent review, and `workspace init` seeds before-landing review for PR-route workspaces. ([ORB-18088])
+- **Portable maintenance sweeps**: new built-in auto-task definitions cover code health, architecture, structure, dependency freshness, flaky tests and CI budgets. ([ORB-18124])
+
 ## 0.32.0 — 2026-10-25
 
 ### Breaking Changes
