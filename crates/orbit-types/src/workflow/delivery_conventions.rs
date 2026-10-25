@@ -297,7 +297,8 @@ impl ConventionTemplate {
     /// Whether `branch` is a branch this template names for `task_id` under
     /// `prefix`. The complete template must match, including the eight-digit
     /// hash and any suffix, so a task token inside an external ref or a prefix
-    /// of the owning task id does not establish ownership.
+    /// of the owning task id does not establish ownership. An external ref is
+    /// matched verbatim and may contain `/`.
     pub fn branch_names_task(&self, branch: &str, prefix: &str, task_id: &str) -> bool {
         !task_id.is_empty()
             && match_owner(&self.segments, branch, prefix, &TaskMatch::Exact(task_id)).is_some()
@@ -326,7 +327,8 @@ fn is_id_char(c: char) -> bool {
 
 /// Match the complete rendered shape, returning the task id matched. Fixed
 /// literals and the hash length establish the task boundary even when the
-/// template puts digits or the hash immediately after the task id.
+/// template puts digits or the hash immediately after the task id. An external
+/// ref may contain `/`; later segments still bound where it ends.
 fn match_owner(
     segments: &[Segment],
     text: &str,
@@ -373,12 +375,13 @@ fn match_owner(
                     })
                 }
             },
-            Segment::Placeholder(_) => {
-                let run = text.find('/').unwrap_or(text.len());
-                (0..=run)
-                    .filter(|end| text.is_char_boundary(*end))
-                    .find_map(|end| go(rest, &text[end..], prefix, task, captured))
-            }
+            // Branch templates reach this arm only for `ext.<system>`. The id
+            // is rendered verbatim and may contain `/`. The first completing
+            // split wins, and a slash-free remainder is searched exactly as
+            // far as `find('/')` used to search.
+            Segment::Placeholder(_) => (0..=text.len())
+                .filter(|end| text.is_char_boundary(*end))
+                .find_map(|end| go(rest, &text[end..], prefix, task, captured)),
         }
     }
     go(segments, text, prefix, task, None)

@@ -111,3 +111,13 @@ fn branch_readers_round_trip_an_alphanumeric_literal_after_the_task() {
 fn branch_readers_ignore_a_sibling_token_in_an_external_ref() {
     assert_rendered_branch_owner("feature/{{ext.jira}}-{{task_id}}-{{hash}}", "X-ORB-1");
 }
+
+#[test]
+fn branch_readers_round_trip_an_external_ref_suffix_containing_a_slash() {
+    assert_rendered_branch_owner("feature/{{task_id}}-{{hash}}-{{ext.jira}}", "team/ISSUE-1");
+}
+
+#[test]
+fn branch_readers_round_trip_an_external_ref_containing_a_slash_before_the_task() {
+    assert_rendered_branch_owner("feature/{{ext.jira}}-{{task_id}}-{{hash}}", "team/ISSUE-1");
+}
