@@ -83,6 +83,14 @@ struct Fixture {
     repo: PathBuf,
     parent: JobRun,
     worktree: PathBuf,
+    /// Creating this path lets the held substitute worker exit.
+    worker_release: PathBuf,
+}
+
+impl Drop for Fixture {
+    fn drop(&mut self) {
+        let _ = std::fs::write(&self.worker_release, b"");
+    }
 }
 
 /// A git workspace whose implement run is live in its own linked worktree,
@@ -112,19 +120,19 @@ fn fixture_with(crews: &str, explore: &str) -> Fixture {
     git(&repo, &["add", ".gitignore", "src/lib.rs"]);
     git(&repo, &["commit", "-qm", "seed"]);
     let (parent, worktree) = live_run(&runtime, &repo, "T-EXPLORE-1");
-    orbit_core::test_support::install_substitute_pipeline_worker([
-        std::env::current_exe()
-            .expect("test binary")
-            .to_string_lossy()
-            .into_owned(),
-        "--list".into(),
-    ]);
+    // A worker that exits at once is settled as an interrupted startup while
+    // its explorer is still pending, which races the row's own start. Hold the
+    // worker until the fixture drops, so only the row decides the explorer's
+    // start and finish.
+    let worker_release = root.path().join("release-substitute-worker");
+    crate::worker_fixture::install(&worker_release, "created");
     Fixture {
         _root: root,
         runtime,
         repo,
         parent,
         worktree,
+        worker_release,
     }
 }
 
