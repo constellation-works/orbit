@@ -201,6 +201,7 @@
       }
     }
   ],
+  "code-health-sweep": [],
   "code-review": [
     {
       "comments": [
@@ -1421,7 +1422,33 @@
       }
     }
   ],
-  "escape-to-guard": [],
+  "escape-to-guard": [
+    {
+      "comments": [
+        "## Classify unclassified and absent escapes",
+        "## Cluster by nature, escape, layer and mechanism",
+        "## File guards for clusters at the bar",
+        "## Follow up earlier guards",
+        "## Record the run",
+        "## Rules and command surfaces"
+      ],
+      "digest": "d9cb7a3bf15fe19161a97bddd43e5150ed3db8edcfb23c89752b789bb9d1c10e",
+      "revision": "dd80c010afa6ca947ff080c0f3da28522dedd1b9",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 7 * * 1"
+        },
+        "tags": [
+          "escape-to-guard",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "friction-curation": [
     {
       "comments": [
