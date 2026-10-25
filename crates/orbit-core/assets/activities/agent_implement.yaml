@@ -87,7 +87,7 @@ spec:
       # or `[]` means no relation. The implement step fails an output whose
       # entries are not task IDs before any commit, push or PR.
       regression_from:
-        type: array
+        type: [array, "null"]
         items:
           type: string
       # Claimed mode: findings the owner refused to file. The handoff
@@ -488,10 +488,9 @@ spec:
     - `context_files_added`: selectors you would have declared in step 4.
     - `comment`: any task comment or leftovers. A real blocker is still
       `result.blocker`, not only a comment.
-    - `regression_from`: when the task asks you to record a
-      `regression_from` relation, the culprit task IDs (`["<task-id>"]`),
-      with the culprit commit named in `execution_summary`. When no culprit
-      relation is filed, omit `regression_from` or set it to `null`.
+    - `regression_from`: return culprit task IDs when a relation is
+      requested and name the culprit commit in `execution_summary`;
+      otherwise omit this field or return `null`.
     - `task_artifacts`: required task artifacts (ledgers, screenshots) for
       diff and no-diff candidates alike, including `no-diff-expected`, as
       `[{"path":"doc-duties-ledger.json","source_path":".orbit/tmp/doc-duties-ledger.json"}]`,
