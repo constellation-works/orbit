@@ -171,9 +171,10 @@ when the remote reports it; `--no-probe` uses the stored snapshot.
   marks), machine_id, ssh, prefix, reachable, version, protocol, workspaces and error.
   `--format json` and `--json` print the object `{host_file, legacy, hosts}`, and
   `--format ndjson` prints one host per line. A while-legacy notice goes to stderr.
-- With a probe, `reachable` reports whether the host answered; it is `null` with `--no-probe`.
-  A host that answers with another identity is reachable and carries
-  `host_identity_mismatch` as its error. `error.message` does not repeat `error.code`.
+- With a probe, `reachable` reports whether the host answered. With `--no-probe`, remote rows
+  have `reachable: null`; the local row stays `reachable: true`. A host that answers with
+  another identity is reachable and carries `host_identity_mismatch` as its error.
+  `error.message` does not repeat `error.code`.
 - Exit status is 0 when the file loads, whatever the hosts' reachability, because the
   command is a report. `orbit doctor` is the gate.
 
