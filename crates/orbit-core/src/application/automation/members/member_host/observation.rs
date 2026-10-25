@@ -1,18 +1,31 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_automation::AutomationError;
 use orbit_automation::members::{MemberHost, MemberPage};
+use orbit_common::OrbitError;
 use orbit_store::contracts::TaskListFilter;
-use orbit_types::task::{TaskStatus, TaskType};
+use orbit_types::task::{TaskEnvelopeV2, TaskStatus, TaskType};
 use orbit_types::workflow::automation::members::{StateMember, StateTriggerKind, bundle_crew};
 use serde_json::json;
 
 use super::super::super::preparation;
 use super::super::Host;
 use super::host::{already_preparing, already_triaging, already_verifying, incident_crew};
+use crate::application::automation::SourceCache;
 use crate::application::task::escalation_triage_steps::PilotWarningCandidacy;
 use crate::application::task::{TriageCandidacy, finding_fingerprint, needs_verification};
+
+/// Statuses the shared per-request snapshot carries: every status any state
+/// trigger observes (`Host::observed_statuses`), including `review` for
+/// decision requests, so every state routine's page derives from it.
+const SNAPSHOT_STATUSES: [TaskStatus; 5] = [
+    TaskStatus::Proposed,
+    TaskStatus::Backlog,
+    TaskStatus::Someday,
+    TaskStatus::Blocked,
+    TaskStatus::Review,
+];
 
 impl Host<'_> {
     pub(super) fn observe_page(
@@ -33,35 +46,21 @@ impl Host<'_> {
             ..Default::default()
         };
         // With a shared cache, one snapshot of the workspace's observed
-        // statuses serves every routine in the request: each page (statuses,
-        // type, cursor, limit, canonical order) is derived from it in
-        // memory, exactly as the store's in-memory selection derives it.
-        // Every observed status is in the snapshot's status set.
-        const SNAPSHOT_STATUSES: [TaskStatus; 4] = [
-            TaskStatus::Proposed,
-            TaskStatus::Backlog,
-            TaskStatus::Someday,
-            TaskStatus::Blocked,
-        ];
+        // statuses serves every routine in a status inspection: each page
+        // (statuses, type, cursor, limit, canonical order) is derived from
+        // it in memory, exactly as the store's in-memory selection derives
+        // it. Every observed status is in the snapshot's status set. A real
+        // evaluation keeps its per-evaluation candidate read, as at base.
         let workspace_key = self.runtime.shared_root().display().to_string();
         let tasks = match self.inspection_cache {
             Some(cache)
-                if filter
-                    .statuses
-                    .as_ref()
-                    .is_some_and(|values| values.iter().all(|s| SNAPSHOT_STATUSES.contains(s))) =>
+                if self.dry_run
+                    && filter.statuses.as_ref().is_some_and(|values| {
+                        values.iter().all(|s| SNAPSHOT_STATUSES.contains(s))
+                    }) =>
             {
                 let snapshot = cache.task_snapshot(&workspace_key, || {
-                    Ok(self
-                        .runtime
-                        .task_candidates(
-                            &TaskListFilter {
-                                statuses: Some(SNAPSHOT_STATUSES.to_vec()),
-                                ..Default::default()
-                            },
-                            usize::MAX,
-                        )?
-                        .items)
+                    self.snapshot_envelopes(cache, &workspace_key)
                 })?;
                 // One pass over the shared snapshot: count every match and
                 // clone only the first page past the cursor, instead of
@@ -118,27 +117,29 @@ impl Host<'_> {
 
         let active_preparations = match self.trigger.kind {
             StateTriggerKind::PreparationEligible => match self.inspection_cache {
-                Some(cache) => cache.preparations(&workspace_key, "task_pilot", || {
-                    preparation::active_task_pilot_preparations(self.runtime)
-                })?,
-                None => preparation::active_task_pilot_preparations(self.runtime)?,
+                Some(cache) if self.dry_run => {
+                    cache.preparations(&workspace_key, "task_pilot", || {
+                        preparation::active_task_pilot_preparations(self.runtime)
+                    })?
+                }
+                _ => preparation::active_task_pilot_preparations(self.runtime)?,
             },
             StateTriggerKind::FindingUnverified => match self.inspection_cache {
-                Some(cache) => {
+                Some(cache) if self.dry_run => {
                     cache.preparations(&workspace_key, "finding_verification", || {
                         preparation::active_finding_verifications(self.runtime)
                     })?
                 }
-                None => preparation::active_finding_verifications(self.runtime)?,
+                _ => preparation::active_finding_verifications(self.runtime)?,
             },
             StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
                 match self.inspection_cache {
-                    Some(cache) => {
+                    Some(cache) if self.dry_run => {
                         cache.preparations(&workspace_key, "escalation_triage", || {
                             preparation::active_escalation_triages(self.runtime)
                         })?
                     }
-                    None => preparation::active_escalation_triages(self.runtime)?,
+                    _ => preparation::active_escalation_triages(self.runtime)?,
                 }
             }
             StateTriggerKind::ExecutionFailed | StateTriggerKind::DecisionRequested => {
@@ -153,10 +154,10 @@ impl Host<'_> {
 
         for envelope in tasks.items {
             let task = match self.inspection_cache {
-                Some(cache) => cache.task(&workspace_key, &envelope.id, || {
+                Some(cache) if self.dry_run => cache.task(&workspace_key, &envelope.id, || {
                     self.runtime.get_task(&envelope.id)
                 })?,
-                None => self.runtime.get_task(&envelope.id)?,
+                _ => self.runtime.get_task(&envelope.id)?,
             };
 
             match self.trigger.kind {
@@ -374,5 +375,73 @@ impl Host<'_> {
             withheld,
             next,
         })
+    }
+
+    /// The shared snapshot's envelopes, in the candidate listing's canonical
+    /// order (newest first, task ID ascending for ties).
+    ///
+    /// A status inspection (`dry_run`) builds it from the workspace status
+    /// index plus one keyed envelope read per selected task, so it never pays
+    /// the candidate scan's freshness validation over every task in the
+    /// workspace, closed ones included. An index that cannot prove itself —
+    /// unpopulated, or naming a status the settled envelope no longer holds —
+    /// falls back to the observational candidate read. A real evaluation
+    /// keeps the coordinated candidate read and its index validation: its
+    /// pages feed admission, not only a status projection.
+    fn snapshot_envelopes(
+        &self,
+        cache: &SourceCache,
+        workspace_key: &str,
+    ) -> Result<Vec<TaskEnvelopeV2>, OrbitError> {
+        let filter = TaskListFilter {
+            statuses: Some(SNAPSHOT_STATUSES.to_vec()),
+            ..Default::default()
+        };
+        if !self.dry_run {
+            return Ok(self.runtime.task_candidates(&filter, usize::MAX)?.items);
+        }
+        if let Some(envelopes) = self.indexed_snapshot(cache, workspace_key)? {
+            return Ok(envelopes);
+        }
+        Ok(self
+            .runtime
+            .observe_task_candidates(&filter, usize::MAX)?
+            .items)
+    }
+
+    /// Snapshot envelopes selected through the cached status index alone, or
+    /// `None` when the index cannot prove the selection: it holds no task of
+    /// this workspace, a selected envelope is missing or unsettled, or an
+    /// envelope's status differs from its indexed status.
+    fn indexed_snapshot(
+        &self,
+        cache: &SourceCache,
+        workspace_key: &str,
+    ) -> Result<Option<Vec<TaskEnvelopeV2>>, OrbitError> {
+        let index = cache.status_index(workspace_key, || {
+            self.runtime.task_status_index_for(&BTreeSet::new())
+        })?;
+        if index.is_empty() {
+            return Ok(None);
+        }
+        let ids: BTreeSet<String> = index
+            .iter()
+            .filter(|(_, status)| SNAPSHOT_STATUSES.contains(status))
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut envelopes = self.runtime.stores().tasks().task_envelopes_for_ids(&ids)?;
+        if envelopes.len() != ids.len()
+            || envelopes
+                .iter()
+                .any(|envelope| index.get(&envelope.id) != Some(&envelope.status))
+        {
+            return Ok(None);
+        }
+        envelopes.sort_by(|a, b| {
+            b.created_at
+                .cmp(&a.created_at)
+                .then_with(|| a.id.cmp(&b.id))
+        });
+        Ok(Some(envelopes))
     }
 }

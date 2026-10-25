@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::OrbitError;
-use orbit_types::task::Task;
+use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::SourceRevision;
 
 type HeadKey = (PathBuf, String, String);
@@ -33,6 +33,11 @@ pub(crate) struct SourceCache {
     // Only a status inspection populates it; it lives for one request, so a
     // later request re-reads the store.
     task_snapshots: RefCell<BTreeMap<String, std::rc::Rc<Vec<orbit_types::task::TaskEnvelopeV2>>>>,
+    // The workspace status index (`task_status_index_for` with no targets
+    // already projects every indexed task of the workspace), read once per
+    // workspace per request instead of once per state routine: pages and
+    // observability checks of every routine in the request share it.
+    status_indexes: RefCell<BTreeMap<String, std::rc::Rc<BTreeMap<String, TaskStatus>>>>,
     // Hydrated tasks and active-preparation scans are workspace-scoped: the
     // status report shares one cache across every discovered workspace, so
     // the workspace key keeps one checkout's tasks from serving another's
@@ -83,6 +88,23 @@ impl SourceCache {
             .borrow_mut()
             .insert(workspace.to_string(), snapshot.clone());
         Ok(snapshot)
+    }
+
+    /// One workspace's indexed task statuses, fetched once per request and
+    /// shared by reference, like [`Self::task_snapshot`].
+    pub(super) fn status_index(
+        &self,
+        workspace: &str,
+        fetch: impl FnOnce() -> Result<BTreeMap<String, TaskStatus>, OrbitError>,
+    ) -> Result<std::rc::Rc<BTreeMap<String, TaskStatus>>, OrbitError> {
+        if let Some(index) = self.status_indexes.borrow().get(workspace) {
+            return Ok(index.clone());
+        }
+        let index = std::rc::Rc::new(fetch()?);
+        self.status_indexes
+            .borrow_mut()
+            .insert(workspace.to_string(), index.clone());
+        Ok(index)
     }
 
     pub(super) fn task(

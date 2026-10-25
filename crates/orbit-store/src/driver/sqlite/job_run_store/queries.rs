@@ -552,6 +552,33 @@ fn job_run_filter_sql(
         params.push(Box::new(task_id.clone()));
     }
     if let Some(routine) = &query.trigger_routine {
+        // Pre-filter on the run's own input before probing `job_run_states`:
+        // parsing each candidate's pipeline state means walking its overflow
+        // chain (hundreds of KB on drain runs) only to read one trigger
+        // field. Every term below only excludes a run whose input proves it
+        // was not admitted for this routine, so the state probe still decides
+        // every kept row: a state or delivery automation run names its
+        // consumer (`<machine>/<workspace>/<kind>/<routine>`) in the input it
+        // was submitted with, and drain-promoted or CI-sweep-filed child runs
+        // carry their authority records in theirs and are never
+        // routine-triggered.
+        let consumer_pattern = format!(
+            "%/{}",
+            routine
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let pattern = params.len() + 1;
+        conditions.push(format!(
+            "(COALESCE(json_extract(input_json, '$.state_automation.consumer') \
+             LIKE ?{pattern} ESCAPE '\\', 1) \
+             AND COALESCE(json_extract(input_json, '$.automation.batch.consumer') \
+             LIKE ?{pattern} ESCAPE '\\', 1) \
+             AND json_type(input_json, '$.drain_promotion') IS NULL \
+             AND json_type(input_json, '$.ci_sweep_filing') IS NULL)"
+        ));
+        params.push(Box::new(consumer_pattern));
         conditions.push(format!(
             "EXISTS (SELECT 1 FROM job_run_states AS trigger_state \
              WHERE trigger_state.workspace_id = job_runs.workspace_id \
