@@ -49,9 +49,11 @@ Task publication is not a full backup. It covers task records only. See
 
 ## Take a backup
 
-Orbit's SQLite files (`orbit.db` and `tasks/index.sqlite`) run in WAL mode. Copying a
-live `.db` file without its `-wal` and `-shm` sidecars can produce a torn
-copy. Pick one of these.
+Orbit's SQLite files (`orbit.db` and `tasks/index.sqlite`) run in WAL mode, so a
+committed change can sit in a `-wal` file until SQLite checkpoints it. Copying a
+database file while Orbit may write is not a safe backup, even when you also copy
+its `-wal` and `-shm` files. A checkpoint between the copies can leave committed
+changes out of the copy, and the copy can still pass `quick_check`. Pick one of these.
 
 **Cold copy.** Stop Orbit first: the dashboard, MCP servers, scheduled timers and any
 running drain. Then copy the whole directory.
@@ -59,6 +61,10 @@ running drain. Then copy the whole directory.
 ```bash
 cp -a ~/.orbit ~/orbit-backup-$(date +%F)
 ```
+
+A plain file copy of the database files is safe only in this stopped state, or
+from one atomic filesystem snapshot of the volume that holds `~/.orbit`, taken at a
+single instant.
 
 **Live snapshot of one database.** This works while Orbit runs and writes a
 checkpointed file with no sidecars. It uses the `sqlite3` shell, which Orbit does
@@ -70,12 +76,9 @@ sqlite3 ~/.orbit/orbit.db "VACUUM INTO '/backups/orbit.db'"
 sqlite3 ~/.orbit/orbit.db ".backup /backups/orbit.db"
 ```
 
-If you must copy a live database file, copy `*.db`, `*.db-wal` and `*.db-shm`
-together.
-
-A live snapshot covers one database. A consistent whole-machine backup is the cold copy.
-Keep recovery copies outside `~/.orbit`, because deployment cleanup
-(`orbit gc deployments`) treats `orbit.db.bak-*` files there as disposable.
+A live snapshot covers one database. For the whole machine, use the cold copy or an
+atomic filesystem snapshot. Keep recovery copies outside `~/.orbit`, because deployment
+cleanup (`orbit gc deployments`) treats `orbit.db.bak-*` files there as disposable.
 
 ## Restore and verify
 
