@@ -45,11 +45,11 @@ These records describe evidence at the recorded commit or date; they do not cert
 
 | Record | Purpose |
 | --- | --- |
-| [QA evidence](./qa/README.md) | This directory holds coverage records from QA passes. |
-| [CLI command evidence](./qa/cli-command-evidence.md) | The help inventory contains 173 command nodes: 147 terminal paths and 26 parent groups. |
-| [Orbit desktop control-center validation](./qa/mcp-apps-probe.md) | The candidate provides Tasks, Runs, Review, Auto-drain and Automation views in the existing Orbit plugin. |
-| [MCP behavioral evidence](./qa/mcp-tool-evidence.md) | Behavioral evidence matrix for the advertised MCP tools and their verified limits. |
-| [Shipped workflow evidence](./qa/workflow-evidence.md) | Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests. |
+| [QA evidence](./dev/qa/README.md) | This directory holds coverage records from QA passes. |
+| [CLI command evidence](./dev/qa/cli-command-evidence.md) | The help inventory contains 173 command nodes: 147 terminal paths and 26 parent groups. |
+| [Orbit desktop control-center validation](./dev/qa/mcp-apps-probe.md) | The candidate provides Tasks, Runs, Review, Auto-drain and Automation views in the existing Orbit plugin. |
+| [MCP behavioral evidence](./dev/qa/mcp-tool-evidence.md) | Behavioral evidence matrix for the advertised MCP tools and their verified limits. |
+| [Shipped workflow evidence](./dev/qa/workflow-evidence.md) | Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests. |
 
 ## Runbooks
 
@@ -102,9 +102,9 @@ Incident reviews preserve impact, timelines, causal evidence, uncertainty, and f
 
 | Incident | Date | Summary |
 | --- | --- | --- |
-| [Run failure log](./rca/failure-log.md) | 2026-09-27 | Open causes of Orbit task-run failures and blocks, one entry per distinct cause, each with the task that will close it; resolved causes are removed. |
-| [Cross-crate recursive test-worker OOM](./rca/2026-09-23-cross-crate-test-worker-oom.md) | 2026-09-23 | Root cause analysis of the cross-crate recursive test-worker fork bomb that exhausted memory and forced a hard reset of the Linux execution host. |
-| [Recursive test-worker fork storm](./rca/2026-09-06-recursive-test-worker-fork-storm.md) | 2026-09-06 | Root cause analysis of the recursive Orbit test-worker fork storm that saturated a 14-CPU Linux host. |
+| [Run failure log](./dev/rca/failure-log.md) | 2026-09-27 | Open causes of Orbit task-run failures and blocks, one entry per distinct cause, each with the task that will close it; resolved causes are removed. |
+| [Cross-crate recursive test-worker OOM](./dev/rca/2026-09-23-cross-crate-test-worker-oom.md) | 2026-09-23 | Root cause analysis of the cross-crate recursive test-worker fork bomb that exhausted memory and forced a hard reset of the Linux execution host. |
+| [Recursive test-worker fork storm](./dev/rca/2026-09-06-recursive-test-worker-fork-storm.md) | 2026-09-06 | Root cause analysis of the recursive Orbit test-worker fork storm that saturated a 14-CPU Linux host. |
 
 ## Designs
 
@@ -130,7 +130,6 @@ a conservative title/status fallback.
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |
 | [Finding Verification](./design/finding-verification/1_overview.md) | Review-filed bug findings are verified against the code by a pooled verifier crew before promotion; CONFIRMED unlocks backlog and drain admission, REJECTED closes the task with its evidence. | Accepted | claude |
-| [Hidden Acceptance](./design/hidden-acceptance/1_scope.md) | Scope: an acceptance lane whose scenarios implementers cannot see or edit, written from the specification by another agent family and run after landing, so a green result is an independent signal rather than the implementer grading its own work | Draft | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Accepted | codex |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | ToolSessionContext is Orbit's transport-to-Core invocation envelope. | Accepted | codex |
@@ -152,6 +151,15 @@ a conservative title/status fallback.
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Draft | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
+
+### Archived designs
+
+Superseded, retired or parked designs live under `docs/design/_archived/<feature>/`.
+They are reference only and are not authoritative.
+
+| Feature | Summary | Status | Lead |
+| --- | --- | --- | --- |
+| [Hidden Acceptance](./design/_archived/hidden-acceptance/1_scope.md) | Scope: an acceptance lane whose scenarios implementers cannot see or edit, written from the specification by another agent family and run after landing, so a green result is an independent signal rather than the implementer grading its own work | Deprecated | claude |
 
 Folder layout, frontmatter, ADR, and ownership rules live in
 [design conventions](./design/CONVENTIONS.md).

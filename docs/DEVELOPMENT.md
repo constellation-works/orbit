@@ -60,7 +60,7 @@ The task and MCP CLI integration binaries use named contract tables, with
 four and eight nextest slots respectively. Each row keeps its assertions and disposable state; rows that
 share a workspace address independent task IDs. Exact-child fixtures isolate
 the complete table once, rather than re-executing removed test entry points.
-The [MCP and task test budget report](reviews/cli-mcp-task-test-budget.md)
+The [MCP and task test budget report](dev/reviews/cli-mcp-task-test-budget.md)
 records the coverage mapping and candidate-host before/after measurements.
 
 Tasks tagged `no-diff-expected` run no workspace gates or required validation
@@ -755,7 +755,7 @@ Gates often run beside a busy drain, where a fixture's wall-clock time stretches
 
 ### Tests that submit pipeline runs
 
-Submitting a run (ship, resume, auto, job) spawns a detached worker by re-executing the current binary. From a test, that binary is the libtest harness, which would rerun the spawning test without bound ([RCA](rca/2026-09-23-cross-crate-test-worker-oom.md)), so only the CLI `main` may act as a worker and an unsubstituted submission fails with `OrbitError::Execution`.
+Submitting a run (ship, resume, auto, job) spawns a detached worker by re-executing the current binary. From a test, that binary is the libtest harness, which would rerun the spawning test without bound ([RCA](dev/rca/2026-09-23-cross-crate-test-worker-oom.md)), so only the CLI `main` may act as a worker and an unsubstituted submission fails with `OrbitError::Execution`.
 
 Install a substitute with `orbit_core::test_support::install_substitute_pipeline_worker` (`crate::test_support` inside `orbit-core`), enabling the orbit-core `test-support` feature from `[dev-dependencies]` only. It is process-wide and the last install wins, so it covers other threads (such as a dashboard's blocking pool); install one argv per test binary, as `crates/orbit-web/tests/http_api/support.rs` does. `{run_id}` in the argv becomes the run id. CLI tests that run the real `orbit` binary use its production entry point instead.
 
@@ -912,7 +912,7 @@ It checks release dates, merged-PR links, version and subsection anchors, keyboa
 
 ## MCP Apps compatibility prototype
 
-[The isolated reproduction and native desktop probe](qa/mcp-apps-probe.md) covers the Control Center, operator controls, rendered preview, routing boundaries and evidence template. Record automated protocol/bridge results and native desktop results separately.
+[The isolated reproduction and native desktop probe](dev/qa/mcp-apps-probe.md) covers the Control Center, operator controls, rendered preview, routing boundaries and evidence template. Record automated protocol/bridge results and native desktop results separately.
 
 ## Desktop app
 

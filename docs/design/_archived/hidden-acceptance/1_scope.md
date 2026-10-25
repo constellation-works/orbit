@@ -3,7 +3,7 @@ title: "Scope: Hidden acceptance for unattended delivery"
 owner: claude
 last_updated: 2026-10-24
 last_validated: 2026-10-24
-status: Draft
+status: Deprecated
 feature: hidden-acceptance
 doc_role: scope
 type: design
@@ -13,16 +13,16 @@ tags: [hidden-acceptance, qa, auto-tasks, plugins]
 
 # Scope: Hidden acceptance for unattended delivery
 
-Status: proposed.
-Bearing: The [full pre-release QA sweep](../../runbooks/qa-full-sweep.md) already
+Status: deprecated. Parked as reference only (PR #5842); revisit only if regressions keep slipping past CI and review.
+Bearing: The [full pre-release QA sweep](../../../runbooks/qa-full-sweep.md) already
 builds an attested candidate (`--build-candidate` binds every result to HEAD, the
 tracked diff and untracked inputs), runs an inventory of end-to-end scenarios in an
 isolated Orbit root, records NOT_RUN and BLOCKED honestly, and files deduplicated
-defects without repairing them. [Automation triggers](../automation-triggers/2_design.md)
+defects without repairing them. [Automation triggers](../../automation-triggers/2_design.md)
 provide the `deliveries_landed` schedule that `delivery-code-review` uses for
-after-landing review. The [plugin standard](../plugins/1_scope.md) lets a plugin ship
+after-landing review. The [plugin standard](../../plugins/1_scope.md) lets a plugin ship
 tools, auto-tasks, jobs and a private `{{plugin_state}}` directory from one manifest.
-[Finding verification](../finding-verification/1_overview.md) establishes that a review-filed
+[Finding verification](../../finding-verification/1_overview.md) establishes that a review-filed
 defect is confirmed before it becomes work. This scope builds on all four and changes
 none of their contracts.
 

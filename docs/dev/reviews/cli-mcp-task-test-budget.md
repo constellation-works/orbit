@@ -144,7 +144,7 @@ runtime artifacts.
 Each line identifies a removed entry and its surviving coverage or redundancy
 reason. Tables in the next section retain the bodies of consolidated entries.
 
-### [crates/orbit-cli/tests/mcp/mcp_roundtrip.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip.rs)
+### [crates/orbit-cli/tests/mcp/mcp_roundtrip.rs](../../../crates/orbit-cli/tests/mcp/mcp_roundtrip.rs)
 
 - mcp_friction_rehome_moves_a_record_into_its_registered_owner: task::friction_lifecycle_cli::friction_cli_triage_stats_and_rehome_preserve_workspace_ownership already checks the same ownership transfer through the CLI; MCP record mutation remains in mcp_serve_round_trips_records_against_a_temp_workspace.
 - mcp_friction_refused_rehome_leaves_the_edits_unapplied: The same refusal atomicity is checked by task::friction_lifecycle_cli::friction_cli_triage_stats_and_rehome_preserve_workspace_ownership; generic MCP structured errors remain covered.
@@ -160,11 +160,11 @@ reason. Tables in the next section retain the bodies of consolidated entries.
 - managed_cli_from_linked_worktree_updates_canonical_workspace: task::context_selector_worktree exercises owning-worker CLI/tool writes from the linked checkout; managed_mcp_config_routes_a_linked_worktree_by_its_logical_workspace_id retains the MCP routing proof.
 - mcp_task_show_follows_the_global_id_and_explicit_workspace_stays_a_filter: task_show_is_global_by_default_across_tool_run_and_mcp includes the same global lookup and fail-closed explicit filter.
 
-### [crates/orbit-cli/tests/mcp/mcp_setup_root.rs](../../crates/orbit-cli/tests/mcp/mcp_setup_root.rs)
+### [crates/orbit-cli/tests/mcp/mcp_setup_root.rs](../../../crates/orbit-cli/tests/mcp/mcp_setup_root.rs)
 
 - external_root_task_index_loss_is_reported_and_reindexed: task::task_registry_recovery::lost_registry_refuses_allocation_until_the_high_water_mark_is_reestablished exercises actual registry loss/reindex and non-reissued IDs; external-root MCP init/remove remains covered.
 
-### [crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs)
+### [crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs](../../../crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs)
 
 - a_newer_build_writes_while_older_mcp_dashboard_and_drain_processes_stay_live: generation_admission::a_data_only_feature_migration_joins_beside_an_older_live_participant covers compatible live generations; persistent_client_hands_over_to_a_local_candidate_update retains production MCP handover. Dashboard/drain are unrelated to the MCP wire contract.
 - a_replaced_drain_hands_its_run_to_the_installed_executable: Restored here as one isolated process-boundary row covering `drain_upgrade_boundary`, `reexec` and run adoption through `ORBIT_ADOPT_PIPELINE_RUN`, followed by cancellation of the adopted owner. generation_admission::a_candidate_admission_admits_beside_a_server_that_hands_over_to_it covers candidate admission, and persistent_client_hands_over_to_a_local_candidate_update covers MCP session handover; neither replaces this drain contract.
@@ -173,11 +173,11 @@ reason. Tables in the next section retain the bodies of consolidated entries.
 - read_only_foreign_digest_refuses_when_store_schema_differs: generation_admission tests cover schema compatibility and fail-closed live admission at the owning public API; new_review_record_contract_refuses_a_live_old_client_before_mutation retains a production incompatible-client proof.
 - a_local_candidate_refuses_live_clients_untouched_and_serves_them_once_they_reconnect: new_review_record_contract_refuses_a_live_old_client_before_mutation retains incompatible-client refusal; persistent_client_hands_over_to_a_local_candidate_update and the partial/invalid-request handover rows retain production session continuity.
 
-### [crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs)
+### [crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs](../../../crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs)
 
 - desktop_task_status_sets_compose_with_search_priority_and_pagination: task::task_tags::search_status_modes_include_blocked_and_deferred_tasks and task_list CLI contracts exercise the shared status filters; desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations retains the desktop boundary.
 
-### [crates/orbit-cli/tests/task/task_trimmed_surface.rs](../../crates/orbit-cli/tests/task/task_trimmed_surface.rs)
+### [crates/orbit-cli/tests/task/task_trimmed_surface.rs](../../../crates/orbit-cli/tests/task/task_trimmed_surface.rs)
 
 - task_update_complexity_roundtrips_through_a_real_task_record: A typed field round trip repeats the add/update/show path; task_update_repeats_dependencies_and_clears_context and task_cli_roundtrips_filters_and_replaces_tags retain repeated/cleared CLI argument contracts.
 - task_add_rejects_missing_context_file: task_update_rejects_missing_context_file_and_leaves_task_unchanged and selector_missing_from_both_checkouts_is_rejected_from_a_worktree retain CLI context rejection and atomicity; add/update share the selector validator.
@@ -189,36 +189,36 @@ reason. Tables in the next section retain the bodies of consolidated entries.
 - migrate_bare_invocation_inspects_and_confirm_applies: Workspace migration is outside the task contract; workspace initialization/recovery is exercised by the workspace integration binary.
 - workspace_remove_is_recoverable_by_reinitializing_the_checkout: Workspace lifecycle is covered in the workspace integration binary and the external-root MCP init/remove contract; this task retains task-specific archive/import recovery.
 
-### [crates/orbit-cli/tests/task/audit_cli.rs](../../crates/orbit-cli/tests/task/audit_cli.rs)
+### [crates/orbit-cli/tests/task/audit_cli.rs](../../../crates/orbit-cli/tests/task/audit_cli.rs)
 
 - audit_cli_fixture_keeps_isolated_home_untouched_by_log_events: audit_cli_round_trips_real_mutation_filters_stats_and_export retains isolated-home command auditing; the removed row rechecks fixture setup rather than another CLI contract.
 - audit_stats_policy_count_matches_dashboard_fixture: Dashboard policy-count formatting repeats the audit stats aggregation checked by audit_cli_round_trips_real_mutation_filters_stats_and_export.
 - success_via_runtime_yields_exactly_one_row: Direct RuntimeHost dispatch/audit is core behavior, already exercised by orbit-core runtime admission_audit boundary tests; audit_cli_round_trips_real_mutation_filters_stats_and_export retains actual CLI exactly-once auditing.
 
-### [crates/orbit-cli/tests/task/task_list.rs](../../crates/orbit-cli/tests/task/task_list.rs)
+### [crates/orbit-cli/tests/task/task_list.rs](../../../crates/orbit-cli/tests/task/task_list.rs)
 
 - task_list_help_documents_rule: Help goldens already pin the CLI surface; this row only matches prose and conflicts with AGENTS.md behavioral-test guidance.
 - existing_filters_keep_behaviour: task_cli_roundtrips_filters_and_replaces_tags and search_status_modes_include_blocked_and_deferred_tasks retain actual CLI tag/status filtering.
 
-### [crates/orbit-cli/tests/task/auto_task_settings_cli.rs](../../crates/orbit-cli/tests/task/auto_task_settings_cli.rs)
+### [crates/orbit-cli/tests/task/auto_task_settings_cli.rs](../../../crates/orbit-cli/tests/task/auto_task_settings_cli.rs)
 
 - every_shipped_body_history_source_is_recognized_by_workspace_sync: older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked retains the migration/fork distinction; enumerating every historical prose revision repeats the same classifier and sync path.
 - older_shipped_body_keeps_explicit_settings_and_their_edit_stamp: bundled_auto_task_settings_stay_outside_the_body_and_survive_a_body_refresh retains explicit-settings persistence and body refresh; older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked retains old-body migration.
 - older_shipped_probe_bodies_recognize_rendered_and_historical_base_branches: older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked retains shipped-body versus operator-fork recognition; historical branch strings repeat the same managed-body normalization path.
 
-### [crates/orbit-cli/tests/task/claimed_delivery_recovery.rs](../../crates/orbit-cli/tests/task/claimed_delivery_recovery.rs)
+### [crates/orbit-cli/tests/task/claimed_delivery_recovery.rs](../../../crates/orbit-cli/tests/task/claimed_delivery_recovery.rs)
 
 - terminal_claim_adopts_settings_and_doctor_reports_its_status / false archived, true rejected, false done: Status/checkpoint cross-products repeat terminal adoption: retained rows cover every terminal status and both checkpoint representations; archived reissue and scheduler retain both representations too.
 - unminted_retry_recovers_after_a_legacy_task_closed_and_settings_changed / rejected, done: These statuses repeat the archived terminal-predecessor path; terminal adoption retains rejected/done, while unminted retry retains both resolvable and deleted predecessors.
 
-### [crates/orbit-cli/tests/mcp/main.rs](../../crates/orbit-cli/tests/mcp/main.rs)
+### [crates/orbit-cli/tests/mcp/main.rs](../../../crates/orbit-cli/tests/mcp/main.rs)
 
 - mcp_git_fixtures_preserve_inherited_authority_decoy / mcp_roundtrip::fresh_workspace_init_mcp_explains_local_ship_and_allows_pr_worktree_setup: Repeats the same git_repo::command authority scrub. The shared workspace git_fixture_isolation::git_fixtures_preserve_inherited_authority_decoy regression retains both hostile locator sets and decoy-state checks; upstream removed the per-binary wrapper.
 - mcp_git_fixtures_preserve_inherited_authority_decoy / mcp_roundtrip::managed_mcp_config_routes_a_linked_worktree_by_its_logical_workspace_id: Repeats the same git_repo::command authority scrub. The shared workspace git_fixture_isolation::git_fixtures_preserve_inherited_authority_decoy regression retains both hostile locator sets and decoy-state checks; upstream removed the per-binary wrapper.
 
 - mcp_git_fixtures_preserve_inherited_authority_decoy / mcp_setup_root::mcp_init_binds_an_external_root_checkout_and_remove_reverses_it: Upstream removed the remaining wrapper row. The setup boundary fixture remains; the shared workspace Git-decoy regression owns containment.
 
-### [crates/orbit-cli/tests/task/main.rs](../../crates/orbit-cli/tests/task/main.rs)
+### [crates/orbit-cli/tests/task/main.rs](../../../crates/orbit-cli/tests/task/main.rs)
 
 - task_git_fixtures_preserve_inherited_authority_decoy / auto_task_lifecycle_cli::fixture_git_commits_and_refs_stay_in_the_fixture: Upstream removed the remaining wrapper row. The shared workspace Git-decoy regression retains fixture Git operations and owns containment.
 - task_git_fixtures_preserve_inherited_authority_decoy / task_publication::operator_workflow_is_network_free_labelled_and_fail_closed: Repeats the same git_repo::command authority scrub. The shared workspace git_fixture_isolation::git_fixtures_preserve_inherited_authority_decoy regression retains both hostile locator sets and decoy-state checks; upstream removed the per-binary wrapper.
@@ -233,7 +233,7 @@ reason. Tables in the next section retain the bodies of consolidated entries.
 Each original entry remains a named row or is folded into an equivalent
 already-initialized fixture with its assertions intact.
 
-### [crates/orbit-cli/tests/mcp/mcp_roundtrip.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip.rs)
+### [crates/orbit-cli/tests/mcp/mcp_roundtrip.rs](../../../crates/orbit-cli/tests/mcp/mcp_roundtrip.rs)
 
 - mcp_server_advertises_governed_tools_but_denies_an_unprivileged_session → governed_session_admission. Named table row; original body and assertions retained.
 - a_replica_mcp_session_enforces_checkout_capability_classes → governed_session_admission. Named table row; original body and assertions retained.
@@ -281,7 +281,7 @@ already-initialized fixture with its assertions intact.
 - read_only_registry_files_keep_uncheckpointed_wal_reads_observational → observational_read_only_stores. Named table row; original body and assertions retained.
 - absent_global_semantic_index_keeps_read_only_cli_reads_observational → observational_read_only_stores. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/mcp/mcp_setup_root.rs](../../crates/orbit-cli/tests/mcp/mcp_setup_root.rs)
+### [crates/orbit-cli/tests/mcp/mcp_setup_root.rs](../../../crates/orbit-cli/tests/mcp/mcp_setup_root.rs)
 
 - mcp_setup_expands_tilde_and_anchors_relative_roots_for_flags_and_environment → setup_root_expansion_and_config_confinement. Named table row; original body and assertions retained.
 - outside_client_config_guard_rejects_config_files_in_scanned_directories → standalone `#[test]`, no longer a table row. Body and assertions retained; it re-executes itself through `isolated_test::run_in_child` because it swaps the process-wide panic hook, and its fixture runs no `orbit` process. Surviving coverage of the guard: the rows that call `assert_no_client_config_outside_the_checkout` in this file.
@@ -298,13 +298,13 @@ already-initialized fixture with its assertions intact.
 - toml_client_home_config_symlink_survives_init_and_remove → symlinked_client_configuration. Named table row; original body and assertions retained.
 - json_client_home_config_symlink_is_emptied_when_removal_leaves_no_entries → symlinked_client_configuration. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs)
+### [crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs](../../../crates/orbit-cli/tests/mcp/mcp_roundtrip/upgrade.rs)
 
 - new_review_record_contract_refuses_a_live_old_client_before_mutation → upgrade_admission_and_session_handover. Named table row; original body and assertions retained.
 - persistent_client_hands_over_to_a_local_candidate_update → upgrade_admission_and_session_handover. Named table row; original body and assertions retained.
 - a_replaced_mcp_server_defers_handover_until_a_large_partial_request_completes → upgrade_admission_and_session_handover. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/mcp/mcp_roundtrip/plugins.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip/plugins.rs)
+### [crates/orbit-cli/tests/mcp/mcp_roundtrip/plugins.rs](../../../crates/orbit-cli/tests/mcp/mcp_roundtrip/plugins.rs)
 
 - brokered_plugin_calls_audit_only_caller_owned_failures → plugin_failure_auditing. Named table row; original body and assertions retained.
 - managed_global_plugin_tool_refusals_are_audited → plugin_failure_auditing. Named table row; original body and assertions retained.
@@ -326,7 +326,7 @@ already-initialized fixture with its assertions intact.
 - a_plugin_child_cannot_shed_its_callback_session_with_setsid → linux_callback_and_root_confinement. Named table row; original body and assertions retained.
 - a_plugin_holding_orbit_tools_cannot_write_orbits_own_roots → linux_callback_and_root_confinement. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs)
+### [crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs](../../../crates/orbit-cli/tests/mcp/mcp_roundtrip/desktop.rs)
 
 - desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinations → desktop_destination_and_routine_contracts. Named table row; original body and assertions retained.
 - domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch_without_authority → desktop_destination_and_routine_contracts. Named table row; original body and assertions retained.
@@ -334,13 +334,13 @@ already-initialized fixture with its assertions intact.
 - desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates → desktop_governance_and_bounded_reads. Named table row; original body and assertions retained.
 - bounded_run_detail_reads_a_fixed_audit_budget_beyond_a_long_history → desktop_governance_and_bounded_reads. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/mcp/mcp_roundtrip/transport_operations.rs](../../crates/orbit-cli/tests/mcp/mcp_roundtrip/transport_operations.rs)
+### [crates/orbit-cli/tests/mcp/mcp_roundtrip/transport_operations.rs](../../../crates/orbit-cli/tests/mcp/mcp_roundtrip/transport_operations.rs)
 
 - stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape → artifact_and_auto_task_stdio_contracts. Named table row; original body and assertions retained.
 - stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state → artifact_and_auto_task_stdio_contracts. Named table row; original body and assertions retained.
 - stdio_drain_and_ship_starts_report_their_notices → artifact_and_auto_task_stdio_contracts. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/task_trimmed_surface.rs](../../crates/orbit-cli/tests/task/task_trimmed_surface.rs)
+### [crates/orbit-cli/tests/task/task_trimmed_surface.rs](../../../crates/orbit-cli/tests/task/task_trimmed_surface.rs)
 
 - update_status_reopens_terminal_tasks_only_with_an_explicit_force → governed_status_transitions. Named table row; original body and assertions retained.
 - update_status_restores_an_archived_task_with_force → governed_status_transitions. Named table row; original body and assertions retained.
@@ -358,12 +358,12 @@ already-initialized fixture with its assertions intact.
 - locks_release_reaches_the_admin_tool_only_with_the_operator_capability → lock_and_audit_administration. Named table row; original body and assertions retained.
 - audit_prune_refuses_unconfirmed_then_deletes_when_confirmed → lock_and_audit_administration. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/pilot_comments.rs](../../crates/orbit-cli/tests/task/pilot_comments.rs)
+### [crates/orbit-cli/tests/task/pilot_comments.rs](../../../crates/orbit-cli/tests/task/pilot_comments.rs)
 
 - approval_prints_latest_pilot_blocker_warnings_in_text_and_json → pilot_comment_rendering. Named table row; original body and assertions retained.
 - task_show_summarizes_pilot_comments_without_changing_json_or_fallback → pilot_comment_rendering. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/auto_task_lifecycle_cli.rs](../../crates/orbit-cli/tests/task/auto_task_lifecycle_cli.rs)
+### [crates/orbit-cli/tests/task/auto_task_lifecycle_cli.rs](../../../crates/orbit-cli/tests/task/auto_task_lifecycle_cli.rs)
 
 - auto_task_cli_delete_opt_out_restore_and_open_task_refusals_persist → auto_task_lifecycle_and_recovery. Named table row; original body and assertions retained.
 - auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes → auto_task_lifecycle_and_recovery. Named table row; original body and assertions retained.
@@ -372,7 +372,7 @@ already-initialized fixture with its assertions intact.
 - auto_task_add_and_schedule_update_reject_retired_integrated_qa_coverage → retired_coverage_and_closed_actions. Named table row; original body and assertions retained.
 - auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled → retired_coverage_and_closed_actions. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/context_selector_worktree.rs](../../crates/orbit-cli/tests/task/context_selector_worktree.rs)
+### [crates/orbit-cli/tests/task/context_selector_worktree.rs](../../../crates/orbit-cli/tests/task/context_selector_worktree.rs)
 
 - selector_missing_from_both_checkouts_is_rejected_from_a_worktree → worktree_scope_and_owned_creation. Named table row; original body and assertions retained.
 - worktree_nested_under_the_registered_checkout_can_declare_its_own_file → worktree_scope_and_owned_creation. Named table row; original body and assertions retained.
@@ -382,7 +382,7 @@ already-initialized fixture with its assertions intact.
 - owning_worker_relaxation_still_rejects_invalid_selectors → foreign_and_invalid_creation_refusals. Named table row; original body and assertions retained.
 - owning_worker_outside_a_worktree_gets_the_strict_guard → foreign_and_invalid_creation_refusals. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/friction_lifecycle_cli.rs](../../crates/orbit-cli/tests/task/friction_lifecycle_cli.rs)
+### [crates/orbit-cli/tests/task/friction_lifecycle_cli.rs](../../../crates/orbit-cli/tests/task/friction_lifecycle_cli.rs)
 
 - friction_update_empty_title_restores_derivation_like_the_tool → friction_clear_semantics_and_replica_admission. Named table row; original body and assertions retained.
 - friction_update_empty_rehome_to_clears_alone_and_with_other_edits → friction_clear_semantics_and_replica_admission. Named table row; original body and assertions retained.
@@ -392,46 +392,46 @@ already-initialized fixture with its assertions intact.
 - friction_title_is_redacted_on_add_and_update_before_persistence → friction_ownership_and_redaction. Named table row; original body and assertions retained.
 - friction_add_description_alias_is_redacted_like_body → friction_ownership_and_redaction. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/write_preflight.rs](../../crates/orbit-cli/tests/task/write_preflight.rs)
+### [crates/orbit-cli/tests/task/write_preflight.rs](../../../crates/orbit-cli/tests/task/write_preflight.rs)
 
 - add_warnings_match_on_cli_and_tool → write_preflight_cli_tool_parity. Named table row; original body and assertions retained.
 - update_and_approval_warnings_match_on_cli_and_tool → write_preflight_cli_tool_parity. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/task_list.rs](../../crates/orbit-cli/tests/task/task_list.rs)
+### [crates/orbit-cli/tests/task/task_list.rs](../../../crates/orbit-cli/tests/task/task_list.rs)
 
 - completed_add_and_update_leave_the_next_write_free_list_indexed → task_index_and_bounded_listing. Named table row; original body and assertions retained.
 - task_list_truncation_notice_and_bare_json_array_with_60_tasks → task_index_and_bounded_listing. Named table row; original body and assertions retained.
 - task_list_truncation_notice_reaches_stderr_in_json_and_ndjson_modes → task_index_and_bounded_listing. Named table row; original body and assertions retained.
 - older_someday_task_discoverable_ahead_of_newer_done_tasks → task_index_and_bounded_listing. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/auto_task_settings_cli.rs](../../crates/orbit-cli/tests/task/auto_task_settings_cli.rs)
+### [crates/orbit-cli/tests/task/auto_task_settings_cli.rs](../../../crates/orbit-cli/tests/task/auto_task_settings_cli.rs)
 
 - template_flags_preserve_unnamed_fields_and_full_tool_templates_still_replace → auto_task_settings_and_managed_bodies. Named table row; original body and assertions retained.
 - bundled_auto_task_settings_stay_outside_the_body_and_survive_a_body_refresh → auto_task_settings_and_managed_bodies. Named table row; original body and assertions retained.
 - settings_only_fork_migrates_and_a_body_fork_is_preserved_and_reported → auto_task_settings_and_managed_bodies. Named table row; original body and assertions retained.
 - older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked → auto_task_settings_and_managed_bodies. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/task_tags.rs](../../crates/orbit-cli/tests/task/task_tags.rs)
+### [crates/orbit-cli/tests/task/task_tags.rs](../../../crates/orbit-cli/tests/task/task_tags.rs)
 
 - task_cli_roundtrips_filters_and_replaces_tags → task_tags_status_filters_and_identity. Named table row; original body and assertions retained.
 - search_status_modes_include_blocked_and_deferred_tasks → task_tags_status_filters_and_identity. Named table row; original body and assertions retained.
 - task_list_is_status_neutral_and_bounded_by_limit → task_tags_status_filters_and_identity. Named table row; original body and assertions retained.
 - task_update_refuses_dropping_system_identity_tag_without_override → task_tags_status_filters_and_identity. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/local_read_projections_cli.rs](../../crates/orbit-cli/tests/task/local_read_projections_cli.rs)
+### [crates/orbit-cli/tests/task/local_read_projections_cli.rs](../../../crates/orbit-cli/tests/task/local_read_projections_cli.rs)
 
 - local_read_projections_return_registered_keys_task_flow_and_artifact_manifest → local_read_projection_contracts. Named table row; original body and assertions retained.
 - task_show_formats_status_history_and_whole_second_timestamps_without_changing_json → local_read_projection_contracts. Named table row; original body and assertions retained.
 - task_show_and_list_json_match_the_tool_host_projection → local_read_projection_contracts. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/task_admin_cli.rs](../../crates/orbit-cli/tests/task/task_admin_cli.rs)
+### [crates/orbit-cli/tests/task/task_admin_cli.rs](../../../crates/orbit-cli/tests/task/task_admin_cli.rs)
 
 - task_updates_and_approval_redact_prose_before_persistence → task_admin_persistence_and_conflicts. Named table row; original body and assertions retained.
 - reservation_cli_conflicts_and_confirmation_preserve_claims → task_admin_persistence_and_conflicts. Named table row; original body and assertions retained.
 - portable_archive_cli_round_trip_and_corrupt_input_preserve_tasks → task_admin_persistence_and_conflicts. Named table row; original body and assertions retained.
 - lock_contention_cli_reports_shared_backlog_surface_without_reserving → task_admin_persistence_and_conflicts. Named table row; original body and assertions retained.
 
-### [crates/orbit-cli/tests/task/claimed_delivery_recovery.rs](../../crates/orbit-cli/tests/task/claimed_delivery_recovery.rs)
+### [crates/orbit-cli/tests/task/claimed_delivery_recovery.rs](../../../crates/orbit-cli/tests/task/claimed_delivery_recovery.rs)
 
 - terminal_claim_adopts_settings_and_doctor_reports_its_status → claimed_recovery_contracts_0. Named table row, with unchanged assertions inside the same isolated-child boundary.
 - archived_claim_reissues_the_same_obligations_as_a_new_task → claimed_recovery_contracts_0. Named table row, with unchanged assertions inside the same isolated-child boundary.
@@ -439,7 +439,7 @@ already-initialized fixture with its assertions intact.
 - scheduler_settles_closed_claims_and_adopts_but_refuses_open_tasks → claimed_recovery_contracts_1. Named table row, with unchanged assertions inside the same isolated-child boundary.
 - version_one_receipts_still_read_as_accepted_coverage → claimed_recovery_contracts_0. The existing archived-claim rows run all accepted-version-one assertions using their already-accepted receipt, preserving the post-retry read without another fixture.
 
-### [crates/orbit-cli/tests/task/delivery_remote_source.rs](../../crates/orbit-cli/tests/task/delivery_remote_source.rs)
+### [crates/orbit-cli/tests/task/delivery_remote_source.rs](../../../crates/orbit-cli/tests/task/delivery_remote_source.rs)
 
 - remote_only_landing_mints_a_batch_without_moving_the_checkout → remote_delivery_contracts_0. Named table row, with unchanged assertions inside the same isolated-child boundary.
 - fetch_failure_defers_without_falling_back_to_the_local_branch → remote_delivery_contracts_0. Named table row, with unchanged assertions inside the same isolated-child boundary.
@@ -451,19 +451,19 @@ already-initialized fixture with its assertions intact.
 - doctor_reports_the_remote_tracking_head_without_fetching → remote_delivery_contracts_2. Named table row, with unchanged assertions inside the same isolated-child boundary.
 - doctor_uses_the_oldest_pending_commit_for_remote_trail_health → remote_delivery_contracts_2. Named table row, with unchanged assertions inside the same isolated-child boundary.
 
-### [crates/orbit-cli/tests/task/delivery_remote_source/review_commit.rs](../../crates/orbit-cli/tests/task/delivery_remote_source/review_commit.rs)
+### [crates/orbit-cli/tests/task/delivery_remote_source/review_commit.rs](../../../crates/orbit-cli/tests/task/delivery_remote_source/review_commit.rs)
 
 - review_coverage_bound_to_the_batch_is_the_no_diff_evidence → review_commit_contracts. Named table row, with unchanged assertions inside the same isolated-child boundary.
 - a_derived_summary_leaves_the_batch_owed → review_commit_contracts. Named table row, with unchanged assertions inside the same isolated-child boundary.
 - an_agent_replacement_of_a_derived_summary_settles_the_batch → review_commit_contracts. Named table row, with unchanged assertions inside the same isolated-child boundary.
 
-### [crates/orbit-cli/tests/task/delivery_remote_source/tick.rs](../../crates/orbit-cli/tests/task/delivery_remote_source/tick.rs)
+### [crates/orbit-cli/tests/task/delivery_remote_source/tick.rs](../../../crates/orbit-cli/tests/task/delivery_remote_source/tick.rs)
 
 - clock_tick_expired_source_preserves_debt_without_running_commands → clock_source_contracts. Named table row, with unchanged assertions inside the same isolated-child boundary.
 - clock_tick_shares_fetch_and_each_lookup_across_consumers → clock_source_contracts. Named table row, with unchanged assertions inside the same isolated-child boundary.
 - clock_tick_leaves_two_parked_consumers_with_24_obligations_untouched → clock_source_contracts. Named table row, with unchanged assertions inside the same isolated-child boundary.
 
-### [crates/orbit-cli/tests/task/config_show_task_reads.rs](../../crates/orbit-cli/tests/task/config_show_task_reads.rs)
+### [crates/orbit-cli/tests/task/config_show_task_reads.rs](../../../crates/orbit-cli/tests/task/config_show_task_reads.rs)
 
 - one_config_show_takes_the_task_commit_lock_once → review_after_landing_cli::after_landing_review_mints_exactly_when_the_auto_task_is_enabled. All lock-count and projection assertions run against an equivalent fresh runtime over the already-minted review fixture; no duplicate workspace, commit or review-task setup.
 

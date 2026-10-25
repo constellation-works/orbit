@@ -1426,7 +1426,7 @@ class DocLinkGuardrailTests(unittest.TestCase):
 
     def test_excluded_documents_are_ignored_when_tracked_or_untracked(self):
         excluded = ("docs/design/demo/4_decisions.md", "docs/design/_templates/example.md",
-                    "docs/design/CONVENTIONS.md", "docs/rca/record.md", "CHANGELOG.md",
+                    "docs/design/CONVENTIONS.md", "docs/dev/rca/record.md", "CHANGELOG.md",
                     "crates/demo/tests/fixtures/example.md")
         for name in excluded:
             self.write(name, "[historical](missing.md)\n`crates/missing.rs`\n")

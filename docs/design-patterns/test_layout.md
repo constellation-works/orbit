@@ -68,7 +68,7 @@ After relocating a suite to a crate-root integration binary, remove its empty
 source test module and unused private test support. In `orbit-exec`, sandbox
 compiler/spawn fixtures are modules of `tests/sandbox/main.rs`; only admitted
 private injection and security seams retain sibling source tests. The
-[applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md)
+[applied audit](../dev/reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md)
 records the per-identity coverage and the qualifying seams.
 
 Where a crate had grown one integration binary per file, those files now share
@@ -188,7 +188,7 @@ in an exact child with inherited authority cleared and a disposable home. A move
 case carries its platform `cfg` from both the original function and declaring
 module; native macOS cases remain macOS coverage.
 
-The [per-identity reconciliation](../reviews/unit-test-admission-orbit-core-2026-10-13.json)
+The [per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-core-2026-10-13.json)
 records relocations, retirements and corrected admissions. Private broker scope,
 worker scope/counters, keyed admission, injected stop/clock/probe behavior and raw
 confined writers retain their required child fixtures and seams. Copying a private
@@ -201,7 +201,7 @@ and shell actions, host push/PR operations, and public worktree collection. Empt
 source modules and unused resume/commit/collector fixture support are removed.
 Private inspection leases, CI query/clock injection, raw process observers and
 final-removal safety seams keep their sibling layout, as recorded in the
-[engine per-identity reconciliation](../reviews/unit-test-admission-orbit-engine-2026-10-13.json).
+[engine per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-engine-2026-10-13.json).
 
 ## Public API integration suites
 
@@ -224,12 +224,12 @@ snapshots used as fixture
 evidence deserialize exported persisted types; they do not copy the private
 bundle reader. Private builders, ledger prefixes, counters and publication stage
 hooks remain beside their source as documented in the
-[per-identity reconciliation](../reviews/unit-test-admission-orbit-store-2026-10-13.json).
+[per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-store-2026-10-13.json).
 
 Orbit-web's HTTP, log-rendering and dashboard Node cases share the existing
 `tests/http_api.rs` binary, with fixtures under `tests/http_api/`. Empty API
 `auto_tasks`, `distributed`, `origin`, `tasks` and `runs` source test modules are
 removed, together with unused request/seeding support and the gate's test-only
-permit getter. The [per-identity reconciliation](../reviews/unit-test-admission-orbit-web-2026-10-13.json)
+permit getter. The [per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-web-2026-10-13.json)
 records 32 relocations and the two corrected private SSH budget/probe admissions.
 The original 24 admitted cases and their child fixtures retain their sibling layout.

@@ -1,6 +1,6 @@
 # Unit-test admission audit — 2026-10-12
 
-This snapshot audits every identity in the unit-test baseline at `dd268d0d5a1640b709bcac0d3759b04879f77a14` against the admission criteria and economical-boundary precondition in [the test strategy](../design-patterns/test_strategy.md). The [per-identity report](unit-test-audit-2026-10-12.json) records source locations and hashes, assertion excerpts, the applied criterion, rationale, and a follow-up for every non-admitted identity. The same report is attached as `unit-test-audit.json` to the audit task.
+This snapshot audits every identity in the unit-test baseline at `dd268d0d5a1640b709bcac0d3759b04879f77a14` against the admission criteria and economical-boundary precondition in [the test strategy](../../design-patterns/test_strategy.md). The [per-identity report](unit-test-audit-2026-10-12.json) records source locations and hashes, assertion excerpts, the applied criterion, rationale, and a follow-up for every non-admitted identity. The same report is attached as `unit-test-audit.json` to the audit task.
 
 The baseline lists **975 identities** across 17 crates; **968** still have a source function and **7** are stale allowances. The original brief’s 943 and the pilot’s 949 describe earlier revisions. This audit recommends **313 keep, 38 retire, and 624 move**. These are static design judgments. No tests or baseline allowances are removed in this delivery; each crate has a linked follow-up for applying its decisions.
 
