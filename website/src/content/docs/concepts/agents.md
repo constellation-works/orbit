@@ -697,3 +697,8 @@ host into the shipped executors:
 The bundled `local-shell` executor declares no sandbox on any platform, by
 design. See [Install Orbit](../../getting-started/install/#prepare-the-sandbox)
 for the Linux prerequisites.
+
+To override a shipped executor's own definition — its sandbox backend and
+fallback, the hosts it may run on (`host_os`), its inspection arguments or an
+authentication probe — edit its machine-level YAML instead of the crew. See
+[Executor YAML](../../reference/executor-yaml/).
