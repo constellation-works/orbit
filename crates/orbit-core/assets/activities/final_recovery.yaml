@@ -222,6 +222,12 @@ spec:
       applied as `escalate`. `lane_contract` overrides any guidance below that
       relies on a decision outside that list, including finishing work in the
       worktree and `resume`.
+    - A provider CLI permission denial covers only the one command it refused:
+      rerun the needed work with commands that avoid the denied path, and keep
+      using the shell. Report a tool unavailable only after a trivial call to
+      it (for the shell, `true`) is also denied, quoting that denial. A
+      denial never excuses skipping required validation or the friction you
+      record with `orbit.friction.add`.
 
     Evidence:
     - Every input field except task_id, run_id, workspace_path, repo_root,

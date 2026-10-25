@@ -93,6 +93,13 @@ spec:
     - Uncommitted changes present when you start are an interrupted earlier
       invocation's unverified fixes. Keep one only if a finding you record names
       it and validation passes with it; otherwise edit it back.
+    - A provider CLI permission denial covers only the one command it refused:
+      rerun the needed work with commands that avoid the denied path, and keep
+      using the shell. This does not permit the workarounds the refusals above
+      forbid. Report a tool unavailable only after a trivial call to it (for the
+      shell, `true`) is also denied, quoting that denial. A denial never
+      excuses skipping required validation or the report write through
+      `orbit tool run`.
 
     Procedure
 
