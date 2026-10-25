@@ -330,7 +330,8 @@ Use `holds_promotion: false` for advisory observations such as adjacent work
 outside the task's scope. These remain in the pilot assessment comment returned
 by `orbit task show` and in the implementing worker's brief, but do not withhold
 promotion, mark the assessment unready, or appear in held findings. Existing
-plain-string surface and utility warnings continue to hold. Missing severity or
+plain-string surface and utility warnings continue to hold unless they name only
+recorded dependencies or done tasks, as below. Missing severity or
 malformed structured findings are rejected rather than silently approved.
 
 Applied task-pilot `blocked_by` findings that name an unfinished task in the
