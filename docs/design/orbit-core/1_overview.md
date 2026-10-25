@@ -74,7 +74,13 @@ source scan, enforces the runtime direction.
   `shared_root`, and `local_root`. On the primary checkout `shared_root` and
   `local_root` are equal; in a linked worktree `shared_root` is the primary
   checkout's `.orbit/` and `local_root` is the worktree's own. An explicit
-  `--root` or `ORBIT_ROOT` pins both. A submodule is an independent checkout:
+  `--root` or `ORBIT_ROOT` pins both. A working directory whose own `.orbit/`
+  already holds workspace config resolves to that directory, including when
+  it sits inside a linked worktree; the linked checkout's own local `.orbit/`
+  does not. Bootstrap and workspace `config set` refuse an uninitialized
+  `.orbit/` in the working directory when resolution would otherwise adopt a
+  different root, and the refusal names `--root` as the way to choose one.
+  A submodule is an independent checkout:
   bootstrap stops at its repository boundary and runtime honors its registered
   data directory. Its gitfile does not make it a linked worktree of the
   superproject. When Git is unavailable, linked-worktree discovery requires a
