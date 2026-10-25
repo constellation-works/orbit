@@ -2,7 +2,7 @@ use chrono::Utc;
 use orbit_types::task::{ExternalRef, Task, TaskHistoryEntry, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::{JobRun, JobRunState};
 
-use super::delivery_attention_value;
+use super::{delivery_attention_value, landing_review_gate_facts};
 
 fn task(status: TaskStatus, with_pr: bool) -> Task {
     Task {
@@ -159,4 +159,36 @@ fn healthy_and_ineligible_tasks_have_no_attention() {
         )
         .is_none()
     );
+}
+
+#[test]
+fn abandoned_landing_review_settle_reports_abandoned_verdict() {
+    // Exact step-error text built for `Settled::Abandoned` in
+    // `application/review/gate/settle.rs`: it settles nothing, so the row
+    // must show the gate outcome, not the provisional `(verdict incomplete,`
+    // parenthetical it quotes.
+    let message = format!(
+        "review_abandoned: the reviewer exited successfully but its only report \
+         is the initial provisional one (verdict incomplete, no escalation, finding or \
+         validation record, never updated); attempt attempt-1 was released without a \
+         verdict, so the candidate's review is not spent and a reviewer is admitted again \
+         within its remaining minutes; {}",
+        orbit_types::workflow::REVIEW_LANDING_DECISION_PENDING,
+    );
+    let facts = landing_review_gate_facts(None, Some(&message));
+    assert_eq!(facts["availability"], "read");
+    assert_eq!(facts["verdict"], "abandoned");
+    assert!(facts["finding_count"].is_null());
+}
+
+#[test]
+fn blocked_landing_review_settle_still_parses_verdict_and_count() {
+    let message = format!(
+        "review_gate_blocked: verdict reject (decide); 1 finding(s) recorded; {}",
+        orbit_types::workflow::REVIEW_LANDING_DECISION_PENDING,
+    );
+    let facts = landing_review_gate_facts(None, Some(&message));
+    assert_eq!(facts["availability"], "read");
+    assert_eq!(facts["verdict"], "reject");
+    assert_eq!(facts["finding_count"], 1);
 }

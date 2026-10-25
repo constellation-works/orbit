@@ -880,3 +880,19 @@ establish failure and child reaping. A forwarding refusal alone could pass after
 timeout without proving the byte cap. These cases retain `TunnelSpec`, `ProbeLimit`
 and the fake SSH/peer harness, alongside all 24 previously admitted private fault,
 security and platform cases. No production visibility or behavior changes.
+
+## Landing-review gate verdict parse admission
+
+`crates/orbit-core/src/application/job/delivery_attention/tests.rs::abandoned_landing_review_settle_reports_abandoned_verdict`
+and `blocked_landing_review_settle_still_parses_verdict_and_count` (criterion 1,
+parser edge cases) guard the verdict parse in `landing_review_gate_facts` for
+the observed ORB-18242 mislabel: an abandoned landing-review settlement records
+no verdict, and its step error quotes the provisional `(verdict incomplete, ...`
+parenthetical, which the generic scan misread as the token `incomplete,`.
+Both tests drive the public `landing_review_gate_facts` entry point that
+`orbit-web`'s Why stuck card consumes, feeding the exact abandoned settle
+step-error text (asserting verdict `abandoned` with no finding count) and a
+blocked message (asserting verdict `reject` with finding count 1). Reaching
+either settlement at a boundary would need a full blocked-task delivery run
+through the landing-review settle step, so a boundary fixture cannot prove
+this two-token parse economically.
