@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-10-24
+last_validated: 2026-10-25
 ---
 
 # Orbit Configuration
@@ -1981,7 +1981,7 @@ Placeholders are `{{name}}`, with optional spaces inside the braces. An unknown 
 
 **Commit subjects** keep the 72-character budget. An over-long subject shortens `{{title}}` with an ellipsis first, keeping the rest of the template, including the `[<TASK-ID>]` marker that delivery checks such as already-landed detection read; the full title then leads the body. A subject still over budget is cut around that marker, reserving space for the complete marker within the budget. The subject template must therefore contain `[{{task_id}}]`.
 
-**Branch names** are stable across a run's retries: `{{hash}}` comes from the run ID, and with `ext.*` placeholders an existing local branch carrying the run's hash is reused even if the task's refs changed. A sample render is checked at load, and each real render when `worktree_setup` names the branch: a name that is empty, contains `..`, `@{`, whitespace, a control character or one of `~^:?*[\`, starts with `-`, has an empty component, a component starting with `.` or ending in `.lock`, or ends with `.`, is refused before any ref is created. Readers that find a task from a branch (PR closure, external-merge settlement, PR adoption and CI-failure filing) match the complete template, including the eight-character hex hash and any trailing literal, with `prefix` bound to `orbit`. A task token inside an external reference or a prefix of the owning task ID does not establish ownership. The fixed hash length also lets readers identify the task when `{{hash}}` immediately follows `{{task_id}}`.
+**Branch names** are stable across a run's retries: `{{hash}}` comes from the run ID, and with `ext.*` placeholders an existing local branch carrying the run's hash is reused even if the task's refs changed. A sample render is checked at load, and each real render when `worktree_setup` names the branch: a name that is empty, contains `..`, `@{`, whitespace, a control character or one of `~^:?*[\`, starts with `-`, has an empty component, a component starting with `.` or ending in `.lock`, or ends with `.`, is refused before any ref is created. Readers that find a task from a branch (PR closure, external-merge settlement, PR adoption and CI-failure filing) match the complete template, including the eight-character hex hash and any trailing literal, with `prefix` bound to `orbit`. A task token inside an external reference or a prefix of the owning task ID does not establish ownership. An external reference is matched verbatim, including an id that contains `/`. The fixed hash length also lets readers identify the task when `{{hash}}` immediately follows `{{task_id}}`.
 
 `pr.labels`, `pr.reviewers` and `pr.draft` apply when `pr_open` creates a PR (`gh pr create --label/--reviewer/--draft`); an entry starting with `-` is refused. Completion never merges a draft; mark it ready on the forge to continue.
 
