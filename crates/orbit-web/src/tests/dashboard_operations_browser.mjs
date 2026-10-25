@@ -1268,6 +1268,15 @@ try {
     await page.focus('#workspace-select');
     for (const selector of selectors) {
       await page.keyboard.press('Tab');
+      const lateRailResize = destination === 'diagnostics' && selector === '.rail .tab[data-tab="tasks"]';
+      if (lateRailResize) {
+        // Model a late count/font update while keyboard focus explores a
+        // different destination. ResizeObserver must keep that entry visible.
+        await page.locator('.rail .tab.active .rail-label').evaluate(async node => {
+          node.style.paddingRight = `${parseFloat(getComputedStyle(node).paddingRight) + 20}px`;
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        });
+      }
       const focused = await page.locator(selector).evaluate(node => {
         const box = node.getBoundingClientRect();
         const row = document.getElementById('tabs').getBoundingClientRect();
@@ -1280,7 +1289,17 @@ try {
           left: box.left, right: box.right, rowLeft: row.left, rowRight: row.right,
         };
       });
+      if (lateRailResize) {
+        mobileEvidence.focusedResize = focused;
+        await page.screenshot({ path: path.join(evidence, 'focused-tasks-after-health-resize-dark-375.png') });
+      }
       if (!focused.active || !focused.ring || !focused.onscreen || !focused.sameRow) throw new Error(`Unreachable navigation at ${destination} / ${selector}: ${JSON.stringify(focused)}`);
+      if (lateRailResize) {
+        await page.locator('.rail .tab.active .rail-label').evaluate(async node => {
+          node.style.paddingRight = '';
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        });
+      }
       await page.click(selector, { trial: true, timeout: 2000 });
     }
     const subtabs = selectors.filter(selector => selector.includes('.subtab'));
