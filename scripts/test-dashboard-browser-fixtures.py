@@ -70,6 +70,39 @@ class DashboardBrowserFixtureTests(unittest.TestCase):
                     f"missing {kind} hook '{hook}'",
                     result.stderr)
 
+    def test_positive_id_probes_are_queries(self):
+        probes = [
+            "assert.ok(Boolean(document.getElementById('{id}')));",
+            "assert.ok(!!document.getElementById('{id}'));",
+            "assert.ok(!document.getElementById('{id}').disabled);",
+            "assert.ok(!!document.getElementById('{id}'), 'present');",
+        ]
+        for probe in probes:
+            with self.subTest(probe=probe, id="keep-id"):
+                result = self.run_checker(probe.format(id="keep-id") + "\n")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            with self.subTest(probe=probe, id="gone-id"):
+                result = self.run_checker("const keep = 1;\n" + probe.format(id="gone-id") + "\n")
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(
+                    "crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                    "missing id hook 'gone-id'",
+                    result.stderr)
+
+    def test_asserted_absent_ids_are_not_queries(self):
+        absent = [
+            "assert.equal(document.getElementById('gone-id'), null);",
+            "assert.strictEqual(document.getElementById('gone-id'), undefined);",
+            "assert.ok(document.getElementById('gone-id') === null);",
+            "assert.ok(!document.getElementById('gone-id'));",
+            "assert.equal(!!document.getElementById('gone-id'), false);",
+            "assert.equal(Boolean(document.getElementById('gone-id')), false);",
+        ]
+        for line in absent:
+            with self.subTest(line=line):
+                result = self.run_checker(line + "\n")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_dynamic_hooks_exempt_only_what_the_template_builds(self):
         assets = (
             "<script>\n"
