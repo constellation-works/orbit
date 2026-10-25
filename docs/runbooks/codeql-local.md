@@ -391,9 +391,10 @@ reports it as not run for that reason. A reviewer whose remaining work is only
 this check returns `incomplete` with an `external_evidence` entry of kind
 `codeql`, name `Linux CodeQL (rust)`, that exact command, and the result
 artifact `evidence/codeql-rust-linux.json`. Settlement then holds the review
-for evidence instead of ending it incomplete ([review gate design §4](../design/review-gate/2_design.md)). The hosted `CodeQL / Analyze (rust)`
-job runs only for pull requests and pushes to `main` and `agent-main`, so it
-cannot supply evidence for a candidate before its PR opens.
+for evidence instead of ending it incomplete ([review gate design §4](../design/review-gate/2_design.md)). This repository's hosted `CodeQL / Analyze (rust)`
+job runs only on pushes to `main` and `agent-main` and on the weekly schedule,
+never for a pull request, so it cannot supply evidence for a candidate before
+its PR opens or lands.
 
 A claimed leaf does not depend on its reviewer to name the check. The owner
 declares a workspace rule that a Rust change owes it:
@@ -416,18 +417,23 @@ blocks on an `incomplete` verdict whose only gap this is, nor ships a pass the
 host could not have run. A Linux follower, or a candidate that changes no
 matching path, owes nothing
 ([design](../design/review-gate/2_design.md#4-what-the-validation-records-establish-orb-11528-orb-11545)).
-A before-landing review is the exception only when the rule names the pull
-request's hosted check that runs its exact command, with
-`hosted_check = "CodeQL / Analyze (rust)"`. The requirement is then owed to the
-owner and that check (`owner_owed_evidence`) and does not hold the review; the
-owner's landing merges only after the check passed
-([runbook](review-gate.md#sandboxed-reviewers-on-a-claimed-leaf)). The hosted
-`Analyze (rust)` job in `.github/workflows/codeql.yml` runs the default query
-suite, not `rust-security-extended.qls`, so declaring it for the rule above is
-the operator's judgement that the hosted run is equivalent enough. Leave
-`hosted_check` unset for a custom query (`queries/company-policy.ql`) or a
-workspace without hosted CodeQL: the requirement then holds the before-landing
-review for the owner's Linux run, as it holds a before-PR review.
+This repository declares no `hosted_check`: its hosted CodeQL emits no pull
+request check, so a before-landing review that owes this requirement holds for
+the owner's Linux run described below. A before-landing review is the exception
+only in a workspace whose pull requests really emit a check that runs the rule's
+exact command, such as a workflow with a `pull_request` trigger. There the rule
+may set `hosted_check` to that check's name as the forge reports it (for
+example `hosted_check = "CodeQL / Analyze (rust)"` for a job named so). The
+requirement is then owed to the owner and that check (`owner_owed_evidence`)
+and does not hold the review; the owner's landing merges only after the check
+passed ([runbook](review-gate.md#sandboxed-reviewers-on-a-claimed-leaf)). Orbit
+compares the check's name, not the queries it runs, so declaring it for a job
+that runs the default query suite instead of `rust-security-extended.qls` is
+the operator's judgement that the run is equivalent enough. Leave `hosted_check`
+unset for a custom query (`queries/company-policy.ql`) or a workspace without
+an equivalent pull request check: the requirement then holds the
+before-landing review for the owner's Linux run, as it holds a before-PR
+review.
 
 ### Owner fulfilment
 
