@@ -731,7 +731,7 @@
   },
   {
     "name": "orbit_decision_submit",
-    "description": "Submit a human's answer to one open decision request through a registered decision channel. Governed: callable only by the plugin the channel is bound to (through its callback session) or by the operator testing a channel — never by an agent session. Core verifies the channel is registered and unrevoked, the request is still open against its binding, the answer is allowed, and the per-request token (single-use, expiring with the request, keyed to the channel's current key epoch). Only then is the answer applied in core as the registered human, with the channel and the token fingerprint recorded as provenance. Every refusal (channel_not_registered, channel_revoked, caller_not_allowed, sender_not_allowed, authentication_failed, token_invalid, token_consumed, request_expired, request_superseded, answer_not_allowed, request_not_found) applies nothing; a parse-level refusal does not consume the token.",
+    "description": "Submit a human's answer to one open decision request through a registered decision channel. Governed: callable only by the plugin the channel is bound to (through its callback session) or by the operator testing a channel — never by an agent session. Core verifies the channel is registered and unrevoked, the request is still open against its binding, the answer is allowed, and the per-request token (single-use, expiring with the request, keyed to the channel's current key epoch). When the submission carries raw_message, core also verifies the message's DKIM signature itself (selector key from DNS, body hash, header signature, signing-domain alignment with the sender) and refuses when its own result contradicts the forwarded verdicts; a channel registered with require_dkim_verification refuses a submission without one. Only then is the answer applied in core as the registered human, with the channel and the token fingerprint recorded as provenance. Every refusal (channel_not_registered, channel_revoked, caller_not_allowed, sender_not_allowed, authentication_failed, dkim_verification_failed, dkim_verification_unavailable, dkim_verification_required, raw_message_too_large, token_invalid, token_consumed, request_expired, request_superseded, answer_not_allowed, request_not_found) applies nothing; a parse-level refusal does not consume the token, and dkim_verification_unavailable is retryable and consumes nothing.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -762,6 +762,10 @@
         "auth_results": {
           "type": "string",
           "description": "The raw Authentication-Results header the transport forwards as evidence. A plugin submission must forward one: core requires dkim=pass and spf=pass and refuses on dmarc=fail. The operator's own test submission may omit it."
+        },
+        "raw_message": {
+          "type": "string",
+          "description": "The raw reply message the transport forwards for core-side DKIM verification, at most 262144 bytes (256 KiB). When present, core verifies the message's DKIM signature itself and refuses when its result contradicts the forwarded verdicts. Required on a channel registered with require_dkim_verification; optional otherwise."
         },
         "model": {
           "type": "string",

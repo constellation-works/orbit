@@ -69,6 +69,7 @@ pub(super) fn dispatch(
                 token: input.required_string("token")?,
                 sender: input.optional_string("sender")?,
                 auth_results: input.optional_string("auth_results")?,
+                raw_message: input.optional_string("raw_message")?,
                 caller,
             })?;
             Ok(decision_request_json(&request))

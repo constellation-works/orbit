@@ -45,6 +45,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use super::TaskRecordUpdateParams;
+use super::decision_dkim::{
+    DkimTxtResolver, DkimVerifyError, SystemDkimTxtResolver, sender_domain_of, verify_dkim,
+};
 use super::helpers::SYSTEM_ACTOR_LABEL;
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecords;
@@ -57,6 +60,11 @@ const STORE_DIR: &str = "state/decision-channels";
 const STORE_FILE: &str = "channels.json";
 const STORE_SCHEMA_VERSION: u32 = 1;
 const TOKEN_LEN: usize = 26;
+
+/// Largest raw message a submission may carry for core-side DKIM
+/// verification (256 KiB). A larger one is refused
+/// `raw_message_too_large` and nothing is applied.
+pub const MAX_DECISION_RAW_MESSAGE_BYTES: usize = 256 * 1024;
 
 /// Who is presenting a submission, as the tool boundary resolved it from
 /// trusted seams (the plugin callback session, the operator's capability)
@@ -99,6 +107,13 @@ pub struct DecisionSubmitParams {
     /// plugin submission must forward one (design §4 layer 5); the
     /// operator's test submission may omit it.
     pub auth_results: Option<String>,
+    /// The raw reply message, when the transport forwards one. When
+    /// present, core verifies its DKIM signature itself and refuses
+    /// `dkim_verification_failed` when that contradicts the forwarded
+    /// verdicts; when the channel requires core-side verification, a
+    /// submission without one is refused `dkim_verification_required`.
+    /// At most [`MAX_DECISION_RAW_MESSAGE_BYTES`] bytes.
+    pub raw_message: Option<String>,
     /// Who is presenting the submission (see [`DecisionSubmitCaller`]).
     pub caller: DecisionSubmitCaller,
 }
@@ -137,6 +152,10 @@ pub struct DecisionChannelInfo {
     pub key_fingerprint: String,
     /// Whether the channel is revoked.
     pub revoked: bool,
+    /// Whether core-side DKIM verification of a forwarded raw message is
+    /// required for every submission on this channel.
+    #[serde(default)]
+    pub require_dkim_verification: bool,
     /// When the channel was registered.
     pub registered_at: chrono::DateTime<chrono::Utc>,
 }
@@ -160,6 +179,8 @@ struct ChannelRegistration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     previous_key_hex: Option<String>,
     revoked: bool,
+    #[serde(default)]
+    require_dkim_verification: bool,
     registered_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -173,6 +194,7 @@ impl ChannelRegistration {
             epoch: self.epoch,
             key_fingerprint: sha256_hex(self.key_hex.as_bytes()),
             revoked: self.revoked,
+            require_dkim_verification: self.require_dkim_verification,
             registered_at: self.registered_at,
         }
     }
@@ -198,6 +220,27 @@ impl OrbitRuntime {
         human: &str,
         plugin: &str,
         allowed_senders: Vec<String>,
+    ) -> Result<DecisionChannelInfo, OrbitError> {
+        self.register_decision_channel_with_dkim_requirement(
+            channel,
+            human,
+            plugin,
+            allowed_senders,
+            false,
+        )
+    }
+
+    /// Register a decision channel, optionally requiring core-side DKIM
+    /// verification: with `require_dkim_verification` set, every
+    /// submission must carry the raw message and pass core's own DKIM
+    /// check, or it is refused and nothing is applied.
+    pub fn register_decision_channel_with_dkim_requirement(
+        &self,
+        channel: &str,
+        human: &str,
+        plugin: &str,
+        allowed_senders: Vec<String>,
+        require_dkim_verification: bool,
     ) -> Result<DecisionChannelInfo, OrbitError> {
         let channel = valid_channel_name(channel)?;
         let human = valid_human_label(human)?;
@@ -235,6 +278,7 @@ impl OrbitRuntime {
             previous_epoch: None,
             previous_key_hex: None,
             revoked: false,
+            require_dkim_verification,
             registered_at: chrono::Utc::now(),
         };
         let info = registration.info();
@@ -343,10 +387,28 @@ impl OrbitRuntime {
     /// `channel_revoked`, `sender_not_allowed`, `authentication_failed`,
     /// `request_not_found`, `token_invalid`, `token_consumed`,
     /// `answer_not_allowed`, `request_expired`, `request_superseded`)
-    /// and applies nothing.
+    /// and applies nothing. When the submission carries a raw message,
+    /// core also verifies its DKIM signature itself before any of that
+    /// and refuses `dkim_verification_failed` when its own result
+    /// contradicts the forwarded verdicts, or
+    /// `dkim_verification_unavailable` (retryable) when the DNS lookup
+    /// fails; a channel registered to require that verification refuses
+    /// a submission without a raw message as
+    /// `dkim_verification_required`. None of these consumes the token.
     pub fn submit_decision_via_channel(
         &self,
         params: DecisionSubmitParams,
+    ) -> Result<DecisionRequest, OrbitError> {
+        self.submit_decision_via_channel_with_resolver(params, &SystemDkimTxtResolver::default())
+    }
+
+    /// [`OrbitRuntime::submit_decision_via_channel`] with the DKIM DNS
+    /// resolver supplied by the caller, so tests verify against a fixture
+    /// key and never touch live DNS.
+    pub fn submit_decision_via_channel_with_resolver(
+        &self,
+        params: DecisionSubmitParams,
+        dkim_resolver: &dyn DkimTxtResolver,
     ) -> Result<DecisionRequest, OrbitError> {
         match &params.caller {
             DecisionSubmitCaller::PluginCallback { .. } | DecisionSubmitCaller::Operator => {}
@@ -361,55 +423,62 @@ impl OrbitRuntime {
                 "decision_channel_disabled: the decision channel is not enabled in this workspace; nothing was applied".into(),
             ));
         }
+        // A forwarded raw message is DKIM-verified by core itself,
+        // before the store lock below is taken: the DNS lookup has a
+        // bounded timeout and must never block revoke or rotate. The
+        // non-DNS evidence is judged first (and again under the lock),
+        // so the existing refusal precedence is unchanged.
+        if let Some(raw_message) = params
+            .raw_message
+            .as_deref()
+            .filter(|message| !message.is_empty())
+        {
+            if raw_message.len() > MAX_DECISION_RAW_MESSAGE_BYTES {
+                return Err(OrbitError::InvalidInput(format!(
+                    "raw_message_too_large: the forwarded raw message is {} bytes, over the {}-byte bound for core-side DKIM verification; nothing was applied",
+                    raw_message.len(),
+                    MAX_DECISION_RAW_MESSAGE_BYTES
+                )));
+            }
+            let preliminary = self.active_registration(&params.channel)?;
+            check_transport_evidence(&params, &preliminary)?;
+            let sender_domain = params
+                .sender
+                .as_deref()
+                .and_then(sender_domain_of)
+                .or_else(|| {
+                    preliminary
+                        .allowed_senders
+                        .first()
+                        .and_then(|sender| sender_domain_of(sender))
+                });
+            verify_dkim(raw_message.as_bytes(), sender_domain.as_deref(), dkim_resolver)
+                .map_err(|error| match error {
+                    DkimVerifyError::Failed(reason) => OrbitError::PolicyDenied(format!(
+                        "dkim_verification_failed: {reason}; nothing was applied"
+                    )),
+                    DkimVerifyError::Unavailable(reason) => OrbitError::Execution(format!(
+                        "dkim_verification_unavailable: retryable: {reason}; the token was not consumed and nothing was applied"
+                    )),
+                })?;
+        }
         // Held from the registration read through the apply: a revoke or
         // rotation cannot land between the check and the apply, and two
         // presentations of one token must not both pass the single-use check.
         // Nothing this path reaches takes the same lock.
         let _submission = self.lock_decision_channel_store()?;
         let registration = self.active_registration(&params.channel)?;
-        if let DecisionSubmitCaller::PluginCallback { plugin } = &params.caller
-            && plugin != &registration.plugin
+        check_transport_evidence(&params, &registration)?;
+        if registration.require_dkim_verification
+            && params
+                .raw_message
+                .as_deref()
+                .is_none_or(|message| message.is_empty())
         {
             return Err(OrbitError::PolicyDenied(format!(
-                "channel_not_registered: decision channel `{}` is not bound to plugin `{plugin}`; nothing was applied",
+                "dkim_verification_required: decision channel `{}` requires core-side DKIM verification, so the transport must forward the raw message; nothing was applied",
                 params.channel
             )));
-        }
-        // The transport evidence design §3.3 step 4 verifies. A plugin
-        // submission must carry it; the operator's own test submission may
-        // omit it. A registered allowlist applies to any sender presented.
-        let transport = matches!(params.caller, DecisionSubmitCaller::PluginCallback { .. });
-        let presented = params
-            .sender
-            .as_deref()
-            .map(|sender| sender.trim().to_ascii_lowercase())
-            .filter(|sender| !sender.is_empty());
-        if transport && presented.is_none() {
-            return Err(OrbitError::PolicyDenied(format!(
-                "sender_not_allowed: the transport presented no sender for decision channel `{}`; nothing was applied",
-                params.channel
-            )));
-        }
-        if let Some(sender) = presented.as_deref()
-            && !registration.allowed_senders.is_empty()
-            && !registration
-                .allowed_senders
-                .iter()
-                .any(|allowed| allowed == sender)
-        {
-            return Err(OrbitError::PolicyDenied(format!(
-                "sender_not_allowed: the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
-                params.channel
-            )));
-        }
-        let evidence_passes = match params.auth_results.as_deref() {
-            Some(auth_results) => authentication_results_pass(auth_results),
-            None => !transport,
-        };
-        if !evidence_passes {
-            return Err(OrbitError::PolicyDenied(
-                "authentication_failed: the transport did not forward Authentication-Results showing dkim=pass and spf=pass without dmarc=fail; nothing was applied".into(),
-            ));
         }
         let request = self.get_decision_request(&params.request_id)?.ok_or_else(|| {
             OrbitError::InvalidInput(format!(
@@ -828,6 +897,61 @@ fn valid_human_label(human: &str) -> Result<String, OrbitError> {
         )));
     }
     Ok(human)
+}
+
+/// The channel binding and transport evidence design §3.3 step 4
+/// verifies: the calling plugin is the channel's bound plugin, a plugin
+/// submission presents an allowlisted sender, and the forwarded
+/// `Authentication-Results` passes. The operator's own test submission
+/// may omit sender and evidence; a registered allowlist applies to any
+/// sender presented. Judged before the DKIM lookup and again under the
+/// store lock, so a revoke or rotation between them still refuses.
+fn check_transport_evidence(
+    params: &DecisionSubmitParams,
+    registration: &ChannelRegistration,
+) -> Result<(), OrbitError> {
+    if let DecisionSubmitCaller::PluginCallback { plugin } = &params.caller
+        && plugin != &registration.plugin
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "channel_not_registered: decision channel `{}` is not bound to plugin `{plugin}`; nothing was applied",
+            params.channel
+        )));
+    }
+    let transport = matches!(params.caller, DecisionSubmitCaller::PluginCallback { .. });
+    let presented = params
+        .sender
+        .as_deref()
+        .map(|sender| sender.trim().to_ascii_lowercase())
+        .filter(|sender| !sender.is_empty());
+    if transport && presented.is_none() {
+        return Err(OrbitError::PolicyDenied(format!(
+            "sender_not_allowed: the transport presented no sender for decision channel `{}`; nothing was applied",
+            params.channel
+        )));
+    }
+    if let Some(sender) = presented.as_deref()
+        && !registration.allowed_senders.is_empty()
+        && !registration
+            .allowed_senders
+            .iter()
+            .any(|allowed| allowed == sender)
+    {
+        return Err(OrbitError::PolicyDenied(format!(
+            "sender_not_allowed: the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
+            params.channel
+        )));
+    }
+    let evidence_passes = match params.auth_results.as_deref() {
+        Some(auth_results) => authentication_results_pass(auth_results),
+        None => !transport,
+    };
+    if !evidence_passes {
+        return Err(OrbitError::PolicyDenied(
+            "authentication_failed: the transport did not forward Authentication-Results showing dkim=pass and spf=pass without dmarc=fail; nothing was applied".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn authentication_results_pass(header: &str) -> bool {

@@ -216,13 +216,20 @@ const SUBMIT_PARAMS: &[ParamSpec] = &[
         CliArgKind::flag("auth-results"),
         "The Authentication-Results header forwarded as evidence",
     ),
+    both(
+        "raw_message",
+        ParamType::String,
+        "The raw reply message the transport forwards for core-side DKIM verification, at most 262144 bytes (256 KiB). When present, core verifies the message's DKIM signature itself and refuses when its result contradicts the forwarded verdicts. Required on a channel registered with require_dkim_verification; optional otherwise.",
+        CliArgKind::flag("raw-message"),
+        "The raw reply message forwarded for core-side DKIM verification",
+    ),
 ];
 
 const SUBMIT: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::Submit,
     cli_path: &["submit"],
     tool_name: "orbit.decision.submit",
-    tool_description: "Submit a human's answer to one open decision request through a registered decision channel. Governed: callable only by the plugin the channel is bound to (through its callback session) or by the operator testing a channel — never by an agent session. Core verifies the channel is registered and unrevoked, the request is still open against its binding, the answer is allowed, and the per-request token (single-use, expiring with the request, keyed to the channel's current key epoch). Only then is the answer applied in core as the registered human, with the channel and the token fingerprint recorded as provenance. Every refusal (channel_not_registered, channel_revoked, caller_not_allowed, sender_not_allowed, authentication_failed, token_invalid, token_consumed, request_expired, request_superseded, answer_not_allowed, request_not_found) applies nothing; a parse-level refusal does not consume the token.",
+    tool_description: "Submit a human's answer to one open decision request through a registered decision channel. Governed: callable only by the plugin the channel is bound to (through its callback session) or by the operator testing a channel — never by an agent session. Core verifies the channel is registered and unrevoked, the request is still open against its binding, the answer is allowed, and the per-request token (single-use, expiring with the request, keyed to the channel's current key epoch). When the submission carries raw_message, core also verifies the message's DKIM signature itself (selector key from DNS, body hash, header signature, signing-domain alignment with the sender) and refuses when its own result contradicts the forwarded verdicts; a channel registered with require_dkim_verification refuses a submission without one. Only then is the answer applied in core as the registered human, with the channel and the token fingerprint recorded as provenance. Every refusal (channel_not_registered, channel_revoked, caller_not_allowed, sender_not_allowed, authentication_failed, dkim_verification_failed, dkim_verification_unavailable, dkim_verification_required, raw_message_too_large, token_invalid, token_consumed, request_expired, request_superseded, answer_not_allowed, request_not_found) applies nothing; a parse-level refusal does not consume the token, and dkim_verification_unavailable is retryable and consumes nothing.",
     cli_about: "Submit a human's answer through a registered decision channel",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
@@ -286,13 +293,20 @@ const CHANNEL_REGISTER_PARAMS: &[ParamSpec] = &[
         CliArgKind::flag("allow-sender"),
         "A sender allowed to present answers (repeatable)",
     ),
+    both(
+        "require_dkim_verification",
+        ParamType::Switch,
+        "Require core-side DKIM verification on this channel: every submission must forward the raw message and pass core's own DKIM check, or it is refused. Off by default; without it, core verifies a raw message whenever one is forwarded and judges the forwarded verdicts otherwise.",
+        CliArgKind::flag("require-dkim-verification"),
+        "Require core-side DKIM verification of a forwarded raw message",
+    ),
 ];
 
 const CHANNEL_REGISTER: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::ChannelRegister,
     cli_path: &["channel", "register"],
     tool_name: "orbit.decision.channel_register",
-    tool_description: "Register a decision channel on this host: its name, the human it speaks for, and the plugin allowed to submit through it. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool, and registering is refused from an agent envelope and from any plugin callback, so no running code can mint itself a human. Registration generates the channel key, mirrors it to the plugin's `channel_key` secret, and starts key epoch 1.",
+    tool_description: "Register a decision channel on this host: its name, the human it speaks for, and the plugin allowed to submit through it. Operator CLI only: this operation has no MCP scope and is registered inactive as a tool, and registering is refused from an agent envelope and from any plugin callback, so no running code can mint itself a human. Registration generates the channel key, mirrors it to the plugin's `channel_key` secret, and starts key epoch 1. With require_dkim_verification, every submission on the channel must forward the raw message and pass core-side DKIM verification.",
     cli_about: "Register a decision channel on this host",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

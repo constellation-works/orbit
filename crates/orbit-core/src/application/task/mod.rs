@@ -13,6 +13,7 @@ mod context_repair;
 mod context_widening;
 mod decision;
 mod decision_channel;
+mod decision_dkim;
 mod desktop;
 mod distributed_port;
 pub(crate) mod escalation_triage_steps;
@@ -83,8 +84,9 @@ pub use context_repair::{
 pub(crate) use decision::decision_request_json;
 pub use decision_channel::{
     DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionDigest, DecisionSubmitCaller,
-    DecisionSubmitParams,
+    DecisionSubmitParams, MAX_DECISION_RAW_MESSAGE_BYTES,
 };
+pub use decision_dkim::{DkimTxtResolver, DkimVerifyError, SystemDkimTxtResolver};
 pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub use escalation_triage_steps::{
     PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,

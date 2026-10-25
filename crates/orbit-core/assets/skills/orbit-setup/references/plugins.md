@@ -415,6 +415,8 @@ callable from an agent session.
 orbit decision channel register <channel> --human <human> --plugin <plugin>
 orbit decision channel register <channel> --human <human> --plugin <plugin> \
   --allow-sender <sender> --allow-sender <other-sender>
+orbit decision channel register <channel> --human <human> --plugin <plugin> \
+  --require-dkim-verification
 orbit decision channel list
 orbit decision channel revoke <channel>
 orbit decision channel rotate-key <channel>
@@ -425,10 +427,13 @@ orbit decision channel rotate-key <channel>
   submit through this channel). `--allow-sender` is optional and repeatable:
   when any senders are registered, a submission must present one of them.
   Registration generates the channel key, mirrors it to the bound plugin's
-  `channel_key` secret, and starts key epoch 1.
+  `channel_key` secret, and starts key epoch 1. `--require-dkim-verification`
+  is the per-channel switch (off by default) that makes core-side DKIM
+  verification required: every submission on that channel must forward the
+  raw message and pass core's own DKIM check, or it is refused.
 - `list` shows each channel's name, human, bound plugin, key epoch and
-  fingerprint, allowed senders, and whether it is revoked. Key material is
-  never shown.
+  fingerprint, allowed senders, whether core-side DKIM verification is
+  required, and whether it is revoked. Key material is never shown.
 - `revoke` takes effect immediately: outstanding tokens stop verifying and
   every submission through the channel is refused `channel_revoked`.
 - `rotate-key` generates a fresh key, mirrors it to the bound plugin's
@@ -444,7 +449,8 @@ operator testing a channel. The CLI form is:
 ```bash
 orbit decision submit <request-id> <answer-id> --channel <channel> --token <token>
 orbit decision submit <request-id> <answer-id> --channel <channel> --token <token> \
-  --note "<evidence>" --sender <sender> --auth-results "<header-value>"
+  --note "<evidence>" --sender <sender> --auth-results "<header-value>" \
+  --raw-message "<raw reply message>"
 ```
 
 `<request-id>` is the id `orbit decision list` prints and `<answer-id>` is
@@ -455,9 +461,18 @@ plugin submission must present one, and it must be on the channel's
 allowlist when the channel has one; the operator's own test submission may
 omit it. `--auth-results` is the forwarded Authentication-Results header: a
 plugin submission must forward one showing `dkim=pass` and `spf=pass`, and is
-refused on `dmarc=fail`; the operator's own test submission may omit it. The
+refused on `dmarc=fail`; the operator's own test submission may omit it.
+`--raw-message` is the raw reply message the transport forwards for
+core-side DKIM verification, at most 262144 bytes (256 KiB). When a raw
+message is forwarded, core verifies its DKIM signature itself: it fetches
+the selector's public key from DNS (a 5-second bounded lookup), checks the
+body hash and the signed-header signature, and requires the signing domain
+to align with the presented sender's domain. Core refuses when its own
+result contradicts the forwarded verdicts. On a channel registered with
+`--require-dkim-verification` the raw message is required; otherwise it is
+optional, and a submission without one behaves exactly as before. The
 tool form takes the same fields as `id`, `channel`, `answer`, `token`,
-`note`, `sender` and `auth_results`. Never paste a real token or key into an
+`note`, `sender`, `auth_results` and `raw_message`. Never paste a real token or key into an
 example, a task record or a shell history file; the examples above use
 placeholders only.
 
@@ -472,6 +487,10 @@ token. The refusal codes are:
 | `caller_not_allowed` | The caller is neither the bound plugin through its callback session nor the operator testing the channel. |
 | `sender_not_allowed` | The presented sender is not on the channel's sender allowlist. |
 | `authentication_failed` | Transport authentication evidence is missing or failing. |
+| `dkim_verification_failed` | Core's own DKIM verification of the forwarded raw message failed (unsigned, body hash or header signature mismatch, no key record, or the signing domain does not align with the sender's domain); the forwarded verdicts do not override it. The token is not consumed. |
+| `dkim_verification_unavailable` | The DNS lookup for DKIM verification failed or timed out. Retryable: the token is not consumed and nothing was applied; present the submission again. |
+| `dkim_verification_required` | The channel was registered with `--require-dkim-verification` but the submission forwarded no raw message. |
+| `raw_message_too_large` | The forwarded raw message exceeds the 262144-byte (256 KiB) bound for core-side DKIM verification. |
 | `token_invalid` | The token does not verify for this request, channel and key epoch. |
 | `token_consumed` | The token was already used (tokens are single-use), or was minted under the previous key epoch after rotate-key, which rotation invalidated; a previous-epoch token is consumed when refused. |
 | `request_expired` | The request expired while open. |
