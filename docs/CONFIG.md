@@ -485,6 +485,9 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 
 [workflow.review_skip_tags."auto-task:structure-sweep"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
+[workflow.review_skip_tags."auto-task:suppression-ratchet"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 ```
 
 These mappings apply only to the auto-task that carries its provenance tag. Do not map finding tags such as `code-review`, `delivery-code-review`, `security-review` or `qa-sweep`: fixes filed by those reviews must keep normal agent review. A wider mapping for a future auto-task should remain disabled unless its config includes an appropriate repository-specific guard.

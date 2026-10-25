@@ -659,6 +659,35 @@
   "comment-hygiene": [
     {
       "comments": [
+        "# No context_files and proposed on purpose: the batch is known only after",
+        "# backlog. The executing run never writes its own scope.",
+        "# operator) persists the selected file: selectors and it is approved to",
+        "# selection, so the instance waits in proposed — never a backlog",
+        "# whole-tree holder — until pre-admission preparation (task pilot or",
+        "## Attach the ledger",
+        "## Check and record",
+        "## Comment-only diffs",
+        "## Select a batch (preparation, before admission)",
+        "## The standard",
+        "## Use the prepared footprint"
+      ],
+      "digest": "bdcf4d046362ca4d2466873e0056501dc3d29a1e795c31949fcc99eacaafd2d4",
+      "revision": "5d0634f6ac62d38e85797172b1dfb075d0f5f6ee",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "cron": "45 6 * * *"
+        },
+        "tags": [
+          "comment-hygiene"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# No context_files on purpose: the batch is only known at run time, and a",
         "# context_files to the selected files before editing.",
         "# minted task without selectors holds no workspace lock. The body narrows",
@@ -1095,7 +1124,34 @@
       }
     }
   ],
-  "dependency-freshness": [],
+  "dependency-freshness": [
+    {
+      "comments": [
+        "## Detect ecosystems and inventory",
+        "## Handoff",
+        "## No network",
+        "## Prioritize and file",
+        "## Read the changelog before filing",
+        "## Rules and command surfaces",
+        "## Security exclusion"
+      ],
+      "digest": "db1e6e89e42fed92821964c272344cb94e77a954896fc6a3313ed8a353eef704",
+      "revision": "8cfbbaa89a3f93bb4cf8af57ac8ec943004464e1",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "dependency-freshness",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "doc-duties": [
     {
       "comments": [
@@ -1768,7 +1824,33 @@
       }
     }
   ],
-  "path-risk-review": [],
+  "path-risk-review": [
+    {
+      "comments": [
+        "## Find the cause",
+        "## Minimum support",
+        "## Pick the paths",
+        "## Propose fixes",
+        "## Read the evidence",
+        "## Record"
+      ],
+      "digest": "281c7f51f7b4ae24360c37dca56dc45f072a28f5bedae08c62e814a0f959092f",
+      "revision": "3a404d7a8d45d466198ee7550afb407228b38f69",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "path-risk-review",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "qa-full-sweep": [
     {
       "comments": [
@@ -2823,5 +2905,36 @@
       }
     }
   ],
-  "structure-sweep": []
+  "structure-sweep": [
+    {
+      "comments": [
+        "## Candidate shapes",
+        "## Discovery",
+        "## Duplicate safety",
+        "## Filing",
+        "## Grouping and filing cap",
+        "## Handoff",
+        "## Pin",
+        "## Rules and command surfaces",
+        "## Thresholds (state them in every run summary)"
+      ],
+      "digest": "b9c01e9d7f3150d7382c9410b85dd4e23db104d5769902d88a087c98b02d16a2",
+      "revision": "e5d99399c59ef61c5e89b9e029fc0d6d30fabc00",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 10080
+        },
+        "tags": [
+          "structure-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    }
+  ],
+  "suppression-ratchet": []
 }

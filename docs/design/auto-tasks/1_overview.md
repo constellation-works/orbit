@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These fifteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These sixteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -313,6 +313,19 @@ definition of the same name.
   and never builds or runs tests. A test-reduction task keeps that file's
   coverage — every scenario survives or is named with a reason — and
   reports the test count before and after.
+
+- `suppression-ratchet` — disabled-by-default weekly (`hard`) static count of
+  lint suppressions, TODO/FIXME/HACK/XXX, ignored tests and language escape
+  hatches at one integration-branch SHA. Patterns follow detected languages;
+  package/area counts exclude vendored, generated and build output and split
+  justified from unjustified occurrences. `suppression-ratchet.json` carries
+  the baseline and comparison evidence; the first run files nothing. Later
+  runs file ratchet bugs naming introducing commits plus at most one small
+  reduction in the highest-churn eligible area, capped at three proposed tasks
+  with verified context and `spawned_from`. Categories are grouped when needed
+  to keep every increase covered within the cap. Justified occurrences are
+  never filed. This default owns suppression counting for the portable
+  `code-health-sweep`; the minted chore is `no-diff-expected` and never builds.
 
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces

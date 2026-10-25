@@ -1,0 +1,184 @@
+schemaVersion: 1
+name: suppression-ratchet
+description: Weekly suppression ratchet — baseline unjustified lint suppressions, debt markers, ignored tests and language escape hatches, file increases and one bounded reduction
+enabled: false
+schedule:
+  every_minutes: 10080
+dedupe: skip_if_open
+template:
+  title: Suppression ratchet — count debt, flag increases and select one reduction
+  description: |-
+    Own suppression counting for this repository. Count tracked sources at one
+    pinned integration-branch commit, compare with the previous pass, and file
+    proposed work. Do not edit sources, build, run tests, dispatch or change
+    lifecycle state. The portable code-health-sweep delegates suppression
+    counting here; do not duplicate its other health checks.
+
+    ## Pin the inventory
+
+    Resolve `__ORBIT_BASE_BRANCH__` once to a full commit SHA, fetching its
+    configured remote when available. Record the exact ref and resolution
+    method; fail with evidence if the branch cannot be resolved. Use
+    `git ls-tree -r --name-only <sha>` and `git show <sha>:<path>` throughout,
+    never working-tree contents. Scan tracked text sources and source tests,
+    not prose, binaries, symlink targets or submodule contents. Do not install
+    tools or build to discover languages or packages.
+
+    Detect languages from source extensions, shebangs and package manifests at
+    that SHA. Map each source to its nearest package manifest boundary (using
+    its repository-relative directory as the area key), otherwise its top-level
+    directory, with `.` for root files. Keep this mapping in the artifact.
+    Exclude vendored, generated and build-output trees even when tracked:
+    vendor, third_party, node_modules, target, build, dist, out, coverage,
+    .venv, venv, .git and .orbit; also honor repository-documented equivalents,
+    generated-file headers and generated attributes. Record each exclusion
+    rule and excluded paths with reasons. Do not exclude hand-written sources
+    merely because a path contains a matching substring.
+
+    ## Patterns and counting
+
+    Enable only rows for detected languages/frameworks, and record the exact
+    regexes, file selectors and interpretation used. Adapt syntax to installed
+    framework versions by reading imports/configuration, not by guessing that
+    every `skip` word is a skipped test. This table is the starting inventory:
+
+    | Detected language | lint_suppression | escape_hatch | ignored_test |
+    | --- | --- | --- | --- |
+    | Rust | `#[allow(`, `#![allow(`, `#[expect(`, `#![expect(` (whitespace allowed) | explicit `unsafe` blocks/functions/impls | `#[ignore]`, `#[ignore = "..."]` on tests |
+    | JavaScript / TypeScript | `eslint-disable`, `eslint-disable-next-line`, `eslint-disable-line`, `tslint:disable` directives | `@ts-ignore`, `@ts-nocheck`, `@ts-expect-error`, explicit TypeScript `any` and non-null assertions | Jest/Vitest/Mocha `test.skip`, `it.skip`, `describe.skip`, `xit`, `xdescribe`, `xtest`; Playwright `test.skip` / `test.fixme` |
+    | Python | `# noqa`, `# pylint: disable` directives | `# type: ignore`, `# pyright: ignore` | pytest `@pytest.mark.skip`, `skipif`, `xfail`, `pytest.skip`, `pytest.xfail`; unittest `@unittest.skip`, `skipIf`, `skipUnless`, `expectedFailure`, `self.skipTest` |
+    | Go | `//nolint`, `//lint:ignore`, `//lint:file-ignore` directives | imported `unsafe` operations | testing `t.Skip`, `t.Skipf`, `t.SkipNow`, including other verified receiver names |
+    | Java / Kotlin | `@SuppressWarnings`, `@Suppress`, `//noinspection` | Kotlin `!!`, `@UnsafeVariance`; Java unchecked casts only when verified | JUnit `@Disabled`, `@Ignore`; TestNG `enabled = false` on `@Test` |
+    | C / C++ | diagnostic `ignored` pragmas for GCC/Clang, MSVC `warning(disable:...)`, `NOLINT`, `NOLINTNEXTLINE`, `NOLINTBEGIN` | C++ `reinterpret_cast`, `const_cast` | GoogleTest `DISABLED_` tests, `GTEST_SKIP`; Catch2 hidden tests (`[.]`) |
+    | C# | `#pragma warning disable`, `[SuppressMessage(...)]` | explicit `unsafe` blocks/methods | xUnit `Skip = ...`, NUnit `[Ignore(...)]`, MSTest `[Ignore]` |
+    | Ruby | `# rubocop:disable`, `# rubocop:todo` | verified `T.unsafe`, `T.untyped` when Sorbet is used | RSpec `skip`, `pending`, `xit`, `xdescribe`; Minitest `skip` in tests |
+    | Swift | `// swiftlint:disable` directives | `try!`, forced `as!` casts | XCTest `XCTSkip`, `XCTSkipIf`, `XCTSkipUnless` |
+    | Shell | `# shellcheck disable=...` | none by default | Bats `skip` inside a test |
+
+    For every detected language, also count whole-word `TODO`, `FIXME`, `HACK`
+    and `XXX` in source comments under `debt_marker`, with a subtype for each
+    token. For a language missing above, derive and record equivalent patterns
+    from that language's actual lint/type/test configuration; mark unavailable
+    categories explicitly instead of claiming zero. A directive matching
+    several prefixes is one occurrence in its category; count directive
+    starts, not each lint name in a list, and do not count re-enable directives.
+    Expand multiline directives for classification. Use syntax-aware reading
+    where available and inspect matches to exclude strings, documentation
+    examples and ordinary identifiers. Store locations and subtypes so counts
+    can be independently recomputed. Keep category totals and area totals,
+    each split into `justified` and `unjustified`; absent matches are zero only
+    after a complete scan of that category.
+
+    A match is justified only by a concrete written reason on the same line
+    or immediately preceding line, tied to that occurrence: why the exception
+    is needed, the constraint that prevents removal, or a linked issue with
+    explanatory text. A Rust `reason = "..."` or test skip reason qualifies
+    when substantive. The directive itself, a bare issue link, a restated lint
+    name or the mere presence of TODO does not. Apply this rule to all four
+    categories. Record the reason and its location, and count justified matches
+    separately. Never file work against a justified occurrence and never
+    accept an invented justification as a reduction.
+
+    ## Previous run and durable artifact
+
+    Use registered tools with `model` set to your agent family. Find completed
+    predecessor chores with
+    `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["suppression-ratchet","no-diff-expected","auto-task:suppression-ratchet"],"limit":20,"model":"<agent-family>"}'`.
+    Read newest first by completion evidence, excluding this run, and fetch
+    `suppression-ratchet.json` with
+    `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"suppression-ratchet.json","model":"<agent-family>"}'`.
+    Distinguish an empty history from a tool/permission failure: unavailable
+    owner history is a blocker, not permission to silently reset the ratchet.
+
+    The first run with no predecessor is a baseline: file NOTHING, including
+    no reduction task. An unreadable or incompatible predecessor is not a new
+    first run. Recover its evidence or report why comparison is blocked. When
+    patterns, exclusions or area mapping change, recount BOTH pinned commits
+    using the same new rules and record the migration; never compare unlike
+    counts or attribute a scanner change to source commits. If the previous
+    commit is unavailable, report the comparison as incomplete and file nothing.
+
+    Write `.orbit/tmp/suppression-ratchet.json` and attach it to this task with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/suppression-ratchet.json","path":"suppression-ratchet.json","model":"<agent-family>"}'`.
+    Keep the artifact below the tool's size limit: put large occurrence lists
+    in numbered companion artifacts, referenced by path, rather than truncate
+    coverage. It must contain `schema_version: 1`, pinned `ref` and `sha`,
+    previous task/artifact/SHA (or null on the first run), baseline/comparison
+    status, detected languages/frameworks, patterns with selectors and counting
+    rules, exclusions, source-to-area map, counts per category/subtype/area,
+    justified/unjustified occurrence evidence (inline or companion references),
+    deltas, churn scores, introducing commits, duplicate task references and
+    every filing decision. Persist scan failures as incomplete, never zeros.
+
+    ## Ratchet, then reduce
+
+    After the baseline, compare unjustified counts per category AND per area.
+    A positive area/category delta is actionable even if another area shrank;
+    do not let an offsetting removal hide a local increase. Use the occurrence
+    diff and `git log -S <literal>` / `git log -G <regex>` with patches over
+    `<previous-sha>..<sha>` and the affected paths to identify introducing
+    commits. Inspect patches, including merge changes, moves and removed
+    justifications; a pickaxe hit alone is not proof of introduction. If history
+    diverged, inspect both histories from their merge base and explain the
+    comparison. Name full SHAs and path/line evidence in each ratchet bug.
+
+    Each increasing category must be covered by one `bug` task asking for
+    every newly unjustified occurrence to be removed or given a real written
+    justification. Normally file one bug per increasing category, grouping its
+    areas. Reserve one of the THREE total filing slots for reduction. If more
+    than two categories increased, group categories into at most two ratchet
+    bugs so every increase is covered without exceeding the cap; list each
+    category's evidence and acceptance criteria separately. Existing duplicate
+    coverage satisfies the obligation without minting another task. Carry any
+    uncovered occurrences and outstanding tasks into the artifact and recheck
+    them next run, so taking a new baseline never forgets unresolved increases.
+
+    Also select at most ONE reduction task per non-baseline run. Among areas
+    with remaining unjustified occurrences, rank by changed source lines
+    (added + deleted) in the same commit interval via `git diff --numstat`,
+    respecting the inventory exclusions; break ties by unjustified count, then
+    area path. Select a small coherent batch in the highest-churn area, sized
+    to one PR (normally 1–5 occurrences in closely related files), excluding
+    justified matches and occurrences already covered by open work, including
+    this run's ratchet bugs. Ask for safe removal with behavior preserved, or
+    an evidence-backed justification where removal is unsound. State the
+    measured before count and expected decrease in unjustified count. If that
+    area has no uncovered removable batch, try the next ranked area and record
+    why; if none remain, file no reduction task. Never add filler work.
+
+    Before EACH filing, read the installed orbit skill's task-authoring
+    reference. Search for duplicates using `orbit.search` with `kind: "task"`,
+    `all: true` and one distinctive token at a time (a source basename, rule
+    or category), then read candidate tasks with `orbit.task.show`. A closed
+    task is not coverage for a recurrence unless the finding is still resolved
+    at the pinned SHA. File only uncovered findings, with verified source
+    `context_files`, measurable acceptance criteria, pinned evidence, and a
+    `spawned_from` relation to this minted chore. Use
+    `orbit tool run orbit.task.add --input '{"title":"<finding>","description":"<evidence and scope>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified source path>"],"complexity":"<assessed>","tags":["suppression-ratchet","tech-debt"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    The example files a ratchet bug; for the reduction task use the same
+    fields with `type: "refactor"` and its bounded reduction evidence.
+    Tool-created tasks start `proposed`; read each back to verify its fields.
+    Do not tag findings `no-diff-expected` or `auto-task:suppression-ratchet`.
+    File at most THREE tasks total, including any incidental findings. Record
+    duplicates, deliberate non-filings and limitations in the artifact and
+    execution summary. This chore changes no tracked files and runs no gates.
+  acceptance_criteria:
+    - Tracked sources at one pinned base-branch SHA are counted by detected language, category and area with explicit patterns, exclusions and separate justified/unjustified totals.
+    - suppression-ratchet.json and any referenced companion artifacts are attached, with previous-run evidence, comparable deltas and complete filing decisions; a first baseline files nothing.
+    - Every unjustified increase is covered by a duplicate or proposed ratchet bug naming verified introducing commits and requiring removal or a concrete justification; justified occurrences are never filed.
+    - At most one bounded reduction targets the highest-churn eligible area and at most three tasks are filed total, each proposed with acceptance criteria, context_files and spawned_from.
+    - No tracked sources were edited and no build, test, dispatch or lifecycle transition was performed.
+  priority: medium
+  complexity: hard
+  task_type: chore
+  status: backlog
+  required_tools:
+    - orbit.search
+    - orbit.task.add
+    - orbit.task.artifact.get
+    - orbit.task.artifact.put
+    - orbit.task.list
+    - orbit.task.show
+  tags:
+    - suppression-ratchet
+    - no-diff-expected

@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The fifteen seeded definitions
+## The sixteen seeded definitions
 
-`orbit workspace init` seeds all fifteen, disabled, except any you deleted (see
+`orbit workspace init` seeds all sixteen, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -525,6 +525,19 @@ plugin being removed.
   `no-diff-expected` and never builds or runs tests. A test-reduction
   task keeps that file's coverage — every scenario survives or is named
   with a reason — and reports the test count before and after.
+
+- **`suppression-ratchet`** (`hard`) — weekly. Counts lint suppressions,
+  TODO/FIXME/HACK/XXX, ignored tests and language escape hatches per category
+  and package/area at a pinned integration-branch SHA. Language-specific
+  patterns exclude vendored, generated and build output; justified occurrences
+  are counted separately and never filed. `suppression-ratchet.json` stores
+  comparable counts and filing evidence: the first run is a baseline with no
+  filings; later runs file bugs for increases with introducing commits and at
+  most one small reduction in the highest-churn eligible area. At most three
+  proposed tasks, grouping increasing categories when necessary, each with
+  verified context and `spawned_from`. The minted chore is `no-diff-expected`
+  and never builds. This default owns the suppression counts delegated by
+  the portable `code-health-sweep`.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
