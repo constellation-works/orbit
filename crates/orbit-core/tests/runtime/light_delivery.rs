@@ -6,12 +6,15 @@
 
 use std::collections::HashMap;
 
+use chrono::Utc;
+use orbit_core::application::automation::evaluate_auto_task;
 use orbit_core::application::task::TaskUpdateParams;
-use orbit_engine::execute_deterministic_action;
+use orbit_engine::{RuntimeHost, execute_deterministic_action};
 use orbit_types::task::{
     LIGHT_DELIVERY_APPLIED_EVENT, LIGHT_DELIVERY_IGNORED_EVENT, SKIP_REVIEW_TAG,
     SKIP_VALIDATION_TAG,
 };
+use orbit_types::workflow::automation::DirectLandingRequest;
 use serde_json::{Value, json};
 
 use super::review_gate_audit::Fixture;
@@ -141,8 +144,203 @@ fn a_path_outside_the_allow_list_ignores_both_tags() {
     }
 }
 
+/// Snapshot every task and its history, plus the consumer's durable state and
+/// audit records, through the public runtime/store APIs.
+fn delivery_state(fixture: &Fixture, consumer: &str) -> Value {
+    let tasks = fixture.runtime.list_tasks().unwrap();
+    let histories = tasks
+        .iter()
+        .map(|task| {
+            (
+                task.id.to_string(),
+                fixture.runtime.get_task_history(&task.id).unwrap(),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let store = fixture.runtime.automation_store().unwrap();
+    json!({
+        "tasks": tasks,
+        "histories": histories,
+        "states": store.automation_states_page("", None, 100).unwrap(),
+        "receipts": store.automation_receipts(consumer, 100).unwrap(),
+        "recoveries": store.automation_recoveries(consumer, 100).unwrap(),
+        "waivers": store.automation_waivers(consumer, 100).unwrap(),
+        "definition": fixture.runtime.auto_task_show("preview-review").unwrap(),
+    })
+}
+
+fn mapped_delivery_preview(guard_exit: Option<u8>) {
+    let guard_config = guard_exit.map_or("", |_| "guard = \"guard.sh\"\n");
+    let mut fixture = Fixture::new_with_config(
+        &[],
+        &format!("[workflow.review_skip_tags.mapped]\npaths = [\"**\"]\n{guard_config}"),
+    );
+    fixture.runtime = fixture
+        .runtime
+        .with_automation_machine_identity(Some("hm_preview".into()));
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            TaskUpdateParams {
+                tags: Some(vec!["mapped".into()]),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    git(&fixture, &["checkout", "--quiet", "main"]);
+    if let Some(exit) = guard_exit {
+        std::fs::write(fixture.repo.join("guard.sh"), format!(
+            "#!/bin/sh\nprintf 'base:%s:%s:%s:%s:%s\\n' \"$1\" \"$2\" \"$ORBIT_REVIEW_SKIP_BASE\" \"$ORBIT_REVIEW_SKIP_HEAD\" \"$ORBIT_REVIEW_SKIP_TAG\" > .orbit/guard-ran\nexit {exit}\n"
+        )).unwrap();
+        git(&fixture, &["add", "guard.sh"]);
+        git(&fixture, &["commit", "--quiet", "-m", "base guard"]);
+    }
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.auto_task.add",
+            json!({
+                "name": "preview-review",
+                "schedule": {"deliveries_landed": {
+                    "branch": "main", "owner_machine": "hm_preview", "threshold": 2,
+                    "max_wait_minutes": 60, "coverage": "landed_code_review_v1",
+                }},
+                "template": {"title": "Review landed deliveries"},
+            }),
+        )
+        .unwrap();
+    fixture
+        .runtime
+        .auto_task_toggle("preview-review", true)
+        .unwrap();
+    let definition = fixture
+        .runtime
+        .auto_task_show("preview-review")
+        .unwrap()
+        .unwrap();
+    let evaluate = |dry_run| {
+        let now = std::time::Instant::now();
+        orbit_core::test_support::with_delivery_source_clock(
+            move || now,
+            || evaluate_auto_task(&fixture.runtime, &definition, dry_run, Utc::now()).unwrap(),
+        )
+    };
+    let baseline = evaluate(false);
+    assert_eq!(baseline.reason, "baselined", "{baseline:?}");
+    let consumer = baseline.state.unwrap().consumer;
+    let before = git(&fixture, &["rev-parse", "HEAD"]);
+    std::fs::write(fixture.repo.join("candidate.txt"), "landed\n").unwrap();
+    // The candidate's replacement must never run: guards come from the base.
+    if guard_exit.is_some() {
+        std::fs::write(
+            fixture.repo.join("guard.sh"),
+            "#!/bin/sh\necho candidate > .orbit/guard-ran\nexit 99\n",
+        )
+        .unwrap();
+    }
+    git(&fixture, &["add", "."]);
+    git(&fixture, &["commit", "--quiet", "-m", "landed candidate"]);
+    let after = git(&fixture, &["rev-parse", "HEAD"]);
+    fixture
+        .runtime
+        .record_direct_landing_intent(&DirectLandingRequest {
+            run_id: fixture.input["job_run_id"].as_str().unwrap().into(),
+            branch: "main".into(),
+            before_commit: before.clone(),
+            after_commit: after.clone(),
+            task_ids: vec![fixture.task_id.clone()],
+            handoff_id: None,
+        })
+        .unwrap();
+
+    let initial = delivery_state(&fixture, &consumer);
+    let sentinel = fixture.repo.join(".orbit/guard-ran");
+    for _ in 0..2 {
+        let preview = evaluate(true);
+        assert!(
+            !sentinel.exists(),
+            "preview must not execute the mapped guard"
+        );
+        assert_eq!(
+            delivery_state(&fixture, &consumer),
+            initial,
+            "preview must leave every task/history and automation checkpoint unchanged"
+        );
+        let state = preview.state.unwrap();
+        assert_eq!(
+            state.observed.commit, after,
+            "preview observes the new landing"
+        );
+        assert_eq!(
+            state.pending.len(),
+            1,
+            "preview conservatively retains mapped work"
+        );
+        assert_eq!(state.pending[0].task_ids, vec![fixture.task_id.clone()]);
+    }
+
+    let applied = evaluate(false).state.unwrap();
+    assert_eq!(applied.observed.commit, after);
+    let recorded = decisions(&fixture, "mapped");
+    assert_eq!(
+        recorded.len(),
+        1,
+        "real evaluation records the decision once"
+    );
+    let passes = guard_exit.is_none_or(|exit| exit == 0);
+    assert_eq!(
+        recorded[0].0,
+        if passes {
+            LIGHT_DELIVERY_APPLIED_EVENT
+        } else {
+            LIGHT_DELIVERY_IGNORED_EVENT
+        }
+    );
+    assert_eq!(applied.pending.len(), usize::from(!passes));
+    assert_eq!(
+        applied.covered.commit,
+        if passes { &after } else { &before }.as_str()
+    );
+    if guard_exit.is_some() {
+        assert_eq!(
+            std::fs::read_to_string(&sentinel).unwrap(),
+            format!("base:{before}:{after}:{before}:{after}:mapped\n")
+        );
+    }
+    assert_eq!(
+        fixture
+            .runtime
+            .automation_store()
+            .unwrap()
+            .automation_state(&consumer)
+            .unwrap(),
+        Some(applied)
+    );
+}
+
+fn unguarded_mapped_delivery_preview_is_read_only() {
+    mapped_delivery_preview(None);
+}
+
+#[cfg(unix)]
+fn guarded_mapped_delivery_preview_is_read_only() {
+    for exit in [0, 1] {
+        mapped_delivery_preview(Some(exit));
+    }
+}
+
+#[cfg(unix)]
+crate::scenario_table!(
+    guarded_delivery_preview_scenarios,
+    guarded_mapped_delivery_preview_is_read_only,
+);
+
 crate::scenario_table!(
     light_delivery_scenarios,
     docs_only_candidate_skips_validation_and_every_review,
     a_path_outside_the_allow_list_ignores_both_tags,
+    unguarded_mapped_delivery_preview_is_read_only,
 );

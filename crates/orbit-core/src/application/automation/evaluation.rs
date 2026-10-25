@@ -122,6 +122,7 @@ fn evaluate(
     let host = Host {
         runtime,
         action,
+        dry_run: request.dry_run,
         source: match cache {
             Some(cache) => {
                 source::Source::with_cache(&runtime.paths().repo_root, cache, request.now)
@@ -164,6 +165,7 @@ pub(super) fn auto_task_action_liveness(
     let host = Host {
         runtime,
         action: Action::Task(definition),
+        dry_run: true,
         source: source::Source::read_only(&runtime.paths().repo_root),
     };
 
@@ -185,6 +187,7 @@ enum Action<'a> {
 struct Host<'a> {
     runtime: &'a OrbitRuntime,
     action: Action<'a>,
+    dry_run: bool,
     source: source::Source<'a>,
 }
 
@@ -291,7 +294,7 @@ impl DeliveryHost for Host<'_> {
         // after the shared rule proves the landed trees; the evaluator then
         // applies them for review consumers alone.
         self.runtime
-            .certified_review_exclusions(&self.source, state, &mut page)?;
+            .certified_review_exclusions(&self.source, state, &mut page, self.dry_run)?;
 
         Ok(page)
     }
