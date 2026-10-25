@@ -896,3 +896,18 @@ blocked message (asserting verdict `reject` with finding count 1). Reaching
 either settlement at a boundary would need a full blocked-task delivery run
 through the landing-review settle step, so a boundary fixture cannot prove
 this two-token parse economically.
+
+`crates/orbit-core/src/application/job/delivery_attention/tests.rs::blocked_settlement_quoting_abandoned_marker_still_parses_verdict_and_count`
+(criterion 1, parser edge case) guards the ORB-18244 mislabel: a blocked
+settlement embeds the reviewers free-text escalation verbatim, so the
+escalation may quote the `review_abandoned:` marker, which the `contains`
+check misread as an abandoned settlement. The test drives the public
+`landing_review_gate_facts` entry point with a blocked message whose
+escalation quotes the marker, asserting verdict `reject` with finding count 2.
+
+`crates/orbit-core/src/application/job/delivery_attention/tests.rs::abandoned_landing_review_settle_step_error_reports_abandoned_verdict`
+(criterion 1, parser edge case) guards the recorded shape of an abandoned settlement.
+The step error is the refusal's `Display`, which prefixes the settlement with the
+refused action (`deterministic action \`review_gate_settle\` refused: review_abandoned: ...`).
+The verdict parse anchors the marker after that prefix, so the abandoned settlement
+reports `abandoned`; anchoring on the bare settlement text alone misread it as `incomplete`.
