@@ -7,6 +7,7 @@ use orbit_common::security::child_env::{
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
 use orbit_types::tool::CLAIMED_MODE_DENIED_TOOLS;
 use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, AgentLoopSpec};
+use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
 use crate::context::{ResolvedActivityTools, RuntimeHost};
@@ -170,20 +171,74 @@ pub(super) fn resolve_activity_tool_grant(
         }
         None => host.resolve_activity_tools(task_ids, &spec.tools)?,
     };
-    if claimed {
-        // An allowlisted activity gets the same guard as a deny-listed one.
-        for tools in [
-            &mut activity_tools.requested_tools,
-            &mut activity_tools.effective_tools,
-        ] {
-            tools.retain(|tool| !CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str()));
-        }
+    if claimed && tool_disallow_list.is_none() {
+        restrict_allowlist_for_claimed_mode(host, &mut activity_tools, activity_name, task_ids)?;
     }
     Ok(ActivityToolGrant {
         tool_policy,
         tool_disallow_list,
         activity_tools,
     })
+}
+
+/// Removes [`CLAIMED_MODE_DENIED_TOOLS`] from an allowlisted activity's grant.
+///
+/// A wildcard entry that covers a denied tool is replaced by the registered
+/// tools it matches, minus the denied ones. An allowlist the removal empties
+/// is stamped [`NO_CALLABLE_TOOLS_ENTRY`], because an empty
+/// `ORBIT_ACTIVITY_TOOLS` is read as unrestricted.
+fn restrict_allowlist_for_claimed_mode(
+    host: &dyn RuntimeHost,
+    activity_tools: &mut ResolvedActivityTools,
+    activity_name: &str,
+    task_ids: &[String],
+) -> Result<(), DispatchError> {
+    let is_denied = |tool: &str| CLAIMED_MODE_DENIED_TOOLS.contains(&tool);
+    let covers_denied = |entry: &String| {
+        CLAIMED_MODE_DENIED_TOOLS
+            .iter()
+            .any(|denied| tool_allowed(denied, std::slice::from_ref(entry)))
+    };
+    let mut registered: Option<Vec<String>> = None;
+    for (callable_set, tools) in [
+        (false, &mut activity_tools.requested_tools),
+        (true, &mut activity_tools.effective_tools),
+    ] {
+        let mut restricted: Vec<String> = Vec::with_capacity(tools.len());
+        for entry in tools.iter() {
+            let expanded: Vec<String> = if !covers_denied(entry) {
+                vec![entry.clone()]
+            } else if is_denied(entry) {
+                Vec::new()
+            } else {
+                if registered.is_none() {
+                    registered = Some(
+                        host.resolve_activity_tool_denials(task_ids, activity_name, &[])?
+                            .effective_tools,
+                    );
+                }
+                registered
+                    .iter()
+                    .flatten()
+                    .filter(|tool| {
+                        !is_denied(tool) && tool_allowed(tool, std::slice::from_ref(entry))
+                    })
+                    .cloned()
+                    .collect()
+            };
+            for tool in expanded {
+                if !restricted.contains(&tool) {
+                    restricted.push(tool);
+                }
+            }
+        }
+        let emptied = restricted.is_empty() && !tools.is_empty();
+        *tools = restricted;
+        if emptied && callable_set {
+            tools.push(NO_CALLABLE_TOOLS_ENTRY.to_string());
+        }
+    }
+    Ok(())
 }
 
 /// This activity's tool and process policy envelope followed by its

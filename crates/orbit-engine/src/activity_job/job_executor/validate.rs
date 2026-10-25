@@ -550,6 +550,16 @@ pub(super) fn validate_step(step: &JobV2Step) -> Result<(), DispatchError> {
                     step.id
                 )));
             }
+            // Each fan-out spawns one thread per item (up to its own item
+            // bound), so a fan-out below another multiplies the thread count
+            // past what that bound protects.
+            if contains_fan_out(&fan_out.worker) {
+                return Err(DispatchError::JobValidation(format!(
+                    "step `{}` fan_out worker contains another fan_out; nested fan-outs \
+                     multiply their thread counts and are not supported",
+                    step.id
+                )));
+            }
             validate_step(&fan_out.worker)?;
         }
         JobV2StepBody::Loop { loop_ } => {
@@ -560,6 +570,17 @@ pub(super) fn validate_step(step: &JobV2Step) -> Result<(), DispatchError> {
         JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => {}
     }
     Ok(())
+}
+
+/// Whether `step`, or any step nested in its parallel branches or loop body,
+/// is a fan-out.
+fn contains_fan_out(step: &JobV2Step) -> bool {
+    match &step.body {
+        JobV2StepBody::FanOut { .. } => true,
+        JobV2StepBody::Parallel { parallel } => parallel.branches.iter().any(contains_fan_out),
+        JobV2StepBody::Loop { loop_ } => loop_.steps.iter().any(contains_fan_out),
+        JobV2StepBody::Target(_) | JobV2StepBody::TargetRef(_) => false,
+    }
 }
 
 /// Enforce `retry:` block invariants before any step executes (ORB-10006).

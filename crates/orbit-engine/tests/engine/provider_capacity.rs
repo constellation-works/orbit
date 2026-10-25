@@ -1011,6 +1011,61 @@ esac
     }
 }
 
+/// A failed `parallel:` join keeps a branch's provider failure, like fan-out.
+fn parallel_join_keeps_a_branch_provider_failure() {
+    let fake = FakeProvider::new("codex", "", "", 1, "");
+    fs::write(&fake.path, r#"#!/bin/sh
+prompt=$(cat)
+case "$prompt" in
+  *provider-branch*)
+    echo '{"type":"turn.failed","error":{"message":"Selected model is at capacity. Please try a different model."}}'
+    exit 1
+    ;;
+  *)
+    echo '{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"work_failed","message":"ordinary work failure"}}'
+    exit 0
+    ;;
+esac
+"#).unwrap();
+    let worktree = tempfile::tempdir().unwrap();
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let mut spec = agent_spec(Provider::Codex);
+    spec.instruction = "{{ input.label }}".into();
+    for labels in [
+        ["ordinary-branch", "provider-branch"],
+        ["provider-branch", "ordinary-branch"],
+    ] {
+        let branches: Vec<Value> = labels
+            .iter()
+            .map(|label| {
+                json!({
+                    "id": label,
+                    "spec": ActivityV2Spec::AgentLoop(spec.clone()),
+                    "default_input": {"label": label},
+                })
+            })
+            .collect();
+        let job = load_job_asset(
+            &json!({
+                "schemaVersion": 2, "kind": "Job", "metadata": {"name": "parallel_failure"},
+                "spec": {"state": "enabled", "kind": "workflow", "steps": [{
+                    "id": "branches",
+                    "parallel": {"branches": branches, "join": {"mode": "all"}},
+                }]},
+            })
+            .to_string(),
+        )
+        .unwrap()
+        .spec;
+        let run = run_job(&job, &host, "parallel-mixed-failure");
+        let message = failure_message(&run.outcome);
+        assert!(
+            is_provider_capacity_exhausted(None, Some(&message)),
+            "a branch provider failure must form a hold despite an ordinary failure: {message}"
+        );
+    }
+}
+
 /// Behavior-distinct rows share one bounded family process.
 #[test]
 fn provider_failure_contracts_1() {
@@ -1019,6 +1074,10 @@ fn provider_failure_contracts_1() {
             (
                 "fan_out_prefers_a_provider_failure_over_an_ordinary_failure",
                 fan_out_prefers_a_provider_failure_over_an_ordinary_failure,
+            ),
+            (
+                "parallel_join_keeps_a_branch_provider_failure",
+                parallel_join_keeps_a_branch_provider_failure,
             ),
             (
                 "capacity_is_typed_only_from_text_the_failed_provider_wrote",

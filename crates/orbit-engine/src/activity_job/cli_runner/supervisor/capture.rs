@@ -31,6 +31,17 @@ impl CapturedOutput {
         }
     }
 
+    #[cfg(test)]
+    pub(in crate::activity_job::cli_runner) fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            bytes: bytes.to_vec(),
+            protocol_offset: 0,
+            observed_bytes: bytes.len(),
+            capture_limit_bytes: bytes.len(),
+            truncated: false,
+        }
+    }
+
     pub(in crate::activity_job::cli_runner) fn bytes(&self) -> &[u8] {
         &self.bytes
     }

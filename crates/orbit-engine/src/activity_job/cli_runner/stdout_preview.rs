@@ -55,7 +55,14 @@ fn truncate_preview_text(redacted: &str, prefer_tail: bool, limit: usize) -> Str
         let line_boundary = redacted[boundary..]
             .find('\n')
             .map_or(boundary, |idx| boundary + idx + 1);
-        redacted[line_boundary..].to_string()
+        // A last line longer than the window leaves nothing after its newline;
+        // keep the window's own tail rather than an empty preview.
+        let start = if line_boundary == redacted.len() {
+            boundary
+        } else {
+            line_boundary
+        };
+        redacted[start..].to_string()
     } else {
         let boundary = floor_char_boundary(redacted, limit);
         redacted[..boundary].to_string()
