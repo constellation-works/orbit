@@ -2,7 +2,7 @@
 title: Scoping rules
 description: "Where Orbit stores and merges tasks, activities, jobs, policies, skills, audit, and run data."
 sidebar:
-  order: 6
+  order: 7
 ---
 
 ## Strategies

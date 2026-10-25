@@ -24,6 +24,10 @@ sidebar:
     <h3>Configuration</h3>
     <p><code>config.toml</code> layering, crews, and every settable key.</p>
   </a>
+  <a class="orbit-card" href="./executor-yaml/">
+    <h3>Executor YAML</h3>
+    <p>Overriding a shipped executor: sandbox, <code>host_os</code>, inspection and probes.</p>
+  </a>
   <a class="orbit-card" href="./scoping/">
     <h3>Scoping rules</h3>
     <p>Where Orbit stores each artifact type.</p>
