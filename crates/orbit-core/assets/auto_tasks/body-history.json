@@ -1,4 +1,5 @@
 {
+  "architecture-audit": [],
   "backlog-hygiene": [
     {
       "comments": [
@@ -623,7 +624,35 @@
       }
     }
   ],
-  "comment-hygiene": [],
+  "comment-hygiene": [
+    {
+      "comments": [
+        "# No context_files on purpose: the batch is only known at run time, and a",
+        "# context_files to the selected files before editing.",
+        "# minted task without selectors holds no workspace lock. The body narrows",
+        "## Attach the ledger",
+        "## Check and record",
+        "## Comment-only diffs",
+        "## Narrow the footprint before editing",
+        "## Select a batch",
+        "## The standard"
+      ],
+      "digest": "ec88baa6c80203bd25b75f296ecd18ad773b59b4005b9822dce11a29e96d1f1f",
+      "revision": "a4f8df896502c62c10347610e2be3febb43dc966",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "cron": "45 6 * * *"
+        },
+        "tags": [
+          "comment-hygiene"
+        ]
+      }
+    }
+  ],
   "delivery-code-review": [
     {
       "comments": [],
