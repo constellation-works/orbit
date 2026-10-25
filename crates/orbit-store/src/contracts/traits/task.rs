@@ -217,6 +217,17 @@ pub trait TaskStoreBackend: Send + Sync {
             "observational task candidates unavailable".into(),
         ))
     }
+    /// [`Self::task_candidate_keys`] as an informational snapshot, under the
+    /// same terms as [`Self::observe_task_candidates`]: no coordination,
+    /// recovery, index repair or persisted freshness proofs. A backend
+    /// without a boundary answers with the coordinated read.
+    fn observe_task_candidate_keys(
+        &self,
+        filter: &crate::contracts::TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<crate::contracts::TaskCandidateKeys>, OrbitError> {
+        self.task_candidate_keys(filter, limit)
+    }
     /// Select a fully indexed page from the generated index alone, reading no
     /// envelope; `None` when the filter or the index cannot answer that way.
     fn task_candidate_keys(

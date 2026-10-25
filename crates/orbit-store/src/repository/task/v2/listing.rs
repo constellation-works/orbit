@@ -122,12 +122,38 @@ impl TaskV2Store {
         filter: &TaskListFilter,
         limit: usize,
     ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
-        self.ensure_recovered()?;
+        self.candidate_keys(filter, limit, false)
+    }
+
+    /// [`Self::task_candidate_keys`] under the observational terms of
+    /// [`Self::observe_task_candidates`]: freshness is validated without
+    /// persisting proofs and recovery is never entered.
+    pub(crate) fn observe_task_candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        self.candidate_keys(filter, limit, true)
+    }
+
+    fn candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+        observed: bool,
+    ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        if !observed {
+            self.ensure_recovered()?;
+        }
         let filter = filter.normalized();
         if !filter.is_fully_indexed() {
             return Ok(None);
         }
-        let Some(unsettled) = self.validate_index()? else {
+        let Some(unsettled) = (if observed {
+            self.validate_index_with_proofs(false)?
+        } else {
+            self.validate_index()?
+        }) else {
             return Ok(None);
         };
         let selection = self.registry.indexed_task_selection(

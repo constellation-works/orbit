@@ -25,8 +25,15 @@ use crate::application::task::{TaskListFilter, metadata_task};
 ///   its own subtree, so the walk stops at one.
 ///
 /// Every other closed task is invisible to admission, exclusion and readiness.
+///
+/// `observed` selects the informational store read for the envelope
+/// selections: no commit-boundary section, recovery, index repair or
+/// persisted freshness proofs. Readiness — a read-only projection that
+/// admits nothing — observes; the drain's own snapshot keeps the
+/// coordinated read its admission decisions require.
 pub(super) fn admission_population(
     store: &dyn TaskStoreBackend,
+    observed: bool,
 ) -> Result<BTreeMap<String, Task>, OrbitError> {
     let open = TaskListFilter {
         statuses: Some(
@@ -37,7 +44,7 @@ pub(super) fn admission_population(
         ),
         ..TaskListFilter::default()
     };
-    let mut lookup = into_lookup(store.task_candidates(&open, usize::MAX)?.items);
+    let mut lookup = into_lookup(candidates(store, &open, observed)?.items);
 
     let mut visited = BTreeSet::new();
     let mut frontier = lookup
@@ -59,7 +66,7 @@ pub(super) fn admission_population(
                 parent_id: Some(parent_id),
                 ..TaskListFilter::default()
             };
-            for child in store.task_candidates(&children, usize::MAX)?.items {
+            for child in candidates(store, &children, observed)?.items {
                 if !has_epic_tag(&child.tags) {
                     next.push(child.id.clone());
                 }
@@ -125,6 +132,21 @@ fn include_ancestors(
         lookup.extend(parents);
     }
     Ok(())
+}
+
+/// The unbounded envelope selection of one population phase, through the
+/// coordinated or the observational store read (see
+/// [`admission_population`]).
+fn candidates(
+    store: &dyn TaskStoreBackend,
+    filter: &TaskListFilter,
+    observed: bool,
+) -> Result<orbit_store::contracts::TaskCandidates, OrbitError> {
+    if observed {
+        store.observe_task_candidates(filter, usize::MAX)
+    } else {
+        store.task_candidates(filter, usize::MAX)
+    }
 }
 
 fn into_lookup(

@@ -219,6 +219,21 @@ impl OrbitRuntime {
         self.stores().tasks().task_candidates(filter, limit)
     }
 
+    /// [`Self::task_candidates`] as an informational snapshot: no
+    /// commit-boundary section, recovery, index repair or persisted
+    /// freshness proofs, so an observational poll never queues behind a
+    /// drain's task commits. Never an admission decision.
+    pub fn observe_task_candidates(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<TaskCandidates, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(TaskCandidates::default());
+        }
+        self.stores().tasks().observe_task_candidates(filter, limit)
+    }
+
     /// [`Self::task_candidates`] answered by the generated index alone, for a
     /// filter it fully covers: the selected ids and creation times, with no
     /// envelope read. `None` sends the caller to [`Self::task_candidates`].
@@ -231,6 +246,21 @@ impl OrbitRuntime {
             return Ok(Some(Default::default()));
         }
         self.stores().tasks().task_candidate_keys(filter, limit)
+    }
+
+    /// [`Self::task_candidate_keys`] under the observational terms of
+    /// [`Self::observe_task_candidates`].
+    pub fn observe_task_candidate_keys(
+        &self,
+        filter: &TaskListFilter,
+        limit: usize,
+    ) -> Result<Option<TaskCandidateKeys>, OrbitError> {
+        if !self.coordination_task_reads_visible() {
+            return Ok(Some(Default::default()));
+        }
+        self.stores()
+            .tasks()
+            .observe_task_candidate_keys(filter, limit)
     }
 
     /// Return the bounded registry status projection needed to label one
