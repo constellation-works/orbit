@@ -542,13 +542,7 @@ fn job_run_filter_sql(
         // `task_id`. EXISTS and OR together avoid duplicate rows when a run
         // names the same id both ways.
         let placeholder = params.len() + 1;
-        conditions.push(format!(
-            "((json_type(input_json, '$.task_ids') = 'array' AND EXISTS (\
-             SELECT 1 FROM json_each(input_json, '$.task_ids') AS task_binding \
-             WHERE task_binding.type = 'text' AND task_binding.value = ?{placeholder})) \
-             OR (json_type(input_json, '$.task_id') = 'text' \
-             AND json_extract(input_json, '$.task_id') = ?{placeholder}))"
-        ));
+        conditions.push(task_binding_sql(placeholder));
         params.push(Box::new(task_id.clone()));
     }
     if let Some(routine) = &query.trigger_routine {
@@ -609,11 +603,22 @@ fn job_run_filter_sql(
 /// filter, `idx_job_runs_ws_state_recency`; SQLite uses an expression index
 /// only when the `ORDER BY` spells the indexed expression identically, so
 /// keep this text in step with the migration.
-fn job_run_order_sql(order_by: JobRunOrder) -> &'static str {
+pub(super) fn job_run_order_sql(order_by: JobRunOrder) -> &'static str {
     match order_by {
         JobRunOrder::CreatedAt => "created_at DESC, run_id ASC",
         JobRunOrder::Recency => "COALESCE(finished_at, started_at, created_at) DESC, run_id ASC",
     }
+}
+
+/// Exact submitted task ownership, shared by single-task and batched reads.
+pub(super) fn task_binding_sql(placeholder: usize) -> String {
+    format!(
+        "((json_type(input_json, '$.task_ids') = 'array' AND EXISTS (\
+         SELECT 1 FROM json_each(input_json, '$.task_ids') AS task_binding \
+         WHERE task_binding.type = 'text' AND task_binding.value = ?{placeholder})) \
+         OR (json_type(input_json, '$.task_id') = 'text' \
+         AND json_extract(input_json, '$.task_id') = ?{placeholder}))"
+    )
 }
 
 /// Steps for a page of runs in one query per chunk instead of one per run.

@@ -145,6 +145,32 @@ pub trait JobRunStoreBackend: Send + Sync {
 
     fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError>;
     fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError>;
+    /// Up to `limit_per_task` recent runs of `job_id` for each distinct task,
+    /// grouped by task ID and ordered by recency with run ID as the tiebreak.
+    /// Ownership matches [`JobRunQuery::task_id`]; multi-task runs can appear
+    /// in multiple groups. Missing tasks are omitted. Each task's limit applies
+    /// independently, before row and step hydration. SQLite batches the reads.
+    fn recent_job_runs_for_tasks(
+        &self,
+        job_id: &str,
+        task_ids: &[String],
+        limit_per_task: usize,
+    ) -> Result<std::collections::BTreeMap<String, Vec<JobRun>>, OrbitError> {
+        let mut grouped = std::collections::BTreeMap::new();
+        for task_id in task_ids.iter().collect::<std::collections::BTreeSet<_>>() {
+            let runs = self.list_job_runs_filtered(&JobRunQuery {
+                job_id: Some(job_id.to_string()),
+                task_id: Some(task_id.clone()),
+                order_by: JobRunOrder::Recency,
+                limit: Some(limit_per_task),
+                ..Default::default()
+            })?;
+            if !runs.is_empty() {
+                grouped.insert(task_id.clone(), runs);
+            }
+        }
+        Ok(grouped)
+    }
     /// Distinct trimmed, nonblank task IDs carried by the selected runs' top-level
     /// `task_ids` string array or text `task_id`. Run filters and limits apply
     /// before projection; nested fields confer no ownership. Backends may

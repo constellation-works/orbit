@@ -5,7 +5,6 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     JobRun, JobRunState, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt,
@@ -166,14 +165,39 @@ impl OrbitRuntime {
         if !eligible(&row.task) {
             return Ok(None);
         }
-        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(DELIVERY_JOB.to_string()),
-            task_id: Some(row.task.id.clone()),
-            order_by: JobRunOrder::Recency,
-            limit: Some(8),
-            include_steps: true,
-            ..JobRunQuery::default()
-        })?;
+        Ok(self.delivery_attention_map([row])?.remove(&row.task.id))
+    }
+
+    /// Attention for a list page: batched delivery-run reads, independently
+    /// bounded to eight recent runs per eligible task, plus audit reads only
+    /// for flagged rows. No forge calls.
+    pub fn delivery_attention_map<'a>(
+        &self,
+        rows: impl IntoIterator<Item = &'a TaskRow>,
+    ) -> Result<BTreeMap<String, Value>, OrbitError> {
+        let rows: Vec<&TaskRow> = rows.into_iter().filter(|row| eligible(&row.task)).collect();
+        let eligible_ids: Vec<String> = rows.iter().map(|row| row.task.id.clone()).collect();
+        if eligible_ids.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let runs =
+            self.stores()
+                .jobs()
+                .recent_job_runs_for_tasks(DELIVERY_JOB, &eligible_ids, 8)?;
+        let mut map = BTreeMap::new();
+        for row in rows {
+            let task_runs = runs
+                .get(&row.task.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
+            if let Some(value) = self.delivery_attention_from_runs(row, task_runs) {
+                map.insert(row.task.id.clone(), value);
+            }
+        }
+        Ok(map)
+    }
+
+    fn delivery_attention_from_runs(&self, row: &TaskRow, runs: &[JobRun]) -> Option<Value> {
         let newest = runs.iter().find(|run| {
             let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
             carried.len() == 1 && carried.contains(&row.task.id)
@@ -194,73 +218,6 @@ impl OrbitRuntime {
             )
         });
         let step = failed.and_then(|run| failed_step_id(self, run));
-        Ok(delivery_attention_value(
-            &row.task,
-            &row.history,
-            newest,
-            step.as_deref(),
-            repairing,
-        ))
-    }
-
-    /// Attention for a list page: one batched delivery-run query for the
-    /// whole page, plus audit reads only for flagged rows. No forge calls.
-    pub fn delivery_attention_map<'a>(
-        &self,
-        rows: impl IntoIterator<Item = &'a TaskRow>,
-    ) -> Result<BTreeMap<String, Value>, OrbitError> {
-        let rows: Vec<&TaskRow> = rows.into_iter().collect();
-        let eligible_ids: std::collections::BTreeSet<&str> = rows
-            .iter()
-            .filter(|row| eligible(&row.task))
-            .map(|row| row.task.id.as_str())
-            .collect();
-        if eligible_ids.is_empty() {
-            return Ok(BTreeMap::new());
-        }
-        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            job_id: Some(DELIVERY_JOB.to_string()),
-            order_by: JobRunOrder::Recency,
-            limit: Some(500),
-            include_steps: true,
-            ..JobRunQuery::default()
-        })?;
-        let mut newest: BTreeMap<String, JobRun> = BTreeMap::new();
-        let mut repairing: std::collections::BTreeSet<String> = Default::default();
-        for run in &runs {
-            let carried = run.input.as_ref().map(carried_task_ids).unwrap_or_default();
-            if carried.len() == 1 {
-                let task_id = carried.iter().next().map(String::as_str).unwrap_or("");
-                if eligible_ids.contains(task_id) {
-                    newest
-                        .entry(task_id.to_string())
-                        .or_insert_with(|| run.clone());
-                    if is_live(run) {
-                        repairing.insert(task_id.to_string());
-                    }
-                }
-            }
-        }
-        let mut map = BTreeMap::new();
-        for row in rows.iter().filter(|row| eligible(&row.task)) {
-            let run = newest.get(&row.task.id);
-            let failed = run.filter(|run| {
-                matches!(
-                    run.state,
-                    JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
-                )
-            });
-            let step = failed.and_then(|run| failed_step_id(self, run));
-            if let Some(value) = delivery_attention_value(
-                &row.task,
-                &row.history,
-                run,
-                step.as_deref(),
-                repairing.contains(&row.task.id),
-            ) {
-                map.insert(row.task.id.clone(), value);
-            }
-        }
-        Ok(map)
+        delivery_attention_value(&row.task, &row.history, newest, step.as_deref(), repairing)
     }
 }

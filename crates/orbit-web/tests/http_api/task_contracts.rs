@@ -878,6 +878,147 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
 }
 
 #[test]
+fn delivery_attention_survives_unrelated_run_history() {
+    isolated(
+        "task_contracts::delivery_attention_survives_unrelated_run_history",
+        || {
+            use orbit_core::{JobRun, JobRunState};
+
+            let fixture = Fixture::new();
+            let seed_task = |title: &str| {
+                fixture
+                    .runtime
+                    .add_task(TaskAddParams {
+                        title: title.to_string(),
+                        description: "Delivery history regression".to_string(),
+                        status: Some(TaskStatus::Review),
+                        ..Default::default()
+                    })
+                    .expect("seed review task")
+            };
+            let failed = seed_task("Failed delivery");
+            let timeout = seed_task("Timed out delivery");
+            let interrupted = seed_task("Interrupted delivery");
+            let healthy = seed_task("Unrelated successful deliveries");
+            let base = chrono::Utc::now() - chrono::Duration::hours(1);
+            let seed_run = |task_id: &str, run_id: &str, state, seconds| {
+                let at = base + chrono::Duration::seconds(seconds);
+                fixture.save_run(&JobRun {
+                    run_id: run_id.to_string(),
+                    job_id: "task_pr_pipeline".to_string(),
+                    attempt: 1,
+                    state,
+                    scheduled_at: at,
+                    created_at: at,
+                    started_at: Some(at),
+                    finished_at: Some(at),
+                    duration_ms: None,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(json!({"task_ids": [task_id]})),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                    executed_on: None,
+                });
+            };
+            let cases = [
+                (&failed.id, "jrun-old-failed", JobRunState::Failed),
+                (&timeout.id, "jrun-old-timeout", JobRunState::Timeout),
+                (
+                    &interrupted.id,
+                    "jrun-old-interrupted",
+                    JobRunState::Interrupted,
+                ),
+            ];
+            for (id, run_id, state) in cases {
+                seed_run(id, run_id, state, 0);
+            }
+            seed_run(&healthy.id, "jrun-healthy", JobRunState::Success, 0);
+            let server = fixture.server(true);
+            let assert_lists = |expected: &[(&String, Value)]| {
+                for page in [body_json(request(&server, "/tasks")), tasks_all(&server)] {
+                    let items = page["items"].as_array().expect("task list items");
+                    for (id, attention) in expected {
+                        let row = items
+                            .iter()
+                            .find(|row| row["id"] == **id)
+                            .expect("task row");
+                        assert_eq!(row["delivery_attention"], *attention, "{page}");
+                    }
+                    let healthy_row = items
+                        .iter()
+                        .find(|row| row["id"] == healthy.id)
+                        .expect("healthy row");
+                    assert!(
+                        healthy_row.get("delivery_attention").is_none(),
+                        "{healthy_row}"
+                    );
+                }
+            };
+            let expected: Vec<_> = cases
+                .iter()
+                .map(|(id, run_id, state)| {
+                    let detail = body_json(request(&server, &format!("/tasks/{id}")));
+                    let attention = detail["delivery_attention"].clone();
+                    assert_eq!(attention["run_id"], *run_id);
+                    assert_eq!(attention["run_state"], state.to_string());
+                    (*id, attention)
+                })
+                .collect();
+            assert_lists(&expected);
+
+            // The unrelated task is itself eligible, so even a shared limit
+            // over only eligible IDs would let its retries erase other rows.
+            for n in 1..=500 {
+                seed_run(
+                    &healthy.id,
+                    &format!("jrun-unrelated-{n:03}"),
+                    JobRunState::Success,
+                    n,
+                );
+            }
+            assert_lists(&expected);
+            for (id, attention) in &expected {
+                let detail = body_json(request(&server, &format!("/tasks/{id}")));
+                assert_eq!(detail["delivery_attention"], *attention);
+            }
+
+            let mut live =
+                fixture.seed_run("jrun-live-batch", "task_pr_pipeline", JobRunState::Running);
+            live.input = Some(json!({"task_ids": [&failed.id, &timeout.id]}));
+            fixture.save_run(&live);
+            let mut repairing = expected.clone();
+            for (id, attention) in &mut repairing {
+                if *id == &failed.id || *id == &timeout.id {
+                    attention["repairing"] = json!(true);
+                }
+                let detail = body_json(request(&server, &format!("/tasks/{id}")));
+                assert_eq!(detail["delivery_attention"], *attention);
+            }
+            assert_lists(&repairing);
+
+            for (id, _, _) in cases {
+                seed_run(
+                    id,
+                    &format!("jrun-recovered-{id}"),
+                    JobRunState::Success,
+                    501,
+                );
+            }
+            let cleared: Vec<_> = cases.iter().map(|(id, _, _)| (*id, Value::Null)).collect();
+            assert_lists(&cleared);
+            for (id, _, _) in cases {
+                let detail = body_json(request(&server, &format!("/tasks/{id}")));
+                assert!(detail.get("delivery_attention").is_none(), "{detail}");
+            }
+        },
+    );
+}
+
+#[test]
 fn aggregate_tasks_name_inactive_and_unopenable_workspaces_as_unavailable() {
     isolated(
         "task_contracts::aggregate_tasks_name_inactive_and_unopenable_workspaces_as_unavailable",
