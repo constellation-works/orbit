@@ -423,19 +423,15 @@ spec:
     - `no-diff-expected`: hand off the brief's outputs and execution summary
       with a clean worktree. No no-diff report or validation logs are needed,
       and the two cases below do not apply.
-    - Already landed: if this task's or a sibling's merged commit already
-      covers the clean checkout, verify that commit and the current
-      acceptance checks and do not manufacture a change, on a first attempt
-      or a retry. Attach `already-landed.json` and each validation log
-      before success, in the schema the Orbit task-execution reference
-      gives. Common misses: `criteria_evidence` is one non-empty string per
-      criterion, in order, never objects; `scope.comments` keep only `at`,
-      `by` and `message` (drop receipt ids such as `operation_id`); each
-      required command has one flat `validation[]` entry with outcome
-      `passed` and role `required`.
-    - Genuine no-op: attach `no-diff.json` and one JSON log per validation
-      command (with `run_id`, `tested_head`, `command`, `exit_code` and the
-      captured output), in the schema the task-execution reference gives.
+    - Already landed: if this task's or a sibling's merged commit covers
+      the clean checkout, verify that commit and current acceptance checks;
+      do not manufacture a change on any attempt. Before writing
+      `already-landed.json` and its logs, read the Orbit skill’s
+      task-execution reference, Step 4, and use its already-landed schema.
+    - Genuine no-op: before writing `no-diff.json` and its logs, read that
+      reference’s Verified no-change implementation section and use its
+      separate schema. Attach each report and every referenced log before
+      success.
     - For a genuine no-op, every required check must pass directly or be the
       gate of a sanctioned deferral; for the latter, include the gate's exit-0
       log in the no-diff report and return the deferral record at the top
