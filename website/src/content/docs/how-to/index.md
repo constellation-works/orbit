@@ -51,6 +51,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
 ## Operate
 
 <div class="orbit-card-grid">
+  <a class="orbit-card" href="./diagnostics/">
+    <h3>Investigate Failures from the Terminal</h3>
+    <p>Trace a failure through doctor, run output, host logs, audit events, and server health checks.</p>
+  </a>
   <a class="orbit-card" href="./multi-host/">
     <h3>Run Orbit across hosts</h3>
     <p>Register SSH hosts, route tasks by prefix, select remote workspaces, and prepare a follower.</p>
