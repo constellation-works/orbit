@@ -67,6 +67,8 @@ live state. Check long-lived MCP and service processes, not only active jobs.
 Never delete admission/identity files, bypass schema guards, or start a shadow
 store to recover access. Follow [maintenance](references/maintenance.md).
 
-Seeded schedules are disabled until deliberately enabled; preserve existing
-schedule and enablement choices on an established host. Shared repositories
+Seeded schedules are disabled until deliberately enabled (except
+`crew-performance-refresh`, which is seeded enabled and no-ops while
+`workflow.crew_performance` is `off`); preserve existing schedule and
+enablement choices on an established host. Shared repositories
 need an explicit owner; copying a checkout does not migrate its control plane.

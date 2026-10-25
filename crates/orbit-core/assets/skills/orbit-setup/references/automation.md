@@ -83,17 +83,20 @@ checkout already made the workspace a routine source; an older `.orbit/config.to
 may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
-## The nine seeded routines
+<a id="the-nine-seeded-routines"></a>
+## The ten seeded routines
 
-`orbit workspace init` seeds all nine, **all disabled**, with a workspace-unique
-name (`<base>-<workspace>`) resolved at seed time. The five cron routines resolve
-nothing else per machine, so two hosts seed identical bytes. `task-pilot`,
-`finding-verification`, `pilot-warning-triage` and `blocked-task-triage` are
-state-triggered and
-additionally resolve this host's machine id as `trigger.state.owner_machine` and
-the registered base branch as `trigger.state.branch`;
-a second host registering the same workspace seeds itself as owner of its own
-copy. Run `orbit routine list` to see their names on this host.
+`orbit workspace init` seeds all ten with a workspace-unique name
+(`<base>-<workspace>`) resolved at seed time. Nine are seeded disabled;
+`crew-performance-refresh` is the one exception, seeded enabled because it
+no-ops while `workflow.crew_performance` is `off`. The six cron routines
+resolve nothing else per machine, so two hosts seed identical bytes.
+`task-pilot`, `finding-verification`, `pilot-warning-triage` and
+`blocked-task-triage` are state-triggered and additionally resolve this host's
+machine id as `trigger.state.owner_machine` and the registered base branch as
+`trigger.state.branch`; a second host registering the same workspace seeds
+itself as owner of its own copy. Run `orbit routine list` to see their names
+on this host.
 
 | Base name | Cadence | Target | What it does |
 |---|---|---|---|
@@ -103,9 +106,39 @@ copy. Run `orbit routine list` to see their names on this host.
 | `pilot-warning-triage` | state trigger (`pilot_warnings_held`) | `escalation_triage_pipeline` | Disabled by default; once per assessment, a hard-tier triager reads each proposed task whose task-pilot assessment holds promotion on warnings and records a decision proposal or the human action that settles the hold. It only proposes: it never approves, promotes, clears a hold or edits the task. Approve with `orbit task update <task-id> --approve --note "<evidence>"`. |
 | `blocked-task-triage` | state trigger (`block_escalated`) | `escalation_triage_pipeline` | Disabled by default; once per block episode, a hard-tier triager reads each blocked task whose block final recovery escalated (or that stayed undecided past 72 hours) and requeues, proposes or reports it — [Blocked-task triage](#blocked-task-triage). Replaces the retired `blocked-task-triage` auto-task. |
 | `ci-failure-sweep` | hourly at :05 | `ci_failure_sweep_pipeline` | Files deduped proposed CI findings, pilots them, and admits only current warning-free repairs to backlog. |
+| `crew-performance-refresh` | hourly at :23 | `crew_performance_refresh_pipeline` | Rebuilds this workspace's crew-performance snapshot (the implementer by-type cell matrix) that performance-weighted crew draws read. The one routine seeded enabled: while `workflow.crew_performance` is `off` (the default) it skips the scan, records `skipped: crew_performance_off` and writes no snapshot; once the feature is on, keeps the snapshot fresh — [Crew performance snapshot](#crew-performance-snapshot). |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history older than 30 days. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
 | `ship-sweep` | every 30m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. The 30-minute cadence leaves 10 minutes of slack past the job's 20-minute drain, so `overlap: forbid` does not skip the next fire. |
+
+### Crew performance snapshot
+
+A crew draw must never run the scorecard scan, so the by-type cell matrix is
+persisted as a per-workspace snapshot: one row per `(crew, model, tier, type)`
+cell with its raw score, sample count, crew mean and shrunk score, plus the
+evidence window, a hash of the type list, and `computed_at`. The seeded
+`crew-performance-refresh` routine runs hourly (`cron: "23 * * * *"`, target
+`job:crew_performance_refresh_pipeline`) to rebuild it atomically. Run it on
+demand with:
+
+```bash
+orbit run job crew_performance_refresh_pipeline
+```
+
+While `workflow.crew_performance` is `off` (the default) the refresh writes no
+snapshot, records `skipped: crew_performance_off`, and skips the scan (the hourly
+routine still records a job run). `off` is the only mode that skips the scan;
+`absolute`, `comparative`, `shadow_absolute` and `shadow_comparative` all build
+snapshots over `workflow.crew_performance_window_days` (default `30`, `1`–`90`).
+
+A stored snapshot is usable only while fresh: a reader gets the typed reason
+`missing`, `stale` (older than 24 hours) or `type_list_changed` (built from a
+different `workflow.crew_performance_types` list) otherwise; performance-weighted
+draws treat any unusable reason as factor 1.
+
+Verify the snapshot with `orbit run readiness`: the output prints one line for
+the snapshot (its computed time, window, type list or the unusable reason), and
+`orbit run readiness --json` carries the same details under `crew_performance`.
 
 ## Built in: final recovery of blocked tasks
 
