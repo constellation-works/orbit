@@ -395,7 +395,8 @@ try {
     await contextPanel.getByRole('button', { name: 'save', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#detail-PANEL-8-tab-context_files .detail-tab-count')?.textContent === '2');
     assert.equal(await contextTab.getAttribute('aria-selected'), 'true', 'Saving keeps Context files selected');
-    assert.deepEqual(await contextPanel.locator('.context-selector').allTextContents(), ['file:src/main.rs', 'dir:docs']);
+    assert.deepEqual(await contextPanel.locator('.context-selector').evaluateAll(links => links.map(link => link.getAttribute('title').split(' · ')[0])), ['file:src/main.rs', 'dir:docs'], 'full selector identity remains in the link titles');
+    assert.deepEqual(await contextPanel.locator('.context-selector').allTextContents(), ['main.rs', 'dir:docs'], 'file rows render the basename and dir rows render the kind-prefixed name');
     assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches.at(-1).body), { context_files: ['file:src/main.rs', 'dir:docs'] }, 'Save patches only selectors');
     await capture(page, 'context-files-dark-1440.png');
     await contextTab.focus();
