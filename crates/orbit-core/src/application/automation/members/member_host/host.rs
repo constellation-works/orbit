@@ -57,7 +57,29 @@ impl MemberHost for Host<'_> {
         // Task-keyed entries stay while their task holds a status `observe`
         // queries; an incident key stays while the current inventory has it.
         let statuses = self.observed_statuses();
-        let indexed = self.runtime.task_status_index_for(keys)?;
+        // With a shared cache, the workspace status index is read once per
+        // request, not once per routine: the projection with no targets
+        // already holds every task of this workspace, which is where member
+        // keys come from.
+        // Only a status inspection (`dry_run`) reads the shared index: a real
+        // evaluation retires members from this check, so it keeps its fresh
+        // per-evaluation read.
+        let workspace_key = self.runtime.shared_root().display().to_string();
+        let cached_index;
+        let direct_index;
+        let indexed: &std::collections::BTreeMap<String, TaskStatus> = match self.inspection_cache {
+            Some(cache) if self.dry_run => {
+                cached_index = cache.status_index(&workspace_key, || {
+                    self.runtime
+                        .task_status_index_for(&std::collections::BTreeSet::new())
+                })?;
+                &cached_index
+            }
+            _ => {
+                direct_index = self.runtime.task_status_index_for(keys)?;
+                &direct_index
+            }
+        };
         let incidents = match self.trigger.kind {
             StateTriggerKind::ExecutionFailed => {
                 Some(self.incidents.borrow_mut().inventory(self.runtime)?)
@@ -235,6 +257,40 @@ impl MemberHost for Host<'_> {
 }
 
 impl Host<'_> {
+    /// Hydrate one task through the shared request cache on a status
+    /// inspection, as observation does, so admission re-reads no bundle
+    /// observation in the same request already hydrated. A real evaluation
+    /// keeps admission's fresh reads: its re-derivation is what catches
+    /// material moved since observation.
+    pub(super) fn cached_task(&self, id: &str) -> Result<Task, OrbitError> {
+        match self.inspection_cache {
+            Some(cache) if self.dry_run => {
+                let workspace_key = self.runtime.shared_root().display().to_string();
+                cache.task(&workspace_key, id, || self.runtime.get_task(id))
+            }
+            _ => self.runtime.get_task(id),
+        }
+    }
+
+    /// One active-preparation scan through the shared request cache on a
+    /// status inspection, keyed as observation keys it, so observation and
+    /// admission in one request share the scan instead of repeating it per
+    /// member. A real evaluation rescans, as before: another pilot may have
+    /// prepared a retained member since observation.
+    pub(super) fn cached_preparations(
+        &self,
+        kind: &'static str,
+        fetch: impl FnOnce() -> Result<BTreeMap<String, std::collections::BTreeSet<String>>, OrbitError>,
+    ) -> Result<BTreeMap<String, std::collections::BTreeSet<String>>, OrbitError> {
+        match self.inspection_cache {
+            Some(cache) if self.dry_run => {
+                let workspace_key = self.runtime.shared_root().display().to_string();
+                cache.preparations(&workspace_key, kind, fetch)
+            }
+            _ => fetch(),
+        }
+    }
+
     /// The task-pilot withhold for `now`, cached so this evaluation scans the
     /// host's recent runs once. A different clock replaces the cache.
     pub(super) fn pilot_provider_withhold(&self, now: DateTime<Utc>) -> Option<String> {

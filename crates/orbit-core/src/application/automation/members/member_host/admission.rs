@@ -34,9 +34,11 @@ impl Host<'_> {
             let (_, source) = self.head(&self.trigger.branch)?;
             // Retained pending members may be off the current observation
             // page, or another pilot may have prepared them since observation.
-            let active_preparations = preparation::active_task_pilot_preparations(self.runtime)?;
+            let active_preparations = self.cached_preparations("task_pilot", || {
+                preparation::active_task_pilot_preparations(self.runtime)
+            })?;
             for id in &member.task_ids {
-                let task = match self.runtime.get_task(id) {
+                let task = match self.cached_task(id) {
                     Ok(task) => task,
                     Err(OrbitError::NotFound {
                         kind: NotFoundKind::Task,
@@ -74,9 +76,11 @@ impl Host<'_> {
         }
 
         if self.trigger.kind == StateTriggerKind::FindingUnverified {
-            let active = preparation::active_finding_verifications(self.runtime)?;
+            let active = self.cached_preparations("finding_verification", || {
+                preparation::active_finding_verifications(self.runtime)
+            })?;
             for id in &member.task_ids {
-                let task = match self.runtime.get_task(id) {
+                let task = match self.cached_task(id) {
                     Ok(task) => task,
                     Err(OrbitError::NotFound {
                         kind: NotFoundKind::Task,
@@ -114,7 +118,7 @@ impl Host<'_> {
                 return Ok(MemberAdmission::Retire("decision_channel_disabled".into()));
             }
             for id in &member.task_ids {
-                let request = match self.runtime.get_task(id) {
+                let request = match self.cached_task(id) {
                     Ok(_) => match self.decision_request_of(member)? {
                         Some(request) => request,
                         None => {
@@ -144,11 +148,12 @@ impl Host<'_> {
         }
 
         if self.is_escalation_triage() {
-            let active = preparation::active_escalation_triages(self.runtime)?;
+            let active = self.cached_preparations("escalation_triage", || {
+                preparation::active_escalation_triages(self.runtime)
+            })?;
             for id in &member.task_ids {
                 let escalation = match self
-                    .runtime
-                    .get_task(id)
+                    .cached_task(id)
                     .and_then(|task| self.escalation_of(&task, Utc::now()))
                 {
                     Ok(escalation) => escalation,
@@ -175,7 +180,7 @@ impl Host<'_> {
         }
 
         for id in &member.task_ids {
-            let task = self.runtime.get_task(id)?;
+            let task = self.cached_task(id)?;
             let current = match super::super::super::incidents::observe(self.runtime, &task) {
                 Ok((key, _)) => key,
                 Err(error) => {
