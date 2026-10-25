@@ -46,6 +46,7 @@ template:
 
 struct Fixture {
     _root: TempDir,
+    _git_ceiling: orbit_common::test_env::ScopedEnv,
     global: PathBuf,
     repo: PathBuf,
     runtime: OrbitRuntime,
@@ -58,6 +59,17 @@ fn fixture() -> Fixture {
 
 fn fixture_with_config(config: &str) -> Fixture {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    // Git walks past a plain directory when looking for a repository, so a
+    // fixture rooted under a checkout (a managed run's nested TMPDIR) would
+    // discover the enclosing checkout's `.git` and lock/fetch it. Stop lookup
+    // at the fixture root. The canonical spelling matches what `getcwd`
+    // reports, including the macOS `/var` to `/private/var` link.
+    let ceiling = std::fs::canonicalize(root.path())
+        .unwrap_or_else(|_| root.path().to_path_buf())
+        .to_string_lossy()
+        .into_owned();
+    let git_ceiling =
+        orbit_common::test_env::scoped([("GIT_CEILING_DIRECTORIES", Some(ceiling.as_str()))]);
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
@@ -68,6 +80,7 @@ fn fixture_with_config(config: &str) -> Fixture {
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
     Fixture {
         _root: root,
+        _git_ceiling: git_ceiling,
         global,
         repo,
         runtime,
