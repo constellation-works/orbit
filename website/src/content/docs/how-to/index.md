@@ -63,6 +63,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Publish and Restore Tasks</h3>
     <p>Snapshot task records to a dedicated repository, and recover them.</p>
   </a>
+  <a class="orbit-card" href="./state-and-backup/">
+    <h3>Back Up and Move Orbit State</h3>
+    <p>Find the state you can't regenerate, take consistent SQLite backups, verify a restore, and move tasks with export and import.</p>
+  </a>
   <a class="orbit-card" href="./distributed-drain/">
     <h3>Set Up a Distributed Drain</h3>
     <p>Spread one backlog across machines: one owner, replica checkouts, SSH access.</p>

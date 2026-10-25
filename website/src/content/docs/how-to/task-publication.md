@@ -10,8 +10,7 @@ repository you control, so the backlog survives losing the machine. You choose
 when to publish; nothing publishes on its own.
 
 It covers task records only. Audit events, run history, and configuration
-need the
-[state and backup runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/state-and-backup.md).
+need a full state backup: see [Back up and move Orbit state](../state-and-backup/).
 
 :::tip[Let your agent do it]
 Ask your agent to **back up this workspace's tasks to `<repository URL>`**. The
@@ -75,7 +74,8 @@ It refuses a destination that already has tasks, and it never renumbers or
 partly replaces anything. `orbit task publication inspect` takes the same
 flags without `--confirm` and shows a snapshot without adopting it. To move
 tasks to a different machine identity, use `orbit task export` and
-`orbit task import` instead.
+`orbit task import` instead; see
+[Restore tasks, or move them](../state-and-backup/#restore-tasks-or-move-them).
 
 ## When something is wrong
 
