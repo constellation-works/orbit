@@ -100,9 +100,9 @@ trigger a restart at any time from the tray menu.
 
 The supervisor redirects server output to a dedicated log file:
 
-- **File location**: `dashboard-server.log` inside the operating system's
-  application log directory (for example, `~/.local/share/orbit/logs/` on
-  Linux or `~/Library/Logs/com.orbit.desktop/` on macOS).
+- **File location**: `dashboard-server.log` in the app's log directory:
+  `~/.local/share/works.constellation.orbit.desktop/logs/` on Linux or
+  `~/Library/Logs/works.constellation.orbit.desktop/` on macOS.
 - **Permissions**: Created with user-only permissions (`0600`) to protect
   workspace names, task IDs, and repository paths.
 - **Log rotation**: Truncated automatically on app launch if the file size
@@ -131,7 +131,7 @@ unresolved fleet events:
 
 | Menu Item | Action |
 |---|---|
-| **Status line** | Displays current fleet health: `Orbit: Live`, active drain counts, or `Offline` if the server is stopped. |
+| **Status line** | Shows `Dashboard server not running` when the server is stopped, `Dashboard server not responding` when the server does not answer, otherwise drain and 24 h failure counts (for example, `2 drains running · 1 failure in 24 h`, with `Drains unavailable` or `failures unavailable` when that read failed). |
 | **Attention items** | Up to 8 failed runs (`Failed: <title>`) and 8 review tasks (`Review: <title>`) needing action. Clicking an item opens the dashboard at that run or task. |
 | **Open Orbit** | Restores and focuses the main dashboard window. |
 | **Restart Dashboard Server** | Stops the running `orbit web serve` sidecar and starts a fresh server instance. |
