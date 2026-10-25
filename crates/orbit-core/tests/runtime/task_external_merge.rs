@@ -1166,3 +1166,87 @@ fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neithe
         ExecutionClaimPhase::Revoked
     );
 }
+
+/// A merged delivery whose body is a repository template with no task
+/// placeholder still settles, because of the generated identity comment.
+/// The same body from another author, on another branch, without the token,
+/// or naming only a longer id does not.
+#[test]
+fn a_template_body_without_a_task_placeholder_still_settles_an_external_merge() {
+    let fx = Fixture::new();
+    let task = fx.add_task("Fix the widget", TaskStatus::Review, &[61]);
+    let bare = fx.add_task("Template text only", TaskStatus::Review, &[62]);
+    let human = fx.add_task("Merged by a human", TaskStatus::Review, &[63]);
+    let other_base = fx.add_task("Merged elsewhere", TaskStatus::Review, &[64]);
+    let other_head = fx.add_task("Another branch", TaskStatus::Review, &[65]);
+    let lookalike = fx.add_task("Lookalike id", TaskStatus::Review, &[66]);
+
+    let identity = |id: &str| format!("<!-- orbit-delivery-task: {id} -->");
+    let body = format!("## Summary\n\nFix the widget\n\n{}", identity(&task));
+    let mut recent = fx.forge.0.lock().unwrap();
+    recent.recent.push(FakeForge::merged(
+        61,
+        format!("orbit/{task}-0123abcd"),
+        body.clone(),
+        BOT,
+        &fx.base,
+    ));
+    recent.recent.push(FakeForge::merged(
+        62,
+        format!("orbit/{bare}-0123abcd"),
+        "## Summary\n\nFix the widget".to_string(),
+        BOT,
+        &fx.base,
+    ));
+    recent.recent.push(FakeForge::merged(
+        63,
+        format!("orbit/{human}-0123abcd"),
+        format!("## Summary\n\nFix the widget\n\n{}", identity(&human)),
+        "alice",
+        &fx.base,
+    ));
+    recent.recent.push(FakeForge::merged(
+        64,
+        format!("orbit/{other_base}-0123abcd"),
+        format!("## Summary\n\nFix the widget\n\n{}", identity(&other_base)),
+        BOT,
+        "release",
+    ));
+    recent.recent.push(FakeForge::merged(
+        65,
+        format!("orbit/{other_head}0-0123abcd"),
+        format!("## Summary\n\nFix the widget\n\n{}", identity(&other_head)),
+        BOT,
+        &fx.base,
+    ));
+    recent.recent.push(FakeForge::merged(
+        66,
+        format!("orbit/{lookalike}-0123abcd"),
+        format!("## Summary\n\nFix the widget\n\n<!-- orbit-delivery-task: {lookalike}0 -->"),
+        BOT,
+        &fx.base,
+    ));
+    drop(recent);
+
+    let settlement = fx
+        .runtime
+        .settle_externally_merged_task(&task)
+        .expect("the template body names the task");
+    assert_eq!(settlement.pr_number, 61);
+    assert_eq!(settlement.task_id, task);
+    assert_eq!(fx.status(&task), TaskStatus::Done);
+
+    for (id, why) in [
+        (&bare, "the template text has no task token"),
+        (&human, "a human author is not the delivery identity"),
+        (&other_base, "it merged into another branch"),
+        (&other_head, "the head branch names a longer id"),
+        (&lookalike, "the body names only a longer id"),
+    ] {
+        assert!(
+            fx.runtime.settle_externally_merged_task(id).is_err(),
+            "{why}"
+        );
+        assert_eq!(fx.status(id), TaskStatus::Review, "{why}");
+    }
+}
