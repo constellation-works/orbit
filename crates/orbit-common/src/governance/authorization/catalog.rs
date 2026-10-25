@@ -522,6 +522,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "submitting a decision applies a human's answer to held work, so only the operator testing a channel — or the registered channel's own plugin callback, which the handler binds to the registration — may call it; an agent session never answers for a human",
     },
     GovernedOperation {
+        id: "decision answer",
+        surface: OperationSurface::CliCommand,
+        allowed: &[McpCapability::Operator],
+        rationale: "answering a decision request applies the operator's choice to held work as a human write, so an agent session never answers for a human",
+    },
+    GovernedOperation {
         id: "workspace teardown",
         surface: OperationSurface::CliCommand,
         allowed: &[McpCapability::Operator],
