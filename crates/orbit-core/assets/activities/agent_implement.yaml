@@ -213,11 +213,7 @@ spec:
       `orbit tool run <tool> --input '<json>'` (`--input-file` for large
       input). Both have the same gates; never reach an ungranted tool.
       `orbit tool show <tool>` prints a schema.
-    - Argument names: task tools take `id` (never `task_id`/`taskId`), e.g.
-      `orbit tool run orbit.task.show --input '{"id":"<task-id>","model":"<agent-family>"}'`;
-      GitHub run tools take `run`; `orbit.task.add` takes `type` (feature,
-      bug, refactor or chore); search status filters are `task:rejected` or
-      `friction:resolved`, never `status:rejected` or a bare status.
+    - Use each tool's schema for argument names; before task, GitHub-run or search calls, read Step 1 of the Orbit skill's task-execution reference.
     - To attach a file, write it under `.orbit/tmp/` and call
       `orbit.task.artifact.put` with `id`, `source_path` (the local file) and
       `path` (the artifact name). Names starting with `review-` in any case
