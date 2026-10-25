@@ -1096,7 +1096,7 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 1. **explicit**: `--crew` or run-input `crew`.
 2. **task_config**: an explicit `task.crew`, or a pool or [purpose](#purpose-crew-pools) assignment still valid for its pool (normally set at creation; admission redraws stale pool assignments and default fallbacks, see [pools](#automatic-crew-pools-by-complexity)).
 3. **workspace_default**: `workflow.default_crew`.
-4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus` and `codex` selects `sol` when defined; any other ID selects the same-named crew. Never overrides a configured `default_crew`.
+4. **environment_default**: `CONSTELLATION_DEFAULT_PROVIDER`, a provider ID or alias. `claude` selects `opus`, `codex` selects `sol`, `antigravity` selects `gemini-flash` and `muse` selects `muse-spark` when defined; any other ID selects the same-named crew. Never overrides a configured `default_crew`.
 5. **system_default**: the `opus` crew, or a legacy `claude` crew.
 
 The environment-default tier applies even when neither config file exists.

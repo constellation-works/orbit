@@ -64,7 +64,10 @@ fn default_crew_admission_and_provenance_do_not_depend_on_file_presence() {
     if std::env::var_os(CHILD).is_none() {
         for provider in [
             None,
+            Some("claude"),
             Some("codex"),
+            Some("antigravity"),
+            Some("muse"),
             Some(""),
             Some(" \t "),
             Some(INVALID_PROVIDER),
@@ -96,17 +99,21 @@ fn default_crew_admission_and_provenance_do_not_depend_on_file_presence() {
         Some("opus"),
         "ORB-15556: the built-in snapshot must stay independent of the host environment"
     );
-    let (expected, source) = if provider.as_deref() == Some("codex") {
+    let (expected, source) = match provider.as_deref() {
+        Some("claude") => ("opus", ConfigValueSourceKind::Environment),
         // ORB-15556: the documented codex mapping was bypassed for absent files.
-        ("sol", ConfigValueSourceKind::Environment)
-    } else {
-        (
+        Some("codex") => ("sol", ConfigValueSourceKind::Environment),
+        // ORB-18120: the removed antigravity and muse crew names map to their
+        // replacement built-in crews.
+        Some("antigravity") => ("gemini-flash", ConfigValueSourceKind::Environment),
+        Some("muse") => ("muse-spark", ConfigValueSourceKind::Environment),
+        _ => (
             shipped
                 .workflow_default_crew
                 .as_deref()
                 .expect("shipped crew"),
             ConfigValueSourceKind::BuiltIn,
-        )
+        ),
     };
 
     for (global, workspace) in [

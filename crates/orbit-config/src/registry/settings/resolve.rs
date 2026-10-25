@@ -447,6 +447,8 @@ pub(super) fn resolve_default_crew(
         let preferred = match provider.as_str() {
             "claude" => "opus",
             "codex" => "sol",
+            "antigravity" => "gemini-flash",
+            "muse" => "muse-spark",
             provider => provider,
         };
         Some(if crews.contains_key(preferred) {
