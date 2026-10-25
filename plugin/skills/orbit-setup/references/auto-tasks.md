@@ -359,11 +359,13 @@ plugin being removed.
   dependencies, secret handling, and configuration with evidence; files a
   durable Orbit task for each non-duplicate finding with severity and impact; a
   clean review is a successful no-op.
-- **`code-review`** (`hard`) — every six hours. Reviews the commits merged into the
-  integration branch since the previous sweep's recorded cursor, verifies each
-  candidate finding against the live code, files the non-duplicate ones as tasks
-  tagged `code-review`, and records the new last-reviewed commit in its execution
-  summary — that cursor is the next sweep's window start.
+- **`code-review`** (`hard`) — every six hours. Reviews the two least recently
+  reviewed bounded, disjoint modules read in full at one pinned integration
+  commit. Each confirmed high or critical finding becomes its own task; a
+  module's medium and low findings are grouped into its single cleanup task
+  tagged `code-review`. Per-delivery diff review stays separate under
+  `delivery-code-review`. Rotation history lives in the `reviewed-modules.json`
+  artifact; the `sweep-cursor.json` artifact is the scheduler cursor.
 - **`full-code-review`** (`medium`) — on demand (`orbit auto-task mint
   full-code-review`); its monthly cron stays off until you enable it. The minted
   task is a coordinator: it pins the integration branch's tip, splits the tree
