@@ -188,7 +188,12 @@ impl ToolRegistry {
             && tool.plugin.is_none()
             && !is_preloaded_artifact_payload(name, &input)
         {
-            validate_task_arguments(&input, &tool.tool.schema(), cli_fields(name, ctx))?;
+            validate_task_arguments(
+                &input,
+                &tool.tool.schema(),
+                cli_fields(name, ctx),
+                &declared_aliases(name),
+            )?;
         }
         tool.tool.execute(ctx, input)
     }
@@ -308,6 +313,19 @@ fn cli_fields(name: &str, ctx: &ToolContext) -> &'static [&'static str] {
     }
 }
 
+/// The input spellings a task operation accepts besides its canonical names, as
+/// `(canonical, alias)`. The schema lists canonical names only; the handler's
+/// `OperationSpec::parse_input` renames an alias, so this check must let it
+/// through rather than refuse it as an unknown field.
+fn declared_aliases(name: &str) -> Vec<(&'static str, &'static str)> {
+    orbit_common::governance::task::TASK_OPERATIONS
+        .iter()
+        .filter(|spec| spec.tool_name == name)
+        .flat_map(|spec| spec.wire_params())
+        .flat_map(|param| param.aliases.iter().map(|alias| (param.name, *alias)))
+        .collect()
+}
+
 /// Task argument shapes are checked before a handler can ignore a mistyped
 /// optional field or reach the application host. Required fields and richer
 /// guarded modes remain the handler's responsibility.
@@ -315,6 +333,7 @@ fn validate_task_arguments(
     input: &Value,
     schema: &ToolSchema,
     cli_fields: &[&str],
+    aliases: &[(&str, &str)],
 ) -> Result<(), OrbitError> {
     use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
     use orbit_common::protocol::tool_schema::tool_parameter_schema;
@@ -327,10 +346,18 @@ fn validate_task_arguments(
         .iter()
         .map(|param| param.name.as_str())
         .chain(cli_fields.iter().copied())
+        .chain(aliases.iter().map(|(_, alias)| *alias))
         .collect::<Vec<_>>();
     reject_unknown_tool_fields(input, &allowed)?;
     for parameter in &schema.parameters {
-        let Some(value) = object.get(&parameter.name) else {
+        // A call that sets both spellings is refused by the handler; check
+        // the canonical one here.
+        let Some(value) = object.get(&parameter.name).or_else(|| {
+            aliases
+                .iter()
+                .filter(|(canonical, _)| *canonical == parameter.name)
+                .find_map(|(_, alias)| object.get(*alias))
+        }) else {
             continue;
         };
         // Existing optional parsers treat null as absence, and accept numeric

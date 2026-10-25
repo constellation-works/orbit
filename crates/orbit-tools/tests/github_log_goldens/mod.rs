@@ -254,6 +254,39 @@ fn mid_log_nextest_blocks_survive_independent_command_and_display_limits() {
 }
 
 #[test]
+fn nextest_block_with_invalid_utf8_keeps_source_byte_accounting() {
+    let mut raw = b"FAIL [ 0.123s] suite failing_test\n".to_vec();
+    raw.extend_from_slice(b"output \xff\xfe from the failing test\n");
+    raw.extend_from_slice(b"thread 'failing_test' panicked at tests/sample.rs:12:3:\n");
+    raw.extend_from_slice(b"Summary [ 1.0s] 1 tests run: 1 failed\n");
+    for chunk in [1, 7, raw.len()] {
+        let mut collector = gh::StreamedLogCollector::new(262_144, 40);
+        for bytes in raw.chunks(chunk) {
+            collector.push(bytes);
+        }
+        let log = collector.finish();
+        let regions = log.failure_regions.unwrap();
+        let number = |value: &Value| value.as_u64().unwrap();
+        for range in regions["byte_ranges"].as_array().unwrap() {
+            assert_eq!(
+                number(&range["retained_source_bytes"]) + number(&range["omitted_bytes"]),
+                number(&range["end_byte"]) - number(&range["start_byte"]),
+                "chunk {chunk}: every block accounts for its source bytes"
+            );
+        }
+        assert_eq!(
+            number(&regions["retained_source_bytes"]) + number(&regions["omitted_bytes"]),
+            number(&regions["command_bytes"]),
+            "chunk {chunk}: the total accounts for the command bytes"
+        );
+        assert!(number(&regions["omitted_bytes"]) < raw.len() as u64);
+        let text = regions["text"].as_str().unwrap();
+        assert!(text.contains("panicked at tests/sample.rs"));
+        assert!(!text.contains('\u{fffd}'));
+    }
+}
+
+#[test]
 fn request_fixture_goldens() {
     golden("requests", &read("requests.json"), |case| {
         let input = &case["input"];
@@ -312,6 +345,20 @@ fn request_fixture_goldens() {
             Err(error) => json!({"error": error.to_string()}),
         }
     });
+}
+
+#[test]
+fn landing_request_refuses_empty_and_dot_only_repository_segments() {
+    let commit = "0123456789abcdef0123456789abcdef01234567";
+    assert!(gh::commit_pull_requests_request("acme/orbit", commit).is_ok());
+    for repository in [
+        "acme/..", "../orbit", "acme/.", "./orbit", "acme/", "/orbit", "acme", "a/b/c", "",
+    ] {
+        assert!(
+            gh::commit_pull_requests_request(repository, commit).is_err(),
+            "{repository:?} must be refused"
+        );
+    }
 }
 
 #[cfg(unix)]

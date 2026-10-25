@@ -49,6 +49,53 @@ fn registry_validated_task_tools_reject_unknown_and_mistyped_fields_at_dispatch(
     }
 }
 
+#[test]
+fn registry_validated_task_tools_accept_declared_input_aliases() {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let mut checked = 0;
+    for spec in orbit_common::governance::task::TASK_OPERATIONS {
+        for param in spec.wire_params().filter(|param| !param.aliases.is_empty()) {
+            for alias in param.aliases {
+                checked += 1;
+                // A mistyped alias is reported under the canonical name: the
+                // alias got past the unknown-field check and was type-checked.
+                let wrong = if matches!(
+                    param.param_type,
+                    orbit_common::governance::operation::ParamType::Boolean
+                        | orbit_common::governance::operation::ParamType::Switch
+                ) {
+                    serde_json::json!({ *alias: "not-a-boolean" })
+                } else {
+                    serde_json::json!({ *alias: false })
+                };
+                let error = registry
+                    .execute(spec.tool_name, &ToolContext::default(), wrong)
+                    .expect_err("a mistyped alias must be refused");
+                let message = error.to_string();
+                assert!(
+                    message.contains(param.name) && !message.contains("unknown"),
+                    "{} alias {alias}: {message}",
+                    spec.tool_name
+                );
+            }
+        }
+    }
+    assert!(checked > 0, "task operations declare input aliases");
+
+    let error = registry
+        .execute(
+            "orbit.task.artifact.get",
+            &ToolContext::default(),
+            serde_json::json!({"id": "X", "artifact_path": "a.txt"}),
+        )
+        .expect_err("no task host is attached");
+    assert!(
+        !error.to_string().contains("unknown"),
+        "an alias must not be refused as an unknown field: {error}"
+    );
+}
+
 const RETIRED_AGENT_TOOL_NAMES: &[&str] = &[
     "git.push",
     "github.pr.comment",

@@ -25,7 +25,7 @@
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::process::ChildStdin;
-use std::sync::mpsc::{Receiver, RecvTimeoutError, sync_channel};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex, PoisonError, TryLockError};
 use std::time::{Duration, Instant};
 
@@ -37,13 +37,9 @@ use serde_json::{Value, json};
 use super::backend::PluginBackendSpec;
 use super::callback::PluginCallbackSession;
 use super::envelope::{CallSecrets, apply_secret_updates, call_context, plugin_error};
+use super::line_queue::{LineReceiver, MAX_LINE_BYTES, line_queue};
 use crate::ToolContext;
 
-/// Lines the reader may queue ahead of the consumer before it blocks.
-const LINE_QUEUE: usize = 64;
-/// Longest single line accepted from the server; every MCP message is one
-/// JSON line, and anything past this is not one.
-const MAX_LINE_BYTES: u64 = 64 * 1024 * 1024;
 /// The MCP revision Orbit's own server speaks, and the one a plugin server
 /// must accept.
 const PROTOCOL_VERSION: &str = "2025-06-18";
@@ -106,7 +102,7 @@ struct McpSessionHandle {
 struct McpSession {
     child: OwnedChild,
     stdin: ChildStdin,
-    lines: Receiver<String>,
+    lines: LineReceiver,
     next_id: i64,
     /// Host-issued callback identity for this child. Dropped when the
     /// session ends so ancestry no longer treats the pid as a plugin.
@@ -570,7 +566,7 @@ impl McpSession {
         // The reader thread is what makes the deadline real: a blocking read
         // on a wedged server cannot otherwise be abandoned, and the thread
         // ends when the killed child closes the pipe.
-        let (sender, lines) = sync_channel(LINE_QUEUE);
+        let (sender, lines) = line_queue();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {

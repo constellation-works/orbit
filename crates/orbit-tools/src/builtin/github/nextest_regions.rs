@@ -73,11 +73,15 @@ impl NextestRegions {
     fn observe_bytes(&mut self, bytes: &[u8], total: usize) {
         let start = self.offset - total;
         let line = String::from_utf8_lossy(bytes);
-        if let Err(error) = std::str::from_utf8(bytes)
-            && (error.error_len().is_some() || total == bytes.len())
-        {
-            self.complete = false;
-        }
+        let valid_utf8 = match std::str::from_utf8(bytes) {
+            Ok(_) => true,
+            Err(error) => {
+                if error.error_len().is_some() || total == bytes.len() {
+                    self.complete = false;
+                }
+                false
+            }
+        };
         // Outside a command or captured block, a short line cannot be a
         // status, command boundary, or truncation notice. UTF-8 validity and
         // original source offsets were still checked above.
@@ -169,8 +173,10 @@ impl NextestRegions {
         {
             block.end = self.offset;
             // Retain whole physical lines only. This also prevents a long
-            // credential being split before the redactor sees it.
-            if total == bytes.len() && block.text.len() + total <= MAX_BLOCK_BYTES {
+            // credential being split before the redactor sees it. A line with
+            // invalid UTF-8 is not retained: its lossy text would be longer
+            // than the source bytes and break the byte accounting.
+            if valid_utf8 && total == bytes.len() && block.text.len() + total <= MAX_BLOCK_BYTES {
                 block.text.push_str(&line);
             }
         }
@@ -226,7 +232,7 @@ impl NextestRegions {
                     .sum();
             }
             selection_complete &= kept > 0;
-            let omitted = block.end - block.start - kept;
+            let omitted = (block.end - block.start).saturating_sub(kept);
             if omitted > 0 {
                 block_text.push_str(&format!(
                     "{}[... output block cut; {omitted} bytes not retained ...]\n",
@@ -242,7 +248,7 @@ impl NextestRegions {
             "kind": "runner_failure_regions", "complete": false,
             "command_complete": command_complete, "selection_complete": selection_complete,
             "text": text, "returned_bytes": text.len(), "command_bytes": total_bytes,
-            "retained_source_bytes": retained, "omitted_bytes": total_bytes - retained,
+            "retained_source_bytes": retained, "omitted_bytes": total_bytes.saturating_sub(retained),
             "assertion_payload_omitted_bytes": 0, "failure_anchor_count": self.anchors,
             "byte_ranges": ranges,
         }))

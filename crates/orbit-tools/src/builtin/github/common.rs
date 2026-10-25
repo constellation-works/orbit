@@ -154,10 +154,19 @@ pub fn register(registry: &mut ToolRegistry) {
 /// Numeric-only is a hardening rule, not a formatting preference: the value is
 /// appended to a `gh` argv, and a leading `-` would otherwise be parsed as a
 /// flag.
+///
+/// Leading zeros are dropped, so the value matches the number `gh` reports back:
+/// the log fallbacks compare identifiers as strings, and `0123` is run `123`.
 pub(super) fn require_numeric_id(input: &Value, key: &str) -> Result<String, OrbitError> {
     let raw = require_str(input, key)?;
-    if raw.chars().all(|c| c.is_ascii_digit()) {
-        return Ok(raw);
+    if !raw.is_empty() && raw.chars().all(|c| c.is_ascii_digit()) {
+        let significant = raw.trim_start_matches('0');
+        return Ok(if significant.is_empty() {
+            "0"
+        } else {
+            significant
+        }
+        .to_string());
     }
     Err(OrbitError::InvalidInput(format!(
         "invalid `{key}`: \"{raw}\"; must be a numeric GitHub identifier"
@@ -233,21 +242,31 @@ pub(super) fn repository_path(input: &Value) -> Result<String, OrbitError> {
         return Ok("{owner}/{repo}".to_string());
     };
     let repo = raw.trim();
-    let mut parts = repo.split('/');
-    let owner = parts.next().unwrap_or_default();
-    let name = parts.next().unwrap_or_default();
-    let valid_part = |part: &str| {
-        !part.is_empty()
-            && part
-                .chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-    };
-    if parts.next().is_some() || !valid_part(owner) || !valid_part(name) {
+    if !is_repository_path(repo) {
         return Err(OrbitError::InvalidInput(format!(
             "invalid `repo`: \"{repo}\"; expected owner/name using ASCII letters, digits, '.', '-', or '_'"
         )));
     }
     Ok(repo.to_string())
+}
+
+/// Whether `repo` is exactly `owner/name`, each a non-empty run of ASCII letters,
+/// digits, `-`, `_` and `.` that is not made only of dots. GitHub forbids `.` and
+/// `..` as owner or repository names, and either would walk out of the
+/// `repos/<owner>/<name>` endpoint.
+pub(super) fn is_repository_path(repo: &str) -> bool {
+    let valid_part = |part: &str| {
+        !part.is_empty()
+            && !part.chars().all(|ch| ch == '.')
+            && part
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
+    };
+    let mut parts = repo.split('/');
+    matches!(
+        (parts.next(), parts.next(), parts.next()),
+        (Some(owner), Some(name), None) if valid_part(owner) && valid_part(name)
+    )
 }
 
 /// Read an optional positive bound, clamped into `[1, max]`.

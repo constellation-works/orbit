@@ -13,6 +13,7 @@ mod build;
 mod callback;
 mod envelope;
 mod lifecycle;
+mod line_queue;
 mod loader;
 mod mcp;
 mod migrate;
