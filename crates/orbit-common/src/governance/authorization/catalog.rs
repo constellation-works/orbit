@@ -66,6 +66,14 @@ pub const DASHBOARD_ROUTINE_TOGGLE: GovernedOperation = GovernedOperation {
     rationale: "changing a versioned routine definition changes unattended execution",
 };
 
+/// Routine trigger replacement from the dashboard.
+pub const DASHBOARD_ROUTINE_TRIGGER: GovernedOperation = GovernedOperation {
+    id: "routine.set_trigger",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "changing a versioned routine trigger changes when unattended execution runs",
+};
+
 /// Manual catalog job submission from the dashboard.
 pub const DASHBOARD_JOB_RUN: GovernedOperation = GovernedOperation {
     id: "job.run",
@@ -96,6 +104,14 @@ pub const DASHBOARD_AUTO_TASK_TOGGLE: GovernedOperation = GovernedOperation {
     surface: OperationSurface::Dashboard,
     allowed: &[McpCapability::Operator],
     rationale: "changing a versioned auto-task definition changes unattended task minting",
+};
+
+/// Auto-task schedule replacement from the dashboard.
+pub const DASHBOARD_AUTO_TASK_SCHEDULE: GovernedOperation = GovernedOperation {
+    id: "auto_task.set_schedule",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "changing a versioned auto-task schedule changes when unattended tasks are minted",
 };
 
 /// Unconditional on-demand auto-task mint exposed by the dashboard.
@@ -625,10 +641,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "applying journal retention permanently deletes applied task commit decisions",
     },
     DASHBOARD_ROUTINE_TOGGLE,
+    DASHBOARD_ROUTINE_TRIGGER,
     DASHBOARD_JOB_RUN,
     DASHBOARD_CLOCK_SERVICE,
     DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_AUTO_TASK_SCHEDULE,
     DASHBOARD_AUTO_TASK_MINT,
     DASHBOARD_AUTO_DRAIN_COMPLETE,
     DASHBOARD_AUTO_DRAIN_MODE,

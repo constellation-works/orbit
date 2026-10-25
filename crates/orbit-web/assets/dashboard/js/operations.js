@@ -10,6 +10,7 @@ import { DRAIN_LOCK_REASONS, DRAIN_POOLS, drainCrewNote, drainPilotNote, drainRe
 import { sparkline, svg } from './sparkline.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout, drainStartConcurrencyQuery, initDrainStart, renderDrainStart, resetDrainStart } from './drain-start.js';
 import { hideDrainStarted, renderDrainStarted } from './drain-started.js';
+import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
@@ -119,6 +120,8 @@ export function initOperations(nextContext) {
   });
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
+    closeEditors("routine");
+    closeEditors("auto-task");
     resetDrainStart();
     hideDrainStarted();
     lastDrainLocks = null;
@@ -828,6 +831,46 @@ function routineFailureSummary(routines) {
   ]);
 }
 
+// The schedule column's edit affordance and, while open, the trigger editor.
+function routineEditKey(routine) {
+  return `routine-trigger:${getWorkspace()}:${routine.name}`;
+}
+
+function routineEditButton(payload, routine) {
+  const key = routineEditKey(routine);
+  return scheduleEditButton({
+    key,
+    label: `${routine.name} trigger`,
+    reason: controlReason(payload, "routine_trigger"),
+    onOpen: () => {
+      openEditor(key, "routine", routineDraft(routine.trigger));
+      renderOperations(lastOperations || payload, { force: true });
+    },
+  });
+}
+
+function routineEditor(payload, routine) {
+  const key = routineEditKey(routine);
+  if (!isOpen(key)) return null;
+  const selection = selectionSnapshot();
+  return routineTriggerEditor({
+    key,
+    routine,
+    cronPreview: cronText,
+    save: (trigger) => postJson("/api/routines/trigger", {
+      name: routine.name, source: routine.source, target: routine.target,
+      machine_name: payload.machine_name, expected_trigger: routine.trigger, trigger,
+    }).then((result) => {
+      if (selection.current()) feedback("routine-operation-feedback", "success", `${result.message}: ${routine.name}.`);
+      return result;
+    }),
+    onClose: (saved) => {
+      if (saved) fetchAndRenderOperations().catch(() => {});
+      else if (lastOperations) renderOperations(lastOperations, { force: true });
+    },
+  });
+}
+
 function routineRow(payload, routine, workspaceId) {
   const fire = routine.last_fire;
   const state = routineState(routine);
@@ -867,7 +910,7 @@ function routineRow(payload, routine, workspaceId) {
         identity,
         el("span", { class: "operation-cell-sub" }, [el("span", { text: "runs " }), jobLink(routine.target)]),
       ], "operation-cell-identity"),
-      operationCell("Cadence", cadence),
+      operationCell("Cadence", [...cadence, routineEditButton(payload, routine)]),
       routine.enabled
         ? whenCell("Next fire", nextAt, { fallback: nextEvaluationText(routine.next_evaluation, routine.next_due, routine.trigger) })
         : operationCell("Next fire", [el("span", { class: "operation-cell-main muted", text: nextAt ? `would be ${clockHm(nextAt)}` : "Paused" })]),
@@ -887,10 +930,12 @@ function routineRow(payload, routine, workspaceId) {
       routine.description ? el("p", { class: "operation-description", text: routine.description }) : null,
     ]),
   );
+  const editor = routineEditor(payload, routine);
+  if (editor) card.insertBefore(editor, card.lastChild);
   return card;
 }
 
-function renderOperations(payload) {
+function renderOperations(payload, { force = false } = {}) {
   noteCronZone(payload);
   lastOperations = payload;
   if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Refresh to load session access details.";
@@ -906,6 +951,19 @@ function renderOperations(payload) {
     ? (payload.owner_only || []).filter((routine) => routine.source === workspace)
     : [];
   const body = $("routines-body");
+  // An open trigger editor holds a draft: a background refresh leaves the
+  // rows alone until it closes.
+  const frozen = !force && editingIn("routine") && body.querySelector(".schedule-editor");
+  if (!frozen) renderRoutineRows(payload, body, { workspace, workspaceId, routines, inactive, ownerOnly });
+  const activeCount = routines.filter((routine) => routine.enabled).length;
+  $("routines-count").textContent = workspace ? `${activeCount} active of ${routines.length} · ${workspace}` : "read-only";
+  setRailSubtabCount("rail-count-ops-routines", workspace && routines.length ? `${activeCount}/${routines.length}` : "");
+  renderClock(payload);
+  syncAutoTaskSchedulerNote();
+  if (lastJobs) renderJobs(lastJobs);
+}
+
+function renderRoutineRows(payload, body, { workspace, workspaceId, routines, inactive, ownerOnly }) {
   body.textContent = "";
   if (!workspace) {
     body.appendChild(el("div", { class: "operations-readonly-note", text: `All-workspace mode is read-only. Select one workspace; this machine is already resolved as ${payload.machine_name}.` }));
@@ -945,12 +1003,6 @@ function renderOperations(payload) {
     const toggle = inactivePluginToggle(payload.inactive_plugin_counts?.[workspace] || 0);
     if (toggle) body.appendChild(toggle);
   }
-  const activeCount = routines.filter((routine) => routine.enabled).length;
-  $("routines-count").textContent = workspace ? `${activeCount} active of ${routines.length} · ${workspace}` : "read-only";
-  setRailSubtabCount("rail-count-ops-routines", workspace && routines.length ? `${activeCount}/${routines.length}` : "");
-  renderClock(payload);
-  syncAutoTaskSchedulerNote();
-  if (lastJobs) renderJobs(lastJobs);
 }
 
 function clockButton(payload, action, label) {
@@ -1189,6 +1241,44 @@ function taskLink(taskId, workspaceId) {
   return link;
 }
 
+function autoTaskEditKey(definition) {
+  return `auto-task-schedule:${getWorkspace()}:${definition.name}`;
+}
+
+function autoTaskEditButton(payload, definition) {
+  const key = autoTaskEditKey(definition);
+  return scheduleEditButton({
+    key,
+    label: `${definition.name} schedule`,
+    reason: definition.plugin_inactive ? "Seeded by a plugin that is off here" : actionReason(payload, "auto_task_schedule"),
+    onOpen: () => {
+      openEditor(key, "auto-task", autoTaskDraft(definition.schedule));
+      renderAutoTasks(lastAutoTasks || payload, { force: true });
+    },
+  });
+}
+
+function autoTaskEditor(definition) {
+  const key = autoTaskEditKey(definition);
+  if (!isOpen(key)) return null;
+  const selection = selectionSnapshot();
+  return autoTaskScheduleEditor({
+    key,
+    definition,
+    cronPreview: cronText,
+    save: (schedule) => postJson("/api/auto-tasks/schedule", {
+      name: definition.name, expected_schedule: definition.schedule, schedule,
+    }).then((result) => {
+      if (selection.current()) feedback("auto-task-operation-feedback", "success", `${result.message}: ${definition.name}.`);
+      return result;
+    }),
+    onClose: (saved) => {
+      if (saved) fetchAndRenderAutoTasks()?.catch?.(() => {});
+      else if (lastAutoTasks) renderAutoTasks(lastAutoTasks, { force: true });
+    },
+  });
+}
+
 function autoTaskRow(payload, definition, workspaceId) {
   const on = autoTaskOn(definition);
   const state = on ? "enabled" : "disabled";
@@ -1229,6 +1319,7 @@ function autoTaskRow(payload, definition, workspaceId) {
       operationCell("Trigger", [
         el("span", { class: "operation-cell-main", text: definition.schedule?.cron ? cronText(definition.schedule.cron) : (definition.schedule_summary || "—") }),
         el("span", { class: "operation-cell-sub", text: [definition.schedule?.cron, definition.dedupe === "always" ? "always fire" : "skip if open"].filter(Boolean).join(" · ") }),
+        autoTaskEditButton(payload, definition),
       ]),
       nextCell,
       operationCell("Last minted", lastMinted),
@@ -1253,6 +1344,8 @@ function autoTaskRow(payload, definition, workspaceId) {
       }),
     ]),
   );
+  const editor = autoTaskEditor(definition);
+  if (editor) card.insertBefore(editor, card.lastChild);
   return card;
 }
 
@@ -1285,11 +1378,13 @@ function syncAutoTaskSchedulerNote() {
   note.append(link, el("span", { text: ` (${cronText(scheduler.cron)}).` }));
 }
 
-function renderAutoTasks(payload) {
+function renderAutoTasks(payload, { force = false } = {}) {
   noteCronZone(payload);
   lastAutoTasks = payload;
   const body = $("auto-tasks-body");
   if (!body) return;
+  // An open schedule editor holds a draft: leave the rows alone until it closes.
+  if (!force && editingIn("auto-task") && body.querySelector(".schedule-editor")) return;
   body.textContent = "";
   const workspaceReason = workspaceReadOnlyReason();
   const reason = workspaceReason || payload.read_only_reason || "";

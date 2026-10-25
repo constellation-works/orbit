@@ -160,6 +160,12 @@ then preserves the file as written and stops refreshing it, and `show` reports
 `body: forked` with the differing fields. `orbit workspace sync` moves an older
 fork that differs only in settings back under management.
 
+The dashboard's **Automation › Auto-tasks** row has an **edit** link on the
+trigger that changes only the schedule (cron, a fixed interval or
+`deliveries_landed`). It runs the schedule half of `update`, with the same
+validation, and refuses the save if the schedule changed since the page read
+it. Every other field stays read-only there.
+
 ### Adopting a current bundled body from a stale fork
 
 A genuine custom body is intentionally preserved, even if it still names a

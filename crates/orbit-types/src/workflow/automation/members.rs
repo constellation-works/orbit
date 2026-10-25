@@ -35,6 +35,29 @@ pub enum StateTriggerKind {
     DecisionRequested,
 }
 
+impl StateTriggerKind {
+    /// The job a definition of this kind must target.
+    ///
+    /// `ExecutionFailed` still names `task_triage_pipeline`, which this Orbit
+    /// no longer ships: terminal failed-run triage is retired, so an existing
+    /// definition keeps validating and is skipped as retired by the routine
+    /// loader (`RETIRED_ROUTINE_JOBS`) instead of failing on every clock tick.
+    pub fn job_name(self) -> &'static str {
+        match self {
+            StateTriggerKind::PreparationEligible => "task_pilot_pipeline",
+            StateTriggerKind::ExecutionFailed => "task_triage_pipeline",
+            StateTriggerKind::FindingUnverified => "finding_verification_pipeline",
+            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
+                "escalation_triage_pipeline"
+            }
+            // The notification job the decision channel's transport plugin
+            // ships in a later slice; a state routine on this kind targets
+            // that job by this canonical name.
+            StateTriggerKind::DecisionRequested => "decision_request_pipeline",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StateTrigger {
@@ -358,25 +381,10 @@ impl StateTrigger {
             .max(1)
     }
 
-    /// The job a definition of this kind must target.
-    ///
-    /// `ExecutionFailed` still names `task_triage_pipeline`, which this Orbit
-    /// no longer ships: terminal failed-run triage is retired, so an existing
-    /// definition keeps validating and is skipped as retired by the routine
-    /// loader (`RETIRED_ROUTINE_JOBS`) instead of failing on every clock tick.
+    /// The job a definition of this kind must target; see
+    /// [`StateTriggerKind::job_name`].
     pub fn job_name(&self) -> &'static str {
-        match self.kind {
-            StateTriggerKind::PreparationEligible => "task_pilot_pipeline",
-            StateTriggerKind::ExecutionFailed => "task_triage_pipeline",
-            StateTriggerKind::FindingUnverified => "finding_verification_pipeline",
-            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
-                "escalation_triage_pipeline"
-            }
-            // The notification job the decision channel's transport plugin
-            // ships in a later slice; a state routine on this kind targets
-            // that job by this canonical name.
-            StateTriggerKind::DecisionRequested => "decision_request_pipeline",
-        }
+        self.kind.job_name()
     }
 }
 

@@ -9,7 +9,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
 };
 use orbit_core::application::auto_tasks::AutoTaskListingRow;
 use orbit_core::application::auto_tasks::scheduler::open_auto_task_instances_from_tasks;
@@ -313,7 +313,7 @@ pub(super) async fn mint_auto_task(
     .into_response()
 }
 
-fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
+pub(super) fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
     match error {
         orbit_core::OrbitError::CapabilityRefused(message) => (
             StatusCode::FORBIDDEN,
@@ -329,7 +329,7 @@ fn auto_task_control_error(error: orbit_core::OrbitError) -> Response {
     }
 }
 
-async fn resolve_workspace_blocking(
+pub(super) async fn resolve_workspace_blocking(
     state: &DashboardState,
     workspace: &str,
 ) -> Result<Arc<OrbitRuntime>, Box<Response>> {
@@ -377,6 +377,7 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
         "capabilities": {
             "auto_task_toggle": {"authorized": false, "reason": reason},
             "auto_task_mint": {"authorized": false, "reason": reason},
+            "auto_task_schedule": {"authorized": false, "reason": reason},
         },
         "read_only_reason": reason,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,
@@ -447,6 +448,10 @@ fn list_json(
         || action_capability(&DASHBOARD_AUTO_TASK_MINT, operator_session),
         |reason| json!({"authorized": false, "reason": reason}),
     );
+    let schedule_capability = role_refusal.as_deref().map_or_else(
+        || action_capability(&DASHBOARD_AUTO_TASK_SCHEDULE, operator_session),
+        |reason| json!({"authorized": false, "reason": reason}),
+    );
     let controls_authorized = authorized_caller(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session)
         .is_ok()
         && authorized_caller(&DASHBOARD_AUTO_TASK_MINT, operator_session).is_ok()
@@ -459,6 +464,7 @@ fn list_json(
         "capabilities": {
             "auto_task_toggle": toggle_capability,
             "auto_task_mint": mint_capability,
+            "auto_task_schedule": schedule_capability,
         },
         "read_only_reason": null,
         "unconditional_mint_warning": UNCONDITIONAL_MINT_WARNING,

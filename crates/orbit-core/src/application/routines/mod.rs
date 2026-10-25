@@ -24,6 +24,7 @@ pub(crate) mod seed;
 pub mod status;
 pub mod sweep;
 pub(crate) mod template;
+pub mod trigger_edit;
 
 pub use clock::{
     ClockHealth, ClockInstallReport, ClockSettings, ClockStatus, ClockUnitConvergence,
@@ -43,11 +44,16 @@ pub(crate) use status::rewrite_enabled_line;
 pub use status::{
     FireField, RoutineField, RoutineStatus, RoutineStatusReport, RoutineToggleOutcome,
     RoutineToggleRefusal, ScheduleDisplayState, pause_routine, project_fire, recent_fires,
-    resume_routine, routine_statuses_with_providers, set_routine_enabled, toggle_listed_routine,
+    resume_routine, routine_statuses_with_providers, select_listed_routine, set_routine_enabled,
+    toggle_listed_routine,
 };
 pub use sweep::{
     AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
     run_sweep_at_with_providers, run_sweep_with_providers,
+};
+pub use trigger_edit::{
+    RoutineTriggerEditOutcome, RoutineTriggerOptions, edit_listed_routine_trigger,
+    set_routine_trigger, trigger_options,
 };
 
 /// Who this machine is, as reported by routine status and sweep output.
