@@ -25,6 +25,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Use the Desktop App</h3>
     <p>Supervise the dashboard server, manage the system tray, and follow fleet notifications in a native window.</p>
   </a>
+  <a class="orbit-card" href="./mcp-apps/">
+    <h3>Open the MCP Apps Control Center</h3>
+    <p>Open the embedded control center or one task or run from an MCP client, pick a selector, and fall back when it does not render.</p>
+  </a>
   <a class="orbit-card" href="./continuous-delivery/">
     <h3>Run a Delivery Window</h3>
     <p>Prepare the backlog, drain it for a set time, retune or stop the window, and recover failed runs.</p>

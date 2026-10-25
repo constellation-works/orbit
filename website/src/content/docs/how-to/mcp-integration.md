@@ -137,6 +137,7 @@ Use the existing guides for the other public families:
 | `orbit.pipeline.invoke` | [Activities and jobs](../../concepts/activities-jobs/), [write an activity](../write-activity/), and [Activity and Job YAML](../../reference/activity-job-yaml/). |
 | `orbit.routine.control`, `orbit.auto_task.*` | [Routines and Auto-Tasks](../../concepts/scheduling/) and [schedule recurring work](../recurring-work/). |
 | `orbit.codebase.*` | [Dashboard views](../dashboard/). |
+| `orbit.ui.open`, `orbit.ui.inspect` | [Open the MCP Apps control center](../mcp-apps/). |
 
 The requests below are illustrative MCP `tools/call` bodies, not setup steps.
 Replace `ws_example` with an unchanged selector from `orbit_workspace_list`

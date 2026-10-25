@@ -16,8 +16,8 @@ This desktop shell is distinct from other Orbit surfaces:
 - It is **not** a separate web application: it loads your local
   [Orbit dashboard](../dashboard/) over loopback, keeping all Host and Origin
   security checks intact.
-- It is **not** the embedded MCP Apps control center, which runs inside MCP
-  clients or agent sessions.
+- It is **not** the embedded [MCP Apps control center](../mcp-apps/), which
+  runs inside MCP clients or agent sessions.
 - It is **not** the terminal-based [Claude Code mod](../claude-code/), which
   renders task bands and board views directly inside your CLI prompt.
 
