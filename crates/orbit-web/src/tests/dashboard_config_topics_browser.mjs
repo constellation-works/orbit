@@ -7,6 +7,9 @@
 //     draft is refused before the request, showing a drawer error.
 // (c) the drawer's CLI preview for an array is a valid TOML array literal that
 //     matches the PUT value when executed via `orbit config set`.
+// (d) Raw TOML: the block shows the file for the latest Show click, whichever
+//     read arrives last, and a failed read that is superseded never replaces a
+//     newer success. The block names the file it shows.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -77,6 +80,30 @@ try {
   });
 
   const capturedPuts = [];
+  const rawFiles = {
+    workspace: { text: '# workspace marker\n[workflow]\nbase_branch = "workspace"\n' },
+    global: { text: '# global marker\n[machine]\nname = "global"\n' },
+  };
+  const rawFailures = {}; // scope -> error message returned for each read of that file
+  const rawHolds = {}; // scope -> the next read of that file, held until released
+  const holdRaw = (scope) => {
+    const hold = {};
+    hold.arrived = new Promise((resolve) => { hold.onArrive = resolve; });
+    hold.wait = new Promise((resolve) => { hold.release = resolve; });
+    hold.served = new Promise((resolve) => { hold.onServed = resolve; });
+    rawHolds[scope] = hold;
+    return hold;
+  };
+  const within = (promise, what) => Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), 10000)),
+  ]);
+  const releaseRaw = async (hold) => {
+    hold.release();
+    await within(hold.served, 'held raw response');
+    // Give the page a moment to apply or drop the response before asserting.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  };
   const effectiveConfig = {
     config_set: { authorized: true },
     sections: [
@@ -144,6 +171,19 @@ try {
       case '/api/job-runs':
         await route.fulfill({ json: { items: [], total: 0, limit: 50, truncated: false, crews: [], routines: [] } });
         break;
+      case '/api/config/file': {
+        const scope = url.searchParams.get('scope');
+        const hold = rawHolds[scope];
+        delete rawHolds[scope];
+        if (hold) {
+          hold.onArrive();
+          await hold.wait;
+        }
+        if (rawFailures[scope]) await route.fulfill({ status: 500, json: { error: rawFailures[scope] } });
+        else await route.fulfill({ json: rawFiles[scope] });
+        hold?.onServed();
+        break;
+      }
       case '/api/config/effective':
         await route.fulfill({ json: effectiveConfig });
         break;
@@ -239,6 +279,59 @@ try {
   await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
 
   // -------------------------------------------------------------------------
+  // Case (d): Raw TOML block follows the latest Show click and names its file
+  // -------------------------------------------------------------------------
+  await page.goto(`http://127.0.0.1:${port}/#config/all-keys`);
+  const rawBlock = page.locator('section.config-section', { has: page.locator('.config-section-title', { hasText: 'Raw TOML' }) });
+  const rawPre = rawBlock.locator('pre.topic-raw');
+  const rawLabel = rawBlock.locator('.topic-raw-label');
+  const showButton = (scope) => rawBlock.locator(`button.config-action:has-text("Show ${scope} file")`);
+  // The block must name the file by its path; anchored so the global path does not satisfy the workspace check.
+  const labels = {
+    workspace: /\(\.orbit\/config\.toml\)$/,
+    global: /\(~\/\.orbit\/config\.toml\)$/,
+  };
+  const waitForRawText = (text) => page.waitForFunction((t) => document.querySelector('pre.topic-raw')?.textContent === t, text);
+
+  // Workspace read held, global clicked and answered, workspace answer arrives last.
+  let hold = holdRaw('workspace');
+  await showButton('workspace').click();
+  await within(hold.arrived, 'workspace raw read');
+  assert.match(await rawLabel.textContent(), labels.workspace);
+  await showButton('global').click();
+  await waitForRawText(rawFiles.global.text);
+  await releaseRaw(hold);
+  assert.equal(await rawPre.textContent(), rawFiles.global.text);
+  assert.match(await rawLabel.textContent(), labels.global);
+
+  // Global read held, workspace clicked and answered, global answer arrives last.
+  hold = holdRaw('global');
+  await showButton('global').click();
+  await within(hold.arrived, 'global raw read');
+  await showButton('workspace').click();
+  await waitForRawText(rawFiles.workspace.text);
+  await releaseRaw(hold);
+  assert.equal(await rawPre.textContent(), rawFiles.workspace.text);
+  assert.match(await rawLabel.textContent(), labels.workspace);
+
+  // Workspace read fails, but only after a newer global read has succeeded.
+  rawFailures.workspace = 'workspace file could not be read';
+  hold = holdRaw('workspace');
+  await showButton('workspace').click();
+  await within(hold.arrived, 'failing workspace raw read');
+  await showButton('global').click();
+  await waitForRawText(rawFiles.global.text);
+  await releaseRaw(hold);
+  assert.equal(await rawPre.textContent(), rawFiles.global.text);
+  assert.match(await rawLabel.textContent(), labels.global);
+  delete rawFailures.workspace;
+
+  await rawBlock.screenshot({ path: path.join(evidence, 'config-topics-raw-dark-1440.png') });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await rawBlock.screenshot({ path: path.join(evidence, 'config-topics-raw-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  // -------------------------------------------------------------------------
   // Case (c): array cliCmd line executed in isolated CLI fixture yields PUT value
   // -------------------------------------------------------------------------
   const fixtureBase = path.join(evidence, 'cli-child-fixture');
@@ -271,6 +364,10 @@ try {
       'cleared-integer-not-written-to-zero',
       'non-numeric-integer-refused-before-request',
       'array-cli-preview-toml-literal-round-trips',
+      'raw-latest-click-wins-when-earlier-read-arrives-last',
+      'raw-latest-click-wins-when-later-read-arrives-last',
+      'raw-superseded-failure-does-not-replace-newer-success',
+      'raw-block-names-the-file-it-shows',
     ],
   }, null, 2));
 

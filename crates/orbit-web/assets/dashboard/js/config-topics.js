@@ -7,10 +7,11 @@ let drawer = null; // {row, scope, text, error, pending, workspace, lockGlobal}
 let layerFilter = 'all';
 let topicFilter = 'all';
 let rawScope = null;
-let rawText = '';
+let rawText = null; // null while the latest read is in flight
+let rawSeq = 0; // numbers each read so only the latest click can apply its response
 let notice = null;
 
-export function resetTopics() { drawer = null; layerFilter = 'all'; topicFilter = 'all'; rawScope = null; rawText = ''; notice = null; }
+export function resetTopics() { drawer = null; layerFilter = 'all'; topicFilter = 'all'; rawScope = null; rawText = null; notice = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -260,9 +261,14 @@ export function renderMachine(body, payload, context, throttleNode) {
   finish(body, eff, context, nodes);
 }
 export async function loadRaw(scope, context) {
-  rawScope = scope;
-  try { const f = await fetchJson(`/api/config/file?scope=${scope}`); rawText = f.text ?? '(raw TOML not reported by this server)'; }
-  catch (e) { rawText = e.message || String(e); }
+  const seq = ++rawSeq;
+  rawScope = scope; rawText = null;
+  context.rerender?.();
+  let text;
+  try { const f = await fetchJson(`/api/config/file?scope=${scope}`); text = f.text ?? '(raw TOML not reported by this server)'; }
+  catch (e) { text = e.message || String(e); }
+  if (seq !== rawSeq) return; // a later click owns the block; drop this response, success or error
+  rawText = text;
   context.rerender?.();
 }
 export function renderAllKeys(body, payload, context) {
@@ -298,7 +304,11 @@ export function renderAllKeys(body, payload, context) {
     const b = el('button', { class: 'config-action ghost', text: `Show ${scope} file` }); b.type = 'button';
     b.addEventListener('click', () => loadRaw(scope, context)); rb.appendChild(b);
   }
-  if (rawScope) { const pre = el('pre', { class: 'topic-raw mono', text: rawText || '(empty file)' }); rb.appendChild(pre); }
+  if (rawScope) {
+    const where = rawScope === 'global' ? 'every workspace on this machine (~/.orbit/config.toml)' : 'this workspace (.orbit/config.toml)';
+    rb.appendChild(el('div', { class: 'topic-raw-label mono', text: `Showing ${where}` }));
+    rb.appendChild(el('pre', { class: 'topic-raw mono', text: rawText == null ? 'Loading…' : (rawText || '(empty file)') }));
+  }
   raw.appendChild(rb); nodes.push(raw);
   finish(body, payload, context, nodes);
 }
