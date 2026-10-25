@@ -13,9 +13,8 @@ const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).h
 const evidence = path.resolve(process.argv[3]);
 fs.mkdirSync(evidence, { recursive: true });
 
-// Computed values of #fbbf24 (amber, backlog) and #fca5a5 (red, active).
-const AMBER = 'rgb(251, 191, 36)';
-const RED = 'rgb(252, 165, 165)';
+// Expected contention colours are the theme's warn (backlog) and danger
+// (active) foregrounds, probed from the shipped CSS below.
 
 const task = (id, status, context_files) => ({ id, status, context_files, title: `Basename fixture ${id}`, priority: 'medium', complexity: 'low',
   description: 'Disposable browser scenario', plan: 'Inspect contexts', comments: [], history: [], artifacts: [], tags: [], status_transitions: [] });
@@ -98,27 +97,33 @@ try {
   // Computed colour of each basename and its selector text, keyed by the full selector.
   const basenames = id => page.locator(`#detail-${id} .file-list .context-selector`).evaluateAll(links => Object.fromEntries(links.map(link => {
     const base = link.querySelector('.selector-base');
-    return [link.textContent, { text: base.textContent, color: getComputedStyle(base).color }];
+    const selector = (link.getAttribute('title') || '').split(' · ')[0];
+    return [selector, { text: base.textContent, color: getComputedStyle(base).color }];
   })));
-  const normal = await page.evaluate(() => {
+  const probeColor = variable => page.evaluate(variable => {
     const probe = document.createElement('span');
-    probe.style.color = 'var(--fg-strong)';
+    probe.style.color = `var(${variable})`;
     document.body.append(probe);
     const color = getComputedStyle(probe).color;
     probe.remove();
     return color;
-  });
+  }, variable);
+  const normal = await probeColor('--fg-strong');
+  const AMBER = await probeColor('--warn-fg');
+  const RED = await probeColor('--danger-fg');
 
   await open('BASE-1');
   await contextBlock('BASE-1').screenshot({ path: path.join(evidence, 'backlog-dark-1440.png'), animations: 'disabled' });
   const backlog = await basenames('BASE-1');
-  assert.equal(await page.locator('#detail-BASE-1 .file-list li.context-duplicate-base').count(), 2, 'both duplicate basenames are rendered as duplicates');
+  const duplicateRows = await page.locator('#detail-BASE-1 .file-list .cf-row').evaluateAll(rows => rows.filter(row => row.querySelector('.selector-base')?.textContent === 'shared.rs').map(row => ({ selector: (row.querySelector('.context-selector')?.getAttribute('title') || '').split(' · ')[0], group: row.closest('.cf-group')?.querySelector('.cf-group-name')?.textContent })));
+  assert.equal(duplicateRows.length, 2, 'both duplicate basenames are rendered');
+  assert.deepEqual(duplicateRows.map(row => row.selector).sort(), ['file:src/shared.rs', 'file:tests/shared.rs'], 'duplicate basenames keep their full selector identity in the link titles');
+  assert.deepEqual(duplicateRows.map(row => row.group).sort(), ['src', 'tests'], 'duplicate basenames are distinguished by their folder groups, not a duplicate marker');
   assert.equal(backlog['file:Makefile'].text, 'Makefile');
   assert.equal(backlog['file:Makefile'].color, AMBER, 'root-level contended backlog basename keeps amber');
   assert.equal(backlog['file:src/shared.rs'].color, AMBER, 'duplicate contended backlog basename keeps amber');
   assert.equal(backlog['file:tests/shared.rs'].color, AMBER, 'second duplicate contended backlog basename keeps amber');
   assert.equal(backlog['file:docs/notes.md'].color, normal, 'uncontended basename keeps the normal colour');
-  assert.equal(await page.locator('#detail-BASE-1 .file-list .context-selector').filter({ hasText: 'file:src/shared.rs' }).locator('.selector-root').evaluate(node => getComputedStyle(node).color), AMBER, 'contended backlog directory keeps amber');
   results.push({ scenario: 'backlog root-level and duplicate basenames', passed: true, colors: backlog });
 
   await open('BASE-2');

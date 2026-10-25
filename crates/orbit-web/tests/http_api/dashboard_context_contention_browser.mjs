@@ -149,7 +149,10 @@ try {
   assert(((await page.locator('#detail-CTX-1 .context-selector').first().getAttribute('aria-label')) || '').includes('Contention unknown'), 'unknown data is accessible without extra context text');
   await refresh();
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-1 .context-contended-backlog').length === 3);
-  assert.deepEqual(await page.locator('#detail-CTX-1 .context-selector').allTextContents(), selectors, 'selector text remains intact');
+  const selectorLinks = await page.locator('#detail-CTX-1 .context-selector').evaluateAll(links => links.map(link => ({ title: link.getAttribute('title'), aria: link.getAttribute('aria-label'), text: link.textContent })));
+  assert.deepEqual(selectorLinks.map(link => link.title.split(' · ')[0]).sort(), [...selectors].sort(), 'full selector identity remains in the link titles');
+  assert.deepEqual(selectorLinks.map(link => link.text).sort(), ['dir:src', 'other.rs', 'shared.rs', 'symbol:src/shared.rs#two:function'].sort(), 'visible text is the basename or kind-prefixed rendering, not the full file selector');
+  assert(selectorLinks.filter(link => link.aria).every(link => selectors.some(selector => link.aria.startsWith(`${selector}:`))), 'contended rows carry the full selector in their aria-label');
   assert.equal(await page.locator('#detail-CTX-1 .context-contention').count(), 0, 'context contains selectors alone');
   const assertScoped = async (locator, hash) => {
     const href = new URL(await locator.getAttribute('href'), page.url());
@@ -163,7 +166,7 @@ try {
   await drain.locator('a').first().waitFor();
   assert.deepEqual(await drain.locator('a').allTextContents(), ['CTX-2', 'CTX-3'], 'all unique blockers linked');
   for (const id of ['CTX-2', 'CTX-3']) await assertScoped(drain.getByRole('link', { name: id, exact: true }), `#tasks?open=${id}`);
-  assert.equal(await drain.textContent(), 'Waiting on locksWaits onCTX-2CTX-3', 'one category and one wait, without paths or raw reason');
+  assert.equal(await drain.textContent(), 'Waiting on locksHeld byCTX-2CTX-3', 'one category and one held-by line, without paths or raw reason');
   await drain.screenshot({ path: path.join(evidence, 'multiple-blockers.png') });
   const measureContrast = node => {
     const rgb = color => color.match(/[\d.]+/g).slice(0, 3).map(Number);
@@ -197,7 +200,7 @@ try {
   assert.equal(await draft.inputValue(), 'Unsaved description', 'lock refresh preserves another editor draft');
   tasks[0].context_files = [...selectors, 'file:added.rs'];
   await refresh();
-  assert.deepEqual(await page.locator('#detail-CTX-1 .context-selector').allTextContents(), tasks[0].context_files, 'viewed context updates while another field has a draft');
+  assert.deepEqual((await page.locator('#detail-CTX-1 .context-selector').evaluateAll(links => links.map(link => link.getAttribute('title').split(' · ')[0]))).sort(), [...tasks[0].context_files].sort(), 'viewed context updates while another field has a draft');
   tasks[0].context_files = selectors;
   await refresh();
   matches = true;
@@ -210,7 +213,9 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-1 .context-contended-backlog').length === 3);
   locksUnavailable = true;
   await refresh();
-  await page.locator('#detail-CTX-1 .context-contention-unknown').first().waitFor();
+  // The Overview tab is active here, so the context panel is hidden; the
+  // unknown rows only need to be attached.
+  await page.locator('#detail-CTX-1 .context-contention-unknown').first().waitFor({ state: 'attached' });
   assert.equal(await highlights('CTX-1').count(), 0, 'failed read clears stale highlights');
   locksUnavailable = false;
   await refresh();
@@ -242,9 +247,9 @@ try {
   await page.setViewportSize({ width: 1440, height: 1100 });
   for (const [name, entry, text, links] of [
     ['absent-holder', { reason: 'context_lock_conflict', conflicts: [{ requested_file: 'file:CTX-999.rs' }] }, 'Lock holder unavailable', []],
-    ['reserved-surface', { reason: 'surface_reserved', blocking_task_ids: ['CTX-3', 'CTX-2', 'CTX-3'], conflicts: [{ reserved_by_task_id: 'CTX-2', requested_file: 'file:src/shared.rs' }], detail: 'Reserved for CTX-2, CTX-3, ranked ahead of this task and waiting only on context locks.' }, 'Waits on', ['CTX-2', 'CTX-3']],
-    ['tasks-and-run', { reason: 'conflict_deferred', conflicts: [{ locking_task_id: 'CTX-2', blocking_task_id: 'CTX-3' }], run_ids: ['jrun-first'] }, 'Waits on', ['CTX-2', 'CTX-3', 'jrun-first']],
-    ['live-runs', { reason: 'claimed_by_live_child', run_ids: ['jrun-first', 'jrun-second'] }, 'Waits on', ['jrun-first', 'jrun-second']],
+    ['reserved-surface', { reason: 'surface_reserved', blocking_task_ids: ['CTX-3', 'CTX-2', 'CTX-3'], conflicts: [{ reserved_by_task_id: 'CTX-2', requested_file: 'file:src/shared.rs' }], detail: 'Reserved for CTX-2, CTX-3, ranked ahead of this task and waiting only on context locks.' }, 'Held by', ['CTX-2', 'CTX-3']],
+    ['tasks-and-run', { reason: 'conflict_deferred', conflicts: [{ locking_task_id: 'CTX-2', blocking_task_id: 'CTX-3' }], run_ids: ['jrun-first'] }, 'Held by', ['CTX-2', 'CTX-3', 'jrun-first']],
+    ['live-runs', { reason: 'claimed_by_live_child', run_ids: ['jrun-first', 'jrun-second'] }, 'Live run', ['jrun-first', 'jrun-second']],
     ['dependencies', { reason: 'unmet_dependency', dependencies: [{ task_id: 'CTX-2', status: 'in-progress' }, { task_id: 'CTX-3', status: 'review' }] }, 'Depends on', ['CTX-2', 'CTX-3']],
     ['capacity', { reason: 'capacity_saturated' }, 'no free slot', []],
     ['host', { reason: 'host_os_mismatch', detail: 'requires os:macos' }, 'needs macos host', []],
@@ -254,7 +259,7 @@ try {
     await refresh();
     await page.waitForFunction(text => document.querySelector('#detail-CTX-1 .readiness-drain')?.textContent.includes(text), text);
     assert.deepEqual(await drain.locator('a').allTextContents(), links, name);
-    if (name === 'reserved-surface') assert.equal(await drain.textContent(), 'Waiting on locksWaits onCTX-2CTX-3', 'reservations show one category and one linked blocker list without duplicated detail');
+    if (name === 'reserved-surface') assert.equal(await drain.textContent(), 'Waiting on locksHeld byCTX-2CTX-3', 'reservations show one category and one linked blocker list without duplicated detail');
     assert(!(await drain.textContent()).includes('file:'), 'never infer blockers from paths');
     assert(!(await page.locator('#detail-CTX-1 .readiness-list').textContent()).includes('Ready: nothing'), 'wait never implies eligibility');
     for (const link of await drain.locator('a').all()) {
