@@ -219,9 +219,11 @@ definition of the same name.
   carry-forward, `clean`/`fixed`/`partial`/`skipped`, repeat-skip escalation,
   clean no-diff evidence), adding a per-row `checked_through` commit so a
   file unchanged since its last `clean`/`fixed` check is not re-read. Its
-  diff is comment-only, real defects become filed tasks, and it mints
-  without `context_files` — no workspace lock — narrowing to the selected
-  `file:` selectors before editing (design §4e).
+  diff is comment-only, real defects become filed tasks, and it mints as
+  `proposed` without `context_files`, so pre-admission preparation (task
+  pilot or operator) establishes the selected `file:` selectors before it
+  reaches `backlog` — never a selector-free whole-tree holder in a drain
+  (design §4e).
 - `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
   own run evidence (failed and interrupted runs, step failures, worker logs)
   since the previous scan's `run-failure-cursor.json` artifact. On an owner it

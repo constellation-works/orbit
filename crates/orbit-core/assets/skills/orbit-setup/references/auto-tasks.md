@@ -451,9 +451,11 @@ plugin being removed.
   diff is comment-only — everything outside comments and doc comments stays
   byte-identical — and a stale comment that reveals a real defect is filed
   as a task (at most two per run) instead of being fixed in place. Unlike
-  `doc-duties` it declares no `context_files`, so a minted instance holds no
-  workspace lock; its body narrows `context_files` to the selected `file:`
-  selectors and reads them back before editing. A clean batch is a
+  `doc-duties` it declares no `context_files` and mints as `proposed`, so a
+  minted instance is no backlog whole-tree holder; pre-admission
+  preparation (the task pilot, or an operator by hand) selects the batch
+  and persists exactly its `file:` selectors before the task is approved
+  to `backlog`, and the run reads them back and edits only those files. A clean batch is a
   successful no-diff run with validated no-diff evidence, and the ledger is
   attached on every run.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of

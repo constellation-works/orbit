@@ -44,8 +44,10 @@ Context selectors are copied unchanged into minted tasks. Diff-producing
 chores must declare a scope in their YAML template; otherwise admission holds
 them for task-pilot. Older definitions without selectors remain readable.
 `comment-hygiene` (§4e) is the deliberate exception: its batch is known only
-at run time, so it mints selector-free — which holds no context lock — and
-its body narrows `context_files` to the selected files before editing.
+after selection, so it mints selector-free as `proposed` and its footprint
+is prepared before admission — the task pilot or an operator persists the
+selected selectors and the task is approved to `backlog` — rather than
+entering a drain as selector-free backlog work.
 An explicit complexity must be an
 assessed `low`, `medium`, `hard`, or `xhard` value and is copied to every minted task.
 The bundled defaults all carry reviewed explicit assessments. Legacy and custom
@@ -380,14 +382,22 @@ the definition itself is proven by loading and seeding it through the
 existing loader.
 
 Unlike `doc-duties`, which reserves `dir:.`, `comment-hygiene` declares no
-`context_files`: empty context holds no context lock, so an open instance
-never stalls unrelated work in a drain. Files in the footprint of an open or
-in-progress task are skipped during selection. After selecting its batch and
-before editing, the body narrows the task's `context_files` with
-`orbit.task.update` to exactly the selected `file:` selectors (replacing any
-broader preparation scope), reads them back with `orbit.task.show`, and
-quotes them in the execution summary — in claimed mode the same selectors
-are returned as `context_files_added`. The diff is comment-only: everything
+`context_files` and mints as `proposed`: a selector-free instance is not a
+backlog drain candidate, so it never becomes the unknown-footprint
+whole-tree holder that stalls unrelated editing work, with or without a
+pilot. Batch selection is pre-admission preparation — the task pilot (or
+an operator) follows the body's selection steps, persists exactly the
+selected `file:` selectors, and only then is the task approved to
+`backlog`. That write precedes any execution claim, so the route never
+depends on a scope update a protecting claim refuses or on
+`context_files_added` returned after editing; in claimed mode the
+selectors simply travel with the owner-prepared task. Without preparation
+the instance waits in `proposed`. Files in the footprint of an open or
+in-progress task are skipped during selection. The executing run reads the
+prepared selectors back with `orbit.task.show`, quotes them in the
+execution summary, edits only files they name (dropping one as `skipped`
+is safe; adding one is not), and edits nothing if it was admitted without
+preparation. The diff is comment-only: everything
 outside comments and doc comments stays byte-identical, confirmed before
 handoff by hunk inspection and the repository's normal validation (or a
 comment-stripped comparison where the language tooling offers one). A stale

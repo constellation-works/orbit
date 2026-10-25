@@ -6,8 +6,8 @@
 //! persist selectors, and when no pilot will, runs the task only alone. A
 //! single-slot drain and an explicitly selected ship keep admitting it.
 
-use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskUpdateParams;
+use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
 use serde_json::{Value, json};
@@ -293,9 +293,75 @@ fn without_a_pilot_empty_context_work_is_admitted_only_alone() {
     );
 }
 
+/// A minted `comment-hygiene` instance is prepared before admission: it
+/// mints `proposed` without selectors, so with no pilot a multi-slot drain
+/// admits unrelated editing work instead of holding the whole tree for it.
+/// Pre-admission preparation (the pilot's selector write, then approval to
+/// backlog) establishes the batch footprint before any claim, after which
+/// the instance and disjoint editing work admit together.
+fn comment_hygiene_is_prepared_before_admission() {
+    let (_root, runtime, repo) = runtime();
+    let definitions = runtime.paths().local_dir.join("auto_tasks");
+    std::fs::create_dir_all(&definitions).unwrap();
+    std::fs::write(
+        definitions.join("comment-hygiene.yaml"),
+        include_str!("../../../assets/auto_tasks/comment-hygiene.yaml"),
+    )
+    .unwrap();
+    write_files(&repo, &["src/checked.rs", "src/other.rs"]);
+    let minted = runtime.auto_task_mint("comment-hygiene").unwrap();
+    assert_eq!(
+        minted.status,
+        TaskStatus::Proposed,
+        "a selector-free editing chore must wait for preparation, not backlog admission"
+    );
+    assert!(minted.context_files.is_empty(), "{minted:?}");
+    let editing = seed(
+        &runtime,
+        Seed {
+            title: "unrelated editing",
+            context_files: Some(&["file:src/other.rs"]),
+            ..Seed::default()
+        },
+    )
+    .id;
+    let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
+
+    // No pilot: the unprepared instance is no drain candidate, so it cannot
+    // defer unrelated editing work with a whole-tree conflict.
+    let wave = classify_with(&runtime, &drain, 2);
+    assert_eq!(wave["loose_task_ids"], json!([editing]), "{wave:#}");
+    assert_eq!(
+        admitted(&list_backlog_tasks(&runtime, json!({}))),
+        vec![editing.clone()]
+    );
+
+    // Preparation before admission: persist the batch selectors while the
+    // task is still proposed (no execution claim exists to refuse the
+    // write), then approve it to backlog.
+    set_context(&runtime, &minted.id, &["file:src/checked.rs"]);
+    runtime
+        .update_task_as_human(
+            &minted.id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            },
+            "fixture operator".into(),
+        )
+        .unwrap();
+    let prepared = classify_with(&runtime, &drain, 2);
+    assert_eq!(
+        prepared["loose_task_ids"],
+        json!([editing, minted.id]),
+        "{prepared:#}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work_scenarios,
     a_multi_slot_drain_waits_for_the_pilot_to_prepare_empty_context_work,
-    without_a_pilot_empty_context_work_is_admitted_only_alone
+    without_a_pilot_empty_context_work_is_admitted_only_alone,
+    comment_hygiene_is_prepared_before_admission
 );

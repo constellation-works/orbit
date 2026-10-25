@@ -49,7 +49,21 @@ template:
     above, and name it in the execution summary. It never loosens the
     comment-only diff rule below.
 
-    ## Select a batch
+    ## Select a batch (preparation, before admission)
+
+    This task is minted as `proposed` without `context_files`, so it is not
+    a backlog drain candidate and cannot hold the whole tree as an
+    unknown-footprint task. Batch selection is pre-admission preparation:
+    the task pilot (or an operator preparing the task by hand) follows the
+    steps in this section, persists exactly the selected `file:` selectors
+    as the task's `context_files`, and only then is the task approved to
+    `backlog` for admission. That preparation write happens before any
+    execution claim exists, so it is never the claimed write the claim
+    safeguard refuses, and the effective footprint is established before
+    any edit. Without a pilot or operator preparation the instance simply
+    waits in `proposed`; it does not stall unrelated backlog work. The
+    executing run does not re-select a wider batch: it checks the files
+    its prepared `context_files` name (see "Use the prepared footprint").
 
     1. List tracked source files with `git ls-files`. Exclude generated,
        vendored, fixture and test-data files, generated trees and indexes,
@@ -114,21 +128,34 @@ template:
        been checked. If no candidates remain, explain why in the execution
        summary and finish without a diff.
 
-    ## Narrow the footprint before editing
+    ## Use the prepared footprint
 
-    This task was minted without `context_files`, so it holds no
-    whole-workspace lock and unrelated tasks stay admissible. Keep it that
-    way: before editing anything, narrow this task's footprint to exactly the
-    selected files with
-    `orbit tool run orbit.task.update --input '{"id":"<this task ID>","context_files":["file:<selected path>"],"model":"<agent-family>"}'`
-    (one `file:` selector per selected path, replacing any broader scope a
-    preparation step supplied), then read it back with
+    Admission already established this task's footprint: preparation set
+    `context_files` to exactly the selected `file:` selectors before the
+    task reached `backlog`, before any execution claim. Do not widen or
+    replace it during the run — in particular, do not depend on an ordinary
+    `orbit.task.update` scope write (a protecting claim refuses it) or on
+    returning `context_files_added` at handoff (that is after editing, so
+    it cannot establish locks). In claimed mode the same rule is simpler:
+    the selectors travelled with the task from its owner-side preparation,
+    so no scope write is needed or available.
+
+    Before editing anything, read the prepared selectors back with
     `orbit tool run orbit.task.show --input '{"id":"<this task ID>","field":"context_files","model":"<agent-family>"}'`
-    and quote the narrowed selectors in the execution summary as evidence the
-    narrowing took effect. In claimed mode, where `orbit.task.update` is
-    unavailable, return the same selectors as the run's `context_files_added`
-    output and say so in the summary instead. Edit only files in that narrowed
-    footprint; a file you did not select is a finding for a task, not an edit.
+    (in claimed mode, read them from the injected task) and quote them in
+    the execution summary as evidence of the batch you were admitted for.
+    Those files, in that order, are the selected batch for every later
+    step: the ledger `files` rows, the outcomes and the line budget. You
+    may drop a prepared file from the checked batch — recording it as
+    `skipped` with a reason, for example that another task now owns it or
+    it is unchanged since its last `clean`/`fixed` check — because editing
+    a subset of the admitted footprint is safe; never add a file the
+    footprint does not name. A file outside the footprint is a finding for
+    a task, not an edit. If the read-back shows no selectors, the task was
+    admitted without preparation (for example an explicit single-slot
+    selection): edit nothing, attach a ledger with an empty `files` list
+    and a `notes` entry saying the batch was not prepared before
+    admission, and finish as a validated no-diff run.
 
     ## Check and record
 
@@ -190,7 +217,7 @@ template:
     in order with their line counts, each path's outcome and any ranges,
     changes and verification evidence (including the comment-only
     confirmation), files skipped for another task's footprint or held back
-    for a dedicated task, defect tasks filed, the narrowed `context_files`
+    for a dedicated task, defect tasks filed, the prepared `context_files`
     selectors read back before editing, and whether prior ledgers were
     readable. State explicitly when the batch was clean. Do not manufacture
     an edit to mark a clean run complete; when no file required changes,
@@ -201,7 +228,7 @@ template:
   - Every selected file has an outcome of `clean`, `fixed`, `partial` or `skipped`; a file over 800 lines was taken alone or as recorded ranges and is not `clean` until every range is checked; a `skipped` or `partial` file gives a reason.
   - A file whose two most recent ledger outcomes are `skipped` or `partial` was not selected and is reported as needing a dedicated task.
   - The diff changes only comments and doc comments — everything outside them is byte-identical — confirmed before handoff by the method the execution summary names, and real defects revealed by stale comments were filed as deduplicated tasks (at most two, `spawned_from` this task) instead of being fixed in place.
-  - Before editing, this task's `context_files` were narrowed to exactly the selected `file:` selectors and read back (or returned as `context_files_added` in claimed mode), so no whole-workspace lock was held; the execution summary quotes the narrowed selectors.
+  - This task was prepared before admission — its `context_files` were set to exactly the selected `file:` selectors while it was still `proposed`, before any execution claim — and the run read them back before editing, edited only files they name, and quotes them in the execution summary; an unprepared run (no selectors at read-back) edited nothing and finished no-diff.
   - A versioned `comment-hygiene-ledger.json` artifact records one row per selected file (outcome, date and `checked_through` commit) and carries each path's two latest attempts forward in `state`, and the execution summary records the batch, checks, changes and limits, including clean no-diff batches with validated no-diff evidence.
   task_type: chore
   tags:
@@ -213,13 +240,14 @@ template:
   - orbit.task.artifact.put
   - orbit.task.list
   - orbit.task.show
-  - orbit.task.update
-  # No context_files on purpose: the batch is only known at run time, and a
-  # minted task without selectors holds no workspace lock. The body narrows
-  # context_files to the selected files before editing.
+  # No context_files and proposed on purpose: the batch is known only after
+  # selection, so the instance waits in proposed — never a backlog
+  # whole-tree holder — until pre-admission preparation (task pilot or
+  # operator) persists the selected file: selectors and it is approved to
+  # backlog. The executing run never writes its own scope.
   priority: low
   complexity: low
-  status: backlog
+  status: proposed
 dedupe: skip_if_open
 created_by: system
 created_at: 2026-09-24T00:00:00Z
