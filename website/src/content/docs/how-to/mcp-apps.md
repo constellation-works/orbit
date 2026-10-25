@@ -172,10 +172,11 @@ Everything the panel can change goes through the ordinary Orbit tools, under
 the session's own authority, workspace policy and audit:
 
 - **Tasks.** **New task** files a proposed task that needs acceptance criteria;
-  nothing runs until it is dispatched. Edit changes one field at a time, and
-  comments are appended separately. Edits carry the revision they were read at
-  and are refused if the task changed. A retried write with the same request ID
-  does not repeat the mutation.
+  nothing runs until it is dispatched. One guarded task edit may include
+  title, description, acceptance criteria, priority, crew, and status
+  together, and a comment or a review verdict is a separate write. Edits
+  carry the revision they were read at and are refused if the task changed.
+  A retried write with the same request ID does not repeat the mutation.
 - **Review.** A review records criterion outcomes and evidence against the
   current revision and the run or pull-request head. Requesting changes and
   recording acceptance keep the task in review. **Accept and mark done**
