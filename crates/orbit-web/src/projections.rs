@@ -50,13 +50,21 @@ pub(crate) fn task_to_json(
 
 /// `GET /api/tasks/:id`: the show record plus the dashboard extras — linked
 /// pull requests, the lifecycle transitions with their evidence requirements,
-/// run navigability and `readiness.preparing`.
+/// run navigability and `readiness.preparing` — and, for a proposed task
+/// held by pilot warnings or a blocked task, `escalation_triage`: whether
+/// the details panel's Triage action may submit now, and why not.
 pub(crate) fn task_detail_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Value, OrbitError> {
-    task_detail_with_dashboard_extras(runtime, row, status_by_id)
+    let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id)?;
+    if let Some(triage) = runtime.escalation_triage_eligibility_json(row)?
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert("escalation_triage".to_string(), triage);
+    }
+    Ok(value)
 }
 
 /// Marker the list rows carry so a client can tell a summary from the full

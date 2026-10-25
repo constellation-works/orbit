@@ -159,7 +159,9 @@ impl TriageCandidacy {
         }
     }
 
-    fn detail(&self) -> String {
+    /// Human-readable detail for the candidacy, naming the episode state
+    /// behind it.
+    pub fn detail(&self) -> String {
         match self {
             Self::Qualifies(episode) => format!("qualifies ({:?})", episode.basis),
             Self::NotBlocked => "the task is not blocked".to_string(),
