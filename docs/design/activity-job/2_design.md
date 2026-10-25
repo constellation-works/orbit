@@ -939,8 +939,8 @@ shipped non-implementers, still fails `RequiredToolAdmission` when the
 disallow list covers a requirement. The failure names the tool and the
 activity. The shipped non-implementers are `agent_explore`, `agent_invoke`,
 `agent_review_repair`, `final_recovery`, `pr_conflict_recovery`,
-`review_reconciliation_review`, `step_failure_recovery`, `task_pilot` and
-`verify_finding`. For those, a
+`review_reconciliation_review`, `step_failure_recovery`, `task_pilot`,
+`triage_escalation` and `verify_finding`. For those, a
 covered requirement is dropped from `requested_tools` and recorded as a note
 on the resolution and on `ToolAllowlistHarnessDelegated`
 (`omitted_requirement_notes`). It stays out of `effective_tools`. A custom

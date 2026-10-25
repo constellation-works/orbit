@@ -1289,6 +1289,255 @@ fn answering_an_expired_request_is_refused_and_changes_nothing() {
     );
 }
 
+/// [ORB-18246] Escalation triage of a task whose implementer requires
+/// `orbit.task.add` is admitted through the public pipeline and runs the
+/// triager, while the triager's callable set still excludes every tool on
+/// the `triage_escalation` disallow list.
+#[cfg(unix)]
+#[test]
+fn escalation_triage_runs_a_triager_for_a_task_requiring_a_disallowed_tool() {
+    use std::os::unix::fs::PermissionsExt;
+
+    use orbit_engine::activity_job::{V2ActivityCatalog, load_activity_asset, load_job_asset};
+    use orbit_engine::{
+        DispatchError, V2AuditWriter, execute_job_with_resume,
+        resolve_job_catalog_refs_for_execution,
+    };
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::activity_job::{ActivityV2Spec, V2AuditEventKind};
+    use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
+
+    if !crate::dispatch_admission::isolated(
+        "blocked_task_triage::escalation_triage_runs_a_triager_for_a_task_requiring_a_disallowed_tool",
+    ) {
+        return;
+    }
+    let fx = fixture_with_config(
+        "[workflow]\ndefault_crew = \"hard_lane\"\nhard_complexity_crews = [\"hard_lane\"]\n\
+         [crews.hard_lane]\nprovider = \"codex\"\nmodel = \"fixture-hard\"\n",
+    );
+    let git = |args: &[&str]| -> String {
+        let output = crate::git_test_support::command()
+            .args(args)
+            .current_dir(&fx.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-b", "main"]);
+    git(&["config", "user.name", "Orbit Test"]);
+    git(&["config", "user.email", "orbit-test@example.com"]);
+    git(&["config", "commit.gpgsign", "false"]);
+    std::fs::write(fx.repo.join("README.md"), "fixture\n").unwrap();
+    git(&["add", "README.md"]);
+    git(&["commit", "-m", "seed"]);
+    let revision = git(&["rev-parse", "HEAD"]);
+    let tree = git(&["rev-parse", "HEAD^{tree}"]);
+
+    let created = fx
+        .runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "File findings as tasks",
+                "description": "The implementer files findings as tasks.",
+                "acceptance_criteria": ["Findings are filed."],
+                "complexity": "low",
+                "type": "chore",
+                "workspace": fx.repo.to_string_lossy(),
+                "model": "codex",
+                "required_tools": ["orbit.task.add", "orbit.task.show"],
+            }),
+        )
+        .unwrap();
+    let task = created["id"].as_str().unwrap().to_string();
+    fx.update(json!({"id": task, "plan": "1. Do it."}));
+    fx.update(json!({"id": task, "status": "backlog"}));
+    fx.escalate(&task);
+
+    let runtime = OrbitRuntime::from_roots(&fx.global, &fx.repo.join(".orbit"))
+        .unwrap()
+        .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm())
+        .with_automation_machine_identity(Some("fixture-machine".into()));
+
+    // Only the provider response is scripted; admission, preparation,
+    // fan-out and the triager dispatch use the shipped job and runtime.
+    let provider = fx._root.path().join("codex");
+    let response = json!({
+        "schemaVersion": 1, "status": "success", "error": null,
+        "result": {
+            "partition_index": 0, "observed_revision": revision, "observed_tree": tree,
+            "tasks": [{"task_id": task, "action": "report", "detail": "operator checks the host"}],
+            "summary": "triaged",
+        },
+    });
+    std::fs::write(
+        &provider,
+        format!("#!/bin/sh\ncat > /dev/null\ncat <<'RESPONSE'\n{response}\nRESPONSE\n"),
+    )
+    .unwrap();
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let mut executor: ExecutorResource = serde_yaml::from_str(
+        &std::fs::read_to_string(assets.join("executors/codex.yaml")).unwrap(),
+    )
+    .unwrap();
+    executor.spec.command = Some(provider.display().to_string());
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+
+    let triage_asset = load_activity_asset(
+        &std::fs::read_to_string(assets.join("activities/triage_escalation.yaml")).unwrap(),
+    )
+    .unwrap();
+    let ActivityV2Spec::AgentLoop(triage_spec) = &triage_asset.spec.spec else {
+        panic!("triage_escalation must run an agent");
+    };
+    let disallow_list = triage_spec.tool_disallow_list.clone().unwrap();
+    assert!(
+        disallow_list.iter().any(|tool| tool == "orbit.task.add"),
+        "triage_escalation disallows orbit.task.add"
+    );
+    let mut catalog = V2ActivityCatalog::new();
+    for name in ["prepare_escalation_triage", "triage_escalation"] {
+        let asset = load_activity_asset(
+            &std::fs::read_to_string(assets.join(format!("activities/{name}.yaml"))).unwrap(),
+        )
+        .unwrap();
+        catalog.insert(asset.name, asset.spec);
+    }
+    let mut job = load_job_asset(
+        &std::fs::read_to_string(assets.join("jobs/escalation_triage_pipeline.yaml")).unwrap(),
+    )
+    .unwrap()
+    .spec;
+    resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
+
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        runtime.sqlite_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+    );
+    let run = jobs
+        .insert_job_run("escalation_triage_pipeline", 1, Utc::now(), None, None)
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, Utc::now(), std::process::id())
+        .unwrap();
+    runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(
+                run.run_id.clone(),
+                "escalation_triage_pipeline".into(),
+                json!({}),
+            ),
+        )
+        .unwrap();
+    let audit = V2AuditWriter::with_disk_sinks(
+        &fx._root.path().join("audit"),
+        runtime.v2_audit_store().unwrap(),
+        runtime.workspace_id().unwrap(),
+        &run.run_id,
+        "codex",
+        Some(&fx.repo),
+    )
+    .unwrap();
+    let outcome = execute_job_with_resume(
+        &job,
+        json!({
+            "subject": "block", "task_ids": [task],
+            "workspace_path": fx.repo, "base_branch": "main",
+        }),
+        &run.run_id,
+        audit.clone(),
+        &runtime,
+        None,
+    )
+    .expect("ORB-18246: escalation triage must admit a task requiring orbit.task.add");
+    assert!(outcome.success, "the triage job succeeds: {outcome:?}");
+    assert_eq!(outcome.pipeline["prepare"]["task_count"], 1);
+    assert_eq!(outcome.pipeline["prepare"]["partition_count"], 1);
+
+    let events = audit.events_snapshot().unwrap();
+    let (requested, effective, notes, event_disallow_list) = events
+        .iter()
+        .find_map(|event| match &event.kind {
+            V2AuditEventKind::ToolAllowlistHarnessDelegated {
+                task_ids,
+                requested_tools,
+                effective_tools,
+                omitted_requirement_notes,
+                tool_disallow_list,
+                ..
+            } if task_ids == std::slice::from_ref(&task) => Some((
+                requested_tools,
+                effective_tools,
+                omitted_requirement_notes,
+                tool_disallow_list,
+            )),
+            _ => None,
+        })
+        .expect("the triager reached the provider with its admitted tool policy");
+    assert_eq!(
+        event_disallow_list.as_ref(),
+        Some(&disallow_list),
+        "the triager event must carry the shipped triage_escalation disallow list"
+    );
+    assert!(
+        !requested.iter().any(|tool| tool == "orbit.task.add"),
+        "the covered requirement is dropped from requested_tools: {requested:?}"
+    );
+    assert!(
+        requested.iter().any(|tool| tool == "orbit.task.show"),
+        "a requirement the disallow list does not cover stays requested: {requested:?}"
+    );
+    for tool in &disallow_list {
+        assert!(
+            !effective.iter().any(|allowed| allowed == tool),
+            "the triager must never receive disallowed tool {tool}: {effective:?}"
+        );
+    }
+    assert!(
+        notes.iter().any(|note| {
+            note.contains(&task)
+                && note.contains("orbit.task.add")
+                && note.contains("triage_escalation")
+        }),
+        "the dropped requirement is recorded: {notes:?}"
+    );
+    assert_eq!(
+        runtime.get_task(&task).unwrap().required_tools,
+        vec!["orbit.task.add".to_string(), "orbit.task.show".to_string()],
+        "triaging preserves the implementer's contract"
+    );
+
+    // The implementing activity remains fail-closed for the same requirement.
+    let refused = runtime
+        .resolve_activity_tool_denials(
+            std::slice::from_ref(&task),
+            "agent_implement",
+            &["orbit.task.add".to_string()],
+        )
+        .expect_err("implementing activities remain fail-closed for covered requirements");
+    assert!(
+        matches!(
+            &refused,
+            DispatchError::RequiredToolAdmission { task_id, tool_name, .. }
+                if task_id == &task && tool_name == "orbit.task.add"
+        ),
+        "a covering implementer deny list still refuses its required tool: {refused}"
+    );
+    jobs.finalize_job_run(&run.run_id, JobRunState::Success, Utc::now(), None)
+        .unwrap();
+}
+
 #[test]
 fn a_pilot_warning_requeue_is_refused_as_a_requeue_whatever_proof_it_carries() {
     let fx = fixture();
