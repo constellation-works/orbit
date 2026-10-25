@@ -22,7 +22,7 @@ fn recency_pages_walk_an_index_instead_of_sorting_the_workspace() {
             .iter()
             .map(|param| match param.to_sql().unwrap() {
                 rusqlite::types::ToSqlOutput::Owned(value) => value,
-                rusqlite::types::ToSqlOutput::Borrowed(value) => value.into(),
+                rusqlite::types::ToSqlOutput::Borrowed(value) => Value::try_from(value).unwrap(),
                 other => panic!("unexpected parameter {other:?}"),
             })
             .collect::<Vec<Value>>();

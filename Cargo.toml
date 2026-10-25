@@ -85,7 +85,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal", "net
 tower-http = { version = "0.6", features = ["compression-gzip"] }
 jsonschema = { version = "0.18", default-features = false }
 libc = "0.2"
-rusqlite = { version = "0.31", features = ["bundled", "chrono", "trace"] }
+rusqlite = { version = "0.41", features = ["bundled", "chrono", "fallible_uint", "trace"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
 rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
 serde = { version = "1", features = ["derive"] }

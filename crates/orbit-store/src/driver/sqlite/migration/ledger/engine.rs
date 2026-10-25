@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
+use orbit_common::storage::sqlite::{pragma, sqlite_error, sqlite_store_error};
 use orbit_common::{OrbitError, SqliteContention, StorageLayer};
 use rusqlite::{Connection, ErrorCode, Transaction, TransactionBehavior, params};
 
@@ -244,21 +244,20 @@ struct ForeignKeysOff<'a> {
 
 impl<'a> ForeignKeysOff<'a> {
     fn new(conn: &'a Connection) -> Result<Self, OrbitError> {
-        conn.pragma_update(None, "foreign_keys", "OFF")
-            .map_err(|error| {
-                sqlite_error(
-                    StorageLayer::Migration,
-                    &error,
-                    format!("failed to turn off foreign keys for a migration: {error}"),
-                )
-            })?;
+        pragma::set(conn, "foreign_keys", &"OFF").map_err(|error| {
+            sqlite_error(
+                StorageLayer::Migration,
+                &error,
+                format!("failed to turn off foreign keys for a migration: {error}"),
+            )
+        })?;
         Ok(Self { conn })
     }
 }
 
 impl Drop for ForeignKeysOff<'_> {
     fn drop(&mut self) {
-        if let Err(error) = self.conn.pragma_update(None, "foreign_keys", "ON") {
+        if let Err(error) = pragma::set(self.conn, "foreign_keys", &"ON") {
             orbit_common::tracing::warn!(
                 target: "orbit.store.sqlite",
                 error = %error,

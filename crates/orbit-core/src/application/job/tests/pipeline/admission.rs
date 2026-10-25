@@ -288,7 +288,7 @@ fn trigger_recording_preserves_a_competing_checkpoint_and_drain_controls() {
         .connection()
         .lock()
         .unwrap()
-        .busy_handler(None)
+        .busy_handler(None::<fn(i32) -> bool>)
         .unwrap();
 
     expected.trigger = Some(JobRunTrigger::cli());
