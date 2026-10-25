@@ -1,89 +1,214 @@
 schemaVersion: 1
 name: code-review
-description: Post-merge code review of changes merged since the last completed sweep
+description: Steady whole-tree code review that reviews the two least recently reviewed modules in full
 enabled: false
 schedule:
   cron: 40 */6 * * *
 template:
-  title: Review recently merged changes
+  title: Review the two least recently reviewed modules
   description: |-
-    Review the code merged into this workspace since the last completed sweep.
-    The durable output is filed Orbit tasks for every confirmed finding plus the
-    recorded review cursor; the execution summary is the audit trail. Narrative-only
-    output does not count as delivery.
+    Review this workspace's whole tree a little at a time: partition the tracked
+    tree into modules, pick the two modules reviewed least recently, and read
+    both in full at one pinned commit. The durable output is filed Orbit tasks
+    for every confirmed finding plus the recorded rotation and cursor records;
+    the execution summary is the audit trail. Narrative-only output does not
+    count as delivery. This is not a review of a merged-commit window: a
+    whole-module read also finds defects older than any recent change, and
+    per-delivery diff review is a separate concern owned elsewhere.
 
     ## Rules and command surfaces
 
-    - Use the registered Orbit tool surface. Find the newest current-name sweep with
-      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["code-review","no-diff-expected","auto-task:code-review"],"limit":1,"model":"<agent-family>"}'`
-      and the newest legacy-name sweep with
-      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["code-review-sweep","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`.
-      Both tag filters use AND semantics. Compare the first result from each
-      newest-first list by `created_at`, with the lexicographically smaller task ID
-      winning an equal timestamp, and read the selected sweep's cursor with
-      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
-      A finding is a `bug` tagged only `code-review`, so it is never a sweep
-      candidate even when it completed after the selected sweep. The
-      `auto-task:code-review` provenance tag is carried only by tasks minted from
-      this definition, so a hand-filed or full-review chore that shares the
-      other tags never displaces a real sweep's cursor.
+    - Use the registered Orbit tool surface. List prior rotation sweeps, newest
+      first, with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["code-review","no-diff-expected","auto-task:code-review"],"limit":50,"fields":["id","created_at"],"model":"<agent-family>"}'`.
+      If the envelope reports `truncated`, repeat with a larger `limit` until it
+      does not, so no completed sweep is left out of the rotation history.
+      Both tag filters use AND semantics. The `auto-task:code-review`
+      provenance tag is carried only by tasks minted from this definition, so a
+      hand-filed or full-review chore that shares the other tags is never a
+      rotation sweep, and a finding is a `bug` tagged only `code-review`, so it
+      is never a sweep either.
+      For each listed sweep, discover its artifacts before fetching any record:
+      list them with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
+      and fetch the rotation record with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"reviewed-modules.json","model":"<agent-family>"}'`
+      only when that listing names `reviewed-modules.json`.
       Search existing coverage with
       `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
       and list open review work with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"code-review","model":"<agent-family>"}'`.
-      File a finding with
+      File a confirmed high or critical finding as its own task with
       `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
-      Omit the `regression_from` relation only when no task in the window can be
-      held responsible. Derive canonical `file:` selectors from every evidenced
+      File a module's grouped medium and low findings as its single cleanup task with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown listing every grouped finding>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      In the grouped payload, `context_files` is the deduplicated union of every
+      grouped finding's selectors, and `relations` carries one classified
+      `regression_from` entry for each attributable grouped finding (repeat the
+      entry per culprit task; omit it for a finding no task can be held
+      responsible for, and say why in the description). In either payload, omit
+      the `regression_from` relation only when no landed task can be held
+      responsible. Derive canonical `file:` selectors from every evidenced
       source path, removing the line suffix, and add the matching
       regression-test location. Use existing paths where possible; for a test file
       that must be created, set `allow_missing_context: true` and identify that
       intended path. Never file a finding without context selectors.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
-    - Fail open. A window with no confirmed findings is a successful no-op. Do not
-      invent work to justify the run.
+    - Fail open. A run whose two modules hold no confirmed findings is a
+      successful no-op. Do not invent work to justify the run.
 
-    ## Determine the review window
+    ## Pin the commit
 
-    Run both completed-sweep queries above and select the newer result using the
-    stated ordering. Read the last-reviewed commit recorded in that sweep's
-    execution summary, then review the commits from that point to the current HEAD
-    of the workspace's integration branch. Never use a `code-review`-only finding
-    as a cursor, and never treat a selected sweep's missing cursor as a first run.
-    If neither sweep query returns a result, record the current HEAD as the baseline
-    and stop — only that case seeds the cursor.
+    Fetch the workspace's integration branch and record the full 40-character
+    SHA of its tip. Partition, selection counts and every read use the tree as
+    it stands at that SHA (`git show <sha>:<path>` when the checkout has
+    moved), so later merges cannot shift a module under the review.
 
-    ## Review the window
+    ## Partition the tree into modules
 
-    Read the diffs white-box: correctness, concurrency and error handling, and
-    conformance to the repository's documented standards (agent guide, contributing
-    guide, lint configuration). Review the window as a whole — interactions between
-    separately merged changes are findings per-change review cannot see.
+    The module bound is **25,000 tracked text lines**, a maximum, not a target
+    that may be exceeded. This is the same partition rule the whole-tree
+    snapshot review uses, with no language- or toolchain-specific rule, so both
+    definitions agree on what a module is. Inventory tracked files with
+    `git ls-tree -r -z <sha>` and count each text blob at that SHA
+    (`git show <sha>:<path>`), including an unterminated final line. Do not
+    measure the moving checkout or count a concatenated archive containing
+    binary files. Include source, tests, documentation and authored assets,
+    including files at the root. Vendored, generated, binary and
+    lockfile-only content may be excluded; record every excluded path and its
+    reason in the execution summary and in `reviewed-modules.json`.
+
+    Start with directory boundaries: take directories as candidates first.
+    Recursively split every candidate above 25,000 lines into disjoint child
+    directories, keeping files directly in the parent as separate candidates.
+    If a leaf directory is still too large, split it into disjoint file sets.
+    Prefer module boundaries where they fit the bound; the bound takes
+    precedence. Group small, closely related candidates only when their
+    combined count stays within the bound. Every included file must belong to
+    exactly one module. Use `dir:` selectors for whole directories and `file:`
+    selectors for direct files or file sets; never select an entire parent
+    alongside its children in different modules. A module's ID is its
+    selectors: the module's selectors sorted lexicographically and joined with
+    `,`. Before selecting, verify all module counts against the bound and
+    reconcile the inventories for gaps and duplicates. If a single included
+    file exceeds 25,000 lines and this rule cannot produce a bounded module
+    covering it, report `review_incomplete` with that uncovered path and
+    count; do not file an oversized module review, silently exclude the file,
+    or record it as reviewed.
+
+    ## Build the last-reviewed map and select two modules
+
+    The last-reviewed map comes only from `reviewed-modules.json` artifacts on
+    done chores carrying `auto-task:code-review`, read as above — never from
+    execution-summary prose, `sweep-cursor.json`, or a finding. Work through
+    the listed sweeps newest first (newer `created_at` first, the
+    lexicographically smaller task ID winning an equal timestamp): the first
+    record that names a module ID is that module's most recent review, giving
+    its review time (that sweep's `created_at`) and its pinned SHA. A sweep
+    whose artifact listing has no `reviewed-modules.json`, or whose record is
+    unreadable, malformed or names another schema version, counts as
+    reviewing nothing — legacy window sweeps reviewed nothing in this
+    rotation. Ignore modules the current partition no longer contains.
+
+    A module that grew past the bound since its last review is split by the
+    partition above, and each child inherits the last-reviewed time and pinned
+    SHA of the module it was split from: when a current module has no record
+    under its own ID, expand each recorded module's selectors to the file set
+    they covered at that record's pinned SHA, and a current module whose
+    files are a subset of one recorded module's files inherits that record.
+    When more than one recorded module covers a current module's files, it
+    inherits the oldest of their last-reviewed times and that record's pinned
+    SHA.
+
+    Count the commits since the last review for every module: for a reviewed
+    or inheriting module, the number of commits in
+    `<last reviewed pinned SHA>..<pinned SHA>` that touch the module's paths
+    (`git rev-list --count <from>..<pinned SHA> -- <module paths>`); for a
+    never-reviewed module, every commit up to the pinned SHA that touches its
+    paths. Order all current modules by: never-reviewed first; then oldest
+    last-reviewed time; then more commits since the last review; then the
+    smaller module ID. Select the first **2** (every module when the partition
+    holds fewer than 2). Record the ordering evidence — each selected
+    module's last-reviewed time and pinned SHA or never-reviewed state, its
+    commit count, and its ID — in the execution summary.
+
+    ## Review the two selected modules in full
+
+    Read each selected module in full at the pinned SHA, not a diff. On the
+    first read, divide its inventory into stable named read partitions of at
+    most 10,000 lines each. Prefer directory and module boundaries; split
+    files larger than a partition into explicit inclusive line ranges. Cover
+    every included line exactly once, with no gaps or overlaps, and include
+    empty files in the inventory. Read every partition in full. Use parallel
+    read passes or subagents when the crew and execution rules support them;
+    otherwise read partitions sequentially. The reviewer remains responsible
+    for reconciling every partition and checking calls and invariants across
+    their boundaries. A search, summary, sampled read or truncated tool
+    response does not count as a full read; continue in chunks until all
+    lines in the partition have been examined.
+
+    Look for:
+    - correctness: logic errors, wrong edge cases, broken invariants between
+      callers and callees;
+    - error handling: swallowed or mislabelled errors, panics reachable from
+      input, partial writes left behind on failure;
+    - concurrency: races, lock ordering, locks held across awaits, unbounded
+      or leaked tasks;
+    - security boundaries: path traversal, injection, trust of unvalidated
+      input, secrets in logs or output;
+    - resource bounds: unbounded buffers, queues, retries, recursion or file
+      growth;
+    - conformance to the repository's documented standards: its agent guide,
+      contributing guide, standards documents and lint configuration;
+    - tests that do not test what they claim: assertions that cannot fail,
+      fixtures that bypass the code under test, names that promise behavior
+      the body never exercises.
+
+    If full reading of a selected module cannot be met, do not record that
+    module as reviewed and do not claim a clean no-op for it: return
+    `result.blocker` with `kind: review_incomplete` and evidence naming each
+    uncovered partition, file or unread line range and unresolved check, and
+    put the same inventory in the execution summary. Only a module with every
+    partition fully read and checks across partitions resolved counts as
+    reviewed in this run.
 
     ## Attribute each finding to the task that introduced it
 
-    Every finding is a regression from a change that landed in the window, so
-    name the task that caused it. Find the commit that introduced the defect
-    (`git log -L` or `git blame` on the offending lines, restricted to the
-    reviewed range) and read the task ID from that commit: squash-merge subjects
-    carry it as `[<task-id>]`, and the delivery's pull request references it
-    otherwise. Confirm with `orbit.task.show` that the task exists and that its
-    change is the one at fault — blame the commit that introduced the defect, not
-    a later commit that merely touched the same file. When the defect spans
-    several tasks' changes, blame the one whose change made the code wrong.
-    When the culprit commit carries no task ID, or the defect predates the
-    window and was only exposed by it, say so in the finding and file it without
-    the relation rather than blaming a bystander.
+    Name the task that caused each finding when a landed task can be held
+    responsible. Find the commit that introduced the defect (`git log -L` or
+    `git blame` on the offending lines at the pinned SHA) and read the task ID
+    from that commit: squash-merge subjects carry it as `[<task-id>]`, and
+    the delivery's pull request references it otherwise. Confirm with
+    `orbit.task.show` that the task exists and that its change is the one at
+    fault — blame the commit that introduced the defect, not a later commit
+    that merely touched the same file. When the defect spans several tasks'
+    changes, blame the one whose change made the code wrong. When the culprit
+    commit carries no task ID, or the defect predates every task that can be
+    held responsible and was only exposed later, say so in the finding and
+    file it without the relation rather than blaming a bystander. A
+    whole-module review reaches defects far older than any recent change;
+    age alone never makes a bystander responsible.
 
     ## File confirmed findings
 
-    Verify every finding against the live code before filing — a diff that looks
-    wrong but is guarded elsewhere is not a finding. Search open Orbit tasks tagged
-    `code-review` before filing; skip duplicates and nitpicks. File each confirmed
-    finding as its own Orbit task with file:line evidence, a severity-appropriate
-    priority, the `code-review` tag, and a `regression_from` relation targeting
-    the task identified above. The finding's description names the culprit task
-    and the commit that introduced the defect.
+    Verify every finding against the code at the pinned SHA before filing — a
+    line that looks wrong but is guarded elsewhere is not a finding. Search
+    open Orbit tasks tagged `code-review` before filing; skip duplicates and
+    nitpicks. Give each confirmed finding a severity — `critical`, `high`,
+    `medium` or `low` — used as the filed task's priority, file:line evidence
+    at the pinned SHA, the `code-review` tag, and its module's ID.
+
+    File each confirmed `critical` or `high` finding as its own `bug` task.
+    Group a module's `medium` and `low` findings into at most one cleanup
+    `bug` per module: it lists each grouped finding with its title, severity,
+    file:line evidence and culprit task or the reason none can be held
+    responsible; its `context_files` are the deduplicated union of the
+    grouped findings' selectors; its priority is the highest grouped severity
+    (`medium` when any grouped finding is medium, otherwise `low`); and it
+    carries a classified `regression_from` relation for each attributable
+    grouped finding. A module with no medium or low findings files no cleanup
+    task. Never group a high or critical finding into a cleanup task, and
+    never file more than one cleanup task for one module in one run.
 
     Classify every `regression_from` relation you file by adding
     `"regression":{"nature":"<nature>","escape":"<escape>"}` to it.
@@ -119,27 +244,50 @@ template:
     comparing the per-commit suite on the integration branch against its
     parent commit, not just a green check on the PR's own base.
 
-    ## Record the cursor
+    ## Record the rotation and the cursor
 
-    Always record the reviewed range and the new last-reviewed commit in the
-    persisted execution summary — the next sweep's window starts there. Record
-    the same commit as this task's machine-readable cursor artifact, which the
-    scheduler reads to decide whether the next tick has anything to review:
-    write `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`
+    On every completed run, write the rotation record to
+    `.orbit/tmp/reviewed-modules.json` and attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/reviewed-modules.json","path":"reviewed-modules.json","model":"<agent-family>"}'`.
+    Its shape is
+    `{"schema_version":1,"ref":"<integration branch>","pinned_sha":"<full 40-character commit SHA>","modules":[{"id":"<module ID>","selectors":["<selector>"],"line_count":123,"filed_finding_ids":["<filed task ID>"]}],"exclusions":[{"path":"<path>","reason":"<reason>"}]}`.
+    List exactly the modules this run fully reviewed (both selected modules,
+    or every module when fewer than 2 exist), each with its ID, its selectors,
+    its measured line count and the IDs of every task filed for its findings
+    — each individual high or critical task, and the module's cleanup task
+    once when one was filed. A module this run did not fully read is never
+    listed. The next run's last-reviewed map is built only from these
+    records, so a completed run without one leaves its modules
+    never-reviewed.
+
+    Always record the same pinned commit as this task's machine-readable
+    cursor artifact, which the scheduler reads to decide whether the next
+    tick has anything to review: write
+    `{"schema_version":1,"ref":"<integration branch>","cursor":"<full 40-character commit SHA>"}`
     to a gitignored scratch file inside the checkout (for example
     `.orbit/tmp/sweep-cursor.json`) and attach it with
     `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/sweep-cursor.json","path":"sweep-cursor.json","model":"<agent-family>"}'`.
     `orbit tool show <tool.name>` prints the tool's schema.
-    Write it on every completed sweep, including an empty window: the commit it
-    names is the one this sweep examined through, and a completed sweep without
-    it leaves the next tick no cursor to compare the branch tip against.
+    Write it on every completed run, including a run with no confirmed
+    findings: the commit it names is the pinned SHA this run examined, and a
+    completed run without it leaves the next tick no cursor to compare the
+    branch tip against.
+
+    Record in the execution summary the integration branch and pinned SHA,
+    the partition (every module's ID, selectors and line count, with every
+    exclusion and its reason), the selection ordering evidence for the two
+    reviewed modules, per-partition reading coverage for each, and every
+    filed task ID (naming the cleanup task's module and grouped findings, and
+    each individual task's finding). State explicitly when a reviewed module
+    held no confirmed findings.
   acceptance_criteria:
-  - The review window was derived from the previous sweep's recorded cursor, or the current HEAD was seeded as the baseline on the first run.
-  - Every filed finding was verified against live code, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag.
-  - Every filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, classified with a `regression` nature and escape (`unclassified` when the evidence does not settle one), or its description states why no task in the window can be held responsible.
-  - The reviewed range and the new last-reviewed commit are recorded in the persisted execution summary.
-  - The new last-reviewed commit is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA).
-  - A window with no confirmed findings succeeds as a no-op.
+  - The tracked tree was partitioned at one pinned integration-branch SHA into disjoint modules of at most 25,000 tracked text lines each, directory boundaries first, with every exclusion named, and the 2 modules selected were the least recently reviewed (never-reviewed first, then oldest last-reviewed time, then more commits since the last review, then the smaller module ID), or every module when fewer than 2 exist.
+  - Each selected module was read in full at the pinned SHA in read partitions of at most 10,000 lines covering every included line exactly once, and incomplete reading is reported as `review_incomplete` with its uncovered partitions, files or ranges, never as a clean no-op.
+  - The last-reviewed map was built only from `reviewed-modules.json` artifacts on done chores carrying `auto-task:code-review`; a sweep without a readable artifact counted as reviewing nothing, and a split module's children inherited its last-reviewed time.
+  - Every filed finding was verified against the pinned SHA, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag; each critical or high finding is its own `bug`, and each module's medium and low findings are grouped into at most one cleanup `bug` for that module listing every grouped finding, unioning their `context_files`, and carrying a classified `regression_from` for each attributable grouped finding.
+  - Every attributable filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, classified with a `regression` nature and escape (`unclassified` when the evidence does not settle one), or its description states why no landed task can be held responsible.
+  - The reviewed modules are attached as this task's `reviewed-modules.json` artifact (`schema_version` 1, the pinned SHA, and per module its ID, selectors, line count and filed finding IDs) and the pinned SHA is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA), on every completed run including one with no confirmed findings.
+  - A run whose reviewed modules hold no confirmed findings succeeds as a no-op.
   task_type: chore
   tags:
   - code-review
@@ -147,6 +295,8 @@ template:
   required_tools:
   - orbit.search
   - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
   - orbit.task.list
   - orbit.task.show
   priority: medium
