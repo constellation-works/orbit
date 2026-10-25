@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The twenty seeded definitions
+## The twenty-one seeded definitions
 
-`orbit workspace init` seeds all twenty, disabled, except any you deleted (see
+`orbit workspace init` seeds all twenty-one, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -578,6 +578,22 @@ plugin being removed.
   verified context and `spawned_from`. The minted chore is `no-diff-expected`
   and never builds. This default owns the suppression counts delegated by
   the portable `code-health-sweep`.
+- **`flaky-test-hunt`** (`hard`) — weekly. Hunts flaky tests in hosted CI
+  history over a 14-day window on the integration branch and recent
+  pull-request runs, through 2 signals: a failed run followed by a
+  succeeded rerun of the same SHA, and a fail-then-pass pair on
+  adjacent integration-branch commits when nothing relevant changed.
+  Test names and bounded failure excerpts come from the failed runs'
+  logs; unparseable logs are recorded as gaps. Each run attaches
+  `flaky-test-hunt.json` (flake count per test, occurrences with run
+  ids and SHAs, gaps) diffed against the previous run, and files at
+  most 4 `proposed` tasks tagged `ci-flake`, highest flake count
+  first, deduplicated against open `ci-flake` and CI-failure-sweep
+  tasks. Filed tasks require the root cause fixed or the test deleted
+  as redundant, never silent retries or quarantine without an exit
+  plan. With no hosted CI or unreachable history it is a successful
+  no-op stating the reason. The chore itself is tagged
+  `no-diff-expected` and never builds or runs tests.
 - **`ci-budget-watch`** (`medium`) — daily. Measures the main hosted test
   job's elapsed time (discovered from the CI workflow files) against the
   repository's documented CI budget (figure, statistic, and population

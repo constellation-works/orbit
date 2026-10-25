@@ -1,0 +1,262 @@
+schemaVersion: 1
+name: flaky-test-hunt
+description: Weekly hunt for flaky tests in hosted CI history — tests that failed then passed on a rerun of the same SHA or on the next commit with nothing relevant changed — filing at most 4 proposed ci-flake fix tasks, highest flake count first
+enabled: false
+schedule:
+  cron: 15 8 * * 1
+template:
+  title: Hunt flaky tests in hosted CI history and file ci-flake fix tasks
+  description: |-
+    Find flaky tests in this repository's hosted CI history: tests that
+    failed and then passed without a relevant change. A test that fails
+    once and passes on retry never leaves CI red, so no failure sweep
+    files it, yet it costs reruns and hides real failures. This task
+    measures and files work; it does not edit source, CI configuration,
+    or tests, does not build or run tests, and does not dispatch, merge,
+    or release. The durable outputs are the `flaky-test-hunt.json`
+    artifact and at most 4 proposed `ci-flake` fix tasks; the execution
+    summary is the audit trail.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface, never direct lifecycle CLI
+      subcommands for task writes (they skip agent provenance). Find the
+      previous run with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["flaky-test-hunt","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`,
+      list that task's artifacts with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","field":"artifacts","model":"<agent-family>"}'`
+      and fetch a listed previous artifact with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"flaky-test-hunt.json","model":"<agent-family>"}'`.
+      List open flake work with
+      `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"ci-flake","limit":200,"model":"<agent-family>"}'`
+      and work filed by the CI-failure sweeps with
+      `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"ci-failure-sweep","limit":200,"model":"<agent-family>"}'`.
+      Inspect a candidate with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      Search as a backstop with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token from the test name>","kind":"task","all":true,"model":"<agent-family>"}'`
+      (lexical search matches one substring; never treat a 0-hit
+      multi-word query as proof that nothing is open). Exhaust a
+      `truncated` list by repeating it with `limit` at least the
+      returned `total`; a first page is not proof that no task exists.
+    - Check hosted history is reachable before measuring anything with
+      `orbit tool run github.auth.status --input '{}'`. Read run history
+      only through the granted run tools: list completed runs with
+      `github.run.list` (the discovered workflow file, `status:"completed"`,
+      `limit:100`, and `branch` or `event` filters matching the population
+      below), inspect each candidate run with
+      `orbit tool run github.run.view --input '{"run":"<run id>"}'`,
+      and read each failed run's failure logs with
+      `orbit tool run github.run.logs --input '{"run":"<run id>","scope":"failed"}'`.
+      Recent pull-request heads come from
+      `orbit tool run github.pr.list --input '{"state":"all","base":"__ORBIT_BASE_BRANCH__","limit":100}'`
+      when run metadata alone cannot tell which runs belong to a pull
+      request. A tool error or an empty list is a stated gap, never
+      evidence that no flakes exist.
+    - Before filing, read the installed `orbit` skill's task-authoring
+      reference completely and follow it for task shape, provenance, and
+      lifecycle rules. File each fix task (tool-created tasks start
+      `proposed`) with
+      `orbit tool run orbit.task.add --input '{"title":"Fix flaky test: <test name> (<flake count> flakes in 14 days)","description":"<markdown: flake count and window, every occurrence with failed and passing run ids, head SHAs, workflow and job, the signal that matched, a bounded failure excerpt per failed run, the located test file, and why no open ci-flake or CI-sweep task already covers this test>","acceptance_criteria":["The root cause of the nondeterminism in <test name> is identified from the cited failure excerpts and fixed in the test or in the code under it, or the test is deleted with evidence that another named test already covers the same behavior.","No fix relies on silent retries, added sleeps or timeouts that only mask the failure, weaker assertions, hidden skips, or quarantining or ignoring the test without an exit plan naming the condition and date that end the quarantine and the task that tracks it.","The affected test passes in at least 20 consecutive local runs of the repository test command for that test, or the task records why that count is impractical and the smaller repeated-run evidence gathered instead, and the repository gate commands discovered from its tracked CI configuration pass for the affected area."],"context_files":["file:<verified test file that defines the test>"],"complexity":"medium","tags":["ci-flake"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Set `complexity` to `hard` instead when the excerpts point at
+      shared state, ordering, or timing across tests rather than one
+      isolated test. Use only a verified `context_files` test file the
+      fix would modify; never add a file that is only background
+      reading. Read each filed task back with `orbit.task.show` before
+      recording it as delivered, and leave it `proposed`.
+    - Put the artifact draft under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)
+      and attach it on every completed run, including every no-op below,
+      with
+      `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/flaky-test-hunt.json","path":"flaky-test-hunt.json","model":"<agent-family>"}'`.
+    - Fail open. A run with no hosted CI, unreachable history, or no
+      flaky test at the filing bar is a successful no-op when its
+      artifact states the reason and the gaps. Do not invent a workflow,
+      a test name, or work to justify the run, and do not edit any file
+      in the checkout.
+
+    ## Discover hosted CI and pin the window
+
+    1. **Hosted CI presence.** List the tracked files under
+       `.github/workflows/` (or the equivalent hosted-CI configuration
+       directory this repository actually uses, named in the artifact).
+       Keep every workflow that runs tests on pushes to
+       `__ORBIT_BASE_BRANCH__` or on pull requests, recording the
+       workflow file and the test-bearing jobs in it. When no such
+       directory, workflow file, or test-bearing job exists, attach the
+       artifact stating "no hosted CI configuration found" with the
+       paths checked, record the same reason in the execution summary,
+       and stop as a successful no-op. When the discovered provider is
+       one the granted run tools cannot read, state that instead and
+       stop the same way.
+    2. **Reachability.** Run `github.auth.status`. When it reports the
+       history unavailable or unauthenticated, attach the artifact
+       stating that run history was unreachable (naming the tool output
+       or error), record it in the execution summary, and stop as a
+       successful no-op. Never report an unavailable or empty history
+       as evidence that no flakes exist.
+    3. **Window.** Pin the scan timestamp before reading evidence. The
+       window is the 14 days ending at that timestamp. List completed
+       runs of each discovered workflow inside the window in 2
+       populations: pushes to `__ORBIT_BASE_BRANCH__`
+       (`event:"push"`, `branch:"__ORBIT_BASE_BRANCH__"`) and pull
+       requests (`event:"pull_request"`, cross-checked against
+       `github.pr.list` heads when run metadata is ambiguous). Record
+       per run: run id, workflow file, head SHA, event, conclusion, and
+       completion time. Runs the listing cannot place in a population
+       are recorded as gaps, not silently dropped. When the run tools
+       error or return 0 completed runs in both populations, attach the
+       artifact stating that reason and stop as a successful no-op.
+
+    ## Find the 2 flake signals
+
+    Group the listed runs by workflow file and head SHA, then evaluate
+    both signals. A failed run counts at most once per test even when
+    both signals match it; record every signal that matched.
+
+    1. **Same-SHA rerun.** Within one workflow and one head SHA, a
+       completed run that failed followed by a completed rerun of the
+       same SHA that succeeded is a rerun pair. Every test named in the
+       failed run's logs is a flake occurrence for that test, cited
+       with the failed and passing run ids and the shared SHA. This
+       signal applies to both populations. A later failure after the
+       success does not erase the pair; record it as its own occurrence
+       only when a still later success on the same SHA exists.
+    2. **Adjacent commits, nothing relevant changed.** Order the
+       `__ORBIT_BASE_BRANCH__` push runs by commit ancestry with
+       `git rev-list __ORBIT_BASE_BRANCH__` over the window (never by
+       listing order alone). For a failed run on commit `C` whose next
+       tested commit on that branch is its immediate child `C+1` with a
+       succeeded run of the same workflow and the same test-bearing
+       jobs, each test named in the failed run's logs is a candidate.
+       It becomes a flake occurrence only when
+       `git diff --name-only C..C+1` changes nothing relevant: not the
+       located test file, not any file in the same package or module
+       directory as the test file, and not any file the failure excerpt
+       names. When the test file cannot be located, or relevant change
+       cannot be ruled out from that diff, record the candidate as
+       excluded with the reason; never count it. A commit pair where
+       the suite composition changed (a workflow or test-configuration
+       file in the diff) is excluded the same way.
+    3. **Test names from logs.** For each failed run in a pair, read
+       `github.run.logs` with `scope:"failed"` and extract the failing
+       test names from the failure sections the test runner printed,
+       plus one bounded failure excerpt per test (the failure heading
+       and the assertion or error lines, never the whole log). Runner
+       output shapes differ; labelled examples only, a failure list
+       headed by a failures section, or a per-test FAILED line. A run
+       whose logs error, come back empty or truncated past the failure
+       sections, or name no test is recorded in `gaps` with its run id,
+       SHA, workflow, and the reason, and contributes 0 occurrences.
+       Never guess a test name from a job or step name.
+    4. **Locate each test.** Search the tracked files for the exact
+       test name to find the test file that defines it. Record the
+       file when exactly 1 tracked test file defines it; record an
+       ambiguity or a missing definition as a gap for that test. A
+       test whose file cannot be verified this way is counted in the
+       artifact but never filed (see below).
+
+    Compute the flake count per test over the window: the number of
+    distinct failed runs attributed to that test by either signal.
+    Rank tests by flake count descending, then by most recent failed
+    run. There is no minimum count beyond 1 occurrence from a matched
+    pair: 1 failed-then-passed pair with nothing relevant changed is
+    already a flake, and the count only sets filing order.
+
+    ## File at most 4 fix tasks
+
+    Before filing anything, deduplicate each candidate test in this
+    order: (1) the open `ci-flake` list above, inspected with
+    `orbit.task.show` when a title or tag match is plausible; (2) the
+    open CI-failure-sweep list above, including tasks a sweep filed
+    under its own dedupe tag for the same failing test; (3) a
+    one-token `orbit.search` on a distinctive token from the test name
+    with `all:true`, inspecting every plausible hit in every status. A
+    test already covered by an open or proposed task gets no new task;
+    record the covering task ID in the artifact. A rejected task for
+    the same test is refiled only when this window holds occurrences
+    after that rejection, and the new description says what changed.
+
+    File 1 task per remaining flaky test, at most 4 per run, highest
+    flake count first, with the `orbit.task.add` payload above. Tests
+    past the cap, and counted tests whose test file could not be
+    verified, are recorded in the artifact as overflow or unfiled with
+    the reason, for the next run. Each filed task is tagged `ci-flake`,
+    left `proposed`, carries a `spawned_from` relation to this task and
+    the verified test file as `context_files`, and cites every
+    occurrence's failed and passing run ids, SHAs, and bounded failure
+    excerpts. Its acceptance criteria require the root cause fixed, or
+    the test deleted as redundant with the covering test named, and
+    reject silent retries or quarantine without an exit plan as fixes.
+
+    ## Record the run
+
+    Write `.orbit/tmp/flaky-test-hunt.json` with:
+
+    - `schema_version: 1`, the scan timestamp, the 14-day window
+      bounds, and the integration branch `__ORBIT_BASE_BRANCH__`;
+    - `workflows`: each discovered workflow file with its test-bearing
+      jobs, or the no-hosted-CI statement with the paths checked;
+    - `runs_examined`: per population, the count of completed runs
+      listed, grouped, and paired, with every run that fell in neither
+      population named in `gaps`;
+    - `tests`: 1 row per counted test (test name, verified test file
+      or the location gap, flake count, and every occurrence with its
+      signal, failed run id and SHA, passing run id and SHA, workflow,
+      and bounded failure excerpt), plus each row's disposition: filed
+      task ID, covering task ID, overflow past the 4-task cap, or
+      unfiled with the reason;
+    - `excluded_candidates`: adjacent-commit candidates rejected
+      because something relevant changed, the suite composition
+      changed, or relevance could not be ruled out, each with the 2
+      SHAs and the reason;
+    - `gaps`: every run whose logs could not be parsed (run id, SHA,
+      workflow, reason), every tool error or empty result, unreadable
+      previous artifacts, and populations the history could not cover;
+    - `filed_task_ids` and the deduplication outcome per filed test;
+    - `previous_run_diff`: the previous task ID or the baseline
+      reason, tests new in this window, tests persisting with their
+      count before and after, and tests present last run and absent
+      now.
+
+    Diff this run against the previous run's `flaky-test-hunt.json`
+    (found through the previous-instance query above; absent or
+    unreadable means this is the baseline run, so say so). Attach the
+    file on every completed run, including a no-op run. The execution
+    summary repeats the window bounds, the discovered workflows, the
+    runs examined per population, every counted test with its flake
+    count and disposition, the gaps, the diff against the previous
+    run, and any filed task ID.
+  acceptance_criteria:
+  - The run attaches 1 `flaky-test-hunt.json` artifact recording the scan timestamp, the 14-day window bounds, the discovered workflow files with their test-bearing jobs, and the completed runs examined per population, or the no-hosted-CI statement with the paths checked.
+  - Flakes were found through both signals — the same-SHA signal grouped runs by workflow and head SHA pairing 1 failed run with a later succeeded rerun, and the adjacent-commit signal paired a failed run on 1 `__ORBIT_BASE_BRANCH__` commit with a succeeded run on its immediate child only when `git diff --name-only` between the 2 SHAs changed no test file, same-package file, excerpt-named file, or suite-composition file.
+  - Every counted test name came from the failed run logs read through `github.run.logs`, and every run whose logs errored, were empty, or named 0 tests appears in the artifact `gaps` with its run id, SHA, workflow, and reason and contributed 0 occurrences.
+  - The artifact holds 1 row per counted test with its flake count over the 14-day window (distinct failed runs, 1 failed run counted at most once per test across both signals), every occurrence with failed and passing run ids, SHAs, workflow, and a bounded failure excerpt, and a `previous_run_diff` against the previous run artifact or the baseline statement when none was readable.
+  - At most 4 fix tasks were filed, 1 per test, highest flake count first, each tagged `ci-flake`, left `proposed`, carrying a `spawned_from` relation to this task and the 1 verified test file as `context_files`, citing the occurrence run ids, SHAs, and failure excerpts, and read back with `orbit.task.show`; tests past the cap or without a verified test file are recorded as overflow or unfiled with the reason.
+  - Before each filing, open `ci-flake` tasks and open CI-failure-sweep tasks were listed and a 1-token search on the test name was inspected, so 0 filed task duplicates an open or proposed task, and each already-covered test records its covering task ID in the artifact.
+  - Each filed task requires the root cause fixed or the test deleted with its covering test named, and its criteria reject silent retries, masking sleeps or timeouts, weaker assertions, hidden skips, and quarantine or ignoring without an exit plan naming the condition and date that end it and the 1 task that tracks it.
+  - With no hosted CI configuration, no test-bearing job, an unreachable history shown by `github.auth.status` or the run tools, or 0 completed runs in the window, the run attaches the artifact stating that 1 reason with its gaps, files 0 tasks, and succeeds as a no-op without claiming that no flakes exist.
+  - This run edited 0 files in the checkout and ran 0 build or test commands; the execution summary reports the window, workflows, runs examined, each counted test with its count and disposition, the gaps, the previous-run diff, and every filed task ID.
+  task_type: chore
+  tags:
+  - flaky-test-hunt
+  - no-diff-expected
+  required_tools:
+  - github.auth.status
+  - github.pr.list
+  - github.run.list
+  - github.run.logs
+  - github.run.view
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  priority: medium
+  complexity: hard
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-25T00:00:00Z
+updated_by: system
+updated_at: 2026-10-25T00:00:00Z

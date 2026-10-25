@@ -47,6 +47,10 @@ const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
         include_str!("../assets/auto_tasks/doc-duties.yaml"),
     ),
     (
+        "flaky-test-hunt",
+        include_str!("../assets/auto_tasks/flaky-test-hunt.yaml"),
+    ),
+    (
         "friction-curation",
         include_str!("../assets/auto_tasks/friction-curation.yaml"),
     ),
