@@ -434,9 +434,10 @@ plugin being removed.
   document whose two latest attempts were `skipped` or `partial` is held back
   and reported as needing its own task. A batch whose claims
   are already accurate is a successful no-diff run with validated no-diff
-  evidence. Its template declares `dir:.`
-  because a batch may include root and workspace-specific documents, and omits
-  `no-diff-expected` so it holds a context lock while correcting drift.
+  evidence. Its template declares `dir:docs` plus the tracked top-level
+  `README.md` and `CONTRIBUTING.md` that its brief validates, so it doesn't
+  lock the whole tree, and omits `no-diff-expected` so it holds a lock on
+  that scope while correcting drift.
 - **`comment-hygiene`** (`low`) — daily. The code-comment counterpart of
   `doc-duties`: checks at most six tracked source files and about 1,500 lines
   against a generic comment standard stated in its body (comments say why,
