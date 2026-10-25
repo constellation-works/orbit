@@ -65,6 +65,30 @@
         "## Record and diff",
         "## Rules and command surfaces"
       ],
+      "digest": "b1959ecafdd4966a300e838947aa24c4114079dd8356769813882c191f3b9391",
+      "revision": "c626268d399d8512cc34e81339891dd576ec4392",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "auto-task-yield-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Linkage gap",
+        "## Measure each enabled definition (last 30 days)",
+        "## Propose retuning (at most 3 tasks)",
+        "## Record and diff",
+        "## Rules and command surfaces"
+      ],
       "digest": "c296a2bab039721c83a4a3b61db5e33091d979f7c09822bb121f02c0d30930c6",
       "revision": "37f8572a95ebc191d96a688d430a9da6c6956943",
       "settings": {
@@ -1397,6 +1421,7 @@
       }
     }
   ],
+  "escape-to-guard": [],
   "friction-curation": [
     {
       "comments": [
@@ -2986,5 +3011,29 @@
       }
     }
   ],
-  "suppression-ratchet": []
+  "suppression-ratchet": [
+    {
+      "comments": [
+        "## Patterns and counting",
+        "## Pin the inventory",
+        "## Previous run and durable artifact",
+        "## Ratchet, then reduce"
+      ],
+      "digest": "24e880fd468c0b2d9ef6576cee3a186bf54e8d93aa0d5eb93dbc17c04c213514",
+      "revision": "f787c294723ae82bd1f83f21cfeb207e488a9e25",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 10080
+        },
+        "tags": [
+          "suppression-ratchet",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ]
 }

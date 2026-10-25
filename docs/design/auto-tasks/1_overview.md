@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These sixteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These eighteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -272,6 +272,22 @@ definition of the same name.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore, which is itself tagged `no-diff-expected` and never
   builds or runs tests.
+- `escape-to-guard` — disabled-by-default weekly pass that turns recurring
+  regression classes into prevention. It classifies `unclassified` and
+  absent escapes from the regression task and the culprit's landed diff,
+  recording each classification through the supported `orbit.task.update`
+  relations write (or, when that write cannot change an existing link, in
+  its artifact plus one deduplicated gap task), clusters regressions by
+  nature × escape × layer plus a one-line mechanism, and files at most
+  3 `proposed` guard tasks for clusters of 3 or more regressions in
+  30 days. A guard is a mechanical check inside the gates that already
+  exist — a lint, a type, a static guard script, a generator check, a
+  skill or review-instruction line for `review_missed`, or a regression
+  test for `no_test` — never a new required status check or merge gate.
+  Each run attaches `escape-to-guard.json` (clusters, classification
+  counts before and after, and whether each earlier landed guard's class
+  recurred after its landing date) and diffs it against the previous
+  run; a workspace with no regression links is a successful no-op.
 - `dependency-freshness` — disabled-by-default monthly inventory of direct
   dependencies across every detected ecosystem (for example
   `Cargo.toml`/`Cargo.lock`, `package.json` with a lockfile,
