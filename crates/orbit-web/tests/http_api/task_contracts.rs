@@ -669,9 +669,14 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
             let failed = seed("Failed review", TaskStatus::Review, Some("42"));
             let healthy = seed("Healthy review", TaskStatus::Review, Some("43"));
             let blocked = seed("Blocked with PR", TaskStatus::Blocked, Some("44"));
+            let recovered = seed("Recovered review", TaskStatus::Review, Some("45"));
+            let stale = seed("Stale success review", TaskStatus::Review, Some("46"));
+            let base = chrono::Utc::now();
 
-            let seed_run = |task_id: &str, run_id: &str, state: JobRunState| {
-                let now = chrono::Utc::now();
+            let seed_run = |task_id: &str,
+                            run_id: &str,
+                            state: JobRunState,
+                            now: chrono::DateTime<chrono::Utc>| {
                 let input = json!({ "task_ids": [task_id] });
                 let run = JobRun {
                     executed_on: None,
@@ -706,9 +711,90 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
                     .write_run_state(run_id, &state_doc)
                     .expect("write run state");
             };
-            seed_run(&failed.id, "jrun-delivery-failed", JobRunState::Failed);
-            seed_run(&healthy.id, "jrun-delivery-ok", JobRunState::Success);
-            seed_run(&blocked.id, "jrun-delivery-timeout", JobRunState::Timeout);
+            seed_run(
+                &failed.id,
+                "jrun-delivery-failed",
+                JobRunState::Failed,
+                base,
+            );
+            seed_run(&healthy.id, "jrun-delivery-ok", JobRunState::Success, base);
+            seed_run(
+                &blocked.id,
+                "jrun-delivery-timeout",
+                JobRunState::Timeout,
+                base,
+            );
+            // Recovered: old failed delivery, admitted failed_checks repair,
+            // a published repaired head, then a newer successful delivery.
+            seed_run(
+                &recovered.id,
+                "jrun-delivery-old-failed",
+                JobRunState::Failed,
+                base - chrono::Duration::hours(4),
+            );
+            seed_run(
+                &recovered.id,
+                "jrun-recovered-success",
+                JobRunState::Success,
+                base,
+            );
+            // Stale: a successful delivery that predates a later conflict
+            // admission is not recovery from that admission.
+            seed_run(
+                &stale.id,
+                "jrun-stale-success",
+                JobRunState::Success,
+                base - chrono::Duration::hours(4),
+            );
+            {
+                use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+                use orbit_types::task::TaskHistoryEntry;
+                let entry = |at: chrono::DateTime<chrono::Utc>, event: &str, note: Value| {
+                    TaskHistoryEntry {
+                        at,
+                        by: "system".to_string(),
+                        event: event.to_string(),
+                        note: Some(note.to_string()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }
+                };
+                runtime
+                    .apply_task_automation_update(
+                        &recovered.id,
+                        TaskAutomationUpdate {
+                            append_history: vec![
+                                entry(
+                                    base - chrono::Duration::hours(3),
+                                    "pr_auto_fix_admitted",
+                                    json!({"pr_number":"45","head_sha":"old-failed-head","blocker":"failed_checks","attempt":1,"budget":3,"run_id":"jrun-delivery-old-failed","crew":"c","crew_source":"s"}),
+                                ),
+                                entry(
+                                    base - chrono::Duration::hours(2),
+                                    "pr_auto_fix_pushed",
+                                    json!({"pr_number":"45","from_head_sha":"old-failed-head","to_head_sha":"repaired-head","blocker":"failed_checks","run_id":"jrun-delivery-old-failed"}),
+                                ),
+                            ],
+                            ..Default::default()
+                        },
+                    )
+                    .expect("record recovered repair history");
+                runtime
+                    .apply_task_automation_update(
+                        &stale.id,
+                        TaskAutomationUpdate {
+                            append_history: vec![entry(
+                                base - chrono::Duration::hours(3),
+                                "pr_auto_fix_admitted",
+                                json!({"pr_number":"46","head_sha":"conflict-head","blocker":"conflict","attempt":1,"budget":3,"run_id":"jrun-stale-success","crew":"c","crew_source":"s"}),
+                            )],
+                            ..Default::default()
+                        },
+                    )
+                    .expect("record stale repair history");
+            }
 
             let server = fixture.server(true);
             let page = body_json(request(&server, "/tasks"));
@@ -742,6 +828,51 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
             );
             let healthy_detail = body_json(request(&server, &format!("/tasks/{}", healthy.id)));
             assert!(healthy_detail.get("delivery_attention").is_none());
+
+            assert!(
+                row(&recovered.id).get("delivery_attention").is_none(),
+                "recovered review row must omit superseded delivery_attention: {}",
+                row(&recovered.id)
+            );
+            let recovered_detail = body_json(request(&server, &format!("/tasks/{}", recovered.id)));
+            assert!(
+                recovered_detail.get("delivery_attention").is_none(),
+                "recovered detail must omit superseded delivery_attention: {recovered_detail}"
+            );
+            // The retained ledger is unchanged: admission and push remain,
+            // with their original attempt and budget.
+            let history = runtime
+                .get_task_history(&recovered.id)
+                .expect("recovered history");
+            let admitted: Vec<_> = history
+                .iter()
+                .filter(|entry| entry.event == "pr_auto_fix_admitted")
+                .collect();
+            let pushed: Vec<_> = history
+                .iter()
+                .filter(|entry| entry.event == "pr_auto_fix_pushed")
+                .collect();
+            assert_eq!(admitted.len(), 1, "{history:?}");
+            assert_eq!(pushed.len(), 1, "{history:?}");
+            let attempt: Value =
+                serde_json::from_str(admitted[0].note.as_deref().expect("attempt note"))
+                    .expect("attempt json");
+            assert_eq!(attempt["head_sha"], "old-failed-head");
+            assert_eq!(attempt["attempt"], 1);
+            assert_eq!(attempt["budget"], 3);
+
+            let stale_attention = &row(&stale.id)["delivery_attention"];
+            assert_eq!(stale_attention["blocker"], "conflict", "{stale_attention}");
+            assert_eq!(
+                stale_attention["head_sha"], "conflict-head",
+                "{stale_attention}"
+            );
+            assert_eq!(
+                stale_attention["run_id"], "jrun-stale-success",
+                "{stale_attention}"
+            );
+            let stale_detail = body_json(request(&server, &format!("/tasks/{}", stale.id)));
+            assert_eq!(stale_detail["delivery_attention"], *stale_attention);
         },
     );
 }

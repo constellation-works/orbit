@@ -7,7 +7,10 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
-use orbit_types::workflow::{JobRun, JobRunState, PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt};
+use orbit_types::workflow::{
+    JobRun, JobRunState, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt,
+    PrAutoFixPush,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -40,6 +43,22 @@ fn latest_attempt(
         .next_back()
 }
 
+fn latest_push_at(history: &[TaskHistoryEntry], pr_number: Option<&str>) -> Option<DateTime<Utc>> {
+    let pr_number = pr_number?;
+    history
+        .iter()
+        .filter(|entry| entry.event == PR_AUTO_FIX_PUSHED_EVENT)
+        .filter_map(|entry| {
+            let push: PrAutoFixPush = serde_json::from_str(entry.note.as_deref()?).ok()?;
+            (push.pr_number == pr_number).then_some(entry.at)
+        })
+        .max()
+}
+
+fn run_at(run: &JobRun) -> DateTime<Utc> {
+    run.finished_at.or(run.started_at).unwrap_or(run.created_at)
+}
+
 /// Pure projection from already-read durable state.
 pub fn delivery_attention_value(
     task: &Task,
@@ -61,6 +80,22 @@ pub fn delivery_attention_value(
     });
     if !run_failed && attempt.is_none() {
         return None;
+    }
+    // A conclusive successful delivery newer than every admission and
+    // published repair for this PR supersedes that ledger history. The
+    // history itself is retained for budgeting; only the warning is retired.
+    // A success that predates the latest ledger entry is not recovery from
+    // it, and a live repair keeps the current blocker visible.
+    if !repairing
+        && let Some(run) = newest_run
+        && run.state == JobRunState::Success
+        && let Some((_, admitted_at)) = &attempt
+    {
+        let ledger_at = latest_push_at(history, pr_number.as_deref())
+            .map_or(*admitted_at, |pushed_at| pushed_at.max(*admitted_at));
+        if run_at(run) > ledger_at {
+            return None;
+        }
     }
     let (blocker, head_sha, attempt_n, budget, observed_at) = match &attempt {
         Some((attempt, at)) => (
