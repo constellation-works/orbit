@@ -25,8 +25,9 @@ template:
       `orbit tool run orbit.auto_task.list --input '{"model":"<agent-family>"}'`
       and keep only the definitions that report as enabled; report disabled
       definitions as excluded, never as zero-yield. Find minted chores with
-      `orbit tool run orbit.task.list --input '{"tag":["auto-task:<name>"],"limit":200,"model":"<agent-family>"}'`
-      (one call per enabled definition, replacing `<name>`), and inspect a
+      `orbit tool run orbit.task.list --input '{"tag":["auto-task:<name>"],"limit":10000,"fields":["id","status","created_at"],"model":"<agent-family>"}'`
+      (one call per enabled definition, replacing `<name>`; the complete-read
+      rule below governs it), and inspect a
       chore or a filed task with
       `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
       Search before filing with
@@ -56,6 +57,17 @@ template:
       incoming count that read feeds is `unknown`, never zero. Use
       `orbit.task.show` on a chore or a filed task only for that task's
       own status and rejection evidence, never as a backlink source.
+    - A chore read is complete only when its own envelope reports
+      `truncated` false. A page is not the window: the rows are ordered
+      by status and recency, the filters have no `created_at` bound, and
+      the 30-day window is applied client-side to `created_at` after a
+      complete read. When a chore read reports `truncated` true, read
+      the same definition again with `limit` set to the envelope's
+      `total`. A read that is still truncated, or that fails, makes that
+      definition's chore read incomplete. Write each envelope under
+      `.orbit/tmp/` and count it with a script, not by printing its rows:
+      the field projection keeps the bytes bounded, and the window is
+      compared on parsed timestamps, never as text.
     - Read run cost evidence read-only with
       `orbit run history --limit <n> --no-reconcile --json` and
       `orbit run show <run-id> --no-reconcile --json`. Never use a run read
@@ -80,7 +92,10 @@ template:
     start and end in the artifact. For every enabled definition, record:
 
     1. **Runs.** The chores minted in the window (tag `auto-task:<name>`
-       above), each chore's final status (`done`, `rejected`, or still
+       above; `created_at` inside the window, taken from a complete chore
+       read). When that read is incomplete, the run count and every figure
+       derived from it are `unknown`, never a count of the rows that were
+       read. Each chore's final status (`done`, `rejected`, or still
        open in `proposed`, `backlog`, `in-progress`, `review` or
        `blocked`), and how many were no-op successes: `done` chores whose
        incoming `spawned_from` map entry (see Rules and step 3) is empty.
@@ -136,8 +151,11 @@ template:
 
     ## Propose retuning (at most 3 tasks)
 
-    Rank definitions by cost per landed task (unknown cost last), then by
-    duplicate or invalid rejections, then by no-op share. File at most 3
+    A definition whose chore read is incomplete is listed as `incomplete`
+    in the artifact and the summary: it is not ranked and gets no filed
+    task on partial counts. Rank the complete definitions by cost per
+    landed task (unknown cost last), then by duplicate or invalid
+    rejections, then by no-op share. File at most 3
     proposed tasks per run, one per definition or merged pair, highest
     rank first. Each filed task names its definition and its numbers
     (runs, no-op runs, cost per run, filed, landed, regressions,
@@ -176,8 +194,11 @@ template:
     ID, already tracked by an existing task ID, or overflow). Also record
     whether the incoming-relation population scan was complete (its
     `total`, final `truncated` value and any tasks read through
-    `orbit.task.show` because their list row omitted `relations`), the
-    excluded disabled definitions and any unmatched runs. Attach it
+    `orbit.task.show` because their list row omitted `relations`), per
+    enabled definition the chore read's `limit`, `total`, final
+    `truncated` value and in-window chore count (`incomplete` when the
+    read stayed truncated or failed), the excluded disabled definitions
+    and any unmatched runs. Attach it
     with
     `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/auto-task-yield.json","path":"auto-task-yield.json","model":"<agent-family>"}'`.
     Diff it against the previous run's artifact and record the delta per
@@ -197,6 +218,7 @@ template:
   - At most 3 proposed tasks were filed, each naming its definition, its 30-day numbers and exactly one recommendation (cadence, merge, template fix or disable), with a `spawned_from` relation to this task and `context_files` naming a verified definition file, after a duplicate search
   - No auto-task definition was edited, toggled, enabled, disabled, deleted or minted during the run, and no filed task was approved
   - Filed tasks with no `spawned_from` linkage were counted as `unknown`, the gap was recorded in `auto-task-yield.json`, and the gap was filed at most once after searching for an existing task covering it
+  - Each enabled definition's chore read was complete (`truncated` false) before its 30-day window was applied, or its metrics and ranking are reported as `incomplete` in `auto-task-yield.json` and the execution summary, and an incomplete definition was neither ranked nor filed
   task_type: chore
   tags:
   - auto-task-yield-review

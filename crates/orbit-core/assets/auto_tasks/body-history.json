@@ -41,6 +41,30 @@
         "## Record and diff",
         "## Rules and command surfaces"
       ],
+      "digest": "2d4d1087259537cb126b62745ba7a33fdb5f05cc638c7c750f8b28617cc6b106",
+      "revision": "972939b6952d2c5da8e4421365f8c3d3ca33928c",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "auto-task-yield-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Linkage gap",
+        "## Measure each enabled definition (last 30 days)",
+        "## Propose retuning (at most 3 tasks)",
+        "## Record and diff",
+        "## Rules and command surfaces"
+      ],
       "digest": "c296a2bab039721c83a4a3b61db5e33091d979f7c09822bb121f02c0d30930c6",
       "revision": "37f8572a95ebc191d96a688d430a9da6c6956943",
       "settings": {
