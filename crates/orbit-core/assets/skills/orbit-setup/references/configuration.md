@@ -2,14 +2,7 @@
 
 What is tunable and where. `orbit config keys` and `orbit config show` expose
 the installed version's supported keys and effective values without a source
-checkout. This reference covers operating choices; for additional prose see
-the [published configuration reference](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md),
-checking its release against `orbit --version`.
-
-Contributors adding an executor should use the source checkout's
-[executor onboarding runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/executor-onboarding.md).
-It covers the v2 integration and test seams; this reference is for configuring
-an existing lane.
+checkout. Check `orbit --version` before applying version-dependent CLI advice.
 
 ## Where config lives
 
@@ -191,7 +184,7 @@ rather than run on the default login, and `orbit doctor`'s `env-pass` row
 reports it. A crew with `env` is its own account: its usage readings, failure
 holds, pull-drain auth exclusions and probes are its own, and
 `workflow.provider_limit_budgets` / `provider_limit_overrides` may name it
-(`opus-credits:200usd/30d`). Details: `docs/CONFIG.md`, "Per-crew credentials".
+(`opus-credits:200usd/30d`).
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
 Codex: `astra`, `sol`, `luna`; `antigravity` and `argon` for Antigravity; one crew each for Gemini,
@@ -219,6 +212,10 @@ orbit doctor providers
 
 Executors are how a provider is invoked. You choose crews; executors are
 infrastructure.
+
+For provider IDs, dispatch precedence and refusal diagnostics, see
+[Provider identity and resolution](providers.md#provider-identity-and-resolution).
+To add a lane or fix its login, follow [Provider setup](providers.md#provider-setup).
 
 ## Tag instructions
 
@@ -341,17 +338,7 @@ run rather than today's default. Unsupported/unavailable explicitly selected
 providers fail rather than silently switching vendors. Provider login and model
 availability must be checked on the execution host before dispatch.
 
-Installed executors include provider-specific CLI integrations; a model name
-from another vendor does not change the executor's identity. For example,
-Copilot, Cursor, and Pi keep their own authentication and sandbox grants
-regardless of the model they route to. Use the installed executor catalog and
-provider CLI help for supported model IDs instead of treating examples as a
-permanent list.
-
-Executor tool reach is not uniform. Some provider CLIs have no MCP client at
-all, so Orbit's tools are reached from the agent's shell through the `orbit`
-binary on the child's `PATH` rather than through an injected MCP server. That
-path enforces the same allowlist and caller-role gates, but it means an
-executor definition that disables the provider's shell tool also removes the
-Orbit tool path. Check the provider section of the configuration reference
-before assuming MCP-native tool injection.
+For lane-specific authentication, sandbox grants and MCP versus shell access,
+follow [Provider setup](providers.md#provider-setup). Shell tool access through `orbit tool run`
+enforces the same allowlist and caller-role gates as MCP; disabling that shell
+also removes Orbit tool reach for a shell-only lane.
