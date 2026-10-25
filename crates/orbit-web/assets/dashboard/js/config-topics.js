@@ -78,13 +78,13 @@ function rowNode(row, context, opts = {}) {
     el('span', { class: 'topic-diff', text: diffText(row) }),
   );
   if (pool) node.appendChild(pool);
-  if (opts.inactive) node.appendChild(el('span', { class: 'config-source', text: 'inactive — review.timing is off' }));
+  if (opts.inactive) node.appendChild(el('span', { class: 'config-source topic-inactive', text: 'inactive — review.timing is off' }));
   if (context.canEdit && row.settable !== false && !opts.readOnly) {
     const b = el('button', { class: 'config-action', text: 'Edit' }); b.type = 'button';
     b.addEventListener('click', () => openDrawer(row, context, opts.lockGlobal));
     node.appendChild(b);
   } else if (row.read_only_reason || opts.readOnly) {
-    node.appendChild(el('span', { class: 'topic-diff', text: row.read_only_reason || 'read-only' }));
+    node.appendChild(el('span', { class: 'topic-diff topic-readonly', text: row.read_only_reason || 'read-only' }));
   }
   return node;
 }
@@ -187,7 +187,7 @@ export function renderExecution(body, payload, context) {
   const paths = el('section', { class: 'panel config-section' });
   paths.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: 'Paths' })]));
   const pb = el('div', { class: 'config-section-body' });
-  for (const p of payload.paths || []) pb.appendChild(el('div', { class: 'config-row' }, [el('span', { class: 'config-key mono', text: p.label || p.name || '' }), el('span', { class: 'config-value mono', text: p.path || p.value || '' })]));
+  for (const p of payload.paths || []) pb.appendChild(el('div', { class: 'config-row topic-row topic-plain' }, [el('span', { class: 'config-key mono', text: p.label || p.name || '' }), el('span', { class: 'config-value mono', text: p.path || p.value || '' })]));
   paths.appendChild(pb); nodes.push(paths);
   finish(body, payload, context, nodes);
 }
@@ -199,7 +199,7 @@ export function renderReview(body, payload, context) {
   const lb = el('div', { class: 'config-section-body' });
   for (const [id, label] of [['before_pr','Before PR'],['before_landing','Before landing'],['after_landing','After landing']]) {
     const step = review[id] || {};
-    lb.appendChild(el('div', { class: 'config-row' }, [el('span', { text: label }), el('span', { class: `config-source ${step.enabled ? 'workspace' : ''}`, text: step.enabled ? 'on' : 'off' }), el('span', { text: step.line || '' })]));
+    lb.appendChild(el('div', { class: 'config-row topic-row topic-plain' }, [el('span', { class: 'topic-label', text: label }), el('span', { class: 'topic-value-cell' }, [el('span', { class: `config-source ${step.enabled ? 'workspace' : ''}`, text: step.enabled ? 'on' : 'off' }), el('span', { class: 'config-value', text: step.line || '' })])]));
   }
   if (review.healthy === false) lb.appendChild(el('div', { class: 'config-warning', text: review.error || 'Review diagnostics unavailable.' }));
   layers.appendChild(lb); nodes.push(layers);
@@ -265,7 +265,7 @@ export function renderAllKeys(body, payload, context) {
   nodes.push(section('All keys', filtered, context));
   const raw = el('section', { class: 'panel config-section' });
   raw.appendChild(el('header', {}, [el('span', { class: 'config-section-title', text: 'Raw TOML' })]));
-  const rb = el('div', { class: 'config-section-body' });
+  const rb = el('div', { class: 'config-section-body topic-actions' });
   for (const scope of ['workspace', 'global']) {
     const b = el('button', { class: 'config-action ghost', text: `Show ${scope} file` }); b.type = 'button';
     b.addEventListener('click', () => loadRaw(scope, context)); rb.appendChild(b);
