@@ -115,10 +115,10 @@ try {
   await open('BASE-1');
   await contextBlock('BASE-1').screenshot({ path: path.join(evidence, 'backlog-dark-1440.png'), animations: 'disabled' });
   const backlog = await basenames('BASE-1');
-  const duplicateRows = await page.locator('#detail-BASE-1 .file-list .cf-row').evaluateAll(rows => rows.filter(row => row.querySelector('.selector-base')?.textContent === 'shared.rs').map(row => ({ selector: (row.querySelector('.context-selector')?.getAttribute('title') || '').split(' · ')[0], group: row.closest('.cf-group')?.querySelector('.cf-group-name')?.textContent })));
+  const duplicateRows = await page.locator('#detail-BASE-1 .file-list .cf-row').evaluateAll(rows => rows.filter(row => row.querySelector('.selector-base')?.textContent === 'shared.rs').map(row => ({ selector: (row.querySelector('.context-selector')?.getAttribute('title') || '').split(' · ')[0], path: row.querySelector('.context-selector')?.textContent })));
   assert.equal(duplicateRows.length, 2, 'both duplicate basenames are rendered');
   assert.deepEqual(duplicateRows.map(row => row.selector).sort(), ['file:src/shared.rs', 'file:tests/shared.rs'], 'duplicate basenames keep their full selector identity in the link titles');
-  assert.deepEqual(duplicateRows.map(row => row.group).sort(), ['src', 'tests'], 'duplicate basenames are distinguished by their folder groups, not a duplicate marker');
+  assert.deepEqual(duplicateRows.map(row => row.path).sort(), ['src/shared.rs', 'tests/shared.rs'], 'duplicate basenames are distinguished by their directory, not a duplicate marker');
   assert.equal(backlog['file:Makefile'].text, 'Makefile');
   assert.equal(backlog['file:Makefile'].color, AMBER, 'root-level contended backlog basename keeps amber');
   assert.equal(backlog['file:src/shared.rs'].color, AMBER, 'duplicate contended backlog basename keeps amber');

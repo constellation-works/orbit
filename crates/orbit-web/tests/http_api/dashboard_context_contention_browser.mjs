@@ -151,7 +151,7 @@ try {
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-1 .context-contended-backlog').length === 3);
   const selectorLinks = await page.locator('#detail-CTX-1 .context-selector').evaluateAll(links => links.map(link => ({ title: link.getAttribute('title'), aria: link.getAttribute('aria-label'), text: link.textContent })));
   assert.deepEqual(selectorLinks.map(link => link.title.split(' · ')[0]).sort(), [...selectors].sort(), 'full selector identity remains in the link titles');
-  assert.deepEqual(selectorLinks.map(link => link.text).sort(), ['dir:src', 'other.rs', 'shared.rs', 'symbol:src/shared.rs#two:function'].sort(), 'visible text is the basename or kind-prefixed rendering, not the full file selector');
+  assert.deepEqual(selectorLinks.map(link => link.text).sort(), ['dir:src', 'src/shared.rs', 'symbol:src/shared.rs#two:function', `unrelated/${'long-directory/'.repeat(10)}other.rs`].sort(), 'visible text is the path or kind-prefixed rendering, without the file: kind');
   assert(selectorLinks.filter(link => link.aria).every(link => selectors.some(selector => link.aria.startsWith(`${selector}:`))), 'contended rows carry the full selector in their aria-label');
   assert.equal(await page.locator('#detail-CTX-1 .context-contention').count(), 0, 'context contains selectors alone');
   const assertScoped = async (locator, hash) => {

@@ -2202,47 +2202,20 @@ function buildCriteriaList(criteria) {
   return ul;
 }
 
-const CF_VIEW_KEY = "orbit.contextFiles.view";
-const CF_COLLAPSED_KEY = "orbit.contextFiles.collapsed";
-const CF_ROOT_FILES_KEY = "\u0000project-root-files";
-
-function cfStoreGet(key) {
-  try { return globalThis.localStorage ? globalThis.localStorage.getItem(key) : null; } catch (_) { return null; }
-}
-function cfStoreSet(key, value) {
-  try { if (globalThis.localStorage) globalThis.localStorage.setItem(key, value); } catch (_) { /* per-viewer convenience only */ }
-}
-function cfViewMode() { return cfStoreGet(CF_VIEW_KEY) === "flat" ? "flat" : "grouped"; }
-function cfCollapsed() {
-  try { const v = JSON.parse(cfStoreGet(CF_COLLAPSED_KEY) || "{}"); return v && typeof v === "object" ? v : {}; } catch (_) { return {}; }
-}
-function cfSetCollapsed(key, collapsed) {
-  const next = { ...cfCollapsed() };
-  if (collapsed) next[key] = true; else delete next[key];
-  cfStoreSet(CF_COLLAPSED_KEY, JSON.stringify(next));
-}
-
 function buildFileList(task) {
   const wrap = el("div", { class: "context-files-view" });
   const summary = el("span", { class: "cf-summary" });
-  const groupedBtn = el("button", { class: "cf-toggle-btn", type: "button", text: "By folder" });
-  const flatBtn = el("button", { class: "cf-toggle-btn", type: "button", text: "Flat paths" });
-  groupedBtn.setAttribute("aria-pressed", "true");
-  flatBtn.setAttribute("aria-pressed", "false");
-  const toggle = el("div", { class: "cf-toggle", role: "group", "aria-label": "Context files view" }, [groupedBtn, flatBtn]);
   const copyAll = el("button", { class: "cf-copy-all", type: "button", text: "Copy selectors" });
   copyAll.addEventListener("click", () => {
     const t = ul.contentionTask;
     const paths = t && Array.isArray(t.context_files) ? t.context_files : [];
     if (paths.length) copyWithFeedback(copyAll, paths.join("\n"));
   });
-  const header = el("div", { class: "cf-header" }, [summary, toggle, copyAll]);
+  const header = el("div", { class: "cf-header" }, [summary, copyAll]);
   const banner = el("div", { class: "cf-banner", role: "status" });
   const ul = el("ul", { class: "file-list mono" });
   ul.contentionTask = task;
-  ul.cfRefs = { wrap, summary, banner, header, groupedBtn, flatBtn };
-  groupedBtn.addEventListener("click", () => { cfStoreSet(CF_VIEW_KEY, "grouped"); refreshFileList(ul); });
-  flatBtn.addEventListener("click", () => { cfStoreSet(CF_VIEW_KEY, "flat"); refreshFileList(ul); });
+  ul.cfRefs = { wrap, summary, banner, header };
   wrap.appendChild(header);
   wrap.appendChild(banner);
   wrap.appendChild(ul);
@@ -2301,86 +2274,31 @@ function cfPathForSelector(p) {
   return target;
 }
 
-function cfGroups(entries) {
-  const normalized = entries.map((e) => {
-    const entry = typeof e === "string" ? { selector: e, p: parseContextSelector(e), matches: [] } : e;
-    const target = cfPathForSelector(entry.p);
-    const segs = target.split("/").filter(Boolean);
-    const isDirect = entry.p.kind === "dir" ? segs.length <= 1 : segs.length <= 2;
-    const topKey = segs.length <= 1 ? CF_ROOT_FILES_KEY : segs[0];
-    return { entry, target, segs, isDirect, topKey };
+// One flat list, ordered by full path so files of one directory sit together.
+function cfSortedEntries(entries) {
+  return [...entries].sort((x, y) => {
+    const a = cfPathForSelector(x.p);
+    const b = cfPathForSelector(y.p);
+    return a < b ? -1 : a > b ? 1 : x.selector < y.selector ? -1 : x.selector > y.selector ? 1 : 0;
   });
-
-  const byTop = new Map();
-  for (const item of normalized) {
-    let list = byTop.get(item.topKey);
-    if (!list) { list = []; byTop.set(item.topKey, list); }
-    list.push(item);
-  }
-
-  const groups = [];
-  const byKey = new Map();
-
-  for (const [topKey, items] of byTop) {
-    const shouldSplit = topKey !== CF_ROOT_FILES_KEY && !items.some((it) => it.isDirect);
-    for (const it of items) {
-      const { entry, segs, target } = it;
-      let g;
-      if (topKey === CF_ROOT_FILES_KEY) {
-        g = { key: CF_ROOT_FILES_KEY, prefix: "", name: "project root", subDir: "", displayBase: entry.p.kind === "symbol" ? entry.p.target : (entry.p.base || target) };
-      } else if (shouldSplit) {
-        const child = segs[1] || "";
-        const rest = segs.slice(2).join("/");
-        const idx = rest.lastIndexOf("/");
-        g = {
-          key: `${topKey}/${child}`,
-          prefix: `${topKey}/`,
-          name: child,
-          subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "",
-          displayBase: entry.p.kind === "symbol" ? entry.p.target : (entry.p.base || segs[segs.length - 1] || target),
-        };
-      } else {
-        const rest = segs.slice(1).join("/");
-        const idx = rest.lastIndexOf("/");
-        g = {
-          key: topKey,
-          prefix: "",
-          name: topKey,
-          subDir: idx >= 0 ? `${rest.slice(0, idx + 1)}` : "",
-          displayBase: entry.p.kind === "symbol" ? entry.p.target : (entry.p.base || segs[segs.length - 1] || target),
-        };
-      }
-      entry.groupKey = g.key;
-      entry.subDir = g.subDir;
-      entry.displayBase = g.displayBase;
-      let group = byKey.get(g.key);
-      if (!group) {
-        group = { ...g, dirs: new Map() };
-        byKey.set(g.key, group);
-        groups.push(group);
-      }
-      if (!group.dirs.has(g.subDir)) group.dirs.set(g.subDir, []);
-      group.dirs.get(g.subDir).push(entry);
-    }
-  }
-
-  for (const g of groups) g.count = [...g.dirs.values()].reduce((n, a) => n + a.length, 0);
-  return groups;
 }
 
-function cfSummaryText(total, groups) {
+function cfSummaryText(entries) {
+  const total = entries.length;
   const fileLabel = `${total} file${total === 1 ? "" : "s"}`;
-  if (!groups || groups.length === 0) return fileLabel;
-  if (groups.length <= 3) {
-    const parts = groups.map((g) => g.key === CF_ROOT_FILES_KEY ? "the project root" : g.key);
-    return `${fileLabel} in ${parts.join(" and ")}`;
-  }
-  return `${fileLabel} in ${groups.length} folders`;
+  const dirs = new Set(entries.map((e) => {
+    const target = cfPathForSelector(e.p);
+    const cut = target.lastIndexOf("/");
+    return cut >= 0 ? target.slice(0, cut) : "";
+  }));
+  if (total === 0) return fileLabel;
+  if (dirs.size === 1) return `${fileLabel} in ${[...dirs][0] || "the project root"}`;
+  return `${fileLabel} in ${dirs.size} folders`;
 }
 
 function cfHolderLabel(holder) { return `${holder.id} · ${String(holder.status || "").replaceAll("-", " ")}`; }
 
-function makeContextRow(entry, task, { flat = false } = {}) {
+function makeContextRow(entry, task) {
   const { selector, p, matches } = entry;
   const state = matches === null ? "Contention unknown: current workspace data unavailable"
     : matches && matches.length ? task.status === "backlog" ? "Contended context" : "Active context contention" : "";
@@ -2390,8 +2308,8 @@ function makeContextRow(entry, task, { flat = false } = {}) {
     kindNode.dataset.kind = p.kind;
     children.push(kindNode);
   }
-  if (flat && p.kind !== "symbol") children.push(formatDirectory(p.dir || (p.target.includes("/") ? p.target.slice(0, p.target.lastIndexOf("/") + 1) : "")));
-  children.push(el("span", { class: "selector-base", text: flat ? (p.base || p.target) : entry.displayBase }));
+  if (p.kind !== "symbol") children.push(formatDirectory(p.dir || (p.target.includes("/") ? p.target.slice(0, p.target.lastIndexOf("/") + 1) : "")));
+  children.push(el("span", { class: "selector-base", text: p.base || p.target }));
   const link = el("a", { class: "context-selector", title: [selector, state].filter(Boolean).join(" · ") }, children);
   bindTaskLink(link, task.id, task.workspace_id ? { workspace: task.workspace_id } : {});
   if (state) link.setAttribute("aria-label", `${selector}: ${state}`);
@@ -2420,16 +2338,10 @@ function refreshFileList(ul) {
     const p = parseContextSelector(selector);
     return { selector, p, matches: applicable ? taskContextContenders(task, selector) : [] };
   });
-  const groups = cfGroups(entries);
-  const view = cfViewMode();
   const refs = ul.cfRefs;
   if (refs) {
     refs.header.hidden = entries.length === 0;
-    refs.summary.textContent = cfSummaryText(entries.length, groups);
-    refs.groupedBtn.setAttribute("aria-pressed", String(view === "grouped"));
-    refs.flatBtn.setAttribute("aria-pressed", String(view === "flat"));
-    refs.groupedBtn.classList.toggle("is-on", view === "grouped");
-    refs.flatBtn.classList.toggle("is-on", view === "flat");
+    refs.summary.textContent = cfSummaryText(entries);
     const contended = entries.filter((e) => e.matches && e.matches.length);
     if (contended.length) {
       const holders = [...new Set(contended.flatMap((e) => e.matches.map((h) => h.id)))];
@@ -2437,38 +2349,8 @@ function refreshFileList(ul) {
       refs.banner.textContent = `${contended.length} file${contended.length === 1 ? "" : "s"} overlap${contended.length === 1 ? "s" : ""} an in-progress task: held by ${holders.join(", ")}`;
     } else { refs.banner.hidden = true; refs.banner.textContent = ""; }
   }
-  ul.classList.toggle("cf-flat", view === "flat");
-  ul.classList.toggle("cf-grouped", view !== "flat");
   if (entries.length === 0) { ul.replaceChildren(el("li", { class: "field-empty", text: "no context files" })); return; }
-  if (view === "flat") { ul.replaceChildren(...entries.map((e) => makeContextRow(e, task, { flat: true }))); return; }
-  const collapsed = cfCollapsed();
-  const nodes = groups.map((group) => {
-    const isCollapsed = Boolean(collapsed[group.key]);
-    const head = el("button", { class: "cf-group-head", type: "button" }, [
-      el("span", { class: "cf-chevron", text: "›", "aria-hidden": "true" }),
-      ...(group.prefix ? [el("span", { class: "cf-group-prefix", text: group.prefix })] : []),
-      el("span", { class: "cf-group-name", text: group.name }),
-      el("span", { class: "cf-group-count", text: `${group.count} file${group.count === 1 ? "" : "s"}` }),
-    ]);
-    head.setAttribute("aria-expanded", String(!isCollapsed));
-    const body = el("div", { class: "cf-group-body" });
-    body.hidden = isCollapsed;
-    for (const [dir, dirEntries] of group.dirs) {
-      if (dir) body.appendChild(el("div", { class: "cf-dir", text: dir }));
-      const inner = el("ul", { class: "cf-files" });
-      for (const e of dirEntries) inner.appendChild(makeContextRow(e, task));
-      body.appendChild(inner);
-    }
-    head.addEventListener("click", () => {
-      const nextCollapsed = !body.hidden;
-      body.hidden = nextCollapsed;
-      head.setAttribute("aria-expanded", String(!nextCollapsed));
-      cfSetCollapsed(group.key, nextCollapsed);
-    });
-    const li = el("li", { class: "cf-group" }, [head, body]);
-    return li;
-  });
-  ul.replaceChildren(...nodes);
+  ul.replaceChildren(...cfSortedEntries(entries).map((e) => makeContextRow(e, task)));
 }
 
 // Update only the displayed selectors, including details preserved for an
@@ -3600,14 +3482,22 @@ function buildTaskDetail(task, context, drain = null) {
   const overview = el("div", { class: "task-overview-content" }, [
     el("div", { class: "split-layout detail-overview" }, [leftCol, rightCol.children.length ? rightCol : null]),
   ]);
-  // Keep the wrapper when Reject replaces the action row with its form.
-  // It belongs to the detail scroll viewport, outside the tab panels.
-  const actionFooter = lifecycleActions
-    ? el("div", { class: "task-action-footer", role: "region", "aria-label": "Task actions" }, [lifecycleActions])
-    : null;
+  // Each tab's actions stick to the bottom of the detail scroll viewport,
+  // outside the tab panels; only the active tab's footer shows. Keep the
+  // wrapper when Reject or Comment replaces the action row with its form.
+  const actionFooter = (tab, label, row) => {
+    const footer = el("div", { class: "task-action-footer", role: "region", "aria-label": label }, [row]);
+    footer.dataset.footerTab = tab;
+    return footer;
+  };
+  const contextFilesEditSlot = actionSlot();
+  const actionFooters = [
+    lifecycleActions ? actionFooter("overview", "Task actions", lifecycleActions) : null,
+    commentActions ? actionFooter("comments", "Comment actions", commentActions) : null,
+    showsEditor("context_files") ? actionFooter("context_files", "Context files actions", contextFilesEditSlot) : null,
+  ].filter(Boolean);
   const commentsContent = el("div", { class: "comments-tab-content" }, [
     comments > 0 ? buildCommentsPanel(task, context) : el("p", { class: "field-empty", text: "No comments yet." }),
-    commentActions,
   ]);
   // ORB-12516: distributed claim provenance and the owner's handoff actions.
   // The tab appears only once a read finds a claim this workspace holds for
@@ -3621,7 +3511,7 @@ function buildTaskDetail(task, context, drain = null) {
       count: Array.isArray(task.context_files) ? task.context_files.length : 0,
       showZeroCount: true,
       available: showsEditor("context_files"),
-      content: showsEditor("context_files") ? el("div", { class: "field-block context-files-block" }, [editor("context_files")]) : null,
+      content: showsEditor("context_files") ? el("div", { class: "field-block context-files-block" }, [editor("context_files", contextFilesEditSlot)]) : null,
     },
     { name: "delivery", label: "Delivery", content: delivery, available: Boolean(known && known.length) },
     { name: "history", label: "History", count: history.count, content: history.node },
@@ -3659,7 +3549,7 @@ function buildTaskDetail(task, context, drain = null) {
   band.appendChild(tabStrip);
   detail.appendChild(band);
   for (const panel of tabPanels) detail.appendChild(panel);
-  if (actionFooter) detail.appendChild(actionFooter);
+  for (const footer of actionFooters) detail.appendChild(footer);
   delivery.appendChild(buildDeliveryPanel(task.id, {
     onTaskChanged: () => refreshTasks(context),
     onClaims: paintDelivery,
@@ -4377,8 +4267,7 @@ function buildDetailTabs(task, detail, tabs, context) {
       button.classList.toggle("active", on);
       panels.get(key).hidden = !on;
     }
-    const footer = detail.querySelector(".task-action-footer");
-    if (footer) footer.hidden = next !== "overview";
+    for (const footer of detail.querySelectorAll(".task-action-footer")) footer.hidden = footer.dataset.footerTab !== next;
     if (focus) buttons.get(next).focus();
     if (next === "runs") loadTaskRuns(task, context, runsNode);
   };

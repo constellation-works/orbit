@@ -60,7 +60,7 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
     await capture(page, `presentation-pane-dark-${width}.png`);
 
     const body = page.locator('#task-detail-body');
-    const footer = detail.locator('.task-action-footer');
+    const footer = detail.locator('.task-action-footer[data-footer-tab="overview"]');
     const visibleFooter = async () => {
       await page.waitForFunction(() => document.getAnimations().every(a => a.playState !== 'running' || !a.effect?.target?.closest?.('#task-detail-pane')));
       const b = await body.boundingBox();
@@ -160,7 +160,7 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
       await readiness.getByRole('link', { name: 'PANEL-2', exact: true }).click();
       await waitShown(page, 'PANEL-2');
       await capture(page, `presentation-short-task-dark-${width}.png`);
-      const shortFooter = page.locator('#detail-PANEL-2 .task-action-footer');
+      const shortFooter = page.locator('#detail-PANEL-2 .task-action-footer[data-footer-tab="overview"]');
       const b = await body.boundingBox();
       const f = await shortFooter.boundingBox();
       assert.ok(Math.abs(f.y + f.height - b.y - b.height) <= 1, 'Short task actions also anchor to the viewport bottom');

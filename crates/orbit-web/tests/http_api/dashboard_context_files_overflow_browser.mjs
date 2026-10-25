@@ -1,8 +1,8 @@
 // Run with the host Playwright kit and a checkout-local evidence directory.
-// ORB-17935: flat Context files rows must ellipsize inside a 560px pane, and
-// a grouped contended basename must ellipsize (not hard-clip) in a 375px
-// pane on a wide viewport. ORB-17947: a flat basename wider than its link must
-// stay inside the link and ellipsize at 560, 720 and 375px panes.
+// ORB-17935: Context files rows must ellipsize inside a 560px pane, and a
+// contended basename must ellipsize (not hard-clip) in a 375px pane on a wide
+// viewport. ORB-17947: a basename wider than its link must stay inside the
+// link and ellipsize at 560, 720 and 375px panes.
 // Exercises shipped CSS/JS with disposable API data.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
@@ -172,8 +172,6 @@ try {
     assert.equal(activeInfo.ariaLabel, `Copy ${expectedSelector}`, `${description}: copy button has selector aria-label`);
   };
   await setPaneWidth(560);
-  await page.locator('#detail-CTX-1').getByRole('button', { name: 'Flat paths', exact: true }).click();
-  await page.locator('#detail-CTX-1 .file-list.cf-flat').waitFor();
   const flat = await page.locator('#detail-CTX-1 .file-list').evaluate(node => {
     const pane = node.closest('.task-detail-pane');
     const dim = node.querySelector('.selector-dim');
@@ -192,44 +190,17 @@ try {
   await checkKeyboardTab(page.locator('#detail-CTX-1 .cf-row').first(), 'flat contended 560px', selector);
   await page.locator('#detail-CTX-1 .cf-row').first().hover();
   await block().screenshot({ path: path.join(evidence, 'context-files-flat-dark-560.png'), animations: 'disabled' });
-  await page.locator('#detail-CTX-1').getByRole('button', { name: 'By folder', exact: true }).click();
-  await page.locator('#detail-CTX-1 .file-list.cf-grouped').waitFor();
-  await setPaneWidth(375);
-  const grouped = await page.locator('#detail-CTX-1 .file-list').evaluate(node => {
-    const pane = node.closest('.task-detail-pane');
-    const base = node.querySelector('.selector-base');
-    return { paneClient: pane.clientWidth, paneScroll: pane.scrollWidth, baseText: base?.textContent, baseClient: base?.clientWidth, baseScroll: base?.scrollWidth, textOverflow: base ? getComputedStyle(base).textOverflow : '' };
-  });
-  assert(grouped.paneScroll <= grouped.paneClient + 1, `grouped pane does not overflow at 375px (scroll ${grouped.paneScroll} vs client ${grouped.paneClient})`);
-  assert.equal(grouped.baseText, 'provider_state.rs');
-  assert.equal(grouped.textOverflow, 'ellipsis', 'grouped basename ellipsizes instead of hard-clipping');
-  assert(grouped.baseClient >= 80, `grouped basename stays identifiable at 375px (client ${grouped.baseClient})`);
-  await checkRowCopy(page.locator('#detail-CTX-1 .cf-row').first(), 'grouped contended 375px', { expectPill: true, expectCompact: false });
-  await page.locator('#detail-CTX-1 .cf-row').first().hover();
-  await block().screenshot({ path: path.join(evidence, 'context-files-grouped-dark-375.png'), animations: 'disabled' });
-  await page.locator('#detail-CTX-1').getByRole('button', { name: 'Flat paths', exact: true }).click();
-  await page.locator('#detail-CTX-1 .file-list.cf-flat').waitFor();
   await setPaneWidth(375);
   await checkRowCopy(page.locator('#detail-CTX-1 .cf-row').first(), 'flat contended 375px', { expectPill: true, expectCompact: false });
   await page.locator('#detail-CTX-1 .cf-row').first().hover();
   await block().screenshot({ path: path.join(evidence, 'context-files-flat-dark-375.png'), animations: 'disabled' });
-  await setPaneWidth(560);
-  await page.locator('#detail-CTX-1').getByRole('button', { name: 'By folder', exact: true }).click();
-  await page.locator('#detail-CTX-1 .file-list.cf-grouped').waitFor();
-  await checkRowCopy(page.locator('#detail-CTX-1 .cf-row').first(), 'grouped contended 560px', { expectPill: true });
-  await checkRowCopyFocused(page.locator('#detail-CTX-1 .cf-row').first(), 'grouped contended 560px focused', { expectPill: true });
-  await checkKeyboardTab(page.locator('#detail-CTX-1 .cf-row').first(), 'grouped contended 560px', selector);
-  await page.locator('#detail-CTX-1 .cf-row').first().hover();
-  await block().screenshot({ path: path.join(evidence, 'context-files-grouped-dark-560.png'), animations: 'disabled' });
   await page.locator('[data-key="task-CTX-3"] .title').click();
   await page.locator('#detail-CTX-3 [role="tab"][data-tab="context_files"]').click();
   await page.locator('#detail-CTX-3 .file-list').waitFor();
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-3 .context-contended-backlog').length >= 1);
   const longBlock = () => page.locator('#detail-CTX-3 .field-block').filter({ has: page.locator('.file-list') });
-  const longRow = async ({ view, cls, width }) => {
+  const longRow = async ({ width }) => {
     await setPaneWidth(width);
-    await page.locator('#detail-CTX-3').getByRole('button', { name: view, exact: true }).click();
-    await page.locator(`#detail-CTX-3 .file-list.${cls}`).waitFor();
     return page.locator('#detail-CTX-3 .file-list').evaluate(node => {
       const pane = node.closest('.task-detail-pane');
       const link = node.querySelector('.context-selector');
@@ -241,7 +212,7 @@ try {
   };
   const longFlat = [];
   for (const width of [560, 720, 375]) {
-    const row = await longRow({ view: 'Flat paths', cls: 'cf-flat', width });
+    const row = await longRow({ width });
     assert(row.paneScroll <= row.paneClient + 1, `long basename pane does not overflow at ${width}px (scroll ${row.paneScroll} vs client ${row.paneClient})`);
     assert.equal(row.baseText, longBasename);
     assert(row.linkScroll <= row.linkClient + 1, `long basename stays inside its link at ${width}px (link scroll ${row.linkScroll} vs client ${row.linkClient})`);
@@ -256,25 +227,11 @@ try {
     await longBlock().screenshot({ path: path.join(evidence, `context-files-long-flat-dark-${width}.png`), animations: 'disabled' });
     longFlat.push({ width, ...row });
   }
-  const longGrouped = await longRow({ view: 'By folder', cls: 'cf-grouped', width: 375 });
-  assert(longGrouped.paneScroll <= longGrouped.paneClient + 1, `long basename grouped pane does not overflow at 375px (scroll ${longGrouped.paneScroll} vs client ${longGrouped.paneClient})`);
-  assert.equal(longGrouped.baseText, longBasename);
-  assert(longGrouped.baseInsideLink, 'long grouped basename stays inside its link at 375px');
-  assert.equal(longGrouped.textOverflow, 'ellipsis', 'long grouped basename ellipsizes instead of hard-clipping');
-  await checkRowCopy(page.locator('#detail-CTX-3 .cf-row').first(), 'long grouped basename at 375px', { expectPill: false, expectCompact: false });
-  await checkRowCopyFocused(page.locator('#detail-CTX-3 .cf-row').first(), 'long grouped basename at 375px focused', { expectPill: false });
-  await page.locator('#detail-CTX-3 .cf-row').first().hover();
-  await longBlock().screenshot({ path: path.join(evidence, 'context-files-long-grouped-dark-375.png'), animations: 'disabled' });
-  const longGrouped560 = await longRow({ view: 'By folder', cls: 'cf-grouped', width: 560 });
-  await checkRowCopy(page.locator('#detail-CTX-3 .cf-row').first(), 'long grouped basename at 560px', { expectPill: false, expectCompact: true });
-  await checkRowCopyFocused(page.locator('#detail-CTX-3 .cf-row').first(), 'long grouped basename at 560px focused', { expectPill: false });
   await page.locator('[data-key="task-CTX-4"] .title').click();
   await page.locator('#detail-CTX-4 [role="tab"][data-tab="context_files"]').click();
   await page.locator('#detail-CTX-4 .file-list').waitFor();
   await page.waitForFunction(() => document.querySelectorAll('#detail-CTX-4 .context-contended-backlog').length >= 1);
   await setPaneWidth(560);
-  await page.locator('#detail-CTX-4').getByRole('button', { name: 'Flat paths', exact: true }).click();
-  await page.locator('#detail-CTX-4 .file-list.cf-flat').waitFor();
   const symbol = await page.locator('#detail-CTX-4 .file-list').evaluate(node => {
     const pane = node.closest('.task-detail-pane');
     const link = node.querySelector('.context-selector');
@@ -292,8 +249,8 @@ try {
   await page.locator('#detail-CTX-4 .field-block').filter({ has: page.locator('.file-list') }).screenshot({ path: path.join(evidence, 'context-files-symbol-flat-dark-560.png'), animations: 'disabled' });
   assert.deepEqual(errors, [], 'no browser runtime errors');
   const results = [
-    { scenario: 'flat ellipsis at 560px pane, grouped basename at 375px pane', passed: true, flat, grouped },
-    { scenario: 'long flat basename ellipsizes inside its link at 560, 720 and 375px panes; grouped at 375px', passed: true, longFlat, longGrouped },
+    { scenario: 'flat ellipsis at 560px pane, contended row at 375px pane', passed: true, flat },
+    { scenario: 'long flat basename ellipsizes inside its link at 560, 720 and 375px panes', passed: true, longFlat },
     { scenario: 'long kind-prefixed flat symbol ellipsizes inside its link at 560px pane', passed: true, symbol },
   ];
   fs.writeFileSync(path.join(evidence, 'results.json'), JSON.stringify({ passed: true, results }, null, 2));

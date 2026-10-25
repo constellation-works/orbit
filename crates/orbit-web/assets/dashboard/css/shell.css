@@ -1080,7 +1080,8 @@ a.exec-origin.remote-run-link { color: var(--accent); }
 .host-block .host-resource,
 .host-block .host-resource[data-resource] {
   display: grid;
-  grid-template-columns: 2.1rem max-content minmax(1.25rem, 1fr);
+  /* A fixed value track keeps every bar at one left edge and length. */
+  grid-template-columns: 2.1rem 2.75rem minmax(1.25rem, 1fr);
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -1094,7 +1095,7 @@ a.exec-origin.remote-run-link { color: var(--accent); }
   cursor: inherit;
 }
 .host-block .host-resource .k { color: var(--fg-mute); }
-.host-block .host-resource .v { justify-self: end; color: var(--fg); }
+.host-block .host-resource .v { justify-self: end; color: var(--fg); font-weight: 400; }
 .host-block .host-resource.elevated,
 .host-block .host-resource.elevated .k,
 .host-block .host-resource.elevated .v { color: var(--warn-fg); }
