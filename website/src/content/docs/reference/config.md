@@ -10,6 +10,7 @@ sidebar:
 | Path | Scope |
 |---|---|
 | `~/.orbit/config.toml` | Global |
+| `~/.orbit/clock.env` | Global, machine only — credentials for clock-started runs; see [Scheduled credentials: clock.env](#scheduled-credentials-clockenv) |
 | `.orbit/config.toml` | Workspace, per user (gitignored) |
 
 Each key resolves on its own. A workspace value overrides the global value, a
@@ -54,6 +55,80 @@ descriptions are one sentence; the tables below keep the defaults and ranges.
 `orbit config set` writes the workspace file; `--global` writes the global one.
 If the workspace file does not exist yet, add `--fresh` to start it empty or
 `--seed-from-global` to start from a copy of the global file.
+
+## Scheduled credentials: clock.env
+
+`~/.orbit/clock.env` holds the credentials for runs no login shell starts.
+launchd (macOS) or a systemd user timer (Linux) starts `orbit clock tick`
+with no login environment, so the tick reads this file and supplies its
+values as defaults to the child runs it starts; its own process environment
+is never changed, and the installed unit files never contain a secret. It is
+machine-global, beside the global `config.toml`: there is no workspace
+`clock.env`, and no checkout or sync carries it. For the setup procedure,
+see [Schedule recurring work](../../how-to/recurring-work/#scheduled-credentials).
+
+`orbit routine init --install-clock` creates the file comment-only with
+owner-only permissions when it is absent, and never rewrites an existing
+file. Keep it that way:
+
+```bash
+chmod 600 ~/.orbit/clock.env
+```
+
+```ini
+# ~/.orbit/clock.env — placeholders; put real values only in the file
+CLAUDE_CODE_OAUTH_TOKEN=<token-from-claude-setup-token>
+ANTHROPIC_CREDITS_API_KEY_1=<api-key-for-the-credits-crew>
+GITHUB_TOKEN=<github-token>
+```
+
+Loading rules:
+
+- One `NAME=value` per line. Blank lines and `#` comments are skipped, a
+  leading `export ` is accepted, and one pair of surrounding single or
+  double quotes is stripped. Nothing is expanded. An empty value, a name
+  starting with `ORBIT_`, and a name nobody admits are dropped; a repeated
+  name keeps its last value.
+- A name is admitted only when a discovered workspace's effective
+  `execution.env.pass` lists it, or a crew's `env` entry reads it as its
+  source (below). Each workspace's runs receive the names that workspace's
+  own effective `pass` admits; `pass` is a security key, so a workspace
+  file's list replaces the global one for that workspace.
+- A non-empty value already in the tick's environment wins; an empty or
+  absent one is filled from the file. A dry run (`orbit clock tick
+  --dry-run`) loads nothing.
+- The file must be a regular file, not a symlink, owned by the user running
+  the tick, and readable by its owner alone. A symlink, another owner's
+  file, or a group- or world-readable mode is refused as a load error
+  naming the `chmod 600` fix; the tick still runs and loads nothing from
+  it. Sandboxed agents cannot read the file itself.
+
+Per-crew sources work the same way. A crew's `env` entry
+`NAME=SOURCE` (global config only; see [Crews](#crews)) makes that crew's
+agents receive `NAME` with the value of `SOURCE`, read from the launching
+process or, for clock-started runs, from `clock.env`. Keep the source under
+a name no CLI reads, such as `ANTHROPIC_CREDITS_API_KEY_1`, so other crews
+and interactive shells are unaffected; the agent never receives `SOURCE`
+itself. When a crew entry sets a Claude credential (`ANTHROPIC_API_KEY` or
+`CLAUDE_CODE_OAUTH_TOKEN`), the other Claude credential is removed from that
+crew's agents. An unset or empty source excludes that crew from drains and
+is reported by name — never by value — on the run and by `orbit doctor`.
+
+Verification reports names only. `orbit clock tick --json` lists what the
+file supplied as `clock_env_loaded`, `orbit doctor`'s `env-pass` row names
+`pass` variables unset in doctor's own environment, and on macOS its
+`claude-worker-token` row names the `pass` list or `clock.env` lacking a
+Claude credential, or a crew source `clock.env` lacks. No command, run
+record, or log prints a value.
+
+On macOS, a Claude activity with neither `CLAUDE_CODE_OAUTH_TOKEN` nor
+`ANTHROPIC_API_KEY` in its composed environment is refused before `claude`
+starts, rather than fall back to the Claude Desktop login, which the
+Desktop revokes mid-run. Create a dedicated token with `claude setup-token`,
+store it as `CLAUDE_CODE_OAUTH_TOKEN` above, and admit that name in
+`execution.env.pass`; an admitted `ANTHROPIC_API_KEY`, or a per-crew `env`
+mapping supplying either name, also satisfies the check. A token stored
+under a name `pass` omits counts as lacking.
 
 ## Unknown settings
 
@@ -179,6 +254,7 @@ default_crew = "sol"
 | `effort` | Reasoning effort. See [Reasoning effort](#reasoning-effort). |
 | `description` | Short summary for people. |
 | `tags` | Discovery labels. |
+| `env` | Variables this crew's agents receive on top of `execution.env.pass`, as `NAME` or `NAME=SOURCE`. Global config only. For clock-started runs the source is read from `clock.env`; see [Scheduled credentials: clock.env](#scheduled-credentials-clockenv). |
 
 `ollama` and `openai_compat` are recognized provider IDs with no shipped
 executor: a crew naming either one loads, then fails at dispatch. See
@@ -436,7 +512,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `commit.orchestrated_by_trailer` | **Advanced.** bool · **Default:** `true`<br>Add the `Orchestrated-By` trailer to commit messages. |
 | `branch.name_template` | **Advanced.** string · **Default:** `{{prefix}}/{{task_id}}-{{hash}}`<br>Template for single-task delivery branch names; must contain `{{task_id}}` and `{{hash}}`. A name containing `..` or starting with `-` is refused. |
 | `pr.task_url_template` | **Advanced.** string · **Default:** Unset<br>URL template that links a task ID in PR descriptions. |
-| `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Replaces the default list rather than extending it. macOS also passes `__CF_USER_TEXT_ENCODING` by default. A name you add that the launching shell does not set reaches no agent: drains, `orbit run ship` and `orbit run job` warn on stderr and record it on the run, and `orbit doctor` reports it (start drains from a login shell). |
+| `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Replaces the default list rather than extending it. macOS also passes `__CF_USER_TEXT_ENCODING` by default. A name you add that the launching shell does not set reaches no agent: drains, `orbit run ship` and `orbit run job` warn on stderr and record it on the run, and `orbit doctor` reports it (start drains from a login shell). Clock-started runs read admitted names from `~/.orbit/clock.env`; see [Scheduled credentials: clock.env](#scheduled-credentials-clockenv). |
 | `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. The global file `orbit init` writes sets `danger-full-access`. |
 | `execution.codex.approval_policy` | **Advanced.** string · **Default:** Unset<br>Codex approval policy: `untrusted`, `on-request`, or `never`. |
 | `execution.proc_spawn_max_timeout_minutes` | **Advanced.** integer · **Default:** `45`<br>Longest timeout one `proc.spawn` call may use inside a managed activity, also capped by the activity's remaining wall-clock budget (1–1440). Outside an activity the ceiling stays 60 seconds. |
@@ -495,7 +571,8 @@ Notes:
   deletes the old key. A later release rejects them.
 
 Crew fields are settable as `crews.<name>.<field>`, where the field is
-`model`, `provider`, `enabled`, `effort`, `description`, or `tags`; for
+`model`, `provider`, `enabled`, `effort`, `description`, `tags`, or `env`
+(`env` requires `--global`); for
 example, `orbit config set crews.sol.effort high`. `orbit config set` cannot
 create a crew: first add a `[crews.<name>]` table with `model` and `provider`.
 An installed plugin's declared settings are settable as `plugins.<ns>.<key>`.
