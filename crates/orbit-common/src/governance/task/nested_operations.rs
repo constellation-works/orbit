@@ -231,7 +231,7 @@ pub(super) const LOCKS_RESERVE: TaskOperation = TaskOperation {
                 mcp_only(
                     "ttl_seconds",
                     ParamType::UnsignedInteger,
-                    "Optional reservation TTL in seconds. Defaults to 1800; max 7200.",
+                    "Optional reservation TTL in seconds. Defaults to 1800; max 14400.",
                 ),
                 &["ttlSeconds", "ttl-seconds"],
             ),
@@ -247,7 +247,7 @@ pub(super) const LOCKS_RESERVE: TaskOperation = TaskOperation {
                         value_name: Some("DURATION"),
                         multiple: false,
                     },
-                    "How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 2h",
+                    "How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 4h",
                 ),
                 "30m",
             ),
