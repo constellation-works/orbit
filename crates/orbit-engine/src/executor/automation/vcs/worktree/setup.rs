@@ -2,6 +2,9 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::lower_hex;
+use orbit_types::workflow::{
+    BRANCH_HASH_LEN, ConventionTemplate, Placeholder, unsafe_branch_name_reason,
+};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -116,7 +119,13 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
         }
     }
 
-    let branch_name = branch_name_for_tasks(&identity.branch_prefix, task_ids, worktree_run_id);
+    let branch_name = branch_name_for_tasks(
+        host,
+        repo_root,
+        &identity.branch_prefix,
+        task_ids,
+        worktree_run_id,
+    )?;
 
     let worktree_path = identity.path(repo_root)?;
 
@@ -583,17 +592,83 @@ fn is_empty_dir(path: &Path) -> Result<bool, OrbitError> {
     Ok(entries.next().is_none())
 }
 
-fn branch_name_for_tasks(branch_prefix: &str, task_ids: &[String], run_id: &str) -> String {
-    if task_ids.len() == 1 {
+/// The run's branch. A single task's follows `branch.name_template`
+/// (`<prefix>/<task>-<hash8>` by default); a bundle's is always
+/// `<prefix>/bundle-<hash8>`.
+fn branch_name_for_tasks<H: RuntimeHost + ?Sized>(
+    host: &H,
+    repo_root: &Path,
+    branch_prefix: &str,
+    task_ids: &[String],
+    run_id: &str,
+) -> Result<String, OrbitError> {
+    if let [task_id] = task_ids {
         // A retry for the same run must address the same ref even after the
         // checkout has been removed and only its candidate branch remains.
         let run_hash = lower_hex(Sha256::digest(run_id.as_bytes()));
-        return format!("{branch_prefix}/{}-{}", task_ids[0], &run_hash[..8]);
+        let run_hash = &run_hash[..BRANCH_HASH_LEN];
+        let template = host.pr_config().conventions.branch_name;
+        let task = if template.uses_external_ref() {
+            // A task's external refs may change during the run, so a branch
+            // this run already named is reused rather than renamed.
+            if let Some(existing) =
+                existing_run_branch(repo_root, &template, branch_prefix, task_id, run_hash)?
+            {
+                return Ok(existing);
+            }
+            Some(host.get_task(task_id)?)
+        } else {
+            None
+        };
+        let name = template.render(|placeholder| match placeholder {
+            Placeholder::Prefix => branch_prefix.to_string(),
+            Placeholder::TaskId => task_id.clone(),
+            Placeholder::Hash => run_hash.to_string(),
+            Placeholder::ExternalRef(system) => task
+                .iter()
+                .flat_map(|task| &task.external_refs)
+                .find(|external_ref| external_ref.system.eq_ignore_ascii_case(system))
+                .map(|external_ref| external_ref.id.clone())
+                .unwrap_or_default(),
+            _ => String::new(),
+        });
+        if let Some(reason) = unsafe_branch_name_reason(&name) {
+            return Err(OrbitError::InvalidInput(format!(
+                "branch.name_template renders '{name}' for task {task_id}, and a branch name \
+                 {reason}"
+            )));
+        }
+        return Ok(name);
     }
 
     let mut sorted_ids = task_ids.to_vec();
     sorted_ids.sort();
     let digest = Sha256::digest(sorted_ids.join(","));
     let bundle_hash = lower_hex(digest);
-    format!("{branch_prefix}/bundle-{}", &bundle_hash[..8])
+    Ok(format!(
+        "{branch_prefix}/bundle-{}",
+        &bundle_hash[..BRANCH_HASH_LEN]
+    ))
+}
+
+/// The local branch this run already named for `task_id`, if exactly one
+/// carries the run's hash and matches the template for the task.
+fn existing_run_branch(
+    repo_root: &Path,
+    template: &ConventionTemplate,
+    branch_prefix: &str,
+    task_id: &str,
+    run_hash: &str,
+) -> Result<Option<String>, OrbitError> {
+    let listed = git_output(
+        repo_root,
+        &["for-each-ref", "--format=%(refname:short)", "refs/heads/"],
+    )?;
+    let mut matching = listed.lines().map(str::trim).filter(|branch| {
+        branch.contains(run_hash) && template.branch_names_task(branch, branch_prefix, task_id)
+    });
+    Ok(match (matching.next(), matching.next()) {
+        (Some(branch), None) => Some(branch.to_string()),
+        _ => None,
+    })
 }

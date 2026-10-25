@@ -61,6 +61,7 @@ include!("config_paths.rs");
 include!("config_store.rs");
 include!("crew_env.rs");
 include!("default_crew.rs");
+include!("delivery_conventions.rs");
 include!("fallbacks.rs");
 include!("ignored_crew_attribution.rs");
 include!("plugin_config.rs");

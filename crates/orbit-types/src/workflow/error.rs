@@ -234,3 +234,18 @@ pub enum TagInstructionError {
     #[error("{0}")]
     Capture(String),
 }
+
+/// A template refused when it is parsed. `key` names the setting.
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
+pub enum ConventionTemplateError {
+    #[error("{key}: unknown placeholder `{{{{{placeholder}}}}}`; known placeholders: {known}")]
+    UnknownPlaceholder {
+        key: String,
+        placeholder: String,
+        known: &'static str,
+    },
+    #[error("{key}: unterminated placeholder (a `{{{{` without a matching `}}}}`)")]
+    Unterminated { key: String },
+    #[error("{key}: {reason}")]
+    Invalid { key: String, reason: String },
+}

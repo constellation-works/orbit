@@ -1,4 +1,5 @@
 use super::*;
+use crate::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskComment {
@@ -353,12 +354,17 @@ pub struct ExternalRef {
 pub const GITHUB_PR_EXTERNAL_REF_SYSTEM: &str = "github-pr";
 
 /// Whether a pull request is shaped like one Orbit published for `task_id`:
-/// its head branch is `orbit/<TASK-ID>-…` and its body names the task as a
-/// whole token, so `ORB-1` never matches `ORB-10`'s pull requests. Who
-/// authored it is the caller's to check.
-pub fn names_task_delivery_pull_request(head_branch: &str, body: &str, task_id: &str) -> bool {
-    let branch_prefix = format!("orbit/{task_id}-");
-    if task_id.is_empty() || !head_branch.starts_with(&branch_prefix) {
+/// its head branch is one `branch_template` names for the task under the
+/// default `orbit` prefix (`orbit/<TASK-ID>-…` by default), and its body
+/// names the task as a whole token, so `ORB-1` never matches `ORB-10`'s pull
+/// requests. Who authored it is the caller's to check.
+pub fn names_task_delivery_pull_request(
+    branch_template: &ConventionTemplate,
+    head_branch: &str,
+    body: &str,
+    task_id: &str,
+) -> bool {
+    if !branch_template.branch_names_task(head_branch, DEFAULT_BRANCH_PREFIX, task_id) {
         return false;
     }
     let is_id_char = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';

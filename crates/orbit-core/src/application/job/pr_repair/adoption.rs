@@ -56,7 +56,7 @@ use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::{
     NO_AUTO_APPROVE_TAG, TaskHistoryEntry, TaskStatus, names_task_delivery_pull_request,
 };
-use orbit_types::workflow::{JobRun, JobRunState, PrAutoFixBlocker};
+use orbit_types::workflow::{DEFAULT_BRANCH_PREFIX, JobRun, JobRunState, PrAutoFixBlocker};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -472,7 +472,13 @@ impl OrbitRuntime {
                 format!("the run recorded pull request '{number}'"),
             );
         };
-        if !head.starts_with(&format!("orbit/{task_id}-")) {
+        let branch_template = &self
+            .context
+            .settings()
+            .pr_settings()
+            .conventions
+            .branch_name;
+        if !branch_template.branch_names_task(&head, DEFAULT_BRANCH_PREFIX, task_id) {
             return skip(
                 "not_orbit_pull_request",
                 format!("'{head}' is not one of the task's Orbit branches"),
@@ -514,7 +520,7 @@ impl OrbitRuntime {
                 format!("#{number} is no longer open on '{head}'"),
             );
         }
-        if !names_task_delivery_pull_request(&head, &blockers.pull.body, task_id) {
+        if !names_task_delivery_pull_request(branch_template, &head, &blockers.pull.body, task_id) {
             return skip(
                 "not_orbit_pull_request",
                 format!("#{number} does not name the task"),

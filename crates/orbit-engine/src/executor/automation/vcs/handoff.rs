@@ -176,6 +176,9 @@ pub(super) enum FailedHandoffPhase {
     Push,
     PrLookup,
     PrCreate,
+    /// The configured body could not be rendered, or a required section is
+    /// unfilled under `pr.missing_required_section = "refuse"`.
+    PrBody,
     PrView,
     Promote,
     EmptyBranch,
@@ -192,6 +195,7 @@ impl FailedHandoffPhase {
             Self::Push => "push",
             Self::PrLookup => "automation.vcs.pr.lookup",
             Self::PrCreate => "automation.vcs.pr.create",
+            Self::PrBody => "automation.vcs.pr.body",
             Self::PrView => "automation.vcs.pr.view",
             Self::Promote => "promote",
             Self::EmptyBranch => "empty-branch",

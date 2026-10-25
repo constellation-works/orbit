@@ -128,7 +128,7 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
         }
 
         stage_paths(&workspace_path, &changed_files)?;
-        let message = task_commit_message(&task);
+        let message = task_commit_message(&task, &host.pr_config());
         git_commit_paths_with_identity(
             &workspace_path,
             &message,
@@ -190,7 +190,7 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
 
     let files_to_commit: Vec<String> = files_to_commit.into_iter().collect();
     stage_paths(&workspace_path, &files_to_commit)?;
-    let mut message = finalize_commit_message(&affected_tasks);
+    let mut message = finalize_commit_message(&affected_tasks, &host.pr_config());
     let (_, coauthors) = commit_author_for_tasks(&affected_tasks);
     append_co_author_trailers(&mut message, &coauthors);
     let resolved_model = host.resolved_crew_model(batch_id)?;
@@ -466,7 +466,7 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         std::slice::from_ref(&task),
         true,
     );
-    let message = batch_commit_message(&task);
+    let message = batch_commit_message(&task, &host.pr_config());
     let resolved_model = host.resolved_crew_model(batch_id)?;
 
     git_commit_with_identity(&workspace_path, &message, resolved_model.as_deref())?;
@@ -515,7 +515,7 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
             std::slice::from_ref(task),
             true,
         );
-        let message = batch_commit_message(task);
+        let message = batch_commit_message(task, &host.pr_config());
         let resolved_model = host.resolved_crew_model(run_id)?;
         git_commit_with_identity(workspace_path, &message, resolved_model.as_deref())?;
     }

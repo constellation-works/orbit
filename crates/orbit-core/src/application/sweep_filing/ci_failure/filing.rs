@@ -39,6 +39,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::OrbitError;
 use orbit_engine::ci_run_event::is_branch_event;
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id};
+use orbit_types::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -284,7 +285,15 @@ where
     let mut branch_observations = Vec::new();
     let mut excluded_branch_failures = Vec::new();
     for failure in branch_failures {
-        let Some(owner) = task_branch_owner(&failure) else {
+        let Some(owner) = task_branch_owner(
+            &runtime
+                .context
+                .settings()
+                .pr_settings()
+                .conventions
+                .branch_name,
+            &failure,
+        ) else {
             excluded_branch_failures.push(failure);
             continue;
         };
@@ -764,11 +773,11 @@ fn landing_checkout(evidence: &Value, failure: &Value) -> bool {
         })
 }
 
-fn task_branch_owner(failure: &Value) -> Option<String> {
-    let branch = failure["head_branch"].as_str()?.strip_prefix("orbit/")?;
-    let mut parts = branch.splitn(3, '-');
-    let owner = format!("{}-{}", parts.next()?, parts.next()?);
-    is_valid_orb_task_id(&owner).then_some(owner)
+/// The task a failing run's head branch belongs to, read through the
+/// workspace's branch template (`orbit/<TASK-ID>-…` by default).
+fn task_branch_owner(branch_template: &ConventionTemplate, failure: &Value) -> Option<String> {
+    let branch = failure["head_branch"].as_str()?;
+    branch_template.branch_task_id(branch, DEFAULT_BRANCH_PREFIX, &is_valid_orb_task_id)
 }
 
 /// Re-read comments on each append so retries and repeated sources within one

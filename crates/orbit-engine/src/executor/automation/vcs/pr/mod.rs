@@ -32,7 +32,9 @@ pub(crate) use auto_fix::{
     AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
     provider_authenticated_published_head, recovery_published_head,
 };
-pub(in crate::executor::automation::vcs) use body::meaningful_execution_summary;
+pub(in crate::executor::automation::vcs) use body::{
+    meaningful_execution_summary, render_acceptance_criteria, task_url,
+};
 pub(in crate::executor::automation) use complete::pr_complete;
 pub(in crate::executor::automation::vcs) use delivery::{
     BlockedCheckWait, DeliveryPin, OwedHostedChecks, PrMergeState, UnreportedChecks,
