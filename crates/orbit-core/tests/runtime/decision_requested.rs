@@ -290,10 +290,10 @@ fn fire(fx: &Fixture, task: &str, now: chrono::DateTime<Utc>) -> String {
     run.run_id
 }
 
-/// Finish `run_id` with a conclusively stopped owner: a child that has
-/// already exited supplies its pid, as the delivery settlement fixtures
-/// do, so owner liveness reads stopped without timing guesses.
-fn stop_run(fx: &Fixture, run_id: &str) {
+/// Finish `run_id` as `state` with a conclusively stopped owner: a child
+/// that has already exited supplies its pid, as the delivery settlement
+/// fixtures do, so owner liveness reads stopped without timing guesses.
+fn stop_run(fx: &Fixture, run_id: &str, state: JobRunState) {
     let mut owner = crate::git_test_support::command()
         .args(["hash-object", "--stdin"])
         .current_dir(&fx.repo)
@@ -307,7 +307,7 @@ fn stop_run(fx: &Fixture, run_id: &str) {
     drop(owner.stdin.take());
     assert!(owner.wait().unwrap().success());
     fx.jobs
-        .finalize_job_run(run_id, JobRunState::Success, Utc::now(), None)
+        .finalize_job_run(run_id, state, Utc::now(), None)
         .unwrap();
 }
 
@@ -351,7 +351,7 @@ fn an_open_request_fires_once_per_binding_and_does_not_refire() {
     // The run finishing with the request still open settles the member as
     // notified at the request's fingerprint; re-observation at the same
     // fingerprint fires nothing again.
-    stop_run(&fx, &run_id);
+    stop_run(&fx, &run_id, JobRunState::Success);
     evaluate_routine(
         &runtime,
         &decision_routine(),
@@ -572,4 +572,81 @@ fn member_state_from_before_the_variant_still_loads_and_runs() {
         fx.members()
     );
     assert!(fx.members().active.is_none());
+}
+
+#[test]
+fn a_notification_run_that_does_not_complete_leaves_its_member_to_retry() {
+    let fx = fixture();
+    fx.install_job();
+    let task = fx.task();
+    fx.escalate(&task);
+    fx.raise_request(&task);
+    let runtime = fx.automation_runtime();
+    let now = Utc::now();
+    let run_id = fire(&fx, &task, now);
+
+    stop_run(&fx, &run_id, JobRunState::Failed);
+    evaluate_routine(
+        &runtime,
+        &decision_routine(),
+        false,
+        now + Duration::minutes(5),
+    )
+    .unwrap();
+    let members = fx.members();
+    assert!(
+        !members.assessed.contains_key(&task),
+        "a failed notification is not recorded as sent: {members:?}"
+    );
+    assert!(members.failed.contains_key(&task), "{members:?}");
+}
+
+#[test]
+fn no_member_is_observed_while_the_decision_channel_is_off() {
+    let fx = fixture();
+    fx.install_job();
+    let task = fx.task();
+    fx.escalate(&task);
+    fx.raise_request(&task);
+    std::fs::write(
+        fx.repo.join(".orbit/config.toml"),
+        "[decision_channel]\nenabled = false\n",
+    )
+    .unwrap();
+    evaluate_routine(
+        &fx.automation_runtime(),
+        &decision_routine(),
+        false,
+        Utc::now(),
+    )
+    .unwrap();
+    let members = fx.members();
+    assert!(!members.pending.contains_key(&task), "{members:?}");
+    assert!(members.active.is_none(), "{members:?}");
+}
+
+#[test]
+fn a_pending_member_does_not_fire_after_the_decision_channel_is_turned_off() {
+    let fx = fixture();
+    fx.install_job();
+    let task = fx.task();
+    fx.escalate(&task);
+    fx.raise_request(&task);
+    let now = Utc::now();
+    evaluate_routine(&fx.automation_runtime(), &decision_routine(), false, now).unwrap();
+    assert!(fx.members().pending.contains_key(&task));
+    std::fs::write(
+        fx.repo.join(".orbit/config.toml"),
+        "[decision_channel]\nenabled = false\n",
+    )
+    .unwrap();
+    let due = evaluate_routine(
+        &fx.automation_runtime(),
+        &decision_routine(),
+        true,
+        now + Duration::minutes(3),
+    )
+    .unwrap();
+    assert_ne!(due.reason, "would_fire", "{due:?}");
+    assert!(due.batch.is_empty(), "{due:?}");
 }

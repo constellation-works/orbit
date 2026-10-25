@@ -110,6 +110,9 @@ impl Host<'_> {
 
         if self.trigger.kind == StateTriggerKind::DecisionRequested {
             use orbit_types::task::DecisionRequestState;
+            if !self.runtime.decision_channel_enabled() {
+                return Ok(MemberAdmission::Retire("decision_channel_disabled".into()));
+            }
             for id in &member.task_ids {
                 let request = match self.runtime.get_task(id) {
                     Ok(_) => match self.decision_request_of(member)? {

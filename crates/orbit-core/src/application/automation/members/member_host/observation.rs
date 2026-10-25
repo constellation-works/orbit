@@ -190,7 +190,13 @@ impl Host<'_> {
                     // from the task, its binding and its raise time, so
                     // the same binding notified once never refires, and a
                     // fresh request for a later binding is a new member.
-                    for request in self.runtime.get_task_decision_requests(&task.id)? {
+                    // With the channel off the trigger is inert, as raising is.
+                    let requests = if self.runtime.decision_channel_enabled() {
+                        self.runtime.get_task_decision_requests(&task.id)?
+                    } else {
+                        Vec::new()
+                    };
+                    for request in requests {
                         if request.state != orbit_types::task::DecisionRequestState::Open {
                             continue;
                         }

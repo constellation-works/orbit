@@ -45,7 +45,7 @@ impl Host<'_> {
         if self.trigger.kind
             == orbit_types::workflow::automation::members::StateTriggerKind::DecisionRequested
         {
-            return self.decision_outcome(attempt, id, stopped);
+            return self.decision_outcome(attempt, id, stopped, run.state);
         }
 
         // Only the exact canonical deterministic apply steps can provide this

@@ -283,6 +283,7 @@ A state trigger watches tasks, waits out a short debounce, and starts its job. I
 | `finding_unverified` | `job:finding_verification_pipeline` | Review-filed bugs with no verification verdict. |
 | `pilot_warnings_held` | `job:escalation_triage_pipeline` | Proposed tasks whose latest task-pilot assessment holds promotion on warnings. |
 | `block_escalated` | `job:escalation_triage_pipeline` | Blocked tasks whose current block episode awaits triage. |
+| `decision_requested` | `job:decision_request_pipeline` | Tasks with an open decision request that has not been notified, one member per open request. The job is the decision channel's notification job; a routine on this kind needs it installed. |
 | `execution_failed` | Retired | Kept so an old file still loads. Its job, `task_triage_pipeline`, is no longer shipped, so the routine is skipped as retired. A failed run leaves its task blocked; returning it to the backlog is a human transition. |
 
 `eligibility` and `freshness` are legal only on `preparation_eligible`. On any other kind the file is rejected. The seeded task-pilot routine already contains the default eligibility. Omitting the block resolves to the same predicate: statuses `proposed` and `backlog`, exclude tags `no-diff-expected` and `no-diff-needed`, no required tags, and every task type. Statuses are a non-empty subset of `proposed` and `backlog`. A tag cannot be both required and excluded.

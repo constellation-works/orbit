@@ -426,15 +426,18 @@ impl Host<'_> {
 
     /// Settle a decision-request attempt from the request's effective
     /// state. A request that left `open` (answered, superseded or expired)
-    /// releases its member as superseded, whether or not the run finished;
-    /// a run that stopped while its request is still open has done the
+    /// releases its member as superseded, whether or not the run finished.
+    /// A run that completed while its request is still open has sent the
     /// notification it was fired for, so its member is applied at the
-    /// request's fingerprint and the same request never fires again.
+    /// request's fingerprint and the same request never fires again. A run
+    /// that stopped without completing has not notified anyone: its member
+    /// fails and retries under the routine's budget.
     pub(super) fn decision_outcome(
         &self,
         attempt: &MemberAttempt,
         action_id: &str,
         stopped: bool,
+        run_state: orbit_types::workflow::JobRunState,
     ) -> Result<MemberOutcome, AutomationError> {
         use orbit_types::task::DecisionRequestState;
         let mut applied = Vec::new();
@@ -476,6 +479,10 @@ impl Host<'_> {
                 DecisionRequestState::Open => {
                     if !stopped {
                         return Ok(MemberOutcome::Pending);
+                    }
+                    if run_state != orbit_types::workflow::JobRunState::Success {
+                        failed.insert(member.key.clone(), "notification_not_completed".into());
+                        continue;
                     }
                     applied.push(MemberEvidence {
                         action_id: action_id.into(),
