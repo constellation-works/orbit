@@ -275,6 +275,51 @@ impl Store {
             .map_err(sqlite_store_error)?;
         collect_fires(rows)
     }
+
+    /// Recent fires for every named routine in one query (newest first, at
+    /// most `limit` per routine), keyed by routine name.
+    pub fn routine_recent_fires_for(
+        &self,
+        names: &[String],
+        limit: usize,
+    ) -> Result<std::collections::BTreeMap<String, Vec<RoutineFireRecord>>, OrbitError> {
+        if names.is_empty() || limit == 0 {
+            return Ok(std::collections::BTreeMap::new());
+        }
+        let placeholders = vec!["?"; names.len()].join(",");
+        let conn = self.read()?;
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT {FIRE_COLUMNS} FROM (
+                     SELECT {FIRE_COLUMNS},
+                            ROW_NUMBER() OVER (
+                                PARTITION BY routine_name
+                                ORDER BY slot DESC, attempt DESC
+                            ) AS rn
+                     FROM routine_fires WHERE routine_name IN ({placeholders})
+                 ) WHERE rn <= ? ORDER BY routine_name ASC, slot DESC, attempt DESC"
+            ))
+            .map_err(sqlite_store_error)?;
+        let limit_value = limit as i64;
+        let mut params: Vec<&dyn rusqlite::types::ToSql> = names
+            .iter()
+            .map(|name| name as &dyn rusqlite::types::ToSql)
+            .collect();
+        params.push(&limit_value);
+        let rows = stmt
+            .query_map(params.as_slice(), fire_row)
+            .map_err(sqlite_store_error)?;
+        let mut fires: std::collections::BTreeMap<String, Vec<RoutineFireRecord>> =
+            std::collections::BTreeMap::new();
+        for row in rows {
+            let fire = RoutineFireRecord::try_from_row(row.map_err(sqlite_store_error)?)?;
+            fires
+                .entry(fire.routine_name.clone())
+                .or_default()
+                .push(fire);
+        }
+        Ok(fires)
+    }
 }
 
 const FIRE_COLUMNS: &str =
