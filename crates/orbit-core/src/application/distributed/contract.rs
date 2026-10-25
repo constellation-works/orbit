@@ -122,6 +122,7 @@ impl crate::OrbitRuntime {
             // [ORB-16855] The leaf judges light-delivery tags against the
             // owner's allow-list, which acceptance judges again.
             light_delivery_paths: Some(self.workflow_light_delivery_paths().to_vec()),
+            review_skip_tags: Some(self.review_skip_profiles()),
         }
     }
 

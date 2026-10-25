@@ -60,7 +60,10 @@ pub(crate) use freshness::refreshed_input;
 pub(super) use freshness::{prepare_pr_handoff, rebase_pr_branch};
 pub use git::fetch_remote_base;
 pub(super) use landing::handoff_land;
-pub use light_delivery::judge_light_delivery;
+pub use light_delivery::{
+    judge_light_delivery, judge_light_delivery_with_key, review_skip_decision,
+    run_review_skip_guard,
+};
 pub(crate) use owed_criteria::accept_implementer_owed_criteria;
 pub use pr::PullRequestStatus;
 pub(crate) use pr::completion_recovery_checks;

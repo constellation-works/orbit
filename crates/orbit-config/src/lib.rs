@@ -67,6 +67,7 @@
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
 //! - `tag_instructions` — the `[workflow.tag_instructions.<tag>]` file mapping.
+//! - `review_skip_tags` — the `[workflow.review_skip_tags.<tag>]` review-skip mapping.
 //! - `store` — comment-preserving [`ConfigStore`] edits and an atomic save that
 //!   refuses to replace a file changed since the store read it.
 //! - `seed` — rendering and writing a fresh default `config.toml`.
@@ -84,6 +85,7 @@ mod provider_limit;
 mod raw;
 mod registry;
 mod resolved;
+mod review_skip_tags;
 mod roots;
 mod seed;
 mod store;
@@ -147,6 +149,7 @@ pub use resolved::{
     ResolvedConfig, compatibility_config_keys_at, compatibility_config_keys_present,
     disabled_crew_message, executor_host_os, names_retired_system_crew,
 };
+pub use review_skip_tags::{REVIEW_SKIP_TAGS_KEY, ReviewSkipSettings};
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config};
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};

@@ -27,7 +27,9 @@ use orbit_types::workflow::automation::{AutomationState, Delivery, DeliveryExclu
 
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
-use crate::application::task::light_delivery::carries;
+use crate::application::task::light_delivery::{
+    carries, record_light_delivery, review_skip_decisions,
+};
 
 /// Certificates considered per landing; one candidate tree rarely has more.
 const CERTIFICATES_PER_LANDING: usize = 5;
@@ -110,42 +112,63 @@ fn light_delivery_exclusion(
     if delivery.task_ids.is_empty() || delivery.unattributed.is_some() {
         return Ok(None);
     }
+    let mut tasks = Vec::with_capacity(delivery.task_ids.len());
     let mut digests = Vec::with_capacity(delivery.task_ids.len());
     for task_id in &delivery.task_ids {
         let Ok(task) = runtime.get_task(task_id) else {
             return Ok(None);
         };
-        if !carries(&task, SKIP_REVIEW_TAG) {
-            return Ok(None);
-        }
         digests.push((task_id.clone(), task_meaning_digest(&task)?));
+        tasks.push(task);
     }
-    let filter = PathFilter::new(
-        LIGHT_DELIVERY_PATHS_KEY,
-        runtime.workflow_light_delivery_paths(),
-    )?;
-    let changed = source.git_matching_paths(
-        &[
-            "diff",
-            "--name-only",
-            "--no-renames",
-            "-z",
-            "--end-of-options",
-            &delivery.before.commit,
-            &delivery.after.commit,
-            "--",
-        ],
-        |_| true,
-    )?;
-    if !LightDeliveryJudgement::new(changed.len(), &filter.outside(&changed)).is_light() {
-        return Ok(None);
+    let exclusion = |digests: &[(String, String)]| {
+        combined_task_meaning_digest(digests).map(|digest| DeliveryExclusion {
+            attempt_id: format!("{LIGHT_DELIVERY_ASSURANCE}:{}", delivery.key),
+            assurance: LIGHT_DELIVERY_ASSURANCE.to_string(),
+            task_meaning_digest: digest,
+            final_candidate_tree: delivery.after.tree.clone(),
+        })
+    };
+    if tasks.iter().all(|task| carries(task, SKIP_REVIEW_TAG)) {
+        let filter = PathFilter::new(
+            LIGHT_DELIVERY_PATHS_KEY,
+            runtime.workflow_light_delivery_paths(),
+        )?;
+        let changed = source.git_matching_paths(
+            &[
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                "--end-of-options",
+                &delivery.before.commit,
+                &delivery.after.commit,
+                "--",
+            ],
+            |_| true,
+        )?;
+        if LightDeliveryJudgement::new(changed.len(), &filter.outside(&changed)).is_light() {
+            return Ok(Some(exclusion(&digests)?));
+        }
     }
-    Ok(Some(DeliveryExclusion {
-        attempt_id: format!("{LIGHT_DELIVERY_ASSURANCE}:{}", delivery.key),
-        assurance: LIGHT_DELIVERY_ASSURANCE.to_string(),
-        task_meaning_digest: combined_task_meaning_digest(&digests)?,
-        final_candidate_tree: delivery.after.tree.clone(),
-    }))
+    // A mapped review-skip tag excludes the landing the same way, under
+    // its own paths and guard (read at the landing's base).
+    let decisions = review_skip_decisions(
+        runtime,
+        &runtime.paths().repo_root,
+        &delivery.before.commit,
+        &delivery.after.commit,
+        &tasks,
+    )?;
+    let mut applies = false;
+    for decision in &decisions {
+        applies |= decision.applies();
+        record_light_delivery(runtime, &delivery.task_ids, decision)?;
+    }
+    if applies {
+        return Ok(Some(exclusion(&digests)?));
+    }
+    Ok(None)
 }
 
 /// The assurance a light-delivery exclusion carries.

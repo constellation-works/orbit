@@ -138,7 +138,7 @@ pub(crate) fn tag_instructions_from_document(
 
 /// A path inside the repository: relative, `/`-separated, without `.` or
 /// `..` segments. A leading `./` is dropped.
-fn repository_path(raw: &str) -> Result<String, String> {
+pub(crate) fn repository_path(raw: &str) -> Result<String, String> {
     let path = raw.trim();
     let path = path.strip_prefix("./").unwrap_or(path);
     if path.is_empty() {

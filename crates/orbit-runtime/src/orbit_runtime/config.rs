@@ -222,6 +222,19 @@ impl RuntimeKernel {
         self.context.settings().tag_instructions()
     }
 
+    /// `[workflow.review_skip_tags]` as admitted.
+    pub fn review_skip_settings(&self) -> &orbit_config::ReviewSkipSettings {
+        self.context.settings().review_skip_tags()
+    }
+
+    /// The mapped review-skip profiles by tag, for capture in a claim's
+    /// validation gates.
+    pub fn review_skip_profiles(
+        &self,
+    ) -> std::collections::BTreeMap<String, orbit_types::task::ReviewSkipProfile> {
+        self.context.settings().review_skip_tags().as_map()
+    }
+
     /// `workflow.crew_performance_types` as admitted: the implementer
     /// scorecard's task-type lens.
     pub fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {

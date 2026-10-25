@@ -40,9 +40,11 @@ impl TaskCommitBoundary {
             return Ok(Vec::new());
         }
         // [ORB-16855] A `skip-review` candidate within the owner's
-        // light-delivery paths carries no review, whatever the claim captured.
+        // light-delivery paths — or a mapped review-skip tag's candidate
+        // within its profile whose guard passed — carries no review,
+        // whatever the claim captured.
         if handoff.review == HandoffReview::not_required()
-            && self.light_delivery_applies(handoff, light, orbit_types::task::SKIP_REVIEW_TAG)?
+            && self.light_review_skip_applies(handoff, light)?
         {
             return Ok(Vec::new());
         }

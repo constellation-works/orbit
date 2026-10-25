@@ -3898,6 +3898,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
                 required_validation_commands: self.required_commands.lock().unwrap().clone(),
                 baseline_commands: Vec::new(),
                 light_delivery_paths: None,
+                review_skip_tags: None,
             },
             source: self
                 .gate_source

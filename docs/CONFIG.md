@@ -331,6 +331,8 @@ crew_performance_window_days = 30
 | `workflow.unlocked_path_validation_commands` | `[]` | Commands a repaired candidate runs instead of the full required list when its tree differs from the run's last fully validated tree only in `workflow.unlocked_context_paths`. Empty always runs the full list. See [revalidating an unlocked-path repair](#revalidating-an-unlocked-path-repair). |
 | `workflow.generated_paths` | `{}` | Generated files, as path glob = regenerate command. Conflict recovery regenerates a conflicting match instead of merging it. See [generated paths](#generated-paths-are-regenerated-not-merged). |
 | `workflow.light_delivery_paths` | `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]` | Path globs a candidate must change only within for a `skip-review` or `skip-validation` task to skip agent review or local validation. A leading `!` excludes. `[]` disables both tags. See [light delivery](#light-delivery-skip-review-and-skip-validation). |
+| `workflow.review_skip_tags.<tag>.paths` | unset | Path globs (same syntax as `workflow.light_delivery_paths`; `["**"]` allowed) a candidate carrying `<tag>` must change only within to skip agent review. See [review-skip tags](#review-skip-tags-workflowreview_skip_tags). |
+| `workflow.review_skip_tags.<tag>.guard` | unset | Optional repository-relative executable, read from the delivery's base revision, that must exit 0 (with the base and head as its first two arguments) for `<tag>` to skip agent review. |
 
 ### Crew performance types
 
@@ -396,6 +398,24 @@ A candidate that changes any other path, or nothing at all, ignores both tags an
 On a distributed claim, the owner captures its list in the claim's validation gates. The follower leaf judges its candidate against that copy, never its own config. An owner too old to capture one leaves the leaf with no list, so neither tag applies. The owner judges the handed-off candidate again in its own checkout when it accepts, approves or lands the handoff. It records the decision in the task's history, because a leaf cannot write history.
 
 `review.baseline_commands` are the reviewer's own checks: they run only when a review runs. Tag a task with both tags to skip review and every local check.
+
+### Review-skip tags: `workflow.review_skip_tags`
+
+A workspace (or the global config, layered per tag like `[workflow.tag_instructions]`) can map its own tag to a review skip for low-risk work that touches paths outside `workflow.light_delivery_paths`:
+
+```toml
+[workflow.review_skip_tags.comment-hygiene]
+paths = ["crates/**"]
+guard = "scripts/check-comment-only-diff.sh"
+```
+
+A candidate skips every agent review layer (before-PR, before-landing and after-landing delivery-code-review sampling) for a mapped tag only when every task it delivers carries the tag, every path it changes since its synchronized base matches that tag's `paths` (the `workflow.light_delivery_paths` glob syntax, `!` excludes; `["**"]` allows every path), and the guard, when set, exits 0. Any other candidate gets normal review. Each decision is recorded once per candidate in the task's history as `light_delivery_applied` or `light_delivery_ignored`, naming the tag, its profile key and the failed condition (a task without the tag, the first path outside `paths`, the guard's exit status, or a guard missing at the base). Check them with `orbit task show`.
+
+The guard is a repository-provided executable: Orbit only runs it, so a language-specific check (for example, that the non-comment content is unchanged) lives in the workspace. It is read from the delivery's base revision, never the worktree, so a delivery cannot weaken its own guard, and it runs the way required validation commands run (same environment and sandbox rules), in the candidate's workspace, with the candidate's base and head commits as its first two arguments and as `ORBIT_REVIEW_SKIP_BASE` / `ORBIT_REVIEW_SKIP_HEAD` (the tag as `ORBIT_REVIEW_SKIP_TAG`).
+
+Mapped tags have the same protection as `skip-review`: only filing a task (including an auto-task definition) or an operator update may add one; an agent's update that adds one is refused, and removal is always allowed. A mapped tag skips review only, never validation: required validation, workspace gates and hosted CI still run. The built-in `skip-review` and `skip-validation` tags keep their behaviour above and cannot be remapped. Config validation refuses a mapping that reuses a built-in tag name, has an empty or malformed `paths`, or a `guard` that is absolute or contains `..`, naming the key. `orbit config show` lists the effective mappings under `Review skip tags:` (and as `review_skip_tags` in `--json`).
+
+On a distributed claim, the owner captures its mappings in the claim's validation gates alongside `workflow.light_delivery_paths`. The follower leaf judges its candidate against that copy, guard included, and the owner judges the handed-off candidate again (guard included) when it accepts, recording the decision in the task's history. An owner too old to capture mappings leaves the leaf with none, so no mapped tag applies.
 
 ### Generated paths are regenerated, not merged
 

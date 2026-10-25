@@ -140,10 +140,19 @@ impl OrbitRuntime {
             // attributed agent or tool writer is refused even when this
             // process has no agent envelope — the normal shape of a
             // user-launched MCP server. Removing a tag stays allowed.
+            let mapped_review_skip = self
+                .review_skip_settings()
+                .tags()
+                .map(str::to_string)
+                .collect::<Vec<_>>();
             if writer == TaskFieldWriter::Agent
-                && let Some(added) = LIGHT_DELIVERY_TAGS.iter().find(|tag| {
-                    tags.iter().any(|new| new == *tag) && !task.tags.iter().any(|old| old == *tag)
-                })
+                && let Some(added) = LIGHT_DELIVERY_TAGS
+                    .iter()
+                    .map(|tag| (*tag).to_string())
+                    .chain(mapped_review_skip)
+                    .find(|tag| {
+                        tags.iter().any(|new| new == tag) && !task.tags.iter().any(|old| old == tag)
+                    })
             {
                 return Err(OrbitError::CapabilityDenied(format!(
                     "an agent cannot add `{added}` to an existing task; only filing the task \

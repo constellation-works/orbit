@@ -27,7 +27,7 @@ use crate::OrbitRuntime;
 use crate::application::job::crew_pools::seeded_crew_ticket;
 use crate::application::review::crew::{pool_source, pre_landing_review_crew_unset};
 use crate::application::task::light_delivery::{
-    carries, light_delivery_decision, record_light_delivery,
+    carries, light_delivery_decision, record_light_delivery, review_skip_decisions,
 };
 use crate::runtime::engine::crew::enforce_crew_allowlist;
 
@@ -238,10 +238,19 @@ const SKIP_REVIEW_REASON: &str = "skip_review_light_delivery";
 /// record the decision in each task's history, and say whether review is
 /// skipped. A run none of whose tasks carry the tag judges nothing.
 fn light_review_skipped(runtime: &OrbitRuntime, context: &GateContext) -> Result<bool, OrbitError> {
-    if !context
-        .tasks
-        .iter()
-        .any(|task| carries(task, SKIP_REVIEW_TAG))
+    let gates = runtime.host_validation_gates();
+    let any_mapped = context.tasks.iter().any(|task| {
+        task.tags.iter().any(|tag| {
+            gates
+                .review_skip_tags()
+                .contains_key(&tag.trim().to_lowercase())
+        })
+    });
+    if !any_mapped
+        && !context
+            .tasks
+            .iter()
+            .any(|task| carries(task, SKIP_REVIEW_TAG))
     {
         return Ok(false);
     }
@@ -249,19 +258,29 @@ fn light_review_skipped(runtime: &OrbitRuntime, context: &GateContext) -> Result
     let head = candidate_identity(&context.workspace_path, &base)?
         .head
         .commit;
-    let Some(decision) = light_delivery_decision(
+    let mut skipped = false;
+    if let Some(decision) = light_delivery_decision(
         runtime,
         &context.workspace_path,
         &base,
         &head,
         &context.tasks,
         SKIP_REVIEW_TAG,
-    )?
-    else {
-        return Ok(false);
-    };
-    record_light_delivery(runtime, &context.task_ids, &decision)?;
-    Ok(decision.applies())
+    )? {
+        skipped |= decision.applies();
+        record_light_delivery(runtime, &context.task_ids, &decision)?;
+    }
+    for decision in review_skip_decisions(
+        runtime,
+        &context.workspace_path,
+        &base,
+        &head,
+        &context.tasks,
+    )? {
+        skipped |= decision.applies();
+        record_light_delivery(runtime, &context.task_ids, &decision)?;
+    }
+    Ok(skipped)
 }
 
 /// Whether a task's held candidate is still waiting for named external
