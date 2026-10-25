@@ -1,7 +1,7 @@
 //! Select the review findings a verification run judges, draw each one's
 //! verifier crew and partition them by crew.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
@@ -10,19 +10,15 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskAutomationPort;
+use crate::application::task::batch_prepare::{
+    BatchSpec, Qualification, held_by_run_detail, prepare_batch,
+};
 use crate::application::task::{
     TaskListFilter, VERIFIABLE_STATUSES, finding_fingerprint, is_review_finding, needs_verification,
 };
 
-use crate::application::task::pilot::input::{
-    bounded_usize, requested_workspace_root, string_array,
-};
+use crate::application::task::pilot::input::requested_workspace_root;
 use crate::application::task::pilot::source::resolve_source_snapshot;
-
-const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
-const HARD_MAX_PARTITION_SIZE: usize = 5;
-const DEFAULT_MAX_TASKS: usize = 50;
-const HARD_MAX_TASKS: usize = 500;
 
 pub(crate) fn prepare(
     runtime: &OrbitRuntime,
@@ -42,181 +38,61 @@ pub(crate) fn prepare(
                 "finding verification pins a Git revision; the workspace is not a Git work tree",
             )
         })?;
-    if let Some(claim) = &claim
-        && (source.source_revision != claim.member.source.commit
-            || input.get("task_ids") != Some(&json!(claim.task_ids())))
-    {
-        return Err(DispatchError::action_failed(
-            action,
-            "state-trigger source or task membership changed",
-        ));
-    }
-    let max_partition_size = bounded_usize(
+    prepare_batch(
+        runtime,
         action,
         input,
-        "max_partition_size",
-        DEFAULT_MAX_PARTITION_SIZE,
-        HARD_MAX_PARTITION_SIZE,
-    )?;
-    let max_tasks = bounded_usize(
-        action,
-        input,
-        "max_tasks",
-        DEFAULT_MAX_TASKS,
-        HARD_MAX_TASKS,
-    )?;
-    let explicit_task_ids = string_array(input, "task_ids", action)?;
-    let explicit = !explicit_task_ids.is_empty();
-    if explicit_task_ids.len() > max_tasks {
-        return Err(DispatchError::action_failed(
-            action,
-            format!(
-                "explicit selection names {} tasks, exceeding max_tasks {max_tasks}",
-                explicit_task_ids.len()
-            ),
-        ));
-    }
-
-    // A retried prepare is not held by its own earlier checkpoint.
-    let mut held = runtime.finding_verification_holders().map_err(failed)?;
-    if let Some(run_id) = run_id {
-        held.retain(|_, holders| {
-            holders.remove(run_id);
-            !holders.is_empty()
-        });
-    }
-
-    let candidates = if explicit {
-        let mut seen = BTreeSet::new();
-        explicit_task_ids
-            .iter()
-            .map(|task_id| {
-                if !seen.insert(task_id.as_str()) {
-                    return Err(DispatchError::action_failed(
-                        action,
-                        format!("explicit task_ids contains duplicate {task_id}"),
-                    ));
-                }
-                runtime.get_task(task_id).map_err(|error| {
-                    if matches!(error, OrbitError::NotFound { .. }) {
-                        DispatchError::action_failed(
-                            action,
-                            format!("task {task_id} does not exist in the selected workspace"),
-                        )
-                    } else {
-                        failed(error)
-                    }
-                })
+        run_id,
+        BatchSpec {
+            claim,
+            source_revision: Some(source.source_revision.clone()),
+            source: source.to_json(),
+            workspace_path: workspace_root,
+            automatic_filter: TaskListFilter {
+                statuses: Some(VERIFIABLE_STATUSES.to_vec()),
+                task_type: Some(TaskType::Bug),
+                ..Default::default()
+            },
+            silent_reasons: &[],
+            before_workspace: Vec::new(),
+            before_task_count: vec![("round", json!("initial"))],
+        },
+        |runtime| runtime.finding_verification_holders(),
+        is_review_finding,
+        |task, held, explicit| {
+            let history = runtime.get_task_history(&task.id)?;
+            let reason = if !is_review_finding(task) {
+                Some("not_a_review_finding")
+            } else if !VERIFIABLE_STATUSES.contains(&task.status) {
+                Some("status_not_verifiable")
+            } else if held.contains_key(&task.id) {
+                Some("already_verifying")
+            } else if !explicit && !needs_verification(task, &history) {
+                // An explicit selection re-verifies a confirmed finding on request.
+                Some("already_confirmed")
+            } else {
+                None
+            };
+            Ok(match reason {
+                Some(reason) => Qualification::Rejected(reason),
+                None => Qualification::Selected(history.len()),
             })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        let mut envelopes = runtime
-            .task_candidates(
-                &TaskListFilter {
-                    statuses: Some(VERIFIABLE_STATUSES.to_vec()),
-                    task_type: Some(TaskType::Bug),
-                    ..Default::default()
-                },
-                usize::MAX,
-            )
-            .map_err(failed)?
-            .items;
-        // Oldest findings first, so a capped pass makes progress through them.
-        envelopes.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then(left.id.cmp(&right.id))
-        });
-        envelopes
-            .iter()
-            .map(|envelope| runtime.get_task(&envelope.id))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(failed)?
-            .into_iter()
-            .filter(is_review_finding)
-            .collect()
-    };
-
-    // An explicitly named task that cannot be verified settles superseded with
-    // its reason, so a claimed member is released rather than failed.
-    let mut superseded = Vec::new();
-    let mut excluded = BTreeMap::<&'static str, usize>::new();
-    let mut selected = Vec::new();
-    for task in candidates {
-        let history = runtime.get_task_history(&task.id).map_err(failed)?;
-        let reason = if !is_review_finding(&task) {
-            Some("not_a_review_finding")
-        } else if !VERIFIABLE_STATUSES.contains(&task.status) {
-            Some("status_not_verifiable")
-        } else if held.contains_key(&task.id) {
-            Some("already_verifying")
-        } else if !explicit && !needs_verification(&task, &history) {
-            // An explicit selection re-verifies a confirmed finding on request.
-            Some("already_confirmed")
-        } else {
-            None
-        };
-        match reason {
-            Some(reason) if explicit => superseded.push(json!({
-                "task_id": task.id, "outcome": "superseded", "reason": reason,
-                "status": task.status,
-                "detail": skipped_detail(reason, held.get(&task.id)),
-            })),
-            Some(reason) => *excluded.entry(reason).or_default() += 1,
-            None if selected.len() < max_tasks => selected.push((task, history.len())),
-            None => *excluded.entry("deferred_by_max_tasks").or_default() += 1,
-        }
-    }
-
-    // Every task's verifier is drawn before any is dispatched, so its tier
-    // and crew are part of the prepared checkpoint apply trusts.
-    let mut tasks = Vec::with_capacity(selected.len());
-    let mut by_crew = BTreeMap::<String, Vec<String>>::new();
-    for (task, history_len) in &selected {
-        let verifier = runtime.first_finding_verifier(task).map_err(failed)?;
-        by_crew
-            .entry(verifier.crew.clone())
-            .or_default()
-            .push(task.id.clone());
-        tasks.push(task_snapshot(task, *history_len, &verifier, &[]));
-    }
-    let partitions = by_crew
-        .iter()
-        .flat_map(|(crew, ids)| {
-            ids.chunks(max_partition_size)
-                .map(move |chunk| (crew.clone(), chunk.to_vec()))
-        })
-        .enumerate()
-        .map(|(partition_index, (crew, task_ids))| {
-            let draws = tasks.iter().filter(|task| task_ids.iter().any(|id| task["task_id"] == *id))
+        },
+        |task, history_len| {
+            let verifier = runtime.first_finding_verifier(task)?;
+            let crew = verifier.crew.clone();
+            Ok((task_snapshot(task, history_len, &verifier, &[]), crew))
+        },
+        skipped_detail,
+        |tasks, task_ids| {
+            let draws = tasks
+                .iter()
+                .filter(|task| task_ids.iter().any(|id| task["task_id"] == *id))
                 .map(|task| json!({"task_id": task["task_id"], "eligible_pool": task["eligible_pool"]}))
                 .collect::<Vec<_>>();
-            json!({"partition_index": partition_index, "task_ids": task_ids, "crew": crew, "draws": draws})
-        })
-        .collect::<Vec<_>>();
-    let task_ids = tasks
-        .iter()
-        .map(|task| task["task_id"].clone())
-        .collect::<Vec<_>>();
-
-    Ok(json!({
-        "state_automation": claim,
-        "mode": if explicit { "explicit" } else { "automatic" },
-        "workspace_path": workspace_root,
-        "owner_machine": runtime.automation_execution_location(),
-        // Results of this run must carry the observed-revision proof.
-        crate::application::task::pilot::source::INSPECTION_PROOF_KEY: true,
-        "source": source.to_json(),
-        "round": "initial",
-        "task_count": task_ids.len(),
-        "task_ids": task_ids,
-        "tasks": tasks,
-        "partition_size": max_partition_size,
-        "partition_count": partitions.len(),
-        "partitions": partitions,
-        "excluded_by_reason": excluded,
-        "superseded_during_preparation": superseded,
-    }))
+            Some(("draws", json!(draws)))
+        },
+    )
 }
 
 /// The prepared record of one task apply validates its verdict against.
@@ -245,15 +121,7 @@ fn skipped_detail(reason: &str, holders: Option<&BTreeSet<String>>) -> String {
             "only a bug task filed by a review is verified; this task is not one".into()
         }
         "status_not_verifiable" => "only a proposed, someday or backlog finding is verified".into(),
-        "already_verifying" => format!(
-            "verified by run {}",
-            holders
-                .into_iter()
-                .flatten()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        "already_verifying" => held_by_run_detail("verified", holders),
         _ => reason.into(),
     }
 }

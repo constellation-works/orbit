@@ -2,7 +2,8 @@
 //! assessments, or block episodes awaiting triage), draw each one's
 //! hard-tier crew and partition them by crew.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cell::OnceCell;
+use std::collections::BTreeSet;
 
 use chrono::{SecondsFormat, Utc};
 use orbit_common::OrbitError;
@@ -14,18 +15,14 @@ use serde_json::{Value, json};
 use super::{HeldPilotWarnings, PilotWarningCandidacy};
 use crate::OrbitRuntime;
 use crate::application::task::TriageCandidacy;
-use crate::application::task::pilot::input::{
-    bounded_usize, requested_workspace_root, string_array,
+use crate::application::task::batch_prepare::{
+    BatchSpec, Qualification, held_by_run_detail, prepare_batch,
 };
+use crate::application::task::pilot::input::requested_workspace_root;
 use crate::application::task::pilot::requested_base_branch;
 use crate::application::task::pilot::source::{SourceSnapshot, resolve_source_snapshot};
 use crate::application::task::{TaskAutomationPort, TaskDistributedPort, TaskJobPort};
 use crate::application::task::{TaskListFilter, VerifierAssignment};
-
-const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
-const HARD_MAX_PARTITION_SIZE: usize = 5;
-const DEFAULT_MAX_TASKS: usize = 50;
-const HARD_MAX_TASKS: usize = 500;
 
 /// Refuting a pilot finding takes the strongest reading of the source, so
 /// every triager is drawn from this tier.
@@ -83,14 +80,6 @@ impl Subject {
     }
 }
 
-/// One selected task's prepared row and the crew that wrote what holds it,
-/// when one is known.
-struct Selected {
-    task: Task,
-    row: Value,
-    author: Option<String>,
-}
-
 pub(crate) fn prepare(
     runtime: &OrbitRuntime,
     action: &str,
@@ -116,187 +105,59 @@ pub(crate) fn prepare(
     // revision as finding verification does. A non-Git workspace pins none,
     // as a task pilot does, and its triagers report no observed revision.
     let source = resolve_source_snapshot(runtime, action, input, &workspace_root)?;
-    if let Some(claim) = &claim
-        && (source.as_ref().map(|source| &source.source_revision)
-            != Some(&claim.member.source.commit)
-            || input.get("task_ids") != Some(&json!(claim.task_ids())))
-    {
-        return Err(DispatchError::action_failed(
-            action,
-            "state-trigger source or task membership changed",
-        ));
-    }
-    let max_partition_size = bounded_usize(
+    let now = OnceCell::new();
+    prepare_batch(
+        runtime,
         action,
         input,
-        "max_partition_size",
-        DEFAULT_MAX_PARTITION_SIZE,
-        HARD_MAX_PARTITION_SIZE,
-    )?;
-    let max_tasks = bounded_usize(
-        action,
-        input,
-        "max_tasks",
-        DEFAULT_MAX_TASKS,
-        HARD_MAX_TASKS,
-    )?;
-    let explicit_task_ids = string_array(input, "task_ids", action)?;
-    let explicit = !explicit_task_ids.is_empty();
-    if explicit_task_ids.len() > max_tasks {
-        return Err(DispatchError::action_failed(
-            action,
-            format!(
-                "explicit selection names {} tasks, exceeding max_tasks {max_tasks}",
-                explicit_task_ids.len()
-            ),
-        ));
-    }
-
-    // A retried prepare is not held by its own earlier checkpoint.
-    let mut held = runtime.escalation_triage_holders().map_err(failed)?;
-    if let Some(run_id) = run_id {
-        held.retain(|_, holders| {
-            holders.remove(run_id);
-            !holders.is_empty()
-        });
-    }
-
-    let candidates = if explicit {
-        let mut seen = BTreeSet::new();
-        explicit_task_ids
-            .iter()
-            .map(|task_id| {
-                if !seen.insert(task_id.as_str()) {
-                    return Err(DispatchError::action_failed(
-                        action,
-                        format!("explicit task_ids contains duplicate {task_id}"),
-                    ));
-                }
-                runtime.get_task(task_id).map_err(|error| {
-                    if matches!(error, OrbitError::NotFound { .. }) {
-                        DispatchError::action_failed(
-                            action,
-                            format!("task {task_id} does not exist in the selected workspace"),
-                        )
-                    } else {
-                        failed(error)
-                    }
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    } else {
-        let mut envelopes = runtime
-            .task_candidates(
-                &TaskListFilter {
-                    statuses: Some(vec![subject.status()]),
-                    ..Default::default()
-                },
-                usize::MAX,
-            )
-            .map_err(failed)?
-            .items;
-        // Oldest holds first, so a capped pass makes progress through them.
-        envelopes.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then(left.id.cmp(&right.id))
-        });
-        envelopes
-            .iter()
-            .map(|envelope| runtime.get_task(&envelope.id))
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(failed)?
-    };
-
-    // An explicitly named task that no longer qualifies settles superseded
-    // with its reason, so a claimed member is released rather than failed.
-    let now = Utc::now();
-    let mut superseded = Vec::new();
-    let mut excluded = BTreeMap::<&'static str, usize>::new();
-    let mut selected = Vec::new();
-    for task in candidates {
-        let reason = if held.contains_key(&task.id) {
-            Err("already_triaging")
-        } else {
-            qualify(runtime, subject, &task, now).map_err(failed)?
-        };
-        match reason {
-            Ok(_) if selected.len() >= max_tasks => {
-                *excluded.entry("deferred_by_max_tasks").or_default() += 1;
-            }
-            Ok((row, author)) => selected.push(Selected { task, row, author }),
-            Err(reason) if explicit => superseded.push(json!({
-                "task_id": task.id, "outcome": "superseded", "reason": reason,
-                "status": task.status,
-                "detail": skipped_detail(reason, held.get(&task.id)),
-            })),
+        run_id,
+        BatchSpec {
+            claim,
+            source_revision: source.as_ref().map(|source| source.source_revision.clone()),
+            source: source
+                .as_ref()
+                .map(SourceSnapshot::to_json)
+                .unwrap_or_else(|| {
+                    json!({
+                        "base_branch": requested_base_branch(runtime, input),
+                        "source_ref": Value::Null,
+                        "source_revision": Value::Null,
+                        "fast_forwarded": false,
+                    })
+                }),
+            workspace_path: workspace_root,
+            automatic_filter: TaskListFilter {
+                statuses: Some(vec![subject.status()]),
+                ..Default::default()
+            },
             // A task in the subject's status that holds nothing is not a
             // candidate at all.
-            Err("not_held" | "not_blocked") => {}
-            Err(reason) => *excluded.entry(reason).or_default() += 1,
-        }
-    }
-
-    // Every task's triager is drawn before any is dispatched, so its crew is
-    // part of the prepared checkpoint the run records.
-    let mut tasks = Vec::with_capacity(selected.len());
-    let mut by_crew = BTreeMap::<String, Vec<String>>::new();
-    for Selected {
-        task,
-        mut row,
-        author,
-    } in selected
-    {
-        let triager = triager(runtime, &task, author.as_deref()).map_err(failed)?;
-        by_crew
-            .entry(triager.crew.clone())
-            .or_default()
-            .push(task.id.clone());
-        row["crew"] = json!(triager.crew);
-        row["tier"] = json!(triager.tier);
-        tasks.push(row);
-    }
-    let partitions = by_crew
-        .iter()
-        .flat_map(|(crew, ids)| {
-            ids.chunks(max_partition_size)
-                .map(move |chunk| (crew.clone(), chunk.to_vec()))
-        })
-        .enumerate()
-        .map(|(partition_index, (crew, task_ids))| {
-            json!({"partition_index": partition_index, "task_ids": task_ids, "crew": crew})
-        })
-        .collect::<Vec<_>>();
-    let task_ids = tasks
-        .iter()
-        .map(|task| task["task_id"].clone())
-        .collect::<Vec<_>>();
-
-    Ok(json!({
-        "state_automation": claim,
-        "mode": if explicit { "explicit" } else { "automatic" },
-        "subject": subject.as_str(),
-        "workspace_path": workspace_root,
-        "owner_machine": runtime.automation_execution_location(),
-        // Results of this run must carry the observed-revision proof.
-        crate::application::task::pilot::source::INSPECTION_PROOF_KEY: true,
-        "source": source.as_ref().map(SourceSnapshot::to_json).unwrap_or_else(|| {
-            json!({
-                "base_branch": requested_base_branch(runtime, input),
-                "source_ref": Value::Null,
-                "source_revision": Value::Null,
-                "fast_forwarded": false,
-            })
-        }),
-        "task_count": task_ids.len(),
-        "task_ids": task_ids,
-        "tasks": tasks,
-        "partition_size": max_partition_size,
-        "partition_count": partitions.len(),
-        "partitions": partitions,
-        "excluded_by_reason": excluded,
-        "superseded_during_preparation": superseded,
-    }))
+            silent_reasons: &["not_held", "not_blocked"],
+            before_workspace: vec![("subject", json!(subject.as_str()))],
+            before_task_count: Vec::new(),
+        },
+        |runtime| runtime.escalation_triage_holders(),
+        |_| true,
+        |task, held, _explicit| {
+            if held.contains_key(&task.id) {
+                return Ok(Qualification::Rejected("already_triaging"));
+            }
+            let now = *now.get_or_init(Utc::now);
+            match qualify(runtime, subject, task, now)? {
+                Ok((row, author)) => Ok(Qualification::Selected((row, author))),
+                Err(reason) => Ok(Qualification::Rejected(reason)),
+            }
+        },
+        |task, (mut row, author): (Value, Option<String>)| {
+            let triager = triager(runtime, task, author.as_deref())?;
+            let crew = triager.crew.clone();
+            row["crew"] = json!(crew);
+            row["tier"] = json!(triager.tier);
+            Ok((row, crew))
+        },
+        skipped_detail,
+        |_, _| None,
+    )
 }
 
 /// `task`'s prepared row and the crew to pass over when it qualifies for
@@ -385,15 +246,7 @@ fn triager(
 
 fn skipped_detail(reason: &str, holders: Option<&BTreeSet<String>>) -> String {
     match reason {
-        "already_triaging" => format!(
-            "triaged by run {}",
-            holders
-                .into_iter()
-                .flatten()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+        "already_triaging" => held_by_run_detail("triaged", holders),
         "not_held" => {
             "the task is not proposed, or its latest task-pilot assessment holds nothing on \
              warnings"

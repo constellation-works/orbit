@@ -5,6 +5,7 @@ mod artifact_export;
 mod automation_port;
 mod baseline_hold;
 mod baseline_repair;
+pub(crate) mod batch_prepare;
 pub(crate) use baseline_repair::BASELINE_RED_REPAIR_TAG;
 pub(crate) mod blocked_recovery;
 pub(crate) mod contention;
