@@ -37,6 +37,10 @@ use crate::tool_exec::CapabilityEnforcement;
 /// and the governed-operation registry cannot drift apart.
 pub(crate) const AGENT_INVOKE_OPERATION_ID: &str = "orbit.agent.invoke";
 
+/// Canonical tool name of the delegated-human decision submission, named
+/// once like [`AGENT_INVOKE_OPERATION_ID`].
+pub(crate) const DECISION_SUBMIT_OPERATION_ID: &str = "orbit.decision.submit";
+
 /// How [`RuntimeKernel::admit_agent_invoke`] admitted one caller.
 #[derive(Debug)]
 pub enum AgentInvokeAdmission {
@@ -101,6 +105,25 @@ impl RuntimeKernel {
         // eligible implement or review-repair run.
         if tool_name == AGENT_INVOKE_OPERATION_ID
             && crate::run_input::managed_run_context_run_id_from_env().is_some()
+        {
+            return Ok(());
+        }
+        // The decision channel's submission (design
+        // `docs/design/human-decision-channel/2_design.md` §3.3): its
+        // governed row is operator-only, but the caller the row exists for
+        // — a registered channel plugin's backend — holds no capability,
+        // only a host-issued callback session. An *identified* callback
+        // passes this row and is decided by the checks that can actually
+        // judge it: the callback allowlist at the tool entry (the plugin
+        // must be granted this tool, under its session ceiling) and the
+        // submit handler's registration binding and token verification.
+        // Every other caller, agent sessions included, is held to the row.
+        if tool_name == DECISION_SUBMIT_OPERATION_ID
+            && session_context.worker_invocation.is_none()
+            && matches!(
+                orbit_tools::plugin::resolve_plugin_callback_session(&self.global_root())?,
+                orbit_tools::plugin::CallbackResolution::Identified(_)
+            )
         {
             return Ok(());
         }

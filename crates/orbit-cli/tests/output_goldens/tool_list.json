@@ -761,6 +761,64 @@
     ]
   },
   {
+    "name": "orbit.decision.submit",
+    "description": "Submit a human's answer to one open decision request through a registered decision channel. Governed: callable only by the plugin the channel is bound to (through its callback session) or by the operator testing a channel — never by an agent session. Core verifies the channel is registered and unrevoked, the request is still open against its binding, the answer is allowed, and the per-request token (single-use, expiring with the request, keyed to the channel's current key epoch). Only then is the answer applied in core as the registered human, with the channel and the token fingerprint recorded as provenance. Every refusal (channel_not_registered, channel_revoked, caller_not_allowed, sender_not_allowed, authentication_failed, token_invalid, token_consumed, request_expired, request_superseded, answer_not_allowed, request_not_found) applies nothing; a parse-level refusal does not consume the token.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The decision request id, as `orbit.decision.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "channel",
+        "description": "The registered decision channel submitting the answer, as `orbit decision channel list` shows it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "answer",
+        "description": "The human's chosen answer id, one of the request's allowed answers. An empty answer is refused as unparseable.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "token",
+        "description": "The per-request single-use token minted for this request under the channel key. Core verifies it; presenting it never reveals it back.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "note",
+        "description": "Evidence or note kept with the answer. A pilot-admission `evaluated` answer uses it as its evidence and is refused without one.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "sender",
+        "description": "The transport sender the submission presents as evidence, checked against the channel's sender allowlist when the channel has one.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "auth_results",
+        "description": "The raw Authentication-Results header the transport forwards as evidence. When present, core requires dkim=pass and spf=pass and refuses on dmarc=fail.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.drain.claim.bind",
     "description": "Bind an executor's local leaf run to its execution claim on the owner, moving the claim from `claimed` to `running`. Idempotent: repeating the same run returns the recorded outcome, and a different run is refused, so one claim never has two leaves. The owner fences the claim against the session's own machine; a claim admitted to another machine, or already settled or revoked, is refused as stale.",
     "enabled": true,

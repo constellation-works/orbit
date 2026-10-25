@@ -48,6 +48,10 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
         "a decision request id is workspace-local and carries no host prefix",
     ),
     (
+        "orbit.decision.submit",
+        "a decision request id is workspace-local and carries no host prefix",
+    ),
+    (
         "orbit.workflow.run.show",
         "a run id is host-local: a run executes where it was admitted",
     ),

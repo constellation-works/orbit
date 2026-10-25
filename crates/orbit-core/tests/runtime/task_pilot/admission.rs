@@ -1,7 +1,9 @@
 //! Applied findings hold directly filed backlog tasks across the real drain,
 //! ship-selection and readiness boundaries, with assessment-scoped decisions.
 
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{
+    DecisionSubmitCaller, DecisionSubmitParams, TaskAddParams, TaskUpdateParams,
+};
 use orbit_core::{Task, TaskComplexity, TaskStatus};
 use orbit_types::task::{PilotAdmissionVerdict, TaskDecision};
 use serde_json::json;
@@ -1338,6 +1340,108 @@ fn a_second_pilot_hold_supersedes_the_first() {
     );
 }
 
+fn submit_pilot_answer(
+    workspace: &Workspace,
+    request_id: &str,
+    token: &str,
+    caller: DecisionSubmitCaller,
+) -> Result<orbit_types::task::DecisionRequest, orbit_core::OrbitError> {
+    workspace
+        .runtime
+        .submit_decision_via_channel(DecisionSubmitParams {
+            channel: "email".into(),
+            request_id: request_id.into(),
+            answer_id: "approve_anyway".into(),
+            note: Some("Not a duplicate: the deliverables differ.".into()),
+            token: token.into(),
+            sender: None,
+            auth_results: None,
+            caller,
+        })
+}
+
+fn a_registered_channel_submission_releases_the_pilot_hold_as_the_human() {
+    let workspace = decision_channel_workspace();
+    let task = backlog_task(&workspace);
+    assess(&workspace, &task, Some("duplicate_of"));
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    let request = decision_requests(&workspace, &task).pop().unwrap();
+    workspace
+        .runtime
+        .register_decision_channel("email", "human:fixture", "decision-mail", vec![])
+        .unwrap();
+    let token = workspace
+        .runtime
+        .mint_decision_token("email", &request.id)
+        .unwrap();
+    let answered = submit_pilot_answer(
+        &workspace,
+        &request.id,
+        &token,
+        DecisionSubmitCaller::PluginCallback {
+            plugin: "decision-mail".into(),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        answered.state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+    let resolution = answered.resolution.unwrap();
+    assert_eq!(resolution.answered_by, "human:fixture");
+    assert!(
+        resolution
+            .provenance
+            .unwrap()
+            .starts_with("decision-channel email (request "),
+        "channel provenance is on the resolution"
+    );
+    // The verdict the human funnel recorded is what admission reads: the
+    // hold is released without a new assessment.
+    assert_admission(&workspace, &task, None);
+}
+
+fn agent_and_unregistered_submissions_leave_the_pilot_hold_held() {
+    let workspace = decision_channel_workspace();
+    let task = backlog_task(&workspace);
+    assess(&workspace, &task, Some("duplicate_of"));
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    let request = decision_requests(&workspace, &task).pop().unwrap();
+    workspace
+        .runtime
+        .register_decision_channel("email", "human:fixture", "decision-mail", vec![])
+        .unwrap();
+    let token = workspace
+        .runtime
+        .mint_decision_token("email", &request.id)
+        .unwrap();
+    // The §3.3 guard: a well-formed answer with a valid token, from an
+    // agent envelope and from a plugin the channel is not bound to, is
+    // refused both times and the hold stays held.
+    let agent = submit_pilot_answer(&workspace, &request.id, &token, DecisionSubmitCaller::Agent)
+        .expect_err("an agent-envelope submission is refused");
+    assert!(agent.to_string().contains("caller_not_allowed"), "{agent}");
+    let unregistered = submit_pilot_answer(
+        &workspace,
+        &request.id,
+        &token,
+        DecisionSubmitCaller::PluginCallback {
+            plugin: "other-plugin".into(),
+        },
+    )
+    .expect_err("an unregistered plugin submission is refused");
+    assert!(
+        unregistered.to_string().contains("channel_not_registered"),
+        "{unregistered}"
+    );
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    assert_eq!(
+        decision_requests(&workspace, &task)[0].state,
+        orbit_types::task::DecisionRequestState::Open,
+        "the request is still open for the human"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     decision_channel_pilot_hold_scenarios,
@@ -1345,7 +1449,9 @@ crate::scenario_table!(
     answering_a_pilot_request_records_the_verdict_and_releases_the_hold,
     a_disabled_pilot_hold_writes_no_decision_request,
     a_second_pilot_hold_supersedes_the_first,
-    a_changed_pilot_hold_supersedes_its_request_without_a_new_request
+    a_changed_pilot_hold_supersedes_its_request_without_a_new_request,
+    a_registered_channel_submission_releases_the_pilot_hold_as_the_human,
+    agent_and_unregistered_submissions_leave_the_pilot_hold_held
 );
 
 crate::scenario_table!(

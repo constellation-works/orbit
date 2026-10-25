@@ -29,14 +29,14 @@ pub use context_widening::{
 };
 pub use decision::{
     CodeScanningAlertEvidence, CodeScanningAlertEvidenceError, DECISION_ANSWERED_EVENT,
-    DECISION_REQUESTED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS, DecisionAnswer, DecisionBinding,
-    DecisionGate, DecisionRequest, DecisionRequestState, DecisionResolution,
-    DesktopMutationReceipt, DesktopMutationReceiptError, FINAL_RECOVERY_DECIDED_EVENT,
-    PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, PublicationHistoryError,
-    PublicationProofContainer, PublicationProofValue, PublicationPushCheckpoint,
-    PublicationPushDecision, PublicationPushPerformed, PublicationPushProof,
-    PublicationSettlingDecision, PublicationSettlingObservation, RecordedFinalRecovery,
-    TaskDecision, decision_requests_from_history, open_decision_requests,
+    DECISION_REQUESTED_EVENT, DECISION_TOKEN_CONSUMED_EVENT, DEFAULT_DECISION_REQUEST_TTL_HOURS,
+    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, DecisionRequestState,
+    DecisionResolution, DesktopMutationReceipt, DesktopMutationReceiptError,
+    FINAL_RECOVERY_DECIDED_EVENT, PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict,
+    PublicationHistoryError, PublicationProofContainer, PublicationProofValue,
+    PublicationPushCheckpoint, PublicationPushDecision, PublicationPushPerformed,
+    PublicationPushProof, PublicationSettlingDecision, PublicationSettlingObservation,
+    RecordedFinalRecovery, TaskDecision, decision_requests_from_history, open_decision_requests,
 };
 pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
 pub use fields_updated::{

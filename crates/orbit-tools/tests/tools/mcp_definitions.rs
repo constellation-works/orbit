@@ -70,6 +70,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.command.exec",
             "orbit.decision.list",
             "orbit.decision.show",
+            "orbit.decision.submit",
             "orbit.friction.add",
             "orbit.friction.update",
             "orbit.orchestrator.scorecard",

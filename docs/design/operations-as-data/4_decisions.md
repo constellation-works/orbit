@@ -245,6 +245,20 @@ publication its failure handoff made; the next run still re-authenticates that
 publication before adopting it, as described in
 [stuck job runs](../../runbooks/stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
 
+Current surface addition (2026-10-25): `orbit.decision.submit` is advertised
+and governed by the operator capability. It is advertised because its real
+caller — a registered decision channel's plugin backend — reaches Orbit
+through MCP `tools/call` as well as `orbit tool run`, and must be able to
+discover the tool it was granted; an agent session that sees it is refused at
+the governed row, and advertisement grants it nothing. The one caller the
+row cannot name is that plugin callback itself, which holds no capability,
+only a host-issued callback session: the runtime chokepoint admits an
+*identified* callback past the row and the submit handler decides it by the
+channel registration binding and the per-request token, as specified in
+[human decision channel](../human-decision-channel/2_design.md) §3.3. The
+channel-administration operations stay unadvertised operator CLI verbs with
+no MCP scope, like `orbit.decision.answer`.
+
 ### Rejected alternatives
 
 - **Give the exposure declaration a second axis — "which surface advertises" versus "which capability may perform" — and derive chokepoint enforcement from the second** (ORB-10478 option 1). Rejected: there is no longer a second advertisement axis to split. `McpExposure` is gone and `mcp_scope` is a plain placement decision, so this would mean *introducing* a policy framework to unify two declarations that already have one enforcement point between them — speculative v2 machinery for a drift that a ten-line table catches.

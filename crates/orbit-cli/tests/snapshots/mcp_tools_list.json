@@ -695,6 +695,68 @@
     }
   },
   {
+    "name": "orbit_decision_submit",
+    "description": "Submit a human's answer to one open decision request through a registered decision channel. Governed: callable only by the plugin the channel is bound to (through its callback session) or by the operator testing a channel — never by an agent session. Core verifies the channel is registered and unrevoked, the request is still open against its binding, the answer is allowed, and the per-request token (single-use, expiring with the request, keyed to the channel's current key epoch). Only then is the answer applied in core as the registered human, with the channel and the token fingerprint recorded as provenance. Every refusal (channel_not_registered, channel_revoked, caller_not_allowed, sender_not_allowed, authentication_failed, token_invalid, token_consumed, request_expired, request_superseded, answer_not_allowed, request_not_found) applies nothing; a parse-level refusal does not consume the token.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The decision request id, as `orbit_decision_list` prints it."
+        },
+        "channel": {
+          "type": "string",
+          "description": "The registered decision channel submitting the answer, as `orbit decision channel list` shows it."
+        },
+        "answer": {
+          "type": "string",
+          "description": "The human's chosen answer id, one of the request's allowed answers. An empty answer is refused as unparseable."
+        },
+        "token": {
+          "type": "string",
+          "description": "The per-request single-use token minted for this request under the channel key. Core verifies it; presenting it never reveals it back."
+        },
+        "note": {
+          "type": "string",
+          "description": "Evidence or note kept with the answer. A pilot-admission `evaluated` answer uses it as its evidence and is refused without one."
+        },
+        "sender": {
+          "type": "string",
+          "description": "The transport sender the submission presents as evidence, checked against the channel's sender allowlist when the channel has one."
+        },
+        "auth_results": {
+          "type": "string",
+          "description": "The raw Authentication-Results header the transport forwards as evidence. When present, core requires dkim=pass and spf=pass and refuses on dmarc=fail."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok",
+            "muse"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "id",
+        "channel",
+        "answer",
+        "token"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
     "name": "orbit_friction_add",
     "description": "Append a friction report",
     "inputSchema": {
