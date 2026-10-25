@@ -4,9 +4,10 @@ Debug an Orbit job run without guessing. A failed run has multiple layers of evi
 
 ## Quick Triage
 
-Given a run id `<run_id>`, first read it through the authoritative
-`orbit_workflow_run_show` (`id`, `workspace`) or the owning host's
-`orbit run show`. Record the owner host and workspace before inspecting evidence:
+Given a run id `<run_id>`, first read it through the owning host's
+`orbit run show`. The authoritative `orbit_workflow_run_show` (`id`,
+`workspace`) requires operator authority and is denied for agent sessions.
+Record the owner host and workspace before inspecting evidence:
 
 1. Inspect run state, step summary, and process details:
 
@@ -73,10 +74,13 @@ complete.
 
 ### Tell a working agent from an abandoned wrapper
 
-For a run that is still `running`, `orbit_workflow_run_show` carries
+For a run that is still `running`, the operator-only `orbit_workflow_run_show`
+(operator authority; denied for agent sessions) carries
 `execution_progress`: the activity step that is open and the provider children
-it spawned. Only `show` carries it — `orbit_workflow_run_list` pages many runs
-and does not pay for an audit scan and a liveness probe per row.
+it spawned. Only `show` carries it — `orbit_workflow_run_list` (also
+operator-only) pages many runs and does not pay for an audit scan and a
+liveness probe per row. A session with a shell on the owning host reads the
+same liveness with `orbit run show <run_id> --json` (`provider_processes`).
 
 Its `state` is `observed` when the run has a v2 audit trail and `unavailable`
 when it has none, so an empty projection never has to be read as "nothing is
