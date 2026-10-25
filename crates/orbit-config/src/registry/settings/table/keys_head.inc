@@ -255,6 +255,20 @@ with_tail_keys! {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "pr.labels"),
     },
+    pr_task_tag_labels: Vec<String> => Vec<String> {
+        key: "pr.task_tag_labels", value_type: "array<string>",
+        description: "Task tags to mirror as pull request labels, matched exactly and applied best-effort after creation or reuse.",
+        section: ConfigSection::Delivery, order: 178,
+        tier: ConfigKeyTier::Advanced,
+        resolve: resolve_task_tag_labels,
+    },
+    pr_task_type_labels: BTreeMap<String, String> => BTreeMap<String, String> {
+        key: "pr.task_type_labels", value_type: "table<string,string>",
+        description: "Task type to pull request label mapping, applied best-effort after creation or reuse.",
+        section: ConfigSection::Delivery, order: 178,
+        tier: ConfigKeyTier::Advanced,
+        resolve: resolve_task_type_labels,
+    },
     pr_reviewers: Vec<String> => Vec<String> {
         key: "pr.reviewers", value_type: "array<string>",
         description: "Reviewers (logins or org/team) requested on each pull request Orbit opens.",

@@ -15,6 +15,7 @@ mod delivery;
 pub(in crate::executor::automation::vcs) mod diagnostics;
 mod head_lag;
 mod infrastructure;
+mod labels;
 mod merge;
 mod open;
 mod promote;

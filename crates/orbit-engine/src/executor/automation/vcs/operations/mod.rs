@@ -4,6 +4,7 @@ mod dispatch;
 mod emission;
 mod input;
 mod pr;
+mod pr_labels;
 mod prerequisite;
 pub(super) mod process;
 mod push_retry;
@@ -24,6 +25,7 @@ pub(crate) const CANDIDATE_REF_PREFIX: &str = "refs/orbit/candidates/";
 pub(crate) const PR_LIST: &str = "pr.list";
 /// Every open pull request, for closing a task's earlier delivery PRs.
 pub(crate) const PR_LIST_OPEN: &str = "pr.list_open";
+pub(crate) const PR_ADD_LABELS: &str = "pr.add_labels";
 pub(crate) const PR_CREATE: &str = "pr.create";
 pub(crate) const PR_VIEW: &str = "pr.view";
 pub(crate) const PR_MERGE: &str = "pr.merge";

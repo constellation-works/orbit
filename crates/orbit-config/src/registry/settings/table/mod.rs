@@ -27,9 +27,9 @@ use super::resolve::{
     resolve_memory_limit, resolve_mid_run_steering_max_rounds, resolve_name_list,
     resolve_non_empty, resolve_optional_choice, resolve_optional_non_empty, resolve_percent,
     resolve_pr_body_template, resolve_reclaim, resolve_retention_days, resolve_task_prefix,
-    resolve_text_template, resolve_unlocked_context_paths,
-    resolve_unlocked_path_validation_commands, resolve_validation_path_mode,
-    resolve_worker_tasks_max,
+    resolve_task_tag_labels, resolve_task_type_labels, resolve_text_template,
+    resolve_unlocked_context_paths, resolve_unlocked_path_validation_commands,
+    resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use crate::crew_performance::CrewPerformanceType;
 use crate::lock_modes::RawLockModeEntry;

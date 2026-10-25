@@ -11,6 +11,7 @@
 //! [`DeliveryConventions::default`] is Orbit's built-in behaviour: no
 //! templates, every section and trailer on.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use super::error::ConventionTemplateError;
@@ -481,6 +482,10 @@ pub struct DeliveryConventions {
     pub pr_orchestration_trailer: bool,
     /// `pr.labels`.
     pub labels: Vec<String>,
+    /// `pr.task_tag_labels`: exact allowlist of task tags mirrored to labels.
+    pub task_tag_labels: Vec<String>,
+    /// `pr.task_type_labels`: canonical task type to label name.
+    pub task_type_labels: BTreeMap<String, String>,
     /// `pr.reviewers`.
     pub reviewers: Vec<String>,
     /// `pr.draft`.
@@ -511,6 +516,8 @@ impl Default for DeliveryConventions {
             signature: true,
             pr_orchestration_trailer: true,
             labels: Vec::new(),
+            task_tag_labels: Vec::new(),
+            task_type_labels: BTreeMap::new(),
             reviewers: Vec::new(),
             draft: false,
             commit_subject: None,

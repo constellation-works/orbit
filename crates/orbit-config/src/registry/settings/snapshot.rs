@@ -438,6 +438,8 @@ impl ConfigSnapshot {
             signature: self.pr_signature,
             pr_orchestration_trailer: self.pr_orchestration_trailer,
             labels: self.pr_labels.clone(),
+            task_tag_labels: self.pr_task_tag_labels.clone(),
+            task_type_labels: self.pr_task_type_labels.clone(),
             reviewers: self.pr_reviewers.clone(),
             draft: self.pr_draft,
             commit_subject: self.commit_subject_template.as_deref().and_then(|raw| {
