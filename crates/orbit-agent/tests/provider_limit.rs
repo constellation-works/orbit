@@ -474,6 +474,42 @@ fn muse_run_usage_records_account_windows_at_completion() {
     }
 }
 
+/// Muse Code 1.4.13 allowance payload recorded on macOS at 2026-10-25.
+/// The usage frame moved from `payload_type: "status"` (1.4.12) to
+/// `payload_type: "run.usage"` with `record_type: "status"`.
+const MUSE_USAGE_1413: &[u8] = include_bytes!("provider_invocation/fixtures/muse_usage_1413.jsonl");
+
+#[test]
+fn muse_run_usage_1413_records_account_windows_at_completion() {
+    let now = Utc.with_ymd_and_hms(2026, 10, 25, 6, 30, 0).unwrap();
+    let readings = provider_usage_windows("muse", MUSE_USAGE_1413, None, now);
+    assert_eq!(readings.len(), 2, "the 1.4.13 allowance has two windows");
+    for (reading, label, used, reset) in [
+        (&readings[0], "window", 2.0, 1_792_927_340_000),
+        (&readings[1], "weekly", 62.0, 1_792_972_800_000),
+    ] {
+        assert_eq!(reading.provider, "muse");
+        assert_eq!(reading.window.as_deref(), Some(label));
+        assert_eq!(reading.used_percent, Some(used));
+        assert_eq!(
+            reading.resets_at,
+            chrono::DateTime::from_timestamp_millis(reset)
+        );
+        assert_eq!(
+            reading.source,
+            orbit_types::telemetry::ProviderLimitSource::Event
+        );
+        assert_eq!(reading.observed_at, now);
+        assert!(reading.gating);
+        assert!(!reading.exhausted);
+        assert_eq!(reading.model, None);
+        assert_eq!(reading.account, None);
+        assert_eq!(reading.window_minutes, (label == "weekly").then_some(10080));
+        assert_eq!(reading.run_id, None);
+        assert_eq!(reading.crew, None);
+    }
+}
+
 #[test]
 fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
     use serde_json::{Value, json};
@@ -486,7 +522,9 @@ fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
     let status = records[1].clone();
     let mut cases = vec![
         json!({"payload_type": "status", "payload": {"kind": "run_usage", "models": []}}),
+        json!({"payload_type": "run.usage", "payload": {"kind": "run_usage", "models": []}}),
         json!({"payload_type": "status", "payload": {"kind": "other", "allowance": status["payload"]["allowance"]}}),
+        json!({"payload_type": "run.usage", "payload": {"kind": "other", "allowance": status["payload"]["allowance"]}}),
         json!({"schemaVersion": 1, "payload_type": "status", "payload": status["payload"]}),
     ];
     for record_type in [

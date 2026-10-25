@@ -205,16 +205,24 @@ fn bound_terminal_error(text: &str) -> String {
     }
 }
 
-/// Account windows from the last top-level `status` / `run_usage` allowance
-/// (Muse Code 1.4.12), observed at run completion. Prompt echoes, answer text,
-/// tool results and child-task records never supply account telemetry.
-/// Preserve the provider's labels; normalize the weekly allowance to seven days.
+/// Account windows from the last top-level `run_usage` allowance, observed
+/// at run completion. Muse Code 1.4.12 wrote it as a `status` record;
+/// 1.4.13 writes `payload_type: "run.usage"` with `record_type: "status"`.
+/// Both carry `payload.kind: "run_usage"` and the same allowance shape.
+/// Prompt echoes, answer text, tool results and child-task records never
+/// supply account telemetry. Preserve the provider's labels; normalize the
+/// weekly allowance to seven days.
 pub(crate) fn muse_usage_windows(
     stdout: &[u8],
     now: DateTime<Utc>,
 ) -> Vec<ProviderLimitObservation> {
     let Some(allowance) = top_level_frames(stdout)
-        .filter(|(_, frame)| frame.get("payload_type").and_then(Value::as_str) == Some("status"))
+        .filter(|(_, frame)| {
+            matches!(
+                frame.get("payload_type").and_then(Value::as_str),
+                Some("status" | "run.usage")
+            )
+        })
         .filter_map(|(_, frame)| {
             let payload = frame.get("payload")?;
             if payload.get("kind").and_then(Value::as_str) != Some("run_usage") {
