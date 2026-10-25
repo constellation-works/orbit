@@ -1506,7 +1506,8 @@ any more. When a task's newest delivery leaf ended `failed`, `timeout` or
 `interrupted` and the task waits in `review`, or was blocked or requeued by that
 leaf's own delivery or final recovery, each pass reads the task's recorded pull
 request. If it conflicts with its base or a required check failed on its head,
-the pass resumes the leaf at its completion step with `auto_fix` granted. The
+the pass resumes the leaf at the last completion round it reached, which pins
+the head the leaf last published, with `auto_fix` granted. The
 watcher there admits the repair against the same attempt ledger and budget (three
 per pull request, one per head and blocker), and the auto-fix crew takes the
 task's footprint locks before it edits, pushes to the same branch and leaves

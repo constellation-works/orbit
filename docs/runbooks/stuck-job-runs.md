@@ -1393,9 +1393,15 @@ bounds the pass; a task whose newest run finished is left alone:
 - the pull request's auto-fix ledger would admit a repair of that head and
   blocker, and no earlier hand-back covered them.
 
-The hand-back is a checkpoint resume of the run, rewound to `pr_complete`, with
-`auto_fix` and deferred footprint locks granted and the repair recorded under
-`out_of_run_auto_fix` in its input. The task returns to `review`. The watcher
+The hand-back is a checkpoint resume of the run, rewound to its last
+`pr_complete` round the run reached, with `auto_fix` and deferred footprint locks
+granted and the repair recorded under `out_of_run_auto_fix` in its input. When a
+reviewed head conflicted and a re-review republished it (`re_push`, `re_push_2`),
+the rerun round is the one that completes that publication, so it pins the head
+the pull request carries. The last round (`complete_reviewed_pr_2`) has no
+re-review left, so a reviewed head that conflicts there ends `review_gate_stale`,
+and a red one ends `auto_fix_stopped`; requeue the task for a fresh delivery. The
+task returns to `review`. The watcher
 admits the repair against the pull request's attempt ledger, and the
 `workflow.purpose_crews.auto_fix` crew takes the task's footprint locks before it
 edits, then pushes to the same branch. Completion then merges only when the run
