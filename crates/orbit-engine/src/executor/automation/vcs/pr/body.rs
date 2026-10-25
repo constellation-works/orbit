@@ -3,13 +3,16 @@ use std::collections::BTreeMap;
 use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
 use orbit_types::task::Task;
-use orbit_types::workflow::{ConventionTemplate, KnownRedValidation, TemplateSurface};
+use orbit_types::workflow::{
+    ConventionTemplate, KnownRedValidation, SCREENSHOTS_SECTION, TemplateSurface,
+};
 
 use crate::context::PrConfig;
 
 use super::super::attribution::orchestration_trailer;
 use super::super::conventions::{TaskValues, render_freshness_list};
 use super::super::freshness::BranchFreshness;
+use super::screenshots::Screenshots;
 
 pub(super) const GITHUB_PR_BODY_BYTE_LIMIT: usize = 65_536;
 
@@ -22,12 +25,14 @@ pub(super) const MISSING_SECTION_NOTE: &str = "> **Missing required section.** T
      did not fill this section, so Orbit opened this pull request as a draft.";
 
 /// What a single-task body is rendered from beyond the task: the body
-/// template's text, when one applies, and the agent-filled sections the
-/// implement step wrote (heading name to Markdown).
+/// template's text, when one applies, the agent-filled sections the
+/// implement step wrote (heading name to Markdown), and the screenshot
+/// section.
 #[derive(Default)]
 pub(super) struct BodyInputs<'a> {
     pub(super) template: Option<&'a str>,
     pub(super) filled: BTreeMap<String, String>,
+    pub(super) screenshots: Screenshots,
 }
 
 /// A rendered body and the required sections it published without content.
@@ -54,13 +59,17 @@ pub(super) fn build_batch_pr_body(
             pr_config,
             freshness: Some(freshness),
         };
-        match inputs.template {
+        let (body, mut missing) = match inputs.template {
             Some(template) => render_template_body(template, &values, inputs)?,
             None => {
-                let body = build_single_task_pr_body(task, freshness, pr_config);
+                let body = build_single_task_pr_body(task, freshness, pr_config, inputs);
                 append_agent_sections(body, pr_config, inputs)
             }
+        };
+        if matches!(inputs.screenshots, Screenshots::Missing) {
+            missing.push(SCREENSHOTS_SECTION.to_string());
         }
+        (body, missing)
     } else {
         (
             build_legacy_batch_pr_body(tasks, freshness, changed_files, pr_config),
@@ -207,6 +216,7 @@ fn render_template_body(
     // is skipped.
     let mut replacing: Option<usize> = None;
     let mut open_fence: Option<Fence> = None;
+    let mut screenshots_placed = false;
     let flush = |pending: &mut String, out: &mut String| -> Result<(), OrbitError> {
         if !pending.is_empty() {
             out.push_str(&render_text(pending, values)?);
@@ -242,6 +252,18 @@ fn render_template_body(
             pending.push_str(line);
             continue;
         };
+        if let Some(content) = screenshot_content(&inputs.screenshots)
+            .filter(|_| orbit_types::workflow::same_section_name(SCREENSHOTS_SECTION, name))
+        {
+            flush(&mut pending, &mut out)?;
+            out.push_str(line.trim_end_matches(['\r', '\n']));
+            out.push_str("\n\n");
+            out.push_str(content);
+            out.push_str("\n\n");
+            screenshots_placed = true;
+            replacing = Some(level);
+            continue;
+        }
         let Some(section) = sections
             .iter()
             .find(|section| orbit_types::workflow::same_section_name(section, name))
@@ -269,7 +291,22 @@ fn render_template_body(
         replacing = Some(level);
     }
     flush(&mut pending, &mut out)?;
-    Ok((out.trim_end().to_string(), missing_required))
+    let mut out = out.trim_end().to_string();
+    // A template without the heading gets the section after its own text.
+    if !screenshots_placed && let Some(content) = screenshot_content(&inputs.screenshots) {
+        out.push_str(&format!("\n\n## {SCREENSHOTS_SECTION}\n\n{content}"));
+    }
+    Ok((out, missing_required))
+}
+
+/// The Markdown under the screenshots heading, or `None` when the section is
+/// off. With no publishable screenshot it is [`MISSING_SECTION_NOTE`].
+fn screenshot_content(screenshots: &Screenshots) -> Option<&str> {
+    match screenshots {
+        Screenshots::Off => None,
+        Screenshots::Missing => Some(MISSING_SECTION_NOTE),
+        Screenshots::Table(table) => Some(table),
+    }
 }
 
 fn render_text(text: &str, values: &TaskValues<'_>) -> Result<String, OrbitError> {
@@ -279,7 +316,8 @@ fn render_text(text: &str, values: &TaskValues<'_>) -> Result<String, OrbitError
 }
 
 /// Orbit's own layout has no headings to fill, so its agent-filled sections
-/// follow it in configured order; an unfilled optional section is left out.
+/// follow it in configured order; an unfilled optional section is left out,
+/// as is one named like the screenshot section while Orbit renders that.
 fn append_agent_sections(
     mut body: String,
     pr_config: &PrConfig,
@@ -288,6 +326,11 @@ fn append_agent_sections(
     let conventions = &pr_config.conventions;
     let mut missing_required = Vec::new();
     for section in conventions.agent_filled_sections() {
+        if screenshot_content(&inputs.screenshots).is_some()
+            && orbit_types::workflow::same_section_name(section, SCREENSHOTS_SECTION)
+        {
+            continue;
+        }
         let content = match filled_content(&inputs.filled, section) {
             Some(content) => content,
             None if conventions.is_required_section(section) => {
@@ -365,12 +408,19 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> &str {
     &value[..floor_char_boundary(value, max_bytes)]
 }
 
+/// Orbit's single-task layout. The screenshot section follows the task
+/// contract, ahead of the execution summary, so truncating a long summary
+/// from the end never cuts it.
 pub(super) fn build_single_task_pr_body(
     task: &Task,
     freshness: &BranchFreshness,
     pr_config: &PrConfig,
+    inputs: &BodyInputs<'_>,
 ) -> String {
     let mut sections = vec![render_single_task_section(task, pr_config)];
+    if let Some(content) = screenshot_content(&inputs.screenshots) {
+        sections.push(format!("## {SCREENSHOTS_SECTION}\n\n{content}"));
+    }
 
     if let Some(execution_summary) = meaningful_execution_summary(&task.execution_summary) {
         sections.push(render_execution_summary_section(execution_summary));

@@ -7,7 +7,7 @@ use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::{MaterialField, SourceSensitivity};
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
 use orbit_types::workflow::{
-    CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_REVIEW_MINUTES, MissingSectionPolicy,
+    CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_REVIEW_MINUTES, MissingSectionPolicy, ScreenshotSection,
 };
 use serde_json::{Value as JsonValue, json};
 

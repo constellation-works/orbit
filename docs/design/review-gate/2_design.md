@@ -1,7 +1,7 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-19
+last_updated: 2026-10-25
 last_validated: 2026-10-19
 status: Accepted
 feature: review-gate
@@ -1278,6 +1278,39 @@ Reset decisions are retained atomically in the lineage ledger alongside the norm
 `orbit.task.review_reset` dispatch audit. Task artifacts
 `review-manifest.json`, `review-report.json`, and `review-gate.json` are the
 durable evidence.
+
+### 8.1 Screenshot evidence in the pull request body [ORB-18351]
+
+A UI change's reviewer on the forge sees its screenshots in the body that
+`pr_open` writes. `pr.screenshot_section` (`auto` for `ui`-tagged tasks,
+`always`, `off`) turns on a `## Screenshots` table built from the task's
+`screenshots/<view>-<theme>-<width>[-before|-after].<ext>` artifacts
+([CONFIG.md](../../CONFIG.md#delivery-templates-pr-commit-and-branch)).
+Task artifacts are not reachable from the forge, so before rendering,
+`pr_open` writes exactly those images as one tree and publishes it through
+the private `push.evidence_ref` operation to the task's permanent ref
+`refs/orbit/evidence/<task-id>`, outside `refs/heads`. The operation reuses
+the tip when its tree is unchanged (a retried or resumed `pr_open`) and
+otherwise chains one commit onto the tip without force, so every commit an
+earlier body linked stays reachable. Image links pin the commit sha, never
+the ref name. No step deletes the ref: candidate-ref, automation-pin and
+rescue-ref cleanup do not reach `refs/orbit/evidence/`.
+
+**Forge check (2026-10-25).** The design depended on GitHub serving
+`blob/<sha>/<path>?raw=true` for a commit reachable only from a ref outside
+`refs/heads`, with an append-only, never-merged `orbit-evidence` branch as
+the fallback. GitHub serves it, so the fallback is not used. Evidence:
+commit `7900ae80aaf5561550332097c2b0ca5b9df8b271` of
+constellation-works/orbit, which Orbit pushed to
+`refs/orbit/candidates/ORB-18099/jrun-20261025-1451-c1` and which no other
+advertised ref (heads, tags or `refs/pull/*`, 6,423 in all) names.
+`https://github.com/constellation-works/orbit/blob/7900ae80aaf5561550332097c2b0ca5b9df8b271/docs/CONFIG.md?raw=true`
+answered `302` to `/raw/<sha>/docs/CONFIG.md`, then `200` from
+`raw.githubusercontent.com`, with bytes whose SHA-256 equals that commit's
+blob and differs from its parent's. The check was read-only: the sandbox
+that ran it held no push credentials, so it used a ref Orbit's own delivery
+had pushed rather than a new probe. An evidence ref is the same kind of
+non-branch ref on the same repository.
 
 ## 9. Compatibility and rollback
 

@@ -227,6 +227,13 @@ with_tail_keys! {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_choice(raw, "draft", "pr.missing_required_section", MissingSectionPolicy::VALUES),
     },
+    pr_screenshot_section: String => String {
+        key: "pr.screenshot_section", value_type: "string",
+        description: "When single-task pull request bodies carry the Screenshots table from screenshots/ task artifacts: auto (tasks tagged ui), always or off.",
+        section: ConfigSection::Delivery, order: 174,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "auto", "pr.screenshot_section", ScreenshotSection::VALUES),
+    },
     pr_freshness_section: bool => bool {
         key: "pr.freshness_section", value_type: "bool",
         description: "Include the Branch Freshness section in generated pull request bodies.",

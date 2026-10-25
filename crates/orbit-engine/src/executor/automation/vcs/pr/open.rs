@@ -5,7 +5,7 @@ use orbit_types::task::{Task, TaskHistoryEntry};
 use orbit_types::workflow::{
     FLAKY_VALIDATION_EVENT, FlakyValidation, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
     MissingSectionPolicy, PR_SECTION_GAP_EVENT, PR_SECTIONS_ARTIFACT, PrBodyTemplateSource,
-    REPO_PR_TEMPLATE_LOCATIONS,
+    REPO_PR_TEMPLATE_LOCATIONS, SCREENSHOT_ARTIFACT_PREFIX, SCREENSHOTS_SECTION,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -150,9 +150,19 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                     base_sha,
                 )
                 .map_err(|error| Box::new((FailedHandoffPhase::PrBody, error)))?;
+                // The evidence commit is pushed before the body is built, so
+                // every image link can pin its sha.
+                let screenshots = super::screenshots::publish_screenshots(
+                    host,
+                    &context.workspace_path,
+                    &context.tasks,
+                    &pr_config,
+                )
+                .map_err(|error| Box::new((FailedHandoffPhase::PrBody, error)))?;
                 let inputs = BodyInputs {
                     template: template.as_deref(),
                     filled: filled_sections(host, &context.tasks, &pr_config),
+                    screenshots,
                 };
                 let rendered = build_batch_pr_body(
                     &context.tasks,
@@ -176,10 +186,9 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             return Err(Box::new((
                 FailedHandoffPhase::PrBody,
                 OrbitError::Execution(format!(
-                    "pr_required_section_missing: required pull request section(s) {} have no \
-                     filled content in task artifact `{PR_SECTIONS_ARTIFACT}`; \
-                     pr.missing_required_section = \"refuse\" holds the pull request",
-                    quoted_sections(&missing_required)
+                    "pr_required_section_missing: {}; pr.missing_required_section = \"refuse\" \
+                     holds the pull request",
+                    section_gaps(&missing_required)
                 )),
             )));
         }
@@ -426,6 +435,31 @@ fn filled_sections<H: RuntimeHost + ?Sized>(
     }
 }
 
+/// What is missing behind each unfilled required section: agent-filled ones
+/// lack content in [`PR_SECTIONS_ARTIFACT`], and the screenshot section lacks
+/// image artifacts under [`SCREENSHOT_ARTIFACT_PREFIX`].
+fn section_gaps(missing: &[String]) -> String {
+    let (screenshots, agent): (Vec<String>, Vec<String>) = missing
+        .iter()
+        .cloned()
+        .partition(|section| section == SCREENSHOTS_SECTION);
+    let mut gaps = Vec::new();
+    if !agent.is_empty() {
+        gaps.push(format!(
+            "required pull request section(s) {} have no filled content in task artifact \
+             `{PR_SECTIONS_ARTIFACT}`",
+            quoted_sections(&agent)
+        ));
+    }
+    if !screenshots.is_empty() {
+        gaps.push(format!(
+            "required pull request section `{SCREENSHOTS_SECTION}` has no image task artifacts \
+             under `{SCREENSHOT_ARTIFACT_PREFIX}`"
+        ));
+    }
+    gaps.join("; ")
+}
+
 fn quoted_sections(sections: &[String]) -> String {
     sections
         .iter()
@@ -446,10 +480,11 @@ fn record_section_gap<H: RuntimeHost + ?Sized>(
         MissingSectionPolicy::Draft => "opens the pull request as a draft",
         MissingSectionPolicy::Refuse => "refuses to open the pull request",
     };
+    let gaps = section_gaps(missing);
     let note = format!(
-        "Required pull request section(s) {} have no filled content in task artifact \
-         `{PR_SECTIONS_ARTIFACT}`; pr_open {action} (pr.missing_required_section = \"{}\").",
-        quoted_sections(missing),
+        "{}{}; pr_open {action} (pr.missing_required_section = \"{}\").",
+        gaps[..1].to_ascii_uppercase(),
+        &gaps[1..],
         pr_config.conventions.missing_section.as_str()
     );
     for task in &context.tasks {

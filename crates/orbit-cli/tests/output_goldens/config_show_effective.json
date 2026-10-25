@@ -357,6 +357,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "pr.screenshot_section": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "pr.signature": {
       "scope": "built-in",
       "state": "default",

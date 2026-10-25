@@ -499,6 +499,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `pr.agent_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer may fill through the `pr-sections.json` task artifact. |
 | `pr.required_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer must fill. An unfilled one is handled by `pr.missing_required_section` and recorded in task history. |
 | `pr.missing_required_section` | **Advanced.** string · **Default:** `draft`<br>What happens when a required section is unfilled: `draft` opens the pull request as a draft with a note under the heading; `refuse` opens no pull request. |
+| `pr.screenshot_section` | **Advanced.** string · **Default:** `auto`<br>When a single-task pull request body carries a `## Screenshots` table of the task's `screenshots/` image artifacts: `auto` for tasks tagged `ui`, `always`, or `off`. |
 | `pr.freshness_section` | **Advanced.** bool · **Default:** `true`<br>Include the Branch Freshness section (and the `{{freshness}}` value) in pull request bodies. |
 | `pr.signature` | **Advanced.** bool · **Default:** `true`<br>Append the authoring model's signature to pull request bodies. |
 | `pr.orchestration_trailer` | **Advanced.** bool · **Default:** `true`<br>Append the `Orchestrated-By` trailer to pull request bodies. |
@@ -655,6 +656,18 @@ unfilled required section is never published as an empty heading: with
 `missing_required_section = "draft"` the pull request opens as a draft with a
 note under the heading, and with `"refuse"` no pull request opens. Both are
 recorded in the task's history. Orbit never merges a draft automatically.
+
+With `pr.screenshot_section` on (`auto` turns it on for tasks tagged `ui`),
+Orbit renders a `## Screenshots` table of Before and After images from the
+task's artifacts named
+`screenshots/<view>-<theme>-<width>[-before|-after].<ext>`; a name without a
+suffix is an After shot. Only PNG, JPEG, GIF and WebP images up to 1 MiB are
+published. Orbit commits them to `refs/orbit/evidence/<task-id>` on `origin`,
+a ref that is never merged or deleted, and links each image by that commit's
+sha, so a merged pull request keeps its images. A template's `## Screenshots`
+heading is filled in place; otherwise the section is added. With no
+screenshot, the section carries the missing-section note and
+`missing_required_section` applies.
 
 Commit subjects keep a 72-character budget: the title is shortened first, with
 an ellipsis, and kept whole in the commit body. A subject template must carry

@@ -4,7 +4,8 @@
 //! approved-PR merge, remote cleanup, and Done reconciliation, and `delivery`
 //! owns the candidate identity and merge evidence completion runs behind.
 //! `answers` parses the provider's PR answers once into the types every
-//! reader takes.
+//! reader takes. `screenshots` publishes a task's screenshots to its evidence
+//! ref and renders the body's table of them.
 
 mod answers;
 mod attribution;
@@ -20,6 +21,7 @@ mod merge;
 mod open;
 mod promote;
 mod recovery;
+mod screenshots;
 pub(in crate::executor::automation::vcs) mod source_identity;
 
 pub use answers::PullRequestStatus;

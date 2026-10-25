@@ -121,7 +121,7 @@ pub(super) fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
 /// claimed leaf sets it: its run cannot be resumed the way the clock resumes
 /// a held owner-local run, so it keeps its claim and retries in place.
 #[derive(Debug, Clone, Copy)]
-struct PushBackoff {
+pub(super) struct PushBackoff {
     attempts: u32,
     initial_ms: u64,
     cap_ms: u64,
@@ -129,7 +129,7 @@ struct PushBackoff {
 }
 
 impl PushBackoff {
-    fn from_input(input: &Value) -> Result<Self, OrbitError> {
+    pub(super) fn from_input(input: &Value) -> Result<Self, OrbitError> {
         let Some(retry) = input.get("forge_retry").filter(|value| !value.is_null()) else {
             return Ok(Self {
                 attempts: PUSH_TRANSIENT_ATTEMPTS,
@@ -187,7 +187,7 @@ impl PushBackoff {
 }
 
 /// A push that reached the remote, with what its retries cost.
-struct Pushed {
+pub(super) struct Pushed {
     result: orbit_exec::ExecutionResult,
     attempts: u32,
     waited_ms: u64,
@@ -205,14 +205,14 @@ impl Pushed {
 }
 
 /// Why a push did not reach the remote.
-enum PushFailure {
+pub(super) enum PushFailure {
     /// Not retried: a permanent refusal, a timeout, a failed confirmation.
     Error(OrbitError),
     /// Every attempt in the budget was refused for a transient reason.
     Exhausted(Box<PushExhausted>),
 }
 
-struct PushExhausted {
+pub(super) struct PushExhausted {
     target_ref: String,
     head_sha: String,
     attempts: u32,
@@ -224,7 +224,7 @@ struct PushExhausted {
 }
 
 impl PushFailure {
-    fn into_error(self) -> OrbitError {
+    pub(super) fn into_error(self) -> OrbitError {
         match self {
             Self::Error(error) => error,
             Self::Exhausted(exhausted) => exhausted.error,
@@ -386,7 +386,7 @@ fn confirmed_at_publication_destination(
 /// Retry only transient push failures, confirming the exact remote ref before
 /// resending. A lost reply may hide a successful push, including one that
 /// consumed its force-with-lease. A failed remote read stops further mutations.
-fn execute_push_with_transient_retry(
+pub(super) fn execute_push_with_transient_retry(
     args: &[String],
     repo_root: &Path,
     target_ref: &str,
@@ -581,16 +581,21 @@ fn rejected_for_missing_necessary_objects(message: &str) -> bool {
 pub(crate) fn valid_candidate_ref(value: &str) -> bool {
     value
         .strip_prefix(CANDIDATE_REF_PREFIX)
-        .is_some_and(|rest| {
-            !rest.is_empty()
-                && rest.split('/').all(|segment| {
-                    !segment.is_empty()
-                        && !segment.starts_with('.')
-                        && !segment.ends_with(".lock")
-                        && segment.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-                        })
-                        && !segment.contains("..")
-                })
+        .is_some_and(plain_ref_segments)
+}
+
+/// Whether the rest of a ref after its namespace is one or more plain path
+/// segments: ASCII letters, digits, `-`, `_` and `.`, never `..`, a leading
+/// `.` or a `.lock` suffix.
+pub(super) fn plain_ref_segments(rest: &str) -> bool {
+    !rest.is_empty()
+        && rest.split('/').all(|segment| {
+            !segment.is_empty()
+                && !segment.starts_with('.')
+                && !segment.ends_with(".lock")
+                && segment
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+                && !segment.contains("..")
         })
 }

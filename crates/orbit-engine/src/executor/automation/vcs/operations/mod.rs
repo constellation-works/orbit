@@ -2,6 +2,7 @@ mod check_annotations;
 mod ci;
 mod dispatch;
 mod emission;
+mod evidence;
 mod input;
 mod pr;
 mod pr_labels;
@@ -20,6 +21,8 @@ pub(crate) use push_retry::valid_candidate_ref;
 pub(crate) const PUSH: &str = "push";
 /// [ORB-14338] Push one commit to a run-owned `refs/orbit/candidates/` ref.
 pub(crate) const CANDIDATE_REF_PUSH: &str = "push.candidate_ref";
+/// Publish a task's screenshot tree to its permanent `refs/orbit/evidence/` ref.
+pub(crate) const EVIDENCE_REF_PUSH: &str = "push.evidence_ref";
 /// The namespace a carried candidate ref lives under on `origin`.
 pub(crate) const CANDIDATE_REF_PREFIX: &str = "refs/orbit/candidates/";
 pub(crate) const PR_LIST: &str = "pr.list";

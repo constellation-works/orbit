@@ -26,6 +26,7 @@ pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
         super::CI_EMISSION_OBSERVE => super::emission::observe(input),
         PUSH => push(input),
         CANDIDATE_REF_PUSH => push_candidate_ref(input),
+        super::EVIDENCE_REF_PUSH => super::evidence::push_evidence_ref(input),
         PR_LIST => pr_list(input),
         super::PR_LIST_OPEN => pr_list_open(input),
         PR_CREATE => pr_create(input),
