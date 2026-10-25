@@ -228,10 +228,19 @@ pub struct TaskCompletionByComplexity {
 /// (a comment, an artifact) touched the terminal bundle again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskTerminalTransition {
+    /// Empty when an older owner answered a worker read without it.
+    #[serde(default)]
+    pub task_id: String,
     pub status: TaskStatus,
     /// Complexity bucket, as in [`TaskCompletionByComplexity::complexity`].
     pub complexity: String,
     pub at: DateTime<Utc>,
+    /// The task's `created_at`; `None` when an older owner omitted it.
+    #[serde(default)]
+    pub created_at: Option<DateTime<Utc>>,
+    /// Current indexed tags, sorted.
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 /// One `bug` task as the generated index holds it: a defect, dated when it

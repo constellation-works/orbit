@@ -129,6 +129,33 @@ pub struct NormalizedTokenSummary {
     pub unknown_input_basis_or_model_count: u64,
 }
 
+/// Invocation `activity_id`s that implement a task. Invocations store the
+/// pipeline step id; the activity name stays for records written by older
+/// callers, so no backfill is needed.
+pub const IMPLEMENT_INVOCATION_IDS: &[&str] = &["implement_one", "agent_implement"];
+
+/// Normalized token spend over a set of invocations linked to one task.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskTokenSpend {
+    pub invocation_count: u64,
+    /// Invocations without a model the normalization covers; their tokens
+    /// are not in `normalized_token_total`.
+    pub uncovered_invocation_count: u64,
+    /// As [`NormalizedTokenSummary::normalized_token_total`], over the
+    /// covered invocations.
+    pub normalized_token_total: u64,
+}
+
+/// One task's normalized token spend across this workspace's managed
+/// invocations: every linked invocation, and the implement ones alone.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskTokenTotals {
+    pub all: TaskTokenSpend,
+    pub implement: TaskTokenSpend,
+    /// Model of the task's latest implement invocation.
+    pub implement_model: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OrchestrationModelSummary {
     pub model: String,

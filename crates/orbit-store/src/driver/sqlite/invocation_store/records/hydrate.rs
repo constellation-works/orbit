@@ -166,6 +166,7 @@ pub(super) fn map_invocation_accounting_fact(
         task_ids: Vec::new(),
         provider_cost_usd,
         derived_cost_usd,
+        activity_id: row.get(9)?,
     })
 }
 

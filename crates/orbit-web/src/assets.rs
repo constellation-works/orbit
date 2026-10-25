@@ -157,6 +157,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/metrics.js"),
     ),
     (
+        "/static/js/metrics-tokens.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/metrics-tokens.js"),
+    ),
+    (
         "/static/js/resources.js",
         JS,
         include_bytes!("../assets/dashboard/js/resources.js"),

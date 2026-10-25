@@ -163,7 +163,7 @@ impl Store {
         let sql = format!(
             "SELECT i.id, i.ts, i.model, i.input_tokens, i.cache_read_tokens, \
                     i.cache_create_tokens, i.cache_create_1h_tokens, i.output_tokens, \
-                    i.provider_cost_usd \
+                    i.provider_cost_usd, i.activity_id \
              FROM invocations i {} ORDER BY i.ts ASC, i.id ASC",
             filters.where_clause()
         );

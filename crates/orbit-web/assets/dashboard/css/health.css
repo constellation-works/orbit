@@ -480,6 +480,8 @@ td .rel-rate { font-size: 12px; }
   --mx-medium: #f2b24c;
   --mx-hard: #ff7a6b;
   --mx-other: #3a414b;
+  --mx-xhard: #9085e9;
+  --mx-unset: #e7eaee;
 }
 .panel > .body.metrics-body,
 .panel > .body.resources-body {
@@ -491,6 +493,9 @@ td .rel-rate { font-size: 12px; }
 .mx-s-medium { --mx-c: var(--mx-medium); }
 .mx-s-hard { --mx-c: var(--mx-hard); }
 .mx-s-other { --mx-c: var(--mx-other); }
+/* Tokens per task also draws xhard and unassessed lines (ORB-18364). */
+.mx-s-xhard { --mx-c: var(--mx-xhard); }
+.mx-s-unset { --mx-c: var(--mx-unset); }
 /* Defects: lineage (orange marks fixes that broke something) and origin
    (seven finders in categorical order, the rest folded into Other). Both
    palettes pass the dataviz validator on the dark card surface. */
@@ -523,6 +528,7 @@ td .rel-rate { font-size: 12px; }
 }
 .mx-link-btn:hover { color: var(--accent-hover); }
 .mx-card button:focus-visible,
+.mx-card select:focus-visible,
 .mx-chart-frame:focus-visible,
 .mx-table-wrap:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
@@ -554,6 +560,20 @@ td .rel-rate { font-size: 12px; }
 .mx-seg-btn:hover { color: var(--fg); }
 .mx-seg-btn.on { background: var(--bg-selected); color: var(--fg); box-shadow: inset 0 0 0 1px #2e343c; }
 .mx-trend-view { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* Tokens per task filters: model select and tag cohort picker. */
+.mx-select {
+  min-height: 36px; max-width: 240px; padding: 0 10px; border-radius: 8px;
+  background: var(--bg-sunk); color: var(--fg); border: 1px solid var(--border);
+  font: 500 13px var(--font-sans);
+}
+.mx-tags { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.mx-chip {
+  appearance: none; cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+  min-height: 30px; padding: 0 10px; border-radius: 999px;
+  background: var(--bg-selected); color: var(--fg); border: 1px solid #2e343c;
+  font: 12px var(--font-mono);
+}
+.mx-chip:hover { border-color: var(--accent); }
 .mx-blurb { margin: -4px 0 0; color: var(--fg-mute); font: 13px var(--font-sans); }
 
 /* Series cards double as the legend and the series toggles. */
@@ -576,6 +596,9 @@ td .rel-rate { font-size: 12px; }
 .mx-card .flat { color: var(--fg-mute); }
 .mx-swatch { display: inline-block; flex: 0 0 auto; width: 16px; height: 3px; border-radius: 2px; background: var(--mx-c); }
 .mx-swatch.bar { width: 10px; height: 10px; }
+.mx-swatch.dashed, .mx-sc .mx-swatch.dashed {
+  background: repeating-linear-gradient(90deg, var(--mx-c) 0 5px, transparent 5px 8px);
+}
 .mx-sc .mx-swatch { background: var(--mx-c); }
 
 /* Chart: y axis | plot (gridlines, bars, lines, dots, tooltip) over the
@@ -612,6 +635,8 @@ td .rel-rate { font-size: 12px; }
 .mx-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; z-index: 1; }
 .mx-line { fill: none; stroke: var(--mx-c); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .mx-line.mx-s-all { stroke-width: 3; }
+/* A tag cohort's "without" line. */
+.mx-line.mx-dashed { stroke-dasharray: 6 5; }
 .mx-cursor { position: absolute; top: 0; bottom: 0; width: 1px; background: #2e343c; z-index: 1; }
 .mx-pt {
   position: absolute; z-index: 2; pointer-events: none;
@@ -633,6 +658,8 @@ td .rel-rate { font-size: 12px; }
   position: absolute; transform: translateX(-50%);
   color: var(--fg-mute); font: 11px var(--font-mono); white-space: nowrap;
 }
+/* Tokens rows carry a mean and a median. */
+.mx-chart-tokens .mx-tip { width: 320px; }
 .mx-hover { position: absolute; left: 0; right: 0; top: 0; bottom: 24px; display: flex; z-index: 3; }
 .mx-hover-col { flex: 1 1 0; height: 100%; }
 .mx-tip {
@@ -737,7 +764,7 @@ td .rel-rate { font-size: 12px; }
   .mx-chart-body { gap: 6px; }
   .mx-y-wrap { flex-basis: 32px; }
   .mx-notes { padding-left: 0; }
-  .mx-tip { width: 200px; }
+  .mx-tip, .mx-chart-tokens .mx-tip { width: 200px; }
 }
 
 /* Analytics › Resources: this host's delivery resource profiles. CPU, memory

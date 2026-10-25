@@ -14,7 +14,10 @@ use orbit_types::workflow::ProviderCrewOutage;
 use serde::{Deserialize, Serialize};
 
 use crate::RuntimeKernel;
-use crate::cost::{NormalizedTokenSummary, OrchestrationModelSummary};
+use crate::cost::{
+    IMPLEMENT_INVOCATION_IDS, NormalizedTokenSummary, OrchestrationModelSummary, TaskTokenSpend,
+    TaskTokenTotals,
+};
 
 pub use crate::cost::{
     OrchestrationBucketKind as OrchestratorMetricsBucketKind,
@@ -356,6 +359,40 @@ impl RuntimeKernel {
         open_invocation_store(self)?.list_provider_ledger_entries(provider_names, account, since)
     }
 
+    /// Normalized token spend per linked task over this workspace's managed
+    /// invocations recorded at or after `since` (all of them for `None`). An
+    /// invocation linked to several tasks counts in full toward each.
+    pub fn task_token_totals(
+        &self,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<BTreeMap<String, TaskTokenTotals>, OrbitError> {
+        let facts = open_invocation_store(self)?.list_invocation_accounting_facts(
+            &InvocationAccountingQuery {
+                workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
+                since,
+                until: Utc::now(),
+            },
+        )?;
+        let mut totals = BTreeMap::<String, TaskTokenTotals>::new();
+        for fact in &facts {
+            let normalized = normalized_token_total(fact);
+            let implement = fact
+                .activity_id
+                .as_deref()
+                .is_some_and(|activity| IMPLEMENT_INVOCATION_IDS.contains(&activity));
+            for task_id in &fact.task_ids {
+                let task = totals.entry(task_id.clone()).or_default();
+                task.all.add(normalized);
+                if implement {
+                    task.implement.add(normalized);
+                    // Facts are oldest first, so the last write is the latest.
+                    task.implement_model.clone_from(&fact.model);
+                }
+            }
+        }
+        Ok(totals)
+    }
+
     /// Aggregates this workspace's managed invocation telemetry by canonical task orchestrator.
     ///
     /// The effective window is half-open (`since <= ts < until`). Missing
@@ -469,6 +506,41 @@ fn classify_invocation(
 
 fn valid_cost(cost: f64) -> bool {
     cost.is_finite() && cost >= 0.0
+}
+
+/// The fact's normalized token total, or `None` when its model is missing
+/// or not covered by the normalization table.
+fn normalized_token_total(fact: &InvocationAccountingFact) -> Option<u64> {
+    let usage = TokenUsage {
+        input: fact.input_tokens,
+        cache_read: fact.cache_read_tokens,
+        cache_create: fact.cache_create_tokens,
+        cache_create_1h: fact.cache_create_1h_tokens,
+        output: fact.output_tokens,
+    };
+    let usage = normalize_token_usage(fact.model.as_deref()?, fact.ts, &usage)?;
+    Some(
+        usage
+            .input
+            .saturating_add(usage.cache_read)
+            .saturating_add(usage.cache_create)
+            .saturating_add(usage.cache_create_1h)
+            .saturating_add(usage.output),
+    )
+}
+
+impl TaskTokenSpend {
+    fn add(&mut self, normalized: Option<u64>) {
+        self.invocation_count = self.invocation_count.saturating_add(1);
+        match normalized {
+            Some(tokens) => {
+                self.normalized_token_total = self.normalized_token_total.saturating_add(tokens);
+            }
+            None => {
+                self.uncovered_invocation_count = self.uncovered_invocation_count.saturating_add(1);
+            }
+        }
+    }
 }
 
 fn open_invocation_store(
