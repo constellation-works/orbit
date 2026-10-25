@@ -100,8 +100,9 @@ fi
 HOLD_PID=""
 HOLD_RELEASE=""
 alloc_port() {
-  # Hold the listening socket until release_port so another process cannot
-  # claim the port between allocation and the sccache daemon binding it.
+  # Hold the socket until release_port so no other process takes the port while
+  # the caller reads it. Callers release it before starting any sccache daemon:
+  # the daemon binds this same address, which the held socket blocks.
   HOLD_RELEASE="$WORKDIR/port-release.$$.${RANDOM:-0}"
   python3 - "$HOLD_RELEASE" >"$WORKDIR/alloc-port.out" <<'PY' &
 import os, socket, sys, time
@@ -446,13 +447,13 @@ PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/cs-c" "$WORKDIR/logs/cs-d")
 STATUSES=(pending pending)
 alloc_port; cs_port="$ALLOC_PORT"
+release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
   --setenv SCCACHE_SERVER_PORT "$cs_port" &
 PIDS+=($!)
-release_port
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/cs-d" \
   --setenv SCCACHE_CLIENT_SIDE 1 \
   --setenv SCCACHE_SERVER_PORT "$cs_port" &
@@ -468,6 +469,7 @@ PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/bad-c" "$WORKDIR/logs/bad-d")
 STATUSES=(pending pending)
 alloc_port; bad_port="$ALLOC_PORT"
+release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
 ready="$WORKDIR/sync/c-ready"
@@ -477,8 +479,12 @@ run_ns_hold "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/bad-c" "$ready" "$d
   --setenv SCCACHE_SERVER_PORT "$bad_port" &
 PIDS+=($!)
 pid_c=$!
-release_port
 wait_for_file "$ready"
+# D's failure only means something if C compiled through the daemon on this
+# port. Otherwise D simply started its own daemon, so fail on the precondition.
+if ! grep -Eq 'Compile requests[[:space:]]+[1-9]' "$WORKDIR/logs/bad-c"; then
+  fail "participant C did not compile through the shared daemon on port $bad_port"
+fi
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/bad-d" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
   --setenv SCCACHE_SERVER_PORT "$bad_port" &
