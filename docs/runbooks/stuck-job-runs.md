@@ -1290,6 +1290,103 @@ window closes first, the run holds and the leaf releases its claim to the owner 
 offering the crew or the host, and the task's next claim on that follower continues
 the kept candidate ([distributed drain](distributed-drain.md)).
 
+## A delivery held at the landing review gate
+
+During delivery, the pipeline runs the before-landing review gate at step
+`landing_review_gate_settle`. When final recovery escalates from this step
+(recording the task history event `final_recovery_escalated`), the delivery run
+ends `held` or the task becomes `blocked` with an open pull request.
+
+Unlike a transient forge failure (see [A delivery held for the forge](#a-delivery-held-for-the-forge)),
+a run held at the landing review gate requires an operator decision.
+
+### Read the situation
+
+Before deciding how to recover the task, gather three pieces of evidence:
+
+1. **Review verdict and findings:** Inspect the captured logs for the review gate step:
+   ```bash
+   orbit run logs <run-id> -s landing_review_gate_settle
+   ```
+   Check whether the reviewer issued `verdict complete`, `verdict incomplete`,
+   or `verdict reject`, and note the finding count (such as 0 findings versus
+   concrete defect findings).
+2. **Escalation note in task history:** Inspect the task's history entries:
+   ```bash
+   orbit task show <task-id>
+   ```
+   Look for the `final_recovery_escalated` event under `History:` and read its note,
+   which details why final recovery escalated rather than settling or retrying
+   automatically.
+3. **Pull request required checks:** Inspect the open pull request on the forge (such
+   as GitHub CI check status). Confirm whether all required checks are passing on
+   the candidate head.
+
+### The decision rule
+
+The evidence determines which recovery path to take:
+
+- **0 findings, every required check green, and the failure unrelated to the diff:**
+  The reviewer returned `verdict incomplete` with 0 findings because of an
+  environmental or baseline condition rather than a defect in the candidate diff—such
+  as an empty `workflow.required_validation_commands`, a host-resident baseline
+  failure on a specific runner (see [A task held for a red base](#a-task-held-for-a-red-base)),
+  or `validation_contradicted` from a reproduction check using a reverted fix. If every
+  required check on the pull request is green, merge the pull request directly on the
+  forge, then settle the task to `done`:
+  ```bash
+  orbit task settle-merged <task-id>
+  ```
+  See [A delivery pull request merged outside Orbit](#a-delivery-pull-request-merged-outside-orbit)
+  for settlement rules.
+- **A real finding:**
+  The reviewer returned `verdict reject` with a genuine defect (such as an unbounded
+  scan or a summary-only finding where the implementation omitted required deliverables).
+  Steer the agent by appending an operator comment explaining the correction, then requeue:
+  ```bash
+  orbit task update <task-id> --comment '<guidance on fixing the finding>'
+  orbit task requeue <task-id> --reason '<why the task is requeued>'
+  ```
+  See [Requeue a failure-handoff task onto its published candidate](#requeue-a-failure-handoff-task-onto-its-published-candidate)
+  and [An escalated run that published its own pull request](#an-escalated-run-that-published-its-own-pull-request).
+- **Unreachable criteria:**
+  The escalation arose from acceptance criteria the leaf cannot measure or reach inside
+  an isolated execution worktree (such as live-drain throughput numbers or deployed-service
+  metrics). Re-scope the task's acceptance criteria to what the leaf's own build can
+  demonstrate, keep the existing candidate as an attached patch artifact, and update the
+  criteria:
+  ```bash
+  orbit task artifact put <task-id> .orbit/tmp/<patch-file> --path <artifact-name>
+  orbit task update <task-id> --acceptance-criteria '<scoped-criterion-1>' --acceptance-criteria '<scoped-criterion-2>'
+  ```
+  (or attach via `orbit task update <task-id> --artifact <path=content>`). Then requeue or
+  re-run the task under the reachable criteria.
+
+### Refusals and workarounds
+
+An operator attempting to recover a held or blocked delivery may meet two common refusals:
+
+- **A held run refuses source-repair requeue:**
+  Source-repair requeue requires a conclusively stopped, failed run. When the run is `held`,
+  `orbit task requeue` without discard refuses because the source is not in `failed` or
+  `cancelled` state (`published source is live, discarded, changed, or lacks an applied requeue`).
+  **Workaround:** Save the candidate patch first as a task artifact using `orbit task artifact put`
+  (or `orbit task update --artifact`), then discard the candidate to implement fresh:
+  ```bash
+  orbit task requeue <task-id> --discard-candidate --reason '<reason for fresh run>'
+  ```
+  (or `orbit task update <task-id> --status backlog --discard-candidate`).
+- **A task in `review` cannot be requeued:**
+  `orbit task requeue` accepts only tasks currently in `blocked` status (`only a blocked task can be requeued; <task-id> is review`).
+  If the held delivery left the task in `review`, requeue is refused.
+  **Workaround:** Move the task directly to `backlog` with `--discard-candidate`:
+  ```bash
+  orbit task update <task-id> --status backlog --discard-candidate
+  ```
+  This discards the preserved candidate, closes any unmerged Orbit pull request, and returns
+  the task to `backlog` for fresh execution. If no live run watches the pull request, see
+  also [A conflicting or red pull request no run is watching](#a-conflicting-or-red-pull-request-no-run-is-watching).
+
 ## A delivery leaf that died after opening its pull request
 
 An owner-local delivery leaf (`task_pr_pipeline`) watches the pull request it
