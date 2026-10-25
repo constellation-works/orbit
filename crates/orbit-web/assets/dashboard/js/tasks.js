@@ -154,6 +154,10 @@ const TRIAGE_REFUSAL_MS = 20000;
 // message, kept with the action like a refused Triage.
 const recoveryRefusals = new Map();
 const RECOVERY_REFUSAL_MS = 20000;
+// Operator records (pilot-admission / post-deploy): a refused record's typed
+// code and message, kept with the action like a refused recovery.
+const operatorRecordRefusals = new Map();
+const OPERATOR_RECORD_REFUSAL_MS = 20000;
 // Fix PR: whether the server would start an out-of-run auto-fix of a review
 // task's pull request, keyed like the ship guard. Read once when the panel
 // shows the task and again after FIX_PR_READINESS_MS or a start, so a list
@@ -1353,7 +1357,7 @@ function buildDeliveryAttentionBanner(task) {
   ]);
 }
 
-function buildPilotWarnings(task) {
+function buildPilotWarnings(task, detail, context) {
   const findings = pilotWarnings(task);
   if (!findings.length) return null;
   const labels = {
@@ -1361,17 +1365,128 @@ function buildPilotWarnings(task) {
     validation_tool_warnings: "Validation tool", blocked_by: "Prerequisite",
     adr_conflicts: "Conflict",
   };
+  const content = el("div", { class: "task-attention-content" }, [
+    el("h3", { class: "task-attention-title", text: "Pilot warnings" }),
+    el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }),
+    el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
+      el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
+      el("span", { text: finding.text }),
+    ]))),
+  ]);
+  if (detail && context) {
+    content.appendChild(el("p", {
+      class: "task-attention-body operator-record-note",
+      text: "Clear hold records that the held requirement is satisfied; Approve anyway records a deliberate override. Each records your evidence with the decision and releases the hold exactly as the same written record from the command line does.",
+    }));
+    const actions = el("div", { class: "task-attention-actions operator-record-actions" });
+    const mutable = canMutateTask(task);
+    const disabledTitle = mutable ? "" : aggregateRefusalTitle("Operator record", "record an operator decision");
+    const clear = el("button", {
+      class: "attention-action primary pilot-admission-clear",
+      type: "button",
+      text: "Clear hold",
+      title: disabledTitle || "Record that the held requirement is satisfied, with your evidence; this clears the pilot admission hold",
+    });
+    clear.disabled = !mutable;
+    clear.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, clear, context, { kind: "pilot", verdict: "clear" }); });
+    actions.appendChild(clear);
+    const approve = el("button", {
+      class: "attention-action pilot-admission-approve-anyway",
+      type: "button",
+      text: "Approve anyway",
+      title: disabledTitle || "Record a deliberate override of the pilot admission hold, with your reason; the task is admitted despite the finding",
+    });
+    approve.disabled = !mutable;
+    approve.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, approve, context, { kind: "pilot", verdict: "approve-anyway" }); });
+    actions.appendChild(approve);
+    content.appendChild(actions);
+    const refusal = operatorRecordRefusals.get(taskDispatchIdentity(task));
+    if (refusal) content.appendChild(actionErrorNode(refusal));
+  }
   return el("section", { class: "task-attention warning pilot-warnings", "aria-label": "Pilot warnings" }, [
     el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
-    el("div", { class: "task-attention-content" }, [
-      el("h3", { class: "task-attention-title", text: "Pilot warnings" }),
-      el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }),
-      el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
-        el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
-        el("span", { text: finding.text }),
-      ]))),
-    ]),
+    content,
   ]);
+}
+
+function operatorRecordSignature(task) {
+  return operatorRecordRefusals.get(taskDispatchIdentity(task)) || "";
+}
+
+// One-click operator records: pilot-admission decisions and post-deploy
+// measurements. Each explains what the record does in a confirmation, asks
+// for the required evidence, then posts through the typed operator route,
+// which writes the same record the command line writes. A refusal shows its
+// typed code and message inline and changes nothing.
+async function runOperatorRecord(task, detail, btnNode, context, request) {
+  const visit = captureWorkspaceVisit();
+  const key = taskDispatchIdentity(task);
+  if (!canMutateTask(task)) return;
+  let suffix;
+  let body;
+  let successText;
+  if (request.kind === "pilot") {
+    const approveAnyway = request.verdict === "approve-anyway";
+    const explain = approveAnyway
+      ? `Approve anyway for ${task.id}? This records a deliberate override of the pilot admission hold with your reason, and the task is admitted despite the finding.`
+      : `Clear hold for ${task.id}? This records that the held requirement is satisfied, with your evidence, and clears the pilot admission hold.`;
+    if (typeof window.confirm !== "function" || !window.confirm(explain)) return;
+    if (typeof window.prompt !== "function") return;
+    const evidence = window.prompt(
+      approveAnyway
+        ? `Reason for approving ${task.id} anyway (recorded with the decision):`
+        : `Evidence that the hold on ${task.id} is satisfied (recorded with the decision):`,
+      "",
+    );
+    if (evidence === null) return;
+    if (!evidence.trim()) {
+      const message = "[pilot_admission_evidence_required] pilot admission needs evidence; it is recorded with the decision";
+      operatorRecordRefusals.set(key, message);
+      renderTasks(taskList(context), context);
+      return;
+    }
+    suffix = "/pilot-admission";
+    body = { verdict: request.verdict, evidence: evidence.trim() };
+    successText = approveAnyway ? `${task.id}: pilot admission hold approved anyway` : `${task.id}: pilot admission hold cleared`;
+  } else {
+    const criterion = request.criterion;
+    if (typeof window.confirm !== "function" || !window.confirm(
+      `Mark criterion ${criterion} met for ${task.id}? This records that the deployed build met criterion ${criterion}, with your measurement evidence, and settles that owed criterion.`,
+    )) return;
+    if (typeof window.prompt !== "function") return;
+    const evidence = window.prompt(`Measurement evidence for criterion ${criterion} on ${task.id} (recorded with the result):`, "");
+    if (evidence === null) return;
+    if (!evidence.trim()) {
+      const message = "[post_deploy_evidence_required] post-deploy record needs evidence; it is recorded with the measurement";
+      operatorRecordRefusals.set(key, message);
+      renderTasks(taskList(context), context);
+      return;
+    }
+    suffix = "/post-deploy";
+    body = { criterion, evidence: evidence.trim() };
+    successText = `${task.id}: criterion ${criterion} recorded met`;
+  }
+  const requestPath = visit.path(taskMutationPath(task, suffix));
+  operatorRecordRefusals.delete(key);
+  for (const b of detail.querySelectorAll(".action, .attention-action")) b.disabled = true;
+  try {
+    await postJson(requestPath, body);
+  } catch (error) {
+    if (!visit.isCurrent()) return;
+    const code = error && error.code ? error.code : "operator_record_refused";
+    const message = `[${code}] ${error.message || String(error)}`;
+    operatorRecordRefusals.set(key, message);
+    renderTasks(taskList(context), context);
+    setTimeout(() => {
+      if (operatorRecordRefusals.get(key) !== message) return;
+      operatorRecordRefusals.delete(key);
+      renderTasks(taskList(context), context);
+    }, OPERATOR_RECORD_REFUSAL_MS);
+    return;
+  }
+  if (!visit.isCurrent()) return;
+  taskActionNotice = successText;
+  await refreshTasks(context);
 }
 
 // The readiness dot beside a backlog task's ID: the pool colour, its words as
@@ -1756,7 +1871,7 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
   await refreshTasks(context);
 }
 
-function buildOwedCriteria(owed) {
+function buildOwedCriteria(owed, task, detail, context) {
   const wrap = el("div", { class: "owed-criteria" });
   for (const entry of owed) {
     const parts = [
@@ -1764,7 +1879,28 @@ function buildOwedCriteria(owed) {
     ];
     if (entry.candidate_evidence) parts.push(`candidate: ${entry.candidate_evidence}`);
     if (entry.evidence) parts.push(`recorded by ${entry.recorded_by ?? "—"}: ${entry.evidence}`);
-    wrap.appendChild(el("div", { text: parts.join(" · ") }));
+    const row = el("div", { class: "owed-criterion" }, [
+      el("span", { text: parts.join(" · ") }),
+    ]);
+    if (task && detail && context && entry.state !== "met") {
+      const mutable = canMutateTask(task);
+      const mark = el("button", {
+        class: "action post-deploy-mark-met",
+        type: "button",
+        text: "Mark met",
+        title: mutable
+          ? `Record that the deployed build met criterion ${entry.criterion}, with your measurement evidence; this settles the owed criterion`
+          : aggregateRefusalTitle("Mark met", "record a post-deploy measurement"),
+      });
+      mark.disabled = !mutable;
+      mark.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, mark, context, { kind: "post-deploy", criterion: entry.criterion }); });
+      row.appendChild(mark);
+    }
+    wrap.appendChild(row);
+  }
+  if (task && detail && context) {
+    const refusal = operatorRecordRefusals.get(taskDispatchIdentity(task));
+    if (refusal) wrap.appendChild(actionErrorNode(refusal));
   }
   return wrap;
 }
@@ -3406,7 +3542,7 @@ function buildTaskDetail(task, context, drain = null) {
   // The folded sections read as one group of disclosure rows.
   const disclosures = el("div", { class: "detail-disclosures" });
   if (Array.isArray(task.owed_criteria) && task.owed_criteria.length) {
-    addField(disclosures, "Owed after deploy", buildOwedCriteria(task.owed_criteria), true, false, {
+    addField(disclosures, "Owed after deploy", buildOwedCriteria(task.owed_criteria, task, detail, context), true, false, {
       count: task.owed_criteria.length,
     });
   }
@@ -3500,7 +3636,7 @@ function buildTaskDetail(task, context, drain = null) {
   if (blockCallout) band.appendChild(blockCallout);
   const whyStuck = buildWhyStuckCard(task);
   if (whyStuck) band.appendChild(whyStuck);
-  const pilotCallout = buildPilotWarnings(task);
+  const pilotCallout = buildPilotWarnings(task, detail, context);
   if (pilotCallout) band.appendChild(pilotCallout);
   const deliveryAttentionBanner = buildDeliveryAttentionBanner(task);
   if (deliveryAttentionBanner) band.appendChild(deliveryAttentionBanner);
@@ -6328,7 +6464,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${fixPrSignature(t)}-${decisionSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${operatorRecordSignature(t)}-${fixPrSignature(t)}-${decisionSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
