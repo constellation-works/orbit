@@ -733,29 +733,44 @@ impl PilotAdmissionVerdict {
         }
     }
 
-    /// Allowed pilot-admission answers for a decision request: every
-    /// verdict except `rescope`, which edits criteria.
+    /// Allowed pilot-admission answers for a hold that records every verdict,
+    /// including `evaluated`.
+    ///
+    /// Duplicate and already-landed holds use
+    /// [`Self::finding_override_decision_answers`]: `evaluated` does not
+    /// override those findings, so offering it spends the request without a
+    /// resolution. `rescope` edits criteria and is never an answer.
     pub fn decision_answers() -> Vec<DecisionAnswer> {
-        [
-            (
-                Self::ApproveAnyway,
-                "Approve anyway",
-                "Admit the task despite the finding.",
-            ),
-            (Self::Clear, "Clear", "The finding no longer applies."),
-            (
-                Self::Evaluated,
+        Self::answers_for([Self::ApproveAnyway, Self::Clear, Self::Evaluated])
+    }
+
+    /// Answers that release a duplicate or already-landed finding.
+    ///
+    /// Only verdicts for which [`Self::overrides_findings`] is true. `evaluated`
+    /// is omitted: accepting it records an answer and leaves the hold in place.
+    pub fn finding_override_decision_answers() -> Vec<DecisionAnswer> {
+        Self::answers_for([Self::ApproveAnyway, Self::Clear])
+    }
+
+    fn answers_for(verdicts: impl IntoIterator<Item = Self>) -> Vec<DecisionAnswer> {
+        verdicts.into_iter().map(Self::decision_answer).collect()
+    }
+
+    fn decision_answer(self) -> DecisionAnswer {
+        let (label, consequence) = match self {
+            Self::ApproveAnyway => ("Approve anyway", "Admit the task despite the finding."),
+            Self::Clear => ("Clear", "The finding no longer applies."),
+            Self::Evaluated => (
                 "Evaluated",
                 "The operator evaluated the requirement and attached the evaluation.",
             ),
-        ]
-        .into_iter()
-        .map(|(verdict, label, consequence)| DecisionAnswer {
-            id: verdict.as_str().to_string(),
+            Self::Rescope => ("Rescope", "The acceptance criteria changed."),
+        };
+        DecisionAnswer {
+            id: self.as_str().to_string(),
             label: label.to_string(),
             consequence: consequence.to_string(),
-        })
-        .collect()
+        }
     }
 }
 

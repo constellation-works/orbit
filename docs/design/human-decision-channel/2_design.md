@@ -93,7 +93,10 @@ per request:
   performed; requeue through the normal final-recovery path) and `dismiss`.
 - **Pilot admission:** the `PilotAdmissionVerdict` spellings
   (`approve_anyway`, `clear`, `evaluated`; `rescope` is excluded — it edits
-  criteria, which is a free-form edit). The answer records the same
+  criteria, which is a free-form edit). A duplicate or already-landed hold
+  offers and accepts only `approve_anyway` and `clear`: `evaluated` does not
+  override those findings, and an answer that cannot resolve the hold is
+  refused before the request is consumed. The answer records the same
   `TaskDecision::PilotAdmission` history entry a verdict comment records, against
   the hold's `operation_id`, so `operator_resolution`
   (`crates/orbit-core/src/application/task/pilot/admission.rs:377`) accepts it

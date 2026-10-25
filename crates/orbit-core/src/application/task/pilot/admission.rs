@@ -6,9 +6,9 @@ use orbit_common::OrbitError;
 use orbit_common::governance::authorization::governed_tool;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::{
-    DecisionBinding, DecisionGate, DecisionRequest, HostOs, PILOT_ADMISSION_DECIDED_EVENT,
-    PilotAdmissionVerdict, Task, TaskArtifact, TaskComment, TaskDecision, TaskHistoryEntry,
-    TaskOsRequirement, TaskStatus, decision_requests_from_history,
+    DecisionAnswer, DecisionBinding, DecisionGate, DecisionRequest, HostOs,
+    PILOT_ADMISSION_DECIDED_EVENT, PilotAdmissionVerdict, Task, TaskArtifact, TaskComment,
+    TaskDecision, TaskHistoryEntry, TaskOsRequirement, TaskStatus, decision_requests_from_history,
 };
 use orbit_types::tool::McpCapability;
 use serde::{Deserialize, Serialize};
@@ -87,6 +87,32 @@ impl HostOperationalHold {
 }
 
 impl PilotAdmissionHold {
+    /// Answers a decision request for this hold may offer.
+    ///
+    /// Duplicate and already-landed findings resolve only through a verdict
+    /// that overrides the finding. `evaluated` does not, so it is not offered:
+    /// an operator who chose it would spend the request and leave the hold.
+    pub(crate) fn decision_request_answers(&self) -> Vec<DecisionAnswer> {
+        match self {
+            Self::Duplicate | Self::AlreadyLanded => {
+                PilotAdmissionVerdict::finding_override_decision_answers()
+            }
+            _ => PilotAdmissionVerdict::decision_answers(),
+        }
+    }
+
+    /// Whether `verdict` records a resolution for this hold.
+    ///
+    /// A duplicate or already-landed finding accepts only an overriding
+    /// verdict. Every other hold keeps the answers it already accepted;
+    /// evidence rules for `evaluated` still run when that comment is applied.
+    pub(crate) fn accepts_decision_answer(&self, verdict: PilotAdmissionVerdict) -> bool {
+        match self {
+            Self::Duplicate | Self::AlreadyLanded => verdict.overrides_findings(),
+            _ => true,
+        }
+    }
+
     fn operator_handoff(&self, operation_id: &str) -> Option<(TaskHistoryEntry, &'static str)> {
         match self {
             Self::OperatorValidation(hold) => {
@@ -739,9 +765,9 @@ impl OrbitRuntime {
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
-                if self.pilot_admission_hold(task_id)?.is_none() {
+                let Some(hold) = self.pilot_admission_hold(task_id)? else {
                     return Ok(());
-                }
+                };
                 let comments = self.get_task_comments(task_id)?;
                 let Some(operation_id) = super::latest_pilot_operation_id(&comments) else {
                     return Ok(());
@@ -765,7 +791,7 @@ impl OrbitRuntime {
                 let request = DecisionRequest::new(
                     task_id.to_string(),
                     DecisionGate::PilotAdmission,
-                    PilotAdmissionVerdict::decision_answers(),
+                    hold.decision_request_answers(),
                     binding,
                     "task_pilot".to_string(),
                     now,
