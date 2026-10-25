@@ -125,9 +125,13 @@ For a run, pass the run ID Orbit returned, for example from
 ```
 
 Both tools reject any other argument, such as a `status` or `actor`, with
-`invalid_input`. A missing `workspace` or `id`, an empty string or a value over
-2048 characters is refused the same way. A task or run that does not exist in
-the selected workspace is an error; nothing falls back to another workspace.
+`invalid_input`. `orbit_ui_open` with no arguments or with only `workspace` is
+accepted. `orbit_ui_inspect` requires `id`; `orbit_ui_open` requires `id` only
+when `id` or `kind` is supplied. `kind` requires both `workspace` and `id`.
+Any supplied `workspace`, `id` or `kind` must be a string that is not empty or
+whitespace-only and is no longer than 2048 UTF-8 bytes, or the call returns
+`invalid_input`. A task or run that does not exist in the selected workspace
+is an error; nothing falls back to another workspace.
 Inspecting a run needs a session that may read runs, which means operator
 authority (see [Connect your agent](../mcp-integration/#observe-the-run)).
 
