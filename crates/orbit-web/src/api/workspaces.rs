@@ -60,17 +60,60 @@ fn list_workspaces_json(state: &DashboardState) -> Vec<Value> {
         .collect()
 }
 
+/// Upper bound on the scoped threads one aggregate request fans out to.
+/// Each workspace read is independent (its own runtime and store), so the
+/// aggregate waits for the slowest workspace instead of the sum; the bound
+/// keeps a host with many registered workspaces from spawning a thread per
+/// workspace per poll.
+const MAX_AGGREGATE_FAN_OUT: usize = 8;
+
+/// Run `work(index)` for every index in `0..count` on up to
+/// [`MAX_AGGREGATE_FAN_OUT`] scoped threads, returning the results in
+/// index order. A panicking worker re-raises in the caller, exactly as the
+/// serial loop would.
+fn fan_out<T>(count: usize, work: impl Fn(usize) -> T + Sync) -> Vec<T>
+where
+    T: Send,
+{
+    if count <= 1 {
+        return (0..count).map(work).collect();
+    }
+    let workers = std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(4)
+        .min(MAX_AGGREGATE_FAN_OUT)
+        .min(count);
+    let chunk = count.div_ceil(workers);
+    std::thread::scope(|scope| {
+        let mut handles = Vec::new();
+        for start in (0..count).step_by(chunk) {
+            let end = (start + chunk).min(count);
+            let work = &work;
+            handles.push(scope.spawn(move || (start..end).map(work).collect::<Vec<_>>()));
+        }
+        let mut results = Vec::with_capacity(count);
+        for handle in handles {
+            match handle.join() {
+                Ok(chunk_results) => results.extend(chunk_results),
+                Err(payload) => std::panic::resume_unwind(payload),
+            }
+        }
+        results
+    })
+}
+
 /// `GET /api/fleet/drains` — one observational readiness row per registered
 /// workspace on this host. Unavailable workspaces remain explicit rows. Remote
 /// hosts expose the same endpoint through the existing single-hop forward.
 pub(super) async fn list_fleet_drains(State(state): State<DashboardState>) -> Response {
     match blocking("fleet drains", move || {
         let pinned = state.pin();
-        let items = pinned
-            .entries()
-            .iter()
-            .map(|entry| fleet_drain_row(&pinned, entry))
-            .collect::<Vec<_>>();
+        let entries = pinned.entries();
+        // One readiness snapshot per workspace, computed concurrently: the
+        // row order stays the pinned entries' order.
+        let items = fan_out(entries.len(), |index| {
+            fleet_drain_row(&pinned, &entries[index])
+        });
         Ok::<_, orbit_core::OrbitError>(json!({"items": items}))
     })
     .await
@@ -506,40 +549,36 @@ fn all_tasks_json(
     let mut remaining = 0;
     let mut unavailable = Vec::new();
     let mut unavailable_ids = HashSet::new();
-    for entry in pinned.entries() {
+    // Each workspace's candidate keys are selected concurrently (its own
+    // runtime and store); the fold below runs in pinned entry order, so
+    // totals, candidates and `unavailable` keep their serial order.
+    let entries = pinned.entries();
+    let selections = fan_out(entries.len(), |index| {
+        let entry = &entries[index];
         if !entry.active {
-            record_unavailable(
-                &mut unavailable,
-                &mut unavailable_ids,
-                entry,
-                "workspace is unavailable",
-            );
-            continue;
+            return Err("workspace is unavailable".to_string());
         }
         let runtime = match pinned.runtime_for(&entry.id) {
             Ok(runtime) => runtime,
             Err(_) => {
                 tracing::warn!(workspace = %entry.id, "fleet task list could not open a workspace");
-                record_unavailable(
-                    &mut unavailable,
-                    &mut unavailable_ids,
-                    entry,
-                    "failed to open workspace",
-                );
-                continue;
+                return Err("failed to open workspace".to_string());
             }
         };
         // One broken workspace must not take down the fleet-wide list.
-        let page = match workspace_task_keys(&runtime, query) {
-            Ok(page) => page,
+        match workspace_task_keys(&runtime, query) {
+            Ok(page) => Ok((runtime, page)),
             Err(error) => {
                 tracing::warn!(workspace = %entry.id, %error, "fleet task list skipped a workspace");
-                record_unavailable(
-                    &mut unavailable,
-                    &mut unavailable_ids,
-                    entry,
-                    &error.to_string(),
-                );
+                Err(error.to_string())
+            }
+        }
+    });
+    for (entry, selection) in entries.iter().zip(selections) {
+        let (runtime, page) = match selection {
+            Ok(selection) => selection,
+            Err(error) => {
+                record_unavailable(&mut unavailable, &mut unavailable_ids, entry, &error);
                 continue;
             }
         };
@@ -673,6 +712,13 @@ fn record_unavailable(
 /// filter the task index fully answers is selected there without reading a
 /// single envelope, so only the merged page's bundles are ever opened; the
 /// rest (title search, type, parent, external refs) select over envelopes.
+///
+/// The aggregate is observational — like `/api/job-runs/all`, a dashboard
+/// poll costs reads only — so selection observes settled envelopes without
+/// entering the task-commit boundary: it never queues behind a drain's
+/// exclusive commit sections and never triggers recovery or index repair.
+/// The `pilot_warnings` selection has no observational form and keeps the
+/// coordinated read.
 fn workspace_task_keys(
     runtime: &OrbitRuntime,
     query: &TaskPageQuery,
@@ -698,10 +744,10 @@ fn workspace_task_keys(
             total_without_cursor: page.total_without_cursor,
         });
     }
-    if let Some(keys) = runtime.task_candidate_keys(&filter, query.limit())? {
+    if let Some(keys) = runtime.observe_task_candidate_keys(&filter, query.limit())? {
         return Ok(keys);
     }
-    let page = runtime.task_candidates(&filter, query.limit())?;
+    let page = runtime.observe_task_candidates(&filter, query.limit())?;
     Ok(TaskCandidateKeys {
         items: page
             .items

@@ -57,6 +57,31 @@ pub(crate) fn backlog_snapshot(
         pools,
         workspace_ship_mode(runtime),
         review,
+        false,
+    )
+}
+
+/// The readiness projection's snapshot: identical selection and exclusion
+/// rules, but its envelope selections observe the task population without a
+/// commit-boundary section (see `population::admission_population`), so those
+/// reads never queue behind — or hold up — a drain's task commits. Ancestor
+/// and explicit-id loads still settle a pending commit first. Observation
+/// only: nothing admission decides may consume this snapshot.
+pub(crate) fn backlog_snapshot_observed(
+    runtime: &OrbitRuntime,
+    action: &str,
+    allowlist: Option<&CrewAllowlist>,
+    pools: &CapturedCrewPools,
+    review: Option<&ReviewAdmission>,
+) -> Result<BacklogSnapshot, PassError> {
+    backlog_snapshot_in_mode(
+        runtime,
+        action,
+        allowlist,
+        pools,
+        workspace_ship_mode(runtime),
+        review,
+        true,
     )
 }
 
@@ -69,11 +94,12 @@ pub(super) fn backlog_snapshot_in_mode(
     pools: &CapturedCrewPools,
     mode: ShipMode,
     review: Option<&ReviewAdmission>,
+    observed: bool,
 ) -> Result<BacklogSnapshot, PassError> {
     // The population is materialized once, by moving the selection into the
     // lookup. Everything below borrows from it: the backlog is a vector of
     // references and the snapshot hands back IDs.
-    let task_lookup = admission_population(runtime.stores().tasks())
+    let task_lookup = admission_population(runtime.stores().tasks(), observed)
         .map_err(|error| PassError::store(action, "list tasks", error))?;
     // One status projection per snapshot. It is the registry-global index,
     // not a re-read of `task_lookup`'s statuses (see `BacklogSnapshot`).

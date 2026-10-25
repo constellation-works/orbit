@@ -11,7 +11,7 @@ use crate::application::admission::auto_admission::{
     AdmissionHolders, DeferralReason, select_admissions,
 };
 use crate::application::admission::backlog_exclusion::{
-    BacklogTaskExclusionReason, backlog_snapshot, sort_tasks_for_automatic_dispatch,
+    BacklogTaskExclusionReason, backlog_snapshot_observed, sort_tasks_for_automatic_dispatch,
 };
 use crate::application::admission::claim_holders::ClaimHolders;
 use crate::application::admission::cpu_light::{
@@ -183,7 +183,12 @@ pub fn explain_workspace_auto_readiness(
         .map(|drain| orbit_types::workflow::ReviewAdmission::from_run_input(&drain.input))
         .transpose()?
         .flatten();
-    let mut snapshot = backlog_snapshot(
+    // Readiness admits nothing, so its envelope selections are observed
+    // without the commit boundary: they neither queue behind a drain's
+    // exclusive commit sections nor hold the shared boundary against them.
+    // Ancestor and explicit-id loads (`include_tasks` below) still settle a
+    // pending commit before they read.
+    let mut snapshot = backlog_snapshot_observed(
         runtime,
         "explain_workspace_auto_readiness",
         allowlist.as_ref(),

@@ -314,6 +314,67 @@ fn fleet_drains_preserves_hosts_health_for_ten_workspaces() {
     );
 }
 
+/// Regression guard for the aggregates' concurrent per-workspace fan-out:
+/// fleet rows stay in registry order and the merged task page is identical
+/// across repeated polls of one unchanged store state.
+#[test]
+fn aggregate_fan_out_preserves_row_order_and_payloads_across_polls() {
+    isolated(
+        "aggregate_pages::aggregate_fan_out_preserves_row_order_and_payloads_across_polls",
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            let names = (0..10).map(|n| format!("fanout{n}")).collect::<Vec<_>>();
+            let roots = names
+                .iter()
+                .map(|name| seed_workspace(&global, tmp.path(), name))
+                .collect::<Vec<_>>();
+            let bindings = names
+                .iter()
+                .zip(&roots)
+                .map(|(name, (_, repo))| (name.as_str(), repo.as_path()))
+                .collect::<Vec<_>>();
+            write_registry(&global, &bindings);
+            let server = spawn_server(
+                tmp.path(),
+                false,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            let fleet_first = json_ok(server.get("/api/fleet/drains"));
+            let fleet_rows = fleet_first["items"].as_array().unwrap();
+            assert_eq!(fleet_rows.len(), names.len());
+            let fleet_order = fleet_rows
+                .iter()
+                .map(|row| row["workspace_id"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                fleet_order, names,
+                "fleet rows must stay in registry order under fan-out"
+            );
+            let tasks_first = json_ok(server.get("/api/tasks/all"));
+            assert_eq!(tasks_first["total"], names.len());
+            assert_eq!(tasks_first["unavailable"].as_array().unwrap().len(), 0);
+            for _ in 0..5 {
+                assert_eq!(
+                    json_ok(server.get("/api/fleet/drains")),
+                    fleet_first,
+                    "fleet payload must be identical for the same store state"
+                );
+                assert_eq!(
+                    json_ok(server.get("/api/tasks/all")),
+                    tasks_first,
+                    "aggregate task page must be identical for the same store state"
+                );
+            }
+        },
+    );
+}
+
 #[test]
 fn aggregate_job_runs_page_is_bounded_and_observational() {
     isolated(
