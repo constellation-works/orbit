@@ -3,7 +3,7 @@ mod get;
 mod keys;
 mod path;
 mod render;
-mod set;
+pub(crate) mod set;
 mod show;
 mod support;
 

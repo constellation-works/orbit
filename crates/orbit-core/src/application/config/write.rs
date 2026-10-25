@@ -244,6 +244,17 @@ fn write_store<T>(
     init: ConfigWriteInit,
     edit: impl FnOnce(&mut ConfigStore) -> Result<T, OrbitError>,
 ) -> Result<(ConfigStore, T), OrbitError> {
+    if scope == ConfigScope::Workspace {
+        let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
+        // `--root` pins global and shared to one directory. `ORBIT_ROOT` is
+        // detected inside the refusal. Either one may name the workspace.
+        let explicit_root = runtime.global_root() == runtime.shared_root();
+        crate::runtime::refuse_indirect_uninitialized_caller_orbit(
+            &cwd,
+            &runtime.shared_root(),
+            explicit_root,
+        )?;
+    }
     let path = match scope {
         ConfigScope::Global => global_config_path(runtime),
         ConfigScope::Workspace => workspace_config_path(runtime),

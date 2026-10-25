@@ -120,14 +120,22 @@ impl ResolvedOrbitRoots {
 /// Resolution order:
 /// 1. `--root` flag (escape hatch)
 /// 2. `ORBIT_ROOT` env (escape hatch)
-/// 3. Linked git worktree's main checkout `.orbit/` as `shared_root`
-/// 4. `path_overrides` in global registry (longest prefix match from cwd)
-/// 5. Walk up from cwd to find first workspace `.orbit/` directory, skipping
+/// 3. Initialized `.orbit/` in the working directory, when it is not the
+///    linked checkout's own local root. A nested workspace resolves to itself.
+/// 4. Linked git worktree's main checkout `.orbit/` as `shared_root`
+/// 5. `path_overrides` in global registry (longest prefix match from cwd)
+/// 6. Walk up from cwd to find first workspace `.orbit/` directory, skipping
 ///    the global home `.orbit/`
-/// 6. Legacy: git repo root (for repos without `.orbit/` directory yet),
+/// 7. Legacy: git repo root (for repos without `.orbit/` directory yet),
 ///    skipping the global home `.orbit/`
-/// 7. Fallback: `<cwd>/.orbit`, refusing if it would resolve to the global
+/// 8. Fallback: `<cwd>/.orbit`, refusing if it would resolve to the global
 ///    home `.orbit/`
+///
+/// Bootstrap resolution then refuses an uninitialized `.orbit/` in the
+/// working directory when the selected root is a different directory.
+/// `--root` and `ORBIT_ROOT` skip that refusal. The linked checkout's own
+/// local `.orbit/` is not that fixture, so ordinary commands there still use
+/// the main shared root.
 pub fn resolve_initialize_roots(
     cwd: &Path,
     root_override: Option<&Path>,
@@ -173,11 +181,31 @@ pub fn resolve_bootstrap_roots_with_hint(
 
 /// Core implementation for `.orbit` workspace root discovery.
 ///
-/// Explicit roots from `--root` and `ORBIT_ROOT` win first. Linked git
-/// worktrees then resolve shared state through the main checkout while exposing
-/// the linked checkout's local `.orbit/`, before registry overrides and legacy
-/// walk-up run.
+/// Explicit roots from `--root` and `ORBIT_ROOT` win first. An initialized
+/// `.orbit/` in the working directory wins next when it is not the linked
+/// checkout's own local root. Linked git worktrees then resolve shared state
+/// through the main checkout while exposing the linked checkout's local
+/// `.orbit/`, before registry overrides and legacy walk-up run. Bootstrap
+/// mode refuses an uninitialized working-directory `.orbit/` that lost to
+/// one of those indirect roots.
 fn resolve_roots(
+    cwd: &Path,
+    root_override: Option<&Path>,
+    explicit_root_mode: ExplicitRootMode,
+    hint: Option<&WorkspaceRootHint>,
+) -> Result<ResolvedOrbitRoots, OrbitError> {
+    let roots = resolve_orbit_roots(cwd, root_override, explicit_root_mode, hint)?;
+    if explicit_root_mode == ExplicitRootMode::AllowUninitialized {
+        refuse_indirect_uninitialized_caller_orbit(
+            cwd,
+            &roots.shared_root,
+            root_override.is_some(),
+        )?;
+    }
+    Ok(roots)
+}
+
+fn resolve_orbit_roots(
     cwd: &Path,
     root_override: Option<&Path>,
     explicit_root_mode: ExplicitRootMode,
@@ -206,7 +234,20 @@ fn resolve_roots(
         ));
     }
 
-    // 3. Linked git worktree's main checkout .orbit/ as shared_root
+    // 3. Initialized `.orbit/` in the working directory, unless it is the
+    // linked checkout's own local root. That local root is per-worktree
+    // state, not a second workspace, so ordinary commands keep the main
+    // shared root. A nested fixture with `config.toml` resolves to itself
+    // instead of inheriting the main checkout.
+    if let Some(root) = initialized_nested_caller_orbit(cwd)? {
+        return Ok(log_resolved_roots(
+            cwd,
+            "caller_orbit",
+            ResolvedOrbitRoots::pinned(root),
+        ));
+    }
+
+    // 4. Linked git worktree's main checkout .orbit/ as shared_root
     if let Some(orbit_dir) = find_main_worktree_orbit_dir(cwd) {
         let shared_root = resolve_orbit_dir_candidate(&orbit_dir)?;
         let local_root = local_worktree_orbit_dir(cwd);
@@ -217,7 +258,7 @@ fn resolve_roots(
         ));
     }
 
-    // 4. caller-supplied catalog hint (legacy adapter uses path_overrides)
+    // 5. caller-supplied catalog hint (legacy adapter uses path_overrides)
     if let Some(ws) = hint.map(|hint| hint.orbit_dir.clone()) {
         return Ok(log_resolved_roots(
             cwd,
@@ -226,7 +267,7 @@ fn resolve_roots(
         ));
     }
 
-    // 5. Walk up from cwd to find first workspace .orbit/ directory. Bootstrap
+    // 6. Walk up from cwd to find first workspace .orbit/ directory. Bootstrap
     // flows stop at the current git root, or cwd when there is no git root, so
     // unrelated parent directories with `.orbit/` cannot capture new workspaces.
     let walk_up_boundaries = walk_up_boundaries(cwd, explicit_root_mode);
@@ -239,7 +280,7 @@ fn resolve_roots(
         ));
     }
 
-    // 6. Legacy: git repo root (for repos without .orbit/ directory yet).
+    // 7. Legacy: git repo root (for repos without .orbit/ directory yet).
     //    Skip when the candidate equals the global $HOME/.orbit — that happens
     //    when $HOME is itself a git repo (e.g. yadm/chezmoi/vcsh dotfile
     //    managers), and adopting the global root as a workspace would silently
@@ -255,7 +296,7 @@ fn resolve_roots(
         }
     }
 
-    // 7. Fallback: <cwd>/.orbit, but never the global $HOME/.orbit.
+    // 8. Fallback: <cwd>/.orbit, but never the global $HOME/.orbit.
     let cwd_root = paths::cwd_orbit_root(cwd);
     if is_global_orbit_root(&cwd_root) {
         return Err(OrbitError::InvalidInput(format!(
@@ -274,6 +315,59 @@ fn resolve_roots(
 enum ExplicitRootMode {
     AllowUninitialized,
     RequireInitialized,
+}
+
+fn orbit_root_env_is_set() -> bool {
+    std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty())
+}
+
+/// An initialized `.orbit/` in `cwd` that is not the linked checkout's own
+/// local root.
+///
+/// `Ok(None)` leaves the rest of resolution unchanged, including ordinary
+/// commands standing in the linked checkout itself.
+fn initialized_nested_caller_orbit(cwd: &Path) -> Result<Option<PathBuf>, OrbitError> {
+    let caller = paths::cwd_orbit_root(cwd);
+    if !is_initialized_orbit_root(&caller) || is_global_orbit_root(&caller) {
+        return Ok(None);
+    }
+    if paths_equivalent(&caller, &local_worktree_orbit_dir(cwd)) {
+        return Ok(None);
+    }
+    Ok(Some(resolve_orbit_dir_candidate(&caller)?))
+}
+
+/// Refuse a bootstrap or workspace config write that would adopt a root the
+/// caller did not name.
+///
+/// The working directory holds an uninitialized `.orbit/` that lost to an
+/// indirect root: the linked worktree's main checkout, a registry hint, a
+/// walk-up, or the git-root fallback. The linked checkout's own local
+/// `.orbit/` is not this fixture. Pass `explicit_root` when `--root` was
+/// set; `ORBIT_ROOT` is detected here. Either one is the escape hatch.
+pub fn refuse_indirect_uninitialized_caller_orbit(
+    cwd: &Path,
+    resolved_shared: &Path,
+    explicit_root: bool,
+) -> Result<(), OrbitError> {
+    if explicit_root || orbit_root_env_is_set() {
+        return Ok(());
+    }
+    let caller = paths::cwd_orbit_root(cwd);
+    if !caller.is_dir() || is_global_orbit_root(&caller) || is_initialized_orbit_root(&caller) {
+        return Ok(());
+    }
+    if paths_equivalent(&caller, resolved_shared)
+        || paths_equivalent(&caller, &local_worktree_orbit_dir(cwd))
+    {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "refusing to use workspace '{}' from '{}': '{}' is an uninitialized .orbit directory, and resolution selected a different workspace. Pass `--root <path/to/.orbit>` or set ORBIT_ROOT to choose the workspace explicitly",
+        resolved_shared.display(),
+        cwd.display(),
+        caller.display()
+    )))
 }
 
 fn find_main_worktree_orbit_dir(cwd: &Path) -> Option<PathBuf> {
@@ -544,6 +638,14 @@ pub fn try_resolve_initialized_cwd_roots_with_hint(
     cwd: &Path,
     hint: Option<&WorkspaceRootHint>,
 ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
+    if let Some(root) = initialized_nested_caller_orbit(cwd)? {
+        return Ok(Some(log_resolved_roots(
+            cwd,
+            "caller_orbit",
+            ResolvedOrbitRoots::pinned(root),
+        )));
+    }
+
     if let Some(orbit_dir) = find_main_worktree_orbit_dir(cwd)
         && is_initialized_orbit_root(&orbit_dir)
     {
