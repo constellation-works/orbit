@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The fourteen seeded definitions
+## The fifteen seeded definitions
 
-`orbit workspace init` seeds all fourteen, disabled, except any you deleted (see
+`orbit workspace init` seeds all fifteen, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -512,6 +512,17 @@ plugin being removed.
   coupling hotspot) rather than patching one regression. A run where every
   ranking sits below `min_support` is a successful no-op that reports each
   ranking's below-support counts and files nothing.
+- **`ci-budget-watch`** (`medium`) — daily. Measures the main hosted test
+  job's elapsed time (discovered from the CI workflow files) against the
+  repository's documented CI budget (figure, statistic, and population
+  from the agent guides, contributing guide, and docs). Attaches
+  `ci-budget-watch/report.md` with the last 20 completed runs, the trend
+  against the previous report, and the measurement gaps. With no
+  documented budget it records the trend and files nothing; with no
+  hosted CI or unreachable history it is a successful no-op stating the
+  reason. When over budget it keeps exactly one open `ci-budget` task,
+  updating an existing one instead of filing a second. The chore itself
+  is tagged `no-diff-expected` and never edits source, CI, or tests.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
