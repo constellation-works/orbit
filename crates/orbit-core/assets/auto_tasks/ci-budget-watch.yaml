@@ -34,10 +34,18 @@ template:
       `orbit tool run orbit.search --input '{"query":"ci-budget","kind":"task","all":true,"model":"<agent-family>"}'`
       (lexical search matches one substring; never treat a 0-hit
       multi-word query as proof that nothing is open).
-    - Read hosted run history only through the granted run tools:
-      `orbit tool run github.run.list --input '{"branch":"__ORBIT_BASE_BRANCH__","status":"completed","limit":20,"model":"<agent-family>"}'`
-      (add the discovered workflow name or file as `workflow` once known),
-      then
+    - Read hosted run history only through the granted run tools. After
+      discovering the workflow and documented run population, call
+      `github.run.list` with `status:"completed"`, the discovered workflow
+      name or file, `limit:20`, and `event` or `branch` filters that match
+      that population. For a population scoped to integration-branch pushes,
+      use `event:"push"` and `branch:"__ORBIT_BASE_BRANCH__"`; for a pull
+      request population, use `event:"pull_request"` and any documented
+      target-branch filter. Inspect returned run metadata when a population
+      filter is not available, and state a gap if the tool cannot identify or
+      return enough runs from the documented population. With no documented
+      budget, use integration-branch push runs for a descriptive trend only.
+      Then call
       `orbit tool run github.run.view --input '{"run":"<run id>","model":"<agent-family>"}'`
       for each listed run to read its jobs. A tool error, an empty list, or
       a run whose job timestamps are absent is a stated gap, never a pass.
@@ -97,15 +105,21 @@ template:
 
     ## Measure and compare
 
-    1. List the last 20 completed runs of the chosen workflow on
-       `__ORBIT_BASE_BRANCH__` with `github.run.list`, then read each run
-       with `github.run.view`. For the chosen job in each run record the
+    1. List the last 20 completed runs of the chosen workflow that match the
+       documented population with `github.run.list`, then read each run with
+       `github.run.view`. Use `event:"pull_request"` for a PR population; use
+       `event:"push"` and `branch:"__ORBIT_BASE_BRANCH__"` when the population
+       is integration-branch pushes. Apply other documented filters from run
+       metadata where needed. For the chosen job in each run record the
        head SHA, the run id, the conclusion, and the elapsed seconds
        (job completion time minus job start time; use the full job elapsed
        time only, never a filtered step timing or a sum of test times).
        Runs without that job or without both timestamps are listed as gaps
-       with the reason. When the run tools error or return no completed
-       runs, attach the report stating that run history was unreachable
+       with the reason. If the history cannot identify or return enough runs
+       from the documented population, report that measurement gap and do
+       not decide whether the budget was met. When the run tools error or
+       return no completed runs, attach the report stating that run history
+       was unreachable
        (naming the tool and the error or empty result), record it in the
        execution summary, and stop as a successful no-op.
     2. **Trend.** Fetch the previous run's `ci-budget-watch/report.md`
@@ -162,7 +176,7 @@ template:
     the documented budget or its absence, the headline elapsed values,
     the trend, the decision, and any created or updated task ID.
   acceptance_criteria:
-  - The run attaches `ci-budget-watch/report.md` listing the chosen workflow file, job id and display name with the rule that chose it, and a table of the last 20 completed runs on `__ORBIT_BASE_BRANCH__` with head SHA, run id, conclusion and full elapsed seconds per run, plus every run the table could not measure and why.
+  - The run attaches `ci-budget-watch/report.md` listing the chosen workflow file, job id and display name with the rule that chose it, and a table of the last 20 completed runs in the documented population with head SHA, run id, conclusion and full elapsed seconds per run, plus every run the table could not measure and why. When no budget is documented, the trend uses integration-branch pushes selected with `__ORBIT_BASE_BRANCH__` and is not used to file a task.
   - The report states the documented CI budget as figure, statistic, population and `file:line` source, or states that no budget is documented; with no documented budget the run records the trend and files no task.
   - With no hosted CI configuration, no test-bearing job, or unreachable run history, the run attaches the report stating that reason, files no task, and succeeds as a no-op.
   - The report compares count, minimum, median, maximum and the documented statistic against the previous `ci-budget-watch/report.md`, or states that this run is the baseline when no readable previous report exists.
