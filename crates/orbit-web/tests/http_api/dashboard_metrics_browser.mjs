@@ -119,12 +119,53 @@ function defects(key) {
   };
 }
 
+function tokens(key, url) {
+  const { count, window, start } = trendWindow(key);
+  const workspace = url.searchParams.get('workspace') || 'ws_fixture';
+  const scope = url.searchParams.get('scope') || 'all';
+  const mean = workspace === 'ws_b' ? (scope === 'implement' ? 222 : 1000) : 111;
+  const cell = () => ({ n: 5, mean, median: mean, thin: false, excluded_uncovered: 0, excluded_no_invocations: 0 });
+  return {
+    window, outcome: url.searchParams.get('outcome') || 'done', scope,
+    tags: [], model: null, min_tasks: 3,
+    bucket_starts: Array.from({ length: count }, (_, i) => start(i)),
+    series: [{ complexity: 'low', cohort: 'all', points: Array.from({ length: count }, () => cell()), total: cell() }],
+    total: cell(), excluded_other_model: 0, available_models: [], available_tags: [],
+  };
+}
+
 const requests = [];
 // An older host has no defect trend; set to serve its 404.
 let defectsMissing = false;
+// Controlled token replies: while `holdTokensPredicate` matches a request,
+// its response is parked in `heldTokens` until `releaseHeldTokens()`.
+let heldTokens = [];
+let holdTokensPredicate = null;
+let heldTokensAsError = false;
+function releaseHeldTokens() {
+  for (const held of heldTokens.splice(0)) {
+    if (held.error) {
+      held.res.writeHead(404, { 'content-type': 'application/json' });
+      held.res.end(JSON.stringify({ error: 'not found' }));
+    } else {
+      held.res.setHeader('content-type', 'application/json');
+      held.res.end(JSON.stringify(held.payload));
+    }
+  }
+}
+async function waitForHeldTokens(count = 1) {
+  for (let i = 0; i < 200 && heldTokens.length < count; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(heldTokens.length, count, 'held token request arrived');
+}
 function payloadFor(url) {
   switch (url.pathname) {
-    case '/api/workspaces': return [{ id: 'ws_fixture', name: 'fixture', status: 'active', is_default: true }];
+    case '/api/workspaces': return [
+      { id: 'ws_fixture', name: 'Fixture A', status: 'active', is_default: true },
+      { id: 'ws_b', name: 'Fixture B', status: 'active', is_default: false },
+    ];
+    case '/api/diagnostics/task_tokens':
+      requests.push(`task_tokens?since=${url.searchParams.get('since')}&scope=${url.searchParams.get('scope')}&workspace=${url.searchParams.get('workspace')}`);
+      return tokens(url.searchParams.get('since'), url);
     case '/api/crews': return { default_crew: null, crews: [] };
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
     case '/api/diagnostics/implement_one':
@@ -155,6 +196,10 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (url.pathname.startsWith('/api/')) {
+    if (url.pathname === '/api/diagnostics/task_tokens' && holdTokensPredicate && holdTokensPredicate(url)) {
+      heldTokens.push({ res, payload: payloadFor(url), error: heldTokensAsError });
+      return;
+    }
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(payloadFor(url)));
     return;
@@ -412,6 +457,62 @@ try {
   await body.getByRole('tab', { name: 'Tasks completed' }).click();
   assert.equal(await body.locator('.mx-bars .mx-bar-col').count(), 29, 'completions still render');
   pass('older host without defects');
+
+  // Tokens per task: a held reply from a retired workspace visit cannot
+  // overwrite the current visit, including an A→B→A round trip and an
+  // unavailable/error reply.
+  defectsMissing = false;
+  await page.locator('#metrics-window-selector [data-window="7d"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('window 7d'));
+  await body.getByRole('tab', { name: 'Tokens per task' }).click();
+  const tokenValue = () => body.locator('.mx-sc-value').first().textContent();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
+  assert.equal(await tokenValue(), '111', 'workspace A tokens at 7d');
+  const invocations = body.getByRole('group', { name: 'Invocations' });
+  holdTokensPredicate = url => url.searchParams.get('workspace') === 'ws_fixture' && url.searchParams.get('scope') === 'implement';
+  await invocations.getByRole('button', { name: 'Implement only' }).click();
+  await waitForHeldTokens();
+  await page.locator('#workspace-select').selectOption('ws_b');
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '222');
+  await page.screenshot({ path: path.join(evidence, 'tokens-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 1200 });
+  await page.screenshot({ path: path.join(evidence, 'tokens-375.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  releaseHeldTokens();
+  await page.waitForTimeout(200);
+  assert.equal(await tokenValue(), '222', 'held A reply does not overwrite B');
+  holdTokensPredicate = null;
+  pass('tokens workspace fence');
+
+  heldTokensAsError = true;
+  holdTokensPredicate = url => url.searchParams.get('workspace') === 'ws_b' && url.searchParams.get('scope') === 'all';
+  await invocations.getByRole('button', { name: 'All invocations' }).click();
+  await waitForHeldTokens();
+  await page.locator('#workspace-select').selectOption('ws_fixture');
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
+  releaseHeldTokens();
+  await page.waitForTimeout(200);
+  assert.equal(await tokenValue(), '111', 'held B error reply does not overwrite A');
+  assert.equal(await body.getByText('Tokens per task unavailable').count(), 0);
+  holdTokensPredicate = null;
+  heldTokensAsError = false;
+  await page.locator('#workspace-select').selectOption('ws_b');
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '1k');
+  pass('tokens round trip and error fence');
+
+  // A full-panel refresh started under All invocations cannot replace a
+  // newer Implement-only result.
+  holdTokensPredicate = url => url.searchParams.get('workspace') === 'ws_b' && url.searchParams.get('scope') === 'all';
+  await page.locator('#refresh-btn').click();
+  await waitForHeldTokens();
+  await invocations.getByRole('button', { name: 'Implement only' }).click();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '222');
+  releaseHeldTokens();
+  await page.waitForTimeout(200);
+  assert.equal(await tokenValue(), '222', 'held full refresh does not overwrite Implement only');
+  assert.equal(await invocations.getByRole('button', { name: 'Implement only' }).getAttribute('aria-pressed'), 'true');
+  holdTokensPredicate = null;
+  pass('tokens full-refresh fence');
 
   assert.deepEqual(errors, [], 'no browser errors');
   fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions }, null, 2));
