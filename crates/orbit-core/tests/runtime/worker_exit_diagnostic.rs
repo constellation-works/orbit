@@ -66,6 +66,7 @@ impl Fixture {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn running_pid(&self, run_id: &str) -> u32 {
         wait_for("the worker to start its run", || {
             let run = self.jobs.get_job_run(run_id).unwrap()?;
@@ -246,12 +247,15 @@ fn a_reconciled_run_whose_worker_exit_nobody_observed_says_so() {
 }
 
 /// Where [`signalled_worker`] finds the fixture root and the run it executes.
+#[cfg(target_os = "linux")]
 const SIGNALLED_WORKER_ROOT: &str = "ORBIT_TEST_SIGNALLED_WORKER_ROOT";
+#[cfg(target_os = "linux")]
 const SIGNALLED_WORKER_RUN: &str = "ORBIT_TEST_SIGNALLED_WORKER_RUN";
 
 /// Not a check on its own: the substitute pipeline worker of
 /// [`a_terminated_run_names_who_sent_the_signal`] re-executes this binary
 /// here, so the worker runs Orbit's own worker entry point.
+#[cfg(target_os = "linux")]
 #[test]
 fn signalled_worker() {
     let (Ok(root), Ok(run_id)) = (
@@ -263,6 +267,7 @@ fn signalled_worker() {
     let _ = runtime_at(Path::new(&root)).execute_pipeline_run_worker(&run_id);
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn a_terminated_run_names_who_sent_the_signal() {
     if !isolated("worker_exit_diagnostic::a_terminated_run_names_who_sent_the_signal") {
