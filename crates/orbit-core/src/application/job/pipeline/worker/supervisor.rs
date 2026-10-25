@@ -373,8 +373,12 @@ impl PipelineWorkerSupervisor {
                 );
                 // [ORB-17179] Persist the reaped status before settling the
                 // run: reconciliation can condemn the run as soon as the
-                // worker is reaped, and nobody else can ever recover it.
-                let worker_exit = WorkerExit::observe(child_pid, &status, scope.as_ref());
+                // worker is reaped, and nobody else can ever recover it. The
+                // log is read first because it names who sent a terminating
+                // signal [ORB-18166].
+                let output = read_pipeline_worker_log_tail(&mut worker_log_reader);
+                let worker_exit =
+                    WorkerExit::observe(child_pid, &status, scope.as_ref(), output.as_deref());
                 log_best_effort(
                     "audit worker exit",
                     run_id,
@@ -395,7 +399,6 @@ impl PipelineWorkerSupervisor {
                 // authoritative.
                 let run =
                     self.read_run_while_reaping(run_id, &mut child, &mut exit_status, &mut scope);
-                let output = read_pipeline_worker_log_tail(&mut worker_log_reader);
                 let output_detail = output
                     .as_deref()
                     .filter(|value| !value.is_empty())
@@ -459,9 +462,14 @@ impl PipelineWorkerSupervisor {
                 } else {
                     "before claiming"
                 };
+                let sender = worker_exit
+                    .sender_clause()
+                    .map(|clause| format!(" ({clause})"))
+                    .unwrap_or_default();
                 let exit = format!(
-                    "pipeline worker for run '{run_id}' exited with status {status} {ownership} \
-                     the persisted run from registered workspace '{}'; worker log: '{}'",
+                    "pipeline worker for run '{run_id}' exited with status {status}{sender} \
+                     {ownership} the persisted run from registered workspace '{}'; worker log: \
+                     '{}'",
                     workspace.display(),
                     worker_log.display(),
                 );
