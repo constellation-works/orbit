@@ -153,7 +153,18 @@ fn body(path: &str) -> Value {
             "name":"missing", "source":"fixture", "target":"job:missing",
             "machine_name":"fixture", "expected_enabled":true,"enabled":false,
         }),
+        "/routines/trigger" => json!({
+            "name":"missing", "source":"fixture", "target":"job:missing",
+            "machine_name":"fixture",
+            "expected_trigger":{"cron":"0 * * * *","missed_run":"skip"},
+            "trigger":{"cron":"0 * * * *","missed_run":"skip"},
+        }),
         "/auto-tasks/toggle" => json!({"name":"missing","expected_enabled":true,"enabled":false}),
+        "/auto-tasks/schedule" => json!({
+            "name":"missing",
+            "expected_schedule":{"cron":"0 * * * *"},
+            "schedule":{"cron":"0 * * * *"},
+        }),
         "/auto-tasks/mint" => json!({"name":"missing","acknowledge_unconditional":true}),
         "/workflows/auto" => json!({"for_duration":"1m","complete":false}),
         _ => json!({
