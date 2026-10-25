@@ -475,6 +475,26 @@ fn muse_run_usage_records_account_windows_at_completion() {
 }
 
 #[test]
+fn muse_run_usage_frame_from_1_4_13_records_the_same_account_windows() {
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 4, 14, 0).unwrap();
+    let status_capture = std::str::from_utf8(MUSE_USAGE).unwrap();
+    // Muse Code 1.4.13 renames the 1.4.12 `status` frame to `run.usage` and
+    // keeps the allowance shape, so the 1.4.12 capture stands in for it here.
+    let run_usage_capture = status_capture.replace(
+        r#""payload_type":"status""#,
+        r#""payload_type":"run.usage","record_type":"status""#,
+    );
+    assert_ne!(
+        run_usage_capture, status_capture,
+        "the rename must reach the capture"
+    );
+    let expected = provider_usage_windows("muse", MUSE_USAGE, None, now);
+    assert_eq!(expected.len(), 2, "the recorded allowance has two windows");
+    let readings = provider_usage_windows("muse", run_usage_capture.as_bytes(), None, now);
+    assert_eq!(readings, expected);
+}
+
+#[test]
 fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
     use serde_json::{Value, json};
     let now = Utc::now();
@@ -484,11 +504,38 @@ fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
     let status = records[1].clone();
-    let mut cases = vec![
-        json!({"payload_type": "status", "payload": {"kind": "run_usage", "models": []}}),
-        json!({"payload_type": "status", "payload": {"kind": "other", "allowance": status["payload"]["allowance"]}}),
-        json!({"schemaVersion": 1, "payload_type": "status", "payload": status["payload"]}),
-    ];
+    let run_usage = json!({"payload_type": "run.usage", "payload": status["payload"]});
+    let mut cases = Vec::new();
+    for frame_type in ["status", "run.usage"] {
+        cases.extend([
+            json!({"payload_type": frame_type, "payload": {"kind": "run_usage", "models": []}}),
+            json!({"payload_type": frame_type, "payload": {"kind": "other", "allowance": status["payload"]["allowance"]}}),
+            json!({"schemaVersion": 1, "payload_type": frame_type, "payload": status["payload"]}),
+            json!({"payload_type": frame_type, "payload": {"text": status.to_string()}}),
+        ]);
+        for allowance in [
+            Value::Null,
+            json!([]),
+            json!("unknown"),
+            json!({"monthly": {"used_percent": 99, "resets_at_ms": 1792740094000_i64}}),
+        ] {
+            cases.push(json!({"payload_type": frame_type, "payload": {"kind": "run_usage", "allowance": allowance}}));
+        }
+        for fields in [
+            Value::Null,
+            json!([]),
+            json!({}),
+            json!({"used_percent": "27", "resets_at_ms": 1792740094000_i64}),
+            json!({"used_percent": -1, "resets_at_ms": 1792740094000_i64}),
+            json!({"used_percent": 27}),
+            json!({"resets_at_ms": 1792740094000_i64}),
+            json!({"used_percent": 27, "resets_at_ms": "1792740094000"}),
+            json!({"used_percent": 27, "resets_at_ms": 1.5}),
+            json!({"used_percent": 27, "resets_at_ms": i64::MAX}),
+        ] {
+            cases.push(json!({"payload_type": frame_type, "payload": {"kind": "run_usage", "allowance": {"window": fields, "weekly": fields}}}));
+        }
+    }
     for record_type in [
         "run.lifecycle.started",
         "turn.input.user",
@@ -499,28 +546,8 @@ fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
     ] {
         cases.push(json!({"payload_type": record_type, "payload": status["payload"]}));
         cases.push(json!({"payload_type": record_type, "payload": {"text": status.to_string()}}));
-    }
-    for allowance in [
-        Value::Null,
-        json!([]),
-        json!("unknown"),
-        json!({"monthly": {"used_percent": 99, "resets_at_ms": 1792740094000_i64}}),
-    ] {
-        cases.push(json!({"payload_type": "status", "payload": {"kind": "run_usage", "allowance": allowance}}));
-    }
-    for fields in [
-        Value::Null,
-        json!([]),
-        json!({}),
-        json!({"used_percent": "27", "resets_at_ms": 1792740094000_i64}),
-        json!({"used_percent": -1, "resets_at_ms": 1792740094000_i64}),
-        json!({"used_percent": 27}),
-        json!({"resets_at_ms": 1792740094000_i64}),
-        json!({"used_percent": 27, "resets_at_ms": "1792740094000"}),
-        json!({"used_percent": 27, "resets_at_ms": 1.5}),
-        json!({"used_percent": 27, "resets_at_ms": i64::MAX}),
-    ] {
-        cases.push(json!({"payload_type": "status", "payload": {"kind": "run_usage", "allowance": {"window": fields, "weekly": fields}}}));
+        cases
+            .push(json!({"payload_type": record_type, "payload": {"text": run_usage.to_string()}}));
     }
     for record in cases {
         assert!(
@@ -529,7 +556,14 @@ fn muse_usage_windows_reject_absent_malformed_and_embedded_allowances() {
         );
     }
     let no_allowance = format!("{}\n{}", records[0], records[2]);
-    for capture in [b"".as_slice(), b"not json", no_allowance.as_bytes()] {
+    let run_usage_text = run_usage.to_string();
+    let truncated_run_usage = &run_usage_text[..run_usage_text.len() - 1];
+    for capture in [
+        b"".as_slice(),
+        b"not json",
+        no_allowance.as_bytes(),
+        truncated_run_usage.as_bytes(),
+    ] {
         assert!(provider_usage_windows("muse", capture, None, now).is_empty());
     }
     assert!(provider_usage_windows("claude", MUSE_USAGE, None, now).is_empty());
