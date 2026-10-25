@@ -5,6 +5,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use orbit_automation::{AutomationError, DeferredReason};
+use orbit_common::OrbitError;
+use orbit_types::task::Task;
 use orbit_types::workflow::automation::SourceRevision;
 
 type HeadKey = (PathBuf, String, String);
@@ -18,11 +20,25 @@ type Cached<T> = Result<T, DeferredReason>;
 /// scoped to a checkout and request. Provider responses can be
 /// reused across independent clones of the same provider repository. Failures
 /// are shared too, so an unavailable source is attempted only once per tick.
+type Preparations = std::collections::BTreeMap<String, std::collections::BTreeSet<String>>;
+
 #[derive(Default)]
 pub(crate) struct SourceCache {
     heads: RefCell<BTreeMap<HeadKey, Cached<SourceRevision>>>,
     lookups: RefCell<BTreeMap<LookupKey, Cached<String>>>,
     inspections: RefCell<BTreeMap<InspectionKey, Cached<InspectionHead>>>,
+    // Request-scoped task snapshot shared by the state routines inspected in
+    // one status request: the same workspace population and hydrated tasks
+    // serve every routine instead of one scan and hydration per routine.
+    // Only a status inspection populates it; it lives for one request, so a
+    // later request re-reads the store.
+    task_snapshots: RefCell<BTreeMap<String, std::rc::Rc<Vec<orbit_types::task::TaskEnvelopeV2>>>>,
+    // Hydrated tasks and active-preparation scans are workspace-scoped: the
+    // status report shares one cache across every discovered workspace, so
+    // the workspace key keeps one checkout's tasks from serving another's
+    // routines.
+    tasks: RefCell<BTreeMap<(String, String), Task>>,
+    preparations: RefCell<BTreeMap<(String, &'static str), Preparations>>,
 }
 
 impl SourceCache {
@@ -48,6 +64,57 @@ impl SourceCache {
             (git_dir, repository.into(), branch.into()),
             fetch,
         )
+    }
+
+    /// Task envelopes of one workspace in the observed statuses, fetched once
+    /// per request; each routine's page is derived from this snapshot. The
+    /// snapshot is shared by reference: deriving a page must not copy the
+    /// workspace population per routine.
+    pub(super) fn task_snapshot(
+        &self,
+        workspace: &str,
+        fetch: impl FnOnce() -> Result<Vec<orbit_types::task::TaskEnvelopeV2>, OrbitError>,
+    ) -> Result<std::rc::Rc<Vec<orbit_types::task::TaskEnvelopeV2>>, OrbitError> {
+        if let Some(snapshot) = self.task_snapshots.borrow().get(workspace) {
+            return Ok(snapshot.clone());
+        }
+        let snapshot = std::rc::Rc::new(fetch()?);
+        self.task_snapshots
+            .borrow_mut()
+            .insert(workspace.to_string(), snapshot.clone());
+        Ok(snapshot)
+    }
+
+    pub(super) fn task(
+        &self,
+        workspace: &str,
+        id: &str,
+        fetch: impl FnOnce() -> Result<Task, OrbitError>,
+    ) -> Result<Task, OrbitError> {
+        let key = (workspace.to_string(), id.to_string());
+        if let Some(task) = self.tasks.borrow().get(&key) {
+            return Ok(task.clone());
+        }
+        let task = fetch()?;
+        self.tasks.borrow_mut().insert(key, task.clone());
+        Ok(task)
+    }
+
+    pub(super) fn preparations(
+        &self,
+        workspace: &str,
+        kind: &'static str,
+        fetch: impl FnOnce() -> Result<Preparations, OrbitError>,
+    ) -> Result<Preparations, OrbitError> {
+        let key = (workspace.to_string(), kind);
+        if let Some(preparations) = self.preparations.borrow().get(&key) {
+            return Ok(preparations.clone());
+        }
+        let preparations = fetch()?;
+        self.preparations
+            .borrow_mut()
+            .insert(key, preparations.clone());
+        Ok(preparations)
     }
 
     pub(super) fn lookup(
