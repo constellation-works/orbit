@@ -201,6 +201,7 @@ export default defineConfig({
             { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },
             { slug: 'how-to/task-publication', label: 'Publish and restore tasks' },
             { slug: 'how-to/distributed-drain', label: 'Set up a distributed drain' },
+            { slug: 'how-to/plugins', label: 'Install and grant plugins' },
           ],
         },
         {
