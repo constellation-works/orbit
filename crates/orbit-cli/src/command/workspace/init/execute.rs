@@ -155,6 +155,13 @@ impl WorkspaceInitArgs {
                     .clone()
                     .or_else(|| existing_workspace.map(|workspace| workspace.base_branch.clone()))
                     .unwrap_or_else(|| default_base_branch.clone());
+                let seeded_ship_mode = self
+                    .ship_mode
+                    .as_deref()
+                    .map(orbit_core::ShipMode::parse)
+                    .transpose()?
+                    .or_else(|| existing_workspace.map(orbit_core::resolved_ship_mode))
+                    .unwrap_or(orbit_core::ShipMode::Pr);
                 // Seeded routine names are suffixed with the registered workspace
                 // name, not the checkout directory, so two checkouts sharing a
                 // basename stay distinct on one host [ORB-12107]. Validate the
@@ -259,6 +266,7 @@ impl WorkspaceInitArgs {
                         global_root_override: Some(global_root.to_path_buf()),
                         routine_seed_identity: routine_identity.clone(),
                         workspace_base_branch: Some(seeded_base_branch),
+                        workspace_ship_mode: Some(seeded_ship_mode),
                         // Host detection is a CLI concern: Core seeds config from the
                         // families this adapter reports, never by probing PATH itself.
                         config_seed: Some(config_seed_from_detection(&detect())),

@@ -89,34 +89,33 @@ fn admit_fixture_claude_worker_token(workspace: &McpWorkspace) {
 }
 
 fn ensure_pass_contains(config: &str, name: &str) -> String {
-    let quoted = format!("\"{name}\"");
-    if let Some(start) = config.find("pass = [") {
-        let Some(end_rel) = config[start..].find(']') else {
-            return config.to_string();
-        };
-        let end = start + end_rel;
-        if config[start..end].contains(&quoted) {
-            return config.to_string();
-        }
-        let mut out = String::new();
-        out.push_str(&config[..end]);
-        if !out.ends_with('\n') {
-            out.push('\n');
-        }
-        out.push_str("    ");
-        out.push_str(&quoted);
-        out.push_str(",\n");
-        out.push_str(&config[end..]);
-        return out;
+    let mut document: toml_edit::DocumentMut = config.parse().expect("fixture config TOML");
+    let mut pass = document
+        .get("execution")
+        .and_then(|execution| execution.get("env"))
+        .and_then(|env| env.get("pass"))
+        .and_then(toml_edit::Item::as_array)
+        .cloned()
+        .unwrap_or_else(|| {
+            [
+                "HOME",
+                "PATH",
+                "CODEX_HOME",
+                "TMPDIR",
+                "USER",
+                "__CF_USER_TEXT_ENCODING",
+            ]
+            .into_iter()
+            .collect()
+        });
+    if pass.iter().any(|entry| entry.as_str() == Some(name)) {
+        return config.to_string();
     }
-    let mut out = config.to_string();
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out.push_str(&format!(
-        "\n[execution.env]\npass = [\"HOME\", \"PATH\", \"CODEX_HOME\", \"TMPDIR\", \"USER\", \"__CF_USER_TEXT_ENCODING\", {quoted}]\n"
-    ));
-    out
+    // Init may seed a compact array without a trailing comma; edit TOML rather
+    // than splicing text that only works for the global multiline template.
+    pass.push(name);
+    document["execution"]["env"]["pass"] = toml_edit::value(pass);
+    document.to_string()
 }
 
 /// `PATH` with the fixture's stub directory first, so agent detection sees the

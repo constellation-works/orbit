@@ -67,6 +67,8 @@ impl Fixture {
             "--ship-mode",
             "pr",
         ]);
+        // Forge routing is independent of the review defaults workspace init seeds.
+        fixture.success(&["config", "set", "review.timing", "off"]);
         // Admission here tests forge routing, independently of the test host.
         fixture.success(&[
             "config",
