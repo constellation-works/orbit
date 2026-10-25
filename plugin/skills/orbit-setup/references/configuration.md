@@ -291,6 +291,91 @@ For provider IDs, dispatch precedence and refusal diagnostics, see
 [Provider identity and resolution](providers.md#provider-identity-and-resolution).
 To add a lane or fix its login, follow [Provider setup](providers.md#provider-setup).
 
+## Executor definitions
+
+Four executor settings decide whether a crew can run on a host and how it
+recovers. They live in the installed executor definition (YAML, beside
+`sandbox` and `model_flag`), not in `config.toml`, so `orbit config` never
+shows them. Edit the installed definition to change them: reseeding preserves
+an operator-set value and only fills in fields the install omits, and custom
+executors outside the shipped set are never rewritten.
+
+### `host_os`: which hosts may run this executor
+
+A non-empty subset of `linux`, `macos` and `windows`. An empty list or any
+other name is refused when the definition loads. Omit `host_os`, or set it
+null, and the executor runs on every host; no shipped executor pins it.
+
+```yaml
+spec:
+  host_os:
+    - macos
+```
+
+A task's effective OS requirement is its `os:` tags intersected with its
+assigned crew's executor `host_os`. An empty intersection is refused when the
+task is created or updated, and an explicit crew this host cannot run stays
+assigned and waits instead of being redrawn onto another crew.
+
+Verify with `orbit doctor providers`: an executor `host_os` excludes this
+host reports `unsupported on this OS`, even when its binary is absent
+(`not installed` is only for an executor this host may run whose command is
+missing), and the full `orbit doctor` agrees. Waiting tasks name the mismatch
+(`host_os_mismatch`); filter candidacy with
+`orbit task list --runs-on linux|macos|windows`.
+
+### `auth_probe`: re-admitting a pull-drain provider after auth failures
+
+Only a pull drain's auth-excluded providers run the probe: never at drain
+start, for healthy crews, after the window closes, or for capacity or refusal
+exclusions. The first attempt is due ten minutes after the failed leaf, then
+backs off (twenty, then thirty minutes, capped). A pass re-admits that
+provider account's crews within the window and never clears any other
+exclusion; a crew on its own account is excluded, probed and re-admitted
+alone. Without a probe the exclusion lasts the whole window: re-login and
+start a new drain. Only the shipped definition for one provider declares one.
+
+Opt in by adding the declaration to the installed definition and starting a
+drain. The probe reuses the executor's resolved command, replaces the activity
+argv with `args`, and requires exit zero plus a marker line on stdout;
+`timeout_seconds` is 1–120. Verify with `orbit doctor`
+(`provider-auth:<provider>`, or `provider-auth:<provider>/<crew>` for a crew
+account) and `orbit run show <drain>`: both name the account, exclusion time,
+re-login hint and next probe time. Doctor reads the record and calls no
+provider.
+
+### `inspection_args`: tools for pinned-source inspection runs
+
+The arguments appended to the executor's argv for an inspection run (task
+pilot, finding verification, escalation triage), so the CLI's own file-read
+and shell tools work unattended. An empty list means the static `args`
+already enable those tools; omitting the field means no known inspection
+surface. Inspection draws skip crews without it, and an explicit crew that
+names one fails before launch with `InspectionToolsUnavailable`. Read-only is
+enforced by the `reviewer` filesystem profile, not by these arguments.
+
+Two shipped definitions declare it (an empty list for one, feature flags for
+the other). Declare the arguments on the installed definition once the CLI's
+native tools are known to work non-interactively under the `reviewer`
+profile; an installed omission takes the shipped default of the same name,
+while a set value wins.
+
+### Shared Cargo-cache sandbox grants
+
+Both OS sandboxes let workers share one Cargo cache: the registry, git
+checkouts and download locks under `$CARGO_HOME` are read-write, `bin` is
+read and execute only, credentials are read-denied, and the cache root itself
+is read-only. `$CARGO_HOME` is the child's variable when
+`[execution.env].pass` names it, else `~/.cargo`. There is no executor field
+for this: the grant applies only to profiles that already grant some write
+(`implementer`, `unrestricted`, `docs_writer`, …) and never to read-only
+profiles. On Linux a cache path missing on the host is skipped, not created.
+
+To use a non-default cache location, pass it through
+`[execution.env].pass`; to change what a worker may write, change the
+activity's filesystem profile, not the executor. Dry-run a path with
+`orbit doctor fs-access <profile> <path>`.
+
 ## Tag instructions
 
 A task tag can select extra instructions for the activities that work on

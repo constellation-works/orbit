@@ -202,7 +202,7 @@ does not determine one OS are still rejected, and the rejection tells the
 pilot to leave `required_os` empty. When every
 finding names one OS and the task carries no `os:` tag, the same atomic write
 adds that tag (`os:linux`), so admission routes the task by its tags and a host
-of another OS waits as `host_os_mismatch`. The pilot never removes or replaces
+of another OS waits as `host_os_mismatch` (see [Executor definitions](../../orbit-setup/references/configuration.md#executor-definitions)). The pilot never removes or replaces
 an `os:` tag already on the task. While those tags do not name the required OS
 (an operator chose another, or findings name several OSes), a local drain, ship
 discovery, `orbit run ship` and an owner's pull admission on a host that cannot
