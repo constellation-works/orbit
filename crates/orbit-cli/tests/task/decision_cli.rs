@@ -230,6 +230,22 @@ fn decision_channel_cli_registers_submits_and_revokes() {
                 },
             )
             .expect("record the decision request");
+        // The proposal comment that raised the request carries the option's
+        // target and replacement, which an answer applies.
+        runtime
+            .force_update_task_with_identity(
+                &task.id,
+                orbit_core::application::task::TaskUpdateParams {
+                    comment: Some(
+                        "blocked_task_triage disposition=decision outcome=proposed\n\nOption 1: Drop criterion 2\nConsequences: the old API stays retired\nApplies to: acceptance_criteria\nReplacement text:\n- Recovered.\n\nRecommended: option 1 (Drop criterion 2)"
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .expect("record the proposal comment");
         runtime
             .register_decision_channel("email", "human:operator", "decision-mail", vec![])
             .unwrap();

@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use orbit_core::application::task::{
     DecisionSubmitCaller, DecisionSubmitParams, FinalRecoveryCompletion, FinalRecoveryRequest,
+    TaskUpdateParams,
 };
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
@@ -172,6 +173,22 @@ impl Fixture {
                     append_history: vec![request.history_entry("system")],
                     ..Default::default()
                 },
+            )
+            .unwrap();
+        // The proposal comment that raised the request carries the option's
+        // target and replacement, which an answer applies.
+        self.runtime
+            .force_update_task_with_identity(
+                &task,
+                TaskUpdateParams {
+                    comment: Some(
+                        "blocked_task_triage disposition=decision outcome=proposed\n\nOption 1: Retire the old API criterion\nConsequences: the criterion names the retired API\nApplies to: acceptance_criteria\nReplacement text:\n- The old API stays retired.\n\nRecommended: option 1 (Retire the old API criterion)"
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                },
+                None,
+                None,
             )
             .unwrap();
         let stored = self
@@ -343,6 +360,38 @@ fn every_refusal_applies_nothing() {
                         auth_results: Some(
                             "mx.example.com; dkim=pass; spf=pass; dmarc=fail".into(),
                         ),
+                        caller: Fixture::plugin_caller(),
+                    })
+            }),
+        ),
+        (
+            "authentication_failed".into(),
+            Box::new(|| {
+                fx.runtime
+                    .submit_decision_via_channel(DecisionSubmitParams {
+                        channel: CHANNEL.into(),
+                        request_id: request.id.clone(),
+                        answer_id: "1".into(),
+                        note: None,
+                        token: token.clone(),
+                        sender: Some(SENDER.into()),
+                        auth_results: None,
+                        caller: Fixture::plugin_caller(),
+                    })
+            }),
+        ),
+        (
+            "sender_not_allowed".into(),
+            Box::new(|| {
+                fx.runtime
+                    .submit_decision_via_channel(DecisionSubmitParams {
+                        channel: CHANNEL.into(),
+                        request_id: request.id.clone(),
+                        answer_id: "1".into(),
+                        note: None,
+                        token: token.clone(),
+                        sender: None,
+                        auth_results: Some(AUTH_PASS.into()),
                         caller: Fixture::plugin_caller(),
                     })
             }),

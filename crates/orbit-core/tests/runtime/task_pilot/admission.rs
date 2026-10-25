@@ -1354,8 +1354,11 @@ fn submit_pilot_answer(
             answer_id: "approve_anyway".into(),
             note: Some("Not a duplicate: the deliverables differ.".into()),
             token: token.into(),
-            sender: None,
-            auth_results: None,
+            sender: Some("operator@example.com".into()),
+            auth_results: Some(
+                "mx.example.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass"
+                    .into(),
+            ),
             caller,
         })
 }

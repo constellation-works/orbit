@@ -200,14 +200,14 @@ const SUBMIT_PARAMS: &[ParamSpec] = &[
     both(
         "sender",
         ParamType::String,
-        "The transport sender the submission presents as evidence, checked against the channel's sender allowlist when the channel has one.",
+        "The transport sender the submission presents as evidence. A plugin submission must present one; when the channel has a sender allowlist, the sender must be on it. The operator's own test submission may omit it.",
         CliArgKind::flag("sender"),
         "The transport sender presenting the answer",
     ),
     both(
         "auth_results",
         ParamType::String,
-        "The raw Authentication-Results header the transport forwards as evidence. When present, core requires dkim=pass and spf=pass and refuses on dmarc=fail.",
+        "The raw Authentication-Results header the transport forwards as evidence. A plugin submission must forward one: core requires dkim=pass and spf=pass and refuses on dmarc=fail. The operator's own test submission may omit it.",
         CliArgKind::flag("auth-results"),
         "The Authentication-Results header forwarded as evidence",
     ),

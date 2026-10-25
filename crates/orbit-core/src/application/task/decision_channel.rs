@@ -31,7 +31,8 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{
-    FileLockOptions, acquire_exclusive_file_lock, create_private_dir_all, write_new_private_text,
+    FileLockGuard, FileLockOptions, acquire_exclusive_file_lock, create_private_dir_all,
+    write_new_private_text,
 };
 use orbit_types::identity::is_automation_actor;
 use orbit_types::plugin::is_valid_namespace;
@@ -90,10 +91,12 @@ pub struct DecisionSubmitParams {
     pub note: Option<String>,
     /// The per-request token presented with the answer.
     pub token: String,
-    /// The transport sender, when the transport presents one.
+    /// The transport sender. A plugin submission must present one; the
+    /// operator's test submission may omit it.
     pub sender: Option<String>,
-    /// The raw `Authentication-Results` header, when the transport
-    /// forwards one.
+    /// The raw `Authentication-Results` header the transport forwards. A
+    /// plugin submission must forward one (design §4 layer 5); the
+    /// operator's test submission may omit it.
     pub auth_results: Option<String>,
     /// Who is presenting the submission (see [`DecisionSubmitCaller`]).
     pub caller: DecisionSubmitCaller,
@@ -193,6 +196,7 @@ impl OrbitRuntime {
             .map(|sender| sender.trim().to_ascii_lowercase())
             .filter(|sender| !sender.is_empty())
             .collect();
+        let _lock = self.lock_decision_channel_store()?;
         let mut store = self.decision_channel_store()?;
         let epoch = match store.channels.get(&channel) {
             Some(existing) if !existing.revoked => {
@@ -239,6 +243,7 @@ impl OrbitRuntime {
         &self,
         channel: &str,
     ) -> Result<DecisionChannelInfo, OrbitError> {
+        let _lock = self.lock_decision_channel_store()?;
         let mut store = self.decision_channel_store()?;
         let registration = store.channels.get_mut(channel).ok_or_else(|| {
             OrbitError::InvalidInput(format!(
@@ -261,6 +266,7 @@ impl OrbitRuntime {
         &self,
         channel: &str,
     ) -> Result<DecisionChannelInfo, OrbitError> {
+        let _lock = self.lock_decision_channel_store()?;
         let mut store = self.decision_channel_store()?;
         let plugin = {
             let registration = store.channels.get(channel).ok_or_else(|| {
@@ -339,6 +345,11 @@ impl OrbitRuntime {
                 "decision_channel_disabled: the decision channel is not enabled in this workspace; nothing was applied".into(),
             ));
         }
+        // Held from the registration read through the apply: a revoke or
+        // rotation cannot land between the check and the apply, and two
+        // presentations of one token must not both pass the single-use check.
+        // Nothing this path reaches takes the same lock.
+        let _submission = self.lock_decision_channel_store()?;
         let registration = self.active_registration(&params.channel)?;
         if let DecisionSubmitCaller::PluginCallback { plugin } = &params.caller
             && plugin != &registration.plugin
@@ -348,23 +359,35 @@ impl OrbitRuntime {
                 params.channel
             )));
         }
-        if !registration.allowed_senders.is_empty() {
-            let presented = params
-                .sender
-                .as_deref()
-                .map(|sender| sender.trim().to_ascii_lowercase());
-            if presented.is_none_or(|sender| !registration.allowed_senders.contains(&sender)) {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "sender_not_allowed: the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
-                    params.channel
-                )));
-            }
+        // The transport evidence design §3.3 step 4 verifies. A plugin
+        // submission must carry it; the operator's own test submission may
+        // omit it. A registered allowlist applies to any sender presented.
+        let transport = matches!(params.caller, DecisionSubmitCaller::PluginCallback { .. });
+        let presented = params
+            .sender
+            .as_deref()
+            .map(|sender| sender.trim().to_ascii_lowercase());
+        if transport && presented.is_none() {
+            return Err(OrbitError::PolicyDenied(format!(
+                "sender_not_allowed: the transport presented no sender for decision channel `{}`; nothing was applied",
+                params.channel
+            )));
         }
-        if let Some(auth_results) = params.auth_results.as_deref()
-            && !authentication_results_pass(auth_results)
+        if !registration.allowed_senders.is_empty()
+            && presented.is_none_or(|sender| !registration.allowed_senders.contains(&sender))
         {
+            return Err(OrbitError::PolicyDenied(format!(
+                "sender_not_allowed: the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
+                params.channel
+            )));
+        }
+        let evidence_passes = match params.auth_results.as_deref() {
+            Some(auth_results) => authentication_results_pass(auth_results),
+            None => !transport,
+        };
+        if !evidence_passes {
             return Err(OrbitError::PolicyDenied(
-                "authentication_failed: the forwarded Authentication-Results do not show dkim=pass and spf=pass without dmarc=fail; nothing was applied".into(),
+                "authentication_failed: the transport did not forward Authentication-Results showing dkim=pass and spf=pass without dmarc=fail; nothing was applied".into(),
             ));
         }
         let request = self.get_decision_request(&params.request_id)?.ok_or_else(|| {
@@ -560,18 +583,19 @@ impl OrbitRuntime {
         })
     }
 
+    fn lock_decision_channel_store(&self) -> Result<FileLockGuard, OrbitError> {
+        let lock_path = self.decision_channel_dir().join("channels.lock");
+        acquire_exclusive_file_lock(&lock_path, "decision channels", FileLockOptions::default())
+            .map_err(|error| OrbitError::Io(format!("lock {}: {error}", lock_path.display())))
+    }
+
+    /// Callers hold `lock_decision_channel_store` across their whole
+    /// read-modify-write; this writer does not take it again.
     fn write_decision_channel_store(&self, store: &ChannelStoreFile) -> Result<(), OrbitError> {
         let dir = self.decision_channel_dir();
         create_private_dir_all(&dir)
             .map_err(|error| OrbitError::Io(format!("create {}: {error}", dir.display())))?;
         let path = dir.join(STORE_FILE);
-        let lock_path = dir.join("channels.lock");
-        let _lock = acquire_exclusive_file_lock(
-            &lock_path,
-            "decision channels",
-            FileLockOptions::default(),
-        )
-        .map_err(|error| OrbitError::Io(format!("lock {}: {error}", lock_path.display())))?;
         let body = serde_json::to_string(store).map_err(|error| {
             OrbitError::Execution(format!("serialize decision channels: {error}"))
         })?;
