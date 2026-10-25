@@ -16,6 +16,10 @@ sidebar:
     <h3>Activity and job YAML</h3>
     <p>Schema v2 activity and job shapes.</p>
   </a>
+  <a class="orbit-card" href="./scheduling-yaml/">
+    <h3>Scheduling YAML</h3>
+    <p>Auto-task and routine definitions, including state and delivery triggers.</p>
+  </a>
   <a class="orbit-card" href="./policy-format/">
     <h3>Policy format</h3>
     <p>Filesystem profiles and global deny rules.</p>
