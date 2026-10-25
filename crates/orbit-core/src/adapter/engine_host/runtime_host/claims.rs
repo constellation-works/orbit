@@ -2,7 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_engine::TaskActivityUpdate;
-use orbit_types::task::{Task, TaskStatus};
+use orbit_types::task::{ContextWideningStep, Task, TaskStatus};
 
 use crate::OrbitRuntime;
 
@@ -113,4 +113,32 @@ pub(super) fn record_claim_handoff(
         )),
     )?;
     Ok(())
+}
+
+pub(super) fn kept_claim_candidate(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+) -> Result<Option<orbit_store::contracts::KeptClaimCandidate>, OrbitError> {
+    // Without an identity this host is no machine a candidate lives on,
+    // so only a durable one is offered.
+    runtime.stores().tasks().kept_claim_candidate(
+        task_id,
+        runtime.automation_machine_identity().unwrap_or_default(),
+    )
+}
+
+pub(super) fn widen_task_context_files(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    run_id: &str,
+    step: ContextWideningStep,
+    activity: &str,
+    paths: &[String],
+) -> Result<Vec<String>, OrbitError> {
+    // A claimed leaf cannot write the owner's task; the owner widens the
+    // declaration when it accepts the handoff.
+    if runtime.worker_invocation().is_some() {
+        return Ok(Vec::new());
+    }
+    runtime.widen_context_files_for_paths(task_id, run_id, step, activity, paths)
 }

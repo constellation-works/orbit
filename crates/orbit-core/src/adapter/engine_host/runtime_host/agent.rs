@@ -55,3 +55,10 @@ pub(super) fn tag_instructions_for_activity(
         },
     )
 }
+
+pub(super) fn actor_model_identity(runtime: &OrbitRuntime) -> Option<String> {
+    matches!(runtime.actor().kind, crate::context::ActorKind::Agent)
+        .then(|| runtime.actor_label().trim())
+        .filter(|label| !label.is_empty())
+        .map(ToOwned::to_owned)
+}

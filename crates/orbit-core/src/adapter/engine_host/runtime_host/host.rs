@@ -32,11 +32,10 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::adapter::engine_host::actions::{cli_executor, dispatch, sandbox, task_context};
 use crate::runtime::engine::paths::current_repo_root;
-#[cfg(target_os = "linux")]
-use crate::runtime::recovery_authority::RecoveryAuthority;
 
 use super::{
-    activity_tools, agent, checkpoints, claims, crew, invocation, task_automation, validation,
+    activity_tools, agent, checkpoints, claims, crew, executors, invocation, recovery,
+    task_automation, validation,
 };
 
 impl RuntimeHost for OrbitRuntime {
@@ -44,34 +43,11 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         run: &PluginBrokerRun,
     ) -> Result<Option<Box<dyn PluginBrokerHandle>>, OrbitError> {
-        #[cfg(unix)]
-        {
-            let dispatch = std::sync::Arc::new(crate::adapter::command::RunDispatch::new(
-                self.clone(),
-                run.clone(),
-            ));
-            let broker = crate::runtime::plugin::broker::PluginBroker::start(
-                &self.global_root(),
-                &run.run_id,
-                dispatch,
-            )?;
-            Ok(Some(Box::new(broker)))
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = run;
-            Ok(None)
-        }
+        executors::start_plugin_broker(self, run)
     }
 
     fn register_worker_pid_namespace(&self, pid: u32) -> Result<(), OrbitError> {
-        #[cfg(target_os = "linux")]
-        if let Some(binding) = self.worker_invocation() {
-            RecoveryAuthority::open(&self.global_root())?.bind_worker_namespace(pid, binding)?;
-        }
-        #[cfg(not(target_os = "linux"))]
-        let _ = pid;
-        Ok(())
+        executors::register_worker_pid_namespace(self, pid)
     }
 
     fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError> {
@@ -333,12 +309,7 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         task_id: &str,
     ) -> Result<Option<orbit_store::contracts::KeptClaimCandidate>, OrbitError> {
-        // Without an identity this host is no machine a candidate lives on,
-        // so only a durable one is offered.
-        self.stores().tasks().kept_claim_candidate(
-            task_id,
-            self.automation_machine_identity().unwrap_or_default(),
-        )
+        claims::kept_claim_candidate(self, task_id)
     }
 
     fn claim_execution_context(&self) -> Result<orbit_engine::ClaimExecutionContext, OrbitError> {
@@ -399,12 +370,7 @@ impl RuntimeHost for OrbitRuntime {
         activity: &str,
         paths: &[String],
     ) -> Result<Vec<String>, OrbitError> {
-        // A claimed leaf cannot write the owner's task; the owner widens the
-        // declaration when it accepts the handoff.
-        if self.worker_invocation().is_some() {
-            return Ok(Vec::new());
-        }
-        self.widen_context_files_for_paths(task_id, run_id, step, activity, paths)
+        claims::widen_task_context_files(self, task_id, run_id, step, activity, paths)
     }
 
     fn apply_task_automation_update(
@@ -430,23 +396,11 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
-        let settings = self.context.settings();
-        orbit_engine::UnlockedPathValidation {
-            paths: settings.unlocked_context_paths().patterns().to_vec(),
-            commands: settings.unlocked_path_validation_commands().to_vec(),
-        }
+        validation::unlocked_path_validation(self)
     }
 
     fn generated_paths(&self) -> Vec<orbit_engine::GeneratedPath> {
-        self.context
-            .settings()
-            .generated_paths()
-            .iter()
-            .map(|(path, command)| orbit_engine::GeneratedPath {
-                path: path.clone(),
-                command: command.clone(),
-            })
-            .collect()
+        validation::generated_paths(self)
     }
 
     fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
@@ -465,8 +419,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn agent_stall_window(&self) -> Option<std::time::Duration> {
-        let minutes = self.context.agent_stall_minutes();
-        (minutes > 0).then(|| std::time::Duration::from_secs(u64::from(minutes) * 60))
+        validation::agent_stall_window(self)
     }
 
     fn agent_provider_config(&self) -> std::collections::HashMap<String, String> {
@@ -604,13 +557,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn resolved_crew_model(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(self
-            .get_job_run_backend(run_id)?
-            .and_then(|run| run.crew_model)
-            .and_then(|model| {
-                let model = model.trim();
-                (!model.is_empty()).then(|| model.to_string())
-            }))
+        crew::resolved_crew_model(self, run_id)
     }
 
     fn run_tool_with_context_and_role(
@@ -632,10 +579,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn actor_model_identity(&self) -> Option<String> {
-        matches!(self.actor().kind, crate::context::ActorKind::Agent)
-            .then(|| self.actor_label().trim())
-            .filter(|label| !label.is_empty())
-            .map(ToOwned::to_owned)
+        agent::actor_model_identity(self)
     }
 
     fn pr_config(&self) -> orbit_engine::PrConfig {
@@ -828,9 +772,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn final_recovery_log_tail(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
-        Ok(self
-            .read_pipeline_worker_log(run_id)?
-            .and_then(|snapshot| snapshot.content))
+        recovery::final_recovery_log_tail(self, run_id)
     }
 
     fn admit_final_recovery(
@@ -902,14 +844,7 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         run_id: &str,
     ) -> Result<Option<orbit_types::workflow::SourceRepairAdmission>, OrbitError> {
-        self.get_job_run_backend(run_id)?
-            .and_then(|run| run.input)
-            .and_then(|input| input.get(orbit_types::workflow::SOURCE_REPAIR_KEY).cloned())
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|e| {
-                OrbitError::JobValidation(format!("source repair admission unreadable: {e}"))
-            })
+        recovery::source_repair_admission(self, run_id)
     }
 
     fn owner_published_candidate(
