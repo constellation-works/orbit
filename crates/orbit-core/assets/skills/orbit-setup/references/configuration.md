@@ -256,21 +256,25 @@ holds, pull-drain auth exclusions and probes are its own, and
 (`opus-credits:200usd/30d`).
 
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
-Codex: `astra`, `sol`, `luna`; `antigravity` and `argon` for Antigravity; one crew each for Gemini,
-Grok, Copilot, Cursor, Pi, OpenCode, Muse), with `enabled = true` on the crews whose
+Codex: `astra`, `sol`, `luna`; Antigravity: `gemini-flash`, `argon`;
+Grok: `grok`; Copilot: `copilot`; Muse: `muse-spark`, `muse-wonder`, `muse-wonder-full`;
+no built-in Gemini CLI, Cursor, Pi, or OpenCode crew), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points
 `workflow.default_crew` at the preferred family's default (`opus` on a Claude
-host). Interactive init offers the enabled crews by name; `--non-interactive`
+host, `gemini-flash` on an Antigravity host). Interactive init offers the enabled crews by name; `--non-interactive`
 writes the recommendation. Init does not write a `custom` or `system` crew
-table, nor a system-crew key: system work draws from the pools. The four
+table, nor a system-crew key. The four
 `workflow.*_complexity_crews` pools are seeded from the detected families
 (Claude only: `haiku` / `sonnet` / `opus` / `opus`; Codex only: `luna` / `sol` /
 `sol` / `astra`; both: `haiku, luna` / `sol, sonnet` / `opus` / `opus, astra`;
-grok joins `medium`, `antigravity` or else `gemini` joins `low`, and `argon` joins `hard` when `agy` is present; other families
-leave them `[]`). A user-authored
-legacy `qa` crew remains loadable, but init never creates it. To move system
-work, set its `workflow.purpose_crews.<purpose>` pool, or edit the complexity
-pool it falls back to. With no supported
+grok joins `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`;
+a detected `muse` appends `muse-spark`, `muse-wonder`, and `muse-wonder-full` to `low`, `medium`, and `hard`;
+Copilot and other families leave them `[]`). A user-authored
+legacy `qa` crew remains loadable, but init never creates it. Init also writes every
+`workflow.purpose_crews` pool explicitly: `task_pilot` and `auto_fix` copy `low`, and
+`failure_recovery` and `review` copy `medium`. Because a fresh init writes them as explicit lists,
+editing `workflow.*_complexity_crews` later does not move those purpose pools; to move system
+work, edit its `workflow.purpose_crews.<purpose>` pool directly. With no supported
 agent CLI, every crew is written disabled and no default crew is set, so nothing
 dispatches until you enable a crew. Which provider CLIs
 this machine can launch, and each executor's sandbox mode:
