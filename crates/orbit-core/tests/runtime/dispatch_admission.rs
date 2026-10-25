@@ -349,7 +349,16 @@ fn empty_context_is_admitted_on_auto_ship_and_readiness_without_locks() {
 /// The shipped documentation chore mints with a locking scope, so a drain can
 /// admit it without pilot preparation and withhold overlapping work.
 fn doc_duties_mints_an_admissible_locking_context() {
-    let (_root, runtime, _repo) = runtime();
+    let (_root, runtime, repo) = runtime();
+    write_files(&repo, &["crates/foo/src/lib.rs"]);
+    // Unrelated work in flight: a whole-tree lock conflicts with it on every
+    // admission pass and starves the chore [ORB-18264].
+    let _holder = seed(
+        &runtime,
+        Seed::named("holder")
+            .status(TaskStatus::InProgress)
+            .files(&["file:crates/foo/src/lib.rs"]),
+    );
     let definitions = runtime.paths().local_dir.join("auto_tasks");
     std::fs::create_dir_all(&definitions).unwrap();
     std::fs::write(
@@ -358,9 +367,22 @@ fn doc_duties_mints_an_admissible_locking_context() {
     )
     .unwrap();
     let minted = runtime.auto_task_mint("doc-duties").unwrap();
+    assert_eq!(
+        minted.context_files,
+        vec![
+            "dir:docs".to_string(),
+            "file:README.md".to_string(),
+            "file:CONTRIBUTING.md".to_string(),
+        ],
+        "the documentation chore must lock only the paths its brief validates [ORB-18264]"
+    );
     assert!(
-        !minted.context_files.is_empty(),
-        "the documentation chore must reserve its edits"
+        !minted
+            .context_files
+            .iter()
+            .any(|selector| selector == "dir:."),
+        "a whole-tree lock starves on a busy drain [ORB-18264]: {:?}",
+        minted.context_files
     );
     assert_eq!(
         admitted(&list_backlog_tasks(&runtime, json!({}))),

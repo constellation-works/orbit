@@ -207,10 +207,11 @@ definition of the same name.
   whose two latest attempts were `skipped` or `partial` is held back, even after
   those attempts leave the window, and reported as needing its own task.
   `last_validated` advances only on `clean`/`fixed`, and no frontmatter is added
-  solely for this task. Its template reserves `dir:.` for root and
-  workspace-specific documentation and does not carry `no-diff-expected`, since
-  verified drift corrections produce diffs. Clean batches use validated no-diff
-  evidence.
+  solely for this task. Its template locks `dir:docs` plus the tracked
+  top-level `README.md` and `CONTRIBUTING.md` documents its brief validates
+  (never the whole tree, which starves on a busy drain) and does not carry
+  `no-diff-expected`, since verified drift corrections produce diffs. Clean
+  batches use validated no-diff evidence.
 - `comment-hygiene` — disabled-by-default daily check of code comments, the
   counterpart of `doc-duties` for source files. At most six files and about
   1,500 lines per run, judged against a generic language-agnostic standard a
