@@ -1,0 +1,175 @@
+schemaVersion: 1
+name: dependency-freshness
+description: Monthly inventory of outdated, unused and duplicate dependencies; files at most 3 proposed upgrade or removal tasks
+enabled: false
+schedule:
+  cron: 0 9 1 * *
+template:
+  title: Check dependency freshness
+  description: |-
+    Inventory this workspace's direct dependencies and keep them moving in
+    small steps. The durable outputs are the `dependency-freshness.json`
+    artifact on this task and the proposed upgrade or removal tasks filed
+    below; the execution summary is only an audit trail. This task files
+    work; it does not upgrade, remove, or edit any dependency itself, and it
+    never builds, tests, or times anything.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface, never direct lifecycle CLI
+      subcommands (they skip agent provenance). Find the previous run with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["dependency-freshness","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
+      and fetch its inventory with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"dependency-freshness.json","model":"<agent-family>"}'`.
+      Search coverage with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
+      (lexical search matches one substring: use a single distinctive token,
+      never a multi-word phrase, and never treat a 0-hit multi-word query as
+      proof that nothing covers a candidate). Inspect a candidate with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      List open dependency work with
+      `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"dependency-freshness","limit":200,"model":"<agent-family>"}'`.
+    - File an upgrade or removal task (tool-created tasks start `proposed`)
+      with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<manifest path>","file:<lockfile path>"],"complexity":"<assessed>","tags":["dependency-freshness"],"type":"chore","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Read each filed task back with `orbit.task.show` before recording it
+      as delivered. Never file a candidate without `context_files` naming
+      the ecosystem manifest and its lockfile. Tasks land in `proposed`.
+      Do not approve them.
+    - Static inventory only: no builds, tests, or timing runs in this task.
+      Put throwaway scripts under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`).
+    - Never bump the repository's own package version, tag, or publish
+      anything. Releases are the operator's.
+    - Fail open. A run with no candidate above the bars below is a
+      successful no-op when the inventory evidence is persisted.
+
+    ## Detect ecosystems and inventory
+
+    Detect every ecosystem this workspace actually uses from its tracked
+    manifests and lockfiles; assume none. Labelled examples — use only the
+    rows this repository matches and ignore the rest:
+
+    - Rust example: manifests named `Cargo.toml` with `Cargo.lock`;
+      outdated from the ecosystem's outdated report, unused declared
+      dependencies from its unused-dependency report, and duplicate
+      versions from the lockfile or its duplicate report.
+    - JavaScript/TypeScript example: `package.json` with its lockfile
+      (`package-lock.json`, `pnpm-lock.yaml`, or `yarn.lock`); outdated,
+      unused, and duplicate reports from the package manager or its
+      audit tooling.
+    - Python example: `pyproject.toml` (or setup files) with `uv.lock`
+      or the lockfile the workspace uses; outdated, unused, and duplicate
+      reports from the environment tooling.
+    - Go example: modules declared in `go.mod` with `go.sum`; outdated
+      from the module tooling's list of newer versions, and unused or
+      duplicate entries from its tidy and verification reports.
+
+    Use each ecosystem's own outdated, unused, and duplicate tooling where
+    it is available. Record any tool that is unavailable as a gap in the
+    artifact and the execution summary; do not guess its output. For each
+    detected ecosystem, record in the artifact:
+
+    1. Direct dependencies that are behind, split into major-behind and
+       minor-behind, with the declared version, the locked version, and
+       the newest version the tooling reports.
+    2. Declared dependencies that no tracked source file imports or calls.
+    3. Duplicate versions of one dependency in the lockfile.
+
+    Count usage for prioritization: for each direct dependency, count its
+    import or call sites in tracked source files (exclude vendored and
+    generated trees and test-only code, and name the exclusions).
+
+    ## Security exclusion
+
+    Exclude anything already covered by a security advisory or an open
+    advisory task; that work belongs to the security sweeps (the
+    `security-review` default and the advisory sweep routine). Before
+    filing, list open security work with
+    `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"security-review","limit":200,"model":"<agent-family>"}'`
+    and search each candidate's name with `orbit.search` (see above).
+    A candidate whose only reason to move is an advisory is recorded in
+    the artifact as excluded, with the advisory or task that covers it,
+    and is never filed here.
+
+    ## Read the changelog before filing
+
+    Before filing an upgrade, read the upstream changelog or release
+    notes between the current and target versions. Quote the breaking
+    changes that apply to this workspace in the filed task's description,
+    with the version range they came from. An upgrade whose notes cannot
+    be read (no network or registry access for that source) is recorded
+    in the artifact as deferred with that reason, not filed from memory.
+
+    ## Prioritize and file
+
+    Rank candidates by how far behind they are multiplied by how much
+    they are used (the import or call-site count above): major-behind
+    first, then minor-behind by usage. File at most 3 tasks per run:
+
+    - One task per dependency, or one per tight family that must move
+      together (name every member and why they move together).
+    - Unused-dependency removals are grouped into one task listing every
+      unused declared dependency to remove; that grouped task counts
+      toward the 3-task cap.
+    - Duplicate versions are filed only when the fix is a version bump
+      of a direct dependency; a duplicate caused only by transitive
+      versions is recorded in the artifact, not filed.
+
+    Each filed task's description contains: the ecosystem, the manifest
+    and lockfile paths, the current and target versions, the usage count,
+    the quoted breaking changes that apply (upgrades only), and the
+    duplicate or advisory checks that were run. Record the overflow in
+    the artifact; the next run files it first after re-verifying.
+
+    ## No network
+
+    With no network or registry access, the run is a successful no-op
+    that states why: still write the artifact with the ecosystems
+    detected, the tooling gaps, and `network: unavailable` as the reason
+    no target versions could be confirmed, and file no task.
+
+    ## Handoff
+
+    Write `.orbit/tmp/dependency-freshness.json` with `schema_version: 1`,
+    the scan time, and per ecosystem: the manifest and lockfile paths,
+    the tooling used or the gap recorded, every direct dependency with
+    its declared, locked, and newest versions (or the no-network reason),
+    the unused and duplicate lists, the excluded advisory-covered entries,
+    the deferred entries with reasons, and each candidate's disposition
+    (filed task ID, grouped-removal task ID, or overflow). Diff it
+    against the previous run's artifact fetched above and record the
+    delta (newly behind, newly current, removed) in the execution
+    summary; absent or unreadable means this is the baseline run, say so.
+    Attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/dependency-freshness.json","path":"dependency-freshness.json","model":"<agent-family>"}'`.
+    The execution summary covers: the ecosystems detected, the tooling
+    gaps, the counts behind (major and minor), unused, and duplicate,
+    the advisory exclusions, every filed task ID, the overflow, and the
+    delta against the previous run.
+  acceptance_criteria:
+  - Ecosystems were detected from tracked manifests and lockfiles under `Cargo.toml`/`Cargo.lock`, `package.json`, `pyproject.toml`/`uv.lock`, and `go.mod` rows that apply, and `dependency-freshness.json` names the tooling used or records each unavailable tool as a gap.
+  - The artifact `dependency-freshness.json` lists each direct dependency with declared, locked, and newest versions split into major-behind and minor-behind, plus the unused declared dependencies and duplicate lockfile versions, with an import or call-site count per dependency.
+  - Dependencies covered by a security advisory or an open `security-review` task were excluded and recorded in `dependency-freshness.json`, and no task was filed for them in this run.
+  - Each filed upgrade task quotes the breaking changes that apply from the upstream release notes between its current and target versions, and at most 3 tasks were filed, all `proposed` with a `spawned_from` relation and `context_files` naming the manifest and lockfile.
+  - No repository package version was bumped, no tag was created, and nothing was published; the run edited no manifest or lockfile.
+  - 'With no network or registry access the run wrote `dependency-freshness.json` with `network: unavailable` as the reason, filed 0 tasks, and finished with status `success`.'
+  - The run attaches `dependency-freshness.json` to this task, diffs it against the previous run's artifact or states it is the baseline run, and the execution summary maps every candidate to a disposition.
+  task_type: chore
+  tags:
+  - dependency-freshness
+  - no-diff-expected
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-24T00:00:00Z
+updated_by: system
+updated_at: 2026-10-24T00:00:00Z

@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The twelve seeded definitions
+## The thirteen seeded definitions
 
-`orbit workspace init` seeds all twelve, disabled, except any you deleted (see
+`orbit workspace init` seeds all thirteen, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -486,6 +486,19 @@ plugin being removed.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore. The chore itself is tagged `no-diff-expected` and never
   builds or runs tests.
+- **`dependency-freshness`** (`medium`) — monthly. Inventories direct
+  dependencies in every detected ecosystem (for example
+  `Cargo.toml`/`Cargo.lock`, `package.json` with a lockfile,
+  `pyproject.toml`/`uv.lock`, `go.mod`) with each ecosystem's own outdated,
+  unused, and duplicate tooling, recording unavailable tooling as a gap.
+  Dependencies covered by a security advisory or an open advisory task are
+  excluded; that work belongs to the security sweeps. Each run attaches
+  `dependency-freshness.json` diffed against the previous run and files at
+  most 3 `proposed` upgrade or removal tasks ranked by how far behind
+  multiplied by import or call-site usage, each quoting the breaking
+  changes that apply from upstream release notes. It never bumps the
+  repository's own version, tags, or publishes, and with no network or
+  registry access it finishes as a successful no-op stating why.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
