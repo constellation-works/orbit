@@ -272,6 +272,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
         &snapshot.task_lookup,
         runtime.paths().repo_root.as_path(),
         runtime.unlocked_context_paths(),
+        runtime.footprint_lock_modes(),
     );
     // [ORB-15191] Work with no footprint waits for its pilot or goes alone,
     // unless this drain runs one leaf at a time.

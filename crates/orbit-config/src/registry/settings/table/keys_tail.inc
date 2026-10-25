@@ -374,6 +374,13 @@ macro_rules! with_tail_keys {
         section: ConfigSection::Delivery, order: 67,
         resolve: resolve_unlocked_context_paths,
     },
+    workflow_lock_modes: Vec<FootprintLockModeEntry> => Vec<RawLockModeEntry> {
+        key: "workflow.lock_modes", value_type: "array<table>",
+        description: "Ordered path regexes and their footprint lock mode (exclusive or shared); the first match wins.",
+        section: ConfigSection::Delivery, order: 67,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<RawLockModeEntry>>| crate::lock_modes::admit_lock_modes(raw),
+    },
     workflow_light_delivery_paths: Vec<String> => Vec<String> {
         key: "workflow.light_delivery_paths", value_type: "array<string>",
         description: "Path globs a skip-review or skip-validation task must change only within.",

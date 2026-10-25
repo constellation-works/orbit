@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use orbit_common::fs::path::workspace_relative_paths_overlap;
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_core::{JobRun, OrbitRuntime};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
@@ -31,7 +31,12 @@ pub(super) fn waiting_lock_holders(
     let Ok(locks) = runtime.run_tool("orbit.task.locks", json!({})) else {
         return LockHolders::new();
     };
-    resolve_lock_holders(&selectors, &locks, &run_task_ids(run))
+    resolve_lock_holders(
+        &selectors,
+        &locks,
+        &run_task_ids(run),
+        runtime.footprint_lock_modes(),
+    )
 }
 
 /// The tasks this run itself carries: they never count as their own holder.
@@ -55,6 +60,7 @@ fn resolve_lock_holders(
     selectors: &[String],
     locks: &Value,
     own: &BTreeSet<String>,
+    lock_modes: &FootprintLockModes,
 ) -> LockHolders {
     let strings = |value: &Value| -> Vec<String> {
         value
@@ -86,7 +92,7 @@ fn resolve_lock_holders(
     for selector in selectors {
         let holders = held
             .iter()
-            .filter(|(held_selector, _)| workspace_relative_paths_overlap(selector, held_selector))
+            .filter(|(held_selector, _)| lock_modes.selectors_block(selector, held_selector))
             .flat_map(|(_, tasks)| tasks.iter())
             .filter(|task| !own.contains(*task))
             .cloned()

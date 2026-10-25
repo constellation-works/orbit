@@ -328,6 +328,7 @@ crew_performance_window_days = 30
 | `workflow.distributed_completion` | `review` | How far this owner takes an accepted distributed-drain handoff: `review` waits for an operator's **Approve handoff**; `done` authorizes it on acceptance and lands it through `task_landing_pipeline`, rechecking this key before the merge. |
 | `workflow.admission_affinity` | `band` | **Advanced.** How this owner orders admission against the live executor census, so each executor takes work only it can run first. `band`: within a dispatch band (critical, then corrective or expiring, then the rest), work only the requester can run leads, ahead of priority. `priority`: it leads only within a priority. `off`: the canonical band, priority, expiry and age order. Applies to pull admission and the owner's local drain alike. See [task pull](design/distributed-drain/specs/task-pull.md#executor-census-and-affinity). |
 | `workflow.unlocked_context_paths` | `["**/*.md"]` | Path globs whose `context_files` entries take no context lock. See [unlocked context paths](#unlocked-context-paths). |
+| `workflow.lock_modes` | `[]` | **Advanced.** Ordered `[[workflow.lock_modes]]` tables, each a `pattern` regex and a `mode` of `exclusive` (default) or `shared`. An overlap between two footprints at a shared path does not block admission. See [footprint lock modes](#footprint-lock-modes). |
 | `workflow.unlocked_path_validation_commands` | `[]` | Commands a repaired candidate runs instead of the full required list when its tree differs from the run's last fully validated tree only in `workflow.unlocked_context_paths`. Empty always runs the full list. See [revalidating an unlocked-path repair](#revalidating-an-unlocked-path-repair). |
 | `workflow.generated_paths` | `{}` | Generated files, as path glob = regenerate command. Conflict recovery regenerates a conflicting match instead of merging it. See [generated paths](#generated-paths-are-regenerated-not-merged). |
 | `workflow.light_delivery_paths` | `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]` | Path globs a candidate must change only within for a `skip-review` or `skip-validation` task to skip agent review or local validation. A leading `!` excludes. `[]` disables both tags. See [light delivery](#light-delivery-skip-review-and-skip-validation). |
@@ -362,6 +363,29 @@ While `workflow.crew_performance` is `off` (the default) the refresh writes no s
 `workflow.unlocked_context_paths` lists workspace-relative globs: `*` matches within one path component and `**` spans components, so `**/*.md` is every Markdown file and `docs/**` is everything under `docs/`. A `context_files` entry whose path matches stays in the task's context, and the agent still receives it, but takes no context lock. Local drain waves, readiness, backlog admission, `orbit task eligible`, lock contention and lock reservations skip it, so two tasks that share only a design doc beside their own code run together and landing reconciles the text by merge and conflict recovery.
 
 A task whose every entry matches, such as a rewrite of one document, still locks them all, because two rewrites of one file are where a merge can silently produce contradictory text. A mixed task touching that file is not held back by the rewrite, since it does not request the file. Leave build and CI definitions (`Makefile`, `.github/workflows/*.yml`) and code out of the list: they define the gates, so a bad merge there breaks every delivery. `[]` locks every entry, as before the setting existed. Owner pull admission still checks a remote claim's full declared footprint. The value is read when an Orbit process opens the workspace.
+
+### Footprint lock modes
+
+Two tasks whose `context_files` overlap normally cannot run together. The second waits for the first, whether it is a local drain wave, a pull admission, a reservation or a claim. `workflow.lock_modes` lets you name paths where an overlap is allowed. These are files that merge cleanly or are regenerated, such as append-only `mod.rs` registration lists or a generated catalog:
+
+```toml
+[[workflow.lock_modes]]
+pattern = '(^|/)mod\.rs$'
+mode = "shared"
+
+[[workflow.lock_modes]]
+pattern = '^crates/orbit-core/assets/auto_tasks/body-history\.json$'
+mode = "shared"
+```
+
+- Each `pattern` is a Rust [`regex`](https://docs.rs/regex/latest/regex/#syntax) searched for in the selector's normalized, workspace-relative anchor path (`symbol:` selectors use their backing file). Anchor patterns with `^` and `$` to match the whole path.
+- `mode` is `exclusive`, the default and the behaviour without the setting, or `shared`. The first matching entry wins, in config order, and a path no entry matches is `exclusive`. So an earlier `exclusive` entry can carve an exception out of a later `shared` one.
+- The mode applies at the **overlap point**. That is the narrower selector's anchor, or the common anchor when the two anchors are equal. `file:a/mod.rs` against `file:a/mod.rs` is waived when `mod.rs` is shared. `dir:a` against `file:a/mod.rs` is waived too, because they meet at the shared file. `dir:a` against `file:a/lib.rs` still blocks, because `lib.rs` is exclusive. A task stays blocked while any of its overlaps is not waived, and admission diagnostics name only the overlaps that still block.
+- `module:` and `command:` selectors have no path, so they always lock exclusively.
+- Every footprint check that admits or defers work applies the setting. That covers local drain waves, readiness, backlog admission, `orbit task eligible`, lock reservations, owner pull admission, owner-wave admission, execution-claim checks and the in-progress footprint guard.
+- A shared path trades prevention for repair. Two tasks may both change it, and the second to land resolves the conflict through `base_conflict`, a rebase or a landing repair. Keep build and CI definitions and most code exclusive.
+
+An invalid regex, an empty pattern or an unknown mode fails config validation, and the error names the entry by position and pattern. The setting belongs to the owner. A follower never sends it and it is not part of the request fingerprint, so an owner or follower that predates it treats every overlap as exclusive. Orbit ships no shared patterns. The value is read when an Orbit process opens the workspace.
 
 ### Revalidating an unlocked-path repair
 

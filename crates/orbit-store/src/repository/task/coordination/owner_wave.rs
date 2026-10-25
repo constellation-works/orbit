@@ -16,7 +16,6 @@ use orbit_types::task::TaskStatus;
 use serde::{Deserialize, Serialize};
 
 use super::TaskCommitBoundary;
-use super::admission::overlaps;
 use crate::contracts::*;
 
 const OWNER_WAVE_KIND: &str = "owner-wave-admission-v1";
@@ -49,6 +48,7 @@ impl TaskCommitBoundary {
         }
         self.with_admission(|| {
             let claims = self.execution_claims()?;
+            let lock_modes = self.store.footprint_lock_modes();
             let expires_at = Utc::now() + Duration::seconds(OWNER_WAVE_VISIBILITY_SECONDS);
             let mut admissions = Vec::with_capacity(candidates.len());
             let mut rows = Vec::with_capacity(candidates.len());
@@ -56,7 +56,7 @@ impl TaskCommitBoundary {
                 if let Some(claim) = claims.iter().find(|claim| {
                     claim.phase.protects_footprint()
                         && (claim.task_id == candidate.task_id
-                            || overlaps(&candidate.footprint, &claim.footprint))
+                            || lock_modes.footprints_block(&candidate.footprint, &claim.footprint))
                 }) {
                     admissions.push(OwnerWaveAdmission {
                         task_id: candidate.task_id.clone(),

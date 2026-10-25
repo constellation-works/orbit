@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-21
+last_updated: 2026-10-25
 last_validated: 2026-10-21
 status: Draft
 feature: distributed-drain
@@ -121,6 +121,27 @@ ordinary entry using its own `context_files`, and sequencing is expressed with d
   code never match the default. `[]` locks every entry. Owner pull admission still checks a
   claim's full declared footprint against in-flight tasks, so a remote claim may wait on a
   shared Markdown file that a local wave admits.
+- `workflow.lock_modes` decides which overlaps block. It is an ordered list of
+  `{pattern, mode}` entries, where `pattern` is a Rust regex searched for in the selector's
+  normalized anchor path (the path `OverlapScope::Anchored` holds) and `mode` is `exclusive`
+  (the default) or `shared`. The first matching entry wins. Two overlapping selectors meet at
+  an **overlap point**: the narrower anchor, or the common anchor when the two are equal
+  (`OverlapScope::overlap_point`). An overlap whose point is shared is waived, so `dir:a`
+  against `file:a/mod.rs` is waived when `mod.rs` is shared, while `dir:a` against
+  `file:a/lib.rs` still blocks. `module:` and `command:` selectors have no point and always
+  block. The only overlap rule is `orbit-common`'s `FootprintLockModes::blocks`, and the
+  checks below all call it rather than keeping their own copy of the all-exclusive rule.
+  Local waves (`auto_admission`), readiness, backlog exclusion, surface reservations,
+  `orbit task eligible`, `reserve_locks` (through `OverlapIndex` and the runtime lock index)
+  apply it, and so do the owner's pull `Screen`, owner-wave admission, execution-claim
+  checks, the in-progress footprint guard and the reservation store. The store-side checks read
+  the modes from the `Store` handle the runtime opens with them. Diagnostics such as
+  `deferred_conflicts`/`blocked_by` and lock-wait blockers name only overlaps that still
+  block. A shared path is a choice to resolve a conflict at landing (`base_conflict`, rebase
+  or landing repair) rather than prevent it. The setting is owner-side admission
+  configuration. It is not in the follower request or its fingerprint, and receipts do not
+  record it, so an owner or follower that predates it behaves as all-exclusive. Core ships no
+  shared patterns.
 - A task filed by a review (tagged `code-review`, `delivery-code-review`, `qa-full-sweep`,
   `qa-sweep` or `security-review`) keeps selectors the finding names as substantive change
   targets. Read-only evidence belongs in the description, not the lock footprint; incidental

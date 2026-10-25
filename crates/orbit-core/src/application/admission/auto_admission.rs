@@ -15,9 +15,10 @@
 //! independent work instead of stopping at the cluster.
 //!
 //! Footprints come from `lock_context_files_for_task` and are compared under
-//! `workspace_relative_paths_overlap`'s semantics through an `OverlapIndex`,
-//! so canonical file/directory/symbol normalization is the same semantics the
-//! gate will enforce later — answered as a prefix lookup per requested
+//! `FootprintLockModes::blocks` (selector overlap, less the overlaps
+//! `workflow.lock_modes` shares) through an `OverlapIndex`, so canonical
+//! file/directory/symbol normalization is the same semantics the gate will
+//! enforce later — answered as a prefix lookup per requested
 //! selector rather than a pass over every held one. Nothing here reserves
 //! anything: the wave is a prediction from a snapshot. The drain then passes
 //! it through the pull admission section [ORB-15514], which refuses a
@@ -28,8 +29,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_common::fs::overlap_index::OverlapIndex;
-use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_store::contracts::ExecutionClaim;
 use orbit_types::task::{Task, TaskStatus};
 use serde_json::{Value, json};
@@ -193,6 +194,7 @@ impl AdmissionSelection {
         claim: &ExecutionClaim,
         workspace_root: &Path,
         unlocked: &UnlockedContextPaths,
+        lock_modes: &FootprintLockModes,
     ) {
         self.selected.retain(|selected| *selected != task.id);
         let mut conflicts = lock_context_files_for_task(task, workspace_root, unlocked)
@@ -201,7 +203,7 @@ impl AdmissionSelection {
                 claim
                     .footprint
                     .iter()
-                    .filter(|held| workspace_relative_paths_overlap(&requested_selector, held))
+                    .filter(|held| lock_modes.selectors_block(&requested_selector, held))
                     .map(|held| AdmissionConflict {
                         requested_selector: requested_selector.clone(),
                         blocking_selector: held.clone(),
@@ -231,6 +233,9 @@ impl AdmissionSelection {
 pub(crate) struct AdmissionHolders {
     held: OverlapIndex<Vec<String>>,
     claimed: OverlapIndex<Vec<String>>,
+    /// `workflow.lock_modes`: an overlap only at a shared path is no
+    /// conflict, with holders or within the wave.
+    lock_modes: FootprintLockModes,
 }
 
 impl AdmissionHolders {
@@ -246,6 +251,7 @@ impl AdmissionHolders {
         task_lookup: &BTreeMap<String, Task>,
         workspace_root: &Path,
         unlocked: &UnlockedContextPaths,
+        lock_modes: &FootprintLockModes,
     ) -> Self {
         let mut claimed: BTreeMap<String, Vec<String>> = BTreeMap::new();
         for task_id in live_claims {
@@ -267,18 +273,19 @@ impl AdmissionHolders {
         Self {
             held: index_holders(lock_holders),
             claimed: index_holders(&claimed),
+            lock_modes: lock_modes.clone(),
         }
     }
 
     fn conflicts_for(&self, requested_selector: &str) -> Vec<AdmissionConflict> {
         let held = self
             .held
-            .overlapping(requested_selector)
+            .overlapping(requested_selector, &self.lock_modes)
             .into_iter()
             .map(|entry| (entry, ConflictProvenance::HeldLock));
         let claimed = self
             .claimed
-            .overlapping(requested_selector)
+            .overlapping(requested_selector, &self.lock_modes)
             .into_iter()
             .map(|entry| (entry, ConflictProvenance::LiveClaim));
 
@@ -368,7 +375,11 @@ pub(crate) fn select_admissions(
         if !published_resumes.contains_key(candidate_id) {
             for requested_selector in &selectors {
                 conflicts.extend(holders.conflicts_for(requested_selector));
-                conflicts.extend(wave_conflicts(requested_selector, &wave));
+                conflicts.extend(wave_conflicts(
+                    requested_selector,
+                    &wave,
+                    &holders.lock_modes,
+                ));
             }
         }
         conflicts.sort();
@@ -398,8 +409,12 @@ pub(crate) fn select_admissions(
     selection
 }
 
-fn wave_conflicts(requested_selector: &str, wave: &OverlapIndex<String>) -> Vec<AdmissionConflict> {
-    wave.overlapping(requested_selector)
+fn wave_conflicts(
+    requested_selector: &str,
+    wave: &OverlapIndex<String>,
+    lock_modes: &FootprintLockModes,
+) -> Vec<AdmissionConflict> {
+    wave.overlapping(requested_selector, lock_modes)
         .into_iter()
         .map(|(blocking_selector, blocking_task_id)| AdmissionConflict {
             requested_selector: requested_selector.to_string(),

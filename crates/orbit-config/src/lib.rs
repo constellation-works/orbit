@@ -50,6 +50,8 @@
 //! - `registry` — the fixed-key registry and its admitted [`ConfigSnapshot`].
 //! - `layering` — document reading, per-key merge, replace-only rules, and
 //!   source provenance.
+//! - `lock_modes` — the ordered `workflow.lock_modes` footprint lock-mode
+//!   entries owner admission applies to selector overlaps.
 //! - `memory_limit` — the typed worker memory limit ([`MemoryLimit`]) and
 //!   its one parser [ORB-12913].
 //! - `crew_performance` — the ordered `workflow.crew_performance_types` list
@@ -76,6 +78,7 @@ mod aliases;
 mod crew_performance;
 mod crew_pools;
 mod layering;
+mod lock_modes;
 mod memory_limit;
 mod operation;
 mod persistence;
@@ -119,6 +122,7 @@ pub use layering::{
     ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
     load_effective_config,
 };
+pub use lock_modes::LOCK_MODES_KEY;
 pub use memory_limit::{MemoryLimit, MemoryUnit};
 pub use operation::{
     OPERATION_POLICY_VERSION, OperationField, OperationLayerSource, OperationPolicy,

@@ -356,6 +356,17 @@ impl ConfigSnapshot {
         self.machine_host_shutdown_hold_minutes
     }
 
+    /// The admitted `workflow.lock_modes` entries, compiled. Admission has
+    /// already compiled every pattern, so an error here is a snapshot built
+    /// around admission.
+    pub fn footprint_lock_modes(
+        &self,
+    ) -> Result<orbit_common::fs::lock_mode::FootprintLockModes, OrbitError> {
+        orbit_common::fs::lock_mode::FootprintLockModes::new(&self.workflow_lock_modes).map_err(
+            |reason| OrbitError::InvalidInput(format!("{} {reason}", crate::LOCK_MODES_KEY)),
+        )
+    }
+
     /// The admitted `workflow.mid_run_steering.*` settings.
     pub fn mid_run_steering(&self) -> MidRunSteeringSettings {
         MidRunSteeringSettings {

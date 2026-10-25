@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
-use orbit_common::fs::selector::overlaps;
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_types::task::{Task, TaskStatus};
 
 use crate::OrbitRuntime;
@@ -98,15 +98,17 @@ impl OrbitRuntime {
                 selectors: lock_context_files_for_task(task, repo_root, unlocked),
             })
             .collect();
-        Ok(compute_contention(&surfaces))
+        Ok(compute_contention(&surfaces, self.footprint_lock_modes()))
     }
 }
 
 /// Whether two lock surfaces would refuse to be held at the same time.
-fn surfaces_conflict(left: &LockSurface, right: &LockSurface) -> bool {
-    left.selectors
-        .iter()
-        .any(|a| right.selectors.iter().any(|b| overlaps(a, b)))
+fn surfaces_conflict(
+    left: &LockSurface,
+    right: &LockSurface,
+    lock_modes: &FootprintLockModes,
+) -> bool {
+    lock_modes.footprints_block(&left.selectors, &right.selectors)
 }
 
 /// Rank selectors by how many surfaces overlap them, and cluster the surfaces
@@ -116,7 +118,10 @@ fn surfaces_conflict(left: &LockSurface, right: &LockSurface) -> bool {
 /// selector overlap is a containment relation — `dir:src` covers everything
 /// beneath it — not string equality, so it cannot be bucketed by hash. The
 /// input is one workspace's pending tasks, which is the scale this is for.
-pub(crate) fn compute_contention(surfaces: &[LockSurface]) -> LockContentionReport {
+pub(crate) fn compute_contention(
+    surfaces: &[LockSurface],
+    lock_modes: &FootprintLockModes,
+) -> LockContentionReport {
     let constrained: Vec<&LockSurface> = surfaces
         .iter()
         .filter(|surface| !surface.selectors.is_empty())
@@ -136,7 +141,7 @@ pub(crate) fn compute_contention(surfaces: &[LockSurface]) -> LockContentionRepo
                     surface
                         .selectors
                         .iter()
-                        .any(|held| overlaps(held, selector))
+                        .any(|held| lock_modes.selectors_block(held, selector))
                 })
                 .map(|surface| surface.task_id.clone())
                 .collect();
@@ -155,7 +160,7 @@ pub(crate) fn compute_contention(surfaces: &[LockSurface]) -> LockContentionRepo
             .then_with(|| a.selector.cmp(&b.selector))
     });
 
-    let (groups, largest_group) = cluster(&constrained);
+    let (groups, largest_group) = cluster(&constrained, lock_modes);
 
     LockContentionReport {
         hotspots,
@@ -168,7 +173,7 @@ pub(crate) fn compute_contention(surfaces: &[LockSurface]) -> LockContentionRepo
 
 /// Connected components over the conflict graph, as
 /// `(component count, largest component size)`.
-fn cluster(surfaces: &[&LockSurface]) -> (usize, usize) {
+fn cluster(surfaces: &[&LockSurface], lock_modes: &FootprintLockModes) -> (usize, usize) {
     let mut seen = vec![false; surfaces.len()];
     let mut groups = 0;
     let mut largest = 0;
@@ -183,7 +188,7 @@ fn cluster(surfaces: &[&LockSurface]) -> (usize, usize) {
         while let Some(index) = stack.pop() {
             size += 1;
             for (other, surface) in surfaces.iter().enumerate() {
-                if !seen[other] && surfaces_conflict(surfaces[index], surface) {
+                if !seen[other] && surfaces_conflict(surfaces[index], surface, lock_modes) {
                     seen[other] = true;
                     stack.push(other);
                 }

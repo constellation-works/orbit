@@ -24,6 +24,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_types::task::{Task, TaskPriority, automatic_dispatch_cmp_with_expiry};
 
 use super::backlog_exclusion::{
@@ -60,6 +61,7 @@ pub(super) fn reserving_detail() -> String {
 /// sorts ahead of it in dispatch order, using the same frozen-batch expiry
 /// snapshot as the backlog sort. A task in `published_resumes` is never
 /// withheld.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn withhold_reserved_surfaces<'a>(
     backlog: Vec<&'a Task>,
     reserving: &[&Task],
@@ -67,6 +69,7 @@ pub(super) fn withhold_reserved_surfaces<'a>(
     expiring_batches: &BTreeMap<String, DateTime<Utc>>,
     workspace_root: &Path,
     unlocked: &UnlockedContextPaths,
+    lock_modes: &FootprintLockModes,
     excluded: &mut Vec<BacklogTaskExclusion>,
 ) -> Vec<&'a Task> {
     if reserving.is_empty() {
@@ -93,7 +96,7 @@ pub(super) fn withhold_reserved_surfaces<'a>(
             continue;
         }
         let conflicts: Vec<BacklogTaskConflict> =
-            task_lock_overlaps(task, &reserved_index, workspace_root, unlocked)
+            task_lock_overlaps(task, &reserved_index, workspace_root, unlocked, lock_modes)
                 .into_iter()
                 .filter(|overlap| {
                     reserving_by_id

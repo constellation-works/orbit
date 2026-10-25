@@ -3,8 +3,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_common::fs::overlap_index::OverlapIndex;
-use orbit_common::fs::path::workspace_relative_paths_overlap;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{TaskLockConflict, TaskLockHolder};
 use orbit_types::task::{
@@ -109,17 +109,18 @@ pub fn lock_holder_index(lock_holders: &BTreeMap<String, Vec<String>>) -> Overla
 }
 
 /// Every (requested selector, holder) pair where `task`'s lock surface
-/// overlaps a held selector, sorted and deduplicated. Empty means the task
-/// collides with no active work.
+/// overlaps a held selector at a point `lock_modes` does not share, sorted
+/// and deduplicated. Empty means the task collides with no active work.
 pub fn task_lock_overlaps(
     task: &Task,
     holders: &OverlapIndex<&[String]>,
     workspace_root: &Path,
     unlocked: &UnlockedContextPaths,
+    lock_modes: &FootprintLockModes,
 ) -> Vec<TaskLockOverlap> {
     let mut conflicts = Vec::new();
     for requested_file in lock_context_files_for_task(task, workspace_root, unlocked) {
-        for (_, locking_task_ids) in holders.overlapping(&requested_file) {
+        for (_, locking_task_ids) in holders.overlapping(&requested_file, lock_modes) {
             for locking_task_id in locking_task_ids.iter() {
                 conflicts.push(TaskLockOverlap {
                     requested_file: requested_file.clone(),
@@ -147,6 +148,8 @@ pub struct TaskLockIndex {
     inherited_only_epic_root_ids: BTreeSet<String>,
     /// `workflow.unlocked_context_paths` as the runtime admitted it.
     unlocked: UnlockedContextPaths,
+    /// `workflow.lock_modes` as the runtime admitted it.
+    lock_modes: FootprintLockModes,
 }
 
 impl TaskLockIndex {
@@ -161,6 +164,7 @@ impl TaskLockIndex {
             envelopes,
             requested_task_ids,
             runtime.unlocked_context_paths().clone(),
+            runtime.footprint_lock_modes().clone(),
         ))
     }
 
@@ -168,6 +172,7 @@ impl TaskLockIndex {
         envelopes: Vec<TaskEnvelopeV2>,
         requested_task_ids: &[String],
         unlocked: UnlockedContextPaths,
+        lock_modes: FootprintLockModes,
     ) -> Self {
         let all_tasks = envelopes
             .into_iter()
@@ -210,6 +215,7 @@ impl TaskLockIndex {
             tasks,
             inherited_only_epic_root_ids,
             unlocked,
+            lock_modes,
         }
     }
 
@@ -396,7 +402,7 @@ pub fn task_lock_conflicts_indexed(
         for requested_file in &requested_files {
             if held_files
                 .iter()
-                .any(|held_file| workspace_relative_paths_overlap(requested_file, held_file))
+                .any(|held_file| index.lock_modes.selectors_block(requested_file, held_file))
             {
                 conflicts.push(TaskLockConflict {
                     file: requested_file.clone(),

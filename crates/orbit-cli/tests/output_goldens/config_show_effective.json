@@ -603,6 +603,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.lock_modes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.low_complexity_crews": {
       "scope": "built-in",
       "state": "default",

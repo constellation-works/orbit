@@ -87,7 +87,7 @@ impl RuntimeKernel {
                     // requester does not re-lock its docs one selector at a time.
                     let matches = expanded.retained.iter()
                         .filter(|requested| surface.binary_search(requested).is_ok())
-                        .flat_map(|requested| contenders.overlapping(requested))
+                        .flat_map(|requested| contenders.overlapping(requested, self.footprint_lock_modes()))
                         .filter(|(_, (id, _))| **id != task.id)
                         .map(|(_, (id, held))| json!({"id": id, "status": "in-progress", "selector": held}))
                         .collect::<Vec<_>>();

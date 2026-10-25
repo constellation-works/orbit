@@ -100,6 +100,7 @@ pub(super) fn backlog_snapshot_in_mode(
     // leaves unlocked are left out here as for any holder, though the claim
     // froze them.
     let unlocked = runtime.unlocked_context_paths();
+    let lock_modes = runtime.footprint_lock_modes();
     let lock_holders = active_task_lock_holders(task_lookup.values(), workspace_root, unlocked);
     // `task_lookup` iterates in task-ID order rather than the store's
     // created-at order; `sort_tasks_for_automatic_dispatch` is a total order
@@ -408,7 +409,8 @@ pub(super) fn backlog_snapshot_in_mode(
             .iter()
             .filter(|task| !published_resumes.contains_key(&task.id))
             .filter_map(|task| {
-                let conflicts = task_lock_overlaps(task, &holder_index, workspace_root, unlocked);
+                let conflicts =
+                    task_lock_overlaps(task, &holder_index, workspace_root, unlocked, lock_modes);
                 (!conflicts.is_empty()).then(|| (task.id.clone(), conflicts))
             })
             .collect();
@@ -465,6 +467,7 @@ pub(super) fn backlog_snapshot_in_mode(
                 &expiring_batches,
                 workspace_root,
                 unlocked,
+                lock_modes,
                 &mut excluded,
             );
         }

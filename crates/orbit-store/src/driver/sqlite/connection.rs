@@ -1,6 +1,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_common::storage::sqlite::{
     apply_default_pragmas, open_private, sqlite_error, sqlite_store_error,
 };
@@ -107,10 +108,16 @@ pub struct Store {
     /// before it reaches SQLite, so an older binary reads a newer store but
     /// never rewrites it.
     forward_compatible: Option<Arc<ForwardCompatibleOpen>>,
+    /// The owner's `workflow.lock_modes`, which every footprint-overlap check
+    /// this handle makes (reservations, claims, admission) applies. A handle
+    /// opened without them treats every overlap as blocking.
+    footprint_lock_modes: FootprintLockModes,
 }
 
 pub struct StoreTx<'a> {
     pub(crate) tx: Transaction<'a>,
+    /// The opening handle's [`Store::footprint_lock_modes`].
+    pub(crate) lock_modes: FootprintLockModes,
 }
 
 impl StoreTx<'_> {
@@ -204,7 +211,21 @@ impl Store {
             conn: Arc::new(Mutex::new(conn)),
             readers: (!read_only).then(|| Arc::new(ReadPool::new(path.to_path_buf()))),
             forward_compatible: forward_compatible.map(Arc::new),
+            footprint_lock_modes: FootprintLockModes::default(),
         })
+    }
+
+    /// This handle with the owner's `workflow.lock_modes`, applied by every
+    /// footprint-overlap check it makes.
+    #[must_use]
+    pub fn with_footprint_lock_modes(mut self, modes: FootprintLockModes) -> Self {
+        self.footprint_lock_modes = modes;
+        self
+    }
+
+    /// The lock modes this handle's footprint-overlap checks apply.
+    pub fn footprint_lock_modes(&self) -> &FootprintLockModes {
+        &self.footprint_lock_modes
     }
 
     /// Set when this handle opened a database newer than the binary
@@ -272,6 +293,7 @@ impl Store {
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
             forward_compatible: None,
+            footprint_lock_modes: FootprintLockModes::default(),
         })
     }
 
@@ -284,6 +306,7 @@ impl Store {
             conn: Arc::new(Mutex::new(conn)),
             readers: None,
             forward_compatible: None,
+            footprint_lock_modes: FootprintLockModes::default(),
         })
     }
 
@@ -312,7 +335,10 @@ impl Store {
             .transaction_with_behavior(behavior)
             .map_err(sqlite_store_error)?;
 
-        let mut store_tx = StoreTx { tx };
+        let mut store_tx = StoreTx {
+            tx,
+            lock_modes: self.footprint_lock_modes.clone(),
+        };
         let result = op(&mut store_tx)?;
         store_tx.tx.commit().map_err(sqlite_store_error)?;
 
