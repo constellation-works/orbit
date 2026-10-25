@@ -65,9 +65,11 @@ impl TaskValues<'_> {
 
     /// Render a commit subject within [`COMMIT_SUBJECT_BUDGET`] characters.
     /// The title is shortened first, with an ellipsis, so the template's own
-    /// text (the task marker included) survives; only a subject still over
-    /// budget without its title is cut as a whole. The flag says whether the
-    /// title was shortened, so the caller can keep it in the body.
+    /// text (the task marker included) survives; a subject still over budget
+    /// without its title is cut around the complete bracketed task marker,
+    /// reserving space for it, so delivery readers never lose the marker.
+    /// The flag says whether the title was shortened, so the caller can keep
+    /// it in the body.
     pub(super) fn render_subject(&self, template: &ConventionTemplate) -> (String, bool) {
         let subject = self.render_line(template);
         if subject.chars().count() <= COMMIT_SUBJECT_BUDGET {
@@ -91,12 +93,51 @@ impl TaskValues<'_> {
                 }
             }
         }
+        let shortened = template.uses(&Placeholder::Title) && !title.is_empty();
+        // Reserve the complete marker: cut the other text around it rather
+        // than cutting the whole subject, which could delete the marker
+        // a commit subject template is required to carry.
+        let marker = format!("[{}]", self.task.id);
+        if let Some(start) = subject.find(&marker) {
+            let suffix = &subject[start..];
+            let suffix_chars = suffix.chars().count();
+            let marker_chars = marker.chars().count();
+            if marker_chars >= COMMIT_SUBJECT_BUDGET {
+                return (marker, shortened);
+            }
+            if suffix_chars <= COMMIT_SUBJECT_BUDGET.saturating_sub(1) {
+                // Ellipsis and a separating space precede the suffix.
+                let keep = COMMIT_SUBJECT_BUDGET
+                    .saturating_sub(suffix_chars)
+                    .saturating_sub(2);
+                let mut cut: String = subject[..start].chars().take(keep).collect();
+                cut = cut.trim_end().to_string();
+                cut.push(SUBJECT_ELLIPSIS);
+                if !cut.is_empty() && !suffix.starts_with(' ') {
+                    cut.push(' ');
+                }
+                cut.push_str(suffix);
+                return (cut, shortened);
+            }
+            let keep = COMMIT_SUBJECT_BUDGET
+                .saturating_sub(marker_chars)
+                .saturating_sub(1);
+            let mut cut = marker.clone();
+            cut.push_str(
+                &suffix[marker.len()..]
+                    .chars()
+                    .take(keep)
+                    .collect::<String>(),
+            );
+            cut.push(SUBJECT_ELLIPSIS);
+            return (cut, shortened);
+        }
         let mut cut = subject
             .chars()
             .take(COMMIT_SUBJECT_BUDGET.saturating_sub(1))
             .collect::<String>();
         cut.push(SUBJECT_ELLIPSIS);
-        (cut, template.uses(&Placeholder::Title) && !title.is_empty())
+        (cut, shortened)
     }
 }
 
