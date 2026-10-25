@@ -178,9 +178,12 @@ relation when it accepts the handoff ([distributed-drain design](../distributed-
 claimed-mode implementation).
 
 The broker holds no copy of the claimed task, so it admits a `regression_from` relation by shape
-alone. The owner decides. It accepts one only when the claimed task carries the provenance tag of
-a review auto-task that files regression findings (`auto-task:delivery-code-review` or
-`auto-task:code-review`), and only when the target is a task in the owner's workspace. Any other
+alone. The owner decides. It accepts one only while the claim is active. The claimed task must
+carry a finding-filing auto-task provenance tag (`auto-task:delivery-code-review`,
+`auto-task:code-review`, `auto-task:qa-sweep` or `auto-task:qa-full-sweep`), or carry
+`no-diff-expected` together with `full-code-review` or `qa-full-sweep` for an area task.
+Area tasks use these durable tags because they are filed by a coordinator rather than minted
+by the scheduler. The target must be a task in the owner's workspace. Any other
 claimed task's `regression_from` is refused as before. A worker cannot change the claimed task's
 tags. The owner records the claim, bound run and executing machine as the new task's first
 comment.

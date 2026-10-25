@@ -47,17 +47,27 @@ pub fn auto_task_builds_by_design(name: &str) -> bool {
     BUILDS_BY_DESIGN_AUTO_TASKS.contains(&name)
 }
 
-/// The shipped review auto-tasks whose template files each confirmed finding
-/// with a `regression_from` relation to the task that introduced it.
-const REGRESSION_FINDING_AUTO_TASKS: [&str; 2] = ["delivery-code-review", "code-review"];
+/// The shipped review and QA auto-tasks whose templates file confirmed
+/// findings with a `regression_from` relation to the task that introduced them.
+const REGRESSION_FINDING_AUTO_TASKS: [&str; 4] = [
+    "delivery-code-review",
+    "code-review",
+    "qa-sweep",
+    "qa-full-sweep",
+];
 
-/// Whether a task with `tags` was minted by a review auto-task that files
-/// regression findings [ORB-14792]: it carries one of their
-/// `auto-task:<name>` provenance tags.
+/// Whether a task's durable tags identify a review or QA task that files
+/// regression findings. Scheduler-minted tasks carry an `auto-task:<name>`
+/// provenance tag. Coordinator-filed area tasks instead carry
+/// `no-diff-expected` together with `full-code-review` or `qa-full-sweep`.
 pub fn files_regression_findings(tags: &[String]) -> bool {
     REGRESSION_FINDING_AUTO_TASKS
         .iter()
         .any(|name| tags.contains(&auto_task_tag(name)))
+        || (tags.iter().any(|tag| tag == "no-diff-expected")
+            && tags
+                .iter()
+                .any(|tag| matches!(tag.as_str(), "full-code-review" | "qa-full-sweep")))
 }
 
 /// Artifact path a completed sweep writes its cursor to, and the scheduler's

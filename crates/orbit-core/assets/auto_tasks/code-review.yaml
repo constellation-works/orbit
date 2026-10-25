@@ -227,14 +227,20 @@ template:
     - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
     - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
     - `unclassified`: the evidence does not settle the nature.
-    `escape` is why the delivery gates missed it:
-    - `no_test`: no test covered the broken behavior.
-    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    `escape` is why the delivery gates missed it. Inspect the tests and gate
+    selection at the culprit commit: use `no_test` when no test exercises the
+    broken behavior there, and `test_not_selected` when a covering test exists
+    but the culprit's gates did not run it. Use `unclassified` only when the
+    evidence does not settle the escape, and state the unresolved evidence in
+    the finding's description. Mere visibility in the diff is not evidence
+    for `review_missed` when no test exercises the broken behavior.
+    - `no_test`: no test exercised the broken behavior at the culprit commit.
+    - `test_not_selected`: a covering test existed at the culprit commit but its gates did not run it.
     - `platform_only`: it shows only on a platform or host the gates did not exercise.
     - `review_missed`: it was visible in the diff and review did not flag it.
     - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
     - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
-    - `unclassified`: the evidence does not settle the escape.
+    - `unclassified`: the evidence does not settle the escape; state why in the finding.
 
     ## Findings that narrow a shared invariant
 

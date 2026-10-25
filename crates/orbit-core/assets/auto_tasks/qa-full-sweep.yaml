@@ -217,7 +217,7 @@ template:
     > Reuse an open task whose reproducer covers the same defect, and reassess
     > a closed one against the pinned SHA rather than treating it as
     > suppression. File each confirmed non-duplicate finding as its own task with
-    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-full-sweep"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-full-sweep"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this area task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
     > Its description holds the exact reproducer, the pinned SHA, the
     > environment, expected and observed results and the evidence artifact.
     > Add `ui` to its tags when the defect is in something a user sees
@@ -228,12 +228,19 @@ template:
     > set `allow_missing_context: true` and identify that intended path.
     > Never file a finding without context selectors. Record each finding's
     > task ID on its scenario.
-    > When the finding is a regression a landed task introduced (squash-merge
-    > subjects carry its ID as `[<task-id>]`; confirm with `orbit.task.show`), add
+    > Attribute every finding before filing: locate the commit that introduced
+    > the defect with `git log -L` or `git blame` on the offending lines at the
+    > pinned revision. Read its task ID from the squash subject (`[<task-id>]`)
+    > or pull request, then confirm with `orbit.task.show` that the task exists
+    > and its change made the code wrong. Never blame a later task that merely
+    > touched the file or exposed an older defect. Add
     > `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}`
-    > to its `relations` and name the culprit commit in its description. A
-    > claimed run cannot record that relation: name the culprit, nature and escape
-    > in the description instead. Never blame a bystander task.
+    > to the finding's `relations` and name the culprit commit in its description.
+    > If no landed task can be held responsible (for example the defect predates
+    > task-tagged history), omit that relation and state why in the description.
+    > In owner and claimed runs, include a `spawned_from` relation targeting this
+    > review/QA task; claimed runs may also file the classified `regression_from`
+    > to a task in the claimed workspace while their claim is active.
     > Choose `unclassified` rather than guess. `nature` is what kind of regression
     > the link records:
     > - `broke_existing`: the culprit broke behavior that worked before it landed.
@@ -242,14 +249,20 @@ template:
     > - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
     > - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
     > - `unclassified`: the evidence does not settle the nature.
-    > `escape` is why the delivery gates missed it:
-    > - `no_test`: no test covered the broken behavior.
-    > - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
+    > `escape` is why the delivery gates missed it. Inspect the tests and gate
+    > selection at the culprit commit: use `no_test` when no test exercises the
+    > broken behavior there, and `test_not_selected` when a covering test exists
+    > but the culprit's gates did not run it. Use `unclassified` only when the
+    > evidence does not settle the escape, and state the unresolved evidence in
+    > the finding's description. Mere visibility in the diff is not evidence
+    > for `review_missed` when no test exercises the broken behavior.
+    > - `no_test`: no test exercised the broken behavior at the culprit commit.
+    > - `test_not_selected`: a covering test existed at the culprit commit but its gates did not run it.
     > - `platform_only`: it shows only on a platform or host the gates did not exercise.
     > - `review_missed`: it was visible in the diff and review did not flag it.
     > - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
     > - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
-    > - `unclassified`: the evidence does not settle the escape.
+    > - `unclassified`: the evidence does not settle the escape; state why in the finding.
     >
     > Finish only when every scenario has a recorded outcome; recording a
     > `FAIL`, `BLOCKED` or `NOT_RUN` honestly completes this task, and the
@@ -274,7 +287,9 @@ template:
     capability-gated scenario is recorded as PASS; every failure maps to a
     verified, non-duplicate `bug` tagged `qa-full-sweep` with a reproducer,
     the pinned SHA and source/test context selectors, or to an existing task
-    that already covers it.
+    that already covers it; every filed finding carries a `regression_from`
+    classified with nature and escape, or its description states why no landed
+    task can be held responsible.
 
     ## File the roll-up
 

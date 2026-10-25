@@ -365,10 +365,12 @@ it — see [friction.md](friction.md). Then:
   in the summary; the owner checks and records the relation at handoff. That
   output carries IDs only, so state the nature and escape you would have set
   in the summary. An owner-routed tool that answers unreachable is not a task
-  failure. A task you file must be `spawned_from` the claimed task; a claimed
-  `delivery-code-review` or `code-review` task may also give each finding a
-  `regression_from` relation to its culprit, classified with its `regression`
-  nature and escape ([task-fields.md](task-fields.md#behavior-affecting-optional-fields)). `orbit.search` and `orbit.task.list` reach the
+  failure. A task you file must be `spawned_from` the claimed task. A claimed
+  `delivery-code-review`, `code-review`, `qa-sweep` or `qa-full-sweep` auto-task,
+  or an area task tagged `full-code-review` or `qa-full-sweep` together with
+  `no-diff-expected`, may also give each finding a `regression_from` relation
+  to a culprit in the claimed workspace while the claim is active, classified
+  with its `regression` nature and escape ([task-fields.md](task-fields.md#behavior-affecting-optional-fields)). `orbit.search` and `orbit.task.list` reach the
   owner's authoritative records in the claimed workspace through the coordinator;
   use them for duplicate checks. Federated search scopes are refused.
   Return a finding the owner still refuses in `unfiled_findings` as
