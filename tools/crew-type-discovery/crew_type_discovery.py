@@ -167,6 +167,11 @@ def slug(value: str) -> str:
     return s or "candidate"
 
 
+# Configuration admission refuses these names (`other` is the fallback type),
+# so a suggested block must never be labeled with one.
+RESERVED_TYPE_NAMES = frozenset({"other"})
+
+
 def meets_threshold(leaf, margin, min_leaf) -> bool:
     return leaf.n >= min_leaf and abs(leaf.mean - leaf.parent_mean) >= margin
 
@@ -222,6 +227,8 @@ def suggestion_for(leaf, margin, min_leaf):
         return None
     name_parts = tags + paths
     name = slug("-".join(name_parts))[:64]
+    if name in RESERVED_TYPE_NAMES:
+        name = f"candidate-{name}"
     lines = ["[[workflow.crew_performance_types]]", f'name = "{name}"']
     if tags:
         lines.append("tags = [" + ", ".join(f'"{t}"' for t in tags) + "]")

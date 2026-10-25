@@ -4,8 +4,10 @@ Guards the repair for the defect where a tree leaf combining several
 branches (``tag a and tag b``, ``tag a and not tag b``) was serialized
 into a ``tags = [...]`` block that the real configuration matcher reads
 as any-of, so the reported n/mean described a different population than
-the pasted type would match. Only the script's public CLI is exercised;
-the export payloads below are private fixtures driving that behavior.
+the pasted type would match. A second guard keeps a suggested block off
+the reserved fallback name ``other``, which configuration refuses. Only
+the script's public CLI is exercised; the export payloads below are
+private fixtures driving that behavior.
 """
 
 import json
@@ -209,6 +211,22 @@ class DiscoveryCliTest(unittest.TestCase):
         self.assertIn("tag a and tag b", text)
         self.assertIn("no equivalent ready-to-paste type", text)
         self.assertIn("not a suggestion", text)
+
+    def test_reserved_fallback_name_never_becomes_ready_to_paste_name(self):
+        fixture = FIXTURES / "planted.json"
+        payload = json.loads(fixture.read_text(encoding="utf-8"))
+        for row in payload["tasks"]:
+            row["tags"] = ["other" if tag == "ui" else tag for tag in row["tags"]]
+        report = json.loads(run_cli(payload=payload))
+        other = [s for s in report["suggestions"] if s["tags"] == ["other"]]
+        self.assertEqual(len(other), 1, "the expressible `other` tag leaf must still be suggested")
+        self.assertEqual(other[0]["n"], 100)
+        self.assertNotEqual(other[0]["name"], "other", "`other` is the reserved fallback type name")
+        self.assertIn(f'name = "{other[0]["name"]}"', other[0]["toml"])
+        for suggestion in report["suggestions"]:
+            self.assertNotEqual(suggestion["name"], "other")
+        text = run_cli(payload=payload, extra=())
+        self.assertNotIn('name = "other"', text, "the text report must not print a reserved name")
 
 
 if __name__ == "__main__":
