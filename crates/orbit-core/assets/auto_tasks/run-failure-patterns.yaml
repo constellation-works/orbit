@@ -46,11 +46,10 @@ template:
       for task shape. File each fix task (tool-created tasks start `proposed`)
       with
       `orbit tool run orbit.task.add --input '{"title":"<surface and failure>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["run-failure-patterns","no-auto-approve"],"type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
-      Add `"crew":"opus"` when the assessed complexity is `hard` or `xhard`.
       The `no-auto-approve` tag keeps the task `proposed` for human approval:
       an `--approve-proposed` drain never promotes it. File a friction instead
       only when the evidence cannot establish a cause, with
-      `orbit tool run orbit.friction.add --input '{"title":"<surface and failure>","body":"<markdown>","tags":["automation","run-failure-patterns"],"during_task":"<this task ID>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.friction.add --input '{"title":"<surface and failure>","body":"<markdown>","tags":["automation"],"during_task":"<this task ID>","model":"<agent-family>"}'`.
       Never file both for one pattern: friction curation turns frictions into
       tasks, so a friction beside a fix task duplicates the work. Do not use
       direct lifecycle CLI subcommands; they skip agent provenance.
