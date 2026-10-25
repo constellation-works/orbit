@@ -43,9 +43,12 @@ template:
       nothing covers the pattern.
     - Before filing a fix task, read the installed `orbit` skill's
       task-authoring reference (`references/task-authoring.md`) and follow it
-      for task shape. File each fix task (tool-created tasks start `proposed`)
-      with
-      `orbit tool run orbit.task.add --input '{"title":"<surface and failure>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["run-failure-patterns","no-auto-approve"],"type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      for task shape. File every fix task (tool-created tasks start `proposed`)
+      with a `spawned_from` relation targeting this mining chore:
+      `orbit tool run orbit.task.add --input '{"title":"<surface and failure>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["run-failure-patterns","no-auto-approve"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Read every created task back with `orbit.task.show` and verify that exact
+      `spawned_from` edge before recording it as delivered; if missing or
+      incorrect, report the linkage error and do not count it as delivered.
       The `no-auto-approve` tag keeps the task `proposed` for human approval:
       an `--approve-proposed` drain never promotes it. File a friction instead
       only when the evidence cannot establish a cause, with
@@ -215,8 +218,8 @@ template:
     When the verified mechanism shows that a landed task's change caused the
     pattern, including one that reintroduced a done fix, add
     `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}`
-    to the fix task's `relations` and name that commit in its body. Never blame
-    a bystander task.
+    to the fix task's `relations` alongside its required `spawned_from` edge
+    and name that commit in its body. Never blame a bystander task.
     Choose `unclassified` rather than guess. `nature` is what kind of regression
     the link records:
     - `broke_existing`: the culprit broke behavior that worked before it landed.
@@ -261,6 +264,7 @@ template:
   - Open and closed tasks and frictions were searched for every pattern before filing, and no duplicate record was filed.
   - Every untracked pattern's mechanism was verified in code, and it was filed as one proposed fix task tagged `run-failure-patterns` and `no-auto-approve`, or as a friction only when no cause could be established, never both.
   - Every filed record carries the signature, occurrence count, first and last seen, representative run ids, and a redacted excerpt.
+  - Every filed fix task carries a verified `spawned_from` relation targeting this mining chore, alongside any justified `regression_from` relation.
   - No run was retried, resumed, cancelled, or edited, and no run state was mutated.
   - The execution summary reports runs scanned, patterns found, filed versus already-tracked ids, and the window bounds, and the new cursor is attached as `run-failure-cursor.json`.
   - A window with no new untracked pattern succeeds as a no-op.

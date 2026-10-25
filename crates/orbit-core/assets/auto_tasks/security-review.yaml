@@ -11,7 +11,7 @@ template:
 
     ## Rules and command surfaces
 
-    - Use the registered Orbit tool surface. Search coverage with `orbit tool run orbit.search --input '{"query":"<distinctive symptom, component, or CVE terms>","kind":"task","all":true,"model":"<agent-family>"}'`. List open security-review work with `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"security-review","model":"<agent-family>"}'`. Inspect a candidate with `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`. File a finding with `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["security-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","workspace":"<current workspace path>","model":"<agent-family>"}'`. Derive canonical `file:` selectors from every evidenced source path, removing the line suffix, and add the matching regression-test location. Use existing paths where possible; for a test file that must be created, set `allow_missing_context: true` and identify that intended path. Never file a finding without context selectors. Do not use direct lifecycle CLI subcommands; they skip agent provenance.
+    - Use the registered Orbit tool surface. Search coverage with `orbit tool run orbit.search --input '{"query":"<distinctive symptom, component, or CVE terms>","kind":"task","all":true,"model":"<agent-family>"}'`. List open security-review work with `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"security-review","model":"<agent-family>"}'`. Inspect a candidate with `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`. File a finding with `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["security-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`. Derive canonical `file:` selectors from every evidenced source path, removing the line suffix, and add the matching regression-test location. Use existing paths where possible; for a test file that must be created, set `allow_missing_context: true` and identify that intended path. Never file a finding without context selectors. Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Before filing anything, check for duplicate open tasks covering the same underlying issue, including open tasks tagged `security-review`. Skip duplicates. If an open or done task already covers the finding, record the `<finding> -> <task-id>` mapping in the execution summary instead of filing another copy.
     - Every actionable finding must be a durable, deduplicated Orbit task with reproducible evidence and severity/impact. Include the exact file paths, commands, dependency names and versions, configuration keys, or secret-handling locations that demonstrate the issue, plus a severity rating and an impact statement. Do not leave findings in narrative-only output.
     - Fail open. A clean review with no findings is a successful no-op. Do not invent work to justify the run.
@@ -29,13 +29,14 @@ template:
 
     1. Snapshot existing open `security-review` tasks and search for overlapping coverage of each candidate finding.
     2. Review the four areas above and collect evidence-backed findings only.
-    3. For each actionable, non-duplicate finding, file exactly one Orbit task through `orbit tool run orbit.task.add` with reproduction evidence, severity, and impact. Read it back with `orbit tool run orbit.task.show` before recording it as delivered.
+    3. For each actionable, non-duplicate finding, file exactly one Orbit task through `orbit tool run orbit.task.add` with reproduction evidence, severity, impact, and a `{"type":"spawned_from","target":"<this task ID>"}` relation targeting this review chore. Read it back with `orbit tool run orbit.task.show` and verify that exact edge before recording it as delivered; if missing or incorrect, report the linkage error and do not count it as delivered.
     4. If there are no findings, persist an execution summary that the review was clean and succeed. Do not file filler tasks.
 
     When the finding is a regression a landed task introduced (squash-merge
     subjects carry its ID as `[<task-id>]`; confirm with `orbit.task.show`), add
     `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}`
-    to its `relations` and name the culprit commit in its description. A
+    to its `relations` alongside the required `spawned_from` edge and name the
+    culprit commit in its description. A
     claimed run cannot record that relation: name the culprit, nature and escape
     in the description instead. Never blame a bystander task.
     Choose `unclassified` rather than guess. `nature` is what kind of regression
@@ -57,7 +58,7 @@ template:
   acceptance_criteria:
   - Applicable application code, dependencies, secret handling, and configuration were reviewed with evidence from the current workspace.
   - Existing open tasks were searched and duplicate findings were not filed.
-  - Every actionable finding was filed as a durable Orbit task with reproducible evidence, severity, and impact; narrative-only output is not delivery.
+  - Every actionable finding was filed as a durable Orbit task with reproducible evidence, severity, impact, and a read-back-verified `spawned_from` relation to this review chore alongside any justified `regression_from` relation; narrative-only output is not delivery.
   - A review with no findings finishes with status `success` and files no task.
   task_type: chore
   tags:
