@@ -572,9 +572,7 @@ impl OrbitRuntime {
             .ok_or_else(|| refuse("source checkpoints disappeared"))?;
         let definition = self.source_repair_definition(&source)?;
         if binding.workspace_id != self.workspace_id()?
-            || digest(
-                &json!({"run":source,"steps":source.steps,"checkpoints":source_state,"definition":definition}),
-            )? != binding.source_digest
+            || run_evidence_digest(&source, &source_state, &definition)? != binding.source_digest
         {
             return Err(refuse("immutable published source changed"));
         }
