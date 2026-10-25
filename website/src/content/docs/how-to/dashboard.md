@@ -875,6 +875,48 @@ use **ship** or the [auto-drain](#auto-drain). **Details** shows the
 equivalent command, such as
 `orbit run job worktree_gc_pipeline --workspace orbit`.
 
+## Knowledge › Frictions
+
+**Knowledge** (`#knowledge`) holds the selected workspace's friction
+records: what made work harder than it should have been, reported with
+`orbit friction add`. Pick one workspace first. **All workspaces** replaces
+the list with "Select a workspace to view this panel", because the ledger
+is per workspace. To report, search, and resolve records from a terminal,
+see [Report and triage friction](../friction/).
+
+Three tiles lead the panel: **open**, **triaged**, and **resolved this
+month**. Below them, the search box matches a record's ID, model, tags,
+status, task, and body text, and **Show** filters by status:
+
+| Show | Lists |
+|---|---|
+| **Active** (default) | `open` and `triaged` records. |
+| **Open** | Records not yet looked at. |
+| **Triaged** | Records that have been read and classified. |
+| **Resolved** | Records whose cause is fixed or no longer applies. |
+| **All** | Every record, whatever its status. |
+
+Each row shows the record's ID, when it was reported, a summary of its
+body, its status pill and tags, and `during <task-id>` when it was filed
+against a task. Select a row to open **Friction detail**: the full body,
+its status, model, reported and resolved times, tags, and the task it
+names. On a narrow screen the detail opens inline under the row instead of
+in its own panel.
+
+From the detail panel you triage without leaving the dashboard:
+
+- **status** sets `open`, `triaged`, or `resolved`. This is the same
+  transition as `orbit friction update <id> --status <status>`.
+- **tags** edits the record's tag set; saving replaces the stored tags,
+  as `orbit friction update --tag` does.
+- **Resolve** marks the record resolved, as `orbit friction resolve`
+  does. It is disabled on a record that is already resolved.
+
+Nothing here files a task or moves a record to another workspace. When a
+record earns work, file the task and link it in the task's summary; when a
+record sits in the wrong workspace, rehome it from the terminal. Both
+workflows are in [Report and triage friction](../friction/).
+
 ## Plugins
 
 Plugins (`#plugins`) lists the plugins installed on the selected host and
