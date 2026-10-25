@@ -750,9 +750,14 @@ impl OrbitRuntime {
                 let binding = DecisionBinding::PilotOperation {
                     operation_id: operation_id.to_string(),
                 };
-                if decision_requests_from_history(&history, chrono::Utc::now())
-                    .iter()
-                    .any(|request| request.binding == binding)
+                if decision_requests_from_history(
+                    &self.get_task(task_id)?,
+                    &history,
+                    Some(operation_id),
+                    chrono::Utc::now(),
+                )
+                .iter()
+                .any(|request| request.binding == binding)
                 {
                     return Ok(());
                 }

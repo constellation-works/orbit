@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::{
-    ArtifactManifestFileV2, ExternalRef, Task, TaskArtifact, TaskComment, TaskHistoryEntry,
-    TaskStatus,
+    ArtifactManifestFileV2, DecisionRequest, ExternalRef, Task, TaskArtifact, TaskComment,
+    TaskHistoryEntry, TaskStatus,
 };
 
 use orbit_store::RegisteredTaskResolution;
@@ -22,6 +22,29 @@ impl OrbitRuntime {
             .tasks()
             .get_task(id)?
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
+    }
+
+    /// Read effective human-decision requests, rechecking the current task,
+    /// block episode and pilot admission hold without writing any records.
+    pub fn get_task_decision_requests(&self, id: &str) -> Result<Vec<DecisionRequest>, OrbitError> {
+        let task = self.get_task(id)?;
+        let history = self.get_task_history(id)?;
+        let comments = self.get_task_comments(id)?;
+        let pilot_operation = if task.status == TaskStatus::Backlog
+            && self
+                .pilot_admission_hold_in(&task, &comments, &|| Ok(history.clone()))?
+                .is_some()
+        {
+            super::pilot::latest_pilot_operation_id(&comments)
+        } else {
+            None
+        };
+        Ok(orbit_types::task::decision_requests_from_history(
+            &task,
+            &history,
+            pilot_operation,
+            chrono::Utc::now(),
+        ))
     }
 
     /// Resolve a dependency target through this machine's registered owner.

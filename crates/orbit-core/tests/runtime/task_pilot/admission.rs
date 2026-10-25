@@ -1194,8 +1194,10 @@ fn decision_requests(
     workspace: &Workspace,
     task: &Task,
 ) -> Vec<orbit_types::task::DecisionRequest> {
-    let history = workspace.runtime.get_task_history(&task.id).unwrap();
-    orbit_types::task::decision_requests_from_history(&history, chrono::Utc::now())
+    workspace
+        .runtime
+        .get_task_decision_requests(&task.id)
+        .unwrap()
 }
 
 fn decision_channel_workspace() -> Workspace {
@@ -1241,6 +1243,47 @@ fn a_disabled_pilot_hold_writes_no_decision_request() {
     assert!(decision_requests(&workspace, &task).is_empty());
 }
 
+fn a_changed_pilot_hold_supersedes_its_request_without_a_new_request() {
+    for change in ["operator_clear", "clear_assessment", "replacement_hold"] {
+        let workspace = decision_channel_workspace();
+        let task = backlog_task(&workspace);
+        assess(&workspace, &task, Some("duplicate_of"));
+        assert_admission(&workspace, &task, Some("pilot_duplicate"));
+        match change {
+            "operator_clear" => {
+                workspace
+                    .runtime
+                    .update_task_as_human(
+                        &task.id,
+                        TaskUpdateParams {
+                            comment: Some(
+                                "task-pilot-admission: clear\nThe finding no longer applies."
+                                    .into(),
+                            ),
+                            ..Default::default()
+                        },
+                        "human:fixture".into(),
+                    )
+                    .unwrap();
+            }
+            "clear_assessment" => assess(&workspace, &task, None),
+            _ => assess(&workspace, &task, Some("duplicate_of")),
+        }
+        // Reading must invalidate the old binding before admission raises anything else.
+        let requests = decision_requests(&workspace, &task);
+        assert_eq!(
+            requests.len(),
+            1,
+            "{change}: no replacement request was raised"
+        );
+        assert_eq!(
+            requests[0].state,
+            orbit_types::task::DecisionRequestState::Superseded,
+            "{change}"
+        );
+    }
+}
+
 fn a_second_pilot_hold_supersedes_the_first() {
     let workspace = decision_channel_workspace();
     let task = backlog_task(&workspace);
@@ -1259,9 +1302,11 @@ fn a_second_pilot_hold_supersedes_the_first() {
         orbit_types::task::DecisionRequestState::Open
     );
     assert_ne!(requests[0].binding.key(), requests[1].binding.key());
-    let history = workspace.runtime.get_task_history(&task.id).unwrap();
     assert_eq!(
-        orbit_types::task::open_decision_requests(&history, chrono::Utc::now()).len(),
+        requests
+            .iter()
+            .filter(|request| request.state == orbit_types::task::DecisionRequestState::Open)
+            .count(),
         1,
         "at most one request per task is open"
     );
@@ -1272,7 +1317,8 @@ crate::scenario_table!(
     decision_channel_pilot_hold_scenarios,
     an_enabled_pilot_hold_raises_one_open_decision_request,
     a_disabled_pilot_hold_writes_no_decision_request,
-    a_second_pilot_hold_supersedes_the_first
+    a_second_pilot_hold_supersedes_the_first,
+    a_changed_pilot_hold_supersedes_its_request_without_a_new_request
 );
 
 crate::scenario_table!(

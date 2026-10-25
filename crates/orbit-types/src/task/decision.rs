@@ -15,7 +15,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{ContextFilesWidening, RegressionRiskMarks, TagsChanged, TaskHistoryEntry, TaskStatus};
+use super::{
+    ContextFilesWidening, RegressionRiskMarks, TagsChanged, Task, TaskHistoryEntry, TaskStatus,
+};
 use crate::workflow::{FlakyValidation, HeldCandidate, KnownRedValidation};
 
 /// History event the final-recovery applier records its decision on.
@@ -744,12 +746,44 @@ impl PilotAdmissionVerdict {
 /// Every decision request in `history`, oldest first, with its effective
 /// state: a request is `answered` when a `decision_answered` entry (or its
 /// own resolution) records one, `expired` once its expiry passes, and
-/// `superseded` when a newer request for the same task follows it. At
-/// most one request per task therefore reads as `open`.
+/// `superseded` when its binding is no longer current or a newer request
+/// for the same task follows it. At most one request per task reads as `open`.
+///
+/// Supply the current task and its history. `pilot_operation` is the latest
+/// assessment operation id only while its admission hold still applies;
+/// pass `None` when the hold is cleared. Block episodes use the latest move
+/// to `blocked`, with the same nanosecond timestamp key as block triage.
 pub fn decision_requests_from_history(
+    task: &Task,
     history: &[TaskHistoryEntry],
+    pilot_operation: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<DecisionRequest> {
+    let block_episode = (task.status == TaskStatus::Blocked)
+        .then(|| {
+            history
+                .iter()
+                .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        })
+        .flatten()
+        .map(|entry| entry.at.to_rfc3339_opts(chrono::SecondsFormat::Nanos, true));
+    let binding_current = |request: &DecisionRequest| {
+        request.task_id == task.id
+            && match &request.binding {
+                DecisionBinding::BlockEpisode { episode } => {
+                    block_episode.as_ref() == Some(episode)
+                }
+                DecisionBinding::PilotOperation { operation_id } => {
+                    task.status == TaskStatus::Backlog
+                        && pilot_operation == Some(operation_id.as_str())
+                }
+                DecisionBinding::TaskRevision { revision, status } => {
+                    *status == task.status
+                        && chrono::DateTime::parse_from_rfc3339(revision)
+                            .is_ok_and(|revision| revision == task.updated_at)
+                }
+            }
+    };
     let answered: std::collections::BTreeMap<String, DecisionResolution> = history
         .iter()
         .filter(|entry| entry.event == DECISION_ANSWERED_EVENT)
@@ -778,10 +812,11 @@ pub fn decision_requests_from_history(
             request.resolution = Some(resolution.clone());
         } else if request.resolution.is_some() || request.state == DecisionRequestState::Answered {
             request.state = DecisionRequestState::Answered;
-        } else if task_ids
-            .iter()
-            .skip(index + 1)
-            .any(|task_id| task_id == &request.task_id)
+        } else if !binding_current(request)
+            || task_ids
+                .iter()
+                .skip(index + 1)
+                .any(|task_id| task_id == &request.task_id)
         {
             request.state = DecisionRequestState::Superseded;
         } else if now >= request.expires_at {
@@ -793,12 +828,15 @@ pub fn decision_requests_from_history(
     requests
 }
 
-/// The open decision requests in `history`, oldest first.
+/// The open decision requests in `task`'s history, oldest first.
+/// Current binding inputs follow [`decision_requests_from_history`].
 pub fn open_decision_requests(
+    task: &Task,
     history: &[TaskHistoryEntry],
+    pilot_operation: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Vec<DecisionRequest> {
-    decision_requests_from_history(history, now)
+    decision_requests_from_history(task, history, pilot_operation, now)
         .into_iter()
         .filter(|request| request.state == DecisionRequestState::Open)
         .collect()

@@ -114,7 +114,7 @@ fn pilot_receipts(
 }
 
 /// Operation id of the newest task-pilot receipt comment.
-fn latest_pilot_operation_id(comments: &[TaskComment]) -> Option<&str> {
+pub(super) fn latest_pilot_operation_id(comments: &[TaskComment]) -> Option<&str> {
     pilot_receipts(comments)
         .next()
         .map(|(_, receipt)| receipt.operation_id)
