@@ -22,7 +22,7 @@ Orbit's own repository uses feature-scoped design docs for load-bearing decision
 
 ## Who Orbit is for
 
-The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, Cursor, OpenCode, or Pi — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, audit, sandboxing, and parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../website/src/content/docs/concepts/agents.md).
+The AI-native engineer running multiple provider CLIs — such as Claude Code, Codex, Antigravity, Grok, Copilot, or Muse Code — heavily, who has outgrown the in-session model and wants engineering discipline around their AI-assisted work — tasks, decision records, audit, sandboxing, and parallel dispatch. Gemini CLI remains available as a legacy executor. See the [current provider and executor list](../website/src/content/docs/concepts/agents.md) (the Cursor, Pi, and OpenCode lanes were [retired](../website/src/content/docs/concepts/agents.md#retired-providers)).
 
 Staff and principal engineers, tech leads, and founding engineers fit the same profile. If they bring Orbit into their team's workflow, that's a natural extension — but the project is not positioned for team conversion. Orbit optimizes for the individual engineer who refuses to vibe-code their way through agent-driven development.
 

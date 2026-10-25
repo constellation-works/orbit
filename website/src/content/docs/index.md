@@ -34,9 +34,6 @@ next: false
         <li>Antigravity</li>
         <li>Grok</li>
         <li>Copilot</li>
-        <li>Cursor</li>
-        <li>OpenCode</li>
-        <li>Pi</li>
         <li>Muse Code</li>
       </ul>
       <p class="orbit-hero-providers-note">Legacy Gemini CLI is also available. <a href="/concepts/agents/">How agents are invoked →</a></p>

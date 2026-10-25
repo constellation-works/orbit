@@ -54,8 +54,9 @@ command. These are the destinations.
 ### AI coding agents you choose
 
 Orbit runs agent work by launching the CLI of the provider you configure: Claude
-Code, Codex, Gemini CLI, Antigravity, Grok, GitHub Copilot, Cursor Agent, Pi, or
-OpenCode. It passes the agent your task's context, such as the task
+Code, Codex, Gemini CLI, Antigravity, Grok, GitHub Copilot, or Muse Code (the
+Cursor, Pi, and OpenCode lanes were [retired](/concepts/agents/#retired-providers)).
+It passes the agent your task's context, such as the task
 description, prompts, and workspace files. The agent may send that content to
 its provider, under the provider's own terms and privacy policy. Orbit itself
 does not contact any AI provider's API.
