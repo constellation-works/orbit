@@ -42,6 +42,7 @@ mod apply;
 mod assessment;
 mod attachment_budget;
 mod blockers;
+mod cfg_gate;
 mod drain_promotion;
 mod freshness;
 pub(crate) mod input;

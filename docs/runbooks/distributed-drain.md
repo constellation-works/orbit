@@ -10,7 +10,7 @@ paths:
   - "crates/orbit-web/src/api/distributed.rs"
 related_features: [distributed-drain, federated-mcp, host-registry, remote-access]
 related_artifacts: [ORB-15639, ORB-14260, ORB-14194, ORB-13908, ORB-13941, ORB-14149, ORB-13663, ORB-13642, ORB-13625, ORB-12968, ORB-12516, ORB-12515, ORB-12500, ORB-12495, ORB-12564, ORB-12491, ORB-12490]
-last_validated: 2026-10-19
+last_validated: 2026-10-25
 ---
 
 # Set Up and Recover a Single-Owner Distributed Drain
@@ -397,9 +397,14 @@ evidence only the owner's own store, services or data can produce. A
 requirement stated only in warning prose routes nothing. Apply rejects
 a `required_os` entry whose criterion text names no OS or native facility
 (mac, macos, darwin, seatbelt, sandbox-exec, linux, bwrap, bubblewrap,
-windows, launchd, systemd, keychain, cgroup). The rejection tells the pilot
-to leave `required_os` empty for a portable criterion, and the repair pilot
-re-answers. When every
+windows, launchd, systemd, keychain, cgroup), unless its evidence cites one
+`#[cfg(target_os = "<os>")]` gate at a repository-relative `path:line` that
+apply confirms in the pinned source, on an item the criterion names, and the
+entry's `os` is that OS. A portable criterion, a gate on an unnamed item, an
+`os` that differs from the gate, an unconfirmed path or line, and a
+`cfg(unix)` or `cfg(not(windows))` gate that does not determine one OS are
+still rejected. The rejection tells the pilot to leave `required_os` empty,
+and the repair pilot re-answers. When every
 `required_os` entry names one OS and the task carries no `os:` tag, the pilot's
 atomic apply adds that tag, so tag routing sends the task to a host of that OS
 and a follower of another OS sees it as `host_os_mismatch`. An `os:` tag the

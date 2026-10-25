@@ -192,8 +192,14 @@ pilot records a typed `required_os` finding naming the one-based criterion and
 the OS, and commits it as `native_os_hold` in its assessment audit. Apply
 rejects an entry whose criterion text names no OS or native facility (mac,
 macos, darwin, seatbelt, sandbox-exec, linux, bwrap, bubblewrap, windows,
-launchd, systemd, keychain, cgroup) and tells the pilot to leave `required_os`
-empty for a portable criterion. When every
+launchd, systemd, keychain, cgroup), unless its evidence cites one
+`#[cfg(target_os = "<os>")]` gate at a repository-relative `path:line` that
+apply confirms in the pinned source, on an item the criterion names, and the
+entry's `os` is that OS. A portable criterion, a gate on an item the
+criterion does not name, an `os` that differs from the gate, a path or line
+the pin does not confirm, and a `cfg(unix)` or `cfg(not(windows))` gate that
+does not determine one OS are still rejected, and the rejection tells the
+pilot to leave `required_os` empty. When every
 finding names one OS and the task carries no `os:` tag, the same atomic write
 adds that tag (`os:linux`), so admission routes the task by its tags and a host
 of another OS waits as `host_os_mismatch`. The pilot never removes or replaces

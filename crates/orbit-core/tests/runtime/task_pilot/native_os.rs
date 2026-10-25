@@ -524,6 +524,14 @@ fn a_malformed_native_os_finding_is_refused_at_apply() {
             json!([{"criterion": 1, "os": "macos", "evidence": " "}]),
             "evidence must be a non-empty string",
         ),
+        (
+            json!([{"criterion": 1.5, "os": "macos", "evidence": "native launch"}]),
+            "criterion must be a 1-based index",
+        ),
+        (
+            json!([{"criterion": "1", "os": "macos", "evidence": "native launch"}]),
+            "criterion must be a 1-based index",
+        ),
         (json!({"criterion": 1}), "must be an array or null"),
     ] {
         let applied = apply(&workspace, &task, Some(required_os));
@@ -903,6 +911,196 @@ fn compatible_and_unrestricted_pilot_assignments_still_apply() {
     assert_eq!(kept.crew.as_deref(), Some("fixture"));
 }
 
+const GATED_FN: &str = "native_tree_attributes_a_build_like_workload";
+const GATE_PATH: &str = "crates/fixture/tree.rs";
+const GATED_SOURCE: &str = "\
+#[cfg(target_os = \"macos\")]
+#[test]
+fn native_tree_attributes_a_build_like_workload() {}
+
+#[cfg(unix)]
+fn portable_unix_probe() {}
+
+#[cfg(not(windows))]
+fn not_windows_probe() {}
+";
+
+fn source_line(needle: &str) -> usize {
+    GATED_SOURCE
+        .lines()
+        .position(|line| line.contains(needle))
+        .unwrap()
+        + 1
+}
+
+fn cite(attribute: &str, path: &str, line: usize, item: &str) -> String {
+    format!("Verified `{attribute}` at `{path}:{line}` on `{item}`.")
+}
+
+fn refused(applied: &Value, expected: &str) {
+    assert_eq!(applied["applied_count"], 0, "{applied}");
+    let error = applied["task_outcomes"][0]["error"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(error.contains(expected), "{expected}: {error}");
+}
+
+/// A criterion that names a cfg-gated test, and no OS token, routes to that
+/// OS when apply confirms the gate in the pinned source.
+fn a_verified_cfg_gate_on_a_named_test_routes_to_that_os() {
+    let mut workspace = Workspace::new();
+    on(&mut workspace, HostOs::Linux);
+    workspace.commit_file(GATE_PATH, GATED_SOURCE, "add cfg-gated test");
+    let criterion = format!(
+        "cargo test --list reports exactly one test, application::job::pipeline::worker::tests::usage::tree::{GATED_FN}"
+    );
+    let task = backlog_task(&workspace, &[&criterion], &[]);
+    let evidence = cite(
+        "#[cfg(target_os = \"macos\")]",
+        GATE_PATH,
+        source_line("target_os = \"macos\""),
+        GATED_FN,
+    );
+    assess(
+        &workspace,
+        &task,
+        Some(json!([{
+            "criterion": 1,
+            "os": "macos",
+            "evidence": evidence,
+        }])),
+    );
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let audit: Value =
+        serde_json::from_str(comments.last().unwrap().receipt().unwrap().body).unwrap();
+    assert_eq!(
+        audit["native_os_hold"]["requirements"],
+        json!([{"criterion": 1, "os": "macos"}]),
+        "{audit}"
+    );
+    assert_eq!(tags(&workspace, &task), ["os:macos"]);
+    let (reason, detail) = exclusion(&workspace, &task).expect("a linux host waits");
+    assert_eq!(reason, "host_os_mismatch");
+    assert!(
+        detail.contains("waits for a macos host (os:macos)"),
+        "{detail}"
+    );
+    on(&mut workspace, HostOs::Macos);
+    assert_eq!(exclusion(&workspace, &task), None);
+}
+
+/// An edit that is not in the pinned commit is not a verified gate.
+fn an_uncommitted_cfg_gate_is_not_verified() {
+    let workspace = Workspace::new();
+    workspace.commit_file(
+        GATE_PATH,
+        &format!("fn {GATED_FN}() {{}}\n"),
+        "ungated test",
+    );
+    std::fs::write(workspace.repo.join(GATE_PATH), GATED_SOURCE).unwrap();
+    let criterion = format!("Run {GATED_FN}.");
+    let task = backlog_task(&workspace, &[&criterion], &[]);
+    let applied = apply(
+        &workspace,
+        &task,
+        Some(json!([{
+            "criterion": 1,
+            "os": "macos",
+            "evidence": cite(
+                "#[cfg(target_os = \"macos\")]",
+                GATE_PATH,
+                source_line("target_os = \"macos\""),
+                GATED_FN,
+            ),
+        }])),
+    );
+    refused(&applied, "pinned source does not have that gate");
+    assert!(tags(&workspace, &task).is_empty(), "{applied}");
+    assert_eq!(exclusion(&workspace, &task), None);
+}
+
+/// Neighbouring citations stay refused: another item, the wrong OS, a cfg
+/// that does not determine one OS, and a path the pin does not contain.
+fn a_cfg_gate_citation_is_refused_for_each_neighbouring_miss() {
+    let macos_line = source_line("target_os = \"macos\"");
+    let unix_line = source_line("cfg(unix)");
+    let not_windows_line = source_line("not(windows)");
+    let macos_gate = "#[cfg(target_os = \"macos\")]";
+    let named = format!("Run {GATED_FN} once.");
+    let cases = [
+        (
+            "Run ordinary_probe once.",
+            json!([{
+                "criterion": 1,
+                "os": "macos",
+                "evidence": cite(macos_gate, GATE_PATH, macos_line, GATED_FN),
+            }]),
+            "does not name the item",
+        ),
+        (
+            named.as_str(),
+            json!([{
+                "criterion": 1,
+                "os": "linux",
+                "evidence": cite(macos_gate, GATE_PATH, macos_line, GATED_FN),
+            }]),
+            "os is linux but the cited gate is target_os = \"macos\"",
+        ),
+        (
+            "Run portable_unix_probe once.",
+            json!([{
+                "criterion": 1,
+                "os": "linux",
+                "evidence": cite("#[cfg(unix)]", GATE_PATH, unix_line, "portable_unix_probe"),
+            }]),
+            "does not determine one of linux, macos, or windows",
+        ),
+        (
+            "Run not_windows_probe once.",
+            json!([{
+                "criterion": 1,
+                "os": "linux",
+                "evidence": cite(
+                    "#[cfg(not(windows))]",
+                    GATE_PATH,
+                    not_windows_line,
+                    "not_windows_probe",
+                ),
+            }]),
+            "does not determine one of linux, macos, or windows",
+        ),
+        (
+            named.as_str(),
+            json!([{
+                "criterion": 1,
+                "os": "macos",
+                "evidence": cite(macos_gate, GATE_PATH, unix_line, GATED_FN),
+            }]),
+            "pinned source does not have that gate",
+        ),
+        (
+            named.as_str(),
+            json!([{
+                "criterion": 1,
+                "os": "macos",
+                "evidence": cite(macos_gate, "crates/fixture/missing.rs", 1, GATED_FN),
+            }]),
+            "pinned source has no file",
+        ),
+    ];
+    // Each case has its own workspace. The tasks share one fixture file, and
+    // one drain wave would defer every task after the first.
+    for (criterion, finding, expected) in cases {
+        let workspace = Workspace::new();
+        workspace.commit_file(GATE_PATH, GATED_SOURCE, "add cfg-gated tests");
+        let task = backlog_task(&workspace, &[criterion], &[]);
+        let applied = apply(&workspace, &task, Some(finding));
+        refused(&applied, expected);
+        assert!(tags(&workspace, &task).is_empty(), "{expected}: {applied}");
+        assert_eq!(exclusion(&workspace, &task), None, "{expected}");
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_native_os_finding_tags_an_untagged_task_for_that_os_scenarios,
@@ -924,4 +1122,11 @@ crate::scenario_table!(
     a_pilot_os_tag_conflicting_with_the_explicit_crew_is_refused_unapplied,
     a_pilot_complexity_rerate_falls_back_from_an_incompatible_crew,
     compatible_and_unrestricted_pilot_assignments_still_apply
+);
+
+crate::scenario_table!(
+    cfg_gated_criterion_routes_by_verified_gate_scenarios,
+    a_verified_cfg_gate_on_a_named_test_routes_to_that_os,
+    an_uncommitted_cfg_gate_is_not_verified,
+    a_cfg_gate_citation_is_refused_for_each_neighbouring_miss
 );
