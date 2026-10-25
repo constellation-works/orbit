@@ -350,6 +350,40 @@ records an `activity.tag_instructions_applied` event naming the step,
 activity, task, and each instruction's tag, role, source, SHA-256 and
 size.
 
+## Review-skip tags
+
+A workspace can map its own tag to a review skip for low-risk work that
+touches paths outside `workflow.light_delivery_paths`. The workspace file
+or the global file may carry the mapping, layered per tag like
+`[workflow.tag_instructions]`:
+
+```toml
+[workflow.review_skip_tags.comment-hygiene]
+paths = ["docs/**", "**/*.md"]
+guard = "scripts/check-comment-only-diff.sh"
+```
+
+- `paths` lists the path globs a candidate carrying the tag must change
+  only within (the `workflow.light_delivery_paths` glob syntax, with `!`
+  excludes; `["**"]` allows every path). `guard` is an optional
+  repository-relative executable, read from the delivery's base revision,
+  that must exit 0 for the tag to skip review.
+- Edit `config.toml` directly; `orbit config set` does not write these
+  keys (they are unknown keys, unlisted by `orbit config keys`). The
+  seeded template is not migrated into existing config files, so an
+  existing install opts in by adding the tables to its `config.toml`.
+- A mapped tag skips every agent review layer and nothing else:
+  required validation, workspace gates and hosted checks still run. The
+  built-in `skip-review` and `skip-validation` tags cannot be remapped.
+- Only filing a task or an operator update may add a mapped tag; an
+  agent's update that adds one is refused, while removal is always
+  allowed.
+- Verify with `orbit config show` (effective mappings under
+  `Review skip tags:`, `review_skip_tags` in `--json`) and with
+  `orbit task show`: each candidate's decision is recorded once in the
+  task's history as `light_delivery_applied` or
+  `light_delivery_ignored`, naming the tag and the failed condition.
+
 ## Environment passthrough
 
 Agent subprocesses always start from a **cleared** environment plus the

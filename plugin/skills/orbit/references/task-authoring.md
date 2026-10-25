@@ -235,7 +235,9 @@ Any other changed path makes delivery ignore
 both tags and review and validate normally, and the task's history records
 why. A reviewer that does run keeps its own checks, so tag a task with both to
 skip everything. Don't tag code changes in the hope they stay small: the
-allow-list, not the tag, decides.
+allow-list, not the tag, decides. For low-risk work outside those paths, a
+workspace can map its own tag to a review-only skip — see
+[review-skip tags](../../orbit-setup/references/configuration.md#review-skip-tags).
 
 ## Modification footprint
 
