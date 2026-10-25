@@ -30,6 +30,7 @@ impl Execute for AgentsCommand {
         let Invocation { spec, input } = self.command;
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
+            AgentsVerb::Scorecard if value["per_task"] == true => per_task_blocks(&value),
             AgentsVerb::Scorecard if value["shadow"] == true => shadow_blocks(&value),
             AgentsVerb::Scorecard if value["by_type"] == true => by_type_blocks(&value),
             AgentsVerb::Scorecard => scorecard_blocks(&value),
@@ -212,6 +213,55 @@ pub(crate) fn by_type_blocks(value: &Value) -> Vec<Block> {
             number(&cell["crew_mean"]),
             number(&cell["score"]),
         ]);
+    }
+    vec![Block::table(table)]
+}
+
+/// The per-task export: one row per implemented task, without naming it.
+/// Use `--json` for the machine-readable export the offline report reads.
+fn per_task_blocks(value: &Value) -> Vec<Block> {
+    let terms = value["terms"].as_array().cloned().unwrap_or_default();
+    let mut columns = vec![
+        Column::new("CREW").fixed(),
+        Column::new("MODEL"),
+        Column::new("TIER"),
+        Column::new("TYPE"),
+        Column::new("TAGS"),
+        Column::new("PATHS"),
+    ];
+    columns.extend(
+        terms
+            .iter()
+            .map(|term| Column::new(&text(&term["label"]).to_uppercase()).number()),
+    );
+    let mut table = Table::new(columns)
+        .keep_all_columns()
+        .empty_message("no implemented task in the window".to_string())
+        .trailing_notice(selection_line(value))
+        .trailing_notice(
+            "One row per implemented task; use --json for the machine-readable export.".to_string(),
+        );
+    for task in value["tasks"].as_array().into_iter().flatten() {
+        let join = |key: &str| {
+            task[key]
+                .as_array()
+                .map(|items| items.iter().map(text).collect::<Vec<_>>().join(","))
+                .unwrap_or_default()
+        };
+        let mut cells = vec![
+            text(&task["crew"]),
+            text(&task["model"]),
+            text(&task["tier"]),
+            text(&task["type"]),
+            join("tags"),
+            join("path_prefixes"),
+        ];
+        cells.extend(
+            terms
+                .iter()
+                .map(|term| number(&task["counts"][text(&term["key"])])),
+        );
+        table.add_row(cells);
     }
     vec![Block::table(table)]
 }

@@ -37,6 +37,15 @@ pub(super) struct RoleSpec {
 }
 
 /// The implementer `(crew, model, tier, type)` cell matrix.
+/// One row per implemented task, for the offline type-discovery report.
+pub(super) fn implementer_per_task_rows(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    types: &[orbit_config::CrewPerformanceType],
+) -> Vec<serde_json::Value> {
+    implementers::per_task_rows(facts, since, types)
+}
+
 pub(super) fn implementer_by_type_cells(
     facts: &AgentFacts,
     since: DateTime<Utc>,

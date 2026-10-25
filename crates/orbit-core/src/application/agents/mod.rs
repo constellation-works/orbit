@@ -102,4 +102,7 @@ pub struct AgentQuery {
     min_support: usize,
 }
 
-pub use api::{agent_attribution, agent_by_type_scorecard, agent_detail, agent_scorecard};
+pub use api::{
+    agent_attribution, agent_by_type_scorecard, agent_detail, agent_per_task_export,
+    agent_scorecard,
+};
