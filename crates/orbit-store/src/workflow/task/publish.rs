@@ -88,7 +88,8 @@ pub struct PublicationPublishRequest {
 /// What a publication attempt did to the publication branch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PublicationPublishStatus {
-    /// Created the configured branch in a previously empty repository.
+    /// Created the configured branch; the repository may already hold other
+    /// lineages' branches, which this lineage never reads or touches.
     Initialized,
     /// Fast-forwarded the branch with a new generation.
     Advanced,
@@ -117,9 +118,16 @@ pub struct PublicationPublishOutcome {
 ///
 /// Fails closed — leaving the remote branch and the caller's last-success
 /// record untouched — when the caller is not the declared owner, the registered
-/// workspace or source fingerprint disagrees, the repository is non-empty
-/// without a matching publication envelope, the branch moved, or any bundle
-/// fails validation.
+/// workspace or source fingerprint disagrees, the bound branch carries content
+/// that is not this lineage's matching publication envelope, the branch moved,
+/// or any bundle fails validation. Lineages are branch-scoped: an absent bound
+/// branch initializes generation 1 even when other branches exist, and other
+/// branches are never read, written, or validated. There is deliberately no
+/// repo-wide foreign-repository guard (for example against a default branch
+/// carrying ordinary source commits): such a guard would require inspecting
+/// branches outside this lineage, and the bound branch plus its
+/// compare-and-swap creation already prevent adopting or overwriting anything
+/// Orbit did not create for this lineage.
 pub fn publish_task_snapshot(
     registry: &TaskRegistryStore,
     request: PublicationPublishRequest,
@@ -412,19 +420,11 @@ impl PublicationCache {
     /// and lineage before any snapshot is built.
     fn observe_remote(&self, request: &ValidatedRequest) -> Result<RemoteState, OrbitError> {
         let git_dir = self.git_dir_str()?;
-        let listing = runner().run(&["--git-dir", git_dir, "ls-remote", "origin"])?;
-        let branch_present = listing
-            .lines()
-            .filter_map(|line| line.split_once('\t'))
-            .any(|(_, name)| name.trim() == request.publication_branch);
-        if !branch_present {
-            if listing.trim().is_empty() {
-                return Ok(RemoteState { tip: None });
-            }
-            return Err(publish_error(format!(
-                "publication repository is not empty and does not carry branch '{}'; refusing to initialize, adopt, or overwrite it",
-                request.publication_branch
-            )));
+        // Branch-scoped observation: query only the bound branch. An absent
+        // bound branch initializes this lineage regardless of any other
+        // branches in the repository, which are never read or validated.
+        if self.remote_branch_tip(request)?.is_none() {
+            return Ok(RemoteState { tip: None });
         }
 
         let refspec = format!(
@@ -788,8 +788,8 @@ fn decide_action(
     let Some(tip) = &observed.tip else {
         if let Some(last) = &request.last_success {
             return Err(publish_error(format!(
-                "publication repository is empty but generation {} at commit {} was recorded locally; resolve the publication binding before publishing again",
-                last.generation, last.commit
+                "publication branch '{}' is absent but generation {} at commit {} was recorded locally; resolve the publication binding before publishing again",
+                request.publication_branch, last.generation, last.commit
             )));
         }
         // Retain pending evidence: an initializing push may still be in flight.

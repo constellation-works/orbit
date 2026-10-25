@@ -5,7 +5,7 @@ tags: [operations, backup, recovery, git, task-publication]
 paths: ["crates/orbit-cli/src/command/task/publication.rs", "crates/orbit-cli/src/command/workspace/publication.rs", "crates/orbit-cli/src/command/workspace/source_remote.rs", "crates/orbit-store/src/workflow/task/**"]
 related_features: [task-publication, task-artifacts, host-registry]
 related_artifacts: [ORB-11077, ORB-11142, ORB-11145, ORB-11426]
-last_validated: 2026-10-19
+last_validated: 2026-10-25
 ---
 
 # Publish Orbit Tasks to a Dedicated Repository
@@ -24,7 +24,7 @@ global-root and database backups described in [Inventory and Protect Orbit State
 Before binding a workspace, prepare:
 
 - a registered local **owner** checkout, not a replica;
-- one empty, dedicated Git repository for exactly one Orbit workspace;
+- one Git repository dedicated to task publication; it may be shared by several Orbit workspaces, each bound to its own branch and publication ID (the bound branch for this workspace must not exist yet, or must already carry this lineage);
 - provider-side private visibility, collaborators, retention, and branch protection;
 - working SSH or HTTPS credentials for that repository; and
 - the logical workspace selector returned by `orbit workspace list --all --format json`.
@@ -205,7 +205,7 @@ Success has all of these properties:
 - local and remote commit IDs match; and
 - `incomplete_attachments` matches the selected attachment policy (`true` after `omit`).
 
-The first publish creates generation 1 and the configured branch in an empty repository.
+The first publish creates generation 1 and the configured branch when that branch is absent — including in a repository that already holds other workspaces' publication branches, whose tips it never reads or moves. Branch creation is a compare-and-swap that fails if the branch appears first.
 Later publishes advance the same linear lineage with compare-and-swap semantics.
 
 ## Inspect and recover a publication
@@ -264,7 +264,7 @@ unrelated authorities.
 | A binding appears missing or belongs to another checkout. | Run `orbit workspace list --all --format json`, then repeat `workspace publication show` with the intended logical `--workspace` selector before changing the binding. |
 | The logical `ws_*` ID differs from an internal runtime task partition. | This is supported after ORB-11142. Keep selecting the logical workspace; do not rebind or rewrite task storage to make the IDs match. |
 | The publication remote is rejected during bind. | Remove credentials from the URL, confirm it differs from the source remote, and use a dedicated repository. |
-| First publication finds an unrelated or non-publication branch. | Stop. Provision an empty dedicated repository; Orbit will not adopt or overwrite unrelated history. |
+| First publication finds an unrelated or non-publication commit on its bound branch. | Stop. Orbit will not adopt or overwrite that branch; bind an unused branch instead. Other branches in the same repository do not block a first publish. |
 | `--attachments fail` names one or more files. | Review the named files. Use `omit` for a core-record snapshot, or use `include` only after explicit exposure approval. |
 | Status reports a moved branch or authority conflict. | Stop publishing and identify the unexpected writer or stale binding. Orbit will not merge or force-push the branch. |
 | The registered checkout path is genuinely stale or invalid. | Restore or re-point the checkout and run `orbit workspace init --force` from the intended repository. A different runtime partition alone is not evidence of stale registration. |

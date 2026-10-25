@@ -1,7 +1,6 @@
 //  Publication transport is a separate workflow area. Its security fixture
 //  owns a child process with a private PATH so no real transport can run.
 
-
 #[cfg(unix)]
 #[test]
 fn inspect_and_restore_refuse_credentials_before_git_or_cache_writes() {
@@ -122,6 +121,9 @@ mod inspect;
 
 #[path = "publication/pending.rs"]
 mod pending;
+
+#[path = "publication/shared_repo.rs"]
+mod shared_repo;
 
 #[cfg(unix)]
 #[path = "publication/archive.rs"]
