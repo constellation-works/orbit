@@ -8,7 +8,7 @@ use orbit_common::OrbitError;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     JobRun, JobRunState, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixAttempt,
-    PrAutoFixPush,
+    PrAutoFixPush, REVIEW_ABANDONED_MARKER,
 };
 use serde_json::{Map, Value, json};
 
@@ -118,8 +118,18 @@ fn finding_count(value: Option<&Value>) -> Option<u64> {
 }
 
 fn verdict_from_message(message: &str) -> Option<&str> {
+    // An abandoned settlement records no verdict: the step error says the
+    // attempt "was released without a verdict". Report the gate outcome
+    // instead of misreading the parenthetical "(verdict incomplete, ...)".
+    if message.contains(REVIEW_ABANDONED_MARKER) {
+        return Some("abandoned");
+    }
     let rest = message.split("verdict ").nth(1)?;
-    let token = rest.split([' ', '(']).next()?.trim();
+    let token = rest
+        .split([' ', '('])
+        .next()?
+        .trim()
+        .trim_matches([',', ';', ':', '.', '!', '?', '"', '\'']);
     (!token.is_empty()).then_some(token)
 }
 
