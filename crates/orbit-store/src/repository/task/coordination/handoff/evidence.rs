@@ -250,6 +250,30 @@ impl TaskCommitBoundary {
             .any(|carried| carried == tag))
     }
 
+    /// Whether any owner-judged review-skip decision (`skip-review` or a
+    /// mapped tag) applies to `handoff`'s candidate, and its copy of the
+    /// task still carries that tag.
+    pub(super) fn light_review_skip_applies(
+        &self,
+        handoff: &TaskHandoff,
+        light: &[LightDeliveryDecision],
+    ) -> Result<bool, OrbitError> {
+        let Some(decision) = light.iter().find(|decision| {
+            decision.skips_review()
+                && decision.applies()
+                && decision.candidate == handoff.candidate.candidate.commit
+        }) else {
+            return Ok(false);
+        };
+        Ok(self
+            .bundle_store
+            .read_bundle_lightweight(&handoff.task_id)?
+            .envelope
+            .tags
+            .iter()
+            .any(|carried| carried == &decision.tag))
+    }
+
     pub(super) fn observe_handoff<'a>(
         &self,
         auth: &'a ClaimInvocation,

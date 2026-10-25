@@ -460,6 +460,7 @@ pub trait NullRuntimeHost: Send + Sync {
             required_validation_commands: NullRuntimeHost::required_validation_commands(self),
             baseline_commands: NullRuntimeHost::review_baseline_commands(self),
             light_delivery_paths: None,
+            review_skip_tags: None,
         })
     }
 

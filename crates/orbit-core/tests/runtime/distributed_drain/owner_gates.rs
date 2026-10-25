@@ -35,6 +35,7 @@ fn owner_gates() -> ValidationGates {
                 .map(|pattern| (*pattern).to_string())
                 .collect(),
         ),
+        review_skip_tags: Some(std::collections::BTreeMap::new()),
     }
 }
 
@@ -44,6 +45,7 @@ fn replica_gates() -> ValidationGates {
         baseline_commands: vec![],
         // A replica fallback carries its own list, which no leaf applies.
         light_delivery_paths: owner_gates().light_delivery_paths,
+        review_skip_tags: Some(std::collections::BTreeMap::new()),
     }
 }
 

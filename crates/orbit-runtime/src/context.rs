@@ -450,6 +450,9 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.tag_instructions]`: the files that replace or disable
     /// Orbit's shipped per-tag instructions.
     tag_instructions: orbit_config::TagInstructionSettings,
+    /// `[workflow.review_skip_tags]`: mapped tags whose candidates may
+    /// skip agent review under their own paths and guard.
+    review_skip_tags: orbit_config::ReviewSkipSettings,
     /// `workflow.unlocked_context_paths`: declared context that takes no
     /// context lock.
     unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
@@ -508,6 +511,7 @@ impl OrbitRuntimeSettings {
         worktree_parked_reclaim_after_hours: u64,
         mid_run_steering: orbit_config::MidRunSteeringSettings,
         tag_instructions: orbit_config::TagInstructionSettings,
+        review_skip_tags: orbit_config::ReviewSkipSettings,
         unlocked_context_paths: crate::task::locks::UnlockedContextPaths,
         unlocked_path_validation_commands: Vec<String>,
         generated_paths: std::collections::BTreeMap<String, String>,
@@ -549,6 +553,7 @@ impl OrbitRuntimeSettings {
             worktree_parked_reclaim_after_hours,
             mid_run_steering,
             tag_instructions,
+            review_skip_tags,
             unlocked_context_paths,
             unlocked_path_validation_commands,
             generated_paths,
@@ -587,6 +592,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn tag_instructions(&self) -> &orbit_config::TagInstructionSettings {
         &self.tag_instructions
+    }
+
+    pub(crate) fn review_skip_tags(&self) -> &orbit_config::ReviewSkipSettings {
+        &self.review_skip_tags
     }
 
     pub fn unlocked_context_paths(&self) -> &crate::task::locks::UnlockedContextPaths {

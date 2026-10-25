@@ -108,6 +108,9 @@ pub struct ResolvedConfig {
     /// `[workflow.tag_instructions.<tag>]`: which file, if any, replaces
     /// Orbit's shipped default instruction for a tag and role.
     pub tag_instructions: crate::TagInstructionSettings,
+    /// `[workflow.review_skip_tags.<tag>]`: path allow-list and optional
+    /// guard under which a candidate carrying `<tag>` skips agent review.
+    pub review_skip_tags: crate::ReviewSkipSettings,
 }
 
 impl ResolvedConfig {
@@ -145,6 +148,7 @@ impl ResolvedConfig {
             plugins: BTreeMap::new(),
             plugin_enablement: BTreeMap::new(),
             tag_instructions: crate::TagInstructionSettings::default(),
+            review_skip_tags: crate::ReviewSkipSettings::default(),
             snapshot,
         }
     }
@@ -347,6 +351,8 @@ impl ResolvedConfig {
             crate::plugin_enablement::plugin_enablement_from_document(&document, config_path)?;
         let tag_instructions =
             crate::tag_instructions::tag_instructions_from_document(&document, config_path)?;
+        let review_skip_tags =
+            crate::review_skip_tags::review_skip_tags_from_document(&document, config_path)?;
 
         Ok(Self {
             execution_env: ExecutionEnvPolicy::from_snapshot(&snapshot)
@@ -378,6 +384,7 @@ impl ResolvedConfig {
             plugins,
             plugin_enablement,
             tag_instructions,
+            review_skip_tags,
             snapshot,
         })
     }

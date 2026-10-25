@@ -57,6 +57,7 @@ impl ClaimedLeaf {
             required_validation_commands: review.required_validation_commands.clone()?,
             baseline_commands: review.baseline_commands.clone(),
             light_delivery_paths: None,
+            review_skip_tags: None,
         })
     }
 }
@@ -69,6 +70,7 @@ impl OrbitRuntime {
             required_validation_commands: self.workflow_required_validation_commands().to_vec(),
             baseline_commands: self.review_baseline_commands().to_vec(),
             light_delivery_paths: Some(self.workflow_light_delivery_paths().to_vec()),
+            review_skip_tags: Some(self.review_skip_profiles()),
         }
     }
 
