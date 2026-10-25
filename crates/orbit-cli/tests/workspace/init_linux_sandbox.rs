@@ -166,10 +166,8 @@ fn failed_preparation_still_seeds_init_in_both_modes_and_json_formats() {
         let fixture = Fixture::new();
         assert_warned_init(&fixture.init(interactive, format));
         let root = fixture.home.join(".orbit");
-        let config: toml::Value = fs::read_to_string(root.join("config.toml"))
-            .unwrap()
-            .parse()
-            .unwrap();
+        let config: toml::Value =
+            toml::from_str(&fs::read_to_string(root.join("config.toml")).unwrap()).unwrap();
         assert_eq!(config["machine"]["name"].as_str(), Some("sandbox-fixture"));
         for path in [
             "skills",

@@ -1167,7 +1167,8 @@ fn historical_timing_spellings_keep_task_commands_and_config_writes_usable() {
         ("before_landing", "before_landing"),
         ("before-landing", "before_landing"),
     ] {
-        let mut document: toml::Value = fs::read_to_string(&path).unwrap().parse().unwrap();
+        let mut document: toml::Value =
+            toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         document["review"]["timing"] = toml::Value::String(spelling.into());
         fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
         let added = fixture.json(&[
@@ -1192,10 +1193,10 @@ fn historical_timing_spellings_keep_task_commands_and_config_writes_usable() {
                 .any(|task| task["id"] == id)
         );
         set_policy(&fixture, "review.timing", spelling);
-        let saved: toml::Value = fs::read_to_string(&path).unwrap().parse().unwrap();
+        let saved: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(saved["review"]["timing"].as_str(), Some(canonical));
     }
-    let mut document: toml::Value = fs::read_to_string(&path).unwrap().parse().unwrap();
+    let mut document: toml::Value = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
     document["review"]["timing"] = toml::Value::String("invalid-timing".into());
     fs::write(&path, toml::to_string(&document).unwrap()).unwrap();
     let output = fixture
@@ -1256,7 +1257,8 @@ fn doctor_timing_alias_rewrite_preserves_policy_and_legacy_readability() {
                 .iter()
                 .any(|key| key.key == "operation.review_minutes")
         );
-        let document: toml::Value = std::fs::read_to_string(&path).unwrap().parse().unwrap();
+        let document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(document["review"]["timing"].as_str(), Some(canonical));
         let reloaded = OrbitRuntime::from_roots(&global, &workspace).unwrap();
         assert_eq!(reloaded.operation_policy(), &before, "{alias}");

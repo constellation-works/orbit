@@ -417,7 +417,7 @@ impl ConfigStore {
             // number, array, or inline table.
             self.set_document_value(key, &toml_edit::Value::from(value).to_string())?;
         }
-        let staged = self.doc.to_string().parse::<toml::Value>().map_err(|err| {
+        let staged: toml::Value = toml::from_str(&self.doc.to_string()).map_err(|err| {
             OrbitError::InvalidInput(format!("staged machine identity is not valid TOML: {err}"))
         })?;
         for (key, value) in fields {
@@ -640,7 +640,7 @@ impl ConfigStore {
     /// scope-free admission pipeline cannot see which file it is resolving,
     /// so the store — which does — states the rule.
     fn reject_workspace_machine_table(&self) -> Result<(), OrbitError> {
-        let document = self.doc.to_string().parse::<toml::Value>().map_err(|err| {
+        let document: toml::Value = toml::from_str(&self.doc.to_string()).map_err(|err| {
             OrbitError::InvalidInput(format!(
                 "invalid TOML in '{}': {err}",
                 redact_home_dir(&self.path.display().to_string())
@@ -943,11 +943,10 @@ pub(crate) fn validated_config_store_path(path: &Path) -> Result<Option<PathBuf>
 /// falling back to a plain string if it doesn't parse as one. No `--type`
 /// flag: this is the entire type-inference rule for `orbit config set`.
 ///
-/// `toml_edit::Value` (like `toml::Value`) has no public "parse a bare
-/// value" entry point — both crates' string parsers expect a full
-/// `key = value` document, so `"10000".parse::<toml_edit::Value>()` is not
-/// a thing. Instead, wrap `raw` as the value of a throwaway key in a
-/// synthetic one-line document, parse *that*, and pull the value back out.
+/// Wrap `raw` as the value of a throwaway key in a synthetic one-line
+/// document, parse *that*, and pull the value back out. Parsing in
+/// document position keeps the value's decor as written, rather than the
+/// cleared decor a bare-value parse returns.
 /// Any extra keys `raw` might smuggle in (e.g. `1\nother = "x"`) are parsed
 /// but never read, so this can't be used to inject unrelated keys — worst
 /// case a crafted `raw` just fails to parse and falls back to a string.

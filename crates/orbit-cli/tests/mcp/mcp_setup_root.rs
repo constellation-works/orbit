@@ -1229,7 +1229,7 @@ fn expected_local_args(fixture: &ExternalRootFixture, workspace: &str) -> Vec<St
 }
 
 fn toml_server_args(document: &str, server_id: &str) -> Vec<String> {
-    let parsed: toml::Value = document.parse().expect("parse toml client config");
+    let parsed: toml::Value = toml::from_str(document).expect("parse toml client config");
     parsed["mcp_servers"][server_id]["args"]
         .as_array()
         .expect("toml args")
