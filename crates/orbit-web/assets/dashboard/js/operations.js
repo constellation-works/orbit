@@ -10,7 +10,7 @@ import { DRAIN_LOCK_REASONS, DRAIN_POOLS, drainCrewNote, drainPilotNote, drainRe
 import { sparkline, svg } from './sparkline.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout, drainStartConcurrencyQuery, initDrainStart, renderDrainStart, resetDrainStart } from './drain-start.js';
 import { hideDrainStarted, renderDrainStarted } from './drain-started.js';
-import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
+import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, editorObserved, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
 
 const $ = (id) => document.getElementById(id);
 const pendingOperations = new Set();
@@ -843,7 +843,7 @@ function routineEditButton(payload, routine) {
     label: `${routine.name} trigger`,
     reason: controlReason(payload, "routine_trigger"),
     onOpen: () => {
-      openEditor(key, "routine", routineDraft(routine.trigger));
+      openEditor(key, "routine", routineDraft(routine.trigger), { source: routine.source, target: routine.target, trigger: routine.trigger });
       renderOperations(lastOperations || payload, { force: true });
     },
   });
@@ -857,13 +857,16 @@ function routineEditor(payload, routine) {
     key,
     routine,
     cronPreview: cronText,
-    save: (trigger) => postJson("/api/routines/trigger", {
-      name: routine.name, source: routine.source, target: routine.target,
-      machine_name: payload.machine_name, expected_trigger: routine.trigger, trigger,
-    }).then((result) => {
-      if (selection.current()) feedback("routine-operation-feedback", "success", `${result.message}: ${routine.name}.`);
-      return result;
-    }),
+    save: (trigger) => {
+      const observed = editorObserved(key) || { source: routine.source, target: routine.target, trigger: routine.trigger };
+      return postJson("/api/routines/trigger", {
+        name: routine.name, source: observed.source, target: observed.target,
+        machine_name: payload.machine_name, expected_trigger: observed.trigger, trigger,
+      }).then((result) => {
+        if (selection.current()) feedback("routine-operation-feedback", "success", `${result.message}: ${routine.name}.`);
+        return result;
+      });
+    },
     onClose: (saved) => {
       if (saved) fetchAndRenderOperations().catch(() => {});
       else if (lastOperations) renderOperations(lastOperations, { force: true });
@@ -1252,7 +1255,7 @@ function autoTaskEditButton(payload, definition) {
     label: `${definition.name} schedule`,
     reason: definition.plugin_inactive ? "Seeded by a plugin that is off here" : actionReason(payload, "auto_task_schedule"),
     onOpen: () => {
-      openEditor(key, "auto-task", autoTaskDraft(definition.schedule));
+      openEditor(key, "auto-task", autoTaskDraft(definition.schedule), { schedule: definition.schedule });
       renderAutoTasks(lastAutoTasks || payload, { force: true });
     },
   });
@@ -1266,12 +1269,15 @@ function autoTaskEditor(definition) {
     key,
     definition,
     cronPreview: cronText,
-    save: (schedule) => postJson("/api/auto-tasks/schedule", {
-      name: definition.name, expected_schedule: definition.schedule, schedule,
-    }).then((result) => {
-      if (selection.current()) feedback("auto-task-operation-feedback", "success", `${result.message}: ${definition.name}.`);
-      return result;
-    }),
+    save: (schedule) => {
+      const observed = editorObserved(key);
+      return postJson("/api/auto-tasks/schedule", {
+        name: definition.name, expected_schedule: observed ? observed.schedule : definition.schedule, schedule,
+      }).then((result) => {
+        if (selection.current()) feedback("auto-task-operation-feedback", "success", `${result.message}: ${definition.name}.`);
+        return result;
+      });
+    },
     onClose: (saved) => {
       if (saved) fetchAndRenderAutoTasks()?.catch?.(() => {});
       else if (lastAutoTasks) renderAutoTasks(lastAutoTasks, { force: true });
