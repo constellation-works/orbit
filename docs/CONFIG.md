@@ -2003,6 +2003,8 @@ At claim admission the owner captures `review.timing` as the contract's `before_
 | `pr.signature` | `true` | **Advanced.** Append the authoring model's signature. |
 | `pr.orchestration_trailer` | `true` | **Advanced.** Append the `Orchestrated-By` trailer to PR bodies. |
 | `pr.labels` | `[]` | **Advanced.** Labels `gh pr create` applies to each PR Orbit opens. |
+| `pr.task_tag_labels` | `[]` | **Advanced.** Allowlist of task tags mirrored as PR labels, matched exactly (case-sensitive). |
+| `pr.task_type_labels` | `{}` | **Advanced.** Table mapping `feature`, `bug`, `refactor` or `chore` to a PR label name. Unknown types are refused. |
 | `pr.reviewers` | `[]` | **Advanced.** Reviewers (logins or `org/team`) requested on each PR Orbit opens. |
 | `pr.draft` | `false` | **Advanced.** Open every PR as a draft. Completion never merges a draft. |
 
@@ -2058,6 +2060,19 @@ Placeholders are `{{name}}`, with optional spaces inside the braces. An unknown 
 **Branch names** are stable across a run's retries: `{{hash}}` comes from the run ID, and with `ext.*` placeholders an existing local branch carrying the run's hash is reused even if the task's refs changed. A sample render is checked at load, and each real render when `worktree_setup` names the branch: a name that is empty, contains `..`, `@{`, whitespace, a control character or one of `~^:?*[\`, starts with `-`, has an empty component, a component starting with `.` or ending in `.lock`, or ends with `.`, is refused before any ref is created. Readers that find a task from a branch (PR closure, external-merge settlement, PR adoption and CI-failure filing) match the complete template, including the eight-character hex hash and any trailing literal, with `prefix` bound to `orbit`. A task token inside an external reference or a prefix of the owning task ID does not establish ownership. An external reference is matched verbatim, including an id that contains `/`. The fixed hash length also lets readers identify the task when `{{hash}}` immediately follows `{{task_id}}`.
 
 `pr.labels`, `pr.reviewers` and `pr.draft` apply when `pr_open` creates a PR (`gh pr create --label/--reviewer/--draft`); an entry starting with `-` is refused. Completion never merges a draft; mark it ready on the forge to continue.
+
+Task-derived labels are opt-in and separate from `pr.labels`. For example:
+
+```toml
+[pr]
+task_tag_labels = ["ui", "security"]
+
+[pr.task_type_labels]
+bug = "bug"
+feature = "enhancement"
+```
+
+After creating or reusing a PR, Orbit unions the allowlisted tags present on every delivered task with their mapped type labels. Empty settings add no forge commands. Label names must be non-empty and must not start with `-`, just like `pr.labels`. Orbit creates missing labels, accepts existing labels without changing their color or description, then adds the labels. Label creation and application use normal transient retries; any remaining failure is warned and recorded in the `pr_open` output's `task_labels.applied` and `task_labels.failed` (label and reason), while the PR step still succeeds with its original decision and PR identity. It never removes labels or syncs later task edits.
 
 ### Housekeeping
 

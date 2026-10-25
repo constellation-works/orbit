@@ -33,6 +33,7 @@ pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
     let context = load_handoff_context(host, input, "pr_open")?;
     match open_or_reuse_pr(host, input, &context) {
         Ok(mut output) => {
+            super::labels::apply_task_labels(host, &context, &mut output);
             output["superseded_pull_request"] =
                 supersede_prior_pull_request(host, &context.workspace_path, input, &output);
             // A reused pull request was opened by this lineage, whose create

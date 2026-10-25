@@ -11,10 +11,12 @@ pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_ATTEMPTS: u32 = 
 pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_RETRY_DELAY: Duration =
     Duration::from_millis(500);
 
-/// Retry a private automation VCS read-only lookup across a bounded number
+/// Retry a private automation VCS lookup or idempotent label mutation across a bounded number
 /// of attempts when GitHub answers with a transient failure. This includes
 /// PR lists, views and status, repository identity and merge capabilities,
-/// and CI and check-annotation reads without a completion deadline.
+/// and CI and check-annotation reads without a completion deadline. Task-derived
+/// label create and add operations are idempotent: create accepts an existing
+/// label and edit only adds labels, so an ambiguous response can be retried.
 /// Deadline-bounded reads retain their caller's observation recovery.
 /// `pr_open` calls
 /// `PR_LIST` and `PR_VIEW` to check for an existing PR before deciding whether
@@ -39,7 +41,7 @@ pub(super) fn execute_with_transient_retry(
                 tracing::warn!(target: "orbit_engine::executor::automation::vcs::operations",
                     operation,
                     attempt,
-                    "retrying private automation VCS lookup after a transient GitHub failure"
+                    "retrying private automation VCS operation after a transient GitHub failure"
                 );
                 super::super::remote_probe::fixed_wait(GITHUB_TRANSIENT_RETRY_DELAY);
                 attempt += 1;

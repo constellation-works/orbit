@@ -698,6 +698,32 @@ pub(super) fn resolve_name_list(
     Ok(names)
 }
 
+/// Tag matching is exact, including case: unlike static forge names, keep
+/// differently cased entries so neither configured tag is lost.
+pub(super) fn resolve_task_tag_labels(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    let mut labels = BTreeSet::new();
+    for label in raw.unwrap_or_default() {
+        labels.extend(resolve_name_list(Some(vec![label]), "pr.task_tag_labels")?);
+    }
+    Ok(labels.into_iter().collect())
+}
+
+/// Only canonical task types may map to non-empty, option-safe label names.
+pub(super) fn resolve_task_type_labels(
+    raw: Option<BTreeMap<String, String>>,
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    let mut labels = BTreeMap::new();
+    for (task_type, label) in raw.unwrap_or_default() {
+        task_type
+            .parse::<orbit_types::task::TaskType>()
+            .map_err(|error| OrbitError::InvalidInput(format!("pr.task_type_labels: {error}")))?;
+        let key = format!("pr.task_type_labels.{task_type}");
+        let label = resolve_name_list(Some(vec![label]), &key)?;
+        labels.insert(task_type, label[0].clone());
+    }
+    Ok(labels)
+}
+
 /// A text template keeps its whitespace: a body template may begin or end
 /// with blank lines on purpose. Only an all-blank value is refused.
 fn resolve_optional_non_empty_raw(

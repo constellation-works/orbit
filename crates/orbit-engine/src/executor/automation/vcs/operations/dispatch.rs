@@ -29,6 +29,7 @@ pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
         PR_LIST => pr_list(input),
         super::PR_LIST_OPEN => pr_list_open(input),
         PR_CREATE => pr_create(input),
+        super::PR_ADD_LABELS => super::pr_labels::add_labels(input),
         PR_VIEW => pr_view(input),
         PR_MERGE => pr_merge(input),
         PR_MERGE_CAPABILITIES => pr_merge_capabilities(input),

@@ -503,6 +503,8 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `pr.signature` | **Advanced.** bool · **Default:** `true`<br>Append the authoring model's signature to pull request bodies. |
 | `pr.orchestration_trailer` | **Advanced.** bool · **Default:** `true`<br>Append the `Orchestrated-By` trailer to pull request bodies. |
 | `pr.labels` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Labels applied to each pull request Orbit opens. |
+| `pr.task_tag_labels` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Exact, case-sensitive allowlist of task tags mirrored as PR labels after creation or reuse. |
+| `pr.task_type_labels` | **Advanced.** table&lt;string,string&gt; · **Default:** `{}`<br>Map `feature`, `bug`, `refactor` or `chore` to label names, e.g. `{ bug = "bug", feature = "enhancement" }`. Unknown types are refused. Task labels are unioned across the delivery; missing labels are created and existing labels accepted. Names must be non-empty and cannot start with `-`. Failures warn and are recorded as `task_labels.applied` / `.failed` in the PR step output without failing the step. Empty settings add no commands. Later task edits do not sync or remove labels. |
 | `pr.reviewers` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Reviewers (logins or `org/team`) requested on each pull request Orbit opens. |
 | `pr.draft` | **Advanced.** bool · **Default:** `false`<br>Open every pull request as a draft. A draft is never merged automatically. |
 | `commit.subject_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit subjects; must contain `[{{task_id}}]`. Subjects keep a 72-character budget: the title is shortened first, with an ellipsis, and kept whole in the body. |
