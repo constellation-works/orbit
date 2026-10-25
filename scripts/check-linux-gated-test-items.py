@@ -28,8 +28,10 @@ for something else only hides a finding. UpperCamel imports are skipped
 because a trait import is also used implicitly through method calls. Items
 under `#[allow(dead_code)]`, `#[allow(unused_imports)]` or `#[allow(unused)]`
 (or `expect`) are skipped, and so are items that carry an attribute other than
-cfg/doc/lint/inline ones (`#[test]`, `#[ctor]`, ...). Unknown cfgs (features,
-`test`, `debug_assertions`) keep code live, as in the Windows guard.
+cfg/doc/lint/inline ones (`#[test]`, `#[ctor]`, ...). A `cfg_attr` allowance
+counts only where its condition may hold on macOS, so one that only Linux
+applies does not skip anything. Unknown cfgs (features, `test`,
+`debug_assertions`) keep code live, as in the Windows guard.
 """
 
 import argparse
@@ -136,12 +138,19 @@ def use_leaves(values, ends, start, end, prefix=()):
 
 
 def lint_names(attrs):
-    """Lint names allowed by `#[allow(..)]`/`#[expect(..)]` (also under cfg_attr)."""
+    """Lint names that `#[allow(..)]`/`#[expect(..)]` apply on the macOS target.
+
+    A `cfg_attr` applies its lints only where its condition may hold there, as
+    rustc does, so a Linux-only allowance exempts nothing that macOS compiles.
+    """
     found = set()
     for attr in attrs:
-        if attr[:1] in (("allow",), ("expect",)) or (
-                attr[:1] == ("cfg_attr",) and ("allow" in attr or "expect" in attr)):
+        if attr[:1] in (("allow",), ("expect",)):
             found.update(value for value in attr if IDENT.fullmatch(value))
+        elif attr[:2] == ("cfg_attr", "(") and attr[-1:] == (")",):
+            arguments = list(portability.split_arguments(attr[2:-1]))
+            if len(arguments) >= 2 and True in portability.cfg_values(arguments[0], PLATFORM):
+                found |= lint_names(arguments[1:])
     return found
 
 

@@ -172,6 +172,63 @@ class LinuxGatedTestItemTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.check_tree({SUITE: source}, 0)
 
+    def test_conditional_lint_allowances_exempt_an_item_only_where_their_condition_holds_on_macos(self):
+        # Rust applies a cfg_attr allowance only where its condition holds, so a
+        # Linux-only allowance leaves the item unexempt on macOS.
+        cases = (
+            ('#[cfg_attr(target_os = "linux", allow(dead_code))]', False),
+            ('#[cfg_attr(not(target_os = "linux"), allow(dead_code))]', True),
+            ('#[cfg_attr(unix, allow(dead_code))]', True),
+            ('#[cfg_attr(any(target_os = "linux", target_os = "macos"), allow(dead_code))]', True),
+            ('#[cfg_attr(feature = "slow", allow(dead_code))]', True),
+            ('#[cfg_attr(target_os = "linux", cfg_attr(unix, allow(dead_code)))]', False),
+            ('#[cfg_attr(unix, cfg_attr(target_os = "linux", allow(dead_code)))]', False),
+            ('#[cfg_attr(unix, cfg_attr(not(target_os = "linux"), allow(dead_code)))]', True),
+            ("#[allow(dead_code)]", True),
+        )
+        for attr, exempt in cases:
+            with self.subTest(attr=attr):
+                source = f"{attr}\nfn fixture() {{}}\n\n" + linux_test("fixture();")
+                if exempt:
+                    self.check_tree({SUITE: source}, 0)
+                else:
+                    self.check_tree({SUITE: source}, 1, "test helper fn `fixture`")
+        for attr, exempt in (
+            ('#[cfg_attr(target_os = "linux", allow(unused_imports))]', False),
+            ('#[cfg_attr(not(target_os = "linux"), allow(unused_imports))]', True),
+            ("#[allow(unused_imports)]", True),
+        ):
+            with self.subTest(attr=attr):
+                source = f"{attr}\nuse std::fs;\n\n" + linux_test('fs::read("x");')
+                if exempt:
+                    self.check_tree({SUITE: source}, 0)
+                else:
+                    self.check_tree({SUITE: source}, 1, "import `fs`")
+
+    def test_conditional_lint_allowances_in_inherited_scopes_follow_the_same_rule(self):
+        for condition, exempt in (('target_os = "linux"', False), ('not(target_os = "linux")', True)):
+            with self.subTest(condition=condition):
+                inner = f'#![cfg_attr({condition}, allow(unused_imports))]\nuse std::fs;\n'
+                source = inner + "\n" + linux_test('fs::read("x");')
+                if exempt:
+                    self.check_tree({SUITE: source}, 0)
+                else:
+                    self.check_tree({SUITE: source}, 1, "import `fs`")
+
+                inner = f'#![cfg_attr({condition}, allow(dead_code))]\nfn fixture() {{}}\n'
+                source = "mod cases {\n" + inner + "\n" + linux_test("fixture();") + "}\n"
+                if exempt:
+                    self.check_tree({SUITE: source}, 0)
+                else:
+                    self.check_tree({SUITE: source}, 1, "test helper fn `fixture`")
+
+                files = {SUITE: f"#[cfg_attr({condition}, allow(dead_code))]\nmod support;\n",
+                         SUPPORT: "fn fixture() {}\n\n" + linux_test("fixture();")}
+                if exempt:
+                    self.check_tree(files, 0)
+                else:
+                    self.check_tree(files, 1, "test helper fn `fixture`")
+
     def test_module_holding_tests_or_gated_by_inner_cfg_is_not_a_fixture(self):
         files = {SUITE: "mod cases;\nmod linux_cases;\n" + linux_test("cases::helper(); linux_cases::helper();"),
                  "crates/example/tests/cases.rs": "pub fn helper() {}\n#[test]\nfn runs() {}\n",
