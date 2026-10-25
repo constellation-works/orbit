@@ -214,7 +214,14 @@ path: it never completes, rejects or archives a task, resumes a run, or merges
 or closes a pull request. A recovery that needs one of those is reported with
 the exact operator command. To triage one blocked task now, run
 `orbit run job escalation_triage_pipeline --input 'subject="block"' --input
-'task_ids=["<task-id>"]'`.
+'task_ids=["<task-id>"]'`. The dashboard's task details panel offers the
+same explicit submission as a **Triage** action — on a blocked task with
+`subject="block"`, and on a proposed task held by pilot warnings with the
+default `pilot_warning` subject (`orbit run job escalation_triage_pipeline
+--input 'task_ids=["<task-id>"]'`). The action is enabled only while the
+task currently qualifies and is otherwise disabled with the reason; on
+success it links the submitted run, whose triage comment appears on the
+refreshed task.
 
 ## Built in: re-checking tasks held for a red base
 

@@ -80,6 +80,7 @@ pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub use escalation_triage_steps::{
     PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,
 };
+pub(crate) use escalation_triage_steps::{PilotWarningCandidacy, pilot_warning_candidacy};
 pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,

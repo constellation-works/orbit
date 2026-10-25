@@ -84,7 +84,9 @@ impl PilotWarningCandidacy {
         }
     }
 
-    fn detail(&self) -> String {
+    /// Human-readable detail for the candidacy, naming the assessment,
+    /// decision or triage marker behind it.
+    pub(crate) fn detail(&self) -> String {
         match self {
             Self::Qualifies(held) => format!(
                 "assessment {} holds on {} warning finding(s)",
