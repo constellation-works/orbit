@@ -212,6 +212,37 @@ class DiscoveryCliTest(unittest.TestCase):
         self.assertIn("no equivalent ready-to-paste type", text)
         self.assertIn("not a suggestion", text)
 
+    def test_missing_file_reports_one_line_error_without_traceback(self):
+        missing = FIXTURES / "does-not-exist-crew-type-discovery.json"
+        self.assertFalse(missing.exists(), "regression fixture must stay absent")
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), str(missing)],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout, "")
+        lines = proc.stderr.splitlines()
+        self.assertEqual(len(lines), 1, f"expected one error line, got: {proc.stderr!r}")
+        self.assertIn(str(missing), proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
+    def test_malformed_stdin_reports_one_line_error_without_traceback(self):
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPT), "-"],
+            input="not json",
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        self.assertEqual(proc.returncode, 1)
+        self.assertEqual(proc.stdout, "")
+        lines = proc.stderr.splitlines()
+        self.assertEqual(len(lines), 1, f"expected one error line, got: {proc.stderr!r}")
+        self.assertIn("stdin", proc.stderr)
+        self.assertNotIn("Traceback", proc.stderr)
+
     def test_reserved_fallback_name_never_becomes_ready_to_paste_name(self):
         fixture = FIXTURES / "planted.json"
         payload = json.loads(fixture.read_text(encoding="utf-8"))

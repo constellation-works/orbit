@@ -316,6 +316,10 @@ def analyse(rows, weights, group_by, max_depth, min_leaf, margin):
     return out_groups, suggestions, unsupported
 
 
+def source_label(source: str | None) -> str:
+    return "stdin" if source in (None, "-") else source
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="Suggest crew performance types from a per-task export.")
     ap.add_argument("source", nargs="?", default="-", help="Export JSON file, or - / omitted for stdin")
@@ -328,7 +332,15 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     if args.min_leaf < 1 or args.max_depth < 0:
         ap.error("--min-leaf must be at least 1 and --max-depth at least 0")
-    rows, weights = load_rows(args.source)
+    try:
+        rows, weights = load_rows(args.source)
+    except OSError as exc:
+        detail = exc.strerror or exc
+        print(f"error: cannot read export from {source_label(args.source)}: {detail}", file=sys.stderr)
+        return 1
+    except json.JSONDecodeError as exc:
+        print(f"error: invalid JSON in export from {source_label(args.source)}: {exc}", file=sys.stderr)
+        return 1
     groups, suggestions, unsupported = analyse(
         rows, weights, args.group_by, args.max_depth, args.min_leaf, args.margin
     )
