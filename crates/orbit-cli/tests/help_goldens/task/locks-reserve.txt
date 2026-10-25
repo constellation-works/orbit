@@ -16,7 +16,7 @@ Options:
           Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --ttl <DURATION>
-          How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 2h
+          How long the claim holds, e.g. `45m`, `2h`. Default 30m, maximum 4h
           
           [default: 30m]
 

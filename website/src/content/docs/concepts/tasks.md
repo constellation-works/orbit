@@ -165,7 +165,7 @@ orbit task locks reserve \
 - `--file` takes `file:` or `dir:` selectors. Repeat the flag or comma-separate
   selectors to claim several.
 - `--ttl` takes a duration such as `45m` or `2h`. It defaults to `30m`, and its
-  maximum is `2h`.
+  maximum is `4h`.
 - Selectors stay inside the workspace. Symbol, module and command selectors are
   refused.
 
