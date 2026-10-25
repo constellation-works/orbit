@@ -49,6 +49,7 @@ PLATFORMS = {
 class Token:
     value: str
     offset: int
+    raw_literal: str | None = None
 
 
 def tokens(source):
@@ -80,14 +81,16 @@ def tokens(source):
             value = match[0]
             start = index
             index = match.end()
+            raw_literal = None
             if re.fullmatch(r'(?:br|cr|r)\#*"', value):
                 terminator = '"' + "#" * value.count("#")
                 end = source.find(terminator, index)
                 if end < 0:
                     raise ValueError("unterminated Rust raw string")
                 index = end + len(terminator)
+                raw_literal = source[start:index]
                 value = '"<raw-string>"'
-            yield Token(value, start)
+            yield Token(value, start, raw_literal)
 
 
 def pairs(items):
