@@ -447,7 +447,11 @@ supervisor owns each command's process group until cleanup finishes. Timeout,
 normal command completion, and loss of the QA parent sweep the owned group.
 The report records whether cleanup was verified. A refused group signal or
 expired reap deadline fails with an explicit unverified cleanup outcome;
-timeout and lost-supervisor outcomes also fail.
+timeout and lost-supervisor outcomes also fail. The harness scratch directory
+itself is removed with cleanup errors ignored, so a fixture child that
+outlives its test and writes into the tree during removal cannot lose the
+report; any leftover paths are recorded in the report's `scratch_cleanup`
+field as a warning instead.
 `python3 scripts/test-qa-full-sweep.py
 --self-test` exercises those fail-closed rules. Logs and the JSON report are
 task artifacts, not a parallel results store.

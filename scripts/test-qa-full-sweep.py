@@ -2416,7 +2416,12 @@ def main():
     }
     scratch = repo / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch) as tmp:
+    # A fixture child that outlives its test can write into this tree while it
+    # is removed (observed OSError 66 from host-resource-pressure.json). That
+    # cleanup failure must never take the report with it, so ignore it here
+    # and record anything left behind as a warning below instead.
+    with tempfile.TemporaryDirectory(prefix="orbit-qa-full-", dir=scratch,
+                                     ignore_cleanup_errors=True) as tmp:
         temp = Path(tmp)
         env = isolated_environment(temp)
         browser_env = browser_environment(env, args.playwright_browsers_path,
@@ -2532,6 +2537,25 @@ def main():
                             "stdout":"", "stderr":str(error), "outcome":"FAIL",
                             "assertions":[], "candidate_id":candidate_id})
 
+    # The scratch TemporaryDirectory above ignores cleanup errors, so a late
+    # fixture write can leave paths behind. They are evidence of the race,
+    # not of a scenario outcome, so record them as a warning on the report.
+    scratch_leftovers = []
+    scratch_leftover_error = None
+    if Path(tmp).exists():
+        try:
+            scratch_leftovers = sorted(
+                str(path.relative_to(tmp)) for path in Path(tmp).rglob("*"))
+        except OSError as error:
+            scratch_leftover_error = str(error)
+    scratch_cleanup_warning = None
+    if scratch_leftover_error:
+        scratch_cleanup_warning = ("harness scratch cleanup did not finish; leftover walk failed: "
+                                   f"{scratch_leftover_error}")
+    elif scratch_leftovers:
+        scratch_cleanup_warning = (f"harness scratch cleanup did not finish; {len(scratch_leftovers)} "
+                                   "leftover path(s) remain under the scratch temp dir")
+
     covered = {result["scenario"] for result in results}
     for scenario in inventory["scenarios"]:
         if scenario["id"] not in covered:
@@ -2556,6 +2580,8 @@ def main():
         "environment": {"os":platform.system(), "release":platform.release(), "architecture":platform.machine(),
                         "capabilities":capabilities},
         "inventory_sha256": hashlib.sha256(inventory_path.read_bytes()).hexdigest(),
+        "scratch_cleanup": {"leftover_paths": scratch_leftovers,
+                            "warning": scratch_cleanup_warning},
         "results": results, "findings": decision_failures,
         "post_publish_handoff": {"npm_freshness":"PENDING", "website_freshness":"PENDING",
                                   "part_of_pre_release_decision":False},
