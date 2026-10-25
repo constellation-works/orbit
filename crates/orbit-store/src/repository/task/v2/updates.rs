@@ -3,8 +3,44 @@ use crate::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use crate::driver::file::task_bundle::PendingWriteGuard;
 use orbit_types::task::{
     ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
-    TASK_FIELDS_UPDATED_EVENT, task_fields_updated_note,
+    TAGS_CHANGED_EVENT, TASK_FIELDS_UPDATED_EVENT, TagsChanged, TaskDecision,
+    task_fields_updated_note,
 };
+
+/// The `tags_changed` event a write appends when it leaves different tags
+/// than it found, carrying both lists so a reader can replay the tags in
+/// force at any earlier time.
+fn tags_changed_event(
+    bundle: &TaskBundleV2,
+    actor: &str,
+    at: chrono::DateTime<Utc>,
+    previous: Vec<String>,
+    tags: Vec<String>,
+) -> TaskEventRowV2 {
+    let render = |list: &[String]| {
+        if list.is_empty() {
+            "(none)".to_string()
+        } else {
+            list.join(", ")
+        }
+    };
+    TaskEventRowV2 {
+        schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
+        event_id: next_event_id(&bundle.events),
+        at,
+        by: actor.to_string(),
+        event_type: TAGS_CHANGED_EVENT.to_string(),
+        note: Some(format!(
+            "tags changed: {} → {}",
+            render(&previous),
+            render(&tags)
+        )),
+        from_status: None,
+        to_status: None,
+        operation_id: None,
+        decision: Some(TaskDecision::TagsChanged(TagsChanged { previous, tags })),
+    }
+}
 
 impl TaskV2Store {
     pub(crate) fn apply_atomic_task_mutation(
@@ -116,6 +152,17 @@ impl TaskV2Store {
                 }
             }
             if let Some(tags) = tags {
+                if tags != bundle.envelope.tags {
+                    let event = tags_changed_event(
+                        &bundle,
+                        &fields.actor,
+                        now,
+                        bundle.envelope.tags.clone(),
+                        tags.clone(),
+                    );
+                    self.bundle_store.append_event(id, &event)?;
+                    bundle.events.push(event);
+                }
                 bundle.envelope.tags = tags;
             }
             bundle.envelope.status = fields.status;
@@ -351,6 +398,18 @@ impl TaskV2Store {
                     operation_id: None,
                     decision: None,
                 };
+                self.bundle_store.append_event(id, &event)?;
+                bundle.events.push(event);
+            }
+
+            if bundle.envelope.tags != original_envelope.tags {
+                let event = tags_changed_event(
+                    &bundle,
+                    &fields.actor,
+                    Utc::now(),
+                    original_envelope.tags.clone(),
+                    bundle.envelope.tags.clone(),
+                );
                 self.bundle_store.append_event(id, &event)?;
                 bundle.events.push(event);
             }

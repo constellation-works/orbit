@@ -91,7 +91,7 @@ pub(crate) fn scorecard_blocks(value: &Value) -> Vec<Block> {
     }
     if computed {
         let formula = if value["role"] == "implementers" {
-            "100 + weighted (actual − expected) per 100 tasks; expectations use the fleet's rates for the same tier mix"
+            "100 + weighted (actual − expected) per 100 tasks; expectations use the fleet's rates for the same tier mix; tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere here"
         } else {
             "each term per 100 units, weighted and summed"
         };

@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
-use orbit_types::task::{RegressionClassification, TaskComplexity, TaskOrigin, TaskStatus};
+use orbit_types::task::{
+    RegressionClassification, TaskComplexity, TaskOrigin, TaskStatus, is_no_diff_expected,
+};
 use orbit_types::workflow::ReviewVerdict;
 
 use super::super::attribution::{Charge, Credit};
@@ -135,6 +137,18 @@ pub(in crate::application::agents) struct Attempt {
     pub(in crate::application::agents) start: DateTime<Utc>,
     pub(in crate::application::agents) end: Option<DateTime<Utc>>,
     pub(in crate::application::agents) runner: Runner,
+    /// The task's tags as of this attempt's start, replayed from its
+    /// `tags_changed` history: a tag added later does not reclassify work
+    /// already admitted.
+    pub(in crate::application::agents) tags: Vec<String>,
+}
+
+impl Attempt {
+    /// Whether the task was `no-diff-expected` work when this attempt was
+    /// admitted: not implementation, so it counts on no implementer row.
+    pub(in crate::application::agents) fn no_diff(&self) -> bool {
+        is_no_diff_expected(&self.tags)
+    }
 }
 
 /// A problem as the task's records show it, before it has an owner.

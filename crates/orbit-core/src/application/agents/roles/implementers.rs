@@ -1,6 +1,11 @@
 //! Implementers: the crew and model of the implementation runs that did the
 //! work. Every term is compared with the fleet on the same tier mix;
-//! recorded cost and duration remain unscored context.
+//! recorded cost and duration remain unscored context. Work admitted as
+//! `no-diff-expected` (reviews, audits, sweeps) is not implementation and
+//! counts nowhere here: no units, credit, charges or fleet expectation.
+//! The tag is judged as of each attempt's start, so retagging a task after
+//! work began cannot move that attempt out of scoring, and an untagged
+//! task that ends with no diff still counts in full.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,7 +34,7 @@ const TERMS: &[Term] = &[
         key: "weighted_landed",
         label: "Landed",
         weight: 1.0,
-        definition: "Landed tasks whose final implementation run is the row's, one point each, whatever their complexity.",
+        definition: "Landed tasks whose final implementation run is the row's, one point each, whatever their complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and are left out of every implementer count.",
         group: "credit",
     },
     Term {
@@ -82,20 +87,34 @@ fn tier(task: &TaskFacts) -> &'static str {
     task.complexity.map_or("unassessed", |tier| tier.as_str())
 }
 
-/// One task per row, however many attempts that row started in the window.
-fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+/// Whether an attempt counts as implementation in the window: it started
+/// in the window and the task was not `no-diff-expected` work when the
+/// attempt was admitted. The one filter the headline rows, the fleet
+/// expectations and the by-type cells all share.
+fn counted(attempt: &Attempt, since: DateTime<Utc>) -> bool {
+    attempt.start >= since && !attempt.no_diff()
+}
+
+/// Each row's counted tasks: one task per row, however many counted
+/// attempts that row started in the window.
+fn work_by_row(facts: &AgentFacts, since: DateTime<Utc>) -> BTreeMap<Key, Vec<&TaskFacts>> {
     let mut work: BTreeMap<Key, Vec<&TaskFacts>> = BTreeMap::new();
     for task in &facts.tasks {
         let keys: BTreeSet<_> = task
             .attempts
             .iter()
-            .filter(|a| a.start >= since)
+            .filter(|a| counted(a, since))
             .map(key)
             .collect();
         for row in keys {
             work.entry(row).or_default().push(task);
         }
     }
+    work
+}
+
+fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
+    let work = work_by_row(facts, since);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {
@@ -175,7 +194,7 @@ fn first_review<'a>(task: &'a TaskFacts, row: &Key, since: DateTime<Utc>) -> Opt
     task.reviews.iter().find(|review| {
         task.attempt_at(review.at).is_some_and(|index| {
             let attempt = &task.attempts[index];
-            attempt.start >= since && key(attempt) == *row
+            counted(attempt, since) && key(attempt) == *row
         })
     })
 }
@@ -279,7 +298,7 @@ fn row_input<'a>(
         for attempt in task
             .attempts
             .iter()
-            .filter(|a| a.start >= since && key(a) == row)
+            .filter(|a| counted(a, since) && key(a) == row)
         {
             runs_without_model += usize::from(attempt.runner.model.is_none());
             if let Some(end) = attempt.end {
@@ -387,18 +406,7 @@ pub(super) fn by_type_cells(
     since: DateTime<Utc>,
     types: &[CrewPerformanceType],
 ) -> Vec<Value> {
-    let mut work: BTreeMap<Key, Vec<&TaskFacts>> = BTreeMap::new();
-    for task in &facts.tasks {
-        let keys: BTreeSet<_> = task
-            .attempts
-            .iter()
-            .filter(|a| a.start >= since)
-            .map(key)
-            .collect();
-        for row in keys {
-            work.entry(row).or_default().push(task);
-        }
-    }
+    let work = work_by_row(facts, since);
     let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
     let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
     for charge in &facts.charges {
@@ -407,8 +415,18 @@ pub(super) fn by_type_cells(
     for credit in &facts.credits {
         credits.entry(&credit.task_id).or_default().push(credit);
     }
-    let task_type =
-        |task: &TaskFacts| classify_task_type(types, &task.tags, &task.context_files).to_string();
+    // Classify by the tags in force when the counted work was admitted
+    // (the earliest counted attempt in the window), so a tag added after
+    // an attempt started cannot retype work already scored.
+    let task_type = |task: &TaskFacts| {
+        let tags = task
+            .attempts
+            .iter()
+            .filter(|a| counted(a, since))
+            .min_by_key(|a| a.start)
+            .map_or(&task.tags, |a| &a.tags);
+        classify_task_type(types, tags, &task.context_files).to_string()
+    };
     let mut fleet_tier: BTreeMap<&str, Fleet> = BTreeMap::new();
     let mut fleet_cell: BTreeMap<(&str, String), Fleet> = BTreeMap::new();
     for tasks in work.values() {

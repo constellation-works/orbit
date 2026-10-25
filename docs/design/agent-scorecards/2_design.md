@@ -104,6 +104,7 @@ The Not scored reasons are:
 - each unscored escape, and the unscored natures `merge_reintroduced` and `contract_drift`;
 - `unattributed`: an orchestrator problem on a task with no orchestrator attribution;
 - `no_run`: an implementer problem on a task with no implementation attempt;
+- `no_diff_expected`: an implementer problem on an attempt admitted as `no-diff-expected` work, which is not implementation (§5.2);
 - `no_review`: a reviewer problem with no settled review to charge, or a REJECTED finding whose filing review job is unknown.
 
 A problem falls in the window of its owner's unit of work: the task's creation for orchestrators, the charged attempt's start for implementers, the settlement for reviewers (the filing attempt's start for a review job), and the problem's own time when Not scored. A regression against a task outside the 90-day scan is not counted.
@@ -184,7 +185,7 @@ The role panel shows each orchestrator's rework split into spec (counted), crew 
 
 **Current.**
 
-Unit: **implemented tasks**, meaning tasks with at least one implementation run by the row's crew and model that started in the window.
+Unit: **implemented tasks**, meaning tasks with at least one implementation run by the row's crew and model that started in the window. Tasks tagged `no-diff-expected` are not implementer work and are left out entirely: no units, credit, charges or fleet expectation, in the headline rows and the by-type cells alike. The tag is judged per attempt, as of the attempt's start, replayed from the task's `tags_changed` history, so a tag added after work began does not exempt that attempt and removing it does not retroactively count one. The tag alone decides: an untagged task that ends with no diff (a verified no-diff or already-landed handoff) still counts with its normal credits and charges. Implementer problems on an excluded attempt are Not scored with reason `no_diff_expected`, so the attribution strip and the ranking still agree. Tag edits made before writes recorded `tags_changed` entries cannot be reconstructed; those attempts read the task's current tags. A configured by-type entry that matches only on `no-diff-expected` keeps its cells, all empty. The Pilots role's own `no-diff-expected` exclusion (§5.4) is unchanged, and both roles read the one `is_no_diff_expected` predicate.
 
 | Term | Weight | Definition |
 |---|---|---|
