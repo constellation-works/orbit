@@ -58,6 +58,22 @@ class LinuxGatedTestItemTests(unittest.TestCase):
         result = self.check_tree({SUITE: source}, 1, "import `fs`", "import `stream`")
         self.assertNotIn("import `io`", result.stderr)
 
+    def test_grouped_alias_of_live_helper_counts_as_reference_with_cfg_liveness(self):
+        helper = "fn fixture() -> u32 { 7 }\n\n"
+        linux_user = linux_test("assert_eq!(fixture(), 7);")
+        for use in ("use super::{fixture as setup};", "use super::fixture as setup;"):
+            with self.subTest(use=use):
+                portable = ("mod portable {\n    " + use + "\n    #[test]\n"
+                            "    fn runs() { assert_eq!(setup(), 7); }\n}\n")
+                self.check_tree({SUITE: helper + linux_user + "\n" + portable}, 0)
+
+        linux_alias = ('mod portable {\n    #[cfg(target_os = "linux")]\n'
+                       '    use super::{fixture as setup};\n'
+                       '    #[cfg(target_os = "linux")]\n    #[test]\n'
+                       '    fn runs() { assert_eq!(setup(), 7); }\n}\n')
+        self.check_tree({SUITE: helper + linux_user + "\n" + linux_alias},
+                        1, "test helper fn `fixture`")
+
     def test_ungated_helper_function_used_only_by_linux_tests_is_reported(self):
         source = "fn fixture() -> u32 {\n    7\n}\n\n" + linux_test("assert_eq!(fixture(), 7);")
         self.check_tree({SUITE: source}, 1, "crates/example/tests/suite.rs:1:", "test helper fn `fixture`")
