@@ -393,6 +393,32 @@
     }
   },
   {
+    "surface": "dashboard",
+    "operation": "task.requeue",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
+    "surface": "dashboard",
+    "operation": "task.settle_merged",
+    "required_any": [
+      "operator"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "deny",
+      "remote_agent_session": "deny",
+      "replica": "deny"
+    }
+  },
+  {
     "surface": "tool",
     "operation": "github.auth.status",
     "required_any": [],

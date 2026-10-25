@@ -82,6 +82,8 @@ mod task_contracts;
 mod task_create;
 #[path = "http_api/task_pilot.rs"]
 mod task_pilot;
+#[path = "http_api/task_recovery.rs"]
+mod task_recovery;
 #[path = "http_api/task_writes.rs"]
 mod task_writes;
 #[path = "http_api/workflows.rs"]

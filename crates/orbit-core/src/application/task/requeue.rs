@@ -322,6 +322,18 @@ impl OrbitRuntime {
         reason: &str,
         discard: bool,
     ) -> Result<Value, OrbitError> {
+        self.requeue_blocked_task_as(id, reason, discard, None)
+    }
+
+    /// Like [`Self::requeue_blocked_task`], recording `actor` in task history
+    /// instead of the ambient identity (the dashboard passes its own label).
+    pub fn requeue_blocked_task_as(
+        &self,
+        id: &str,
+        reason: &str,
+        discard: bool,
+        actor: Option<&str>,
+    ) -> Result<Value, OrbitError> {
         let reason = redact_all(reason.trim());
         if reason.is_empty() {
             return Err(OrbitError::InvalidInput(
@@ -329,7 +341,10 @@ impl OrbitRuntime {
             ));
         }
         self.ensure_coordination_task_write_permitted()?;
-        let actor = self.actor().resolve_write_label(None, None)?;
+        let actor = match actor {
+            Some(actor) => actor.to_string(),
+            None => self.actor().resolve_write_label(None, None)?,
+        };
         let task = self.get_task(id)?;
         self.ensure_requeueable(&task)?;
         let receipt = self.handoff_receipt(&task)?;
