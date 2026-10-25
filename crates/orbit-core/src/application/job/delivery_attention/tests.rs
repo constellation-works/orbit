@@ -182,6 +182,24 @@ fn abandoned_landing_review_settle_reports_abandoned_verdict() {
 }
 
 #[test]
+fn abandoned_landing_review_settle_step_error_reports_abandoned_verdict() {
+    // The recorded step error is the refusal's `Display`, which names the
+    // refused action before the settlement text.
+    let message = format!(
+        "deterministic action `review_gate_settle` refused: review_abandoned: the reviewer \
+         exited successfully but its only report is the initial provisional one (verdict \
+         incomplete, no escalation, finding or validation record, never updated); attempt \
+         attempt-1 was released without a verdict, so the candidate's review is not spent and \
+         a reviewer is admitted again within its remaining minutes; {}",
+        orbit_types::workflow::REVIEW_LANDING_DECISION_PENDING,
+    );
+    let facts = landing_review_gate_facts(None, Some(&message));
+    assert_eq!(facts["availability"], "read");
+    assert_eq!(facts["verdict"], "abandoned");
+    assert!(facts["finding_count"].is_null());
+}
+
+#[test]
 fn blocked_landing_review_settle_still_parses_verdict_and_count() {
     let message = format!(
         "review_gate_blocked: verdict reject (decide); 1 finding(s) recorded; {}",
