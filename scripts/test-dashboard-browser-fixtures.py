@@ -70,6 +70,36 @@ class DashboardBrowserFixtureTests(unittest.TestCase):
                     f"missing {kind} hook '{hook}'",
                     result.stderr)
 
+    def test_dynamic_hooks_exempt_only_what_the_template_builds(self):
+        assets = (
+            "<script>\n"
+            "const id = `doctor-${check.name}`;\n"
+            "node.dataset.key = `doctor-${index}-${row.check}`;\n"
+            "node.id = `panel-${task.id}-crew`;\n"
+            "el('div', { class: `chip chip-${tone}` });\n"
+            "</script>\n")
+        controls = [
+            "page.locator('#panel-ABC-1-crew');\n",
+            "page.locator('.chip-warn');\n",
+        ]
+        for line in controls:
+            with self.subTest(control=line):
+                result = self.run_checker(line, assets=assets)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        cases = [
+            ("class", "page.locator('.doctor-command');\n", "doctor-command"),
+            ("id", "page.locator('#chip-warn');\n", "chip-warn"),
+            ("id", "page.locator('#panel-ABC-1');\n", "panel-ABC-1"),
+        ]
+        for kind, line, hook in cases:
+            with self.subTest(kind=kind, hook=hook):
+                result = self.run_checker(f"const keep = 1;\n{line}", assets=assets)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(
+                    f"crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                    f"missing {kind} hook '{hook}'",
+                    result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

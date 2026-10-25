@@ -15,7 +15,10 @@ geometry against a changed layout still needs the browser run itself.
 
 This is a lexical guard, not a JavaScript parser: only literal hooks in
 string/template literals (plus ``getElementById`` and ``dataset.*``
-lookups) are extracted. Computed selectors and paths are skipped.
+lookups) are extracted. Computed selectors and paths are skipped. An id or
+class the assets build from a template (``id = `detail-${task.id}```,
+``class: `chip chip-${tone}```) satisfies only a fixture hook of that kind
+that the whole template can produce.
 """
 
 import argparse
@@ -58,11 +61,12 @@ def _parse_quoted(source, start):
     return "".join(out), index
 
 
-def _parse_template(source, start, found):
+def _parse_template(source, start, found, expressions=None):
     """Return (content, end_index) for a ` template at start.
 
     Interpolations become one SENTINEL; literals nested inside an
-    interpolation are appended to ``found`` as (content, offset).
+    interpolation are appended to ``found`` as (content, offset), and
+    the source text of each interpolation to ``expressions``.
     """
     out = []
     index = start + 1
@@ -76,6 +80,7 @@ def _parse_template(source, start, found):
         elif char == "$" and source[index + 1:index + 2] == "{":
             out.append(SENTINEL)
             index += 2
+            expression_start = index
             depth = 1
             while index < len(source) and depth:
                 inner = source[index]
@@ -91,6 +96,8 @@ def _parse_template(source, start, found):
                 elif inner == "}":
                     depth -= 1
                     index += 1
+                    if not depth and expressions is not None:
+                        expressions.append(source[expression_start:index - 1].strip())
                 else:
                     index += 1
         else:
@@ -338,24 +345,114 @@ def _segments_match(segments, pattern, is_prefix):
     return index == len(segments)
 
 
-def dynamic_prefixes(assets_text):
-    prefixes = set()
-    for match in re.finditer(r"([A-Za-z][A-Za-z0-9_-]*[-_])(?:\$\{|['\"]\s*\+)", assets_text):
-        prefixes.add(match.group(1))
-    return prefixes
+IDENT = r"[A-Za-z_$][\w$]*"
+NAMED_TEMPLATE_RE = re.compile(rf"\b(?:const|let|var)\s+({IDENT})\s*=\s*`")
+RETURNED_TEMPLATE_RE = re.compile(
+    rf"\bfunction\s+({IDENT})\s*\([^)]*\)\s*\{{\s*return\s*`")
+# Where a dashboard asset defines a hook: an id assigned or passed as an
+# object property, a class passed as a property or added to classList.
+ID_DEFINITION_RE = re.compile(rf"\bid\s*[:=](?!=)\s*(?=`|{IDENT})")
+CLASS_DEFINITION_RE = re.compile(
+    r"\b(?:class|className)\s*[:=](?!=)\s*(?=`)|classList\.(?:add|toggle)\(\s*(?=`)")
+MAX_TEMPLATE_DEPTH = 3
+
+
+def _template_at(text, start):
+    """Return ([items], end) for the template at start: characters, with
+    each interpolation (SENTINEL) followed by its source text."""
+    expressions = []
+    content, end = _parse_template(text, start, [], expressions)
+    items, slot = [], 0
+    for char in content:
+        if char == SENTINEL:
+            items.append((SENTINEL, expressions[slot] if slot < len(expressions) else ""))
+            slot += 1
+        else:
+            items.append(char)
+    return items, end
+
+
+def _item_regex(items, named, depth=0):
+    """Regex source for template items, or None when no literal text
+    constrains it (`${x}` alone would match every hook)."""
+    parts, constrained = [], False
+    for item in items:
+        if isinstance(item, str):
+            parts.append(re.escape(item))
+            constrained = True
+            continue
+        resolved = _name_regex(item[1], named, depth + 1)
+        if resolved:
+            parts.append(resolved)
+            constrained = True
+        else:
+            parts.append(".+")
+    return "".join(parts) if constrained else None
+
+
+def _name_regex(name, named, depth=0):
+    """Alternation of every constrained template bound to ``name``."""
+    if depth > MAX_TEMPLATE_DEPTH:
+        return None
+    sources = [_item_regex(items, named, depth) for items in named.get(name, ())]
+    sources = [source for source in sources if source]
+    return "(?:" + "|".join(sources) + ")" if sources else None
+
+
+def dynamic_hook_patterns(assets):
+    """Patterns for the ids and classes the assets build from templates.
+
+    ``assets`` is a list of file texts. A dynamically built hook is
+    exempt only for the kind its generating expression defines (a class
+    template cannot satisfy a missing id, nor can a data-key value), and
+    only for tokens the whole template can produce.
+    """
+    patterns = {"id": [], "class": []}
+    for text in assets:
+        named = {}
+        for regex in (NAMED_TEMPLATE_RE, RETURNED_TEMPLATE_RE):
+            for match in regex.finditer(text):
+                named.setdefault(match.group(1), []).append(
+                    _template_at(text, match.end() - 1)[0])
+        for match in ID_DEFINITION_RE.finditer(text):
+            if text[match.end()] == "`":
+                source = _item_regex(_template_at(text, match.end())[0], named)
+            else:
+                name = re.match(IDENT, text[match.end():]).group(0)
+                if text.startswith(".", match.end() + len(name)):
+                    continue  # property access, not a bare template name
+                source = _name_regex(name, named)
+            if source:
+                patterns["id"].append(re.compile(source))
+        for match in CLASS_DEFINITION_RE.finditer(text):
+            words, word = [], []
+            for item in _template_at(text, match.end())[0]:
+                if isinstance(item, str) and item.isspace():
+                    words.append(word)
+                    word = []
+                else:
+                    word.append(item)
+            words.append(word)
+            for word in words:
+                if any(not isinstance(item, str) for item in word):
+                    source = _item_regex(word, named)
+                    if source:
+                        patterns["class"].append(re.compile(source))
+    return patterns
 
 
 def check(root):
     web = root / "crates/orbit-web"
     fixtures = sorted(web.rglob("*_browser.mjs"))
     assets_dir = web / "assets/dashboard"
-    assets_text = ""
+    asset_files = []
     if assets_dir.is_dir():
         for path in sorted(assets_dir.rglob("*")):
             if path.is_file():
-                assets_text += path.read_text(encoding="utf-8", errors="ignore") + "\n"
+                asset_files.append(path.read_text(encoding="utf-8", errors="ignore"))
+    assets_text = "".join(text + "\n" for text in asset_files)
     patterns = route_patterns(root)
-    prefixes = dynamic_prefixes(assets_text)
+    dynamic = dynamic_hook_patterns(asset_files)
 
     def present(kind, token, defined):
         if token in defined.get(kind, ()):
@@ -369,7 +466,7 @@ def check(root):
             if f"dataset.{camel}" in assets_text:
                 return True
         return token in assets_text or any(
-            token.startswith(prefix) for prefix in prefixes)
+            regex.fullmatch(token) for regex in dynamic.get(kind, ()))
 
     failures = []
     for fixture in fixtures:
