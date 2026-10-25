@@ -81,10 +81,7 @@ head:
       .orbit-setup-explorer:has(#ose-p-antigravity:checked) #ose-panel-antigravity,
       .orbit-setup-explorer:has(#ose-p-gemini:checked) #ose-panel-gemini,
       .orbit-setup-explorer:has(#ose-p-grok:checked) #ose-panel-grok,
-      .orbit-setup-explorer:has(#ose-p-copilot:checked) #ose-panel-copilot,
-      .orbit-setup-explorer:has(#ose-p-cursor:checked) #ose-panel-cursor,
-      .orbit-setup-explorer:has(#ose-p-pi:checked) #ose-panel-pi,
-      .orbit-setup-explorer:has(#ose-p-opencode:checked) #ose-panel-opencode { display: block; }
+      .orbit-setup-explorer:has(#ose-p-copilot:checked) #ose-panel-copilot { display: block; }
       .ose-facts {
         display: grid;
         grid-template-columns: max-content minmax(0, 1fr);
@@ -198,9 +195,6 @@ Every provider id, and what it can run today:
 | `antigravity` | `agy` | `low`, `medium`, `high`, via `--effort` | Active |
 | `grok` | `grok` | Model-specific, via `--reasoning-effort` | Active |
 | `copilot` | `copilot` | Not supported | Active |
-| `cursor` | `cursor-agent` | Not supported | Active |
-| `pi` | `pi` | `low`–`max`, via `--thinking` | Active |
-| `opencode` | `opencode run` | `high`, `max`, via `--variant` | Active |
 | `muse` | `muse exec` | `low`–`max`, via `--reasoning-effort` | Active on macOS and Linux |
 | `gemini` | `gemini` | Not supported | Legacy |
 | `ollama` | — | Not supported | No shipped crew or executor |
@@ -234,10 +228,11 @@ working. Each is deprecated and emits a warning:
 | `xai` | `grok` |
 
 `openai-compat` is an accepted, non-deprecated spelling of `openai_compat`.
-Any other string is an unknown provider and is rejected, not guessed at. The
-model vendor named *inside* a Pi or OpenCode run (`pi --provider anthropic`,
-`opencode --model anthropic/...`) is not an Orbit provider id and never moves
-the run to another lane.
+Any other string is an unknown provider and is rejected, not guessed at.
+
+### Retired providers
+
+The `cursor`, `pi` and `opencode` lanes were retired (ORB-18096). A crew naming one fails to load, naming the crew, the retired provider and the remedy: pick a supported provider (`claude`, `codex`, `gemini`, `grok`, `copilot`, `antigravity`, `muse`). `orbit doctor` reports the same refusal. Persisted records naming them still read and display. The Cursor editor MCP client (`orbit mcp init --cursor`) is a separate surface and is unaffected.
 
 ## Set up an executor
 
@@ -261,9 +256,6 @@ JavaScript.
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-antigravity" value="antigravity"><label for="ose-p-antigravity">antigravity</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-grok" value="grok"><label for="ose-p-grok">grok</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-copilot" value="copilot"><label for="ose-p-copilot">copilot</label></span>
-<span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-cursor" value="cursor"><label for="ose-p-cursor">cursor</label></span>
-<span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-pi" value="pi"><label for="ose-p-pi">pi</label></span>
-<span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-opencode" value="opencode"><label for="ose-p-opencode">opencode</label></span>
 <span class="ose-choice"><input type="radio" name="ose-provider" id="ose-p-gemini" value="gemini"><label for="ose-p-gemini">gemini <span class="ose-choice-note">legacy</span></label></span>
 </div>
 </fieldset>
@@ -424,92 +416,6 @@ model = "claude-sonnet-5"
 <div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
 </div>
 <div class="ose-note"><p>Orbit has no verified Copilot effort contract, so there is no effort picker. An <code>effort</code> on this crew is ignored with a warning (<em>provider 'copilot' does not support configured reasoning effort</em>). It does not take the workspace down or get remapped.</p><p>The retired <code>gh-copilot</code> gh extension is a different tool and is not an Orbit executor.</p></div>
-</div>
-<div class="ose-panel" id="ose-panel-cursor">
-<dl class="ose-facts">
-<dt>Binary on <code>PATH</code></dt><dd><code>cursor-agent</code></dd>
-<dt>Example model</dt><dd><code>gpt-5</code></dd>
-<dt>Reasoning effort</dt><dd>Not supported.</dd>
-</dl>
-<div class="ose-snippet">
-
-<pre class="ose-code"><code>[workflow]
-default_crew = "cursor"
-
-[crews.cursor]
-provider = "cursor"
-model = "gpt-5"
-</code></pre>
-
-<div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
-</div>
-<div class="ose-note"><p>An <code>effort</code> on this crew is ignored with a warning, not remapped to a nearby value.</p><p>Orbit runs the standalone headless <code>cursor-agent</code> binary. Having the Cursor editor installed does not mean this binary is on <code>PATH</code>.</p></div>
-</div>
-<div class="ose-panel" id="ose-panel-pi">
-<dl class="ose-facts">
-<dt>Binary on <code>PATH</code></dt><dd><code>pi</code> (npm <code>@earendil-works/pi-coding-agent</code>)</dd>
-<dt>Example model</dt><dd><code>sonnet</code></dd>
-<dt>Reasoning effort</dt><dd>Supported — the full crew vocabulary, rendered as <code>pi --thinking &lt;value&gt;</code>.</dd>
-</dl>
-<fieldset class="ose-field">
-<legend>2. Reasoning effort (optional)</legend>
-<div class="ose-choices">
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-none" value="none" checked><label for="ose-e-pi-none">omit</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-low" value="low"><label for="ose-e-pi-low">low</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-medium" value="medium"><label for="ose-e-pi-medium">medium</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-high" value="high"><label for="ose-e-pi-high">high</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-xhigh" value="xhigh"><label for="ose-e-pi-xhigh">xhigh</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-pi" id="ose-e-pi-max" value="max"><label for="ose-e-pi-max">max</label></span>
-</div>
-</fieldset>
-<div class="ose-snippet">
-
-<pre class="ose-code"><code>[workflow]
-default_crew = "pi"
-
-[crews.pi]
-provider = "pi"
-model = "sonnet"
-<span class="ose-eff" data-effort="low">effort = "low"
-</span><span class="ose-eff" data-effort="medium">effort = "medium"
-</span><span class="ose-eff" data-effort="high">effort = "high"
-</span><span class="ose-eff" data-effort="xhigh">effort = "xhigh"
-</span><span class="ose-eff" data-effort="max">effort = "max"
-</span></code></pre>
-
-<div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
-</div>
-<div class="ose-note"><p>Pi's <code>--thinking</code> values are model-independent and include every crew value, so all of them are accepted.</p><p>Pi's own <code>--provider</code> flag names the model vendor <em>inside</em> a Pi run. It is not an Orbit provider: <code>provider = "pi"</code> selects this lane.</p></div>
-</div>
-<div class="ose-panel" id="ose-panel-opencode">
-<dl class="ose-facts">
-<dt>Binary on <code>PATH</code></dt><dd><code>opencode</code></dd>
-<dt>Example model</dt><dd><code>anthropic/claude-sonnet-4-5</code></dd>
-<dt>Reasoning effort</dt><dd>Supported for <code>high</code> and <code>max</code> only, rendered as <code>opencode run --variant &lt;value&gt;</code>.</dd>
-</dl>
-<fieldset class="ose-field">
-<legend>2. Reasoning effort (optional)</legend>
-<div class="ose-choices">
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-opencode" id="ose-e-opencode-none" value="none" checked><label for="ose-e-opencode-none">omit</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-opencode" id="ose-e-opencode-high" value="high"><label for="ose-e-opencode-high">high</label></span>
-<span class="ose-choice"><input class="ose-eff-radio" type="radio" name="ose-effort-opencode" id="ose-e-opencode-max" value="max"><label for="ose-e-opencode-max">max</label></span>
-</div>
-</fieldset>
-<div class="ose-snippet">
-
-<pre class="ose-code"><code>[workflow]
-default_crew = "opencode"
-
-[crews.opencode]
-provider = "opencode"
-model = "anthropic/claude-sonnet-4-5"
-<span class="ose-eff" data-effort="high">effort = "high"
-</span><span class="ose-eff" data-effort="max">effort = "max"
-</span></code></pre>
-
-<div class="ose-actions"><button class="ose-copy" type="button">Copy config</button><span class="ose-status" role="status" aria-live="polite"></span></div>
-</div>
-<div class="ose-note"><p><code>low</code>, <code>medium</code>, and <code>xhigh</code> are missing because <code>opencode run --variant</code> forwards the value to whichever model provider <code>--model</code> selected, and OpenCode publishes no provider-independent vocabulary. Orbit accepts only the two values OpenCode's help text names. Other values are ignored with a warning at config load and refused by <code>orbit config set</code>, instead of being remapped to <code>minimal</code> or <code>high</code>.</p><p>The vendor prefix in <code>anthropic/claude-sonnet-4-5</code> is OpenCode's own model addressing. It does not make this an Anthropic lane: Orbit dispatches through <code>provider = "opencode"</code>.</p></div>
 </div>
 <div class="ose-panel" id="ose-panel-gemini">
 <dl class="ose-facts">

@@ -891,7 +891,7 @@ A crew is one provider-model assignment. An activity uses the crew named in its 
 
 | Field | Required | Values |
 |---|---|---|
-| `provider` | Yes | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode`, `muse`. See [provider identity](#provider-identity-and-resolution). |
+| `provider` | Yes | `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `muse`. See [provider identity](#provider-identity-and-resolution). |
 | `model` | Yes | Model ID passed to the provider CLI. |
 | `enabled` | No | Default `true`. `false` keeps the crew defined and listed but refuses to run it; see [disabled crews](#disabled-crews). |
 | `effort` | No | Reasoning effort (below). Omitted leaves the provider's default. |
@@ -913,7 +913,7 @@ model = "gemini-4-argon-high"
 provider = "antigravity"
 ```
 
-**Built-in crews**, in init's family preference order. A config with no `[crews]` table uses the full set. Existing explicit model pins are kept as written. The legacy Gemini CLI, Cursor, Pi and OpenCode lanes have no built-in crew: define one under `[crews.<name>]` to use them.
+**Built-in crews**, in init's family preference order. A config with no `[crews]` table uses the full set. Existing explicit model pins are kept as written. The legacy Gemini CLI lane has no built-in crew: define one under `[crews.<name>]` to use it.
 
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
@@ -928,9 +928,8 @@ provider = "antigravity"
 
 | Provider | Accepted `effort` | Rendered as |
 |---|---|---|
-| `claude`, `codex`, `pi`, `muse` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` · `model_reasoning_effort` · `--thinking` · `--reasoning-effort` |
+| `claude`, `codex`, `muse` | `low`, `medium`, `high`, `xhigh`, `max` | `--effort` · `model_reasoning_effort` · `--reasoning-effort` |
 | `antigravity` | `low`, `medium`, `high` | `--effort` |
-| `opencode` | `high`, `max` | `--variant` |
 | `grok` (`grok-4.7`, `grok-4.6`) | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
 | `grok` (`grok-4.5`) | `low`, `medium`, `high` | `--reasoning-effort` |
 | others | none | — |
@@ -1074,17 +1073,14 @@ Every `provider` string (a crew's, an activity's inline `provider`, setup detect
 | `gemini` | `gemini` | Legacy Gemini CLI (enterprise / API-key deployments). |
 | `grok` | `grok` | |
 | `copilot` | `copilot` | [GitHub Copilot CLI](#github-copilot-cli) |
-| `cursor` | `cursor-agent` | [Cursor Agent CLI](#cursor-agent-cli) |
-| `pi` | `pi` | [Pi CLI](#pi-cli) |
 | `antigravity` | `agy` | [Antigravity CLI](#antigravity-cli) |
-| `opencode` | `opencode` | [OpenCode CLI](#opencode-cli) |
 | `muse` | `muse` | [Muse Code CLI](#muse-code-cli) |
 | `ollama` | — | Recognized but unsupported at the Orbit CLI entry point (`provider.unsupported`). |
 | `openai_compat` (`openai-compat`) | — | HTTP-only, no CLI runtime; selecting it fails. |
 
 - Parsing ignores case and surrounding whitespace.
 - Deprecated aliases resolve with an `orbit.config.crew` warning: `anthropic` → `claude`, `openai`/`chatgpt` → `codex`, `google` → `gemini`, `xai` → `grok`.
-- `copilot`, `cursor`, `pi`, `antigravity`, `opencode` and `muse` have no aliases, and the model vendor a lane runs (a Claude model through Copilot) never changes the provider.
+- `copilot`, `antigravity` and `muse` have no aliases, and the model vendor a lane runs (a Claude model through Copilot) never changes the provider.
 - The cross-repo Worker executor runs only `claude`, `codex`, `gemini` and `grok`; a Worker-routed step naming another lane is refused, not re-pointed.
 
 **Audit attribution.** Process audit maps `ORBIT_AGENT_NAME` and `ORBIT_AGENT_MODEL` to an agent family. An invalid pair (`copilot` with a `claude-*` model) or an agent envelope with no identity records `unknown` with a warning. An agent envelope (non-empty name and model, truthy `ORBIT_MANAGED_RUN_CONTEXT`, `ORBIT_TASK_ACTOR_KIND=agent`) takes precedence over `ORBIT_ACTOR`, the operator override and the OS username. This affects recorded identity only, not command authorization.
@@ -1114,7 +1110,8 @@ An explicit selection that cannot run fails with a stable diagnostic and never f
 
 - `provider openai_compat is unsupported by the Orbit CLI entry point (HTTP-only)`
 - `provider ollama is unsupported by the Orbit CLI entry point`
-- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, cursor, pi, antigravity, opencode, muse`
+- `unknown provider '<x>'; expected one of claude, codex, gemini, grok, copilot, ollama, openai_compat, antigravity, muse`
+- `provider 'cursor' is retired and no longer supported; pick a supported provider (…)` — likewise for `pi` and `opencode` (see [retired providers](#retired-providers))
 - A selected lane whose binary is missing fails permanently, naming the binary.
 
 ---
@@ -1124,6 +1121,10 @@ An explicit selection that cannot run fails with a stable diagnostic and never f
 For every lane: Orbit passes `--model` from the crew and sends the prompt on **stdin**, never argv (process listings and audit see argv). Muse Code, which cannot read stdin, gets the prompt in a private file instead ([below](#muse-code-cli)). The Orbit OS sandbox is the filesystem boundary, and provider-specific write grants apply only while that provider runs. Credentials reach the agent only through [`[execution.env].pass`](#executionenv--the-agent-subprocess-environment); Orbit never puts a key on argv. A lane without native or Orbit-managed MCP reaches Orbit tools with `orbit tool run <tool> --input '<json>'` through its shell tool, under the same grants.
 
 `orbit tool run` selects a workspace from any directory with `workspace` in the JSON input or the global `--workspace` flag: a name, `ws_*` ID, absolute local checkout path, or local `hm_*/ws_*` selector from the federated listing. A selector for another host fails locally, naming it; run the command on that owner host. Unparseable JSON or an unreadable `--input-file` is reported before workspace selection, runtime open or migration, so an input typo never migrates the checkout.
+
+### Retired providers
+
+The `cursor`, `pi` and `opencode` lanes were retired (ORB-18096). A crew naming one fails to load, naming the crew, the retired provider and the remedy: pick a supported provider (`claude`, `codex`, `gemini`, `grok`, `copilot`, `antigravity`, `muse`). `orbit doctor` reports the same refusal. Persisted records naming them still read and display. The Cursor editor MCP client (`orbit mcp init --cursor`) is a separate surface and is unaffected.
 
 ### GitHub Copilot CLI
 
@@ -1136,28 +1137,6 @@ For every lane: Orbit passes `--model` from the crew and sends the prompt on **s
 | Sandbox | Write: `COPILOT_HOME` (default `~/.copilot`) and `$XDG_CACHE_HOME/copilot`. macOS: read `~/Library/Keychains`. No access to `~/.config/gh`. |
 
 An account without Copilot entitlement fails with `Error: Authentication failed`; org-policy-disabled third-party MCP servers produce a `session.warning` (`warningType: "policy"`). The GitHub org admin fixes both. A run with no assistant message fails the step.
-
-### Cursor Agent CLI
-
-| | |
-|---|---|
-| Install | `curl https://cursor.com/install -fsS \| bash`, then `cursor-agent --version`; put `~/.local/bin` on `PATH`. Cloud agents are not used. |
-| Auth | `cursor-agent login` (check with `cursor-agent status`), in the macOS login keychain by default. A file-store login (`AGENT_CLI_CREDENTIAL_STORE=file` at login) also needs `pass = ["AGENT_CLI_CREDENTIAL_STORE"]`. Or `pass = ["CURSOR_API_KEY"]`. |
-| Model | `cursor-agent models` (or `--list-models`). |
-| Flags | `--print --force --output-format json`. The terminal `{"type":"result","subtype":"success","is_error":false,"result":…}` object is validated before the envelope is read. |
-| Sandbox | Write: `~/.cursor`. macOS: read `~/Library/Keychains`. |
-
-### Pi CLI
-
-| | |
-|---|---|
-| Install | `npm install -g @earendil-works/pi-coding-agent`, then `pi --version`. |
-| Auth | `/login` in an interactive `pi` session (under `$PI_CODING_AGENT_DIR`, default `~/.pi/agent`), or a vendor key via `pass`. Orbit never renders `--api-key`. |
-| Model | A `--model` pattern, optionally vendor-prefixed (`openai/gpt-4o`); list with `pi --list-models`. `effort` renders as `--thinking <level>`. |
-| Flags | `--mode json --no-session --no-approve --offline`: ephemeral sessions, no inherited project trust (project-local `.pi` extensions don't run; `AGENTS.md`/`CLAUDE.md` still load), no startup network calls. |
-| Sandbox | Write: `$PI_CODING_AGENT_DIR`, else `~/.pi`. |
-
-Pi has no MCP client and `orbit mcp init` offers none; keep Pi's `bash` tool available, since Orbit tools go through it. Completion is read only from the final assistant `message_end` frame. No provider token usage is reported; raw output is kept in the audit blob store.
 
 ### Antigravity CLI
 
@@ -1175,20 +1154,6 @@ Pi has no MCP client and `orbit mcp init` offers none; keep Pi's `bash` tool ava
 Orbit checks the response from a terminal `result` with `status: "SUCCESS"` for its completion envelope; a non-zero exit with a terminal `ERROR` surfaces the bounded, redacted `error` string. Running for the whole `--print-timeout` spends the provider budget and is never completion: a run that then exits 0 with `SUCCESS` but no Orbit completion envelope fails as a timeout (`timed_out: true`, retryable, transient) with a diagnostic naming the print-timeout and elapsed time, keeping the bounded `final_message`. An early exit without an envelope gets the ordinary completion-envelope message.
 
 Background commands cannot be turned off for a headless run. `agy` 1.3.3 has no flag or setting for it (`agy --help` lists none), so Orbit passes nothing and instead tells every provider, in the shared prompt contract, to run commands in the foreground. `agy` itself waits for a background task it started only until `--print-timeout`, capped at 30 minutes, then ends the turn and exits 0 with the task still running and no envelope. When the last `manage_task`-style status report in stdout shows a `task-<id>` still running, the step fails naming that task, the elapsed time and the bounded last `response`, instead of the generic message. The exit code, a `SUCCESS` wrapper and a persisted summary never count as completion; whatever the run left in the checkout is unverified.
-
-### OpenCode CLI
-
-| | |
-|---|---|
-| Install | `opencode --version`, then `opencode models`. Served modes (`serve`, `--attach`, `web`) are not used. |
-| Auth | `opencode auth login` (`auth.json` under `$XDG_DATA_HOME/opencode`), or a vendor key via `pass`. |
-| Model | A fully qualified `<vendor>/<model>` (`anthropic/claude-sonnet-4-5`). `effort` renders as `--variant`: `high`/`max` only. |
-| Flags | `run --format json --auto`. `--auto` is required unattended (otherwise every permission request is auto-rejected) and is not a security boundary. `--continue`, `--session` and `--share` are never passed. |
-| Sandbox | Write: `$XDG_DATA_HOME/opencode`, the config root (`$OPENCODE_CONFIG_DIR`, else `$XDG_CONFIG_HOME/opencode`), `$XDG_STATE_HOME/opencode` and `$XDG_CACHE_HOME/opencode`. |
-
-Unset or empty XDG variables use the HOME-based defaults: `~/.local/share/opencode`, `~/.config/opencode`, `~/.local/state/opencode` and `~/.cache/opencode`, respectively. Non-empty absolute XDG overrides keep the `opencode` subdirectory; `$OPENCODE_CONFIG_DIR` selects the config directory directly.
-
-Orbit does not write OpenCode's `opencode.json` MCP config and `orbit mcp init` has no OpenCode target; Orbit tools go through the shell tool. Only assistant `text` parts are read; a terminal `error` event or non-zero exit fails the step. No provider token usage is reported.
 
 ### Muse Code CLI
 

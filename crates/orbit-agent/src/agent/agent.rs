@@ -22,10 +22,7 @@ pub enum ProviderOptions {
     Antigravity,
     Grok,
     Copilot,
-    Cursor,
     Ollama,
-    Pi,
-    Opencode,
     Muse,
     Mock,
 }
@@ -45,10 +42,7 @@ impl ProviderOptions {
             Self::Antigravity => "antigravity",
             Self::Grok => "grok",
             Self::Copilot => "copilot",
-            Self::Cursor => "cursor",
             Self::Ollama => "ollama",
-            Self::Pi => "pi",
-            Self::Opencode => "opencode",
             Self::Muse => "muse",
             Self::Mock => "mock",
         }

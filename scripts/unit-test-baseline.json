@@ -110,6 +110,9 @@
       "test_function_paths": [
         "tests/crew_pools.rs::malformed_pools_name_the_setting_they_came_from",
         "tests/machine.rs::host_shutdown_hold_minutes_defaults_and_rejects_non_positive_values",
+        "tests/retired_providers.rs::crew_naming_a_retired_provider_fails_with_named_refusal",
+        "tests/retired_providers.rs::retired_provider_refusal_is_case_insensitive",
+        "tests/retired_providers.rs::supported_provider_crew_still_loads_and_defaults_have_no_retired_crews",
         "tests/seed.rs::every_family_combination_seeds_valid_defaults_pools_and_enabled_flags",
         "tests/seed.rs::rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled"
       ]
@@ -301,6 +304,7 @@
         "application/tests/executor.rs::seed_default_executors_preserves_local_shell_sandbox_on_mismatched_platform",
         "application/tests/executor.rs::seed_default_executors_upgrades_old_unsandboxed_linux_default",
         "application/tests/executor.rs::seed_on_macos_keeps_sandbox_exec_and_existing_choices",
+        "application/tests/executor.rs::seed_retires_stale_retired_provider_executors",
         "application/tests/executor.rs::seed_shipped_muse_is_unrestricted_with_platform_sandbox",
         "application/tests/executor.rs::seed_without_a_host_backend_keeps_the_declared_sandbox",
         "application/tests/job_pipeline.rs::configure_pipeline_worker_stdio_binds_missing_suffix_to_validated_authority",

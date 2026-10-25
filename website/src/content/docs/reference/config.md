@@ -248,7 +248,7 @@ default_crew = "sol"
 
 | Field | Purpose |
 |---|---|
-| `provider` | Required. Agent CLI family: `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, `cursor`, `pi`, `opencode`, or `muse`. |
+| `provider` | Required. Agent CLI family: `claude`, `codex`, `antigravity`, `gemini`, `grok`, `copilot`, or `muse`. |
 | `model` | Required. Model ID passed to the provider CLI. |
 | `enabled` | Default `true`. `false` keeps the crew listed but refuses to run it. See [Disabled crews](#disabled-crews). |
 | `effort` | Reasoning effort. See [Reasoning effort](#reasoning-effort). |
@@ -318,7 +318,6 @@ supported value is passed through the provider's documented flag.
 | `pi` | `low`, `medium`, `high`, `xhigh`, `max` | `--thinking` |
 | `muse` | `low`, `medium`, `high`, `xhigh`, `max` | `--reasoning-effort` |
 | `antigravity` | `low`, `medium`, `high` | `--effort` |
-| `opencode` | `high`, `max` | `--variant` |
 | `grok` with `grok-4.6` or `grok-4.7` | `low`, `medium`, `high`, `xhigh` | `--reasoning-effort` |
 | `grok` with `grok-4.5` | `low`, `medium`, `high` | `--reasoning-effort` |
 | others | None | — |

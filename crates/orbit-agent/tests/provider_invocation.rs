@@ -71,14 +71,6 @@ const CLI_CASES: &[CliCase] = &[
         effort_flag: None,
     },
     CliCase {
-        provider: "cursor",
-        binary: "cursor-agent",
-        model: "fixture-model",
-        emitted_model: "fixture-model",
-        model_flag: "--model",
-        effort_flag: None,
-    },
-    CliCase {
         provider: "ollama",
         binary: "ollama",
         model: "fixture-model",
@@ -87,28 +79,12 @@ const CLI_CASES: &[CliCase] = &[
         effort_flag: None,
     },
     CliCase {
-        provider: "pi",
-        binary: "pi",
-        model: "vendor/fixture-model",
-        emitted_model: "vendor/fixture-model",
-        model_flag: "--model",
-        effort_flag: Some("--thinking"),
-    },
-    CliCase {
         provider: "antigravity",
         binary: "agy",
         model: "gemini-3.8-flash-high",
         emitted_model: "gemini-3.8-flash-high",
         model_flag: "--model",
         effort_flag: Some("--effort"),
-    },
-    CliCase {
-        provider: "opencode",
-        binary: "opencode",
-        model: "vendor/fixture-model",
-        emitted_model: "vendor/fixture-model",
-        model_flag: "--model",
-        effort_flag: Some("--variant"),
     },
     CliCase {
         provider: "muse",
@@ -137,14 +113,6 @@ fn expected_state_overrides(provider: &str) -> &'static [&'static str] {
         "claude" => &["CLAUDE_CONFIG_DIR"],
         "grok" => &["GROK_HOME"],
         "copilot" => &["COPILOT_HOME", "XDG_CACHE_HOME"],
-        "pi" => &["PI_CODING_AGENT_DIR"],
-        "opencode" => &[
-            "XDG_DATA_HOME",
-            "XDG_CONFIG_HOME",
-            "XDG_STATE_HOME",
-            "XDG_CACHE_HOME",
-            "OPENCODE_CONFIG_DIR",
-        ],
         "muse" => &["XDG_CONFIG_HOME", "XDG_DATA_HOME"],
         _ => &[],
     }

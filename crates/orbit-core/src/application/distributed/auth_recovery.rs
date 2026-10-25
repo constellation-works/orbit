@@ -306,8 +306,7 @@ pub(crate) fn relogin_hint(provider: &str) -> String {
         "gemini" => "Run `gemini` and sign in.".into(),
         "antigravity" => "Run `agy` and sign in.".into(),
         "copilot" => "Run `copilot` and `/login`.".into(),
-        "cursor" => "Run `cursor-agent login`.".into(),
-        "grok" | "pi" | "opencode" => format!("Run `{provider}` and configure its provider credentials."),
+        "grok" => format!("Run `{provider}` and configure its provider credentials."),
         "muse" => "Run `muse login`, or pass META_API_KEY in [execution.env].pass.".into(),
         _ => format!("Re-login with the `{provider}` CLI."),
     }

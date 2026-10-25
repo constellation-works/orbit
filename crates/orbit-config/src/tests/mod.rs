@@ -1,5 +1,6 @@
 mod crew_pools;
 mod machine;
+mod retired_providers;
 mod seed;
 
 use crate::ConfigRoots;

@@ -21,11 +21,9 @@ pub(super) struct EnvOverrides<'a> {
     pub(super) grok_home: Option<&'a str>,
     pub(super) copilot_home: Option<&'a str>,
     pub(super) xdg_cache_home: Option<&'a str>,
-    pub(super) pi_coding_agent_dir: Option<&'a str>,
     pub(super) xdg_data_home: Option<&'a str>,
     pub(super) xdg_config_home: Option<&'a str>,
     pub(super) xdg_state_home: Option<&'a str>,
-    pub(super) opencode_config_dir: Option<&'a str>,
     pub(super) cargo_home: Option<&'a str>,
 }
 
@@ -47,11 +45,9 @@ pub(super) fn compile_with_env(
         ("GROK_HOME", env.grok_home),
         ("COPILOT_HOME", env.copilot_home),
         ("XDG_CACHE_HOME", env.xdg_cache_home),
-        ("PI_CODING_AGENT_DIR", env.pi_coding_agent_dir),
         ("XDG_DATA_HOME", env.xdg_data_home),
         ("XDG_CONFIG_HOME", env.xdg_config_home),
         ("XDG_STATE_HOME", env.xdg_state_home),
-        ("OPENCODE_CONFIG_DIR", env.opencode_config_dir),
         ("CARGO_HOME", env.cargo_home),
     ]);
     compile_macos_sandbox_profile(resolved, provider).expect("compile")

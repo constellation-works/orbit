@@ -33,9 +33,6 @@ pub(super) fn append_linux_provider_state_roots(
     // validated provider-root path below, so an unconditional entry would
     // mkdir a `~/.copilot` on hosts that have never installed the CLI.
     directories.extend(linux_copilot_state_roots(provider, home.as_deref()));
-    directories.extend(linux_cursor_state_roots_with(provider, home.as_deref()));
-    directories.extend(linux_pi_state_roots(provider, home.as_deref()));
-    directories.extend(linux_opencode_state_roots(provider, home.as_deref()));
     directories.extend(linux_muse_state_roots(provider, home.as_deref()));
     for directory in directories {
         let canonical = ensure_linux_provider_directory(&directory, home.as_deref())?;
@@ -160,113 +157,6 @@ fn ensure_linux_provider_directory(
             validated.display()
         ))
     })
-}
-
-/// Writable state root for an active Cursor executor on Linux. The CLI stores
-/// logged-in authentication, settings, permissions, and sessions under
-/// `$HOME/.cursor`; no other provider receives this grant. [ORB-10945]
-fn linux_cursor_state_roots_with(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
-    if orbit_types::workflow::Provider::parse(provider).ok()
-        != Some(orbit_types::workflow::Provider::Cursor)
-    {
-        return Vec::new();
-    }
-    home.map(|home| vec![home.join(".cursor")])
-        .unwrap_or_default()
-}
-
-/// Process-env wrapper around [`linux_pi_state_roots_with`].
-fn linux_pi_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
-    linux_pi_state_roots_with(
-        provider,
-        home,
-        std::env::var_os("PI_CODING_AGENT_DIR")
-            .map(PathBuf::from)
-            .as_deref(),
-    )
-}
-
-/// Writable state root for an active Pi executor on Linux. The CLI stores
-/// `/login` credentials, settings, saved project trust decisions, installed
-/// packages, and sessions under `$PI_CODING_AGENT_DIR` when set, otherwise
-/// `$HOME/.pi`. No other provider receives this grant — every entry in the
-/// caller's list is *created* by `ensure_linux_provider_directory`, so an
-/// unconditional entry would mkdir a `~/.pi` on hosts that never installed Pi.
-/// [ORB-11296]
-fn linux_pi_state_roots_with(
-    provider: &str,
-    home: Option<&Path>,
-    pi_coding_agent_dir: Option<&Path>,
-) -> Vec<PathBuf> {
-    if orbit_types::workflow::Provider::parse(provider).ok()
-        != Some(orbit_types::workflow::Provider::Pi)
-    {
-        return Vec::new();
-    }
-    match pi_coding_agent_dir {
-        Some(path) => vec![path.to_path_buf()],
-        None => home.map(|home| vec![home.join(".pi")]).unwrap_or_default(),
-    }
-}
-
-/// Process-env wrapper around [`linux_opencode_state_roots_with`].
-fn linux_opencode_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
-    let env_path = |name: &str| std::env::var_os(name).map(PathBuf::from);
-    linux_opencode_state_roots_with(
-        provider,
-        home,
-        OpencodeStateEnv {
-            xdg_data_home: env_path("XDG_DATA_HOME"),
-            xdg_config_home: env_path("XDG_CONFIG_HOME"),
-            xdg_state_home: env_path("XDG_STATE_HOME"),
-            xdg_cache_home: env_path("XDG_CACHE_HOME"),
-            opencode_config_dir: env_path("OPENCODE_CONFIG_DIR"),
-        },
-    )
-}
-
-/// XDG roots that locate OpenCode's writable state on Linux.
-#[derive(Default, Clone)]
-struct OpencodeStateEnv {
-    pub(super) xdg_data_home: Option<PathBuf>,
-    pub(super) xdg_config_home: Option<PathBuf>,
-    pub(super) xdg_state_home: Option<PathBuf>,
-    pub(super) xdg_cache_home: Option<PathBuf>,
-    pub(super) opencode_config_dir: Option<PathBuf>,
-}
-
-/// Writable state roots for an active OpenCode executor on Linux.
-///
-/// OpenCode resolves every root through `xdg-basedir` and creates its data,
-/// config, and state directories at startup, before it reads Orbit's envelope.
-/// The data root holds `auth.json` from `opencode auth login`, the session and
-/// message stores, and logs. No other provider receives this grant — every
-/// entry in the caller's list is *created* by `ensure_linux_provider_directory`,
-/// so an unconditional entry would mkdir an `~/.local/share/opencode` on hosts
-/// that never installed OpenCode. [ORB-11295]
-fn linux_opencode_state_roots_with(
-    provider: &str,
-    home: Option<&Path>,
-    env: OpencodeStateEnv,
-) -> Vec<PathBuf> {
-    if orbit_types::workflow::Provider::parse(provider).ok()
-        != Some(orbit_types::workflow::Provider::Opencode)
-    {
-        return Vec::new();
-    }
-    let scoped = |xdg_base: Option<PathBuf>, home_relative_default: &[&str]| {
-        xdg_scoped_root(home, xdg_base, home_relative_default, "opencode")
-    };
-    [
-        scoped(env.xdg_data_home, &[".local", "share"]),
-        env.opencode_config_dir
-            .or_else(|| scoped(env.xdg_config_home, &[".config"])),
-        scoped(env.xdg_state_home, &[".local", "state"]),
-        scoped(env.xdg_cache_home, &[".cache"]),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
 }
 
 /// `<xdg base>/<app>`: the explicit XDG variable when non-empty, otherwise its

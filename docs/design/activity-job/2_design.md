@@ -1692,7 +1692,7 @@ That seeded corpus is Activity / Job's executable reference documentation.
 
 ### 11.1 Provider typing is broader than provider wiring
 
-The `Provider` enum names `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `cursor`, `pi`, `antigravity`, `opencode`, and `muse`, but `openai_compat` has no CLI runtime and therefore cannot be executed. The CLI entry point refuses it as HTTP-only. The schema is broader than the runtime.
+The `Provider` enum names `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `antigravity`, and `muse` (plus the retired `cursor`, `pi` and `opencode` variants, which only deserialise from persisted records), but `openai_compat` has no CLI runtime and therefore cannot be executed. The CLI entry point refuses it as HTTP-only. The schema is broader than the runtime.
 
 ### 11.2 Tool policy is advisory at dispatch
 

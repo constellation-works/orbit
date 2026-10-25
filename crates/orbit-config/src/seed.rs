@@ -25,9 +25,9 @@ use crate::resolved::default_crews;
 pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default-config.toml");
 
 /// Crew families Orbit ships crews for, in the order a seeded config prefers
-/// them. Families with no built-in crew (`ollama`, the legacy `gemini` CLI,
-/// Cursor, Pi, OpenCode) are not seeded; an operator defines their crews by
-/// hand. [ORB-10946] [ORB-11299] [ORB-16577]
+/// them. Families with no built-in crew (`ollama`, the legacy `gemini` CLI)
+/// are not seeded; an operator defines their crews by hand.
+/// [ORB-10946] [ORB-11299] [ORB-16577]
 const CREW_FAMILY_PREFERENCE: &[&str] =
     &["claude", "codex", "antigravity", "grok", "copilot", "muse"];
 

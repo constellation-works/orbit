@@ -67,7 +67,7 @@ Name resolution arrived in [T20260418-2019]; `run-v2` entrypoints in [T20260418-
 
 ### 2.4 Provider is the only agent runtime choice
 
-For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `cursor`, `pi`, `antigravity`, `opencode`, or `muse`. Orbit's CLI entry point uses the registered direct-agent executors for the supported provider lanes; `openai_compat` and providers without a supported executor fail structurally instead of falling back.
+For `agent_loop`, the asset declares a **provider** — `claude`, `codex`, `gemini`, `grok`, `copilot`, `ollama`, `openai_compat`, `antigravity`, or `muse` (plus the retired `cursor`, `pi` and `opencode` ids, which only deserialise from persisted records). Orbit's CLI entry point uses the registered direct-agent executors for the supported provider lanes; `openai_compat` and providers without a supported executor fail structurally instead of falling back.
 
 ### 2.5 Audit, policy, and seeded assets make the runtime inspectable
 

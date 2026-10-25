@@ -99,7 +99,7 @@ fn only_the_confined_muse_lane_may_write_muse_state_roots() {
         assert!(text.contains(&grant(dir)), "muse must write {dir}");
     }
 
-    for provider in ["claude", "codex", "opencode", "pi"] {
+    for provider in ["claude", "codex", "grok", "copilot"] {
         let text = compile_with_env(&resolved, provider, home());
         for dir in defaults {
             assert!(

@@ -62,6 +62,13 @@ impl ExecutorDefStoreBackend for InMemoryExecutorStore {
         }
         Ok(())
     }
+
+    fn delete_executor_def(&self, name: &str) -> Result<bool, OrbitError> {
+        let mut defs = self.defs.lock().expect("lock");
+        let before = defs.len();
+        defs.retain(|def| def.name != name);
+        Ok(defs.len() != before)
+    }
 }
 
 /// A pre-ORB-10552 Linux install is upgraded to the native backend.
@@ -221,4 +228,27 @@ fn seed_on_macos_keeps_sandbox_exec_and_existing_choices() {
         };
         assert_eq!(def.sandbox, expected, "{} on macos", def.name);
     }
+}
+
+/// [ORB-18096] Re-seeding retires stale shipped executors for removed lanes.
+#[test]
+fn seed_retires_stale_retired_provider_executors() {
+    let store = InMemoryExecutorStore::default();
+    for name in ["cursor", "pi", "opencode"] {
+        store
+            .upsert_executor_def(&base_def(name, ExecutorType::DirectAgent))
+            .expect("seed stale retired executor");
+    }
+    store
+        .upsert_executor_def(&base_def("custom", ExecutorType::DirectAgent))
+        .expect("seed custom");
+    seed_default_executors_for_platform(&store, false, LINUX).expect("seed");
+    for name in ["cursor", "pi", "opencode"] {
+        assert!(
+            store.get_executor_def(name).expect("get").is_none(),
+            "stale {name} executor must be retired"
+        );
+    }
+    assert!(store.get_executor_def("custom").expect("get").is_some());
+    assert!(store.get_executor_def("claude").expect("get").is_some());
 }

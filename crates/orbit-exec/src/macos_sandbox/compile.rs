@@ -65,11 +65,8 @@ pub fn compile_macos_sandbox_profile(
     let grok_home = std::env::var_os("GROK_HOME");
     let copilot_home = std::env::var_os("COPILOT_HOME");
     let xdg_cache_home = std::env::var_os("XDG_CACHE_HOME");
-    let pi_coding_agent_dir = std::env::var_os("PI_CODING_AGENT_DIR");
     let xdg_data_home = std::env::var_os("XDG_DATA_HOME");
     let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
-    let xdg_state_home = std::env::var_os("XDG_STATE_HOME");
-    let opencode_config_dir = std::env::var_os("OPENCODE_CONFIG_DIR");
     let cargo_home = std::env::var_os("CARGO_HOME");
     compile_macos_sandbox_profile_with_env(
         rules,
@@ -81,11 +78,8 @@ pub fn compile_macos_sandbox_profile(
             grok_home: grok_home.as_deref(),
             copilot_home: copilot_home.as_deref(),
             xdg_cache_home: xdg_cache_home.as_deref(),
-            pi_coding_agent_dir: pi_coding_agent_dir.as_deref(),
             xdg_data_home: xdg_data_home.as_deref(),
             xdg_config_home: xdg_config_home.as_deref(),
-            xdg_state_home: xdg_state_home.as_deref(),
-            opencode_config_dir: opencode_config_dir.as_deref(),
             cargo_home: cargo_home.as_deref(),
         },
     )
@@ -102,11 +96,8 @@ struct SandboxCompileEnv<'a> {
     grok_home: Option<&'a OsStr>,
     copilot_home: Option<&'a OsStr>,
     xdg_cache_home: Option<&'a OsStr>,
-    pi_coding_agent_dir: Option<&'a OsStr>,
     xdg_data_home: Option<&'a OsStr>,
     xdg_config_home: Option<&'a OsStr>,
-    xdg_state_home: Option<&'a OsStr>,
-    opencode_config_dir: Option<&'a OsStr>,
     cargo_home: Option<&'a OsStr>,
 }
 
@@ -122,11 +113,8 @@ fn compile_macos_sandbox_profile_with_env(
         grok_home,
         copilot_home,
         xdg_cache_home,
-        pi_coding_agent_dir,
         xdg_data_home,
         xdg_config_home,
-        xdg_state_home,
-        opencode_config_dir,
         cargo_home,
     } = env;
     let mut out = String::new();
@@ -225,52 +213,6 @@ fn compile_macos_sandbox_profile_with_env(
             ));
         }
     }
-    // Cursor's CLI configuration, permissions, and sessions live in
-    // `$HOME/.cursor`. On macOS the default login is the login keychain, not
-    // that directory; the write grant here is still required for the rest of
-    // the CLI state. API-key auth is an explicit environment opt-in and needs
-    // no additional path. [ORB-10945] [ORB-12261]
-    if Provider::parse(provider).ok() == Some(Provider::Cursor)
-        && let Some(state_dir) = super::provider_dirs::cursor_state_dir(home)
-    {
-        out.push_str(&format!(
-            "(allow file-write* (subpath \"{}\"))\n",
-            super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
-        ));
-    }
-    // Pi's agent directory holds `/login` credentials, settings, saved project
-    // trust decisions, installed packages, and sessions. Grant it only to the
-    // active Pi executor; API-key auth is an explicit environment opt-in and
-    // needs no additional path. [ORB-11296]
-    if Provider::parse(provider).ok() == Some(Provider::Pi)
-        && let Some(state_dir) = super::provider_dirs::pi_state_dir(home, pi_coding_agent_dir)
-    {
-        out.push_str(&format!(
-            "(allow file-write* (subpath \"{}\"))\n",
-            super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
-        ));
-    }
-    // OpenCode creates its XDG data/config/state roots during startup, before
-    // it reads Orbit's envelope, so they are granted only to the active
-    // OpenCode executor. `auth.json` lives in the data root; API-key auth is an
-    // explicit environment opt-in and needs no additional path. [ORB-11295]
-    if Provider::parse(provider).ok() == Some(Provider::Opencode) {
-        for state_dir in
-            super::provider_dirs::opencode_state_dirs(super::provider_dirs::OpencodeDirEnv {
-                home,
-                xdg_data_home,
-                xdg_config_home,
-                xdg_state_home,
-                xdg_cache_home,
-                opencode_config_dir,
-            })
-        {
-            out.push_str(&format!(
-                "(allow file-write* (subpath \"{}\"))\n",
-                super::sbpl_filter::sbpl_escape(&state_dir.display().to_string())
-            ));
-        }
-    }
     // Muse Code keeps its settings and `auth.json` login under its XDG config
     // root, tracing/plugins/skills under its XDG data root, and its session
     // name authority under Application Support. Granted only to the active
@@ -327,9 +269,9 @@ fn compile_macos_sandbox_profile_with_env(
 /// Whether `provider`'s CLI reads its own credentials from the macOS login
 /// Keychain, and therefore cannot run under the default Keychain read deny.
 ///
-/// Claude Code, Copilot CLI, and Cursor Agent CLI do: each keeps its login
+/// Claude Code and Copilot CLI do: each keeps its login
 /// session in a login-keychain item (`Claude Code-credentials`,
-/// `github-copilot-app`, `cursor-access-token` / `cursor-refresh-token`). The
+/// `github-copilot-app`). The
 /// Antigravity CLI (`agy`) also stores its OAuth token in the login keychain
 /// and does not persist a readable token under its state directory by default.
 /// Muse Code's `muse exec` needs the login keychain too, although `muse login`
@@ -345,13 +287,7 @@ fn compile_macos_sandbox_profile_with_env(
 fn provider_reads_macos_login_keychain(provider: &str) -> bool {
     matches!(
         Provider::parse(provider).ok(),
-        Some(
-            Provider::Claude
-                | Provider::Copilot
-                | Provider::Cursor
-                | Provider::Antigravity
-                | Provider::Muse
-        )
+        Some(Provider::Claude | Provider::Copilot | Provider::Antigravity | Provider::Muse)
     )
 }
 
@@ -415,9 +351,9 @@ pub fn macos_login_keychain_access(
 /// Re-allow the confined provider's own credential store after
 /// [`emit_default_credential_read_denies`], so last-match-wins grants it.
 ///
-/// Without this, a sandboxed Claude, Copilot, Cursor, or Antigravity CLI cannot
+/// Without this, a sandboxed Claude, Copilot, or Antigravity CLI cannot
 /// see its Keychain item and reports a fake login failure (Claude: OAuth
-/// expiry; Copilot: no authentication information; Cursor and Antigravity:
+/// expiry; Copilot: no authentication information; Antigravity:
 /// authentication required) —
 /// an authentication failure no re-login can clear, because the credential is
 /// present and simply unreadable. The carve-out is deliberately narrow:

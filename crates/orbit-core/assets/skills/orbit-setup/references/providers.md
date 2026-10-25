@@ -3,7 +3,7 @@
 ## Provider identity and resolution
 
 Choose the execution lane first. Canonical provider IDs are `claude`, `codex`,
-`gemini`, `grok`, `copilot`, `cursor`, `pi`, `antigravity`, `opencode`, `muse`,
+`gemini`, `grok`, `copilot`, `antigravity`, `muse`,
 `ollama` and `openai_compat`. The last two are recognized but unsupported at the
 Orbit CLI entry point; `openai-compat` is an accepted spelling of `openai_compat`.
 Case and surrounding whitespace are ignored. Deprecated aliases resolve with
@@ -11,9 +11,10 @@ an `orbit.config.crew` warning: `anthropic` → `claude`, `openai`/`chatgpt` →
 `codex`, `google` → `gemini`, `xai` → `grok`. The warning says the provider
 "uses a deprecated alias; resolving to the canonical id — update the config".
 Replace aliases with canonical IDs.
-The six newer lanes have no aliases. A model vendor routed through a lane never
-changes its provider: a Claude model through Copilot is still `copilot`, and
-`<vendor>/<model>` through Pi or OpenCode keeps `pi` or `opencode`.
+The newer lanes have no aliases. A model vendor routed through a lane never
+changes its provider: a Claude model through Copilot is still `copilot`.
+
+**Retired providers.** The `cursor`, `pi` and `opencode` lanes were retired. A crew naming one fails to load, naming the crew, the retired provider and the remedy: pick a supported provider (`claude`, `codex`, `gemini`, `grok`, `copilot`, `antigravity`, `muse`). `orbit doctor` reports the same refusal. Persisted records naming them still read and display. The Cursor editor MCP client (`orbit mcp init --cursor`) is a separate surface and is unaffected.
 
 For task dispatch, the first applicable tier wins:
 
@@ -64,13 +65,13 @@ naming the crew: correct the name or deliberately enable it, then recheck.
    returned by that CLI. For example, replace the model placeholder before saving:
 
    ```toml
-   [crews.cursor]
-   provider = "cursor"
-   model = "<id from cursor-agent models>"
+   [crews.copilot]
+   provider = "copilot"
+   model = "<id from the CLI model list>"
    enabled = true
    ```
 
-   Set it as default with `orbit config set workflow.default_crew cursor` (add
+   Set it as default with `orbit config set workflow.default_crew copilot` (add
    `--global` for a user-wide default). Check `orbit config show`; a task pin or
    pool assignment can still outrank it. Changing the default does not dispatch work.
 5. Register MCP only for lanes that support it below. In the intended agent
@@ -97,26 +98,6 @@ configure the client explicitly or use its shell and `orbit tool run`.
 `session.warning` with `warningType: "policy"` can mean org-disabled third-party
 MCP. Check login/entitlement or ask the org admin to fix policy.
 
-### Cursor
-
-Install `curl https://cursor.com/install -fsS | bash`; put `~/.local/bin` on
-`PATH` and verify `cursor-agent --version`. Authenticate with `cursor-agent login`,
-check `cursor-agent status`, and list IDs with `cursor-agent models` (or
-`cursor-agent --list-models`). Allow `CURSOR_API_KEY` for key auth, or
-`AGENT_CLI_CREDENTIAL_STORE` if login used its `file` store. Writes cover
-`~/.cursor`; macOS reads the login keychain. Native MCP registration is
-`orbit mcp init --cursor`; verify the connection in the agent client.
-
-### Pi
-
-Install `npm install -g @earendil-works/pi-coding-agent`; verify `pi --version`.
-Use `/login` inside `pi`, or allow the selected vendor's key name (for example
-`ANTHROPIC_API_KEY`) in `execution.env.pass`. List IDs with
-`pi --list-models`; models can be vendor-prefixed. Preserve `PI_CODING_AGENT_DIR`
-if customized: login defaults to `~/.pi/agent`, and writes cover that custom
-directory or `~/.pi`. Pi has no MCP client/init target: keep its `bash` tool and
-`orbit` on the child's `PATH` for `orbit tool run`.
-
 ### Antigravity
 
 Install `curl -fsSL https://antigravity.google/cli/install.sh | bash` per the
@@ -131,21 +112,6 @@ Native MCP uses `orbit mcp init --antigravity` (`.agents/mcp_config.json`, or
 `~/.gemini/config/mcp_config.json` at home scope). `authentication required`
 means finish login on that host. This lane uses `agy`, separate from `gemini`;
 when migrating, change both the provider and model slug.
-
-### OpenCode
-
-Install `npm install -g opencode-ai` per the [CLI installation guide](https://opencode.ai/docs/);
-verify `opencode --version`, use `opencode auth login`, then `opencode models`.
-Orbit's lane contract was checked with OpenCode 1.18.29; verify compatibility
-before replacing it with another major version sharing the same binary name.
-Use fully qualified `<vendor>/<model>` IDs. Login stores `auth.json` under
-`$XDG_DATA_HOME/opencode`; alternatively allow the vendor key name (for example
-`ANTHROPIC_API_KEY`). Preserve customized `OPENCODE_CONFIG_DIR`
-and `XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` in `pass`.
-Writes cover their `opencode` subdirectories (or `OPENCODE_CONFIG_DIR` directly);
-unset XDG roots default to `~/.local/share`, `~/.config`, `~/.local/state`,
-`~/.cache`. OpenCode supports MCP, but Orbit neither writes its `opencode.json`
-nor offers an init target; the lane uses its shell and `orbit tool run`.
 
 ### Muse
 
