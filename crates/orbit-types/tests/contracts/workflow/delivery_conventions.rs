@@ -2,7 +2,9 @@
 //! `branch.name_template`, and never a task whose id only prefixes it.
 
 use orbit_types::task::names_task_delivery_pull_request;
-use orbit_types::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX, default_branch_template};
+use orbit_types::workflow::{
+    ConventionTemplate, DEFAULT_BRANCH_PREFIX, Placeholder, default_branch_template,
+};
 
 fn is_orb_id(candidate: &str) -> bool {
     candidate
@@ -59,4 +61,53 @@ fn branch_readers_find_the_task_under_default_and_custom_templates() {
             "{branch}"
         );
     }
+}
+
+fn assert_rendered_branch_owner(source: &str, external_ref: &str) {
+    let template = ConventionTemplate::parse_branch("branch.name_template", source).unwrap();
+    let branch = template.render(|placeholder| match placeholder {
+        Placeholder::TaskId => "ORB-10".to_string(),
+        Placeholder::Hash => "0123abcd".to_string(),
+        Placeholder::ExternalRef(_) => external_ref.to_string(),
+        _ => DEFAULT_BRANCH_PREFIX.to_string(),
+    });
+    assert_eq!(
+        template
+            .branch_task_id(&branch, DEFAULT_BRANCH_PREFIX, &is_orb_id)
+            .as_deref(),
+        Some("ORB-10"),
+        "{branch}"
+    );
+    for (id, owns) in [("ORB-10", true), ("ORB-1", false)] {
+        assert_eq!(
+            template.branch_names_task(&branch, DEFAULT_BRANCH_PREFIX, id),
+            owns,
+            "{branch}: {id}"
+        );
+        assert_eq!(
+            names_task_delivery_pull_request(
+                &template,
+                &branch,
+                "Delivers ORB-10; follows ORB-1.",
+                id
+            ),
+            owns,
+            "{branch}: {id}"
+        );
+    }
+}
+
+#[test]
+fn branch_readers_round_trip_an_adjacent_hash() {
+    assert_rendered_branch_owner("feature/{{task_id}}{{hash}}", "");
+}
+
+#[test]
+fn branch_readers_round_trip_an_alphanumeric_literal_after_the_task() {
+    assert_rendered_branch_owner("feature/{{task_id}}0{{hash}}", "");
+}
+
+#[test]
+fn branch_readers_ignore_a_sibling_token_in_an_external_ref() {
+    assert_rendered_branch_owner("feature/{{ext.jira}}-{{task_id}}-{{hash}}", "X-ORB-1");
 }

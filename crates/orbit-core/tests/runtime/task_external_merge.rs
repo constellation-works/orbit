@@ -166,6 +166,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_config("")
+    }
+
+    fn with_config(config: &str) -> Self {
         let root =
             TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).expect("create tempdir");
         let global_root = root.path().join("global");
@@ -174,6 +178,7 @@ impl Fixture {
         std::fs::create_dir_all(&global_root).expect("create global root");
         std::fs::create_dir_all(&workspace_root).expect("create workspace root");
         std::fs::write(repo_root.join("shared.txt"), "fixture\n").expect("write shared file");
+        std::fs::write(workspace_root.join("config.toml"), config).expect("write config");
         let forge = FakeForge::default();
         let runtime = OrbitRuntime::from_roots(&global_root, &workspace_root)
             .expect("build test runtime")
@@ -1249,4 +1254,30 @@ fn a_template_body_without_a_task_placeholder_still_settles_an_external_merge() 
         );
         assert_eq!(fx.status(id), TaskStatus::Review, "{why}");
     }
+}
+
+crate::scenario_table!(
+    sibling_delivery_contract,
+    external_merge_does_not_settle_a_sibling_delivery_named_in_an_external_ref
+);
+
+fn external_merge_does_not_settle_a_sibling_delivery_named_in_an_external_ref() {
+    let fx = Fixture::with_config(
+        "[branch]\nname_template = 'feature/{{ext.jira}}-{{task_id}}-{{hash}}'\n",
+    );
+    let sibling = fx.add_task("Mentioned task", TaskStatus::Review, &[61]);
+    let owner = fx.add_task("Merged task", TaskStatus::Review, &[61]);
+    fx.forge.0.lock().unwrap().recent.push(FakeForge::merged(
+        61,
+        format!("feature/X-{sibling}-{owner}-0123abcd"),
+        format!("Delivers {owner}; follows {sibling}."),
+        BOT,
+        &fx.base,
+    ));
+    assert!(fx.runtime.settle_externally_merged_task(&sibling).is_err());
+    assert_eq!(fx.status(&sibling), TaskStatus::Review);
+    let settlement = fx.runtime.settle_externally_merged_task(&owner).unwrap();
+    assert_eq!(settlement.pr_number, 61);
+    assert_eq!(settlement.task_id, owner);
+    assert_eq!(fx.status(&owner), TaskStatus::Done);
 }

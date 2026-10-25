@@ -880,3 +880,41 @@ fn a_template_body_without_a_task_placeholder_still_closes_on_terminal() {
         "author, branch and whole-token checks still hold"
     );
 }
+
+crate::scenario_table!(
+    sibling_delivery_contract,
+    landing_does_not_close_a_sibling_delivery_named_in_an_external_ref
+);
+
+fn landing_does_not_close_a_sibling_delivery_named_in_an_external_ref() {
+    let fx = Fixture::with_config(Some(
+        "[branch]\nname_template = 'feature/{{ext.jira}}-{{task_id}}-{{hash}}'\n",
+    ));
+    let sibling = fx.add_task("Landing task");
+    let owner = fx.add_task("Still delivering");
+    let body = format!("Delivers {owner}; follows {sibling}.");
+    fx.forge.open_pr(
+        11,
+        &format!("feature/X-{sibling}-{sibling}-0123abcd"),
+        &body,
+        BOT,
+    );
+    fx.forge.open_pr(
+        12,
+        &format!("feature/X-{sibling}-{owner}-0123abcd"),
+        &body,
+        BOT,
+    );
+    fx.record_prs(&sibling, &[11, 13]);
+    fx.move_to_review(&sibling);
+    fx.update(json!({
+        "id": sibling, "status": "done", "model": "codex",
+        "note": "delivered by pull request #13 merged as 0123456789abcdef0123456789abcdef01234567"
+    }));
+    assert_eq!(fx.forge.closed_numbers(), vec![11]);
+    assert_eq!(fx.forge.still_open(), vec![12]);
+    assert_eq!(
+        fx.runtime.get_task(&owner).unwrap().status,
+        TaskStatus::Backlog
+    );
+}

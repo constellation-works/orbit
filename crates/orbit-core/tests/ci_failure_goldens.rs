@@ -2232,3 +2232,38 @@ fn ci_printed_test_names_and_locations_do_not_change_runtime_failure_identity() 
         "printed source cannot fragment a runtime cause"
     );
 }
+
+#[test]
+fn ci_failure_branch_routing_ignores_a_sibling_token_in_an_external_ref() {
+    if !isolated("ci_failure_branch_routing_ignores_a_sibling_token_in_an_external_ref") {
+        return;
+    }
+    let (_root, global, workspace) = orbit_dirs();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[branch]\nname_template = 'feature/{{ext.jira}}-{{task_id}}-{{hash}}'\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let sibling = add_titled(&runtime, "Mentioned task");
+    let owner = add_titled(&runtime, "Actual delivery");
+    let pr = pull_request(
+        "error: task branch regression",
+        0,
+        &format!("feature/X-{}-{}-0123abcd", sibling.id, owner.id),
+        &"3".repeat(40),
+    );
+    let output = file(&runtime, vec![pr.clone()]);
+    assert_eq!(output["filed_count"], 0, "{output}");
+    assert_eq!(
+        output["attributed"].as_array().unwrap().len(),
+        1,
+        "{output}"
+    );
+    assert_eq!(output["attributed"][0]["task_id"], owner.id, "{output}");
+    assert!(runtime.get_task_artifacts(&sibling.id).unwrap().is_empty());
+    let path = output["attributed"][0]["artifact"].as_str().unwrap();
+    let artifact = runtime.get_task_artifact(&owner.id, path).unwrap().unwrap();
+    let retained: Value = serde_json::from_slice(&artifact.content).unwrap();
+    assert_eq!(retained["failure"], pr);
+}

@@ -119,7 +119,7 @@ fn terminal_replay_finishes_side_effects_after_a_post_lock_read_failure() {
         let task = runtime.get_task(&task.id).expect("task with PR");
         *forge.open.lock().unwrap() = Some(ForgePullRequest {
             number: 17,
-            head_branch: format!("orbit/{}-delivery", task.id),
+            head_branch: format!("orbit/{}-0123abcd", task.id),
             body: format!("Task {}", task.id),
             author: "orbit-bot".to_string(),
         });

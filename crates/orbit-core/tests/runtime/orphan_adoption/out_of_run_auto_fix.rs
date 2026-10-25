@@ -83,7 +83,7 @@ impl Fixture {
             })
             .unwrap()
             .id;
-        let head = format!("orbit/{task}-leaf");
+        let head = format!("orbit/{task}-0123abcd");
         let input = json!({"task_ids": [task], "completion": completion, "auto_fix": false});
         let run = self
             .jobs
