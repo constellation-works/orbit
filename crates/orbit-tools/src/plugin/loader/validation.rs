@@ -224,7 +224,8 @@ fn is_first_party_remote(url: &str) -> bool {
 /// handling both `scheme://[user@]host[:port]/org/repo` and the SCP-like
 /// `[user@]host:org/repo` form `git@github.com:org/repo` uses. Returns `None`
 /// when `url` does not decompose into a host and a non-empty first segment,
-/// or when the path holds a dot segment (`.`, `..`, or their percent-encoded
+/// when its authority does not name one host (see [`authority_host`]), or
+/// when the path holds a dot segment (`.`, `..`, or their percent-encoded
 /// forms) or an empty segment: Git's HTTP transport resolves those before it
 /// fetches, so the organisation read from the text would not be the
 /// repository fetched. An unrecognised shape fails closed rather than
@@ -234,20 +235,31 @@ fn remote_host_and_org(url: &str) -> Option<(String, String)> {
     let url = url.trim().trim_end_matches(".git").trim_end_matches('/');
     if let Some((_scheme, rest)) = url.split_once("://") {
         let (authority, path) = rest.split_once('/')?;
-        let host = authority
-            .rsplit_once('@')
-            .map_or(authority, |(_, host)| host);
-        let host = host.split(':').next().unwrap_or(host);
-        return Some((host.to_lowercase(), organisation(path)?));
+        return Some((authority_host(authority)?, organisation(path)?));
     }
     let (host_part, path) = url.split_once(':')?;
     if host_part.is_empty() || host_part.contains('/') {
         return None;
     }
-    let host = host_part
-        .rsplit_once('@')
-        .map_or(host_part, |(_, host)| host);
-    Some((host.to_lowercase(), organisation(path)?))
+    Some((authority_host(host_part)?, organisation(path)?))
+}
+
+/// The lowercased host of an authority `[user@]host[:port]`, or `None` when
+/// the text does not name one host that every reader agrees on. libcurl, the
+/// https transport git uses, ends the authority at `?`, so
+/// `https://evil.example?@github.com/…` connects to `evil.example` while the
+/// text after `?` reads as `github.com`. WHATWG URL parsers end it at `\`
+/// instead, and a second `@` leaves the userinfo boundary ambiguous. An
+/// authority holding any of them fails closed.
+fn authority_host(authority: &str) -> Option<String> {
+    if authority.contains(['?', '\\']) || authority.matches('@').count() > 1 {
+        return None;
+    }
+    let host = authority
+        .split_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = host.split(':').next().unwrap_or(host);
+    Some(host.to_lowercase())
 }
 
 /// The first segment of a remote's repository path, or `None` when any
