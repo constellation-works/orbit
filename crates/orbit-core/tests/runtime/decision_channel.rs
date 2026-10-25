@@ -270,6 +270,41 @@ impl Fixture {
         id
     }
 
+    /// Declares an existing workspace file as the task's footprint.
+    fn prepare_footprint(&self, task: &str) {
+        std::fs::write(self.repo.join("README.md"), "# fixture\n").unwrap();
+        self.update(json!({"id": task, "context_files": ["file:README.md"]}));
+    }
+
+    /// Records an applied task-pilot assessment holding the task as a
+    /// duplicate, in the receipt-comment form pilot admission reads.
+    fn seed_pilot_duplicate_hold(&self, task: &str) {
+        use orbit_types::task::TaskComment;
+
+        let audit = json!({"assessment": {
+            "disposition": "selectors",
+            "duplicate_of": {
+                "task_id": task,
+                "evidence": "The same work is already covered by existing work.",
+            },
+            "already_landed": null,
+        }});
+        self.runtime
+            .apply_task_automation_update(
+                task,
+                TaskAutomationUpdate {
+                    append_comments: vec![TaskComment {
+                        at: chrono::Utc::now(),
+                        by: "task-pilot".to_string(),
+                        message: format!("operation_id={}\n{audit}", "a".repeat(64)),
+                        operation_id: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
     fn digest(
         &self,
         caller: DecisionSubmitCaller,
@@ -1259,6 +1294,9 @@ fn an_approve_through_the_channel_lands_like_a_screened_approval() {
     let fx = fixture();
     fx.register();
     let decided = fx.proposed_task("Decided by channel");
+    // A channel approval is screened: only a prepared footprint (or the
+    // no-diff disposition) is admitted, so prepare one here.
+    fx.prepare_footprint(&decided);
     let rejected = fx.proposed_task("Rejected by channel");
     let direct = fx.proposed_task("Decided directly");
 
@@ -1302,4 +1340,139 @@ fn an_approve_through_the_channel_lands_like_a_screened_approval() {
     fx.submit(&reject_request, "reject", &token, Fixture::plugin_caller())
         .unwrap();
     assert_eq!(fx.status(&rejected), TaskStatus::Rejected);
+}
+
+#[test]
+fn a_digest_approve_is_refused_while_the_pilot_holds_or_no_footprint_is_prepared() {
+    let fx = fixture();
+    fx.register();
+    // Held by the pilot (duplicate) and without a footprint.
+    let held = fx.proposed_task("Held by pilot");
+    fx.seed_pilot_duplicate_hold(&held);
+    // No pilot hold, but no footprint either.
+    let unprepared = fx.proposed_task("No footprint yet");
+    // No footprint, with the supported no-diff disposition.
+    let no_diff = fx.proposed_task("No diff expected");
+    fx.human()
+        .update_task_as_human(
+            &no_diff,
+            TaskUpdateParams {
+                tags: Some(vec!["no-diff-expected".to_string()]),
+                ..Default::default()
+            },
+            HUMAN.to_string(),
+        )
+        .unwrap();
+
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    let request_for = |task: &str| {
+        digest
+            .raised
+            .iter()
+            .find(|request| request.task_id == task)
+            .unwrap()
+            .clone()
+    };
+    let open_request_for = |task: &str| {
+        fx.requests(task)
+            .into_iter()
+            .find(|request| {
+                request.gate == DecisionGate::ProposedApproval
+                    && request.state == DecisionRequestState::Open
+            })
+            .unwrap()
+    };
+
+    // The pilot-held proposal is refused twice with the hold refusal:
+    // the first refusal neither answered the request nor consumed the
+    // token, and the task stays proposed.
+    let held_request = request_for(&held);
+    let held_token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &held_request.id)
+        .unwrap();
+    for _ in 0..2 {
+        let refused = fx
+            .submit(
+                &held_request,
+                "approve",
+                &held_token,
+                Fixture::plugin_caller(),
+            )
+            .expect_err("a pilot-held proposal is not approved through the channel");
+        let refused = refused.to_string();
+        assert!(refused.contains("pilot_duplicate"), "{refused}");
+        assert!(!refused.contains("token_consumed"), "{refused}");
+        assert_eq!(fx.status(&held), TaskStatus::Proposed);
+        let request = open_request_for(&held);
+        assert_eq!(request.id, held_request.id);
+        assert!(request.resolution.is_none(), "{request:?}");
+    }
+
+    // Without a prepared footprint the approval is refused and applies
+    // nothing; once the footprint is declared, the same public path
+    // approves it as the human.
+    let unprepared_request = request_for(&unprepared);
+    let unprepared_token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &unprepared_request.id)
+        .unwrap();
+    let refused = fx
+        .submit(
+            &unprepared_request,
+            "approve",
+            &unprepared_token,
+            Fixture::plugin_caller(),
+        )
+        .expect_err("an empty-footprint proposal is not approved through the channel");
+    assert!(
+        refused.to_string().contains("missing_context_files"),
+        "{refused}"
+    );
+    assert_eq!(fx.status(&unprepared), TaskStatus::Proposed);
+    assert!(open_request_for(&unprepared).resolution.is_none());
+
+    fx.prepare_footprint(&unprepared);
+    fx.digest(Fixture::plugin_caller()).unwrap();
+    let prepared_request = open_request_for(&unprepared);
+    let prepared_token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &prepared_request.id)
+        .unwrap();
+    let answered = fx
+        .submit(
+            &prepared_request,
+            "approve",
+            &prepared_token,
+            Fixture::plugin_caller(),
+        )
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(answered.resolution.clone().unwrap().answered_by, HUMAN);
+    assert_eq!(fx.status(&unprepared), TaskStatus::Backlog);
+    assert!(
+        !fx.runtime
+            .get_task(&unprepared)
+            .unwrap()
+            .context_files
+            .is_empty(),
+        "an admitted proposal carries its prepared footprint"
+    );
+
+    // The no-diff disposition needs no footprint.
+    let no_diff_request = request_for(&no_diff);
+    let no_diff_token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &no_diff_request.id)
+        .unwrap();
+    let answered = fx
+        .submit(
+            &no_diff_request,
+            "approve",
+            &no_diff_token,
+            Fixture::plugin_caller(),
+        )
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(fx.status(&no_diff), TaskStatus::Backlog);
 }
