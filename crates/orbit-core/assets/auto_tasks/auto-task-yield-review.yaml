@@ -34,6 +34,28 @@ template:
       (lexical search matches one substring: use a single distinctive
       token, never a multi-word phrase, and never treat a 0-hit multi-word
       query as proof that nothing covers a candidate).
+    - Relations point from the referencing task to its target: a filed
+      task carries `spawned_from` to its chore, and a later regression
+      carries `regression_from` to the filed task it regresses. A task's
+      `orbit.task.show` record, and a list row for that task, carry only
+      that task's own outgoing relations, never incoming ones, so reading
+      a chore or a filed task can never discover the tasks that filed
+      from it or later regressed it. Discover those only from the
+      referencing tasks. Before measuring, enumerate the task population
+      with
+      `orbit tool run orbit.task.list --input '{"limit":10000,"fields":["id","status","created_at","relations"],"model":"<agent-family>"}'`,
+      check `truncated` and raise the limit until it is false, then
+      invert every returned task's outgoing relations into two incoming
+      maps: `spawned_from` (chore ID -> the task IDs that filed from it)
+      and `regression_from` (filed task ID -> the later task IDs that
+      regress it). A list row that omits `relations` (the key is absent,
+      not an explicit empty list) is unread, not empty: read that task
+      with `orbit.task.show` (`"fields":["id","status","relations"]`)
+      and invert its outgoing relations instead. If the population read
+      stays truncated, or a referencing task cannot be read, every
+      incoming count that read feeds is `unknown`, never zero. Use
+      `orbit.task.show` on a chore or a filed task only for that task's
+      own status and rejection evidence, never as a backlink source.
     - Read run cost evidence read-only with
       `orbit run history --limit <n> --no-reconcile --json` and
       `orbit run show <run-id> --no-reconcile --json`. Never use a run read
@@ -60,9 +82,11 @@ template:
     1. **Runs.** The chores minted in the window (tag `auto-task:<name>`
        above), each chore's final status (`done`, `rejected`, or still
        open in `proposed`, `backlog`, `in-progress`, `review` or
-       `blocked`), and how many were no-op successes: `done` chores that
-       filed no task (no task carries a `spawned_from` relation to the
-       chore; see step 3).
+       `blocked`), and how many were no-op successes: `done` chores whose
+       incoming `spawned_from` map entry (see Rules and step 3) is empty.
+       When the population scan behind that map is incomplete, the
+       no-op count is `unknown`, never zero, and no chore is classified
+       as a no-op from an incomplete scan.
     2. **Cost.** Tokens or cost per run from the run evidence above
        (`orbit run history --limit <n> --no-reconcile --json`, then
        `orbit run show <run-id> --no-reconcile --json` for a run whose
@@ -71,22 +95,27 @@ template:
        cost figure, report that run's cost as `unknown`, never as zero,
        and report the definition's cost per run as `unknown` when any
        counted run is unknown.
-    3. **Output.** The tasks the chores filed: tasks whose
-       `spawned_from` relation targets a minted chore of this definition,
-       found by reading each chore with `orbit.task.show`. For each filed
-       task record its outcome from `orbit.task.show`: `done`, `rejected`,
-       archived as a duplicate, or still open. When filed tasks carry no
-       `spawned_from` linkage to any chore, count them as `unknown`, do
-       not guess their definition, and report the linkage gap (see
-       "Linkage gap" below).
-    4. **Quality.** Filed tasks that later regressed: a later task whose
-       `regression_from` relation targets the filed task, read from the
-       filed task's `orbit.task.show` record. Filed tasks rejected as
-       duplicates or invalid: `rejected` filed tasks whose rejection
-       evidence on `orbit.task.show` (status reason, comments or
-       relations) marks them duplicate or invalid; a rejection whose
-       reason the evidence does not state is counted as `rejected` with
-       reason `unknown`, never assumed duplicate or invalid.
+    3. **Output.** The tasks the chores filed: for each minted chore of
+       this definition, the task IDs in its incoming `spawned_from` map
+       entry — the referencing tasks whose own outgoing `spawned_from`
+       relation targets that chore, inverted in the Rules scan. Never
+       find them by reading the chore itself. For each filed task record
+       its outcome from that filed task's own `orbit.task.show` (or its
+       list-row status): `done`, `rejected`, archived as a duplicate, or
+       still open. When filed tasks carry no `spawned_from` linkage to
+       any chore, count them as `unknown`, do not guess their
+       definition, and report the linkage gap (see "Linkage gap" below).
+    4. **Quality.** Filed tasks that later regressed: for each filed
+       task, the task IDs in its incoming `regression_from` map entry —
+       the later referencing tasks whose own outgoing `regression_from`
+       relation targets that filed task, inverted in the Rules scan.
+       Never read them from the filed task itself. Filed tasks rejected
+       as duplicates or invalid: `rejected` filed tasks whose rejection
+       evidence on that filed task's own `orbit.task.show` (status
+       reason, comments or relations) marks them duplicate or invalid; a
+       rejection whose reason the evidence does not state is counted as
+       `rejected` with reason `unknown`, never assumed duplicate or
+       invalid.
     5. **Derived.** Landed tasks per run: filed tasks with outcome `done`
        divided by runs in the window (`unknown` when runs is zero). Cost
        per landed task: total known cost divided by landed tasks
@@ -145,7 +174,10 @@ template:
     or invalid rejections, unknown-linkage counts, landed tasks per run,
     cost per landed task, and each candidate's disposition (filed task
     ID, already tracked by an existing task ID, or overflow). Also record
-    the excluded disabled definitions and any unmatched runs. Attach it
+    whether the incoming-relation population scan was complete (its
+    `total`, final `truncated` value and any tasks read through
+    `orbit.task.show` because their list row omitted `relations`), the
+    excluded disabled definitions and any unmatched runs. Attach it
     with
     `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/auto-task-yield.json","path":"auto-task-yield.json","model":"<agent-family>"}'`.
     Diff it against the previous run's artifact and record the delta per

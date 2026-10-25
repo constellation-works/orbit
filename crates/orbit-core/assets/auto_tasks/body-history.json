@@ -32,7 +32,32 @@
       }
     }
   ],
-  "auto-task-yield-review": [],
+  "auto-task-yield-review": [
+    {
+      "comments": [
+        "## Linkage gap",
+        "## Measure each enabled definition (last 30 days)",
+        "## Propose retuning (at most 3 tasks)",
+        "## Record and diff",
+        "## Rules and command surfaces"
+      ],
+      "digest": "c296a2bab039721c83a4a3b61db5e33091d979f7c09822bb121f02c0d30930c6",
+      "revision": "37f8572a95ebc191d96a688d430a9da6c6956943",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "auto-task-yield-review",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "backlog-hygiene": [
     {
       "comments": [
