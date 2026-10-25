@@ -143,6 +143,55 @@ impl crate::OrbitRuntime {
         Ok(leaves)
     }
 
+    /// The claimed leaf stage for one task, from this host's unsettled
+    /// pull admissions: the leaf's stage, run id and state. This is the
+    /// task-keyed form of [`Self::pull_drain_claimed_leaves`] for a reader
+    /// (the task detail projection) that holds a task, not a drain run.
+    /// `None` when this host holds no live admission for the task — the
+    /// caller must not guess a stage for a run it cannot read.
+    pub fn claimed_leaf_stage_for_task(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<(ClaimedLeafStage, String, String)>, OrbitError> {
+        use LocalPullPhase as Phase;
+        let jobs = self.stores().jobs();
+        for record in jobs.unsettled_local_pull_admissions()? {
+            if !matches!(
+                record.phase,
+                Phase::Launching | Phase::Launched | Phase::Settling
+            ) {
+                continue;
+            }
+            let claimed_task = record
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.claim.as_ref())
+                .map(|claim| claim.task_id.as_str());
+            if claimed_task != Some(task_id) {
+                continue;
+            }
+            let Some(leaf) = record.leaf_run_id.as_deref() else {
+                continue;
+            };
+            let Some(run) = jobs.get_job_run(leaf)? else {
+                continue;
+            };
+            if run.state.is_terminal() {
+                continue;
+            }
+            let stage = if self
+                .read_run_state(leaf)?
+                .is_some_and(|state| state.in_landing_review())
+            {
+                ClaimedLeafStage::Reviewing
+            } else {
+                ClaimedLeafStage::Implementing
+            };
+            return Ok(Some((stage, run.run_id.clone(), run.state.to_string())));
+        }
+        Ok(None)
+    }
+
     /// The settlements a pull drain carries that its owner refused while
     /// still holding their claims [ORB-13979]. Empty for every other run.
     pub fn pull_drain_refused_settlements(

@@ -58,6 +58,7 @@ fn short_inspection_revision_fails_a_retried_task_pilot_once() {
         kind: JobKind::Workflow,
         steps: vec![JobV2Step {
             id: "pilot".to_string(),
+            stage: None,
             when: None,
             retry: Some(RetrySpec {
                 max_attempts: 3,

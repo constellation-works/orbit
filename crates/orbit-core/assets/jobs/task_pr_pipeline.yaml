@@ -144,6 +144,7 @@ spec:
 
   steps:
     - id: worktree
+      stage: { id: setup, label: Setup }
       target: activity:worktree_setup
       retry:
         max_attempts: 4
@@ -190,6 +191,7 @@ spec:
         prior_foreign_run: "{{ steps.worktree.output.prior_foreign_run }}"
 
     - id: implement_bundle
+      stage: { id: implement, label: Implement }
       when: "{{ steps.resume_candidate.output.implement }} == true"
       loop:
         items: "{{ input.task_ids }}"
@@ -215,6 +217,7 @@ spec:
               resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
+      stage: { id: validate, label: Validate }
       recovery_activity: step_failure_recovery
       target: activity:git_commit
       default_input:
@@ -319,6 +322,7 @@ spec:
     # partial work resets this bound.
     # None of these outcomes opens a PR.
     - id: review_gate_admit
+      stage: { id: review, label: Review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -388,6 +392,7 @@ spec:
         ownership_base_sha: "{{ steps.review_gate_settle.output.implementation_head_sha }}"
 
     - id: push
+      stage: { id: publish, label: Publish }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:git_push
@@ -468,6 +473,7 @@ spec:
     # settle error keeps the PR open and unmerged and the task in review with
     # that step's typed reason.
     - id: landing_review_gate_admit
+      stage: { id: landing_review, label: Landing review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -546,6 +552,7 @@ spec:
         pr_number: "{{ steps.pr_open.output.pr_number }}"
 
     - id: complete_pr
+      stage: { id: merge, label: Merge }
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} != true || {{ input.auto_fix }} == true && {{ steps.commit.output.skipped_no_diff_expected }} != true"
       # A DIRTY PR is repaired only after pr_complete reuses git_rebase to
       # prove real unmerged entries. Protection, review, check, auth, stale
@@ -589,6 +596,7 @@ spec:
     # `re_review_gate_admit` always runs, reads the run's recorded
     # `complete_pr` checkpoint itself, and its `applies` gates the rest.
     - id: re_review_gate_admit
+      stage: { id: re_review, label: Re-review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -806,6 +814,7 @@ spec:
     # runs take this route with their full evidence checkpoint; they create no
     # new code delivery and do not acquire the side-effect-only task tag.
     - id: complete_no_diff
+      stage: { id: publish, label: Publish }
       when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true"
       recovery_activity: step_failure_recovery
       target: activity:pr_complete

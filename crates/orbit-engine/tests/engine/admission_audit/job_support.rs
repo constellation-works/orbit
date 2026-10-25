@@ -106,6 +106,7 @@ pub(super) fn deterministic_target(action: &str) -> TargetStep {
 pub(super) fn target_step(id: &str, action: &str) -> JobV2Step {
     JobV2Step {
         id: id.to_string(),
+        stage: None,
         when: None,
         retry: None,
         recovery_activity: None,

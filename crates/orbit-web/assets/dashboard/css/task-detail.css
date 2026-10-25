@@ -598,6 +598,46 @@
 }
 .task-lifecycle-step.current .task-lifecycle-label { color: var(--fg-strong); font-weight: 600; }
 
+/* The delivery stage under the lifecycle strip: same past/current/future
+   language, thinner. The current segment takes extra width so its label
+   stays readable at 375px; the others may ellipsize. */
+.task-stage {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  gap: 3px;
+}
+.task-stage-step { flex: 1 1 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.task-stage-step.current { flex-grow: 2.6; }
+.task-stage-bar { height: 2px; border-radius: 2px; background: var(--border); }
+.task-stage-step.past .task-stage-bar { background: color-mix(in srgb, var(--fg-mute) 50%, transparent); }
+.task-stage-step.current .task-stage-bar { background: var(--state-running); }
+.task-stage-label {
+  font-size: 10.5px;
+  color: var(--fg-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.task-stage-step.current .task-stage-label {
+  color: var(--fg-strong);
+  font-weight: 600;
+  /* The current stage wraps instead of ellipsizing, so it stays readable
+     at 375px where every other segment is cut. */
+  white-space: normal;
+  overflow: visible;
+  text-overflow: clip;
+}
+.task-stage.ended .task-stage-step.current .task-stage-bar { background: var(--state-failed); }
+.task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-bar { background: var(--state-cancelled); }
+.task-stage.ended .task-stage-step.current .task-stage-label { color: var(--state-failed); }
+.task-stage.ended[data-run-state="cancelled"] .task-stage-step.current .task-stage-label { color: var(--state-cancelled); }
+.task-stage-link { text-decoration: none; }
+.task-stage-link:hover { text-decoration: underline; }
+.task-stage.awaiting .task-stage-step.current .task-stage-bar { background: var(--warn-fg); }
+.task-stage.awaiting .task-stage-step.current .task-stage-label { color: var(--warn-fg); }
+
 /* The pull request, the run, who carried the task and its readiness. */
 .task-delivery-card {
   display: flex;

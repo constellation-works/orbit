@@ -65,6 +65,11 @@ pub(crate) fn task_detail_json(
         if let Some(triage) = runtime.escalation_triage_eligibility_json(row)? {
             object.insert("escalation_triage".to_string(), triage);
         }
+        // Detail-only: the stage reads the run and its audit trail, which
+        // list rows never pay for.
+        if let Some(stage) = runtime.job_run_stage(row)? {
+            object.insert("job_run_stage".to_string(), stage);
+        }
         crate::why_stuck::attach_why_stuck(runtime, row, object)?;
     }
     Ok(value)

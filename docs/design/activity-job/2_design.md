@@ -84,6 +84,7 @@ A former `Groundhog(GroundhogSpec)` variant (a sibling activity kind from [T2026
 - every step has `id`
 - every step may add `when`
 - every step may add `retry`
+- every step may add `stage`: display metadata naming the delivery stage the step starts, as a bare stage id (`stage: implement`) or a mapping with a display label (`stage: { id: landing_review, label: Landing review }`). A stage id is a lowercase letter followed by lowercase letters, digits, `_` or `-` (at most 64 bytes); an invalid `stage:` value is refused at job load with an error naming the step. A step without `stage:` inherits the stage of the nearest earlier step in its own list; steps inside `fan_out`, `parallel` and `loop` bodies inherit from their parent step, and a stage declared inside a nested body does not leak back to the steps after the parent. A job with no `stage:` keys loads and runs unchanged. Execution ignores stages: the task detail's stage strip reads them (see the user-interface design), preferring the job definition the run recorded and otherwise the currently loaded job of the same name, so a YAML edit can relabel a catalog-backed run's history
 - every step chooses exactly one body
 
 The body is one of:

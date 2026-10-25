@@ -1082,6 +1082,7 @@ pub(super) fn fake_cli(basename: &str, body: &str) -> Result<FakeCli, Box<dyn st
 fn synthetic_loop_session_job() -> JobV2 {
     let assess_step = JobV2Step {
         id: "assess".to_string(),
+        stage: None,
         when: None,
         retry: None,
         recovery_activity: None,
@@ -1119,6 +1120,7 @@ fn synthetic_loop_session_job() -> JobV2 {
     };
     let loop_step = JobV2Step {
         id: "assess_fix".to_string(),
+        stage: None,
         when: None,
         retry: None,
         recovery_activity: None,

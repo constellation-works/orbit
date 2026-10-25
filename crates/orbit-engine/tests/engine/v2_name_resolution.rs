@@ -369,6 +369,7 @@ fn validate_job_checks_quorum_bounds() {
 fn validation_step(id: &str, when: Option<&str>, body: JobV2StepBody) -> JobV2Step {
     JobV2Step {
         id: id.to_string(),
+        stage: None,
         when: when.map(str::to_string),
         retry: None,
         recovery_activity: None,
@@ -557,6 +558,7 @@ fn synthetic_job_using_ref(target_name: &str) -> JobV2 {
         kind: JobKind::Workflow,
         steps: vec![JobV2Step {
             id: "the_step".to_string(),
+            stage: None,
             when: None,
             retry: None,
             recovery_activity: None,
