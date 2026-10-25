@@ -72,7 +72,7 @@ export function parseDraft(row, text) {
   if (t === 'number') {
     const trimmed = text.trim();
     const n = Number(trimmed);
-    if (trimmed === '' || Number.isNaN(n)) throw new Error(`${row.key} takes a number`);
+    if (trimmed === '' || Number.isNaN(n) || !Number.isFinite(n)) throw new Error(`${row.key} takes a number`);
     return n;
   }
   if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) return text.split('\n').map((s) => s.trim()).filter(Boolean);
@@ -83,6 +83,14 @@ export function cliCmd(row, scope, text) {
   let v;
   if (t === 'bool' || t === 'integer') {
     v = text.trim() === '' ? "''" : shellWord(text.trim());
+  } else if (t === 'number') {
+    const trimmed = text.trim();
+    const n = Number(trimmed);
+    if (trimmed !== '' && Number.isFinite(n)) {
+      v = String(n);
+    } else {
+      v = trimmed === '' ? "''" : shellWord(trimmed);
+    }
   } else if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) {
     const entries = text.split('\n').map((s) => s.trim()).filter(Boolean);
     v = shellQuote(`[${entries.map((s) => JSON.stringify(s)).join(', ')}]`);
