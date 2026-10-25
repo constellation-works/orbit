@@ -19,8 +19,12 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::write_text_with_parent;
 use orbit_types::identity::Crew;
+use orbit_types::workflow::ShipMode;
 
+use crate::layering::WORKSPACE_REPLACE_ONLY_KEYS;
+use crate::plugin_enablement::workspace_config_sets_policy;
 use crate::resolved::default_crews;
+use crate::{ConfigRoots, ConfigScope, ConfigStore, ResolvedConfig};
 
 pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default-config.toml");
 
@@ -212,6 +216,91 @@ pub fn seed_default_config(
     let body = render_seeded_config(DEFAULT_CONFIG_TEMPLATE, seed)?;
     write_text_with_parent(config_path, &body)?;
     Ok(true)
+}
+
+/// Seed missing workspace review choices for its registered delivery route.
+///
+/// Uses enabled crews from the effective config after global bootstrap, never
+/// provider detection alone. Existing keys and comments survive, including
+/// deprecated review switches; repeated initialization writes nothing. The
+/// global config is never changed, even when both roots name the same file.
+pub fn seed_workspace_review(roots: &ConfigRoots, ship_mode: ShipMode) -> Result<bool, OrbitError> {
+    if roots.global() == roots.workspace() {
+        return Ok(false);
+    }
+    let path = roots.workspace().join("config.toml");
+    ConfigStore::with_write_lock(&path, || {
+        let mut store = ConfigStore::open(ConfigScope::Workspace, &path)?;
+        let resolved = ResolvedConfig::load(roots)?;
+        let cheap: Vec<&str> = ["luna", "haiku"]
+            .into_iter()
+            .filter(|name| resolved.crews.get(*name).is_some_and(|crew| crew.enabled))
+            .collect();
+        let (timing, reason) = match ship_mode {
+            ShipMode::Local => ("off", "Before-landing review needs the PR route."),
+            ShipMode::Pr if cheap.is_empty() => {
+                ("off", "No cheap reviewer enabled (luna or haiku).")
+            }
+            ShipMode::Pr => (
+                "before_landing",
+                "Review the PR before landing with enabled cheap crews.",
+            ),
+        };
+
+        // Creating the first policy layer must not silently change the sandbox,
+        // approval policy or environment allowlist that this workspace used.
+        let mut changed = false;
+        if !workspace_config_sets_policy(&path) {
+            for key in WORKSPACE_REPLACE_ONLY_KEYS {
+                if let Some(value) = resolved
+                    .snapshot
+                    .value_for(key)
+                    .filter(|value| !value.is_null())
+                {
+                    let value = toml::Value::try_from(value)
+                        .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+                    changed |= store.seed_missing_value(
+                        key,
+                        &value.to_string(),
+                        "Keep the security policy in effect before workspace init.",
+                    )?;
+                }
+            }
+        }
+        if ![
+            "review.before_pr",
+            "review.before_landing",
+            "operation.review_policy",
+        ]
+        .iter()
+        .any(|key| store.is_key_set(key))
+        {
+            changed |= store.seed_missing_value(
+                "review.timing",
+                &toml::Value::String(timing.to_string()).to_string(),
+                reason,
+            )?;
+        }
+        if !store.is_key_set("operation.review_minutes") {
+            changed |= store.seed_missing_value(
+                "review.minutes",
+                "30",
+                "Bound review to the built-in 30-minute budget.",
+            )?;
+        }
+        if ship_mode == ShipMode::Pr {
+            changed |= store.seed_missing_value(
+                "workflow.purpose_crews.pre_landing_review",
+                &toml_array(&cheap).to_string(),
+                "Only enabled luna and haiku crews; no costlier fallback is seeded.",
+            )?;
+        }
+        if changed {
+            store.validate_workspace_with_global(roots.global())?;
+            store.save()?;
+        }
+        Ok(changed)
+    })
 }
 
 fn render_seeded_config(template: &str, seed: Option<&ConfigSeed>) -> Result<String, OrbitError> {

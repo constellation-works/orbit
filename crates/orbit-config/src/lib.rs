@@ -155,7 +155,7 @@ pub use resolved::{
 };
 pub use review_skip_tags::{REVIEW_SKIP_TAGS_KEY, ReviewSkipSettings};
 pub use roots::ConfigRoots;
-pub use seed::{ConfigSeed, seed_default_config};
+pub use seed::{ConfigSeed, seed_default_config, seed_workspace_review};
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
 pub use tag_instructions::{TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings};
 

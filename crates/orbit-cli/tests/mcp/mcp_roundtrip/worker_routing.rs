@@ -47,6 +47,8 @@ fn claimed_worker_reads_owner_records_and_preserves_workspace_routing() {
     }
 
     let owner = McpWorkspace::init();
+    // This routing fixture claims work without a before-landing review lane.
+    owner.run_ok(&["config", "set", "review.timing", "off"]);
     std::fs::write(owner.work.join("work.rs"), "fn work() {}\n").expect("task context");
     let (owner_machine_id, _) = machine_identity(&owner.home);
     let mut owner_operator = owner.serve_with_args(&["--operator"]);

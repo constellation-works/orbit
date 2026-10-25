@@ -256,6 +256,8 @@ fn config_set_refusals_match_shared_admission_without_writes() {
     }
     let fixture = Fixture::layered();
     let workspace = fixture.repo.join(".orbit/config.toml");
+    // Exercise first-write admission without the policy workspace init now seeds.
+    fs::remove_file(&workspace).expect("remove fixture workspace policy");
     let unknown = orbit_config::admit_config_key("workflow.base_brunch")
         .unwrap_err()
         .to_string();

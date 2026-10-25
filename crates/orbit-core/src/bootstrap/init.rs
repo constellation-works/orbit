@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use orbit_common::OrbitError;
 use orbit_store::compose::{global_executor_def_store, global_policy_def_store};
 use orbit_store::friction_store;
+use orbit_types::workflow::ShipMode;
 use orbit_types::workspace::{DEFAULT_BASE_BRANCH, WorkspacePaths};
 
 use crate::application::executor::seed_default_executors;
@@ -26,7 +27,7 @@ use crate::bootstrap::product_profile::ProductProfile;
 use orbit_common::fs::io::{create_dir_symlink, create_private_dir_all, remove_path_if_exists};
 
 use crate::runtime::resolve_global_root;
-use orbit_config::{ConfigSeed, seed_default_config};
+use orbit_config::{ConfigRoots, ConfigSeed, seed_default_config, seed_workspace_review};
 
 #[derive(Debug, Clone)]
 pub struct InitResult {
@@ -66,6 +67,9 @@ pub struct InitOptions {
     /// renders the registry default, which is also what an unregistered
     /// workspace record would carry.
     pub workspace_base_branch: Option<String>,
+    /// Effective registered delivery route for explicit workspace init.
+    /// `None` leaves workspace review config alone during implicit bootstrap.
+    pub workspace_ship_mode: Option<ShipMode>,
     /// When true, create/update skill symlinks beside the selected global root.
     pub link_global_skills: bool,
     /// Explicit inputs for seeding a fresh `config.toml`: which provider
@@ -274,6 +278,9 @@ pub fn init_workspace_at_root(
             )?;
             refreshed_skill_files = global_result.refreshed_skill_files;
             created_skills_symlink = global_result.created_skills_symlink;
+            if let Some(ship_mode) = options.workspace_ship_mode {
+                seed_workspace_review(&ConfigRoots::new(&global_root, &orbit_root), ship_mode)?;
+            }
             // Routines and auto-tasks are workspace-scoped, so their managed-asset
             // reconciliation happens here rather than in the global branch; fold
             // their warnings in alongside the global (skill/activity/job) ones.

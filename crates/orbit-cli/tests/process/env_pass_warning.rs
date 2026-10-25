@@ -103,17 +103,23 @@ impl Fixture {
     }
 
     fn pass_list(&self, names: &[&str]) {
-        let path = self.home.join(".orbit/config.toml");
-        let mut config: DocumentMut = fs::read_to_string(&path)
-            .expect("read config")
-            .parse()
-            .expect("parse config");
-        let mut pass = Array::new();
-        for name in names {
-            pass.push(*name);
+        // Workspace init freezes replace-only security keys. Keep the same
+        // fixture policy for workspace workers and global-only loader checks.
+        for path in [
+            self.home.join(".orbit/config.toml"),
+            self.repo.join(".orbit/config.toml"),
+        ] {
+            let mut config: DocumentMut = fs::read_to_string(&path)
+                .expect("read config")
+                .parse()
+                .expect("parse config");
+            let mut pass = Array::new();
+            for name in names {
+                pass.push(*name);
+            }
+            config["execution"]["env"]["pass"] = value(pass);
+            fs::write(&path, config.to_string()).expect("write config");
         }
-        config["execution"]["env"]["pass"] = value(pass);
-        fs::write(&path, config.to_string()).expect("write config");
     }
 
     /// Add a global `[crews.<name>]` on the fixture's provider whose `env`

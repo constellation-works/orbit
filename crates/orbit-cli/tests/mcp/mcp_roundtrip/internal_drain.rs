@@ -200,6 +200,8 @@ fn follower_internal_transport_reconciles_lost_admission_and_fences_claims() {
     use std::sync::Arc;
 
     let owner = McpWorkspace::init();
+    // This transport fixture claims work without a before-landing review lane.
+    owner.run_ok(&["config", "set", "review.timing", "off"]);
     let mut public = owner.serve_with_args(&["--operator"]);
     let discovery = public.call_tool_ok("orbit_workspace_list", json!({}));
     let machine = discovery["machine_id"].as_str().unwrap();
