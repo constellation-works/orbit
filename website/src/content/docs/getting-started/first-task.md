@@ -119,7 +119,7 @@ context, and the run is recorded as a footprint miss. See
 - `orbit task show "$TASK_ID"` shows the task.
 - `orbit audit list` shows the recorded events.
 - `orbit task artifact put "$TASK_ID" <file>` attaches a report or other output
-  to the task.
+  to the task. See [Task artifacts](../../concepts/tasks/#task-artifacts).
 
 ## Next
 
