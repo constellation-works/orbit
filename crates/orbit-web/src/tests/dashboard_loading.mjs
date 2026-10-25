@@ -623,7 +623,13 @@ networkDown = false;
 metricsError = false;
 refresh(); await settle();
 check(node('conn-status').className.includes('green'), 'connection recovers');
-check(text('meta-text').includes('refreshed') && !text('meta-text').includes('analytics/'), 'connection line names the destination, not its route');
+{
+  const meta = node('meta-text');
+  const clock = meta.textContent;
+  check(/^\d{2}:\d{2}:\d{2} /.test(clock) && !clock.includes('analytics/') && !clock.includes('Metrics'), 'success line shows only the refresh time, never the destination or route');
+  check(meta.title.startsWith('Refreshed ') && meta.title.endsWith(clock) && meta.title.includes(' at '), 'success title carries the destination with the time');
+  check((meta.getAttribute('aria-label') || '') === meta.title && meta.getAttribute('aria-label').length > clock.length, 'success accessible name carries the destination');
+}
 check(document.title !== 'orbit' && document.title.endsWith('orbit'), 'the page title names the current destination');
 // Exercise Health through the full request builder and DOM rendering path.
 healthFixture = true;

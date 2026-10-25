@@ -85,8 +85,8 @@ export async function assertClockRepaint(browser, origin, evidence) {
     // A refresh starts synchronously in the click; it is done once the meta
     // line reports the refresh on the newly chosen clock.
     const refreshed = label => page.waitForFunction(label => {
-      const text = document.getElementById('meta-text').textContent;
-      return text.startsWith('refreshed') && text.endsWith(label);
+      const meta = document.getElementById('meta-text');
+      return meta.textContent.endsWith(label) && /^Refreshed .* at /.test(meta.title);
     }, label);
     const switchClock = async (zone, label) => {
       const button = page.locator(`.rail-foot .clock-zone-btn[data-zone="${zone}"]`);

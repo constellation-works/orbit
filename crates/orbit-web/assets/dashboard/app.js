@@ -1833,10 +1833,24 @@ function formatJobsRailCount(n) {
   return `${formatBigInt(n)} ${n === 1 ? "run" : "runs"}`;
 }
 
-// The connection line names the destination the way the rail does, not by its
-// route: the connection line uses the destination label.
+// The connection line's visible success text is only the refresh time; the
+// destination stays in its title and accessible name. Panel names still use
+// the destination label the way the rail does, not the route.
 function refreshLabel() {
   return destinationLabel(activeTab);
+}
+
+// The success line shows only the clock so the time is never clipped in the
+// fixed-width rail; the destination rides in the title and accessible name
+// on #meta-text (role="group" in index.html, never role="status" so a poll
+// does not announce). Error lines keep their wording and carry the full
+// text in the title for their ellipsis.
+function setMetaText(visible, full) {
+  const meta = $("meta-text");
+  meta.textContent = visible;
+  const accessible = full ?? visible;
+  meta.title = accessible;
+  meta.setAttribute("aria-label", accessible);
 }
 
 // Chrome retains values when a panel fails. Mark the whole snapshot until a
@@ -1909,14 +1923,14 @@ setHostSwitchHandler(selectHost);
 
 function showHostUnavailable(now) {
   $("conn-status").className = "status-dot red";
-  $("meta-text").textContent = `host unavailable · ${formatClock(now)}`;
+  setMetaText(`host unavailable · ${formatClock(now)}`);
   markRefreshStale(true);
 }
 
 async function refreshDashboard() {
   const sequence = ++refreshSequence;
   const host = getHost();
-  $("meta-text").textContent = "fetching…";
+  setMetaText("fetching…");
   $("conn-status").className = "status-dot orange";
   if (host || workspacesWanted || workspaceRebuild) {
     const ready = await ensureHostScope();
@@ -1950,8 +1964,13 @@ async function refreshDashboard() {
   markRefreshStale(errors.length > 0);
   $("conn-status").className = `status-dot ${offline ? "red" : errors.length ? "orange" : "green"}`;
   const panels = [...new Set(errors.map(({ panel }) => panel))].join(", ");
-  const label = offline ? `offline · ${panels}` : errors.length ? `panel update failed: ${panels}` : `refreshed ${refreshLabel()}`;
-  $("meta-text").textContent = `${label} · ${formatClock(now)}`;
+  const clock = formatClock(now);
+  if (offline || errors.length) {
+    const label = offline ? `offline · ${panels}` : `panel update failed: ${panels}`;
+    setMetaText(`${label} · ${clock}`);
+  } else {
+    setMetaText(clock, `Refreshed ${refreshLabel()} at ${clock}`);
+  }
   if (activeTab === "tasks") fitLogPanelToViewport();
   return errors.length === 0;
 }
