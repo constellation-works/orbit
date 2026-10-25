@@ -94,6 +94,8 @@ class DashboardBrowserFixtureTests(unittest.TestCase):
             "assert.equal(document.getElementById('gone-id'), null);",
             "assert.strictEqual(document.getElementById('gone-id'), undefined);",
             "assert.ok(document.getElementById('gone-id') === null);",
+            "assert(document.getElementById('gone-id') == undefined);",
+            "assert.equal(document.getElementById('gone-id') === null, true);",
             "assert.ok(!document.getElementById('gone-id'));",
             "assert.equal(!!document.getElementById('gone-id'), false);",
             "assert.equal(Boolean(document.getElementById('gone-id')), false);",
@@ -102,6 +104,25 @@ class DashboardBrowserFixtureTests(unittest.TestCase):
             with self.subTest(line=line):
                 result = self.run_checker(line + "\n")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_null_comparisons_need_an_absence_assertion(self):
+        probes = [
+            "if (document.getElementById('{id}') === null) throw new Error('required widget missing');",
+            "if (document.getElementById('{id}') == undefined) throw new Error('required widget missing');",
+            "assert.ok(!(document.getElementById('{id}') === null));",
+            "assert.equal(document.getElementById('{id}') === null, false);",
+            "assert.strictEqual(document.getElementById('{id}') == undefined, false);",
+            "const absent = document.getElementById('{id}') === null;",
+        ]
+        for probe in probes:
+            for hook, expected in [("keep-id", 0), ("gone-id", 1)]:
+                with self.subTest(probe=probe, hook=hook):
+                    result = self.run_checker("const keep = 1;\n" + probe.format(id=hook) + "\n")
+                    self.assertEqual(result.returncode, expected, result.stdout + result.stderr)
+                    if expected:
+                        self.assertIn(
+                            "crates/orbit-web/src/tests/sample_browser.mjs:2: "
+                            "missing id hook 'gone-id'", result.stderr)
 
     def test_dynamic_hooks_exempt_only_what_the_template_builds(self):
         assets = (
