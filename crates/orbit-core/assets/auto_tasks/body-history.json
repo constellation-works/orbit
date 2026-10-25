@@ -1,4 +1,34 @@
 {
+  "agent-guidance-audit": [
+    {
+      "comments": [
+        "## Discover guidance files",
+        "## Duplicates",
+        "## Filing",
+        "## Generated mirrors",
+        "## Handoff",
+        "## Pin one commit",
+        "## Rolling batch",
+        "## Rules and command surfaces",
+        "## What to check"
+      ],
+      "digest": "c3153e102d547e9db0735493e988be6ffe5d6fe1d9fa62e4672117f9aa5619da",
+      "revision": "a65afab3d1bcea7d789e72dcf770a25e69c5cda1",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "agent-guidance-audit",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "architecture-audit": [
     {
       "comments": [
