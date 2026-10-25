@@ -1393,8 +1393,8 @@ bounds the pass; a task whose newest run finished is left alone:
 - the pull request's auto-fix ledger would admit a repair of that head and
   blocker, and no earlier hand-back covered them.
 
-The hand-back is a checkpoint resume of the run, rewound to its last
-`pr_complete` round the run reached, with `auto_fix` and deferred footprint locks
+The hand-back is a checkpoint resume of the run, rewound to the first
+`pr_complete` round after the last publication (`git_push`) the run checkpointed, with `auto_fix` and deferred footprint locks
 granted and the repair recorded under `out_of_run_auto_fix` in its input. When a
 reviewed head conflicted and a re-review republished it (`re_push`, `re_push_2`),
 the rerun round is the one that completes that publication, so it pins the head

@@ -142,7 +142,8 @@ impl Fixture {
             state.record_pipeline_output(id, output.clone());
             self.step(&run, index, id, JobRunState::Success, None);
         }
-        state.record_step(4, JobRunState::Failed, None, None);
+        // Production checkpoints only a step that succeeded, so the failed
+        // `complete_pr` leaves no entry in `step_states`.
         self.jobs.write_run_state(&run, &state).unwrap();
         self.step(
             &run,
@@ -526,49 +527,68 @@ fn full_capacity_still_reports_the_pull_requests_left_alone() {
     );
 }
 
-/// ORB-18204: ORB-18124's leaf rebased and republished its reviewed head in
-/// two re-review rounds, then a third base advance stopped its last round.
-/// The repair reran the first round, pinned the initial publication, and
-/// failed as `delivery_evidence_stale` against the head the leaf's own
-/// `re_push_2` had published.
-fn a_repair_reruns_the_completion_round_that_published_the_pull_requests_head() {
-    let fx = fixture_with(&rereviewed_leaf_job());
-    let leaf = fx.stopped_leaf(85, "done", Shelf::Escalated);
+/// Record `rounds` as the checkpoints of steps 4.. as production writes them:
+/// each is a Success, and a step that failed or never ran has no entry.
+fn checkpoint_rounds(fx: &Fixture, leaf: &Leaf, rounds: &[(&str, Value)]) {
     let mut state = fx.jobs.read_run_state(&leaf.run).unwrap().unwrap();
-    let rebased = json!({"phase": "complete", "re_review_required": true});
-    let rounds = [
-        ("complete_pr", rebased.clone()),
-        (
-            "re_push",
-            json!({"phase": "push", "branch": leaf.head, "local_sha": "ddd2", "remote_sha_before": "ddd1"}),
-        ),
-        ("complete_reviewed_pr", rebased),
-        (
-            "re_push_2",
-            json!({"phase": "push", "branch": leaf.head, "local_sha": "ddd3", "remote_sha_before": "ddd2"}),
-        ),
-    ];
     for (index, (id, output)) in (4..).zip(rounds) {
         state.record_step(index, JobRunState::Success, Some(output.clone()), None);
-        state.record_pipeline_output(id, output);
+        state.record_pipeline_output(id, output.clone());
     }
-    state.record_step(8, JobRunState::Failed, None, None);
     fx.jobs.write_run_state(&leaf.run, &state).unwrap();
-    fx.blocked(&leaf, "ddd3", "orbit-bot", true, &[]);
-    let drain = fx.drain();
+}
 
-    let pass = fx.pass(&drain, "done", true);
+/// The resumed run of `leaf`, repaired once: its seeded state.
+fn repaired_state(fx: &Fixture, leaf: &Leaf, head: &str, completion: &str) -> PipelineState {
+    fx.blocked(leaf, head, "orbit-bot", true, &[]);
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, completion, true);
     started(&pass, &leaf.task).unwrap_or_else(|| panic!("{pass}"));
     let retries = fx.retries(&leaf.run);
     assert_eq!(retries.len(), 1, "{pass}");
-    let seeded = fx.jobs.read_run_state(&retries[0].run_id).unwrap().unwrap();
-    for index in 0..8 {
+    fx.jobs.read_run_state(&retries[0].run_id).unwrap().unwrap()
+}
+
+fn assert_reused(seeded: &PipelineState, indices: std::ops::Range<u32>) {
+    for index in indices {
         assert_eq!(
             seeded.step_states.get(&index),
             Some(&JobRunState::Success),
             "step {index} is reused"
         );
     }
+}
+
+fn rebased_round() -> Value {
+    json!({"phase": "complete", "re_review_required": true})
+}
+
+fn republished(leaf: &Leaf, local: &str, before: &str) -> Value {
+    json!({"phase": "push", "branch": leaf.head, "local_sha": local, "remote_sha_before": before})
+}
+
+/// ORB-18204: ORB-18124's leaf rebased and republished its reviewed head in
+/// two re-review rounds, then a third base advance stopped its last round.
+/// The repair reran the first round, pinned the initial publication, and
+/// failed as `delivery_evidence_stale` against the head the leaf's own
+/// `re_push_2` had published. The failed round is absent from the checkpoints,
+/// as production leaves it [ORB-18217].
+fn a_repair_reruns_the_completion_round_that_published_the_pull_requests_head() {
+    let fx = fixture_with(&rereviewed_leaf_job());
+    let leaf = fx.stopped_leaf(85, "done", Shelf::Escalated);
+    checkpoint_rounds(
+        &fx,
+        &leaf,
+        &[
+            ("complete_pr", rebased_round()),
+            ("re_push", republished(&leaf, "ddd2", "ddd1")),
+            ("complete_reviewed_pr", rebased_round()),
+            ("re_push_2", republished(&leaf, "ddd3", "ddd2")),
+        ],
+    );
+
+    let seeded = repaired_state(&fx, &leaf, "ddd3", "done");
+    assert_reused(&seeded, 0..8);
     assert!(
         !seeded.step_states.contains_key(&8),
         "the last round reruns"
@@ -578,6 +598,53 @@ fn a_repair_reruns_the_completion_round_that_published_the_pull_requests_head() 
         seeded.pipeline["re_push_2"]["local_sha"], "ddd3",
         "the rerun round pins the head the pull request carries"
     );
+}
+
+/// A round that failed right after a re-review republished the head reruns
+/// against that publication, not the one before it.
+fn a_repair_reruns_the_second_round_when_it_is_the_one_that_failed() {
+    let fx = fixture_with(&rereviewed_leaf_job());
+    let leaf = fx.stopped_leaf(86, "done", Shelf::Escalated);
+    checkpoint_rounds(
+        &fx,
+        &leaf,
+        &[
+            ("complete_pr", rebased_round()),
+            ("re_push", republished(&leaf, "eee2", "eee1")),
+        ],
+    );
+
+    let seeded = repaired_state(&fx, &leaf, "eee2", "done");
+    assert_reused(&seeded, 0..6);
+    assert!(!seeded.step_states.contains_key(&6), "the round reruns");
+    assert_eq!(seeded.next_step_index, 6);
+    assert_eq!(seeded.pipeline["re_push"]["local_sha"], "eee2");
+}
+
+/// Rounds that rebased without a republication, and conditional steps that
+/// checkpointed Success with null output, are not publications: the repair
+/// reruns the round that follows the original push.
+fn a_repair_does_not_count_a_skipped_republication_as_published() {
+    let fx = fixture_with(&rereviewed_leaf_job());
+    let leaf = fx.stopped_leaf(87, "done", Shelf::Escalated);
+    checkpoint_rounds(
+        &fx,
+        &leaf,
+        &[
+            ("complete_pr", rebased_round()),
+            ("re_push", Value::Null),
+            ("complete_reviewed_pr", Value::Null),
+            ("re_push_2", Value::Null),
+        ],
+    );
+
+    let seeded = repaired_state(&fx, &leaf, "fff1", "done");
+    assert_reused(&seeded, 0..4);
+    assert!(
+        !seeded.step_states.contains_key(&4),
+        "the first round reruns"
+    );
+    assert_eq!(seeded.next_step_index, 4);
 }
 
 fn red_checks_and_review_or_requeued_tasks_are_repaired_too() {
@@ -943,6 +1010,8 @@ crate::scenario_table!(
     one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
     a_repair_reruns_the_completion_round_that_published_the_pull_requests_head,
+    a_repair_reruns_the_second_round_when_it_is_the_one_that_failed,
+    a_repair_does_not_count_a_skipped_republication_as_published,
     skipped_repairs_are_checkpointed_and_visible_in_readiness,
     full_capacity_still_reports_the_pull_requests_left_alone,
     red_checks_and_review_or_requeued_tasks_are_repaired_too,
