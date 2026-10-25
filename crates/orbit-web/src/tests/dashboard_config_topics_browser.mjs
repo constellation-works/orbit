@@ -10,6 +10,8 @@
 // (d) Raw TOML: the block shows the file for the latest Show click, whichever
 //     read arrives last, and a failed read that is superseded never replaces a
 //     newer success. The block names the file it shows.
+// (e) a number row's CLI preview passes a numeric TOML literal matching the
+//     value Save PUTs and admitted by `orbit config set`.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -57,6 +59,21 @@ function cleanEnv(home) {
   ];
   for (const v of authorityVars) delete env[v];
   return env;
+}
+
+function parseTomlLiteralFromCli(command) {
+  const script = `
+import sys, shlex, tomllib
+cmd = sys.argv[1]
+tokens = shlex.split(cmd)
+assert tokens[0:3] == ['orbit', 'config', 'set'], f'Unexpected prefix: {tokens[:3]}'
+val_token = tokens[4]
+parsed = tomllib.loads(f"v = {val_token}")["v"]
+print(type(parsed).__name__, parsed)
+`;
+  const out = execFileSync('python3', ['-I', '-c', script, command], { encoding: 'utf8' }).trim();
+  const [typeName, valStr] = out.split(' ');
+  return { typeName, value: Number(valStr) };
 }
 
 const pageErrors = [];
@@ -137,6 +154,18 @@ try {
             settable: true,
             source: { layer: 'workspace' },
             built_in: { value: 3 },
+            shadowed_by: [],
+          },
+          {
+            key: 'workflow.usage_pressure_cap',
+            label: 'Usage pressure cap',
+            description: 'Largest factor usage pressure scales a crew draw weight by.',
+            value_type: 'number',
+            value: 2.0,
+            state: 'set',
+            settable: true,
+            source: { layer: 'workspace' },
+            built_in: { value: 2.0 },
             shadowed_by: [],
           },
         ],
@@ -279,6 +308,98 @@ try {
   await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
 
   // -------------------------------------------------------------------------
+  // Case (e): number row Save and CLI preview pass matching numeric TOML literals
+  // -------------------------------------------------------------------------
+  const numRow = page.locator('.topic-row[data-key="workflow.usage_pressure_cap"]');
+  await numRow.waitFor({ state: 'visible' });
+  await numRow.locator('button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+
+  const numTextarea = drawer.locator('textarea.config-input');
+  await numTextarea.waitFor({ state: 'visible' });
+  assert.equal(await numTextarea.inputValue(), '2');
+
+  const numCliNode = drawer.locator('.drawer-cli');
+
+  // Draft 2.5: verify CLI preview emits numeric TOML literal, matches Save PUT
+  await numTextarea.fill('2.5');
+  const numCliText = (await numCliNode.textContent()).trim();
+  const expectedNumCli = 'orbit config set workflow.usage_pressure_cap 2.5';
+  assert.equal(numCliText, expectedNumCli);
+  const parsed25 = parseTomlLiteralFromCli(numCliText);
+  assert.equal(parsed25.typeName, 'float');
+  assert.equal(parsed25.value, 2.5);
+
+  // Capture dark theme screenshot at 1440px
+  await page.screenshot({ path: path.join(evidence, 'config-topics-number-drawer-dark-1440.png') });
+
+  // Capture responsive phone screenshot at 375px
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.screenshot({ path: path.join(evidence, 'config-topics-number-drawer-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  // Click Save and assert PUT payload
+  capturedPuts.length = 0;
+  await drawer.locator('button.config-action:has-text("Save")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+
+  assert.equal(capturedPuts.length, 1);
+  assert.equal(capturedPuts[0].key, 'workflow.usage_pressure_cap');
+  assert.equal(capturedPuts[0].body.value, 2.5);
+  assert.equal(typeof capturedPuts[0].body.value, 'number');
+  assert.equal(capturedPuts[0].body.scope, 'workspace');
+
+  // Re-open drawer to test other drafts: .5, 5., +2.5, 1e3, 2
+  await numRow.locator('button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+
+  const draftCases = [
+    { draft: '.5', expectedCli: 'orbit config set workflow.usage_pressure_cap 0.5', expectedType: 'float', expectedVal: 0.5 },
+    { draft: '5.', expectedCli: 'orbit config set workflow.usage_pressure_cap 5', expectedType: 'int', expectedVal: 5 },
+    { draft: '+2.5', expectedCli: 'orbit config set workflow.usage_pressure_cap 2.5', expectedType: 'float', expectedVal: 2.5 },
+    { draft: '1e3', expectedCli: 'orbit config set workflow.usage_pressure_cap 1000', expectedType: 'int', expectedVal: 1000 },
+    { draft: '2', expectedCli: 'orbit config set workflow.usage_pressure_cap 2', expectedType: 'int', expectedVal: 2 },
+  ];
+
+  for (const c of draftCases) {
+    await numTextarea.fill(c.draft);
+    const cli = (await numCliNode.textContent()).trim();
+    assert.equal(cli, c.expectedCli, `cli preview mismatch for draft ${c.draft}`);
+    const parsed = parseTomlLiteralFromCli(cli);
+    assert.equal(parsed.typeName, c.expectedType, `type mismatch for draft ${c.draft}`);
+    assert.equal(parsed.value, c.expectedVal, `value mismatch for draft ${c.draft}`);
+  }
+
+  // Refusal on cleared field
+  capturedPuts.length = 0;
+  await numTextarea.fill('');
+  await drawer.locator('button.config-action:has-text("Save")').click();
+  assert.equal(capturedPuts.length, 0);
+  const numWarning = drawer.locator('.config-warning');
+  await numWarning.waitFor({ state: 'visible' });
+  assert.equal(await numWarning.textContent(), 'workflow.usage_pressure_cap takes a number');
+
+  // Refusal on non-numeric draft
+  capturedPuts.length = 0;
+  await numTextarea.fill('not_a_number');
+  await drawer.locator('button.config-action:has-text("Save")').click();
+  assert.equal(capturedPuts.length, 0);
+  await numWarning.waitFor({ state: 'visible' });
+  assert.equal(await numWarning.textContent(), 'workflow.usage_pressure_cap takes a number');
+
+  // Refusal on non-finite draft (Infinity)
+  capturedPuts.length = 0;
+  await numTextarea.fill('Infinity');
+  await drawer.locator('button.config-action:has-text("Save")').click();
+  assert.equal(capturedPuts.length, 0);
+  await numWarning.waitFor({ state: 'visible' });
+  assert.equal(await numWarning.textContent(), 'workflow.usage_pressure_cap takes a number');
+
+  // Close drawer
+  await drawer.locator('button.config-action:has-text("Close")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+
+  // -------------------------------------------------------------------------
   // Case (d): Raw TOML block follows the latest Show click and names its file
   // -------------------------------------------------------------------------
   await page.goto(`http://127.0.0.1:${port}/#config/all-keys`);
@@ -355,6 +476,18 @@ try {
   const getParsed = JSON.parse(getOutput.toString());
   assert.deepEqual(getParsed.value, expectedArrayValue);
 
+  // Run the exact CLI preview command generated by the drawer for number (2.5)
+  execFileSync('bash', ['-c', numCliText], { cwd: fixtureWork, env });
+  const numGetOutput = execFileSync('orbit', ['config', 'get', 'workflow.usage_pressure_cap', '--json'], { cwd: fixtureWork, env });
+  const numGetParsed = JSON.parse(numGetOutput.toString());
+  assert.equal(numGetParsed.value, 2.5);
+
+  // Confirm whole-number draft (2) is admitted by the CLI for an f64 row
+  execFileSync('bash', ['-c', 'orbit config set workflow.usage_pressure_cap 2'], { cwd: fixtureWork, env });
+  const numGetOutput2 = execFileSync('orbit', ['config', 'get', 'workflow.usage_pressure_cap', '--json'], { cwd: fixtureWork, env });
+  const numGetParsed2 = JSON.parse(numGetOutput2.toString());
+  assert.equal(numGetParsed2.value, 2.0);
+
   assert.equal(pageErrors.length, 0, `Page errors encountered: ${pageErrors.join('; ')}`);
 
   fs.writeFileSync(path.join(evidence, 'dashboard-config-topics-result.json'), JSON.stringify({
@@ -368,6 +501,10 @@ try {
       'raw-latest-click-wins-when-later-read-arrives-last',
       'raw-superseded-failure-does-not-replace-newer-success',
       'raw-block-names-the-file-it-shows',
+      'number-row-save-and-cli-preview-match-numeric-toml-literal',
+      'number-row-draft-variants-render-valid-numeric-literals',
+      'cleared-or-invalid-number-refused-before-request',
+      'cli-admits-whole-number-literal-for-f64-row',
     ],
   }, null, 2));
 
