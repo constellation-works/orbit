@@ -289,6 +289,42 @@ impl Fixture {
             .filter(|entry| entry.event == orbit_types::task::DECISION_REQUESTED_EVENT)
             .count()
     }
+
+    /// Records a candidate with `head` held against `task`, as an owner-local
+    /// run does when its candidate waits for review.
+    fn hold_candidate(&self, task: &str, head: &str) {
+        use orbit_types::task::{TaskDecision, TaskHistoryEntry};
+        use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
+
+        let held = HeldCandidate {
+            run_id: format!("jrun-{head}"),
+            machine_id: None,
+            branch: "orbit/candidate".to_string(),
+            head_sha: head.to_string(),
+            failed_step_id: "review".to_string(),
+            durable_ref: None,
+            carry_failure: None,
+            task_spec_digest: self.runtime.get_task(task).unwrap().spec_digest(),
+        };
+        self.runtime
+            .apply_task_automation_update(
+                task,
+                TaskAutomationUpdate {
+                    append_history: vec![TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".to_string(),
+                        event: CANDIDATE_HELD_EVENT.to_string(),
+                        note: Some(held.text()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: Some(TaskDecision::CandidateHeld(held)),
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
 }
 
 #[test]
@@ -1023,9 +1059,6 @@ fn a_superseded_proposal_request_stays_superseded_after_the_task_is_restored() {
 
 #[test]
 fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
-    use orbit_types::task::{TaskDecision, TaskHistoryEntry};
-    use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate};
-
     let fx = fixture();
     fx.register();
     let task = fx.task();
@@ -1034,37 +1067,7 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
     assert_eq!(fx.status(&task), TaskStatus::Review);
     let fx_description = fx.runtime.get_task(&task).unwrap().description;
 
-    let hold_candidate = |head: &str| {
-        let held = HeldCandidate {
-            run_id: format!("jrun-{head}"),
-            machine_id: None,
-            branch: "orbit/candidate".to_string(),
-            head_sha: head.to_string(),
-            failed_step_id: "review".to_string(),
-            durable_ref: None,
-            carry_failure: None,
-            task_spec_digest: fx.runtime.get_task(&task).unwrap().spec_digest(),
-        };
-        fx.runtime
-            .apply_task_automation_update(
-                &task,
-                TaskAutomationUpdate {
-                    append_history: vec![TaskHistoryEntry {
-                        at: chrono::Utc::now(),
-                        by: "system".to_string(),
-                        event: CANDIDATE_HELD_EVENT.to_string(),
-                        note: Some(held.text()),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: Some(TaskDecision::CandidateHeld(held)),
-                    }],
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-    };
-    hold_candidate("candidate-a");
+    fx.hold_candidate(&task, "candidate-a");
 
     let digest = fx.digest(Fixture::plugin_caller()).unwrap();
     let first = digest
@@ -1089,7 +1092,7 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
 
     // A new candidate replaces the reviewed one: superseded, then the
     // next digest raises a fresh request bound to the new candidate.
-    hold_candidate("candidate-b");
+    fx.hold_candidate(&task, "candidate-b");
     assert_eq!(
         fx.requests(&task)
             .into_iter()
@@ -1116,7 +1119,7 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
     assert_eq!(candidate.as_deref(), Some("candidate-b"));
 
     // Holding the first candidate again does not revive its request.
-    hold_candidate("candidate-a");
+    fx.hold_candidate(&task, "candidate-a");
     let states: Vec<_> = fx
         .requests(&task)
         .into_iter()
@@ -1144,6 +1147,62 @@ fn a_review_approval_binds_to_the_candidate_and_supersedes_on_replacement() {
             .state,
         DecisionRequestState::Superseded
     );
+}
+
+/// A task that held a candidate, returned to `backlog` and was proposed again
+/// still carries that candidate in its history. Its proposal approval is
+/// raised without a candidate, so the historical candidate must not supersede
+/// it: repeated digests keep answering the one open request.
+#[test]
+fn a_reproposed_task_with_a_historical_candidate_keeps_one_open_proposal() {
+    let fx = fixture();
+    fx.register();
+    let task = fx.task();
+    fx.update(json!({"id": task, "status": "in_progress"}));
+    fx.update(json!({"id": task, "status": "review"}));
+    fx.hold_candidate(&task, "candidate-a");
+    fx.update(json!({"id": task, "status": "backlog"}));
+    fx.update(json!({"id": task, "status": "proposed"}));
+    assert_eq!(fx.status(&task), TaskStatus::Proposed);
+
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    let raised: Vec<_> = digest
+        .raised
+        .iter()
+        .filter(|request| request.task_id == task)
+        .collect();
+    assert_eq!(raised.len(), 1, "{:?}", digest.raised);
+    let proposal = raised[0].clone();
+    assert_eq!(proposal.gate, DecisionGate::ProposedApproval);
+    let DecisionBinding::TaskRevision {
+        candidate, status, ..
+    } = &proposal.binding
+    else {
+        panic!(
+            "a proposal approval binds to a task revision: {:?}",
+            proposal.binding
+        );
+    };
+    assert_eq!(status, &TaskStatus::Proposed);
+    assert_eq!(candidate, &None);
+    let open_requests = |fx: &Fixture| -> Vec<String> {
+        fx.requests(&task)
+            .into_iter()
+            .filter(|request| request.state == DecisionRequestState::Open)
+            .map(|request| request.id)
+            .collect()
+    };
+    assert_eq!(open_requests(&fx), vec![proposal.id.clone()]);
+
+    // The unchanged proposal raises nothing new and stays the one open request.
+    let again = fx.digest(Fixture::plugin_caller()).unwrap();
+    assert!(
+        again.raised.iter().all(|request| request.task_id != task),
+        "{:?}",
+        again.raised
+    );
+    assert_eq!(open_requests(&fx), vec![proposal.id.clone()]);
+    assert_eq!(fx.requested_entries(&task), 1);
 }
 
 #[test]
