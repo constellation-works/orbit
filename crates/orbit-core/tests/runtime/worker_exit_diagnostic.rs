@@ -6,6 +6,9 @@
 //! the two settles the run first, and a worker nobody reaped says that no
 //! exit status was observed, with no scope evidence invented where the worker
 //! ran in no systemd scope.
+//!
+//! [ORB-18166] A worker's run names who sent the signal that killed it when
+//! the worker captured the sender, and says the sender is unknown otherwise.
 
 #![cfg(unix)]
 
@@ -51,9 +54,7 @@ impl Fixture {
             ),
         )
         .unwrap();
-        let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
-            .unwrap()
-            .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
+        let runtime = runtime_at(root.path());
         let jobs = orbit_store::compose::workspace_job_run_store(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
@@ -63,6 +64,15 @@ impl Fixture {
             runtime,
             jobs,
         }
+    }
+
+    fn running_pid(&self, run_id: &str) -> u32 {
+        wait_for("the worker to start its run", || {
+            let run = self.jobs.get_job_run(run_id).unwrap()?;
+            (run.state == JobRunState::Running)
+                .then_some(run.pid)
+                .flatten()
+        })
     }
 
     fn pid_file(&self, run_id: &str) -> PathBuf {
@@ -76,6 +86,13 @@ impl Fixture {
             .find_map(|step| step.error_message.clone())
             .unwrap_or_else(|| panic!("run {} has no diagnostic: {run:?}", run.run_id))
     }
+}
+
+/// The fixture's runtime over the roots under `root`.
+fn runtime_at(root: &Path) -> OrbitRuntime {
+    OrbitRuntime::from_roots(&root.join("home/.orbit"), &root.join("repo/.orbit"))
+        .unwrap()
+        .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm())
 }
 
 fn wait_for<T>(what: &str, mut probe: impl FnMut() -> Option<T>) -> T {
@@ -154,8 +171,12 @@ fn killed_worker_reconciled_at(phase: WorkerReapPhase) -> String {
     );
     assert!(
         diagnostic.contains(&format!("reaped pid {pid} at"))
-            && diagnostic.contains(&format!("killed by signal {} (SIGKILL)", libc::SIGKILL)),
-        "the interrupted run names the signal that ended its worker: {diagnostic}"
+            && diagnostic.contains(&format!(
+                "killed by signal {} (SIGKILL), sender unknown: the worker captured none",
+                libc::SIGKILL
+            )),
+        "the interrupted run names the signal that ended its worker, and invents no \
+         sender for a SIGKILL nothing can catch: {diagnostic}"
     );
     diagnostic
 }
@@ -222,4 +243,104 @@ fn a_reconciled_run_whose_worker_exit_nobody_observed_says_so() {
             ),
         "an unobserved exit says so, and invents no scope evidence: {diagnostic}"
     );
+}
+
+/// Where [`signalled_worker`] finds the fixture root and the run it executes.
+const SIGNALLED_WORKER_ROOT: &str = "ORBIT_TEST_SIGNALLED_WORKER_ROOT";
+const SIGNALLED_WORKER_RUN: &str = "ORBIT_TEST_SIGNALLED_WORKER_RUN";
+
+/// Not a check on its own: the substitute pipeline worker of
+/// [`a_terminated_run_names_who_sent_the_signal`] re-executes this binary
+/// here, so the worker runs Orbit's own worker entry point.
+#[test]
+fn signalled_worker() {
+    let (Ok(root), Ok(run_id)) = (
+        std::env::var(SIGNALLED_WORKER_ROOT),
+        std::env::var(SIGNALLED_WORKER_RUN),
+    ) else {
+        return;
+    };
+    let _ = runtime_at(Path::new(&root)).execute_pipeline_run_worker(&run_id);
+}
+
+#[test]
+fn a_terminated_run_names_who_sent_the_signal() {
+    if !isolated("worker_exit_diagnostic::a_terminated_run_names_who_sent_the_signal") {
+        return;
+    }
+    let fixture = Fixture::new();
+    // `env` execs, so the recorded PID is the worker the supervisor reaps.
+    install_substitute_pipeline_worker([
+        "/usr/bin/env".to_string(),
+        format!("{SIGNALLED_WORKER_ROOT}={}", fixture.root.path().display()),
+        format!(
+            "{SIGNALLED_WORKER_RUN}={}",
+            orbit_core::test_support::RUN_ID_PLACEHOLDER
+        ),
+        std::env::current_exe().unwrap().display().to_string(),
+        "--exact".to_string(),
+        "worker_exit_diagnostic::signalled_worker".to_string(),
+        "--nocapture".to_string(),
+        "--test-threads=1".to_string(),
+    ]);
+    let run_id = fixture
+        .runtime
+        .submit_job_run(JOB, json!({}), Some("test"))
+        .unwrap()
+        .run_id;
+    let pid = fixture.running_pid(&run_id);
+
+    // No cancellation request: this process is the unexplained sender.
+    // SAFETY: the fixture owns `pid`; SIGTERM only ends that process.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) }, 0);
+    let workspace: &Path = &fixture.runtime.paths().repo_root;
+    wait_for("the supervisor's settlement", || {
+        pipeline_worker_observer_completed(workspace, &run_id, pid).then_some(())
+    });
+
+    let sender = std::process::id();
+    // SAFETY: `getuid` only reads this process's credentials.
+    let uid = unsafe { libc::getuid() };
+    let command = std::fs::read_to_string("/proc/self/comm").unwrap();
+    let command = command.trim();
+    let run = fixture.runtime.show_job_run(&run_id).unwrap();
+    assert_eq!(run.state, JobRunState::Interrupted, "{run:?}");
+    let step = run
+        .steps
+        .iter()
+        .find(|step| step.error_message.is_some())
+        .unwrap_or_else(|| panic!("run {run_id} has no diagnostic: {run:?}"));
+    assert_eq!(
+        step.error_code.as_deref(),
+        Some("worker_terminated"),
+        "{run:?}"
+    );
+    let diagnostic = step.error_message.as_deref().unwrap();
+    assert!(
+        diagnostic.contains(&format!(
+            "exited with status signal: {} (SIGTERM) (sent by pid {sender} (uid {uid}, command \
+             '{command}'))",
+            libc::SIGTERM
+        )),
+        "the run names the SIGTERM's sender: {diagnostic}"
+    );
+
+    let exit = fixture
+        .runtime
+        .list_audit_events(None, Some("pipeline.worker.exited".into()), None, None, 20)
+        .unwrap()
+        .into_iter()
+        .find(|row| row.target_id.as_deref() == Some(run_id.as_str()))
+        .expect("the supervisor recorded the worker's exit");
+    let exit: serde_json::Value =
+        serde_json::from_str(exit.arguments_json.as_deref().unwrap()).unwrap();
+    assert_eq!(exit["worker_pid"], pid, "{exit}");
+    assert_eq!(
+        exit["signal"],
+        libc::SIGTERM,
+        "the worker still died from the signal: {exit}"
+    );
+    assert_eq!(exit["signal_sender"]["pid"], sender, "{exit}");
+    assert_eq!(exit["signal_sender"]["uid"], uid, "{exit}");
+    assert_eq!(exit["signal_sender"]["command"], command, "{exit}");
 }

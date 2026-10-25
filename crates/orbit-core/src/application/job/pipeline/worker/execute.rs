@@ -5,6 +5,9 @@ use crate::application::job::{JobAutomationPort, JobPullSettlementPort};
 
 impl OrbitRuntime {
     pub fn execute_pipeline_run_worker(&self, run_id: &str) -> Result<(), OrbitError> {
+        // [ORB-18166] Before anything can be killed mid-run, so a terminating
+        // signal's sender reaches the supervisor's exit record.
+        super::exit::capture_terminating_signal_senders();
         self.preflight_pipeline_worker_store()?;
         upgrade_handover::bind_worker_run(run_id);
         if upgrade_handover::adopts_run(run_id) {

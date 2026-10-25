@@ -4,8 +4,8 @@ summary: Diagnose, cancel, resume, or replay pending and running Orbit job runs.
 tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-runtime/src/audit/run.rs"]
 related_features: [activity-job, auditability]
-related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179]
-last_validated: 2026-10-20
+related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179, ORB-18166]
+last_validated: 2026-10-25
 ---
 
 # Recover Stuck Job Runs
@@ -203,8 +203,9 @@ worker; once it has, the two race to settle the run. A run interrupted with
 `reason=process_not_found` or `token_mismatch` then ends its diagnostic with a
 `worker exit:` clause:
 
-- `its supervisor reaped pid <pid> at <time>: killed by signal 9 (SIGKILL)` (or
-  `exited with code <n>`): the observer recorded the exit before reconciliation won.
+- `its supervisor reaped pid <pid> at <time>: killed by signal 9 (SIGKILL), sender
+  unknown: …` (or `exited with code <n>`): the observer recorded the exit before
+  reconciliation won.
 - `no supervisor observed or recorded its exit status; …`: nobody had recorded an exit.
   The launching process had exited, so the init process or the user manager reaped the
   worker, or reconciliation won the race. What follows is what the worker's scope, recorded
@@ -225,6 +226,32 @@ job run marked interrupted because recorded worker process is no longer alive (r
 ```
 
 The clause adds evidence only; it changes neither which runs are interrupted nor when.
+
+#### Who sent the signal
+
+A signalled exit also names its sender. On Linux a worker catches SIGTERM, SIGINT and
+SIGHUP for its whole life (unless it inherited them ignored or another handler owns
+them). When another process sends one, the worker writes that process's pid, uid and
+command name to its log and then dies from the same signal, so the reaped status and
+the run's classification are unchanged. The observer reads the line before it records
+the exit. The `pipeline.worker.exited` row carries it as `signal_sender` (`pid`, `uid`,
+and `command`, which is `null` if the sender had already exited). The diagnostic says
+`sent by pid <pid> (uid <uid>, command '<name>')`, or `command unreadable`. When the observer settles the run
+itself, that clause follows the status:
+
+```text
+pipeline worker for run '…' exited with status signal: 15 (SIGTERM) (sent by pid 812 (uid 1000, command 'systemd')) after claiming the persisted run …
+```
+
+Look the pid up in `journalctl --user` or `journalctl -b` around the exit time to find
+the unit or tool behind it. A signalled exit with no captured sender reads `sender
+unknown: the worker captured none`; nothing is guessed. That covers SIGKILL, which no
+process can catch, a signal the kernel generated, and any worker on macOS. It also
+covers a signal that arrived before the worker installed its handler, or while a
+supervised step was intercepting signals for its own children. Orbit forwards such a
+signal itself, so the original sender is lost. An authorized `orbit run cancel` still
+records the run `cancelled`; when its SIGTERM ended the worker, the worker's
+`pipeline.worker.exited` row names the cancelling process as the sender.
 
 For a claimed follower leaf, reconciliation samples this evidence immediately before
 finalization records its claim release in the durable outbox. The owner receives that
