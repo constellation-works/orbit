@@ -6,6 +6,7 @@ pub(crate) mod backlog_exclusion;
 pub(crate) mod census;
 pub(crate) mod claim_holders;
 pub(super) mod cpu_light;
+mod distributed_port;
 pub(super) mod gap_fit;
 mod job_port;
 pub(super) mod leaf_occupancy;

@@ -8,6 +8,11 @@
 //! would close a cycle. These ports are the way in: `distributed` and
 //! `pull_drain` implement them on [`OrbitRuntime`](crate::OrbitRuntime), so
 //! composing the runtime binds them.
+//!
+//! [ORB-17939] `review`'s handoff console and `automation`'s pilot
+//! reservations read the owner's commit boundary, and the console the
+//! handoff completion authority, through [`JobDrainPort`] too: both sit
+//! below `distributed`, which drives them.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -20,7 +25,8 @@ use crate::application::contracts::{
 };
 
 /// Drain admission and owner coordination reads job code calls,
-/// implemented by `distributed`.
+/// implemented by `distributed`. `review` and `automation` call its owner
+/// reads too.
 pub(in crate::application) trait JobDrainPort {
     /// Admit an operator's explicit `entry_point` invocation over
     /// `task_ids`, or refuse it the way the shared drain entry decision

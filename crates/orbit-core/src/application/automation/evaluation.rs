@@ -8,7 +8,10 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::automation::*;
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, RoutineDefinition};
 
-use super::{SourceCache, consumer_key, direct, members, ownership, provider, source, stall, task};
+use super::{
+    AutomationReviewPort, SourceCache, consumer_key, direct, members, ownership, provider, source,
+    stall, task,
+};
 
 pub fn evaluate_auto_task(
     runtime: &OrbitRuntime,
@@ -287,7 +290,8 @@ impl DeliveryHost for Host<'_> {
         // [ORB-11333] Accepted before-PR certificates become exclusions only
         // after the shared rule proves the landed trees; the evaluator then
         // applies them for review consumers alone.
-        crate::application::review::exclusions(self.runtime, &self.source, state, &mut page)?;
+        self.runtime
+            .certified_review_exclusions(&self.source, state, &mut page)?;
 
         Ok(page)
     }

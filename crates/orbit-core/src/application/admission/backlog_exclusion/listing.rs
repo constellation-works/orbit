@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use orbit_engine::DispatchError;
 use orbit_types::task::{EpicHierarchyNode, has_epic_tag, inherited_only_epic_roots};
@@ -16,7 +16,7 @@ use super::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason, workspace_ship_mode,
 };
 use crate::OrbitRuntime;
-use crate::application::workspace_auto::read_live_leaf_runs;
+use crate::application::task::TaskWorkspaceAutoPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::lock_context_files_for_task;
 
@@ -103,14 +103,12 @@ pub(crate) fn list_backlog_tasks(
         // with no footprint to the drain's rule: it waits for its pilot, or
         // goes alone. Other live leaves carrying tasks are the work in flight;
         // this run carries none yet.
-        let live_tasks = read_live_leaf_runs(runtime)
-            .map_err(|error| DispatchError::DeterministicActionFailed {
+        let live_tasks = runtime.live_leaf_task_ids().map_err(|error| {
+            DispatchError::DeterministicActionFailed {
                 action: action.to_string(),
                 message: format!("list live leaf runs: {error}"),
-            })?
-            .into_iter()
-            .flat_map(|run| run.task_ids)
-            .collect::<BTreeSet<_>>();
+            }
+        })?;
         snapshot
             .include_tasks(runtime, &live_tasks)
             .map_err(|error| DispatchError::DeterministicActionFailed {
