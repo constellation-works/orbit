@@ -167,8 +167,54 @@ def slug(value: str) -> str:
     return s or "candidate"
 
 
-def suggestion_for(leaf, margin):
-    if abs(leaf.mean - leaf.parent_mean) < margin:
+def meets_threshold(leaf, margin, min_leaf) -> bool:
+    return leaf.n >= min_leaf and abs(leaf.mean - leaf.parent_mean) >= margin
+
+
+def describe_feature(feat: str) -> str:
+    kind, _, value = feat.partition(":")
+    return f"{kind} {value}"
+
+
+def unrepresentable_reason(leaf) -> str | None:
+    """Why no ready-to-paste type can describe exactly this leaf's population.
+
+    Returns None when the leaf predicate is a single positive tag/path with
+    no exclusions, which the configuration matcher (first type whose tags a
+    task carries any of, or whose paths match any of) expresses exactly. Any
+    conjunction of positives, any exclusion, or an exclusion-only predicate
+    matches a different population under any-of/no-negation semantics, so
+    emitting it as an equivalent block would misdescribe the reported n/mean.
+    """
+    positives = [f for f, present in leaf.predicate if present]
+    negatives = [f for f, present in leaf.predicate if not present]
+    if len(positives) == 1 and not negatives:
+        return None
+    details = []
+    if len(positives) > 1:
+        details.append(
+            "requires all of "
+            + ", ".join(describe_feature(f) for f in positives)
+            + " at once (conjunction)"
+        )
+    if negatives:
+        details.append(
+            "excludes " + ", ".join(describe_feature(f) for f in negatives) + " (a type has no negation)"
+        )
+    if not positives:
+        details.append("has no positive tag or path to match on")
+    return (
+        "leaf predicate " + "; ".join(details) + ": a "
+        "[[workflow.crew_performance_types]] entry matches a task carrying any "
+        "listed tag or path, so no ready-to-paste block describes exactly this "
+        "population; the reported n/mean describe the leaf only"
+    )
+
+
+def suggestion_for(leaf, margin, min_leaf):
+    if not meets_threshold(leaf, margin, min_leaf):
+        return None
+    if unrepresentable_reason(leaf) is not None:
         return None
     tags = [f.partition(":")[2] for f, p in leaf.predicate if p and f.startswith("tag:")]
     paths = [f.partition(":")[2] for f, p in leaf.predicate if p and f.startswith("path:")]
@@ -227,6 +273,7 @@ def analyse(rows, weights, group_by, max_depth, min_leaf, margin):
 
     out_groups = []
     suggestions = []
+    unsupported = []
     for gkey in sorted(groups):
         samples = [(feats, rel) for feats, rel, _ in groups[gkey]]
         root = build(samples, max_depth, min_leaf, 0, [], 0.0)
@@ -238,13 +285,28 @@ def analyse(rows, weights, group_by, max_depth, min_leaf, margin):
                 "predicate": predicate_text(leaf.predicate),
             }
             group_leaves.append(entry)
-            s = suggestion_for(leaf, margin)
+            if not meets_threshold(leaf, margin, min_leaf):
+                continue
+            reason = unrepresentable_reason(leaf)
+            if reason is not None:
+                unsupported.append(
+                    {
+                        "group": list(gkey),
+                        "n": leaf.n,
+                        "mean_relative": round(leaf.mean, 2),
+                        "parent_mean_relative": round(leaf.parent_mean, 2),
+                        "predicate": predicate_text(leaf.predicate),
+                        "reason": reason,
+                    }
+                )
+                continue
+            s = suggestion_for(leaf, margin, min_leaf)
             if s is not None:
                 s = {"group": list(gkey), **s}
                 suggestions.append(s)
         label = " / ".join(gkey) if group_by != "tier" else f"tier {gkey[0]}"
         out_groups.append({"group": list(gkey), "label": label, "n": len(samples), "leaves": group_leaves})
-    return out_groups, suggestions
+    return out_groups, suggestions, unsupported
 
 
 def main(argv=None) -> int:
@@ -260,9 +322,11 @@ def main(argv=None) -> int:
     if args.min_leaf < 1 or args.max_depth < 0:
         ap.error("--min-leaf must be at least 1 and --max-depth at least 0")
     rows, weights = load_rows(args.source)
-    groups, suggestions = analyse(rows, weights, args.group_by, args.max_depth, args.min_leaf, args.margin)
+    groups, suggestions, unsupported = analyse(
+        rows, weights, args.group_by, args.max_depth, args.min_leaf, args.margin
+    )
     if args.json:
-        print(json.dumps({"groups": groups, "suggestions": suggestions}, indent=2))
+        print(json.dumps({"groups": groups, "suggestions": suggestions, "unsupported": unsupported}, indent=2))
         return 0
     for group in groups:
         print(f"## {group['label']} (n={group['n']})")
@@ -277,7 +341,15 @@ def main(argv=None) -> int:
             print(s["toml"])
             print()
     else:
-        print("No suggested types: no leaf met the n and margin thresholds.")
+        print("No suggested types: no leaf met the n and margin thresholds with an expressible predicate.")
+        print()
+    if unsupported:
+        print("Leaves with no equivalent ready-to-paste type (analysis only; not suggestions):")
+        print()
+        for u in unsupported:
+            print(f"# group {' / '.join(u['group'])}: n={u['n']} mean_relative={u['mean_relative']:+.2f} when {u['predicate']}")
+            print(f"# not a suggestion: {u['reason']}")
+            print()
     return 0
 
 

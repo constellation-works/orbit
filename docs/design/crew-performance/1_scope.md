@@ -223,6 +223,14 @@ predicate that reaches it, then a ready-to-paste `[[workflow.crew_performance_ty
 block for each leaf that passes its thresholds: at least `--min-leaf` tasks (default 30,
 the sparse-cell floor) and a mean at least `--margin` points from its parent (default 8).
 `--max-depth` (default 3) bounds the tree, and `--json` emits the same report as JSON.
+A leaf becomes a ready-to-paste block only when its predicate is a single
+positive tag or path: the type matcher is any-of with no negation, so it
+cannot express a conjunction (`tag a and tag b`) or an exclusion
+(`tag a and not tag b`) without matching a broader population than the
+reported `n`/mean. Leaves that pass the thresholds but are not expressible
+stay visible as analysis only — the text report lists them with their reason
+instead of a TOML block, and the JSON report carries them in `unsupported` —
+and are never presented as equivalent configuration.
 
 Read a suggested type as a hypothesis, not a finding: check it in the `--by-type` report
 before adopting it. The report suggests candidate splits and never applies them — it
