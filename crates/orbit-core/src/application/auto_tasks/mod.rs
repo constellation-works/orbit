@@ -127,6 +127,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         "structure-sweep",
         include_str!("../../../assets/auto_tasks/structure-sweep.yaml"),
     ),
+    (
+        "suppression-ratchet",
+        include_str!("../../../assets/auto_tasks/suppression-ratchet.yaml"),
+    ),
 ];
 
 /// Placeholder the shipped delivery definitions carry for the workspace's

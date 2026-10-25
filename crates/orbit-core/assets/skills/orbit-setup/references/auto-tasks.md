@@ -536,6 +536,19 @@ plugin being removed.
   (cadence, merge, template fix or disable), each naming its definition
   and numbers. It never edits, toggles or mints definitions.
 
+- **`suppression-ratchet`** (`hard`) — weekly. Counts lint suppressions,
+  TODO/FIXME/HACK/XXX, ignored tests and language escape hatches per category
+  and package/area at a pinned integration-branch SHA. Language-specific
+  patterns exclude vendored, generated and build output; justified occurrences
+  are counted separately and never filed. `suppression-ratchet.json` stores
+  comparable counts and filing evidence: the first run is a baseline with no
+  filings; later runs file bugs for increases with introducing commits and at
+  most one small reduction in the highest-churn eligible area. At most three
+  proposed tasks, grouping increasing categories when necessary, each with
+  verified context and `spawned_from`. The minted chore is `no-diff-expected`
+  and never builds. This default owns the suppression counts delegated by
+  the portable `code-health-sweep`.
+
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
 

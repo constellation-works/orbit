@@ -332,6 +332,19 @@ definition of the same name.
   never edits, toggles or mints definitions; changing configuration is
   the operator's decision.
 
+- `suppression-ratchet` — disabled-by-default weekly (`hard`) static count of
+  lint suppressions, TODO/FIXME/HACK/XXX, ignored tests and language escape
+  hatches at one integration-branch SHA. Patterns follow detected languages;
+  package/area counts exclude vendored, generated and build output and split
+  justified from unjustified occurrences. `suppression-ratchet.json` carries
+  the baseline and comparison evidence; the first run files nothing. Later
+  runs file ratchet bugs naming introducing commits plus at most one small
+  reduction in the highest-churn eligible area, capped at three proposed tasks
+  with verified context and `spawned_from`. Categories are grouped when needed
+  to keep every increase covered within the cap. Justified occurrences are
+  never filed. This default owns suppression counting for the portable
+  `code-health-sweep`; the minted chore is `no-diff-expected` and never builds.
+
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
 it: its `block_escalated` state trigger admits each escalated block episode once

@@ -2906,5 +2906,36 @@
       }
     }
   ],
-  "structure-sweep": []
+  "structure-sweep": [
+    {
+      "comments": [
+        "## Candidate shapes",
+        "## Discovery",
+        "## Duplicate safety",
+        "## Filing",
+        "## Grouping and filing cap",
+        "## Handoff",
+        "## Pin",
+        "## Rules and command surfaces",
+        "## Thresholds (state them in every run summary)"
+      ],
+      "digest": "b9c01e9d7f3150d7382c9410b85dd4e23db104d5769902d88a087c98b02d16a2",
+      "revision": "e5d99399c59ef61c5e89b9e029fc0d6d30fabc00",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "every_minutes": 10080
+        },
+        "tags": [
+          "structure-sweep",
+          "no-diff-expected",
+          "tech-debt"
+        ]
+      }
+    }
+  ],
+  "suppression-ratchet": []
 }
