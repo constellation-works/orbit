@@ -120,6 +120,7 @@ onWorkspaceChange(() => {
   taskDetails.clear();
   taskDetailLoads.clear();
   taskDrainLoads.clear();
+  taskDecisionLoads.clear();
   expandedComments.clear();
   rawComments.clear();
   restoredCommentHash = null;
@@ -534,6 +535,7 @@ function taskDetailState(task, context) {
 function forgetTaskDetailLoad(taskId) {
   taskDetailLoads.delete(taskId);
   taskDrainLoads.delete(taskId);
+  taskDecisionLoads.delete(taskId);
 }
 
 function loadTaskDrainReadiness(task, context) {
@@ -1617,40 +1619,110 @@ function buildReviewGate(review) {
   return wrap;
 }
 
+// `open_decisions` on a task is compact: each request lists only its answer
+// ids. The label and one-line consequence that tell an operator what an id
+// does live on the decisions API, so the detail reads them from
+// `GET /api/decisions?task_id=` once per set of open requests and renders no
+// answer control until they are in hand.
+const taskDecisionLoads = new Map();
+
+function taskDecisionState(task, context) {
+  const key = task.open_decisions.map((request) => request.id).join(",");
+  const existing = taskDecisionLoads.get(task.id);
+  if (existing && existing.key === key) return existing;
+  const load = { key, pending: true, error: null, requests: new Map() };
+  taskDecisionLoads.set(task.id, load);
+  const visit = captureWorkspaceVisit();
+  const settle = () => {
+    load.pending = false;
+    if (taskDecisionLoads.get(task.id) === load && visit.isCurrent()) {
+      renderTasks(taskList(context), context);
+    }
+  };
+  fetchJson(taskWorkspacePath(task, `/api/decisions?task_id=${encodeURIComponent(task.id)}`)).then(
+    (body) => {
+      for (const request of (body && body.items) || []) load.requests.set(request.id, request);
+      settle();
+    },
+    (error) => {
+      load.error = error.message || String(error);
+      settle();
+    },
+  );
+  return load;
+}
+
+// What the detail paints from the decision read, so its repaint follows the read.
+function decisionSignature(task) {
+  const load = taskDecisionLoads.get(task.id);
+  return load ? `${load.pending}|${load.error || ""}|${load.requests.size}` : "";
+}
+
 // Open human decision requests on this task, one row per request with a
-// button per allowed answer. Answering posts to the decisions API, which
-// applies the answer in core as the human writer — the same apply step as
-// `orbit decision answer` — and the detail then re-reads the task, whose
-// request now reads answered and drops out of `open_decisions`.
+// button per allowed answer, each beside its label and consequence. Answering
+// posts to the decisions API, which applies the answer in core as the human
+// writer — the same apply step as `orbit decision answer` — and the detail
+// then re-reads the task, whose request now reads answered and drops out of
+// `open_decisions`. The answer id stays the submitted key.
 function buildOpenDecisions(task, detail, context) {
   const wrap = el("div", { class: "decision-requests" });
   const mutable = canMutateTask(task);
+  const load = taskDecisionState(task, context);
   for (const request of task.open_decisions) {
     const row = el("div", { class: "decision-request" });
     row.appendChild(el("div", {
       text: `${request.gate} decision needed (${request.id}), expires ${request.expires_at}`,
     }));
+    const described = new Map(
+      ((load.requests.get(request.id) || {}).answers || []).map((answer) => [String(answer.id), answer]),
+    );
+    const allowed = (request.answers || []).map(String).filter((id) => described.has(id));
+    if (!allowed.length) {
+      let text = "Loading answer options…";
+      if (!load.pending) {
+        text = load.error
+          ? `Answer options could not be loaded: ${load.error}`
+          : "Answer options are unavailable for this request.";
+      }
+      row.appendChild(el("div", { class: "decision-pending", role: "status", text }));
+      if (!load.pending) {
+        const retry = el("button", { class: "action", type: "button", text: "Retry" });
+        retry.addEventListener("click", (e) => {
+          e.stopPropagation();
+          taskDecisionLoads.delete(task.id);
+          renderTasks(taskList(context), context);
+        });
+        row.appendChild(retry);
+      }
+      wrap.appendChild(row);
+      continue;
+    }
     const note = el("input", {
       class: "decision-note",
       type: "text",
       placeholder: "note / evidence (optional)",
     });
     row.appendChild(note);
-    const buttons = el("div", { class: "actions decision-answers" });
-    for (const answerId of request.answers || []) {
+    const options = el("div", { class: "decision-answers" });
+    for (const answerId of allowed) {
+      const answer = described.get(answerId);
+      const option = el("div", { class: "decision-option" });
       const btn = el("button", {
         class: "action decision-answer",
-        text: String(answerId).replaceAll("_", " "),
-        title: `Answer ${request.id} with ${answerId}`,
+        type: "button",
+        text: answer.label,
+        title: `Answer ${request.id} with option ${answerId}`,
       });
       btn.disabled = !mutable;
       btn.addEventListener("click", (e) => {
         e.stopPropagation();
-        answerDecision(task, detail, request.id, String(answerId), note.value.trim(), btn, context);
+        answerDecision(task, detail, request.id, answerId, note.value.trim(), btn, context);
       });
-      buttons.appendChild(btn);
+      option.appendChild(btn);
+      option.appendChild(el("span", { class: "decision-consequence", text: answer.consequence }));
+      options.appendChild(option);
     }
-    row.appendChild(buttons);
+    row.appendChild(options);
     wrap.appendChild(row);
   }
   return wrap;
@@ -5459,7 +5531,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${ptask.id}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${decisionSignature(ptask)}`;
   return wrap;
 }
 
@@ -6141,7 +6213,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${fixPrSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${fixPrSignature(t)}-${decisionSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
