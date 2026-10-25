@@ -62,8 +62,10 @@ also requires `workspace`, forbids `input` and `priority`, and is
 operator-only). It returns a run ID immediately. Public submissions require
 an operator; a managed run may invoke only a host-authorized child pipeline
 admission. There is no MCP wait. `orbit.pipeline.wait` is registered and
-CLI-only (`orbit tool run orbit.pipeline.wait` with `run_ids`); poll
-`orbit_workflow_run_show` from MCP.
+CLI-only (`orbit tool run orbit.pipeline.wait` with `run_ids`); an operator
+session polls `orbit_workflow_run_show` from MCP (operator authority; denied
+for agent sessions), while a session with a shell on the owning host polls
+`orbit run show <run_id> --json`.
 
 Equivalent catalog commands exist as `orbit job list|show|run|replay|resume`.
 `replay` re-runs from step 0 against the current definition; `resume` creates a new linked run using persisted checkpoints where
