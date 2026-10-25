@@ -210,7 +210,8 @@ const KNOWLEDGE_SUBTABS = ["frictions"];
 // ORB-12724: `effective` is the layered view; the two `*-file` views are the
 // `--scope` equivalents, and `keys` is the settable-key reference. `hosts` is
 // the serving host's registered remote hosts [ORB-14451].
-const CONFIG_SUBTABS = ["effective", "workspace-file", "global-file", "crews", "keys", "system", "hosts"];
+const CONFIG_SUBTABS = ["workflow", "execution", "review", "crews", "machine", "hosts", "all-keys"];
+const CONFIG_LEGACY_REDIRECTS = { effective: "workflow", "workspace-file": "all-keys", "global-file": "machine", system: "machine", keys: "all-keys" };
 
 function parseHashRoute(raw) {
   const trimmed = String(raw || "").replace(/^#/, "");
@@ -393,7 +394,8 @@ function setKnowledgeSubtabImpl(ctx, name) {
 }
 
 function setConfigSubtabImpl(ctx, name) {
-  if (!CONFIG_SUBTABS.includes(name)) name = "effective";
+  if (CONFIG_LEGACY_REDIRECTS[name]) name = CONFIG_LEGACY_REDIRECTS[name];
+  if (!CONFIG_SUBTABS.includes(name)) name = "workflow";
   ctx.setConfigSubtab(name);
   for (const btn of document.querySelectorAll("#config-subtabs .subtab")) {
     btn.classList.toggle("active", btn.dataset.subtab === name);
@@ -595,7 +597,8 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     setOperationsSubtabImpl(ctx, sub);
     hash = `#operations/${sub}`;
   } else if (top === "config") {
-    const sub = CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab();
+    if (CONFIG_LEGACY_REDIRECTS[segments[1]]) legacyRoute = true;
+    const sub = CONFIG_LEGACY_REDIRECTS[segments[1]] || (CONFIG_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getConfigSubtab());
     setConfigSubtabImpl(ctx, sub);
     hash = `#config/${sub}`;
   } else if (top === "tasks") {

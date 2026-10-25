@@ -113,8 +113,14 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
     };
     let sections = file_sections(&context, &settings);
 
+    let text = if file.exists {
+        std::fs::read_to_string(&file.path).unwrap_or_default()
+    } else {
+        String::new()
+    };
     Ok(json!({
         "scope": scope.label(),
+        "text": text,
         "file": file.json(),
         "layers": {
             "built_in": {"label": ConfigValueSourceKind::BuiltIn.label()},

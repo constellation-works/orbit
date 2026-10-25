@@ -179,7 +179,7 @@ The gate is opt-in per workspace: `[review] verify_findings = true` turns it
 on, and with the key false or absent (the default) no surface below holds a
 finding on verification state [ORB-15760]. The key is read from the config
 files each time the gate is checked, not from the settings the runtime opened
-with, so `orbit config set` or the dashboard's Settings › Effective switch
+with, so `orbit config set` or the dashboard's Settings › Review switch
 applies to a running drain, clock or dashboard. The job and the state trigger
 (§7) work either way, and turning the gate on does not enable the routine.
 

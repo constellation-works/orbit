@@ -755,3 +755,17 @@ textarea.cfx-input { min-height: 88px; padding: 10px 12px; resize: vertical; lin
   .cgf-row .cwf-value, .cgf-row .cgf-reach-cell { grid-column: 1 / -1; }
   .cgf-row .cwf-actions { grid-column: 2; grid-row: 1; }
 }
+
+/* Topic pages (Workflow/Execution/Review/Machine/All keys) */
+.topic-row { flex-wrap: wrap; gap: 8px; align-items: center; }
+.topic-row.inactive { opacity: .55; }
+.topic-label { display: flex; flex-direction: column; min-width: 180px; }
+.topic-diff { color: var(--fg-mute); font-size: 12px; }
+.topic-pool { display: flex; width: 100%; gap: 2px; }
+.topic-pool-seg { background: var(--bg-elev); border: 1px solid var(--border); padding: 2px 6px; font-size: 11px; text-align: center; overflow: hidden; }
+.config-drawer { position: sticky; bottom: 0; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--radius-panel); padding: 16px; margin-top: 12px; display: flex; flex-direction: column; gap: 8px; max-height: 70vh; overflow: auto; }
+.drawer-chain { font-size: 13px; color: var(--fg-mute); }
+.drawer-scope { display: block; font-size: 13px; }
+.drawer-cli { font-size: 12px; color: var(--fg-mute); word-break: break-all; }
+.drawer-actions, .topic-controls, .topic-links { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.topic-raw { white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow: auto; width: 100%; }

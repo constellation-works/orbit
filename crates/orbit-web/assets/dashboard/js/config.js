@@ -10,14 +10,11 @@
 // one key to one file and re-renders that row from the response, so provenance
 // after the write is the server's answer, never a local guess.
 //
-// The Effective, Workspace file and Global file sub-views are their own
-// modules (config-effective.js, config-workspace-file.js,
-// config-global-file.js); this one owns the tab, Crews, Keys and System.
+// Topic pages (Workflow, Execution, Review, Machine, All keys) live in
+// config-topics.js; this module owns the tab, Crews and the throttle panel.
 
 import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
-import { renderEffective, resetEffective } from './config-effective.js';
-import { globalFileCount, renderGlobalFile, resetGlobalFile } from './config-global-file.js';
-import { renderWorkspaceFile, resetWorkspaceFile, workspaceFileCount } from './config-workspace-file.js';
+import { renderAllKeys, renderExecution, renderMachine, renderReview, renderWorkflow, resetTopics } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 
@@ -32,15 +29,15 @@ const EMPTY_ARRAY = "—";
 /// git-ignored one. `system` is the exception: the topbar chips and admission
 /// read the serving machine's global settings, so that is what it edits.
 const SUBTAB_SOURCES = {
-  effective: { path: "/api/config/effective", scope: "workspace" },
-  "workspace-file": { path: "/api/config/file?scope=workspace", scope: "workspace" },
-  "global-file": { path: "/api/config/file?scope=global", scope: "global" },
+  workflow: { path: "/api/config/effective", scope: "workspace" },
+  execution: { path: "/api/config/effective", scope: "workspace" },
+  review: { path: "/api/config/effective", scope: "workspace" },
   crews: { path: "/api/config/effective", scope: "workspace" },
-  keys: { path: "/api/config/keys", scope: null },
-  system: { path: "/api/config/file?scope=global", scope: "global" },
-  // Settings › Hosts is owned by hosts.js; it reads `/api/hosts`.
+  machine: { path: "/api/config/file?scope=global", scope: "global" },
+  "all-keys": { path: "/api/config/effective", scope: "workspace" },
   hosts: { path: "/api/hosts", scope: null },
 };
+const LEGACY_SUBTABS = { effective: "workflow", "workspace-file": "all-keys", "global-file": "machine", system: "machine", keys: "all-keys" };
 
 /// The System tab is the resource throttle only: its keys, in display order.
 const THROTTLE_PREFIX = "workflow.resource_throttle.";
@@ -54,7 +51,7 @@ function throttleResources(host) {
   return THROTTLE_RESOURCES.filter((resource) => resource !== "io" || host?.io);
 }
 
-let activeSubtab = "effective";
+let activeSubtab = "workflow";
 let lastPayload = null;
 let filterText = "";
 // The row (or crew) currently being edited with its draft values. It is
@@ -67,21 +64,20 @@ export function initConfig() {
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastPayload = null;
     editing = null;
-    resetEffective();
-    resetWorkspaceFile();
-    resetGlobalFile();
+    resetTopics();
   });
   // Live readings follow the topbar's poll. A rebuild would discard an open
   // editor's focus, so it waits until nothing is being edited.
   onHostResources((host) => {
-    if (activeSubtab !== "system" || !lastPayload || editing) return;
+    if (activeSubtab !== "machine" || !lastPayload || editing) return;
     lastPayload = { ...lastPayload, host };
     render(lastPayload);
   });
 }
 
 export function setConfigSubtab(name) {
-  if (!SUBTAB_SOURCES[name]) name = "effective";
+  if (LEGACY_SUBTABS[name]) name = LEGACY_SUBTABS[name];
+  if (!SUBTAB_SOURCES[name]) name = "workflow";
   if (name !== activeSubtab) {
     editing = null;
     lastPayload = null;
@@ -106,14 +102,13 @@ export async function fetchAndRenderConfig() {
     $("config-count").textContent = "—";
     return;
   }
-  const source = SUBTAB_SOURCES[activeSubtab] || SUBTAB_SOURCES.effective;
+  const source = SUBTAB_SOURCES[activeSubtab] || SUBTAB_SOURCES.workflow;
   await requestPanel(
     "config-body",
     `${activeSubtab}:${getWorkspace() || ""}`,
     async () => {
       try {
-        if (activeSubtab === "system") return await fetchSystem(source);
-        if (activeSubtab === "global-file") return await fetchGlobalFile(source);
+        if (activeSubtab === "machine") return await fetchMachine(source);
         return await fetchJson(source.path);
       } catch (error) {
         if (error.status === 400 && source.path.startsWith("/api/config/file")) {
@@ -150,32 +145,22 @@ function renderPanels(payload, body) {
   body.replaceChildren();
   updateConfigChrome();
   renderControls();
-  if (activeSubtab === "keys") {
-    renderKeyReference(body, payload);
-    return;
-  }
-  if (activeSubtab === "system") {
-    body.appendChild(systemPanel(payload));
-    $("config-count").textContent = `${throttleResources(payload.host).length} resources`;
-    return;
-  }
+  const ctx = viewContext(payload);
   if (activeSubtab === "crews") {
     body.appendChild(crewsPanel(payload));
     $("config-count").textContent = `${(payload.crews || []).length} crews`;
     return;
   }
-  if (activeSubtab === "effective") {
-    renderEffective(body, payload, viewContext(payload));
-    $("config-count").textContent = countSummary(payload);
+  if (activeSubtab === "machine") {
+    renderMachine(body, payload, ctx, systemPanel(payload));
+    $("config-count").textContent = `${throttleResources(payload.host).length} resources`;
     return;
   }
-  if (activeSubtab === "workspace-file") {
-    renderWorkspaceFile(body, payload, viewContext(payload));
-    $("config-count").textContent = workspaceFileCount(payload);
-    return;
-  }
-  renderGlobalFile(body, payload, viewContext(payload));
-  $("config-count").textContent = globalFileCount(payload);
+  if (activeSubtab === "execution") { renderExecution(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
+  if (activeSubtab === "review") { renderReview(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
+  if (activeSubtab === "all-keys") { renderAllKeys(body, payload, ctx); $("config-count").textContent = countSummary(payload); return; }
+  renderWorkflow(body, payload, ctx);
+  $("config-count").textContent = countSummary(payload);
 }
 
 /// What a sub-view module needs from the tab: whether this session may write
@@ -185,6 +170,7 @@ function viewContext(payload) {
     canEdit: editable(payload),
     refusal: hostWriteRefusal() || payload?.config_set?.reason || "",
     render,
+    rerender: () => { if (lastPayload) render(lastPayload); },
     reload: fetchAndRenderConfig,
   };
 }
@@ -211,18 +197,8 @@ function renderControls() {
   controls.hidden = ownsControls(activeSubtab);
   if (controls.hidden) return;
 
-  if (activeSubtab === "system") {
-    controls.appendChild(reloadButton());
-    return;
-  }
-  // The Effective view carries its own search and filters beside its table.
-  if (activeSubtab === "effective") {
-    controls.appendChild(reloadButton());
-    const fileView = el("a", { class: "config-action ghost", text: "Workspace file view" });
-    fileView.href = "#config/workspace-file";
-    controls.appendChild(fileView);
-    return;
-  }
+  controls.appendChild(reloadButton());
+  return;
 
   const filter = el("input", { class: "config-filter" });
   filter.type = "search";
@@ -240,7 +216,7 @@ function renderControls() {
 
 /// Crews has no controls; the file views carry their own actions.
 function ownsControls(subtab) {
-  return subtab === "crews" || subtab === "workspace-file" || subtab === "global-file";
+  return subtab === "crews";
 }
 
 function reloadButton() {
@@ -255,7 +231,7 @@ function reloadButton() {
 
 function updateConfigChrome() {
   const explainer = $("config-explainer");
-  if (explainer) explainer.hidden = activeSubtab !== "effective";
+  if (explainer) explainer.hidden = activeSubtab !== "workflow";
   const controls = $("config-controls");
   if (controls && ownsControls(activeSubtab)) controls.hidden = true;
 }
@@ -343,7 +319,8 @@ function editable(payload) {
 }
 
 function writeScope() {
-  return (SUBTAB_SOURCES[activeSubtab] || SUBTAB_SOURCES.effective).scope || "workspace";
+  if (activeSubtab === "machine") return "global";
+  return (SUBTAB_SOURCES[activeSubtab] || SUBTAB_SOURCES.workflow).scope || "workspace";
 }
 
 function pendingError(node, key) {
@@ -588,26 +565,15 @@ async function submit(request) {
 /// workspace file overriding a key), and the serving host's live resources.
 /// The host read is best effort — a throttle panel with no readings is still
 /// an editable panel.
-async function fetchSystem(source) {
+async function fetchMachine(source) {
   const [file, effective, host] = await Promise.all([
     fetchJson(source.path),
-    fetchJson(SUBTAB_SOURCES.effective.path),
+    fetchJson("/api/config/effective"),
     fetchHostResources(),
   ]);
-  return { ...file, workspace_overrides: workspaceOverrides(effective), host };
+  return { ...file, effective, workspace_overrides: workspaceOverrides(effective), host };
 }
 
-/// The Global file view reads the global file, whose rows carry their reach
-/// into the bound workspace, and the workspace file, which names what that
-/// workspace sets for a key it does not inherit. The workspace read is best
-/// effort: without it a row still reports its reach.
-async function fetchGlobalFile(source) {
-  const [file, workspaceFile] = await Promise.all([
-    fetchJson(source.path),
-    fetchJson(SUBTAB_SOURCES["workspace-file"].path).catch(() => null),
-  ]);
-  return { ...file, workspace_file: workspaceFile };
-}
 
 async function fetchHostResources() {
   try {
@@ -837,7 +803,13 @@ function crewRow(crew, payload) {
     crewEnvLine(crew.env),
   ]);
   const usedBy = el("span", { class: "config-crew-usage" }, referenced.length
-    ? referenced.map((reference) => el("span", { class: "config-crew-use", text: reference }))
+    ? referenced.map((reference) => {
+        const isKey = reference.includes(".");
+        const page = reference.includes("review") ? "review" : "workflow";
+        const node = isKey ? el("a", { class: "config-crew-use", text: reference }) : el("span", { class: "config-crew-use", text: reference });
+        if (isKey) node.href = `#config/${page}`;
+        return node;
+      })
     : [el("span", { class: "config-crew-use", text: EMPTY_ARRAY })]);
   const cells = el("div", { class: "config-crew-cells" }, [
     identity,
@@ -1037,39 +1009,3 @@ async function submitCrewDelete(crew) {
 }
 
 // --------------------------------------------------------------- key table
-
-function renderKeyReference(body, payload) {
-  const keys = (payload.keys || []).filter((key) =>
-    key.settable !== false && (!filterText || String(key.key).toLowerCase().includes(filterText)),
-  );
-  const panel = el("section", { class: "panel config-section" });
-  panel.appendChild(
-    el("header", {}, [
-      el("span", {}, [
-        el("span", { class: "config-section-title", text: "Settable keys" }),
-        el("span", { class: "config-section-blurb", text: "every key orbit config set admits" }),
-      ]),
-      el("span", { class: "count", text: `${keys.length} keys` }),
-    ]),
-  );
-  const table = el("div", { class: "config-section-body" });
-  for (const key of keys) {
-    table.appendChild(
-      el("div", { class: "config-row config-key-row" }, [
-        el("span", { class: "config-key mono", text: key.key }),
-        el("span", { class: "config-value mono", text: key.value_type }),
-        el("span", { class: "config-source registry", text: key.section }),
-        el("span", { class: "config-description" }, [
-          el("span", { text: key.description }),
-          (key.options || []).length
-            ? el("span", { class: "config-options mono", text: `one of: ${key.options.join(", ")}` })
-            : null,
-        ]),
-      ]),
-    );
-  }
-  if (!keys.length) table.appendChild(el("div", { class: "config-empty", text: "No key matches the filter." }));
-  panel.appendChild(table);
-  body.appendChild(panel);
-  $("config-count").textContent = `${keys.length} keys`;
-}
