@@ -201,7 +201,33 @@
       }
     }
   ],
-  "ci-budget-watch": [],
+  "ci-budget-watch": [
+    {
+      "comments": [
+        "## Decide",
+        "## Discover the documented budget",
+        "## Discover the measured job",
+        "## Measure and compare",
+        "## Report",
+        "## Rules and command surfaces"
+      ],
+      "digest": "2fe771ef6e0837fe1a027156abe722a7a1c9306b96d79d037065e2f00506dbf4",
+      "revision": "60303c5cf814995408196a49351585b96107d7eb",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "45 1 * * *"
+        },
+        "tags": [
+          "ci-budget-watch",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "code-health-sweep": [
     {
       "comments": [
