@@ -151,6 +151,7 @@ spec:
 
   steps:
     - id: worktree
+      stage: { id: setup, label: Setup }
       target: activity:worktree_setup
       retry:
         max_attempts: 4
@@ -185,6 +186,7 @@ spec:
         claim_repair: "{{ input.claim_repair }}"
 
     - id: implement_bundle
+      stage: { id: implement, label: Implement }
       loop:
         items: "{{ input.task_ids }}"
         max_iterations: 256
@@ -213,6 +215,7 @@ spec:
               resume_candidate: "{{ steps.resume_candidate.output.repair }}"
 
     - id: commit
+      stage: { id: validate, label: Validate }
       recovery_activity: step_failure_recovery
       target: activity:git_commit
       default_input:
@@ -273,6 +276,7 @@ spec:
     # reviews after `pr_open` instead). Transient gate and reviewer failures
     # retry, then get one diagnosed recovery before the leaf fails.
     - id: review_gate_admit
+      stage: { id: review, label: Review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -335,6 +339,7 @@ spec:
     # (`recovery_commit_refused:reviewed_candidate`): the repair would publish
     # an unreviewed change, so the leaf fails and carries its candidate.
     - id: validate
+      stage: { id: validate, label: Validate }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:claim_validate
@@ -346,6 +351,7 @@ spec:
         implementation: "{{ steps.implement_one.output }}"
 
     - id: push
+      stage: { id: publish, label: Publish }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       recovery_activity: step_failure_recovery
       target: activity:git_push
@@ -412,6 +418,7 @@ spec:
     # head, natively outside the agent sandbox; admission hands those results
     # to the reviewer and settlement decides the gates from them.
     - id: landing_review_gate_admit
+      stage: { id: landing_review, label: Landing review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
@@ -497,6 +504,7 @@ spec:
     # The leaf's published pull request pins the validation that already
     # passed on this exact commit and base; no command runs again.
     - id: pin_validation
+      stage: { id: handoff, label: Handoff }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} != true"
       target: activity:claim_validate
       default_input:
@@ -532,6 +540,7 @@ spec:
     # That skip runs no required command or replay here, as the owner's own
     # pipeline skips `validate` for the tag; a verified report still does.
     - id: validate_no_diff
+      stage: { id: validate, label: Validate }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
       target: activity:claim_validate
       default_input:
@@ -545,6 +554,7 @@ spec:
         implementation: "{{ steps.implement_one.output }}"
 
     - id: handoff_no_diff
+      stage: { id: handoff, label: Handoff }
       when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
       target: activity:claim_handoff
       default_input:

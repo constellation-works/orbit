@@ -21,6 +21,7 @@ mod pr_repair;
 mod resume;
 mod review_hook;
 mod run;
+mod run_stage;
 mod task_port;
 mod triage_submit;
 mod upgrade_resume;

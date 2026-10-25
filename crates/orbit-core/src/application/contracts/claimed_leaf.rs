@@ -41,10 +41,18 @@ pub enum ClaimedLeafStage {
 }
 
 impl ClaimedLeafStage {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Self::Implementing => "implementing",
             Self::Reviewing => "reviewing",
+        }
+    }
+
+    /// The text a stage indicator shows for this stage.
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::Implementing => "Implementing",
+            Self::Reviewing => "Reviewing",
         }
     }
 }

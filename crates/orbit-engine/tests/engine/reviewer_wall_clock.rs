@@ -103,6 +103,7 @@ fn single_step_job(activity: &str) -> JobV2 {
         kind: JobKind::Workflow,
         steps: vec![JobV2Step {
             id: "review".to_string(),
+            stage: None,
             when: None,
             retry: None,
             recovery_activity: None,

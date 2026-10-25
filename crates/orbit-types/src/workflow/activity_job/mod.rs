@@ -177,7 +177,7 @@ pub use audit_envelope::{
     V2_EVENT_TYPE_TOOL_DENIED, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };
 pub use job_v2::{
-    BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobTaskDelivery, JobV2, JobV2Step,
+    BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobStage, JobTaskDelivery, JobV2, JobV2Step,
     JobV2StepBody, JoinMode, LoopBlock, ParallelBlock, PipelineRef, RetrySpec, SteeringGateSpec,
     TargetRef, TargetStep,
 };

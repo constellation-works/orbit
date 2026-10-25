@@ -124,6 +124,158 @@ impl JobV2 {
             .as_ref()
             .is_some_and(|delivery| delivery.modes.contains(&mode))
     }
+
+    /// Every step in file order — a step, then the steps nested in its
+    /// `parallel` / `fan_out` / `loop` body — paired with its effective
+    /// stage. A step without `stage:` inherits the nearest earlier step's
+    /// stage in its own list; a nested list starts from its parent step's
+    /// effective stage, and a stage declared inside a nested body does not
+    /// leak back to the steps after the parent.
+    pub fn step_stages(&self) -> Vec<(&str, Option<&JobStage>)> {
+        fn walk<'a>(
+            steps: &'a [JobV2Step],
+            inherited: Option<&'a JobStage>,
+            out: &mut Vec<(&'a str, Option<&'a JobStage>)>,
+        ) {
+            let mut current = inherited;
+            for step in steps {
+                let effective = step.stage.as_ref().or(current);
+                current = effective;
+                out.push((step.id.as_str(), effective));
+                match &step.body {
+                    JobV2StepBody::Parallel { parallel } => {
+                        walk(&parallel.branches, effective, out);
+                    }
+                    JobV2StepBody::FanOut { fan_out, .. } => {
+                        walk(std::slice::from_ref(&*fan_out.worker), effective, out);
+                    }
+                    JobV2StepBody::Loop { loop_ } => walk(&loop_.steps, effective, out),
+                    JobV2StepBody::TargetRef(_) | JobV2StepBody::Target(_) => {}
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.steps, None, &mut out);
+        out
+    }
+
+    /// The stages this job declares, in first-appearance order. A stage id
+    /// declared again keeps its first label. Empty for a job with no
+    /// `stage:` keys.
+    pub fn ordered_stages(&self) -> Vec<&JobStage> {
+        let mut stages: Vec<&JobStage> = Vec::new();
+        for (_, stage) in self.step_stages() {
+            if let Some(stage) = stage
+                && !stages.iter().any(|seen| seen.id == stage.id)
+            {
+                stages.push(stage);
+            }
+        }
+        stages
+    }
+
+    /// The effective stage of the step with `step_id`, when the job has
+    /// that step and a stage covers it.
+    pub fn stage_for_step(&self, step_id: &str) -> Option<&JobStage> {
+        self.step_stages()
+            .into_iter()
+            .find(|(id, _)| *id == step_id)
+            .and_then(|(_, stage)| stage)
+    }
+}
+
+/// A display stage a job step belongs to, declared with `stage:` in job
+/// YAML. The short form is a bare id (`stage: implement`); the long form
+/// adds a display label (`stage: { id: landing_review, label: Landing
+/// review }`). Stages are display metadata only: execution ignores them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobStage {
+    pub id: String,
+    pub label: Option<String>,
+}
+
+impl JobStage {
+    /// The text a stage indicator shows: the declared label, or the id.
+    pub fn display_label(&self) -> &str {
+        self.label.as_deref().unwrap_or(&self.id)
+    }
+
+    fn validate(id: &str, label: Option<&str>) -> Result<(), String> {
+        let id_ok = !id.is_empty()
+            && id.len() <= 64
+            && id.as_bytes()[0].is_ascii_lowercase()
+            && id
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+        if !id_ok {
+            return Err(format!(
+                "invalid stage id `{id}` (want a lowercase letter then lowercase letters, digits, `_` or `-`, at most 64 bytes)"
+            ));
+        }
+        if let Some(label) = label
+            && (label.trim().is_empty() || label.len() > 80)
+        {
+            return Err("stage label must be non-empty and at most 80 bytes".to_string());
+        }
+        Ok(())
+    }
+
+    fn from_value(value: &Value) -> Result<Self, String> {
+        let stage = match value {
+            Value::String(id) => JobStage {
+                id: id.clone(),
+                label: None,
+            },
+            Value::Object(object) => {
+                for key in object.keys() {
+                    if key != "id" && key != "label" {
+                        return Err(format!("stage declares unknown key `{key}`"));
+                    }
+                }
+                let id = object
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "stage mapping missing string `id`".to_string())?
+                    .to_string();
+                let label = match object.get("label") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::String(label)) => Some(label.clone()),
+                    Some(_) => return Err("stage `label` must be a string".to_string()),
+                };
+                JobStage { id, label }
+            }
+            _ => {
+                return Err(
+                    "stage must be a stage id string or a mapping with `id` and optional `label`"
+                        .to_string(),
+                );
+            }
+        };
+        JobStage::validate(&stage.id, stage.label.as_deref())?;
+        Ok(stage)
+    }
+}
+
+impl Serialize for JobStage {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match &self.label {
+            None => serializer.serialize_str(&self.id),
+            Some(label) => {
+                use serde::ser::SerializeMap as _;
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("id", &self.id)?;
+                map.serialize_entry("label", label)?;
+                map.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for JobStage {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        JobStage::from_value(&value).map_err(serde::de::Error::custom)
+    }
 }
 
 /// A step in a v2 job. Carries `id`, optional `when` / `retry` modifiers,
@@ -131,6 +283,10 @@ impl JobV2 {
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct JobV2Step {
     pub id: String,
+    /// Display stage this step starts. A step without one inherits the
+    /// nearest earlier step's stage; a nested step inherits its parent's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage: Option<JobStage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub when: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,6 +340,13 @@ impl<'de> Deserialize<'de> for JobV2Step {
             .remove("id")
             .and_then(|x| x.as_str().map(String::from))
             .ok_or_else(|| D::Error::custom("step missing `id`"))?;
+        let stage = match obj.remove("stage") {
+            Some(value) => Some(
+                JobStage::from_value(&value)
+                    .map_err(|error| D::Error::custom(format!("step `{id}`: stage: {error}")))?,
+            ),
+            None => None,
+        };
         let when = deserialize_optional_string::<D::Error>("when", obj.remove("when"))?;
         let retry = match obj.remove("retry") {
             Some(rv) => Some(
@@ -269,6 +432,7 @@ impl<'de> Deserialize<'de> for JobV2Step {
 
         Ok(JobV2Step {
             id,
+            stage,
             when,
             retry,
             recovery_activity,

@@ -3712,6 +3712,8 @@ function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const head = el("div", { class: "task-meta-block" }, [levers]);
   const lifecycle = buildLifecycleStrip(task.status);
   if (lifecycle) head.appendChild(lifecycle);
+  const stageStrip = buildStageStrip(task);
+  if (stageStrip) head.appendChild(stageStrip);
   const delivery = buildDeliveryCard(task, drain, context);
   if (delivery) head.appendChild(delivery);
   return head;
@@ -3743,6 +3745,68 @@ function buildLifecycleStrip(status) {
     }
     list.appendChild(step);
   });
+  return list;
+}
+
+// The delivery stage the task's run is on, as a thinner second strip in the
+// lifecycle strip's past/current/future language. The detail API derives
+// `job_run_stage` from durable run and step state; a task with no readable
+// run carries none and shows no strip. Rendered full-width under the
+// lifecycle strip rather than confined to its current column: at 375px a
+// one-column strip cannot keep the current stage readable.
+const RUN_ENDED_STATES = ["failed", "cancelled", "timeout", "interrupted"];
+
+function buildStageStrip(task) {
+  const info = task.job_run_stage;
+  if (!info || !["in-progress", "review"].includes(task.status)) return null;
+  const ended = RUN_ENDED_STATES.includes(info.run_state);
+  const awaiting = info.run_state === "success" && task.status === "review";
+  let stages = Array.isArray(info.stages) ? info.stages.map((stage) => ({ ...stage })) : [];
+  if (awaiting) {
+    stages = stages.map((stage) => ({ ...stage, state: "past" }));
+    stages.push({ id: "awaiting_approval", label: "Awaiting approval", state: "current" });
+  }
+  if (!stages.length) {
+    const label = info.stage_label || info.stage || info.step_id;
+    if (!label) return null;
+    stages = [{ id: info.stage || info.step_id, label, state: "current" }];
+  }
+  const classes = ["task-stage"];
+  if (ended) classes.push("ended");
+  if (awaiting) classes.push("awaiting");
+  const list = el("ol", { class: classes.join(" "), "aria-label": "Delivery stage" });
+  list.dataset.runState = info.run_state || "";
+  const tooltip = [
+    info.step_id,
+    info.step_index != null && info.step_count != null ? `step ${info.step_index} of ${info.step_count}` : "",
+  ].filter(Boolean).join(" · ");
+  for (const stage of stages) {
+    let text = stage.label;
+    if (stage.state === "current" && !awaiting) {
+      if (ended) {
+        const stateLabel = info.run_state.charAt(0).toUpperCase() + info.run_state.slice(1);
+        text = `${stateLabel} at ${stage.label}`;
+      } else if (info.started_at) {
+        const elapsed = elapsedLabel(Date.now() - Date.parse(info.started_at));
+        if (elapsed) text = `${stage.label} · ${elapsed}`;
+      }
+    }
+    let label = el("span", { class: "task-stage-label", text });
+    if (stage.state === "current" && ended && task.job_run_id && task.job_run_navigable !== false) {
+      const link = el("a", { class: "task-stage-label task-stage-link", text });
+      link.href = runHref(String(task.job_run_id));
+      label = link;
+    }
+    const step = el("li", { class: `task-stage-step ${stage.state}` }, [
+      el("span", { class: "task-stage-bar" }),
+      label,
+    ]);
+    if (stage.state === "current") {
+      step.setAttribute("aria-current", "step");
+      if (tooltip) step.title = tooltip;
+    }
+    list.appendChild(step);
+  }
   return list;
 }
 
