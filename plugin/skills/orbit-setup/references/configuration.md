@@ -258,7 +258,7 @@ holds, pull-drain auth exclusions and probes are its own, and
 `orbit init` writes every built-in crew (Claude: `opus`, `sonnet`, `haiku`, `fable`;
 Codex: `astra`, `sol`, `luna`; Antigravity: `gemini-flash`, `argon`;
 Grok: `grok`; Copilot: `copilot`; Muse: `muse-spark`, `muse-wonder`, `muse-wonder-full`;
-no built-in Gemini CLI, Cursor, Pi, or OpenCode crew), with `enabled = true` on the crews whose
+no built-in Gemini CLI crew; the `cursor`, `pi`, and `opencode` lanes were [retired](providers.md#provider-identity-and-resolution)), with `enabled = true` on the crews whose
 agent CLI it detects and `enabled = false` on the rest, and points
 `workflow.default_crew` at the preferred family's default (`opus` on a Claude
 host, `gemini-flash` on an Antigravity host). Interactive init offers the enabled crews by name; `--non-interactive`

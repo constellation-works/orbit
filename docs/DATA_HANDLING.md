@@ -74,7 +74,8 @@ command you ran or a crew you configured.
 ### Initiated by tools Orbit runs for you
 
 Most Orbit work is done by agent CLIs — for example Claude Code, Codex, Gemini,
-Copilot, Cursor, Grok, Pi, Antigravity, OpenCode, and Muse — running as
+Copilot, Grok, Antigravity, and Muse (the Cursor, Pi, and OpenCode lanes were
+[retired](CONFIG.md#retired-providers)) — running as
 subprocesses. Those processes talk to their own
 providers with their own credentials under their own terms of service. Orbit
 does not proxy, log, or inspect that traffic beyond the stdout/stderr it
@@ -86,14 +87,11 @@ If your organisation's compliance posture depends on where model traffic goes,
 that decision is made when you choose which agent CLIs and providers to install
 and which crews to enable — not by Orbit.
 
-Two specifics worth knowing:
+One specific worth knowing:
 
 - Agent subprocesses keep host network access. Orbit's OS sandbox is a
   filesystem boundary, not a network boundary. The control on exfiltration is
   the environment allowlist described next.
-- Orbit invokes Pi with `--offline`, which suppresses Pi's own version check,
-  package update checks, and install telemetry ping. Model API traffic is
-  unaffected.
 
 ### Optional network surfaces you turn on
 
