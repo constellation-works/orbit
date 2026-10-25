@@ -58,7 +58,7 @@
       },
       {
         "name": "workflow",
-        "description": "Restrict to one workflow by name, file name, or ID",
+        "description": "Restrict to one workflow file name (for example codeql.yml) or numeric workflow id; a job display name is not a workflow name and is not accepted",
         "param_type": "string",
         "required": false
       },
