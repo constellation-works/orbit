@@ -27,18 +27,6 @@ const RUNNER_LOSS: &[&str] = &[
     "the hosted runner encountered an error",
 ];
 
-/// The one completed job in `jobs` that is `job`'s same job.
-pub(super) fn single_completed_job<'a>(jobs: &'a [Value], job: &Value) -> Option<&'a Value> {
-    let matching = jobs
-        .iter()
-        .filter(|candidate| same_job(candidate, job))
-        .collect::<Vec<_>>();
-    let [found] = matching.as_slice() else {
-        return None;
-    };
-    (found["status"] == "completed").then_some(*found)
-}
-
 /// The step a failed job's signature falls back to naming.
 pub(super) fn failed_step(job: &Value) -> &str {
     job["failed_step"]

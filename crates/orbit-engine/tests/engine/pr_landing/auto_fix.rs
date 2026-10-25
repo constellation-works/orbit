@@ -1706,9 +1706,10 @@ fn plant_commit_ci(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: 
     plant_paired_commit_ci(fx, sha, run_id, &[("test", conclusion)], log);
 }
 
-/// One push run whose jobs are `(name, conclusion)`. One log serves every job
-/// in the run. Callers that compare diagnostics plant the same text on each
-/// commit whose failed job is read.
+/// One push run whose jobs are `(name, conclusion)`; an empty conclusion is
+/// a job still running. One log serves every job in the run. Callers that
+/// compare diagnostics plant the same text on each commit whose failed job
+/// is read.
 fn plant_paired_commit_ci(fx: &Fixture, sha: &str, run_id: u64, jobs: &[(&str, &str)], log: &str) {
     let dir = fx.forge.join("commit-ci").join(sha);
     fs::create_dir_all(&dir).unwrap();
@@ -1729,16 +1730,26 @@ fn plant_paired_commit_ci(fx: &Fixture, sha: &str, run_id: u64, jobs: &[(&str, &
         .unwrap(),
     )
     .unwrap();
+    fs::write(
+        dir.join("jobs.json"),
+        serde_json::to_vec(&jobs_listing(run_id, jobs)).unwrap(),
+    )
+    .unwrap();
+    fs::write(dir.join("log"), log).unwrap();
+}
+
+fn jobs_listing(run_id: u64, jobs: &[(&str, &str)]) -> Value {
     let listed = jobs
         .iter()
         .enumerate()
         .map(|(index, (name, conclusion))| {
             let id = run_id + 1 + u64::try_from(index).unwrap();
+            let open = conclusion.is_empty();
             json!({
                 "id": id,
                 "name": name,
-                "status": "completed",
-                "conclusion": conclusion,
+                "status": if open { "in_progress" } else { "completed" },
+                "conclusion": if open { Value::Null } else { json!(conclusion) },
                 "steps": [{
                     "name": "compile",
                     "conclusion": if *conclusion == "failure" { "failure" } else { "success" }
@@ -1746,12 +1757,34 @@ fn plant_paired_commit_ci(fx: &Fixture, sha: &str, run_id: u64, jobs: &[(&str, &
             })
         })
         .collect::<Vec<_>>();
-    fs::write(
-        dir.join("jobs.json"),
-        serde_json::to_vec(&json!({"total_count": jobs.len(), "jobs": listed})).unwrap(),
-    )
-    .unwrap();
-    fs::write(dir.join("log"), log).unwrap();
+    json!({"total_count": jobs.len(), "jobs": listed})
+}
+
+/// From PR status read `poll` on, the planted run on `sha` lists `jobs`, or
+/// refuses the listing when `jobs` is `None`.
+fn stage_commit_jobs(fx: &Fixture, sha: &str, poll: usize, jobs: Option<&[(&str, &str)]>) {
+    let dir = fx.forge.join("commit-ci").join(sha);
+    let run_id: u64 = fs::read_to_string(dir.join("run_id"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    let answer = match jobs {
+        Some(jobs) => serde_json::to_vec(&jobs_listing(run_id, jobs)).unwrap(),
+        None => b"unreadable".to_vec(),
+    };
+    fs::write(dir.join(format!("jobs-from-{poll}.json")), answer).unwrap();
+}
+
+/// Land one more commit on the base, as another delivery would.
+fn land_on_base(fx: &Fixture, label: &str) -> String {
+    fx.git(&["checkout", BASE]);
+    fs::write(fx.repo.join("base.txt"), format!("{label}\n")).unwrap();
+    fx.git(&["add", "base.txt"]);
+    fx.git(&["commit", "-m", label]);
+    fx.git(&["push", "origin", BASE]);
+    fx.git(&["checkout", BRANCH]);
+    fx.local_tip(BASE)
 }
 
 /// Two required failures on one pull request. `test` passed on the fork point
@@ -2262,6 +2295,175 @@ fn open_moved_base_ci(row: &std::path::Path) {
     assert_eq!(fx.head(), fx.candidate, "{case}");
     assert_eq!(fx.remote_tip(BASE), tip, "{case}");
     assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{case}");
+}
+
+/// [ORB-18370] A required failure the base already fails the same way is
+/// never handed to a repair agent while the moved base cannot prove it
+/// fixed. A tip whose CI skipped the job (a docs-only commit) is read back
+/// along the base's first-parent history: a green commit refreshes the PR,
+/// a same-signature red one holds as known-red, and nothing within the bound
+/// holds. A pending tip holds, keeps holding through a poll whose tip or
+/// fork-point jobs cannot be read (the 2026-10-25 admissions), and refreshes
+/// once its jobs pass. None of these spends a repair attempt.
+#[test]
+#[allow(
+    clippy::print_stderr,
+    reason = "isolated regression rows report their identity and elapsed time"
+)]
+fn auto_fix_holds_an_inherited_failure_until_the_base_proves_it() {
+    isolated(
+        "auto_fix::auto_fix_holds_an_inherited_failure_until_the_base_proves_it",
+        |sandbox| {
+            for case in cases(
+                "skipped_tip_green_parent skipped_tip_red_parent skipped_tip_unproven pending_tip_unreadable_tip pending_tip_unreadable_fork_point",
+            ) {
+                in_fresh_row(sandbox, |row| {
+                    eprintln!("scenario: {case}");
+                    let row_started = std::time::Instant::now();
+                    inherited_failure_case(row, case);
+                    eprintln!(
+                        "scenario: {case} row elapsed {:.3} s",
+                        row_started.elapsed().as_secs_f64()
+                    );
+                });
+            }
+        },
+    );
+}
+
+fn inherited_failure_case(row: &std::path::Path, case: &str) {
+    let (fx, host) = opened_review(row);
+    let shared = "error[E0433]: cannot find module `broken_base`\n";
+    let pair = case.starts_with("pending_tip");
+    let failing: &[(&str, &str)] = if pair {
+        &[("test", "failure"), ("lint", "failure")]
+    } else {
+        &[("test", "failure")]
+    };
+    plant_paired_commit_ci(&fx, &fx.candidate, 11, failing, shared);
+    // The fork point fails the same way: the head's failure is inherited.
+    let fork_point = fx.local_tip(BASE);
+    plant_paired_commit_ci(&fx, &fork_point, 21, failing, shared);
+    let mut green = None;
+    let tip = match case {
+        "skipped_tip_green_parent" => {
+            let fixed = land_on_base(&fx, "fix the base");
+            plant_commit_ci(&fx, &fixed, 31, "success", "");
+            green = Some(fixed);
+            let tip = land_on_base(&fx, "docs only");
+            plant_commit_ci(&fx, &tip, 41, "skipped", "");
+            tip
+        }
+        "skipped_tip_red_parent" => {
+            let tip = land_on_base(&fx, "docs only");
+            plant_commit_ci(&fx, &tip, 41, "skipped", "");
+            tip
+        }
+        "skipped_tip_unproven" => {
+            // More commits with no run of the job than the read covers.
+            for commit in 0..8 {
+                land_on_base(&fx, &format!("no ci {commit}"));
+            }
+            let tip = land_on_base(&fx, "docs only");
+            plant_commit_ci(&fx, &tip, 41, "skipped", "");
+            tip
+        }
+        _ => {
+            let tip = land_on_base(&fx, "fix the base");
+            plant_paired_commit_ci(&fx, &tip, 31, &[("test", ""), ("lint", "")], "");
+            if case == "pending_tip_unreadable_tip" {
+                stage_commit_jobs(&fx, &tip, 2, None);
+            } else {
+                stage_commit_jobs(&fx, &fork_point, 2, None);
+                stage_commit_jobs(&fx, &fork_point, 3, Some(failing));
+            }
+            stage_commit_jobs(
+                &fx,
+                &tip,
+                3,
+                Some(&[("test", "success"), ("lint", "success")]),
+            );
+            green = Some(tip.clone());
+            tip
+        }
+    };
+    let rollup = if pair { "paired_failure" } else { "failure" };
+    // The refreshed head passes on the status read after the refresh: the
+    // first poll for a skipped tip, the third for a pending one.
+    match (&green, pair) {
+        (Some(_), true) => fx.script_checks(&[rollup, rollup, rollup, "success"]),
+        (Some(_), false) => fx.script_checks(&[rollup, "success"]),
+        (None, _) => fx.script_checks(&[rollup]),
+    }
+    let mut input = auto_fix_input(&fx);
+    input["max_wait_seconds"] = json!(30);
+    input["poll_interval_seconds"] = json!(5);
+    let reads_before = fx.status_reads();
+    let result = super::complete_with_logical_clock(&host, &input);
+    let polls = fx.status_reads() - reads_before;
+    let history = host.history(TASK_ID);
+    let attempts = repair_attempts(&host);
+    assert!(
+        attempts.is_empty(),
+        "{case}: an inherited failure spends no repair attempt: {attempts:?} {result:?}"
+    );
+    let base_red = history
+        .iter()
+        .filter(|entry| entry.event == "pr_auto_fix_base_red")
+        .filter_map(|entry| serde_json::from_str::<Value>(entry.note.as_deref()?).ok())
+        .collect::<Vec<_>>();
+    let refresh = history
+        .iter()
+        .find(|entry| entry.event == "pr_auto_fix_base_refresh")
+        .and_then(|entry| serde_json::from_str::<Value>(entry.note.as_deref()?).ok());
+    if let Some(green) = green {
+        let output = result.unwrap_or_else(|error| panic!("{case}: refreshed: {error}"));
+        let refresh = refresh.unwrap_or_else(|| panic!("{case}: a base refresh is recorded"));
+        let refreshed = fx.remote_tip(BRANCH);
+        assert_ne!(refreshed, fx.candidate, "{case}");
+        assert_eq!(output["merge"]["head_sha"], refreshed, "{case}");
+        assert_eq!(
+            git(&fx.repo, &["merge-base", &tip, &refreshed]),
+            tip,
+            "{case}: the refresh rebases onto the reserved tip"
+        );
+        for check in refresh["checks"].as_array().unwrap() {
+            assert_eq!(
+                check["base_commit"], green,
+                "{case}: the refresh names the newest commit whose job passed: {refresh}"
+            );
+        }
+        if pair {
+            assert!(
+                base_red.len() >= 2 && polls >= 4,
+                "{case}: the pending tip held across polls ({polls}) before it passed: {base_red:?}"
+            );
+        }
+    } else {
+        let error = result
+            .expect_err("an unproven base admits no repair")
+            .to_string();
+        assert!(
+            error.contains("auto_fix_stopped") && error.contains("base_red"),
+            "{case}: {error}"
+        );
+        assert!(!is_check_repair(&error), "{case}: {error}");
+        assert!(refresh.is_none(), "{case}: no green base, no refresh");
+        if case == "skipped_tip_red_parent" {
+            assert!(
+                base_red.iter().any(|note| note["path"] == "known_red_base"
+                    && note["checks"][0]["base_commit"] == fork_point.as_str()),
+                "{case}: the newest red commit decides: {base_red:?}"
+            );
+        } else {
+            assert!(
+                error.contains("did not run to a result") && polls >= 2,
+                "{case}: held across polls ({polls}): {error}"
+            );
+        }
+        assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
+    }
+    assert!(fx.merge_requests().is_empty(), "{case}: no merge");
 }
 
 /// A second required failure must reach both repair admission and the job's

@@ -5997,7 +5997,20 @@ commit_ci_api() {
                 echo "fake gh: no jobs for run $run" >&2
                 exit 2
             fi
-            cat "$found/jobs.json"
+            # `jobs-from-<n>.json` replaces the answer from status read <n>
+            # on; one holding `unreadable` refuses the listing.
+            answer="$found/jobs.json"
+            reads=$(cat "$forge/reads" 2>/dev/null || echo 0)
+            poll=1
+            while [ "$poll" -le "$reads" ]; do
+                [ -f "$found/jobs-from-$poll.json" ] && answer="$found/jobs-from-$poll.json"
+                poll=$((poll + 1))
+            done
+            if [ "$(cat "$answer")" = unreadable ]; then
+                echo "fake gh: jobs for run $run unavailable" >&2
+                exit 2
+            fi
+            cat "$answer"
             ;;
         *)
             echo "fake gh: unsupported call: $*" >&2

@@ -1610,17 +1610,26 @@ existing recovery activities, final validation and push do the repair:
   has not reported yet also waits; it is never treated as passed. An
   unclassified or optional pending check grants no wait. Review gates and
   unreadable or stale evidence still stop the watcher. A failed required check
-  whose job log shows a code failure is compared with the current base tip
+  whose job log shows a code failure is compared with the current base
   before a repair is admitted. Orbit reads the latest push run of the same
-  workflow on that exact tip. If every failed required job succeeds there and
-  the PR is behind, it refreshes the branch through the existing pinned rebase,
-  validation and lease-checked publication path, then watches checks on the new
-  head. This spends no agent repair attempt. A reviewed head returns for
-  independent re-review before publication. A matching failure on the current
-  base is known red: the watcher records it and waits within the completion
-  deadline, spending no repair attempt. The existing inherited-failure wait also
-  applies while a moved base's same job has not concluded. Missing, pending or
-  unreadable tip evidence cannot prove a landed fix or a known-red base. A
+  workflow on the exact base tip. When that run skipped the job (a docs-only
+  or change-scoped commit) or lists no such job, it reads back along the base
+  branch's first-parent history, up to eight commits including the tip, to the
+  newest commit whose same job ran to success or failure, and judges the
+  failure there. If every failed required job succeeds on the base and the PR
+  is behind, it refreshes the branch onto the current tip, which contains
+  those green commits, through the existing pinned rebase, validation and
+  lease-checked publication path, then watches checks on the new head. This
+  spends no agent repair attempt. A reviewed head returns for independent
+  re-review before publication. A matching failure on the base is known red:
+  the watcher records it and waits within the completion deadline, spending no
+  repair attempt. A failure the base already failed the same way at the head's
+  fork point also waits, without spending a repair attempt, while the moved
+  tip cannot prove it fixed: its same job is still pending, skipped or not
+  listed, no commit within the bound ran it, or its jobs cannot be read. Each
+  poll evaluates it again, so the wait ends once the tip's job concludes. Once
+  a head is recorded that way (`pr_auto_fix_base_red`), a later poll that
+  cannot read the base evidence again keeps waiting instead of repairing. A
   distinct candidate failure keeps the ordinary repair path and three-attempt
   budget. A conflict is rebased onto the current base by PR conflict recovery.
   If a published check repair then conflicts, recovery follows the contiguous
@@ -1758,25 +1767,28 @@ existing recovery activities, final validation and push do the repair:
   concurrent remote movement is refused. Resume spends no new
   repair attempt merely to finish an inherited repair and grants no merge
   authority.
-- A base refresh retains the failed and passing job identities and exact base
-  tip in `auto-fix/<run>/landed-<failed-head>.json` and records
+- A base refresh retains the failed and passing job identities, the base
+  commit each passing job ran on and the exact base tip in
+  `auto-fix/<run>/landed-<failed-head>.json` and records
   `pr_auto_fix_base_refresh` in task history before mutation. Its owner-side
   reservation bounds base refreshes independently of the repair-attempt budget.
-  Old fork-point failure logs are unnecessary: the current tip's latest push
-  jobs supply the evidence. A green tip alone does not prove the base fixed
-  that one failure: when the latest push run of the head's fork point passed
-  the same job, the failure is the candidate's. That check does not by itself
+  Old fork-point failure logs are unnecessary: the base's latest push jobs,
+  read back from the tip past commits that skipped the job, supply the
+  evidence. A green base alone does not prove the base fixed that one failure:
+  when the head's fork point, read back the same way, passed the same job, the
+  failure is the candidate's. That check does not by itself
   end the comparison. When every failed required check is candidate-owned
   that way, completion spends no base refresh and admits one ordinary repair,
   even when the pull request's one base update is already reserved. The same
   repair path holds when one check is candidate-owned and another is green
-  on the tip without a successful fork-point job, as long as no required
-  check is known-red on the tip. A known-red sibling wins over a
-  candidate-owned check: the tip fails that sibling with the same diagnostic,
+  on the base without a successful fork-point job, as long as no required
+  check is known-red on the base. A known-red sibling wins over a
+  candidate-owned check: the base fails that sibling with the same diagnostic,
   completion records `pr_auto_fix_base_red`, and no repair attempt is
   admitted. Other matching current-base failures also record
   `pr_auto_fix_base_red`. Ordinary agent repairs retain their existing
-  admission history. Missing evidence leaves the ordinary diagnosis path in
+  admission history. Missing refresh or known-red evidence leaves the
+  inherited-failure wait and the ordinary diagnosis path in
   place.
 - Closed or merged PRs, and heads superseded by a newer push, get no repair.
 
