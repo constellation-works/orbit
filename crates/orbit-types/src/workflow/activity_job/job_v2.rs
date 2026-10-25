@@ -51,8 +51,11 @@ pub struct JobV2 {
     pub resolved_failure_activity: Option<ActivityV2>,
     /// Last automated look at a failed run [ORB-13907]: invoked at most once
     /// per run, after step recovery is exhausted and before
-    /// `failure_activity`. Its typed decision either resumes the run from an
-    /// earlier step or settles the task without the failure hook.
+    /// `failure_activity`. It returns one typed decision: `resume` (reruns the
+    /// run from an earlier step), a settled decision (`complete_no_diff`,
+    /// `reject`, `archive`, or `requeue`, which does not run
+    /// `failure_activity`), or `escalate` (which, like a missing or malformed
+    /// result, still runs `failure_activity`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub final_recovery_activity: Option<String>,
     #[serde(skip)]
