@@ -176,6 +176,7 @@
         "application/gc/tests/tmp.rs::preview_skips_entries_removed_after_the_listing",
         "application/job/delivery_attention/tests.rs::abandoned_landing_review_settle_reports_abandoned_verdict",
         "application/job/delivery_attention/tests.rs::blocked_landing_review_settle_still_parses_verdict_and_count",
+        "application/job/delivery_attention/tests.rs::blocked_settlement_quoting_abandoned_marker_still_parses_verdict_and_count",
         "application/job/delivery_attention/tests.rs::failed_run_with_failed_checks_attempt_is_flagged",
         "application/job/delivery_attention/tests.rs::healthy_and_ineligible_tasks_have_no_attention",
         "application/job/delivery_attention/tests.rs::timeout_and_interrupted_runs_and_conflict_are_flagged",

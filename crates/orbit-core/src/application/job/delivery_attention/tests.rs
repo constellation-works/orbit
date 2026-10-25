@@ -192,3 +192,20 @@ fn blocked_landing_review_settle_still_parses_verdict_and_count() {
     assert_eq!(facts["verdict"], "reject");
     assert_eq!(facts["finding_count"], 1);
 }
+
+#[test]
+fn blocked_settlement_quoting_abandoned_marker_still_parses_verdict_and_count() {
+    // A blocked settlement embeds the reviewers free-text escalation verbatim,
+    // so the escalation may quote the abandoned-settlement marker. The message
+    // still leads with `review_gate_blocked:`, so it must parse the recorded
+    // verdict and finding count instead of reporting abandoned.
+    let message = format!(
+        "review_gate_blocked: verdict reject (quoted review_abandoned: in escalation); \
+         2 finding(s) recorded; {}",
+        orbit_types::workflow::REVIEW_LANDING_DECISION_PENDING,
+    );
+    let facts = landing_review_gate_facts(None, Some(&message));
+    assert_eq!(facts["availability"], "read");
+    assert_eq!(facts["verdict"], "reject");
+    assert_eq!(facts["finding_count"], 2);
+}

@@ -121,7 +121,7 @@ fn verdict_from_message(message: &str) -> Option<&str> {
     // An abandoned settlement records no verdict: the step error says the
     // attempt "was released without a verdict". Report the gate outcome
     // instead of misreading the parenthetical "(verdict incomplete, ...)".
-    if message.contains(REVIEW_ABANDONED_MARKER) {
+    if message.trim_start().starts_with(REVIEW_ABANDONED_MARKER) {
         return Some("abandoned");
     }
     let rest = message.split("verdict ").nth(1)?;
