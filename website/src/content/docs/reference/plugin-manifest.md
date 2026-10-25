@@ -134,11 +134,13 @@ subcommand; `cli.positional` lists top-level input properties to promote to
 positionals. Those properties remain available as flags.
 
 Set `execution_kind` to `read_only` or `mutating` to describe the operation.
-Mutating tools require operator authority over MCP. This classification does
-not grant filesystem access. `mcp_scope` defaults to `workspace`; `global`
-allows calls without a workspace, while `none` keeps the tool available through
-`orbit tool run` but excludes it from MCP advertisement. A global tool cannot
-assume a workspace exists.
+A mutating plugin tool is callable by an operator or a sanctioned run on both
+the CLI and MCP, and an agent reaches it only when the task's `required_tools` or
+the activity allowlist names it. This classification does not grant filesystem
+access. `mcp_scope` defaults to `workspace`; `global` allows calls without a
+workspace, while `none` keeps the tool available through `orbit tool run` but
+excludes it from MCP advertisement. A global tool cannot assume a workspace
+exists.
 
 ## Backend contracts
 
