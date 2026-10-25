@@ -132,6 +132,17 @@ fn first_party_source_verifies_only_the_repository_git_would_fetch() {
         "git+git@github.com:constellation-works//plugin",
         "git+https://github.com/attacker/constellation-works",
         "git+https://example.com/constellation-works/plugin",
+        // libcurl (git's https transport) ends the authority at `?`, and WHATWG
+        // URL parsers end it at `\`, so the `github.com` after the delimiter is
+        // not the host git contacts. A second `@` leaves the userinfo ambiguous.
+        "git+https://evil.example?@github.com/constellation-works/plugin",
+        "git+https://evil.example\\@github.com/constellation-works/plugin",
+        "git+https://evil.example#@github.com/constellation-works/plugin",
+        "git+https://a@evil.example@github.com/constellation-works/plugin",
+        "git+ssh://git@evil.example?@github.com/constellation-works/plugin",
+        "git+ssh://git@evil.example\\@github.com/constellation-works/plugin",
+        "git+git@evil.example?@github.com:constellation-works/plugin.git",
+        "git+git@evil.example\\@github.com:constellation-works/plugin.git",
     ] {
         assert!(
             !first_party_source(source),
