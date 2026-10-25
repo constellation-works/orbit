@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Steering Delivery"
-last_validated: 2026-10-20
+last_validated: 2026-10-25
 ---
 
 # Spec: Steering Delivery

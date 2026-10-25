@@ -8,7 +8,7 @@ type: design
 summary: "Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider"
 tags: [crew-credentials, crews, execution-env, provider-limits]
 last_updated: 2026-10-21
-last_validated: 2026-10-21
+last_validated: 2026-10-25
 ---
 
 # Scope: per-crew credentials (`crews.<name>.env`)
