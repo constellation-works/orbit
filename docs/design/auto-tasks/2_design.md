@@ -381,7 +381,8 @@ post-deploy on the owner host, from the second minted instance's `state`;
 the definition itself is proven by loading and seeding it through the
 existing loader.
 
-Unlike `doc-duties`, which reserves `dir:.`, `comment-hygiene` declares no
+Unlike `doc-duties`, which locks `dir:docs` plus the tracked top-level
+`README.md` and `CONTRIBUTING.md`, `comment-hygiene` declares no
 `context_files` and mints as `proposed`: a selector-free instance is not a
 backlog drain candidate, so it never becomes the unknown-footprint
 whole-tree holder that stalls unrelated editing work, with or without a
