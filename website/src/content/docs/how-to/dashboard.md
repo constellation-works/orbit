@@ -166,7 +166,7 @@ prove that a particular task or run succeeded.
 | **Agents** | How well each agent role does its part, ranked by crew and model: **Orchestrators**, **Implementers**, **Reviewers**, and **Pilots**. |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
-| **Plugins** | Installed plugins and the panels they add. |
+| **[Plugins](#plugins)** | Installed plugins and the panels they add. |
 | **Settings** | Effective, Workspace file, Global file, Crews, Keys, System, and Hosts. |
 
 The rail foot shows live load, memory, and disk readings for the serving host
@@ -185,7 +185,8 @@ under **Runs**, and doctor warnings, policy denials, and failing routines under
 opens **Health → Incidents → Events** filtered to denials.
 
 View URLs keep older section names: `#diagnostics/…` is Health,
-`#operations/…` is Automation, and `#config/…` is Settings.
+`#operations/…` is Automation, and `#config/…` is Settings. Plugins is
+`#plugins`.
 
 ## Tasks
 
@@ -593,6 +594,193 @@ use **ship** or the [auto-drain](#auto-drain). **Details** shows the
 equivalent command, such as
 `orbit run job worktree_gc_pipeline --workspace orbit`.
 
+## Plugins
+
+Plugins (`#plugins`) lists the plugins installed on the selected host and
+how the selected workspace uses them. Open it when a tool is missing, a
+panel you expected is gone, or you want to switch a plugin on or off without
+leaving the dashboard. Pick one workspace first. **All workspaces** replaces
+the list with `Select a workspace to view this panel` and sets the count
+to —.
+
+Under the heading, the panel says what is installed on this machine, with
+the panels each plugin's manifest declares. An operator session can enable
+or disable a plugin for this host or this workspace. Installing, upgrading,
+and editing grants stay on the command line (`orbit plugin`). Removing one
+does too (`orbit plugin remove`). What each grant allows is in
+[Install and grant plugins](../plugins/). This view does not edit a manifest.
+
+```bash
+orbit web serve
+```
+
+Then choose **Plugins** in the left rail, or open
+`http://127.0.0.1:7878/#plugins`. The address keeps the selected host and
+workspace, as the other views do. A plugin follows the host you selected:
+you see that machine's installs, with this workspace's toggle. From a
+terminal, `orbit plugin list` and `orbit plugin doctor` print that list, and
+`orbit plugin show notes` prints one plugin. The `notes` name below is the
+illustrative plugin from the install guide.
+
+### What a card shows
+
+The count is the number of cards, including plugins that are not serving
+tools. Cards are ordered by name. Each one leads with the name, the version
+(such as `v0.1.0`, or `v—` when none is recorded), and a status:
+
+| Status | Meaning |
+|---|---|
+| `active` | Installed, enabled, and serving its tools. |
+| `disabled` | Switched off on this host, or off in this workspace only. |
+| `missing` | This checkout pins it, and this machine has not installed it. |
+| `inactive` | Enabled, but refused when it loads. |
+
+Chips on that line, when they apply:
+
+- **pinned** — `.orbit/plugins.yaml` in this checkout names the plugin. A pin
+  does not grant a permission, and the plugin tree is not copied into the
+  repository.
+- **unsandboxed** — a warning. The backend runs with no confinement, and this
+  host granted that. `orbit plugin show notes` reports the same fact.
+- **certified for** a version — `orbit plugin test` recorded a passing
+  conformance run for that Orbit version on this host. The chip reads
+  `certified for 0.32.0` when that is the recorded version. Hover or focus
+  it to see the version this dashboard is running. **· behind host** is
+  added, as a warning, when the certificate is an older release than this
+  host: `certified for 0.31.0 · behind host` means this version has not
+  been certified. A version the dashboard cannot parse does not add
+  **behind host**.
+
+The description follows when the plugin has one. A diagnostic follows when
+the server sends one. That line is why an inactive or missing plugin is
+still listed. A disabled plugin often has none. Its status and the
+**Effective** line name the layer that switched it off.
+
+### Host and workspace
+
+The two rows under the description are different switches.
+
+| Row | Meaning |
+|---|---|
+| **Host: enabled** or **Host: disabled** | The machine-wide row. **Disabled** takes the plugin off every workspace on this host. |
+| **Workspace: enabled (inherited)** | This workspace has not written a toggle. The row reads **enabled (inherited)** even when the host row is **disabled**. |
+| **Workspace: enabled** or **Workspace: disabled** | This workspace wrote its own toggle in `[plugin_enablement]`. |
+
+**Effective: disabled by host** or **Effective: disabled by workspace** is
+the line that decides whether the plugin's tools are on. The host row is
+the ceiling. A workspace can only narrow it, and other workspaces keep
+their own toggles.
+
+The buttons are **Enable host**, **Disable host**, **Enable workspace**, and
+**Disable workspace**. They appear only with an
+[operator session](#authorization), and only when the selected host accepts
+writes. On another host, a read-only session hides them. See
+[Switch hosts](#switch-hosts). Without the session the rows stay and the
+buttons do not. There is no button for a grant, an upgrade, or an install.
+
+**Disable host** asks first: `Disable notes on this host? It will be
+unavailable in every workspace on this host.` Confirming does what
+`orbit plugin disable notes` does. Tools stop registering, and the plugin's
+skills are unlinked. Routines and auto-tasks it seeded stay where they are;
+the scheduler skips them while the plugin is off.
+
+**Disable workspace** does not ask. It writes this workspace's toggle only,
+as:
+
+```bash
+orbit plugin disable notes --scope workspace
+```
+
+Run that from the checkout, or pass `--workspace <selector>`. Panels and
+link tiles for that plugin leave this workspace. The host row, other
+workspaces, and skill links stay as they are. **Enable workspace** turns
+the toggle back on:
+
+```bash
+orbit plugin enable notes --scope workspace
+```
+
+Enabling the workspace while the host has the plugin disabled writes
+nothing. The card shows the refusal, which tells you to enable it on the
+host first.
+
+**Enable host** turns the machine-wide row back on and keeps the grants
+already recorded. It does not grant anything new. If the manifest now asks
+for a grant you have not given, or the recorded consent no longer matches,
+the button fails and the card shows the error. That error names the
+`orbit plugin enable notes --grant …` command to review:
+
+```bash
+orbit plugin enable notes --grant fs,network
+```
+
+**Enable host** on a **missing** card does not install the plugin. The error
+tells you to run `orbit plugin sync` when the checkout pins it, or
+`orbit plugin add <source>` when it does not.
+
+A failed toggle leaves the previous state and prints the error on the card.
+While the request is in flight, that card's buttons wait. Changing
+workspace before the answer returns drops the error, so it is not shown on
+another workspace.
+
+Install, upgrade, and a pin this machine does not have yet stay on the
+command line:
+
+```bash
+orbit plugin add ./my-plugin
+orbit plugin doctor
+orbit plugin sync
+```
+
+`./my-plugin` is an illustrative local source, as in the install guide.
+`orbit plugin sync` installs what this checkout pins and this machine is
+missing.
+
+### Tools, panels, and links
+
+Tool names are chips under the scope rows. A dimmed chip is not active: the
+plugin is not serving tools, or a grant it needs is missing. Hover or focus
+a chip for its kind (`read_only` or `mutating`) and the MCP name it
+advertises, or `not advertised` when it has none. A missing grant is fixed
+by enabling again with the complete set you have reviewed, not by a control
+on this card. See [Diagnose inactive tools](../plugins/#diagnose-inactive-tools).
+
+Link tiles and panels appear only while the status is `active`. A tile shows
+the title the plugin declares and opens an `http://` or `https://` address
+in a new tab. Any other scheme is left off the card.
+
+Each panel is the answer from one read-only tool. The tool's name sits
+beside the title. A panel cannot run a mutating tool. The body uses the mode
+the plugin declared:
+
+| What you see | When |
+|---|---|
+| Label and value rows | The tool returned an object of fields. A nested value is shown as JSON text. |
+| A table | The tool returned a list of records. Columns are the union of their fields. An empty list says `No data.` |
+| Markdown | The tool returned text. It goes through the same sanitizer as the rest of the dashboard, so plugin text cannot add a script or an event handler. |
+| Pretty-printed JSON | The declared mode, or any answer that does not fit the mode it declared. The raw answer is shown rather than an empty panel. |
+
+`No data.` is an empty label list, an empty table, or a panel whose tool
+returned no output. A panel that has not arrived yet says `Loading…`.
+
+A panel larger than 256 KiB (262144 bytes) is cut to a prefix. The body then
+leads with `Panel output was N bytes, above the 262144-byte limit; showing a
+serialized JSON prefix.`
+
+### Empty, error, and stale
+
+| What you see | What to do |
+|---|---|
+| `Select a workspace to view this panel`, count — | Choose one workspace. **All workspaces** does not merge plugin lists. Changing host or workspace drops the previous cards instead of leaving them on screen. |
+| No plugins installed | The body says no plugins are installed on this machine, then the command `orbit plugin add <source>` (shown in backticks) and `installs one.` Nothing is installed here, and nothing is pinned. |
+| `Unable to load: … Use Refresh to retry.` | The list never arrived. **Refresh** tries again. |
+| `Refresh failed; showing stale data: … Use Refresh to retry.` | A later refresh failed. The cards from the last good read stay. The top status line reads `panel update failed: Plugins`. **Refresh** tries again. After a failed refresh the next automatic try waits longer, up to five minutes. A hidden browser tab does not refresh this list until you return to it. |
+| An error in one panel body | That panel's read failed. The rest of the card stays. A later successful read replaces the error. |
+| The previous panel body while the list refreshes | A refresh keeps the last good body from this visit instead of blanking the panel. Leaving the workspace, including coming back to the same one, does not reuse that body. One workspace's output is not shown under another. |
+
+While Plugins is open and the browser tab is visible, the list refreshes
+about every 30 seconds.
+
 ## Settings
 
 **Settings** shows the configuration this workspace runs on, with the same
@@ -824,6 +1012,7 @@ are checked by the shared drain submission path before a run is persisted.
 | Settings save says "no workspace config exists yet" | Expected on the first write. Choose **Copy global policy** or **Start empty**. |
 | Settings save returns an admission error | `orbit config set` refuses the value too. The message lists the accepted values. |
 | New workspace missing after `orbit workspace init` | Click **Refresh**. The server reloads `workspaces.json` when it changes, and keeps the last good list if the file is malformed. |
+| Plugins says to select a workspace, or its buttons are missing | **All workspaces** does not list plugins. Enable and disable need one workspace, an [operator session](#authorization), and a host that accepts writes. See [Plugins](#plugins). |
 | **connecting…** stays orange after startup | The first API request probably failed. **Refresh** or the `/healthz` probe tells a dead process from a slow workspace. |
 
 For uptime monitoring, use the detailed probe. It also checks each workspace's
