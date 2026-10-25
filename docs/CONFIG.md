@@ -420,6 +420,9 @@ Mapped tags have the same protection as `skip-review`: only filing a task (inclu
 The seeded template includes one mapping for each shipped default auto-task's `auto-task:<name>` provenance tag, all limited to the documentation/CI paths shown above. The template is not migrated into existing config files: `orbit init` leaves an existing config alone unless run with `--force`. To opt in on an existing install, add the same tables to its `config.toml`:
 
 ```toml
+[workflow.review_skip_tags."auto-task:architecture-audit"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
 [workflow.review_skip_tags."auto-task:backlog-hygiene"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 

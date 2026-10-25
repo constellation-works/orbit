@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The eleven seeded definitions
+## The twelve seeded definitions
 
-`orbit workspace init` seeds all eleven, disabled, except any you deleted (see
+`orbit workspace init` seeds all twelve, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -469,6 +469,23 @@ plugin being removed.
   tagged `run-failure-patterns` and `no-auto-approve`, so it waits for human
   approval; a friction replaces the task only when no cause can be
   established, never both.
+- **`architecture-audit`** (`hard`) — every 14 days. Audits the package and
+  module dependency graph, built from the ecosystem's own metadata tool or
+  an import scan (the method used is named in the run summary): cycles,
+  including up-calls hidden in behavior attached to a shared type from
+  another module; distributed types; public-surface width; concept
+  placement; and sizes with rebuild reach, all recorded in an
+  `architecture.json` artifact carried between passes, plus one scored area
+  read in full. Layering is judged against the repository's documented
+  architecture when one exists; without one, the run reports the layers it
+  inferred and files only true cycles and up-calls, never layering-drift
+  tasks. A split, merge, or move candidate whose case rests on unmeasured
+  numbers is filed first as a `no-diff-expected` measurement task with a
+  go/no-go, and only then as a restructuring task depending on it. Each run
+  files at most 3 `proposed` improvement tasks plus measurement
+  prerequisites, each with `context_files` and a `spawned_from` relation to
+  the minted chore. The chore itself is tagged `no-diff-expected` and never
+  builds or runs tests.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.

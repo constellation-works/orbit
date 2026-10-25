@@ -19,6 +19,10 @@ use serde_json::Value;
 
 const BUNDLED_AUTO_TASKS: &[(&str, &str)] = &[
     (
+        "architecture-audit",
+        include_str!("../assets/auto_tasks/architecture-audit.yaml"),
+    ),
+    (
         "backlog-hygiene",
         include_str!("../assets/auto_tasks/backlog-hygiene.yaml"),
     ),

@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18125]
 ---
 
 # Auto-tasks — Overview
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These ten YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These twelve YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -253,6 +253,23 @@ definition of the same name.
   value and keeps the raw flag as the compare-and-set token. The former `delivery-qa` default is retired and is not seeded;
   hands-on QA stays with `qa-sweep` (recent changes) and `qa-full-sweep`
   (the whole product at one commit).
+- `architecture-audit` — disabled-by-default audit every 14 days of the
+  package and module dependency graph, built from the ecosystem's own
+  metadata tool or an import scan (the method is named in the run summary).
+  It records cycles — including up-calls hidden in behavior attached to a
+  shared type from another module — distributed types, public-surface
+  width, concept placement, sizes and rebuild reach in an
+  `architecture.json` artifact carried between passes, and reads one scored
+  area in full. Layering is judged against the repository's documented
+  architecture when one exists; without one, the run reports the layers it
+  inferred and files only true cycles and up-calls, never layering-drift
+  tasks. A split, merge, or move candidate whose case rests on unmeasured
+  numbers is filed first as a `no-diff-expected` measurement task with a
+  go/no-go, and only then as a restructuring task depending on it. Each run
+  files at most 3 `proposed` improvement tasks plus measurement
+  prerequisites, each with `context_files` and a `spawned_from` relation to
+  the minted chore, which is itself tagged `no-diff-expected` and never
+  builds or runs tests.
 
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
@@ -316,6 +333,12 @@ encode this repository's branches and gates. Re-init preserves them:
   preparation holds it on the owner machine, and the coordinator wires
   dependencies with `orbit.task.update` or a blocker handoff rather than a
   comment.
+- ORB-18125 — Added the disabled, portable `architecture-audit` default
+  (14-day cadence): graph discovery from the ecosystem's metadata tool or an
+  import scan, documented-architecture layering checks with an
+  inferred-layers fallback that files only cycles and up-calls, and
+  measurement-first split, merge, and move filing capped at 3 improvement
+  tasks per run.
 - ORB-17245 — Added the disabled hourly `blocked-task-triage` default and the
   `skip_unless_blocked_candidates` precondition.
 - ORB-17744 — Retired the `blocked-task-triage` default in favour of the

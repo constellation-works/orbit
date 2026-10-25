@@ -1,0 +1,396 @@
+schemaVersion: 1
+name: architecture-audit
+description: Architecture audit every 14 days — package and module dependency graph, cycles (including up-calls hidden in cross-module extensions of a shared type), layering drift against the repository's documented architecture, types spread across modules, public-surface width, concept placement, and split/merge candidates, measurement-first; reads one scored area in full and files up to 3 proposed improvement tasks plus measurement prerequisites
+enabled: false
+schedule:
+  every_minutes: 20160
+template:
+  title: Architecture audit — file cycle, layering, abstraction, placement and split/merge tasks
+  description: |-
+    Audit this repository's architecture at package and module level: the
+    dependency graph, cycles, layering, package splits and merges, and the
+    abstractions that hold the layers together. File one proposed Orbit task
+    per evidence-backed improvement. This task files work; it does not change
+    code, and it never builds, tests, or times anything. The durable outputs
+    are the filed tasks and the `architecture.json` artifact; the execution
+    summary is the audit trail. A run that finds nothing above the bars below
+    is a successful no-op when the scan evidence is persisted.
+
+    Packages follow build and dependency boundaries, not taxonomy. A split,
+    merge, or move needs dependency-graph evidence and a measured benefit,
+    never conceptual tidiness alone.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface, never direct lifecycle CLI
+      subcommands (they skip agent provenance). Find the previous pass with
+      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["architecture-audit","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
+      and fetch its artifact with
+      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"architecture.json","model":"<agent-family>"}'`.
+      Search coverage with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
+      (lexical search matches one substring: use a single distinctive token,
+      never a multi-word phrase, and never treat a 0-hit multi-word query as
+      proof that nothing covers a finding). Inspect a candidate with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+    - Before filing, read the installed `orbit` skill's task-authoring
+      reference and follow it for task shape. File an improvement (tool-created
+      tasks start `proposed`) with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["arch-audit","tech-debt","<cycle|layering|package-split|package-merge|abstraction|placement>"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      File a measurement prerequisite with
+      `orbit tool run orbit.task.add --input '{"title":"Measure <candidate>: <what must be quantified>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"medium","tags":["arch-audit","tech-debt","no-diff-expected"],"type":"chore","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      File a correctness defect confirmed in passing (see below) with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown with file:line evidence>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<evidence source path>","file:<matching test path>"],"complexity":"medium","tags":["arch-audit"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high|critical>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Read each filed task back with `orbit.task.show` before recording it as
+      delivered. Never file a finding without verified `context_files`. Chain
+      dependencies between tasks filed in this run with a follow-up
+      `orbit tool run orbit.task.update --input '{"id":"<filed task ID>","dependencies":["<predecessor task ID>"],"model":"<agent-family>"}'`,
+      and read the task back to confirm the field took effect.
+    - Static analysis only: no builds, tests, or timing runs in this task.
+      Put throwaway scripts under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`).
+    - Fail open. A run that finds nothing above the bars is a successful
+      no-op. Do not invent work to justify the run.
+
+    ## What this sweep owns
+
+    This sweep owns structure that only shows up repository-wide: edges
+    between packages and top-level modules, cycles, where a concept lives,
+    how large a package or shared type has grown, and whether the seams
+    between layers are real. It does not own file size or module layout
+    inside one package, dead code, duplication, local simplification, or one
+    rule broken inside a single area — other sweeps and ordinary review own
+    those. If you confirm a correctness defect in passing, file it as a `bug`
+    tagged `arch-audit` with the payload above, per the task-authoring
+    reference; it does not count toward the filing cap.
+
+    ## Pin and cursor
+
+    Fetch `__ORBIT_BASE_BRANCH__` and record the full SHA of its tip; read
+    every file at that SHA. Read the previous pass's `architecture.json` (see
+    above): it holds the previous metrics, the deferred candidates, and the
+    area reviewed last time. Absent or unreadable means this is the baseline
+    pass; say so.
+
+    ## Discover the repository's shape
+
+    Discover everything below from tracked files; hard-code nothing from
+    another repository. Record each answer in the artifact:
+
+    1. **Languages and packages.** From the tracked manifests and lockfiles,
+       list each publishable or workspace-internal package (or module, in a
+       single-package repository) and its source root. Exclude vendored and
+       generated trees, build output, and test-only code from every count
+       below, and name the exclusions.
+    2. **The graph method.** Build the package and module dependency graph
+       from the ecosystem's own metadata tool when the repository has one;
+       otherwise fall back to a scan of import statements — and, inside the
+       repository, of qualified paths and re-exports — over the discovered
+       source roots. Name the method actually used, and its precision
+       limits, in both the artifact and the execution summary.
+    3. **The documented architecture**, when one exists: look for an
+       architecture document at the repository root or under its docs tree
+       (common names are an `ARCHITECTURE` file or `architecture` pages),
+       design overviews, and the agent guides. Record which document, if
+       any, states the intended layers or dependency direction.
+    4. **The repository's own guards**: any tracked dependency-direction,
+       layering, or lint check, and the CI configuration that runs it,
+       discovered from the tracked CI and script files. A guard that exists
+       but is not wired into CI is itself a lead, not evidence of direction.
+
+    Examples — one per ecosystem; use only the row this repository matches
+    and ignore the rest:
+    - Rust example: metadata from `cargo metadata --format-version 1 --no-deps`, package manifests named `Cargo.toml`, source under each manifest's directory, and behavior attached to a type from another module in an inherent `impl` block.
+    - Go example: metadata from `go list -json ./...`, modules declared in `go.mod`, and packages as directories of `.go` files.
+    - JavaScript/TypeScript example: workspace packages from the root manifest's workspaces field or the package-manager workspace file, with import and re-export scanning inside each package.
+    - Python example: distributions and packages from `pyproject.toml` or setup files, usually with an import scan as the graph source.
+    - Cross-module extension examples: extension methods or partial classes, extension functions, protocol or type extensions, and reopened classes each attach behavior to a type from a module other than the one defining it.
+
+    ## Pass A — structure metrics, whole repository, every run
+
+    Scope is non-test sources under the discovered source roots. Record in
+    the artifact, with deltas against the previous pass:
+
+    1. **Package graph.** Every package with its non-test line count,
+       dependency edges to other in-repository packages (production and
+       test-only edges recorded separately), fan-in, and fan-out. When a
+       documented architecture or a repository guard states an edge list or
+       direction, diff the measured edges against it: an edge in code but
+       not in the document, or the reverse, is a candidate.
+    2. **Module graph and cycles.** Inside each package over 10,000 non-test
+       lines, build a graph of the top-level source directories, and one
+       level deeper for any directory over 20,000 lines. Draw an edge for
+       each kind of reference:
+       - every import of another in-repository module;
+       - every fully qualified path or re-export pointing into another
+         module;
+       - **every call that resolves into behavior attached to a shared type
+         from a module other than the caller's** (see the cross-module
+         extension examples above).
+
+       That last kind of edge matters. A shared type whose behavior is
+       attached from several modules hides up-calls that an import-only map
+       misses: a lower module can call a method whose implementation lives
+       in an upper module, and no import line betrays it. Approximate these
+       edges by indexing the member names each module attaches to each
+       shared type, then searching other modules for calls to those names
+       on that type. Record precision limits honestly.
+
+       Report the strongly connected components (cycles) and each edge that
+       violates a documented direction, with `file:line` examples.
+    3. **Distributed types.** For each type whose behavior is attached from
+       three or more top-level modules, or in more than 40 separate blocks
+       or declarations in total, record the count per module. These types
+       anchor the current package boundaries: they block splits, and they
+       show where an interface owned by the lower layer, a port, or
+       operations-as-data handlers would cut a seam.
+    4. **Public surface.** Per package, count the exported items reachable
+       from the package entry point, and how many no other in-repository
+       package uses. An internal package whose public surface is much wider
+       than its consumers use is a candidate.
+    5. **Concept placement.** Types and functions with the same name stem
+       defined in two or more packages (configuration, error, and record
+       types, path helpers, identifier wrappers, subprocess or API
+       wrappers). Read them before recording a candidate: a shared name is
+       a lead, not a finding.
+    6. **Size and rebuild reach.** Non-test lines per package, and per
+       top-level directory of packages over 20,000 lines. Also count, for
+       each package, the in-repository packages that would need to rebuild
+       or re-check when it changes — its reverse-dependency closure.
+
+    ## Layering: documented, or inferred
+
+    When a documented architecture (Pass A discovery step 3) states the
+    intended layers or dependency direction, judge edges against it, and use
+    it for the layering-drift and placement lenses below.
+
+    When no document states one, infer layers from the measured graph
+    alone — for example by dependency depth: packages and modules that
+    nothing in the repository depends on sit at the top, and those that
+    depend on no other in-repository code sit at the bottom. Report the
+    inferred layers, module by module, in the artifact and the execution
+    summary. Inferred layers are a description of what exists, not an
+    authority: without a documented architecture, file only true cycles
+    (strongly connected components) and up-calls — an edge from a module
+    into a module that already depends on it directly or transitively,
+    including extension edges that close a cycle the import-only graph does
+    not show — and file no layering-drift, placement, or abstraction tasks
+    that rest on the inferred layering being right. Record such candidates
+    in the artifact as deferred, with the reason "no documented
+    architecture".
+
+    ## Pass B — one area, read in full
+
+    Pick one area for a full structural read: a package, or a top-level
+    source directory of a package over 20,000 lines. Split it one level
+    deeper while it exceeds 20,000 non-test lines. Score each area as
+    `(cycle edges + violating edges + distributed-type blocks) × (1 + churn ÷ 1,000)`.
+    Churn is the area's non-test lines changed since it was last reviewed,
+    or over the last 30 days if it has never been reviewed. Skip an area
+    when over half its files are in the `context_files` of an open
+    `arch-audit` task, or of any in-progress or review task. Record every
+    score.
+
+    Read every non-test line of the module entry points, exported types, and
+    interface definitions in the area, plus the files that hold its
+    cross-module edges and distributed-type blocks. A search, sample, or
+    truncated tool response is not a read. Judge the area's abstractions:
+    what each layer owns, whether the seams are real (an interface or port
+    with a clear owner, versus one shared type every layer extends), and
+    where a concept is modelled twice.
+
+    ## Lenses and bars
+
+    Every finding must clear its bar; taste alone is never a finding.
+
+    - **Cycle.** A module-level strongly connected component, or a single
+      edge against a documented direction. Name the edge to cut and the
+      mechanism: move the item to the lower layer, introduce an interface or
+      port owned by the lower layer, invert with a callback, or move the
+      caller up.
+    - **Layering drift.** The documented architecture disagrees with the
+      measured edges. The task decides which one changes and says why. This
+      lens requires a documented architecture; without one, file nothing
+      under it (see above).
+    - **Package split.** A candidate whose dependency direction is already
+      consistent, or becomes consistent once the named cycle tasks land,
+      plus an expected measurable benefit estimated from rebuild reach and
+      line share (Pass A item 6). This sweep never measures that benefit:
+      file a **measurement task first** — a `no-diff-expected` chore that
+      records the numbers the estimate rests on (full and incremental build
+      or check timings on a stated host class, dependency and fan-in
+      counts, or whichever quantity the benefit claim uses) and gives a
+      go/no-go per candidate. Only then file the extraction task, with a
+      `dependencies` entry on the measurement task, instructed to reject
+      itself on a no-go. Name the distributed types from Pass A item 3 that
+      anchor the boundary and how the extraction handles each one.
+    - **Package merge or dissolve.** A package under about 1,500 non-test
+      lines with a single in-repository consumer and no build, stability, or
+      publishing reason to stand alone, or two packages that almost always
+      change together (more than 70% co-change over 90 days of commit
+      history). A merge is a restructuring like a split: file its
+      measurement task first when the case rests on build or coupling
+      numbers an estimate alone cannot settle.
+    - **Move.** A module, type, or mechanism that belongs in a different
+      existing package or layer under the documented architecture. A move
+      whose case rests on unmeasured coupling or build claims also gets its
+      measurement task first, never a direct restructuring task.
+    - **Abstraction.** A concrete structural cost, stated in countable
+      terms: a shared type that three or more layers extend, an interface
+      with one implementer sitting in the wrong package, a public surface
+      more than twice what its consumers use, or one concept modelled in
+      two packages. Name the target shape and the steps to reach it.
+    - **Placement.** A mechanism or contract that lives above the package
+      the documented architecture says should own mechanisms or contracts
+      of its kind, or that is defined independently in two or more packages
+      with consumers in each. Name every copy and every consumer.
+
+    ## Duplicate and conflict safety
+
+    Before filing, list open work with
+    `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"arch-audit","limit":200,"model":"<agent-family>"}'`.
+    Then search each finding's distinctive symbol with `orbit.search` (see
+    above). Check rejected `arch-audit` tasks too, with
+    `orbit tool run orbit.task.list --input '{"status":["rejected"],"tag":"arch-audit","limit":200,"model":"<agent-family>"}'`:
+    read the rejection rationale and refile only if the evidence has
+    materially changed, saying what changed.
+
+    - **Covered by an open task:** skip the finding, or add the new evidence
+      to that task as a comment if it extends the task's scope.
+    - **Touches a file in any in-progress or review task:** defer it to the
+      next pass and record it in the artifact.
+    - **Own chains:** chain the tasks filed in this run with
+      `dependencies` (set by the follow-up `orbit.task.update` above): cycle
+      cuts before the splits they enable, and measurement before
+      extraction, merge, or move. Do not chain onto another sweep's
+      proposed tasks.
+
+    ## Filing
+
+    File at most **3** improvement tasks per run, plus any measurement
+    prerequisites they need; measurement prerequisites do not count toward
+    the cap, and neither does an incidental `bug`. Rank candidates by
+    structural value over risk: cycles first, then layering drift, then
+    abstraction and placement, then splits, merges, and moves. Record the
+    overflow in the artifact; the next pass files it first after
+    re-verifying. File each improvement with the `orbit.task.add` payload
+    above:
+
+    - **Type and tags.** `type: refactor`; tags `arch-audit`, `tech-debt`,
+      and the lens tag from the payload. A measurement prerequisite is a
+      `chore` tagged `arch-audit`, `tech-debt`, and `no-diff-expected`.
+    - **Complexity.** `hard` for anything that crosses a package boundary or
+      moves an exported item; `xhard` for a package extraction or a change
+      touching more than about 100 files. A measurement task is `medium`.
+    - **`context_files`.** Verified `file:`/`dir:` selectors for every
+      definition, edge, and call site that changes. For a split, merge, or
+      move, also list the package manifests and lockfile, the documented
+      architecture the filing cites (when one exists), the repository's
+      dependency-direction guard (when it ships one), and, for a package
+      that does not exist yet, its intended directory with
+      `allow_missing_context: true`.
+    - **Description.** It contains:
+      - **Outcome**;
+      - **Evidence**: the edges, cycle members, block counts, or metrics,
+        with paths and line numbers at the pinned SHA, and the graph method
+        that produced them;
+      - **Target shape and steps**;
+      - **Scope and non-goals**;
+      - for a measurement task, the exact quantities to record, the commands
+        that produce them (discovered from the repository's tracked build
+        and CI configuration), the host class to run them on, and the
+        go/no-go thresholds the restructuring decision uses;
+      - the **Conventions** block below, copied verbatim.
+    - **Acceptance criteria** for an improvement include:
+      - The named edges, cycles, or placements are gone, and the
+        repository's own dependency-direction or layering guard enforces
+        the new direction wherever that guard can express it.
+      - The documented architecture and any affected design overviews
+        describe the result in the same change.
+      - The exported names consumers use keep working, unless the task
+        names the change.
+      - The repository's own gate commands, discovered from its tracked
+        files and agent guides, pass for the affected packages.
+      - The execution summary lists every non-mechanical edit with its
+        reason.
+      - An extraction, merge, or move also reports the measured quantity
+        its measurement task recorded, before and after, on the same host
+        class.
+
+    Conventions block:
+
+    > - Behaviour-preserving. Public APIs, command and output shapes, and
+    >   persisted data formats stay identical unless this task names the
+    >   change.
+    > - A new package edge updates the documented architecture and the
+    >   repository's dependency-direction guard in the same change, when the
+    >   repository has them.
+    > - Keep moved code's visibility as narrow as before; do not widen an
+    >   export, add a wildcard re-export, or silence an unused-import check
+    >   to make a move compile.
+    > - Prefer re-export shims for old paths over rewriting every import in
+    >   one change, so concurrent work keeps merging; name the shim's
+    >   retirement as a follow-up.
+    > - An edge, caller, or consumer that this task does not list is a
+    >   stop-and-report, not a judgement call.
+    > - No layout-only moves; this task exists to change the dependency
+    >   structure, not the file layout.
+
+    Tasks land in `proposed`. Do not approve them.
+
+    ## Handoff
+
+    Write `.orbit/tmp/architecture.json` with:
+    - `schema_version: 1`, `pinned_sha`, and `graph_method` — the metadata
+      tool or import-scan method actually used, with its precision limits;
+    - the documented architecture used, or the inferred layers when none
+      exists;
+    - the Pass A metrics (package graph, module edges, cycles, distributed
+      types, public surface, placement leads, sizes, and rebuild reach),
+      with deltas against the previous pass;
+    - the area scores and the area reviewed (selectors, files read);
+    - every finding (lens, evidence, and its disposition: filed ID,
+      commented-onto ID, deferred with reason, or rejected with reason);
+    - the overflow list.
+
+    Attach it with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/architecture.json","path":"architecture.json","model":"<agent-family>"}'`.
+    The execution summary covers:
+    - the graph method used (metadata tool or import scan) and its stated
+      precision limits;
+    - the package count and edge count against the previous pass;
+    - the cycle count and largest cycle;
+    - the top distributed types by module spread;
+    - the area reviewed, its score, and the top five alternatives;
+    - when no documented architecture exists, the inferred layers;
+    - every finding mapped to its disposition.
+  acceptance_criteria:
+  - The pass is pinned to one `__ORBIT_BASE_BRANCH__` SHA recorded in `architecture.json`, and it reads the previous pass's `architecture.json` or states that it is the baseline pass.
+  - The dependency graph comes from the ecosystem metadata tool this repository uses, or from an import scan when it has none, and the execution summary and `architecture.json` name the method and its precision limits.
+  - Pass A records the package graph, the module graph including cross-module extension edges into shared types, strongly connected components, distributed types, public-surface counts, concept-placement leads, and sizes with rebuild reach, each with deltas against the previous pass, and no build, test, or timing command was run.
+  - When a documented architecture exists, measured edges are diffed against it; when none exists, the execution summary and `architecture.json` report the inferred layers and only true cycles and up-calls are filed, with no layering-drift tasks.
+  - The reviewed area was chosen by the recorded score formula, with conflicted areas skipped, and its entry points, exported types, interfaces, and cross-module edge files were read in full.
+  - Every split, merge, or move candidate whose case rests on unmeasured numbers was filed first as a `no-diff-expected` measurement task with go/no-go thresholds, and its restructuring task carries a `dependencies` entry on that measurement task.
+  - Open and rejected `arch-audit` tasks were checked before filing, findings touching in-progress or review tasks were deferred into `architecture.json`, and no duplicate task was filed.
+  - At most 3 improvement tasks were filed, measurement prerequisites excluded, all `proposed` with a `spawned_from` relation to this task, verified `context_files`, the Conventions block, and the filing acceptance criteria above.
+  - The run attaches `architecture.json` to this task and the execution summary maps every finding to a disposition; a run with no findings above the bars succeeds with that evidence and files no task.
+  task_type: chore
+  tags:
+  - architecture-audit
+  - no-diff-expected
+  - tech-debt
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.task.update
+  priority: low
+  complexity: hard
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-24T00:00:00Z
+updated_by: system
+updated_at: 2026-10-24T00:00:00Z
