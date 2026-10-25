@@ -356,6 +356,14 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
             input["auto_concurrency"] = json!(mode);
         }
         let receipt = client.call_tool_ok("orbit_workflow_auto", input);
+        let id = receipt["run_id"].as_str().unwrap().to_owned();
+        // The worker is detached from the MCP server. A 24h window does not
+        // stop it, so cancel on unwind unless this run has already finished.
+        let mut cleanup = DrainCleanup {
+            workspace: &workspace,
+            run_id: id.clone(),
+            armed: true,
+        };
         assert!(receipt["submitted_at"].is_string(), "{receipt}");
         assert!(receipt.get("review").is_some());
         assert!(receipt.get("job_id").is_none());
@@ -369,25 +377,23 @@ fn stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain() {
                 "configured"
             }
         );
-        let id = receipt["run_id"].as_str().unwrap();
         let shown = client.call_tool_ok(
             "orbit_workflow_run_show",
-            json!({"workspace":selector,"id":id}),
+            json!({"workspace":selector,"id":&id}),
         );
         assert_eq!(shown["auto_concurrency"]["mode"], mode.unwrap_or("off"));
-        let recorded = runtime.show_job_run(id).unwrap();
+        let recorded = runtime.show_job_run(&id).unwrap();
         assert_eq!(recorded.input.as_ref().unwrap()["for_seconds"], seconds);
         assert_eq!(
             recorded.input.as_ref().unwrap()["auto_concurrency"],
             mode.unwrap_or("off")
         );
-        let waited = runtime
-            .wait_pipeline_runs(&[id.to_string()], 10, 1, None)
-            .unwrap();
+        let waited = runtime.wait_pipeline_runs(&[id], 10, 1, None).unwrap();
         assert!(
             waited.results[0].status == orbit_core::PipelineWaitStatus::Success,
             "fixture worker must finish before handoff"
         );
+        cleanup.armed = false;
     }
     assert_eq!(std::fs::read(root.join("config.toml")).unwrap(), config);
     let before = runtime.list_job_runs(Default::default()).unwrap();
@@ -664,7 +670,8 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
         )
         .unwrap();
     }
-    let config = workspace.home.join(".orbit/config.toml");
+    // The workspace policy seeded by init owns the effective allowlist.
+    let config = workspace.work.join(".orbit/config.toml");
     let mut document: toml_edit::DocumentMut =
         std::fs::read_to_string(&config).unwrap().parse().unwrap();
     let mut pass = toml_edit::Array::new();
@@ -695,6 +702,11 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
         "orbit_workflow_auto",
         json!({"workspace":selector,"action":"start","for_seconds":60}),
     );
+    let mut drain_cleanup = DrainCleanup {
+        workspace: &workspace,
+        run_id: started["run_id"].as_str().unwrap().to_owned(),
+        armed: true,
+    };
     assert!(
         started["note"]
             .as_str()
@@ -705,6 +717,11 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
         "orbit_workflow_ship",
         json!({"workspace":selector,"task_ids":[task["id"]],"mode":"local"}),
     );
+    let mut ship_cleanup = DrainCleanup {
+        workspace: &workspace,
+        run_id: shipped["run_id"].as_str().unwrap().to_owned(),
+        armed: true,
+    };
     for receipt in [&started, &shipped] {
         let unset = receipt["warning"]
             .as_str()
@@ -736,6 +753,8 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+    drain_cleanup.armed = false;
+    ship_cleanup.armed = false;
 }
 
 /// [ORB-13987] With login-shell resolution disabled and no configured PATH,
@@ -1276,4 +1295,204 @@ fn artifact_and_auto_task_stdio_contracts() {
         check();
         orbit_common::test_env::record_scenario_pass(name);
     }
+}
+
+/// Cancel a fixture pipeline run on drop, including when an assertion unwinds.
+/// Dropping the MCP server does not reach the detached worker.
+struct DrainCleanup<'a> {
+    workspace: &'a McpWorkspace,
+    run_id: String,
+    armed: bool,
+}
+
+impl Drop for DrainCleanup<'_> {
+    fn drop(&mut self) {
+        if !self.armed {
+            return;
+        }
+        let mut command = McpWorkspace::orbit_command(&self.workspace.work, &self.workspace.home);
+        command.args(["run", "cancel", self.run_id.as_str(), "--confirm"]);
+        // Production cancellation waits for the verified owner to exit. Keep
+        // cleanup bounded without a second panic during assertion unwinding.
+        let output = orbit_common::process::run_bounded_capped(
+            &mut command,
+            test_env::FIXTURE_STEP_DEADLINE,
+            64 * 1024,
+        );
+        if !matches!(&output, Ok(output) if output.status.success()) {
+            tracing::warn!(?output, "drain fixture cleanup failed");
+        }
+    }
+}
+
+/// `stdio_drain_window_matches_the_drain_and_resize_reaches_a_pull_drain`
+/// starts this same 24h `orbit_workflow_auto` drain. The worker is detached
+/// into its own session, so dropping the MCP server does not stop it. A run
+/// that is still going when the test returns must not leave that process
+/// behind. Observed 2026-10-25: the worker stayed up after the fixture
+/// tempdir was gone, held on host admission (`admissions throttled`).
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn a_fixture_auto_drain_worker_does_not_outlive_the_test() {
+    if crate::isolated_test::run_in_child(
+        "mcp_roundtrip::transport_operations::a_fixture_auto_drain_worker_does_not_outlive_the_test",
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let jobs = workspace.home.join(".orbit/resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    // The step cannot finish during this test, which is the shape of the
+    // leaked run: `for_seconds` 86400, auto-concurrency left configured off,
+    // and the worker still executing when the test process is gone.
+    std::fs::write(
+        jobs.join("workspace_auto_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: workspace_auto_pipeline\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: hold\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n      default_input:\n        seconds: 600\n",
+    )
+    .unwrap();
+    let mut client = workspace.serve_with_args(&["--operator"]);
+    let receipt = client.call_tool_ok(
+        "orbit_workflow_auto",
+        json!({"workspace":selector,"action":"start","for_seconds":86_400}),
+    );
+    assert_eq!(receipt["auto_concurrency"]["mode"], "off", "{receipt}");
+    assert_eq!(
+        receipt["auto_concurrency"]["source"], "configured",
+        "{receipt}"
+    );
+    let run_id = receipt["run_id"].as_str().unwrap().to_owned();
+    let cleanup = DrainCleanup {
+        workspace: &workspace,
+        run_id: run_id.clone(),
+        armed: true,
+    };
+    let pid = fixture_worker_pid(&workspace, &run_id);
+    assert!(
+        cwd_is_in_fixture(&workspace, pid),
+        "the drain worker's cwd must be inside the fixture tempdir (pid {pid})"
+    );
+    drop(client);
+    drop(cleanup);
+    let survivors = fixture_pipeline_workers(&workspace);
+    assert!(
+        survivors.is_empty() && !orbit_common::process::identity::process_is_alive(pid),
+        "a fixture auto drain must not leave run-pipeline-worker running after the test \
+         (2026-10-25 detached-worker leak); pid {pid} still in {survivors:?}"
+    );
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn fixture_worker_pid(workspace: &McpWorkspace, run_id: &str) -> u32 {
+    let mut pid = None;
+    test_env::wait_until("the fixture drain worker to record a live pid", || {
+        pid = shown_worker_pid(workspace, run_id)
+            .filter(|pid| orbit_common::process::identity::process_is_alive(*pid));
+        pid.is_some()
+    });
+    pid.expect("wait_until only returns after the worker pid is live")
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn shown_worker_pid(workspace: &McpWorkspace, run_id: &str) -> Option<u32> {
+    let output = McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+        .args(["run", "show", run_id, "--json"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let shown: Value = serde_json::from_slice(&output.stdout).ok()?;
+    u32::try_from(shown["run"]["pid"].as_u64()?).ok()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn fixture_pipeline_workers(workspace: &McpWorkspace) -> Vec<u32> {
+    worker_pids()
+        .into_iter()
+        .filter(|pid| cwd_is_in_fixture(workspace, *pid))
+        .collect()
+}
+
+#[cfg(target_os = "linux")]
+fn worker_pids() -> Vec<u32> {
+    let mut pids = Vec::new();
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return pids;
+    };
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(cmdline) = std::fs::read(format!("/proc/{pid}/cmdline")) else {
+            continue;
+        };
+        if cmdline
+            .split(|byte| *byte == 0)
+            .any(|arg| arg == b"run-pipeline-worker")
+        {
+            pids.push(pid);
+        }
+    }
+    pids
+}
+
+#[cfg(target_os = "macos")]
+fn worker_pids() -> Vec<u32> {
+    let Ok(output) = std::process::Command::new("pgrep")
+        .args(["-f", "run-pipeline-worker"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.trim().parse().ok())
+        .collect()
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn cwd_is_in_fixture(workspace: &McpWorkspace, pid: u32) -> bool {
+    let Some(cwd) = process_cwd(pid) else {
+        return false;
+    };
+    [workspace.work.as_path(), workspace.home.as_path()]
+        .into_iter()
+        .any(|root| path_is_under(&cwd, root))
+}
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn path_is_under(path: &Path, root: &Path) -> bool {
+    if path.starts_with(root) {
+        return true;
+    }
+    match (path.canonicalize(), root.canonicalize()) {
+        (Ok(path), Ok(root)) => path.starts_with(root),
+        _ => false,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn process_cwd(pid: u32) -> Option<PathBuf> {
+    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+}
+
+#[cfg(target_os = "macos")]
+fn process_cwd(pid: u32) -> Option<PathBuf> {
+    let output = std::process::Command::new("lsof")
+        .args(["-a", "-p", &pid.to_string(), "-d", "cwd", "-Fn"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| {
+            line.strip_prefix('n')
+                .map(|path| PathBuf::from(path.trim()))
+        })
 }

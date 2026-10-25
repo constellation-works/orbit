@@ -750,6 +750,8 @@ fn sandbox_fixture() {
     };
     let base = PathBuf::from(base);
     let owner = Node::init(&base, "owner", "TSO");
+    // Claim transport is exercised independently of owner-side landing review.
+    owner.orbit(&["config", "set", "review.timing", "off"]);
     let follower = Node::init(&base, "follower", "TSF");
     assert_eq!(
         Some(follower.home.as_os_str()),

@@ -249,6 +249,29 @@ impl ConfigStore {
         !matches!(item, toml_edit::Item::None)
     }
 
+    /// Seed an absent key with an inline explanation, preserving existing values.
+    pub(crate) fn seed_missing_value(
+        &mut self,
+        key: &str,
+        raw_value: &str,
+        comment: &str,
+    ) -> Result<bool, OrbitError> {
+        if self.is_key_set(key) {
+            return Ok(false);
+        }
+        self.set_value(key, raw_value)?;
+        let mut item = self.doc.as_item_mut();
+        for segment in key.split('.') {
+            item = item.get_mut(segment).ok_or_else(|| {
+                OrbitError::InvalidInput(format!("seeded config key '{key}' is missing"))
+            })?;
+        }
+        if let Some(value) = item.as_value_mut() {
+            value.decor_mut().set_suffix(format!(" # {comment}"));
+        }
+        Ok(true)
+    }
+
     /// Names of the `[crews.<name>]` tables this document defines, sorted.
     pub fn crew_table_names(&self) -> Vec<String> {
         let mut names = self
