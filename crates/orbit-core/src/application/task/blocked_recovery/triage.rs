@@ -15,8 +15,9 @@
 //!   past the bound is refused and recorded; an unreadable count refuses
 //!   without writing.
 //! - **propose** (decision): one comment with the quoted blocker, the
-//!   options, a recommendation and ready-to-apply replacement text. Nothing
-//!   else on the task changes.
+//!   options, a recommendation and, per option, the field it rewrites and
+//!   the ready-to-apply replacement text. Nothing else on the task changes
+//!   until an operator answers an option.
 //! - **report** (human-only): one comment naming the human action.
 //!
 //! Each records a [`BLOCKED_TASK_TRIAGED_EVENT`] in the task history, which
@@ -315,10 +316,49 @@ pub struct TriageOption {
     pub summary: String,
     /// What choosing it leads to.
     pub consequences: String,
-    /// The exact replacement text for each changed description section or
-    /// criterion, ready to apply.
+    /// The task field `replacement` rewrites. Without it an operator's
+    /// answer cannot apply the option and is refused.
+    pub target: Option<TriageTarget>,
+    /// The complete new value of the `target` field, ready to apply.
     pub replacement: String,
 }
+
+/// The task field a decision option's replacement text rewrites.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriageTarget {
+    /// The whole acceptance-criteria list, one criterion per line (a leading
+    /// `- ` or `* ` bullet is dropped).
+    AcceptanceCriteria,
+    /// The whole description.
+    Description,
+}
+
+impl TriageTarget {
+    /// The spelling a proposal carries and its comment records.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AcceptanceCriteria => "acceptance_criteria",
+            Self::Description => "description",
+        }
+    }
+
+    /// The target `value` spells, if any.
+    pub fn parse(value: &str) -> Option<Self> {
+        [Self::AcceptanceCriteria, Self::Description]
+            .into_iter()
+            .find(|target| target.as_str() == value)
+    }
+}
+
+/// Sequences the proposal comment's layout uses to find an option's parts
+/// again when an answer applies it; no option text may contain one.
+const RESERVED_PROPOSAL_SEQUENCES: [&str; 5] = [
+    "\n\nOption ",
+    "\n\nRecommended:",
+    "\nConsequences: ",
+    "\nApplies to: ",
+    "\nReplacement text:\n",
+];
 
 /// A triage decision for one task's current episode.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -774,12 +814,28 @@ pub(crate) fn validated_proposal(
         .iter()
         .map(|option| {
             Ok(TriageOption {
-                summary: triage_text(&option.summary, "options[].summary")?,
-                consequences: triage_text(&option.consequences, "options[].consequences")?,
-                replacement: triage_text(&option.replacement, "options[].replacement")?,
+                summary: proposal_field(&option.summary, "options[].summary")?,
+                consequences: proposal_field(&option.consequences, "options[].consequences")?,
+                target: option.target,
+                replacement: proposal_field(&option.replacement, "options[].replacement")?,
             })
         })
         .collect()
+}
+
+/// A proposal option text: [`triage_text`] that also leaves the proposal
+/// comment's layout unambiguous.
+fn proposal_field(value: &str, field: &str) -> Result<String, OrbitError> {
+    let text = triage_text(value, field)?;
+    match RESERVED_PROPOSAL_SEQUENCES
+        .iter()
+        .find(|reserved| text.contains(**reserved))
+    {
+        Some(reserved) => Err(OrbitError::InvalidInput(format!(
+            "`{field}` must not contain the proposal layout sequence {reserved:?}"
+        ))),
+        None => Ok(text),
+    }
 }
 
 /// `value` trimmed and redacted, refused when that leaves nothing.
@@ -807,8 +863,12 @@ pub(crate) fn quote(text: &str) -> String {
 pub(crate) fn proposal_text(options: &[TriageOption], recommended: usize) -> String {
     let mut text = String::new();
     for (index, option) in options.iter().enumerate() {
+        let applies_to = option
+            .target
+            .map(|target| format!("\nApplies to: {}", target.as_str()))
+            .unwrap_or_default();
         text.push_str(&format!(
-            "\n\nOption {}: {}\nConsequences: {}\nReplacement text:\n{}",
+            "\n\nOption {}: {}\nConsequences: {}{applies_to}\nReplacement text:\n{}",
             index + 1,
             option.summary,
             option.consequences,

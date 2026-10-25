@@ -200,9 +200,13 @@ The triager records exactly one disposition per episode through
   nothing is written. An Orbit defect with no supported recovery gets a
   friction record and a report, never a requeue.
 - **Decision** — a scope or requirements choice. `propose` writes one comment
-  quoting the blocker, with two or three options, their consequences,
-  ready-to-apply replacement text and a recommendation; nothing else on the
-  task changes.
+  quoting the blocker, with two or three options, their consequences, a
+  `target` field (`acceptance_criteria` or `description`) and the ready-to-apply
+  replacement text for it, and a recommendation; nothing else on the task
+  changes. Answering an option through the decision channel writes that
+  replacement as the field's whole new value and returns the task to
+  `backlog` in one human update; an option with no target, or one that would
+  change nothing, is refused and the task stays blocked.
 - **Human-only** — credentials or login, a named owner sign-off, a `security`
   or `security-review` tag, a run another machine executed, or an OS or
   browser-kit requirement. `report` names the human action and changes

@@ -24,7 +24,7 @@ use serde_json::{Value, json};
 use super::TaskRecordUpdateParams;
 use super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskRecords, TriageTarget};
 
 /// JSON for one request as the decision surfaces serve it: the stored
 /// record with its effective (derived) state.
@@ -258,20 +258,25 @@ impl OrbitRuntime {
                     )?;
                     return Ok(());
                 }
-                let mut consequence = "The task returns to backlog.".to_string();
-                if let Some(replacement) = self.triage_replacement_text(task_id, answer_id)? {
-                    consequence.push_str(&format!("\nReplacement text:\n{replacement}"));
-                }
+                let edit = self.triage_option_edit(task_id, answer_id)?;
+                let consequence = format!(
+                    "The task's {} is replaced and it returns to backlog.\nReplacement text:\n{}",
+                    edit.target.as_str(),
+                    edit.replacement
+                );
                 let comment = decision_comment(request, answer_id, chosen, via, note, &consequence);
-                self.update_task_as_human(
-                    task_id,
-                    TaskUpdateParams {
-                        comment: Some(comment),
-                        status: Some(TaskStatus::Backlog),
-                        ..Default::default()
-                    },
-                    actor_label.to_string(),
-                )?;
+                let mut params = TaskUpdateParams {
+                    comment: Some(comment),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                };
+                match edit.target {
+                    TriageTarget::AcceptanceCriteria => {
+                        params.acceptance_criteria = Some(edit.criteria);
+                    }
+                    TriageTarget::Description => params.description = Some(edit.replacement),
+                }
+                self.update_task_as_human(task_id, params, actor_label.to_string())?;
                 Ok(())
             }
             DecisionGate::PilotAdmission => {
@@ -333,38 +338,49 @@ impl OrbitRuntime {
         }
     }
 
-    /// The chosen option's replacement text from the triage proposal
-    /// comment on `task_id`, when `answer_id` is one of its option numbers
-    /// and the comment is still there. The request record carries only
-    /// answer ids, labels and consequences, so the ready-to-apply text is
-    /// quoted back from the proposal that raised the request.
-    fn triage_replacement_text(
-        &self,
-        task_id: &str,
-        answer_id: &str,
-    ) -> Result<Option<String>, OrbitError> {
-        let Ok(option) = answer_id.parse::<usize>() else {
-            return Ok(None);
+    /// The edit the chosen option of the triage proposal on `task_id`
+    /// makes, read back from the proposal comment that raised the request
+    /// (the request record carries only answer ids, labels and
+    /// consequences). Refuses, before anything is written, an option whose
+    /// target or replacement cannot be determined or that would leave the
+    /// task as it is: returning such work to backlog would re-admit it with
+    /// its blocker unresolved.
+    fn triage_option_edit(&self, task_id: &str, answer_id: &str) -> Result<TriageEdit, OrbitError> {
+        let refuse = |reason: &str| {
+            OrbitError::InvalidInput(format!(
+                "answer_not_applicable: option `{answer_id}` cannot be applied ({reason}); nothing was applied and the task stays blocked"
+            ))
         };
-        if option == 0 {
-            return Ok(None);
-        }
+        let option = answer_id
+            .parse::<usize>()
+            .ok()
+            .filter(|option| *option > 0)
+            .ok_or_else(|| refuse("it is not an option number"))?;
         let comments = self.get_task_comments(task_id)?;
-        let Some(proposal) = comments.iter().rev().find(|comment| {
-            comment
-                .message
-                .starts_with("blocked_task_triage disposition=decision")
-        }) else {
-            return Ok(None);
-        };
+        let proposal = comments
+            .iter()
+            .rev()
+            .find(|comment| {
+                comment
+                    .message
+                    .starts_with("blocked_task_triage disposition=decision")
+            })
+            .ok_or_else(|| refuse("the proposal comment is gone"))?;
         let marker = format!("\n\nOption {option}: ");
-        let Some(start) = proposal.message.find(&marker) else {
-            return Ok(None);
-        };
-        let section = &proposal.message[start + marker.len()..];
-        let Some((_, replacement)) = section.split_once("\nReplacement text:\n") else {
-            return Ok(None);
-        };
+        let section = proposal
+            .message
+            .find(&marker)
+            .map(|start| &proposal.message[start + marker.len()..])
+            .ok_or_else(|| refuse("the proposal comment does not list it"))?;
+        let (head, replacement) = section
+            .split_once("\nReplacement text:\n")
+            .ok_or_else(|| refuse("the proposal comment records no replacement text"))?;
+        let target = head
+            .lines()
+            .last()
+            .and_then(|line| line.strip_prefix("Applies to: "))
+            .and_then(TriageTarget::parse)
+            .ok_or_else(|| refuse("the proposal names no field its replacement rewrites"))?;
         let end = [
             "\n\nOption ",
             "\n\nRecommended:",
@@ -374,9 +390,52 @@ impl OrbitRuntime {
         .filter_map(|needle| replacement.find(needle))
         .min()
         .unwrap_or(replacement.len());
-        let text = replacement[..end].trim();
-        Ok((!text.is_empty()).then(|| text.to_string()))
+        let replacement = replacement[..end].trim();
+        if replacement.is_empty() {
+            return Err(refuse("its replacement text is empty"));
+        }
+        if replacement.contains("[REDACTED") {
+            return Err(refuse("its replacement text was redacted"));
+        }
+        let task = self.get_task(task_id)?;
+        let criteria: Vec<String> = replacement
+            .lines()
+            .map(|line| {
+                let line = line.trim();
+                line.strip_prefix("- ")
+                    .or_else(|| line.strip_prefix("* "))
+                    .unwrap_or(line)
+                    .trim()
+                    .to_string()
+            })
+            .filter(|line| !line.is_empty())
+            .collect();
+        let unchanged = match target {
+            TriageTarget::AcceptanceCriteria => criteria == task.acceptance_criteria,
+            TriageTarget::Description => replacement == task.description.trim(),
+        };
+        if unchanged {
+            return Err(refuse(&format!(
+                "its replacement leaves the task's {} unchanged",
+                target.as_str()
+            )));
+        }
+        Ok(TriageEdit {
+            target,
+            replacement: replacement.to_string(),
+            criteria,
+        })
     }
+}
+
+/// One triage option's edit to the held task.
+struct TriageEdit {
+    target: TriageTarget,
+    /// The option's replacement text as the proposal recorded it.
+    replacement: String,
+    /// `replacement` as a criteria list; what an acceptance-criteria target
+    /// writes.
+    criteria: Vec<String>,
 }
 
 /// The human comment an applied answer records beside its own effect.

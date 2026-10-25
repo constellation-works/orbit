@@ -71,7 +71,8 @@ pub use blocked_recovery::{
     BlockTriageDecision, BlockTriageRequest, BlockedNextStep, BlockedRecoveryInput,
     BlockedRecoveryTick, BlockedRecoveryView, BlockedTriageView, EpisodeDisposition,
     FinalRecoveryRecord, MAX_ACTIVE_BLOCKED_RECOVERIES, MAX_EPISODE_AGE_HOURS, TriageBasis,
-    TriageCandidacy, TriageEpisode, TriageOption, episode_disposition, triage_candidacy,
+    TriageCandidacy, TriageEpisode, TriageOption, TriageTarget, episode_disposition,
+    triage_candidacy,
 };
 pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{

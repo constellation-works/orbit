@@ -57,7 +57,7 @@ pub use next_step::BlockedNextStep;
 pub(crate) use triage::block_triaged_at;
 pub use triage::{
     BLOCKED_TASK_TRIAGED_EVENT, BlockTriageDecision, BlockTriageRequest, BlockedTriageView,
-    TriageBasis, TriageCandidacy, TriageEpisode, TriageOption, triage_candidacy,
+    TriageBasis, TriageCandidacy, TriageEpisode, TriageOption, TriageTarget, triage_candidacy,
 };
 pub(in crate::application::task) use triage::{
     proposal_text, quote, triage_text, validated_proposal,

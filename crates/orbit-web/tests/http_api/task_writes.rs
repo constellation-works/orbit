@@ -522,6 +522,22 @@ fn dashboard_answers_a_decision_request_as_human() {
                     },
                 )
                 .expect("record the decision request");
+            // The proposal comment that raised the request carries the option's
+            // target and replacement, which an answer applies.
+            fixture.runtime
+            .force_update_task_with_identity(
+                &id,
+                orbit_core::application::task::TaskUpdateParams {
+                    comment: Some(
+                        "blocked_task_triage disposition=decision outcome=proposed\n\nOption 1: Drop criterion 2\nConsequences: the old API stays retired\nApplies to: acceptance_criteria\nReplacement text:\n- Recovered.\n\nRecommended: option 1 (Drop criterion 2)"
+                            .to_string(),
+                    ),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .expect("record the proposal comment");
 
             let server = fixture.server(true);
             let listed = json_ok(server.get(&format!("/api/decisions{WORKSPACE}")));

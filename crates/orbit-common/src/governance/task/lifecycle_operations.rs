@@ -337,7 +337,7 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
             mcp_only(
                 "options",
                 ParamType::Array,
-                "propose: two or three {summary, consequences, replacement} objects; replacement is the exact text for each changed description section or criterion",
+                "propose: two or three {summary, consequences, target, replacement} objects; target is `acceptance_criteria` or `description`, and replacement is that field's complete new value (one criterion per line), which an operator's answer applies; without a target the option cannot be applied",
             ),
             mcp_only(
                 "recommended",

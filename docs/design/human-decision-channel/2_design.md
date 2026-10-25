@@ -81,7 +81,12 @@ per request:
   `dismiss` (leave blocked, stop asking for this episode). Answering an option
   applies that option's ready-to-apply replacement text and returns the task to
   `backlog` — exactly the manual steps the triage comment instructs today — as one
-  human-attributed update.
+  human-attributed update. Each option carries a `target` (`acceptance_criteria`
+  or `description`) recorded in the proposal comment beside its replacement; the
+  replacement is that field's complete new value. An option with no resolvable
+  target, an empty or redacted replacement, or a replacement equal to the current
+  field is refused (`answer_not_applicable`) before anything is written, so the
+  task stays blocked and the request open.
 - **Block triage `report` / final-recovery escalation:** answers are `done` (the
   `human_action:` the readout carries,
   `crates/orbit-core/src/application/task/blocked_recovery/readout.rs`, has been
