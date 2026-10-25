@@ -257,6 +257,7 @@ const chipClasses = (chip, kind) => `host-resource provider-usage ${kind} ${chip
 const ui = {
   key: null, pinned: false, anchor: null, host: null, signature: '', views: new Map(), chips: new Map(),
   pointerInside: false, openTimer: null, closeTimer: null, suppressFocus: false, bound: false, pinButton: null,
+  focusedChip: null,
 };
 
 function dialogNode() {
@@ -491,8 +492,15 @@ function bindChip(node, key) {
     clearTimeout(ui.openTimer);
     if (ui.key && !ui.pinned) scheduleClose();
   });
-  on(node, 'focus', () => { if (!ui.suppressFocus) openUsage(key, node, false); });
+  on(node, 'focus', () => {
+    ui.focusedChip = node;
+    if (!ui.suppressFocus) openUsage(key, node, false);
+  });
   on(node, 'blur', event => {
+    // A breakpoint hides a focused chip and blurs it; that is not the user leaving,
+    // and the resize handler moves focus on.
+    if (node.getClientRects?.().length === 0) return;
+    if (ui.focusedChip === node) ui.focusedChip = null;
     if (ui.key !== key || ui.pinned || ui.pointerInside) return;
     if (dialogNode().contains?.(event?.relatedTarget)) return;
     closeUsage();
@@ -539,11 +547,19 @@ function bindOnce() {
   });
   const reposition = () => { if (ui.key) placeDialog(); };
   on(window, 'resize', () => {
-    if (!ui.key) return;
-    // A breakpoint can swap the chip that opened it for another.
-    const anchor = visibleChip(ui.key);
-    if (!anchor) closeUsage();
-    else { ui.anchor = anchor; placeDialog(); syncExpanded(); }
+    // A breakpoint can swap the chip that opened the dialog for another, and it
+    // hides the chip that had focus. The browser may already have moved focus to
+    // the body by now, so the chip that had focus is remembered, not read back.
+    const lost = ui.focusedChip;
+    const active = document.activeElement;
+    const focusLost = !!lost?.isConnected && (active === lost || active === document.body);
+    if (ui.key) {
+      const anchor = visibleChip(ui.key);
+      if (!anchor) closeUsage();
+      else { ui.anchor = anchor; placeDialog(); syncExpanded(); }
+    }
+    const next = focusLost ? visibleChip(lost.dataset.usageKey) || visibleChip(ALL_KEY) : null;
+    if (next && next !== lost) focusQuietly(next);
   });
   window.addEventListener?.('scroll', reposition, true);
 }
