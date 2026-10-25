@@ -53,15 +53,43 @@ function openDrawer(row, context, lockGlobal) {
     error: null, pending: false, workspace: getWorkspace(), lockGlobal: !!(lockGlobal || row.global_only) };
   context.rerender?.();
 }
-function parseDraft(row, text) {
+function shellQuote(text) {
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+function shellWord(text) {
+  return /^[A-Za-z0-9_.\/:@%+=,-]+$/.test(text) ? text : shellQuote(text);
+}
+
+export function parseDraft(row, text) {
   const t = row.value_type || '';
   if (t === 'bool') return text === 'true';
-  if (t === 'integer' || t === 'number') { const n = Number(text); return n; }
-  if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) return text.split(/[\n,]/).map((s) => s.trim()).filter(Boolean);
+  if (t === 'integer') {
+    const trimmed = text.trim();
+    if (!/^-?\d+$/.test(trimmed)) throw new Error(`${row.key} takes a whole number`);
+    return Number(trimmed);
+  }
+  if (t === 'number') {
+    const trimmed = text.trim();
+    const n = Number(trimmed);
+    if (trimmed === '' || Number.isNaN(n)) throw new Error(`${row.key} takes a number`);
+    return n;
+  }
+  if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) return text.split('\n').map((s) => s.trim()).filter(Boolean);
   return text;
 }
-function cliCmd(row, scope, text) {
-  const v = text.includes(' ') || text.includes('"') ? `'${text.replace(/'/g, "'\\''")}'` : (text || '…');
+export function cliCmd(row, scope, text) {
+  const t = row.value_type || '';
+  let v;
+  if (t === 'bool' || t === 'integer') {
+    v = text.trim() === '' ? "''" : shellWord(text.trim());
+  } else if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) {
+    const entries = text.split('\n').map((s) => s.trim()).filter(Boolean);
+    v = shellQuote(`[${entries.map((s) => JSON.stringify(s)).join(', ')}]`);
+  } else if (/^(true|false|[+-]?(\d|inf|nan).*|[[{"'].*)$/i.test(text) || text === '') {
+    v = shellQuote(JSON.stringify(text));
+  } else {
+    v = shellWord(text);
+  }
   return `orbit config set ${row.key} ${v}${scope === 'global' ? ' --global' : ''}`;
 }
 
