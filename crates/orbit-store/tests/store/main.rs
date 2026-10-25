@@ -209,6 +209,7 @@ include!("incident_cause.rs");
 include!("incident_performance.rs");
 include!("invocation_workspace_scope.rs");
 include!("job_run_states.rs");
+include!("job_run_tasks.rs");
 include!("migration_freeze.rs");
 include!("provider_ledger.rs");
 include!("provider_limit_observations.rs");
