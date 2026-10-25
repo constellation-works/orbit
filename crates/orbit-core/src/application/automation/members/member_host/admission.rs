@@ -108,6 +108,38 @@ impl Host<'_> {
             return Ok(MemberAdmission::Admit);
         }
 
+        if self.trigger.kind == StateTriggerKind::DecisionRequested {
+            use orbit_types::task::DecisionRequestState;
+            for id in &member.task_ids {
+                let request = match self.runtime.get_task(id) {
+                    Ok(_) => match self.decision_request_of(member)? {
+                        Some(request) => request,
+                        None => {
+                            return Ok(MemberAdmission::Retire("request_superseded".into()));
+                        }
+                    },
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
+                    Err(error) => return Err(error.into()),
+                };
+                match request.state {
+                    DecisionRequestState::Open => {}
+                    DecisionRequestState::Answered => {
+                        return Ok(MemberAdmission::Retire("request_answered".into()));
+                    }
+                    DecisionRequestState::Superseded => {
+                        return Ok(MemberAdmission::Retire("request_superseded".into()));
+                    }
+                    DecisionRequestState::Expired => {
+                        return Ok(MemberAdmission::Retire("request_expired".into()));
+                    }
+                }
+            }
+            return Ok(MemberAdmission::Admit);
+        }
+
         if self.is_escalation_triage() {
             let active = preparation::active_escalation_triages(self.runtime)?;
             for id in &member.task_ids {

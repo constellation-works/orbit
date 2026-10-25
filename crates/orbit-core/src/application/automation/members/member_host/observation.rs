@@ -63,7 +63,9 @@ impl Host<'_> {
             StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
                 preparation::active_escalation_triages(self.runtime)?
             }
-            StateTriggerKind::ExecutionFailed => BTreeMap::new(),
+            StateTriggerKind::ExecutionFailed | StateTriggerKind::DecisionRequested => {
+                BTreeMap::new()
+            }
         };
         // One scan for the page. Admission of a member retained from an
         // earlier page reads this cache instead of scanning again.
@@ -181,6 +183,33 @@ impl Host<'_> {
                         changed_at: now,
                         crew: bundle_crew(task.crew.as_deref()),
                     });
+                }
+                StateTriggerKind::DecisionRequested => {
+                    // One member per open request, keyed by the task and
+                    // fingerprinted by the request id: the id is raised
+                    // from the task, its binding and its raise time, so
+                    // the same binding notified once never refires, and a
+                    // fresh request for a later binding is a new member.
+                    for request in self.runtime.get_task_decision_requests(&task.id)? {
+                        if request.state != orbit_types::task::DecisionRequestState::Open {
+                            continue;
+                        }
+                        candidates.push(StateMember {
+                            key: task.id.clone(),
+                            task_ids: vec![task.id.clone()],
+                            evidence: json!({
+                                "task_id": task.id,
+                                "request_id": request.id,
+                                "gate": request.gate.as_str(),
+                                "binding": request.binding.key(),
+                            }),
+                            fingerprint: request.id.clone(),
+                            source: source.clone(),
+                            first_seen: now,
+                            changed_at: now,
+                            crew: bundle_crew(task.crew.as_deref()),
+                        });
+                    }
                 }
                 StateTriggerKind::ExecutionFailed => {
                     match super::super::super::incidents::observe(self.runtime, &task) {

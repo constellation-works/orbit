@@ -65,7 +65,8 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::PreparationEligible
             | StateTriggerKind::FindingUnverified
             | StateTriggerKind::PilotWarningsHeld
-            | StateTriggerKind::BlockEscalated => None,
+            | StateTriggerKind::BlockEscalated
+            | StateTriggerKind::DecisionRequested => None,
         };
 
         Ok(keys
@@ -117,6 +118,7 @@ impl MemberHost for Host<'_> {
             StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
                 "escalation_triage"
             }
+            StateTriggerKind::DecisionRequested => "decision_request",
         };
 
         // Every batch member travels as an explicit task id. Finding
@@ -266,6 +268,15 @@ impl Host<'_> {
             StateTriggerKind::FindingUnverified => VERIFIABLE_STATUSES.to_vec(),
             StateTriggerKind::PilotWarningsHeld => vec![TaskStatus::Proposed],
             StateTriggerKind::BlockEscalated => vec![TaskStatus::Blocked],
+            // An open request can hold a task at any gate: blocked
+            // (block triage), backlog (pilot admission), proposed or
+            // review (approvals).
+            StateTriggerKind::DecisionRequested => vec![
+                TaskStatus::Blocked,
+                TaskStatus::Backlog,
+                TaskStatus::Proposed,
+                TaskStatus::Review,
+            ],
         }
     }
 
@@ -282,7 +293,8 @@ impl Host<'_> {
             StateTriggerKind::BlockEscalated => Some("block"),
             StateTriggerKind::PreparationEligible
             | StateTriggerKind::ExecutionFailed
-            | StateTriggerKind::FindingUnverified => None,
+            | StateTriggerKind::FindingUnverified
+            | StateTriggerKind::DecisionRequested => None,
         }
     }
 
@@ -383,6 +395,102 @@ impl Host<'_> {
                 }
                 Escalation::Gone(reason) => {
                     superseded.insert(member.key.clone(), reason);
+                }
+            }
+        }
+        Ok(MemberOutcome::Settled(MemberBatchEvidence {
+            action_id: action_id.into(),
+            attempt_id: attempt.id.clone(),
+            applied,
+            failed,
+            superseded,
+        }))
+    }
+
+    /// The effective decision request `member` was raised for, by its
+    /// fingerprint (the request id), or `None` when that request no longer
+    /// reads on the task at all.
+    pub(super) fn decision_request_of(
+        &self,
+        member: &StateMember,
+    ) -> Result<Option<orbit_types::task::DecisionRequest>, AutomationError> {
+        let [task_id] = member.task_ids.as_slice() else {
+            return Ok(None);
+        };
+        Ok(self
+            .runtime
+            .get_task_decision_requests(task_id)?
+            .into_iter()
+            .find(|request| request.id == member.fingerprint))
+    }
+
+    /// Settle a decision-request attempt from the request's effective
+    /// state. A request that left `open` (answered, superseded or expired)
+    /// releases its member as superseded, whether or not the run finished;
+    /// a run that stopped while its request is still open has done the
+    /// notification it was fired for, so its member is applied at the
+    /// request's fingerprint and the same request never fires again.
+    pub(super) fn decision_outcome(
+        &self,
+        attempt: &MemberAttempt,
+        action_id: &str,
+        stopped: bool,
+    ) -> Result<MemberOutcome, AutomationError> {
+        use orbit_types::task::DecisionRequestState;
+        let mut applied = Vec::new();
+        let mut failed = BTreeMap::new();
+        let mut superseded = BTreeMap::new();
+        for member in attempt.members() {
+            let [task_id] = member.task_ids.as_slice() else {
+                failed.insert(member.key.clone(), "malformed_member".into());
+                continue;
+            };
+            match self.runtime.get_task(task_id) {
+                Ok(_) => {}
+                Err(OrbitError::NotFound {
+                    kind: NotFoundKind::Task,
+                    ..
+                }) => {
+                    superseded.insert(member.key.clone(), "task_deleted".into());
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
+            let request = match self.decision_request_of(member)? {
+                Some(request) => request,
+                None => {
+                    superseded.insert(member.key.clone(), "request_superseded".into());
+                    continue;
+                }
+            };
+            match request.state {
+                DecisionRequestState::Answered => {
+                    superseded.insert(member.key.clone(), "request_answered".into());
+                }
+                DecisionRequestState::Superseded => {
+                    superseded.insert(member.key.clone(), "request_superseded".into());
+                }
+                DecisionRequestState::Expired => {
+                    superseded.insert(member.key.clone(), "request_expired".into());
+                }
+                DecisionRequestState::Open => {
+                    if !stopped {
+                        return Ok(MemberOutcome::Pending);
+                    }
+                    applied.push(MemberEvidence {
+                        action_id: action_id.into(),
+                        attempt_id: attempt.id.clone(),
+                        member_key: member.key.clone(),
+                        input_fingerprint: member.fingerprint.clone(),
+                        resulting_fingerprint: member.fingerprint.clone(),
+                        ready: true,
+                        result: json!({
+                            "task_id": task_id,
+                            "request_id": request.id,
+                            "gate": request.gate.as_str(),
+                            "binding": request.binding.key(),
+                        }),
+                    });
                 }
             }
         }

@@ -28,6 +28,11 @@ pub enum StateTriggerKind {
     /// recovery escalated it, or it has no decision past the backstop's age
     /// limit, and nobody outside Orbit's automation touched it since.
     BlockEscalated,
+    /// A task with an open decision request that has not yet been notified:
+    /// one member per open request, fingerprinted by that request, so each
+    /// request (and the binding it was raised against) is notified once
+    /// and the member settles when the request leaves `open`.
+    DecisionRequested,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -367,6 +372,10 @@ impl StateTrigger {
             StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
                 "escalation_triage_pipeline"
             }
+            // The notification job the decision channel's transport plugin
+            // ships in a later slice; a state routine on this kind targets
+            // that job by this canonical name.
+            StateTriggerKind::DecisionRequested => "decision_request_pipeline",
         }
     }
 }
