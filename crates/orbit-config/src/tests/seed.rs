@@ -33,18 +33,7 @@ fn lane(config: &Table, key: &str) -> Option<String> {
 
 #[test]
 fn every_family_combination_seeds_valid_defaults_pools_and_enabled_flags() {
-    let families = [
-        "claude",
-        "codex",
-        "antigravity",
-        "gemini",
-        "grok",
-        "copilot",
-        "cursor",
-        "pi",
-        "opencode",
-        "muse",
-    ];
+    let families = ["claude", "codex", "antigravity", "grok", "copilot", "muse"];
     for mask in 0u32..(1 << families.len()) {
         let detected = families
             .iter()
@@ -85,9 +74,8 @@ fn every_family_combination_seeds_valid_defaults_pools_and_enabled_flags() {
                 "crew `{name}` has a model"
             );
         }
-        // A lane appended later must not move a host's default crew or pools:
-        // with any earlier family detected, adding `muse` changes neither.
-        // [ORB-16577]
+        // A lane appended later must not move a host's default crew: with any
+        // earlier family detected, adding `muse` keeps it. [ORB-16577]
         if detected.contains(&"muse") && detected.len() > 1 {
             let without = ConfigSeed::from_families(detected.iter().filter(|f| **f != "muse"));
             assert_eq!(
@@ -95,14 +83,28 @@ fn every_family_combination_seeds_valid_defaults_pools_and_enabled_flags() {
                 without.recommended_default_crew(),
                 "families {detected:?}: detecting muse moved the default crew"
             );
-            assert_eq!(
-                seed.complexity_pools(),
-                without.complexity_pools(),
-                "families {detected:?}: detecting muse changed the complexity pools"
-            );
         }
-        for (key, pool) in POOL_KEYS.into_iter().zip(pools(&config)) {
-            let canonical = crate::canonical_crew_pool(&pool, &crews, key)
+        let purposes = config["workflow"]["purpose_crews"]
+            .as_table()
+            .expect("every seed writes the purpose pools");
+        let purpose_pools = purposes.keys().map(|purpose| {
+            let pool = purposes[purpose]
+                .as_array()
+                .expect("purpose pool is a list")
+                .iter()
+                .map(|entry| entry.as_str().expect("pool entry is a string").to_string())
+                .collect::<Vec<_>>();
+            (format!("purpose_crews.{purpose}"), pool)
+        });
+        let complexity_pools = POOL_KEYS
+            .into_iter()
+            .map(str::to_string)
+            .zip(pools(&config));
+        for (key, pool) in complexity_pools.chain(purpose_pools) {
+            if pool.is_empty() {
+                continue;
+            }
+            let canonical = crate::canonical_crew_pool(&pool, &crews, &key)
                 .expect("rendered pool parses and references defined crews");
             for entry in canonical.entries {
                 assert!(

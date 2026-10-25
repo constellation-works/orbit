@@ -236,10 +236,10 @@ tags = ["implementation", "review"]
 provider = "claude"
 model = "opus"
 
-[crews.gemini]
+[crews.argon]
 enabled = false
-provider = "gemini"
-model = "gemini-3.8-flash"
+provider = "antigravity"
+model = "gemini-4-argon-high"
 
 [workflow]
 base_branch = "main"
@@ -277,7 +277,7 @@ whose provider CLI it detects and `enabled = false` on the rest. To turn a
 provider on later:
 
 ```bash
-orbit config set crews.gemini.enabled true
+orbit config set crews.argon.enabled true
 ```
 
 A crew table without `enabled` is enabled. A disabled crew:

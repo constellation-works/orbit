@@ -422,7 +422,8 @@ Only the global file, and only when it is absent (or under `--force`):
   | codex only | `["luna"]` | `["sol"]` | `["sol"]` | `["astra"]` |
   | claude only | `["haiku"]` | `["sonnet"]` | `["opus"]` | `["opus"]` |
 
-  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`, and a Google CLI's crew to `low` (`antigravity` when `agy` is detected, otherwise `gemini`). When `agy` is detected, `argon` also joins `hard`. Other families leave the pools `[]`, which route to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
+  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full` to `low`, `medium` and `hard`. With codex, claude, grok, `agy` and `muse` all detected that gives `low = ["haiku", "luna", "gemini-flash", "muse-spark"]`, `medium = ["sol", "sonnet", "grok", "muse-wonder"]`, `hard = ["opus", "argon", "muse-wonder-full"]` and `xhard = ["opus", "astra"]`. Copilot leaves the pools as they are, and an empty pool routes to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
+- every [purpose pool](#purpose-crew-pools), so no route is an invisible default: `task_pilot` and `auto_fix` copy `low`, `failure_recovery` and `review` copy `medium`, and `final_recovery` names whichever of `sol`, `grok` and `muse-wonder` are enabled (else `opus`). `pre_landing_review`, `baseline_red_repair`, `sweep_tasks` and `explorer` are written as `[]`, each with a comment naming the route that keeps.
 
 Interactive init asks for the default crew by name, offering only enabled crews. It no longer writes or asks for `workflow.system_crew`: system work draws from the pools. With no supported CLI, every crew is written disabled and `default_crew` stays unset, so it resolves to the disabled `opus` and agent dispatch refuses until you run `orbit config set crews.<name>.enabled true`; deterministic jobs such as store retention still run. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
 
@@ -848,26 +849,22 @@ effort = "high"
 description = "Systems implementation"
 tags = ["implementation", "review"]
 
-[crews.gemini]
+[crews.argon]
 enabled = false
-model = "gemini-3.8-flash"
-provider = "gemini"
+model = "gemini-4-argon-high"
+provider = "antigravity"
 ```
 
-**Built-in crews**, in init's family preference order. A config with no `[crews]` table uses the full set. Existing explicit model pins are kept as written.
+**Built-in crews**, in init's family preference order. A config with no `[crews]` table uses the full set. Existing explicit model pins are kept as written. The legacy Gemini CLI, Cursor, Pi and OpenCode lanes have no built-in crew: define one under `[crews.<name>]` to use them.
 
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
 | `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`fable`) | `opus` |
 | `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `luna` (`gpt-6-luna`) | `astra` |
-| `antigravity` | `agy` | `antigravity` (`gemini-3.8-flash-high`), `argon` (`gemini-4-argon-high`) | `antigravity` |
-| `gemini` | `gemini` | `gemini` (`gemini-3.8-flash`) | `gemini` |
+| `antigravity` | `agy` | `gemini-flash` (`gemini-3.8-flash-high`), `argon` (`gemini-4-argon-high`) | `gemini-flash` |
 | `grok` | `grok` | `grok` (`grok-4.7`) | `grok` |
 | `copilot` | `copilot` | `copilot` (`claude-sonnet-5`) | `copilot` |
-| `cursor` | `cursor-agent` | `cursor` (`gpt-5`) | `cursor` |
-| `pi` | `pi` | `pi` (`sonnet`) | `pi` |
-| `opencode` | `opencode` | `opencode` (`anthropic/claude-sonnet-4-5`) | `opencode` |
-| `muse` | `muse` | `muse` (`muse-spark-1.3`) | `muse` |
+| `muse` | `muse` | `muse-spark` (`muse-spark-1.3`), `muse-wonder` (`muse-wonder-1.0`), `muse-wonder-full` (`muse-wonder-full-1.0`) | `muse-spark` |
 
 **Reasoning effort.** Choose capability with the model, then tune `effort` within it.
 
@@ -887,7 +884,7 @@ An unsupported `effort` (`max` on Grok, `effort = "hard"`) is ignored for that c
 ```bash
 orbit config set crews.sol.effort high
 orbit config get crews.sol.effort
-orbit config set crews.gemini.enabled true
+orbit config set crews.argon.enabled true
 ```
 
 `config set` refuses invalid values, unsupported provider/model combinations and misspelled fields. It cannot create a crew: add a `[crews.<name>]` table with `model` and `provider` first. `orbit.workspace.list` with `include: ["crews"]` returns each checkout's effective normalized crews with `enabled` (schema version 3), or `crews_error` when its config cannot be read.
@@ -1141,7 +1138,7 @@ Orbit does not write OpenCode's `opencode.json` MCP config and `orbit mcp init` 
 
 | | |
 |---|---|
-| Install | `~/.local/bin/muse`, a launcher that execs `~/.local/bin/muse-bin-<version>`; check with `muse --version`. Init detects `muse` on `PATH` and enables the `muse` crew. Orbit sets `MUSE_NO_AUTO_UPDATE=1` and `MUSE_LOGIN=0` for every run (an outer value cannot override them), so a run never swaps the binary under running work or starts a device login; upgrade with the launcher yourself. |
+| Install | `~/.local/bin/muse`, a launcher that execs `~/.local/bin/muse-bin-<version>`; check with `muse --version`. Init detects `muse` on `PATH` and enables the `muse-spark`, `muse-wonder` and `muse-wonder-full` crews. Orbit sets `MUSE_NO_AUTO_UPDATE=1` and `MUSE_LOGIN=0` for every run (an outer value cannot override them), so a run never swaps the binary under running work or starts a device login; upgrade with the launcher yourself. |
 | Routing | The shipped asset sets no `host_os`: Muse runs on macOS and Linux, so a muse crew is admitted on either host and the seeded sandbox is translated per host (`macos-sandbox-exec` on macOS, `linux-bwrap` on Linux). Native Windows is not an Orbit runtime (ORB-13857), so a Windows host still has no runnable Muse lane through the normal executor/sandbox availability path. |
 | Auth | `muse login` (Meta account, browser device code) once, outside Orbit. The login writes the file `auth.json` under the config root (`$XDG_CONFIG_HOME/muse`, else `~/.config/muse`), and on macOS `muse exec` also reads the login keychain, so Muse gets the read-only `~/Library/Keychains` carve-out; without it a valid login fails with `missing meta credentials`. Or `pass = ["META_API_KEY"]`, which Muse prefers; `muse auth set --api-key-stdin` also works. Orbit never logs in or forwards `META_API_KEY` unless `pass` names it. |
 | Model | A catalog id (`muse-spark-1.3`); `muse model-profile show <model> [--effort <tier>]` resolves one. `effort` renders as `--reasoning-effort`; Muse accepts `none` … `ultra`, which covers every Orbit effort, and any other value is refused at config load. |

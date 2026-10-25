@@ -227,7 +227,7 @@ substitution. Config still loads; `orbit doctor` warns when a lane key names a
 disabled crew. Enable one with:
 
 ```bash
-orbit config set crews.gemini.enabled true
+orbit config set crews.argon.enabled true
 ```
 
 A crew can run on its own provider account through `env`, a list of variables

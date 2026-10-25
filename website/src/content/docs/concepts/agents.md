@@ -357,9 +357,9 @@ model = "gpt-6.1-sol"
 <div class="ose-snippet">
 
 <pre class="ose-code"><code>[workflow]
-default_crew = "antigravity"
+default_crew = "gemini-flash"
 
-[crews.antigravity]
+[crews.gemini-flash]
 provider = "antigravity"
 model = "gemini-3.8-flash-high"
 <span class="ose-eff" data-effort="low">effort = "low"
