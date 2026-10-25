@@ -219,6 +219,16 @@ impl OrbitRuntime {
         &self,
         id: &str,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
+        self.settle_externally_merged_task_as(id, None)
+    }
+
+    /// Like [`Self::settle_externally_merged_task`], recording `actor` in task
+    /// history instead of the system label (the dashboard passes its own label).
+    pub fn settle_externally_merged_task_as(
+        &self,
+        id: &str,
+        actor: Option<&str>,
+    ) -> Result<ExternalMergeSettlement, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let carried = self.live_leaf_task_ids()?;
         let task = self.get_task(id)?;
@@ -274,7 +284,7 @@ impl OrbitRuntime {
             };
             return Err(refused(id, &reason));
         };
-        self.write_settlement(&candidate, &landing)
+        self.write_settlement_as(&candidate, &landing, actor)
     }
 
     /// `task` as a settlement candidate, or why it is not one.
@@ -528,11 +538,20 @@ impl OrbitRuntime {
         candidate: &Candidate,
         landing: &MergedPullRequest,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
+        self.write_settlement_as(candidate, landing, None)
+    }
+
+    fn write_settlement_as(
+        &self,
+        candidate: &Candidate,
+        landing: &MergedPullRequest,
+        actor: Option<&str>,
+    ) -> Result<ExternalMergeSettlement, OrbitError> {
         match &candidate.revoked {
             Some(revoked) => {
                 self.write_revoked_handoff_settlement(&candidate.task, revoked, landing)
             }
-            None => self.write_external_merge_settlement(&candidate.task, landing),
+            None => self.write_external_merge_settlement_as(&candidate.task, landing, actor),
         }
     }
 
@@ -604,11 +623,13 @@ impl OrbitRuntime {
 
     /// Write `observed` to `done` from `landing`, re-checking under the task
     /// lock that it has not moved and that nothing of it went live since.
-    fn write_external_merge_settlement(
+    fn write_external_merge_settlement_as(
         &self,
         observed: &Task,
         landing: &MergedPullRequest,
+        actor: Option<&str>,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
+        let history_actor = actor.unwrap_or(SYSTEM_ACTOR_LABEL).to_string();
         let id = observed.id.as_str();
         let number = landing.pull.number;
         let (landed, note) = landing_note(landing);
@@ -645,7 +666,7 @@ impl OrbitRuntime {
                 let updated = self.stores().task_records().update(
                     id,
                     TaskRecordUpdateParams {
-                        actor: SYSTEM_ACTOR_LABEL.to_string(),
+                        actor: history_actor.clone(),
                         status: Some(TaskStatus::Done),
                         status_event: Some(EXTERNAL_MERGE_SETTLED_EVENT.to_string()),
                         status_note: Some(note.clone()),
