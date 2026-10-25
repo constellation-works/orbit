@@ -4715,6 +4715,7 @@ function appendFixPrControls(actions, task, detail, context, mutable) {
     title: reason || `Hand pull request #${data.pr_number || taskPullRequestNumber(task)} back to its delivery to repair ${blocker}. The repair pushes to the same branch and never merges a pull request its delivery was not allowed to merge`,
   });
   btn.disabled = Boolean(reason);
+  btn.dataset.fixPrSignature = fixPrSignature(task);
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     runFixPr(task, detail, btn, context, data);
@@ -4725,9 +4726,26 @@ function appendFixPrControls(actions, task, detail, context, mutable) {
     const note = feedback.ok
       ? el("div", { class: "task-action-notice", text: feedback.text, role: "status" })
       : actionErrorNode(feedback.text);
+    note.classList.add("fix-pr-feedback");
     note.style.flexBasis = "100%";
     actions.appendChild(note);
   }
+}
+
+// Update only the repair action and its feedback: the surrounding detail may
+// hold an editor whose text, selection and focus must survive the response.
+function refreshFixPrControls(wrap, task, context) {
+  const button = wrap.querySelector(".action.fix-pr");
+  if (!button) return;
+  fixPrState(task, context);
+  if (button.dataset.fixPrSignature === fixPrSignature(task)) return;
+  const detail = button.closest(".task-detail");
+  if (!detail) return;
+  const actions = button.parentNode;
+  for (const note of actions.querySelectorAll(".fix-pr-feedback")) note.remove();
+  const replacement = document.createDocumentFragment();
+  appendFixPrControls(replacement, task, detail, context, canMutateTask(task));
+  button.replaceWith(replacement);
 }
 
 function fixPrSignature(task) {
@@ -4735,7 +4753,7 @@ function fixPrSignature(task) {
   const entry = fixPrReadiness.get(key);
   const state = entry ? `${entry.pending}|${entry.error}|${JSON.stringify(entry.data)}` : "";
   const feedback = fixPrFeedback.get(key);
-  return `${state}|${feedback ? feedback.text : ""}`;
+  return `${state}|${feedback ? `${feedback.ok}|${feedback.text}` : ""}`;
 }
 
 function showFixPrFeedback(key, feedback, context) {
@@ -4758,18 +4776,25 @@ async function runFixPr(task, detail, btnNode, context, readiness) {
   fixPrFeedback.delete(key);
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
-  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  const controls = Array.from(detail.querySelectorAll(".action"), button => ({ button, disabled: button.disabled }));
+  for (const { button } of controls) button.disabled = true;
   btnNode.innerHTML = `<span class="spinner"></span>wait`;
+  const restoreControls = () => {
+    for (const { button, disabled } of controls) button.disabled = disabled;
+    btnNode.textContent = "fix PR";
+  };
   let result;
   try {
     result = await postJson(requestPath, {});
   } catch (error) {
     if (!visit.isCurrent()) return;
+    restoreControls();
     fixPrReadiness.delete(key);
     showFixPrFeedback(key, { ok: false, text: `fix PR refused: ${error.message || String(error)}` }, context);
     return;
   }
   if (!visit.isCurrent()) return;
+  restoreControls();
   fixPrReadiness.delete(key);
   const runId = result && result.resumed_run_id ? String(result.resumed_run_id) : "";
   showFixPrFeedback(key, { ok: true, text: `Repair of pull request #${number} started${runId ? ` in run ${runId}` : ""}` }, context);
@@ -4932,6 +4957,7 @@ function showRejectForm(task, detail, actions, context) {
     e.stopPropagation();
     delete detail.dataset.draft;
     form.replaceWith(actions);
+    refreshFixPrControls(detail, task, context);
     restoreActionFocus(actions, ".action.reject");
   });
   buttons.appendChild(submit);
@@ -5090,6 +5116,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
     if (note) note.textContent = osReadoutNote(task);
   }
   refreshDraftCrewControl(wrap, task, context);
+  refreshFixPrControls(wrap, task, context);
   if (Array.isArray(readinessTask.context_files)) {
     const count = wrap.querySelector(`#detail-${task.id}-tab-context_files .detail-tab-count`);
     if (count) count.textContent = String(readinessTask.context_files.length);
@@ -5153,7 +5180,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${ptask.id}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}`;
   return wrap;
 }
 
