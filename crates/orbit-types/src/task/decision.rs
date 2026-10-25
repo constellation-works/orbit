@@ -15,7 +15,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::{ContextFilesWidening, RegressionRiskMarks, TaskHistoryEntry, TaskStatus};
+use super::{ContextFilesWidening, RegressionRiskMarks, TagsChanged, TaskHistoryEntry, TaskStatus};
 use crate::workflow::{FlakyValidation, HeldCandidate, KnownRedValidation};
 
 /// History event the final-recovery applier records its decision on.
@@ -75,6 +75,9 @@ pub enum TaskDecision {
     /// Code scanning alert evidence a per-alert sweep task was filed from,
     /// recorded on its `created` event.
     CodeScanningAlert(CodeScanningAlertEvidence),
+    /// The tag lists before and after a write that changed them, recorded
+    /// on the `tags_changed` event.
+    TagsChanged(TagsChanged),
 }
 
 /// Durable identity and payload binding of an applied desktop mutation.

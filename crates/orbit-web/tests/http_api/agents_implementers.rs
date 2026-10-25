@@ -10,7 +10,9 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_types::task::{RegressionEscape, RegressionNature, TaskComplexity};
 use serde_json::{Value, json};
 
-use super::agents::{Owned, WS, add, append, as_f64, comment, implementation_run, regression};
+use super::agents::{
+    Owned, WS, add, append, as_f64, comment, implementation_run, regression, retag,
+};
 use super::support::{Fixture, isolated, json_ok};
 
 fn row<'a>(card: &'a Value, crew: &str) -> &'a Value {
@@ -364,7 +366,7 @@ fn by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean() {
                             description: "by-type fixture".into(),
                             complexity: TaskComplexity::Low,
                             tags: if tagged {
-                                vec!["no-diff-expected".to_string()]
+                                vec!["audit-work".to_string()]
                             } else {
                                 Vec::new()
                             },
@@ -394,7 +396,7 @@ fn by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean() {
             }
             let types = vec![CrewPerformanceType {
                 name: "review".into(),
-                tags: vec!["no-diff-expected".into()],
+                tags: vec!["audit-work".into()],
                 paths: Vec::new(),
             }];
             let facts = fixture.runtime.agent_scan().unwrap();
@@ -432,6 +434,166 @@ fn by_type_cells_classify_n_and_shrink_empty_cells_to_the_crew_mean() {
                     .all(|cell| cell["type"] == "other"),
                 "{bare}"
             );
+        },
+    );
+}
+
+/// One landed task for `crew` with `tags`, its attempt three hours ago.
+fn landed_with_tags(fixture: &Fixture, run: &str, crew: &str, tags: Vec<String>) -> String {
+    let now = Utc::now();
+    let start = now - Duration::hours(3);
+    let id = fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: "no-diff exclusion fixture".into(),
+            description: "no-diff exclusion fixture".into(),
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Done),
+            tags,
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string();
+    implementation_run(
+        fixture,
+        run,
+        &id,
+        crew,
+        Some("model"),
+        start,
+        now - Duration::hours(1),
+    );
+    append(
+        fixture,
+        &id,
+        start,
+        "started",
+        None,
+        Some(TaskStatus::InProgress),
+    );
+    append(
+        fixture,
+        &id,
+        now - Duration::hours(1),
+        "status_changed",
+        None,
+        Some(TaskStatus::Done),
+    );
+    id
+}
+
+#[test]
+fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outcomes() {
+    isolated(
+        "agents_implementers::implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outcomes",
+        || {
+            use orbit_core::application::agents::Owner;
+
+            let fixture = Fixture::new();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            // Two ordinary landed tasks: the baseline row.
+            for index in 0..2 {
+                let id =
+                    landed_with_tags(&fixture, &format!("jrun-base-{index}"), "solo", Vec::new());
+                comment(
+                    &fixture,
+                    &id,
+                    &format!(
+                        "before-PR review settled attempt `rv-base-{index}`: verdict **accept**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                    ),
+                );
+            }
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let before = agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            let base = row(&before, "solo").clone();
+            assert_eq!(base["units"], 2, "{before}");
+            assert_eq!(base["counts"]["weighted_landed"], 2);
+
+            // A task filed as no-diff-expected, landed with a reject and an
+            // escaped regression: none of it is implementer work.
+            let tagged = landed_with_tags(
+                &fixture,
+                "jrun-tagged",
+                "solo",
+                vec!["no-diff-expected".to_string()],
+            );
+            comment(
+                &fixture,
+                &tagged,
+                "before-PR review settled attempt `rv-tagged`: verdict **reject**\n- Reviewer: crew `reviewer` (codex / review-model)",
+            );
+            regression(
+                &fixture,
+                &tagged,
+                RegressionNature::DefectInNew,
+                RegressionEscape::NoTest,
+            );
+            let facts = fixture.runtime.agent_scan().unwrap();
+            assert!(
+                facts.charges().iter().all(|charge| charge.task_id != tagged
+                    || charge.owner != Owner::Role(AgentRole::Implementers)),
+                "a no-diff-expected task charges no implementer row"
+            );
+            assert!(
+                facts
+                    .credits()
+                    .iter()
+                    .all(|credit| credit.task_id != tagged),
+                "a no-diff-expected task earns no landed credit"
+            );
+            let after = agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            assert_eq!(
+                row(&after, "solo"),
+                &base,
+                "adding no-diff-expected work leaves units, counts, expectations and score unchanged"
+            );
+
+            // An untagged task that ends with no diff still counts in full,
+            // and so does a task retagged no-diff-expected only after its
+            // attempt started.
+            landed_with_tags(&fixture, "jrun-verified-no-diff", "solo", Vec::new());
+            let late = landed_with_tags(&fixture, "jrun-late-tag", "solo", Vec::new());
+            retag(&fixture, &late, vec!["no-diff-expected".to_string()]);
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let card = agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            let solo = row(&card, "solo");
+            assert_eq!(solo["units"], 4, "{card}");
+            assert_eq!(solo["counts"]["weighted_landed"], 4);
+
+            // The by-type cells share the exclusion: a type that matches
+            // only on no-diff-expected has no counted task, and the
+            // late-tagged task keeps the type its attempt was admitted with.
+            let types = vec![CrewPerformanceType {
+                name: "review".into(),
+                tags: vec!["no-diff-expected".into()],
+                paths: Vec::new(),
+            }];
+            let card = agent_by_type_scorecard(&facts, &query, &types, std::time::Duration::ZERO);
+            let cells = card["cells"].as_array().unwrap();
+            let cell = |type_name: &str| {
+                cells
+                    .iter()
+                    .find(|cell| cell["crew"] == "solo" && cell["type"] == type_name)
+                    .unwrap_or_else(|| panic!("cell {type_name} in {card}"))
+            };
+            assert_eq!(cell("review")["n"], 0, "{card}");
+            assert_eq!(cell("other")["n"], 4, "{card}");
         },
     );
 }

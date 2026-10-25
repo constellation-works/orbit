@@ -540,6 +540,78 @@ fn muse_identity_is_accepted_and_mismatches_refused() {
     assert_eq!(runtime.get_task_comments(&task.id).unwrap(), before);
 }
 
+fn tag_changes_record_previous_and_new_tags_in_history() {
+    use orbit_types::task::{TAGS_CHANGED_EVENT, TagsChanged, tags_at};
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Tag history fixture".into(),
+            tags: vec!["audit-work".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    // A write that leaves the tags alone records no tag change.
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                comment: Some("no retag".into()),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                tags: Some(vec!["no-diff-expected".into()]),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let persisted = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let history = persisted.get_task_history(&task.id).unwrap();
+    let changes: Vec<TagsChanged> = history
+        .iter()
+        .filter(|entry| entry.event == TAGS_CHANGED_EVENT)
+        .map(|entry| {
+            TagsChanged::from_entry(entry)
+                .unwrap()
+                .expect("tags_changed entry carries its lists")
+        })
+        .collect();
+    assert_eq!(
+        changes,
+        [TagsChanged {
+            previous: vec!["audit-work".into()],
+            tags: vec!["no-diff-expected".into()],
+        }],
+        "one retag records exactly one previous/new pair"
+    );
+    let current = persisted.get_task(&task.id).unwrap().tags;
+    let filed_at = history.first().unwrap().at;
+    assert_eq!(
+        tags_at(&history, &current, filed_at),
+        ["audit-work"],
+        "replay before the retag reads the filed tags"
+    );
+    assert_eq!(
+        tags_at(&history, &current, chrono::Utc::now()),
+        ["no-diff-expected"],
+        "replay after the retag reads the new tags"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     activity_updates_refuse_replica_writes_and_preserve_owner_updates_scenarios,
@@ -548,5 +620,6 @@ crate::scenario_table!(
     rejected_artifacts_leave_status_document_and_history_unchanged,
     automation_persists_returned_summary_crew_and_run_history_without_status_change,
     pr_status_updates_share_admission_and_trim_before_storage,
-    muse_identity_is_accepted_and_mismatches_refused
+    muse_identity_is_accepted_and_mismatches_refused,
+    tag_changes_record_previous_and_new_tags_in_history
 );

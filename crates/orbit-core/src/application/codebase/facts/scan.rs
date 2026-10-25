@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::StoreRetentionBackend;
 use orbit_types::task::{
-    NO_DIFF_EXPECTED_TAG, RegressionRiskMarks, Task, TaskHistoryEntry, TaskRelationType, TaskStatus,
+    RegressionRiskMarks, Task, TaskHistoryEntry, TaskRelationType, TaskStatus, is_no_diff_expected,
 };
 
 use super::super::regression::{PendingLink, RegressionLink};
@@ -72,7 +72,7 @@ impl TaskFacts {
             landed: None,
             delivery_at: done_at,
             pilot: None,
-            no_diff: task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG),
+            no_diff: is_no_diff_expected(&task.tags),
             id: task.id.to_string(),
             title: task.title.clone(),
             crew: task.crew.clone().or_else(|| task.implemented_by.clone()),
@@ -192,7 +192,7 @@ pub(in crate::application::codebase) fn scan(
                     paths: entry.facts.landed_paths.clone()?,
                 })
             });
-        let no_diff = task.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
+        let no_diff = is_no_diff_expected(&task.tags);
         let pilot = (landed.is_some() && !no_diff)
             .then(|| {
                 // A delivery-observed landing has no receipt, so its pilot

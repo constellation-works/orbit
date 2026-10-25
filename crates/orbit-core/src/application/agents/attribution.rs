@@ -106,6 +106,7 @@ pub(super) fn attribute(
             && let Some(attempt) = task
                 .final_attempt
                 .and_then(|index| task.attempts.get(index))
+                .filter(|attempt| !attempt.no_diff())
         {
             credits.push(Credit {
                 task_id: task.id.clone(),
@@ -211,11 +212,16 @@ impl Draft<'_> {
     }
 
     /// The implementation attempt at `index`, or Not scored when the task
-    /// has no attempt to charge.
+    /// has no attempt to charge. An attempt admitted as
+    /// `no-diff-expected` work is not implementation, so its problems
+    /// charge no implementer row.
     fn implementer(self, index: Option<usize>) -> Charge {
         let Some(attempt) = index.and_then(|index| self.task.attempts.get(index)) else {
             return self.not_scored("no_run");
         };
+        if attempt.no_diff() {
+            return self.not_scored("no_diff_expected");
+        }
         let runner = attempt.runner.clone();
         let anchor = attempt.start;
         self.charge(

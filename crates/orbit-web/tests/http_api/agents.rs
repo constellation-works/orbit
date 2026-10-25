@@ -168,6 +168,22 @@ pub(super) fn implementation_run(
     });
 }
 
+/// Replace a fixture task's tags through the public update path, as an
+/// operator retagging it now — after any attempt the fixture started.
+pub(super) fn retag(fixture: &Fixture, task_id: &str, tags: Vec<String>) {
+    fixture
+        .runtime
+        .update_task_as_human(
+            task_id,
+            TaskUpdateParams {
+                tags: Some(tags),
+                ..Default::default()
+            },
+            "fixture".into(),
+        )
+        .unwrap();
+}
+
 pub(super) fn comment(fixture: &Fixture, task_id: &str, message: &str) {
     fixture
         .runtime

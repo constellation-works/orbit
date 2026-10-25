@@ -15,6 +15,7 @@ mod readiness;
 mod receipt;
 mod regression;
 mod show_fields;
+mod tags_changed;
 mod ui_requirement;
 mod work_class;
 pub use error::TaskError;
@@ -101,7 +102,10 @@ pub use show_fields::{
     task_artifact_manifest_json, task_base_json, task_dependency_labels, task_os_requirement_json,
     task_show_record_field_json, task_show_reference_field_json, unknown_task_show_field_message,
 };
+pub use tags_changed::{TAGS_CHANGED_EVENT, TagsChanged, TagsChangedError, tags_at};
 pub use ui_requirement::{
     BROWSER_KIT_INSTALL_COMMAND, UI_TAG, browser_kit_wait, requires_browser_kit,
 };
-pub use work_class::{CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, work_class};
+pub use work_class::{
+    CHANGE_WORK_CLASS, NO_DIFF_WORK_CLASS, auto_task_template, is_no_diff_expected, work_class,
+};

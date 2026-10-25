@@ -3,7 +3,7 @@ use std::collections::{BTreeSet, HashMap};
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
     GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskComment, TaskHistoryEntry, TaskRelationType,
-    TaskStatus,
+    TaskStatus, tags_at,
 };
 use orbit_types::workflow::ReviewVerdict;
 
@@ -36,6 +36,7 @@ pub(super) fn task_facts(
             end: span.end,
             runner: runner(runs, span.start, span.end.or(Some(now)))
                 .unwrap_or_else(|| assigned_runner(task, history, pulled, span.start)),
+            tags: tags_at(history, &task.tags, span.start),
         })
         .collect();
     let landed = landed(task.status, history);
