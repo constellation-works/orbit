@@ -311,7 +311,38 @@ import sys
 app = pathlib.Path(sys.argv[1])
 module = sys.argv[2]
 upper = set(sys.argv[3].split("|"))
-token = re.compile(r"::|[a-zA-Z_][a-zA-Z_0-9]*|\S")
+token = re.compile(
+    r"(?P<line>//[^\n]*)|(?P<block>/\*)"
+    r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
+    r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
+    r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
+    r"|::|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+)
+block_delimiter = re.compile(r"/\*|\*/")
+
+
+def code_tokens(source):
+    """Skip Rust comments and literals without losing diagnostic offsets."""
+    index = 0
+    while match := token.search(source, index):
+        index = match.end()
+        if match.lastgroup in ("line", "literal"):
+            continue
+        if match.group("block") is not None:
+            depth = 1
+            while depth and (delimiter := block_delimiter.search(source, index)):
+                depth += 1 if delimiter.group() == "/*" else -1
+                index = delimiter.end()
+            if depth:
+                return
+        elif match.group("raw") is not None:
+            closing = '"' + match.group("hashes")
+            end = source.find(closing, index)
+            if end == -1:
+                return
+            index = end + len(closing)
+        else:
+            yield match.group(), match.start()
 
 
 def use_tree(tokens, index, prefix=()):
@@ -348,7 +379,7 @@ for path in sorted((app / module).rglob("*.rs")):
     if parts[-1] == "mod":
         parts.pop()
     source = path.read_text()
-    tokens = [(match.group(), match.start()) for match in token.finditer(source)]
+    tokens = list(code_tokens(source))
     index = 0
     while index + 1 < len(tokens):
         if tokens[index][0] != "super" or tokens[index + 1][0] != "::":

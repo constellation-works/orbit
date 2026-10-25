@@ -85,6 +85,39 @@ class RelativeImportTests(unittest.TestCase):
                     self.check_import("job/worker.rs", f"use {prefix}::{module}::Probe;",
                                       rejected=True)
 
+    def test_commented_grouped_imports_rejected(self):
+        for owner, modules in (
+            ("job", ("distributed", "pull_drain", "review")),
+            ("task", ("job", "review", "distributed", "sweep_filing", "workspace_auto")),
+        ):
+            for module in modules:
+                for comment in ("// note\n", "/* keep */", "/* outer /* nested */ keep */"):
+                    for tree in (
+                        f"super::super::{{{comment} {module}::Probe}}",
+                        f"super::super::{{RunOwnerLiveness, {comment} {module}::Probe}}",
+                        f"super::{comment} super::{{{module}::Probe}}",
+                        f"super::super::{comment} {{{module}::Probe}}",
+                        f"super::{{super::{{{comment} {module}::Probe}}}}",
+                    ):
+                        with self.subTest(owner=owner, module=module, tree=tree):
+                            self.check_import(f"{owner}/worker.rs", f"use {tree};",
+                                              rejected=True)
+
+    def test_quoted_grouped_paths_accepted(self):
+        for owner, module in (("job", "distributed"), ("task", "review")):
+            tree = f"super::super::{{{module}::Probe}}"
+            for source in (
+                f"// use {tree};",
+                f"/* use {tree}; */",
+                f'const NOTE: &str = "use {tree};";',
+                f'const NOTE: &str = "\\\" use {tree};";',
+                f'const NOTE: &str = r"use {tree};";',
+                f'const NOTE: &str = r##"\" # use {tree};"##;',
+                f'const NOTE: &[u8] = br#"use {tree};"#;',
+            ):
+                with self.subTest(owner=owner, source=source):
+                    self.check_import(f"{owner}/worker.rs", source, rejected=False)
+
     def test_within_job_imports_accepted(self):
         for relative, tree in (
             ("job/pr_repair/adoption.rs", "super::super::{RunOwnerLiveness, run_owner_liveness}"),
