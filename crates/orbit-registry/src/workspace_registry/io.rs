@@ -162,15 +162,6 @@ pub fn load_registry_from_read_only(path: &Path) -> Result<ReadOnlyRegistryLoad,
     Ok(read_registry_snapshot(path, registry_machine_context)?.load)
 }
 
-/// [`load_registry_from_read_only`] with an already-classified machine
-/// identity; see [`load_registry_from_with_machine`].
-pub fn load_registry_from_read_only_with_machine(
-    path: &Path,
-    identity: &MachineIdentityState,
-) -> Result<ReadOnlyRegistryLoad, OrbitError> {
-    Ok(read_registry_snapshot(path, |_| Ok(identity.into()))?.load)
-}
-
 pub(crate) fn load_registry_from_with_writer(
     path: &Path,
     writer: impl FnOnce(&WorkspaceRegistry, &Path) -> Result<(), OrbitError>,
