@@ -5182,6 +5182,9 @@ impl DeliveryHost {
     fn put_artifact(&self, task_id: &str, path: &str, content: &str) {
         locked(&self.artifacts).insert((task_id.into(), path.into()), content.into());
     }
+    fn put_artifact_bytes(&self, task_id: &str, path: &str, content: &[u8]) {
+        locked(&self.artifacts).insert((task_id.into(), path.into()), content.to_vec());
+    }
     fn set_os(&self, os: EvidenceHostOs) {
         *locked(&self.os) = Some(os);
     }
@@ -6244,7 +6247,7 @@ case "$1 ${2:-}" in
                 status "$draft_field" ;;
             *) printf '{"number":%s,"title":"Landing","body":"","headRefName":"%s","files":[],"commits":[],"url":"%s"}\n' "$number_json" "$(cat "$forge/pr-head")" "$url" ;;
         esac ;;
-    "repo view") echo '{"nameWithOwner":"orbit/test"}' ;;
+    "repo view") echo '{"nameWithOwner":"orbit/test","url":"https://github.com/orbit/test"}' ;;
     "api graphql")
         case "$*" in
             *statusCheckRollup*)

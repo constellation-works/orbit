@@ -45,6 +45,10 @@ fn delivery_templates_refuse_unknown_placeholders_and_missing_markers_at_load() 
             "[pr]\nbody_template = \"../outside.md\"\n",
             ["pr.body_template", ".."],
         ),
+        (
+            "[pr]\nscreenshot_section = \"sometimes\"\n",
+            ["pr.screenshot_section", "'sometimes'"],
+        ),
     ];
     for (body, needles) in refusals {
         let error = load_workspace(body).expect_err(body);
@@ -56,12 +60,14 @@ fn delivery_templates_refuse_unknown_placeholders_and_missing_markers_at_load() 
 
     let config = load_workspace(
         "[pr]\ntitle_template = \"{{ type }}: {{title}} ({{ext.jira}})\"\n\
+         screenshot_section = \"always\"\n\
          [commit]\nsubject_template = \"{{type}}({{ext.jira}}): {{title}} [{{task_id}}]\"\n\
          [branch]\nname_template = \"{{prefix}}/{{ext.jira}}-{{task_id}}-{{hash}}\"\n",
     )
     .expect("known placeholders load");
     let conventions = &config.pr.conventions;
     assert!(conventions.pr_title.is_some() && conventions.commit_subject.is_some());
+    assert_eq!(conventions.screenshot_section.as_str(), "always");
     assert_eq!(
         conventions.branch_name.source(),
         "{{prefix}}/{{ext.jira}}-{{task_id}}-{{hash}}"

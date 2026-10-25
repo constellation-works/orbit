@@ -7,7 +7,7 @@ use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::PreparationFreshness;
 use orbit_types::workflow::{
     ConventionTemplate, CrewPurpose, DeliveryConventions, MissingSectionPolicy,
-    PrBodyTemplateSource, TemplateSurface,
+    PrBodyTemplateSource, ScreenshotSection, TemplateSurface,
 };
 
 use super::machine::{
@@ -433,6 +433,8 @@ impl ConfigSnapshot {
             agent_sections: self.pr_agent_sections.clone(),
             required_sections: self.pr_required_sections.clone(),
             missing_section: MissingSectionPolicy::parse(&self.pr_missing_required_section)
+                .unwrap_or_default(),
+            screenshot_section: ScreenshotSection::parse(&self.pr_screenshot_section)
                 .unwrap_or_default(),
             freshness_section: self.pr_freshness_section,
             signature: self.pr_signature,

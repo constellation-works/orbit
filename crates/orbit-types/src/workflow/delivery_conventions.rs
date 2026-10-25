@@ -37,6 +37,22 @@ pub const REPO_PR_TEMPLATE_LOCATIONS: &[(&str, &str)] = &[
     ("docs", "pull_request_template.md"),
 ];
 
+/// Task artifact prefix a delivery publishes as the pull request's
+/// screenshots: `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`.
+pub const SCREENSHOT_ARTIFACT_PREFIX: &str = "screenshots/";
+
+/// The pull request body heading Orbit renders the screenshots under.
+pub const SCREENSHOTS_SECTION: &str = "Screenshots";
+
+/// Task tag that turns the screenshot section on under
+/// [`ScreenshotSection::Auto`].
+pub const UI_TASK_TAG: &str = "ui";
+
+/// Namespace of the permanent per-task refs holding published screenshots on
+/// `origin`. Outside `refs/heads`, so they are never listed or merged as a
+/// branch, and nothing deletes them, so a merged pull request keeps its images.
+pub const EVIDENCE_REF_PREFIX: &str = "refs/orbit/evidence/";
+
 /// The branch prefix a delivery uses when its workflow supplies none.
 pub const DEFAULT_BRANCH_PREFIX: &str = "orbit";
 
@@ -419,6 +435,52 @@ impl MissingSectionPolicy {
     }
 }
 
+/// When a single-task pull request body carries the screenshot section
+/// (`pr.screenshot_section`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScreenshotSection {
+    /// Only for tasks tagged [`UI_TASK_TAG`].
+    #[default]
+    Auto,
+    /// For every single-task delivery.
+    Always,
+    /// Never.
+    Off,
+}
+
+impl ScreenshotSection {
+    /// Accepted spellings of `pr.screenshot_section`.
+    pub const VALUES: &'static [&'static str] = &["auto", "always", "off"];
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "always" => Some(Self::Always),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Always => "always",
+            Self::Off => "off",
+        }
+    }
+
+    /// Whether a task with `tags` gets the section.
+    pub fn applies(self, tags: &[String]) -> bool {
+        match self {
+            Self::Auto => tags
+                .iter()
+                .any(|tag| tag.trim().eq_ignore_ascii_case(UI_TASK_TAG)),
+            Self::Always => true,
+            Self::Off => false,
+        }
+    }
+}
+
 /// Where a pull request body template comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PrBodyTemplateSource {
@@ -474,6 +536,8 @@ pub struct DeliveryConventions {
     pub required_sections: Vec<String>,
     /// `pr.missing_required_section`.
     pub missing_section: MissingSectionPolicy,
+    /// `pr.screenshot_section`.
+    pub screenshot_section: ScreenshotSection,
     /// `pr.freshness_section`.
     pub freshness_section: bool,
     /// `pr.signature`: the `*authored by: <model>*` line.
@@ -512,6 +576,7 @@ impl Default for DeliveryConventions {
             agent_sections: Vec::new(),
             required_sections: Vec::new(),
             missing_section: MissingSectionPolicy::Draft,
+            screenshot_section: ScreenshotSection::Auto,
             freshness_section: true,
             signature: true,
             pr_orchestration_trailer: true,
