@@ -53,11 +53,18 @@ struct Fixture {
 }
 
 fn fixture() -> Fixture {
+    fixture_with_config("")
+}
+
+fn fixture_with_config(config: &str) -> Fixture {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
     let repo = root.path().join("repo");
     std::fs::create_dir_all(&global).unwrap();
     std::fs::create_dir_all(repo.join(".orbit/auto_tasks")).unwrap();
+    if !config.is_empty() {
+        std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
+    }
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
     Fixture {
         _root: root,
@@ -783,6 +790,104 @@ fn a_non_git_triage_run_pins_no_revision_and_its_decisions_report_none() {
     let reported = report(json!({"source_revision": null})).unwrap();
     assert_eq!(reported["outcome"], "reported");
     assert_eq!(fx.triage_comments(&task).len(), 1);
+}
+
+fn decision_requests(fx: &Fixture, task: &str) -> Vec<orbit_types::task::DecisionRequest> {
+    let history = fx.runtime.get_task_history(task).unwrap();
+    orbit_types::task::decision_requests_from_history(&history, Utc::now())
+}
+
+fn propose(fx: &Fixture, task: &str) -> Value {
+    fx.triage(json!({
+        "action": "propose",
+        "id": task,
+        "blocker": "criterion 2 contradicts the retired API",
+        "options": [
+            {"summary": "Drop criterion 2", "consequences": "the old API stays retired", "replacement": "- Recovered."},
+            {"summary": "Keep the API", "consequences": "the retirement is reverted", "replacement": "- Recovered.\n- The API answers."},
+        ],
+        "recommended": 1,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn an_enabled_proposal_raises_one_open_decision_request() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    let proposal = propose(&fx, &task);
+    assert_eq!(proposal["disposition"], "decision");
+    let requests = decision_requests(&fx, &task);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let request = &requests[0];
+    assert_eq!(request.state, orbit_types::task::DecisionRequestState::Open);
+    assert_eq!(request.gate, orbit_types::task::DecisionGate::BlockTriage);
+    assert_eq!(request.task_id, task);
+    assert_eq!(
+        request
+            .answers
+            .iter()
+            .map(|answer| answer.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["1", "2", "dismiss"]
+    );
+    assert_eq!(request.answers[0].label, "Drop criterion 2");
+    assert!(
+        matches!(&request.binding, orbit_types::task::DecisionBinding::BlockEpisode { episode } if episode == proposal["episode"].as_str().unwrap()),
+        "{request:?}"
+    );
+    assert!(request.id.starts_with("dr-"), "{request:?}");
+    assert!(request.expires_at > request.raised_at, "{request:?}");
+}
+
+#[test]
+fn a_disabled_or_absent_channel_writes_no_decision_request() {
+    for config in ["", "[decision_channel]\nenabled = false\n"] {
+        let fx = fixture_with_config(config);
+        let task = fx.task(&[]);
+        fx.escalate(&task);
+        propose(&fx, &task);
+        assert!(
+            decision_requests(&fx, &task).is_empty(),
+            "config {config:?} must write no decision request"
+        );
+        let history = fx.runtime.get_task_history(&task).unwrap();
+        assert!(
+            history
+                .iter()
+                .all(|entry| entry.event != orbit_types::task::DECISION_REQUESTED_EVENT),
+            "config {config:?} must write no decision_requested entry"
+        );
+    }
+}
+
+#[test]
+fn a_second_proposal_supersedes_the_first() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    propose(&fx, &task);
+    fx.update(json!({"id": task, "status": "backlog"}));
+    fx.escalate(&task);
+    propose(&fx, &task);
+    let requests = decision_requests(&fx, &task);
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(
+        requests[0].state,
+        orbit_types::task::DecisionRequestState::Superseded
+    );
+    assert_eq!(
+        requests[1].state,
+        orbit_types::task::DecisionRequestState::Open
+    );
+    assert_ne!(requests[0].binding.key(), requests[1].binding.key());
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    assert_eq!(
+        orbit_types::task::open_decision_requests(&history, Utc::now()).len(),
+        1,
+        "at most one request per task is open"
+    );
 }
 
 #[test]

@@ -1190,7 +1190,91 @@ fn an_incomplete_boundary_counts_from_its_modification_time_until_a_writable_ope
     }
 }
 
+fn decision_requests(
+    workspace: &Workspace,
+    task: &Task,
+) -> Vec<orbit_types::task::DecisionRequest> {
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    orbit_types::task::decision_requests_from_history(&history, chrono::Utc::now())
+}
+
+fn decision_channel_workspace() -> Workspace {
+    Workspace::with_config(
+        "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n[workflow]\ndefault_crew = \"fixture\"\n[decision_channel]\nenabled = true\n",
+    )
+}
+
+fn an_enabled_pilot_hold_raises_one_open_decision_request() {
+    let workspace = decision_channel_workspace();
+    let task = backlog_task(&workspace);
+    assess(&workspace, &task, Some("duplicate_of"));
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    // Repeated admission of the same hold raises nothing further.
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    let requests = decision_requests(&workspace, &task);
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let request = &requests[0];
+    assert_eq!(request.state, orbit_types::task::DecisionRequestState::Open);
+    assert_eq!(
+        request.gate,
+        orbit_types::task::DecisionGate::PilotAdmission
+    );
+    assert_eq!(
+        request
+            .answers
+            .iter()
+            .map(|answer| answer.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["approve_anyway", "clear", "evaluated"]
+    );
+    assert!(
+        matches!(&request.binding, orbit_types::task::DecisionBinding::PilotOperation { operation_id } if !operation_id.is_empty()),
+        "{request:?}"
+    );
+}
+
+fn a_disabled_pilot_hold_writes_no_decision_request() {
+    let workspace = Workspace::new();
+    let task = backlog_task(&workspace);
+    assess(&workspace, &task, Some("duplicate_of"));
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    assert!(decision_requests(&workspace, &task).is_empty());
+}
+
+fn a_second_pilot_hold_supersedes_the_first() {
+    let workspace = decision_channel_workspace();
+    let task = backlog_task(&workspace);
+    assess(&workspace, &task, Some("duplicate_of"));
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    assess(&workspace, &task, Some("duplicate_of"));
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    let requests = decision_requests(&workspace, &task);
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(
+        requests[0].state,
+        orbit_types::task::DecisionRequestState::Superseded
+    );
+    assert_eq!(
+        requests[1].state,
+        orbit_types::task::DecisionRequestState::Open
+    );
+    assert_ne!(requests[0].binding.key(), requests[1].binding.key());
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    assert_eq!(
+        orbit_types::task::open_decision_requests(&history, chrono::Utc::now()).len(),
+        1,
+        "at most one request per task is open"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
+crate::scenario_table!(
+    decision_channel_pilot_hold_scenarios,
+    an_enabled_pilot_hold_raises_one_open_decision_request,
+    a_disabled_pilot_hold_writes_no_decision_request,
+    a_second_pilot_hold_supersedes_the_first
+);
+
 crate::scenario_table!(
     host_operational_holds_human_approved_work_until_a_current_operator_decision_scenarios,
     host_operational_holds_human_approved_work_until_a_current_operator_decision,

@@ -5,6 +5,12 @@ macro_rules! with_tail_keys {
     ($($head:tt)*) => {
         define_config_settings! {
             $($head)*
+    decision_channel_enabled: bool => bool {
+        key: "decision_channel.enabled", value_type: "bool",
+        description: "Raise decision requests for work held on a human decision.",
+        section: ConfigSection::Housekeeping, order: 95,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
     workflow_admission_affinity: String => String {
         key: "workflow.admission_affinity", value_type: "string",
         description: "How far work only the requesting executor can run moves ahead in admission order: band, priority or off.",

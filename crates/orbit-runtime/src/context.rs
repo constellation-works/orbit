@@ -479,6 +479,8 @@ pub struct OrbitRuntimeSettings {
     crew_performance: orbit_config::CrewPerformanceMode,
     /// `workflow.crew_performance_window_days`: the snapshot's window.
     crew_performance_window_days: u32,
+    /// `[decision_channel] enabled`: raise decision requests for held work.
+    decision_channel_enabled: bool,
 }
 
 impl OrbitRuntimeSettings {
@@ -525,6 +527,7 @@ impl OrbitRuntimeSettings {
         crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
         crew_performance: orbit_config::CrewPerformanceMode,
         crew_performance_window_days: u32,
+        decision_channel_enabled: bool,
     ) -> Self {
         Self {
             persistence,
@@ -568,7 +571,12 @@ impl OrbitRuntimeSettings {
             crew_performance_types,
             crew_performance,
             crew_performance_window_days,
+            decision_channel_enabled,
         }
+    }
+
+    pub(crate) fn decision_channel_enabled(&self) -> bool {
+        self.decision_channel_enabled
     }
 
     pub(crate) fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {
