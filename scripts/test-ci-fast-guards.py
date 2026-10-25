@@ -1324,6 +1324,84 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
         self.assertEqual(result.returncode, 2)
         self.assertIn("usage: check-goldens.sh [--update]", result.stderr)
 
+    def use_real_ripgrep(self):
+        real_rg = shutil.which("rg")
+        self.assertIsNotNone(real_rg, "ripgrep not installed")
+        self.write_executable(self.bin / "rg", f'#!/bin/sh\nexec {shlex.quote(real_rg)} "$@"\n')
+
+    def redaction_fixture_targets(self):
+        # The targets block holds a parenthesised comment, so collect the
+        # array line by line up to its closing `)` rather than splitting on
+        # the first parenthesis.
+        text = (SCRIPTS / "check-artifact-redaction-guardrail.sh").read_text()
+        lines = text.splitlines()
+        start = next(i for i, line in enumerate(lines) if line.strip() == "targets=(")
+        end = next(i for i in range(start, len(lines)) if lines[i].strip() == ")")
+        return re.findall(r'"([^"]+)"', "\n".join(lines[start + 1:end]))
+
+    def write_clean_redaction_tree(self, targets, skip=()):
+        for target in targets:
+            if target in skip:
+                continue
+            path = self.root / target
+            if target.endswith(".rs"):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("// clean fixture\n")
+            else:
+                path.mkdir(parents=True, exist_ok=True)
+                (path / "clean.rs").write_text("// clean fixture\n")
+
+    def test_artifact_redaction_guard_fails_closed(self):
+        """A missing scan target must fail even when a violation is present."""
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep not installed")
+        self.use_real_ripgrep()
+        targets = self.redaction_fixture_targets()
+        self.assertGreaterEqual(len(targets), 2, "guard lists scan targets")
+        missing = targets[1]
+        present = next(t for t in targets if t != missing and t.endswith(".rs"))
+        self.write_clean_redaction_tree(targets, skip=(missing,))
+        (self.root / present).write_text("fn redact_local() {}\n")
+        result = self.run_guard("check-artifact-redaction-guardrail.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(missing, result.stderr)
+        # With every target present the violation still fails the guard.
+        missing_path = self.root / missing
+        missing_path.parent.mkdir(parents=True, exist_ok=True)
+        missing_path.write_text("// clean fixture\n")
+        result = self.run_guard("check-artifact-redaction-guardrail.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("redact", result.stdout + result.stderr)
+        # A clean tree with all targets present passes.
+        (self.root / present).write_text("// clean fixture\n")
+        result = self.run_guard("check-artifact-redaction-guardrail.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def write_clean_terminal_tree(self):
+        cli_src = self.root / "crates/orbit-cli/src"
+        (cli_src / "output/tests").mkdir(parents=True, exist_ok=True)
+        (cli_src / "output/sink.rs").write_text("pub fn sink() {}\n")
+        (cli_src / "output/tests/sink.rs").write_text("// clean fixture\n")
+        (cli_src / "lib.rs").write_text("// clean fixture\n")
+        return cli_src
+
+    def test_terminal_state_guard_fails_closed(self):
+        """A missing search root must fail instead of passing silently."""
+        if not shutil.which("rg"):
+            self.skipTest("ripgrep not installed")
+        self.use_real_ripgrep()
+        result = self.run_guard("check-terminal-state-guard.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("missing search root", result.stderr)
+        cli_src = self.write_clean_terminal_tree()
+        result = self.run_guard("check-terminal-state-guard.sh")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        (cli_src / "bad.rs").write_text("fn f() { let _ = IsTerminal; }\n")
+        result = self.run_guard("check-terminal-state-guard.sh")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("terminal state queried outside the output sink",
+                      result.stdout + result.stderr)
+
 
 class DocLinkGuardrailTests(unittest.TestCase):
     """Exercise the checker through its executable boundary in real Git repos."""

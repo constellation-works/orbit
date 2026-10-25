@@ -38,8 +38,33 @@ patterns=(
   '"COLUMNS"'
 )
 
+# Fail closed: ripgrep exits 2 on a missing search root, which `|| true`
+# would swallow into an empty result and a silent pass. Assert the search
+# root exists before scanning. (The allowlist is matched against hit paths,
+# never scanned, so a stale entry cannot open a bypass and is not asserted.)
+if [[ ! -e "$cli_src" ]]; then
+  echo "terminal state guard: missing search root: $cli_src" >&2
+  exit 1
+fi
+
 failed=0
+rg_tmp_out="$(mktemp)"
+rg_tmp_err="$(mktemp)"
 for pattern in "${patterns[@]}"; do
+  # Capture ripgrep's status per pattern: 0 carries matches, 1 means no
+  # match, anything else is a scan error and must fail closed.
+  set +e
+  rg --no-heading --line-number "$pattern" --glob '*.rs' "$cli_src" >"$rg_tmp_out" 2>"$rg_tmp_err"
+  rg_status=$?
+  set -e
+  if [[ "$rg_status" -eq 1 ]]; then
+    continue
+  elif [[ "$rg_status" -ne 0 ]]; then
+    echo "terminal state guard: ripgrep failed (exit $rg_status) for pattern $pattern" >&2
+    cat "$rg_tmp_err" >&2
+    failed=1
+    continue
+  fi
   while IFS= read -r hit; do
     [[ -z "$hit" ]] && continue
     file="${hit%%:*}"
@@ -61,8 +86,9 @@ for pattern in "${patterns[@]}"; do
       echo "terminal state queried outside the output sink: $hit"
       failed=1
     fi
-  done < <(rg --no-heading --line-number "$pattern" --glob '*.rs' "$cli_src" || true)
+  done <"$rg_tmp_out"
 done
+rm -f "$rg_tmp_out" "$rg_tmp_err"
 
 if [[ "$failed" -ne 0 ]]; then
   echo "resolve it once in crates/orbit-cli/src/output/sink.rs and read it from there" >&2
