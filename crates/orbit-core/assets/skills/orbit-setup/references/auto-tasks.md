@@ -346,8 +346,9 @@ plugin being removed.
   suite, and files a task for each non-duplicate issue found. In agent-executor
   sandboxes and linked job-run worktrees, the managed `.git` mount is read-only
   by design (must not be worked around by chmod or host-side gitdir writes).
-  Use `mkdir -p .orbit/tmp/base && git archive <sha> | tar -x -C .orbit/tmp/base` to build a
-  baseline revision without writing `.git`, and `git show HEAD:<path> > <path>`
+  Use `mkdir -p .orbit/tmp && mktemp -d .orbit/tmp/qa-base.XXXXXX` for a new, empty
+  directory, then `git archive <sha> | tar -x -C <that path>` to build a baseline
+  revision without writing `.git`, and `git show HEAD:<path> > <path>`
   to revert a tracked file when `git checkout --` cannot take `index.lock`.
 - **`friction-curation`** (`medium`) — daily. Deduplicates the open friction corpus against
   task history, verifies each survivor still reproduces, resolves the ones that
