@@ -33,6 +33,26 @@ fn repair_leaf_job() -> String {
     .to_string()
 }
 
+/// The shipped leaf's completion rounds after a reviewed head conflicted:
+/// each round rebases the head for re-review, and the next round completes
+/// the head its re-review republished.
+fn rereviewed_leaf_job() -> String {
+    let step = |id: &str, action: &str| json!({"id": id, "spec": {"type": "deterministic", "action": action, "config": {}}});
+    json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_pr_pipeline"},
+    "spec": {"state": "enabled", "kind": "workflow", "task_delivery": {}, "steps": [
+        step("worktree", "pipeline_success_guard"),
+        step("push", "git_push"),
+        step("pr_open", "pr_open"),
+        step("promote_tasks", "pr_promote"),
+        step("complete_pr", "pr_complete"),
+        step("re_push", "git_push"),
+        step("complete_reviewed_pr", "pr_complete"),
+        step("re_push_2", "git_push"),
+        step("complete_reviewed_pr_2", "pr_complete"),
+    ]}})
+    .to_string()
+}
+
 /// How a stopped leaf left its task.
 #[derive(Clone, Copy)]
 enum Shelf {
@@ -56,9 +76,13 @@ struct Leaf {
 }
 
 fn fixture() -> Fixture {
+    fixture_with(&repair_leaf_job())
+}
+
+fn fixture_with(job: &str) -> Fixture {
     let fx = Fixture::new();
     let jobs = fx.activities.parent().unwrap().join("jobs");
-    std::fs::write(jobs.join("task_pr_pipeline.yaml"), repair_leaf_job()).unwrap();
+    std::fs::write(jobs.join("task_pr_pipeline.yaml"), job).unwrap();
     fx
 }
 
@@ -502,6 +526,60 @@ fn full_capacity_still_reports_the_pull_requests_left_alone() {
     );
 }
 
+/// ORB-18204: ORB-18124's leaf rebased and republished its reviewed head in
+/// two re-review rounds, then a third base advance stopped its last round.
+/// The repair reran the first round, pinned the initial publication, and
+/// failed as `delivery_evidence_stale` against the head the leaf's own
+/// `re_push_2` had published.
+fn a_repair_reruns_the_completion_round_that_published_the_pull_requests_head() {
+    let fx = fixture_with(&rereviewed_leaf_job());
+    let leaf = fx.stopped_leaf(85, "done", Shelf::Escalated);
+    let mut state = fx.jobs.read_run_state(&leaf.run).unwrap().unwrap();
+    let rebased = json!({"phase": "complete", "re_review_required": true});
+    let rounds = [
+        ("complete_pr", rebased.clone()),
+        (
+            "re_push",
+            json!({"phase": "push", "branch": leaf.head, "local_sha": "ddd2", "remote_sha_before": "ddd1"}),
+        ),
+        ("complete_reviewed_pr", rebased),
+        (
+            "re_push_2",
+            json!({"phase": "push", "branch": leaf.head, "local_sha": "ddd3", "remote_sha_before": "ddd2"}),
+        ),
+    ];
+    for (index, (id, output)) in (4..).zip(rounds) {
+        state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+        state.record_pipeline_output(id, output);
+    }
+    state.record_step(8, JobRunState::Failed, None, None);
+    fx.jobs.write_run_state(&leaf.run, &state).unwrap();
+    fx.blocked(&leaf, "ddd3", "orbit-bot", true, &[]);
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    started(&pass, &leaf.task).unwrap_or_else(|| panic!("{pass}"));
+    let retries = fx.retries(&leaf.run);
+    assert_eq!(retries.len(), 1, "{pass}");
+    let seeded = fx.jobs.read_run_state(&retries[0].run_id).unwrap().unwrap();
+    for index in 0..8 {
+        assert_eq!(
+            seeded.step_states.get(&index),
+            Some(&JobRunState::Success),
+            "step {index} is reused"
+        );
+    }
+    assert!(
+        !seeded.step_states.contains_key(&8),
+        "the last round reruns"
+    );
+    assert_eq!(seeded.next_step_index, 8);
+    assert_eq!(
+        seeded.pipeline["re_push_2"]["local_sha"], "ddd3",
+        "the rerun round pins the head the pull request carries"
+    );
+}
+
 fn red_checks_and_review_or_requeued_tasks_are_repaired_too() {
     let fx = fixture();
     let red = fx.stopped_leaf(82, "review", Shelf::Escalated);
@@ -864,6 +942,7 @@ crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
     one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
     a_conflicting_pull_request_its_delivery_blocked_is_handed_back_for_an_auto_fix,
+    a_repair_reruns_the_completion_round_that_published_the_pull_requests_head,
     skipped_repairs_are_checkpointed_and_visible_in_readiness,
     full_capacity_still_reports_the_pull_requests_left_alone,
     red_checks_and_review_or_requeued_tasks_are_repaired_too,

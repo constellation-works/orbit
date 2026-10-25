@@ -46,9 +46,9 @@ pub(crate) struct ResumePlan {
     /// Definition pinned beside the source run. `None` for a catalog-backed
     /// source, which keeps resolving `source.job_id` at admission.
     pub(crate) pinned_definition: Option<PinnedRunDefinition>,
-    /// An out-of-run auto-fix: the resume reruns the source's completion step
-    /// with repair authority, and readmits a task its lineage shelved in
-    /// `backlog` as well as one it blocked.
+    /// An out-of-run auto-fix: the resume reruns the source's last completion
+    /// round with repair authority, and readmits a task its lineage shelved
+    /// in `backlog` as well as one it blocked.
     pub(super) completion_repair: bool,
 }
 
@@ -101,8 +101,9 @@ impl OrbitRuntime {
     }
 
     /// Plan an out-of-run auto-fix of the pull request `source_run_id`
-    /// opened: the ordinary resume, rewound to rerun the completion step and
-    /// everything after it, with `auto_fix` granted, the footprint deferred
+    /// opened: the ordinary resume, rewound to rerun the last completion
+    /// round the source reached and everything after it, with `auto_fix`
+    /// granted, the footprint deferred
     /// to the first editing agent, and `repair` recorded on the run input.
     /// The run's own `completion` grant is unchanged, so a run that never
     /// held `--complete` still never merges.
