@@ -224,6 +224,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.labels": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.name": {
       "scope": "built-in",
       "state": "unset",

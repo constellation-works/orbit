@@ -13,7 +13,7 @@ use super::super::surface_reservation::{
 };
 use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
-    browser_kit_exclusion, clears_complexity_gate, host_os_exclusion,
+    browser_kit_exclusion, clears_complexity_gate, host_labels_exclusion, host_os_exclusion,
     inherited_only_epic_root_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion,
 };
 use super::listing::active_pilot_preparations;
@@ -236,6 +236,16 @@ pub(super) fn backlog_snapshot_in_mode(
     backlog.retain(|task| {
         let Some(exclusion) = host_os_exclusion(runtime, task, &executor_host_os, pools, None)
         else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
+    // A task requiring a capability label this host lacks is left for a host
+    // that carries it. Read every pass, so a relabelled task or host counts
+    // at its next admission.
+    backlog.retain(|task| {
+        let Some(exclusion) = host_labels_exclusion(runtime, task) else {
             return true;
         };
         excluded.push(exclusion);

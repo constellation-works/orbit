@@ -46,6 +46,27 @@ impl RuntimeKernel {
         self.host_os
     }
 
+    /// Carry `labels` as this host's `machine.labels`, already normalized. A
+    /// fixture composes a labelled host the way it composes
+    /// [`Self::with_host_os`]; production runtimes take the admitted setting.
+    pub fn with_machine_labels(mut self, labels: Vec<String>) -> Self {
+        self.context.set_machine_labels(labels);
+        self
+    }
+
+    /// This host's admitted `machine.labels`, without the implicit OS label.
+    pub fn machine_labels(&self) -> &[String] {
+        self.context.settings().machine_labels()
+    }
+
+    /// The capability labels this host carries for a task's
+    /// `requires_labels`: its `machine.labels` plus its OS as an implicit
+    /// label. Local admission checks a task against this set, and a pull
+    /// drain declares the configured part to its owner beside its OS.
+    pub fn host_labels(&self) -> std::collections::BTreeSet<String> {
+        orbit_types::task::effective_host_labels(self.machine_labels(), self.host_os)
+    }
+
     /// Declare the registered remote hosts, by machine id, with the
     /// operating system recorded for each at registration. The composition
     /// layer reads them from the host registry; a fixture composes a fleet

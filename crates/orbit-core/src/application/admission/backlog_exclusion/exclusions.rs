@@ -62,6 +62,23 @@ pub(super) fn host_os_exclusion(
     })
 }
 
+/// The exclusion for a task whose `requires_labels` this host does not
+/// carry. Shared by automatic selection and the explicit ship override, like
+/// [`host_os_exclusion`].
+pub(super) fn host_labels_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Option<BacklogTaskExclusion> {
+    let reason = runtime.task_host_labels_wait(task)?;
+    Some(BacklogTaskExclusion {
+        id: task.id.clone(),
+        reason: BacklogTaskExclusionReason::HostLabelsMissing,
+        conflicts: Vec::new(),
+        crew: None,
+        detail: Some(reason),
+    })
+}
+
 /// The exclusion for a `ui` task on a host whose browser kit is not
 /// verified (`kit_verified`, read once per admission pass).
 ///

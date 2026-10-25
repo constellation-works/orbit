@@ -239,6 +239,7 @@ fn clock_sweep_resumes_upgrade_interrupted_run_once_after_generation_settles() {
             execution_machine_id: "exec-m".into(),
         },
         request: AdmissionRequest {
+            labels: Vec::new(),
             request_id: "req-1".into(),
             caller_version: "1".into(),
             caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,

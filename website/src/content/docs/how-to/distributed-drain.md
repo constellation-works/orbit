@@ -36,6 +36,10 @@ task that fails.
   running that OS, and waits in the owner's backlog until one asks for work.
   The crew's executor can also restrict its OS. A task tagged `ui` additionally
   needs a verified browser kit on the executing host (`orbit browser-kit status`).
+  A task's `requires_labels` go only to a machine whose `machine.labels`, plus
+  its OS, include every one; the replica declares its labels with each pull, so
+  the owner knows them once it has pulled. Owner and replicas must run releases
+  that agree on this field: an older peer is refused as protocol skew.
 - **SSH is the access control.** Anyone who can `ssh` to the owner owns it. To
   shut a replica out, remove its key from the owner's `authorized_keys`.
 - **Landing stays on the owner.** Approve each handoff on the owner's

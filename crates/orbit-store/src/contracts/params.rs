@@ -23,6 +23,9 @@ pub struct TaskCreateParams {
     pub relations: Vec<TaskRelation>,
     pub tags: Vec<String>,
     pub required_tools: Vec<String>,
+    /// Capability labels a host must all carry to run the task.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires_labels: Vec<String>,
     pub plan: String,
     pub execution_summary: String,
     pub context_files: Vec<String>,
@@ -79,6 +82,8 @@ pub struct TaskDocumentUpdateParams {
     pub dependencies: Option<Vec<OrbitId>>,
     pub relations: Option<Vec<TaskRelation>>,
     pub tags: Option<Vec<String>>,
+    /// Replacement capability labels; an empty list clears the requirement.
+    pub requires_labels: Option<Vec<String>>,
     pub plan: Option<String>,
     pub execution_summary: Option<String>,
     pub context_files: Option<Vec<String>>,

@@ -6,6 +6,7 @@ use super::{delivery_attention_value, landing_review_gate_facts};
 
 fn task(status: TaskStatus, with_pr: bool) -> Task {
     Task {
+        requires_labels: Vec::new(),
         id: "TASK-1".to_string(),
         title: "Fixture".to_string(),
         description: String::new(),

@@ -7,12 +7,15 @@ use orbit_types::task::{ExecutorOsLimit, HostOs, Task, TaskOsRequirement};
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::host_labels::{FleetLabelHost, label_placement_wait};
 
-/// A request's configured crew constraints. Reuse it across list rows so
-/// executor assets are loaded once, rather than once per task.
+/// A request's configured crew constraints and the fleet's capability
+/// labels. Reuse it across list rows so executor assets and the executor
+/// census are read once, rather than once per task.
 pub struct TaskOsReadout {
     crews: BTreeMap<String, Result<String, String>>,
     limits: BTreeMap<String, ExecutorOsLimit>,
+    fleet: Vec<FleetLabelHost>,
 }
 
 impl TaskOsReadout {
@@ -33,6 +36,7 @@ impl TaskOsReadout {
         Ok(Self {
             crews,
             limits: runtime.executor_host_os_limits()?,
+            fleet: runtime.fleet_label_hosts(),
         })
     }
 
@@ -128,13 +132,28 @@ impl TaskOsReadout {
                 }))
     }
 
-    /// Replace any tags-only base enrichment with this host's derived value.
+    /// Why `task` waits for a host carrying its `requires_labels`, while no
+    /// live host carries them all, or `None`.
+    pub fn placement_wait(&self, task: &Task) -> Option<String> {
+        label_placement_wait(task, &self.fleet)
+    }
+
+    /// Replace any tags-only base enrichment with this host's derived value,
+    /// and name the label placement wait when there is one.
     pub fn insert_into(&self, task: &Task, object: &mut Map<String, Value>) {
         let requirement = self.requirement(task);
         if requirement.is_null() {
             object.remove("os_requirement");
         } else {
             object.insert("os_requirement".to_string(), requirement);
+        }
+        match self.placement_wait(task) {
+            Some(wait) => {
+                object.insert("placement_wait".to_string(), Value::String(wait));
+            }
+            None => {
+                object.remove("placement_wait");
+            }
         }
     }
 }

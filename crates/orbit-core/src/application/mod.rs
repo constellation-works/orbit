@@ -27,6 +27,7 @@ pub(crate) mod executor;
 pub(crate) mod executor_host_os;
 pub mod gc;
 pub mod health;
+pub(crate) mod host_labels;
 pub mod job;
 pub mod landing;
 pub(crate) mod managed_assets;

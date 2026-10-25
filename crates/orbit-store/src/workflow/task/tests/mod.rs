@@ -31,6 +31,7 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
     let now = Utc.with_ymd_and_hms(2026, 6, 1, 9, 0, 0).unwrap();
     TaskBundleV2 {
         envelope: TaskEnvelopeV2 {
+            requires_labels: Vec::new(),
             job_run_machine: None,
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             id: id.to_string(),

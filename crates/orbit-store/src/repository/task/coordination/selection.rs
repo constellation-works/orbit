@@ -163,6 +163,14 @@ impl Screen<'_> {
             receipt.os_unavailable.push(diagnostic(reason, Vec::new()));
             return None;
         }
+        // Nor one requiring a capability label the executor lacks. Read at
+        // each admission, so a relabelled host or task applies to the next.
+        if let Some(reason) = labels_unavailable(request.os, &request.labels, task) {
+            receipt
+                .labels_unavailable
+                .push(diagnostic(reason, Vec::new()));
+            return None;
+        }
         // Nor one tagged `ui` that the executor has no verified browser kit
         // to render.
         if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {

@@ -282,6 +282,9 @@ pub(crate) fn pull_refill(
                         // Read for each request, so a kit verified
                         // mid-window is declared from the next pull.
                         browser_kit: runtime.browser_kit_verified(),
+                        // The owner checks each candidate's
+                        // `requires_labels` against these plus `os`.
+                        labels: runtime.machine_labels().to_vec(),
                         admissible,
                     }))
                 };

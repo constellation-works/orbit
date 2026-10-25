@@ -729,6 +729,7 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
         }
         let now = Utc::now();
         Ok(Task {
+            requires_labels: Vec::new(),
             job_run_machine: None,
             id: TASK_ID.to_string(),
             title: "Continue the earlier claim's candidate".to_string(),

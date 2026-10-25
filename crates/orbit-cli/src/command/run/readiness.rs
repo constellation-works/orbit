@@ -221,6 +221,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
             let host = matches!(
                 reason,
                 "host_os_mismatch"
+                    | "host_labels_missing"
                     | "browser_kit_missing"
                     | "native_os_required"
                     | "unverified_review_finding"

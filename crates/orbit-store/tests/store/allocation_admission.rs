@@ -569,6 +569,7 @@ fn pull_destination() -> PullDestination {
 
 fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
     AdmissionRequest {
+        labels: Vec::new(),
         request_id: request_id.into(),
         caller_version: "1".into(),
         caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
@@ -1138,6 +1139,7 @@ fn task_params(title: &str, selectors: &[&str]) -> TaskCreateParams {
 
 fn owner_request(id: &str) -> AdmissionRequest {
     AdmissionRequest {
+        labels: Vec::new(),
         request_id: id.into(),
         caller_version: "test".into(),
         caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,

@@ -98,6 +98,7 @@ impl Owner {
     fn create(&self, index: usize) {
         self.tasks
             .create_task(TaskCreateParams {
+                requires_labels: Vec::new(),
                 actor: "codex".into(),
                 parent_id: None,
                 title: format!("Task {index}"),
@@ -221,6 +222,7 @@ impl Admitted {
 
 fn request(id: &str) -> AdmissionRequest {
     AdmissionRequest {
+        labels: Vec::new(),
         request_id: id.into(),
         caller_version: "test".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,

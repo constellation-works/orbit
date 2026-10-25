@@ -516,6 +516,13 @@ pub struct AdmissionRequest {
     /// none, so no `ui` task is admitted to it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub browser_kit: bool,
+    /// The executor's `machine.labels`, normalized. Its `os` counts as an
+    /// implicit label beside them. A candidate whose `requires_labels` are
+    /// not all among them is skipped. Part of the request schema, so a peer
+    /// whose build predates labels fails the fingerprint check and is
+    /// refused rather than admitted to labelled work it would ignore.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
     /// The work the executor's host load forecast has room for, under
     /// `machine.auto_concurrency.mode = "enforce"`. Absent otherwise, and from
     /// an executor with no resource profiles: then every work class and
@@ -589,6 +596,11 @@ pub struct AdmissionReceipt {
     /// in the backlog for a host that has one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub browser_kit_unavailable: Vec<AdmissionDiagnostic>,
+    /// Ready candidates skipped because the executor lacks one of their
+    /// `requires_labels` ([`AdmissionRequest::labels`] plus its OS). They
+    /// stay in the backlog for a host that carries them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub labels_unavailable: Vec<AdmissionDiagnostic>,
     /// Ready candidates skipped because their work is outside the request's
     /// [`AdmissionRequest::admissible`] fit. They stay in the backlog until
     /// the executor's host has room, or for another host.

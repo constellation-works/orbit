@@ -950,6 +950,7 @@ fn light_base_update(tag: LightTag, outside: bool) {
     )
     .unwrap();
     let request = AdmissionRequest {
+        labels: Vec::new(),
         request_id: format!("light-{path}"),
         caller_version: "test".into(),
         caller_schema: DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,

@@ -80,6 +80,7 @@ impl OrbitRuntime {
             complexity,
             None,
             &task.tags,
+            &task.requires_labels,
             &task.context_files,
             &mut random_crew_ticket,
         )?;
@@ -344,6 +345,7 @@ impl OrbitRuntime {
             acceptance_criteria: Vec::new(),
             tags,
             required_tools: Vec::new(),
+            requires_labels: Vec::new(),
             plan: String::new(),
             execution_summary: String::new(),
             context_files: Vec::new(),
@@ -684,6 +686,7 @@ impl OrbitRuntime {
         complexity: Option<TaskComplexity>,
         explicit: Option<&str>,
         tags: &[String],
+        requires_labels: &[String],
         context_files: &[String],
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<Option<CreationCrewAssignment>, OrbitError> {
@@ -710,7 +713,7 @@ impl OrbitRuntime {
             && let Some((candidates, _)) = self.creation_complexity_pool_candidates(
                 Some(complexity),
                 &pools,
-                &TaskOsRequirement::from_tags(tags),
+                &self.label_narrowed_os(TaskOsRequirement::from_tags(tags), requires_labels),
             )?
         {
             let source = format!("pool:{complexity}");
@@ -746,6 +749,36 @@ impl OrbitRuntime {
             crew: default.name,
             source: "default".to_string(),
         }))
+    }
+
+    /// `task_os` narrowed to the OSes of the known hosts that carry
+    /// `requires_labels`, so a creation draw excludes a crew whose executor
+    /// `host_os` no such host runs, exactly as it does for `os:` tags. A task
+    /// with no label, invalid tags, or no carrier of a known OS keeps its
+    /// tag requirement.
+    fn label_narrowed_os(
+        &self,
+        task_os: TaskOsRequirement,
+        requires_labels: &[String],
+    ) -> TaskOsRequirement {
+        let Some(carriers) = self.label_carrier_oses(requires_labels) else {
+            return task_os;
+        };
+        if !task_os.invalid.is_empty() {
+            return task_os;
+        }
+        let narrowed = if task_os.any_of.is_empty() {
+            carriers
+        } else {
+            task_os.any_of.intersection(&carriers).copied().collect()
+        };
+        if narrowed.is_empty() {
+            return task_os;
+        }
+        TaskOsRequirement {
+            any_of: narrowed,
+            ..task_os
+        }
     }
 
     /// A creation-seam pool draw's members, weighed by usage pressure

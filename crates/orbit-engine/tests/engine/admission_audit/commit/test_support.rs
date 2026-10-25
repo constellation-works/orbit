@@ -282,6 +282,7 @@ pub fn initialized_git_repo() -> tempfile::TempDir {
 pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -> Task {
     let now = Utc::now();
     Task {
+        requires_labels: Vec::new(),
         job_run_machine: None,
         id: id.to_string(),
         title: title.to_string(),

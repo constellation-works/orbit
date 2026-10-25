@@ -45,6 +45,7 @@ fn create_task(
 ) -> String {
     crate::admission_audit::store_support::tasks(runtime)
         .create_task(TaskCreateParams {
+            requires_labels: Vec::new(),
             actor: "test".to_string(),
             parent_id: None,
             title: format!("task {id_hint}"),

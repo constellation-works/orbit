@@ -18,6 +18,7 @@ pub(crate) fn sample_bundle(id: &str) -> TaskBundleV2 {
     let now = Utc.with_ymd_and_hms(2026, 5, 11, 12, 0, 0).unwrap();
     TaskBundleV2 {
         envelope: TaskEnvelopeV2 {
+            requires_labels: Vec::new(),
             job_run_machine: None,
             schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
             id: id.to_string(),

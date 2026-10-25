@@ -118,6 +118,7 @@ impl PullPeer for Peer {
                 crew_unavailable: vec![],
                 os_unavailable: vec![],
                 browser_kit_unavailable: vec![],
+                labels_unavailable: vec![],
                 queue_depth: 0,
                 capacity_unavailable: Vec::new(),
             })
@@ -367,6 +368,7 @@ fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest)
             execution_machine_id: "owner".into(),
         },
         AdmissionRequest {
+            labels: Vec::new(),
             request_id: "template".into(),
             caller_version: "1".into(),
             caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,

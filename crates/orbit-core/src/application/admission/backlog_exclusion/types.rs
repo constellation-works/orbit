@@ -56,6 +56,11 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// for a host that does — a follower pulling from this owner, say — and
     /// `detail` names the wait (`waits for a macos host (os:macos)`).
     HostOsMismatch,
+    /// The task's `requires_labels` name a capability label this host does
+    /// not carry (its `machine.labels` plus its OS). It stays in `backlog`
+    /// for a host that does, and `detail` names the wait and the labels this
+    /// host lacks. Checked after [`Self::HostOsMismatch`].
+    HostLabelsMissing,
     /// The task is tagged `ui` and this host has no verified headless browser
     /// kit to render its change. It stays in `backlog` for a host that has
     /// one — a follower whose request declares a kit, say — and `detail`

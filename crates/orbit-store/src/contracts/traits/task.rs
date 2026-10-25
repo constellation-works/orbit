@@ -123,6 +123,15 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
         Ok(Vec::new())
     }
+    /// Every recorded census row, live or not: the latest declaration of
+    /// each executor that ever pulled from or drained this workspace. Label
+    /// placement reads it to know which capability labels the fleet carries.
+    /// A store without a coordination journal records none.
+    fn recorded_executor_census(
+        &self,
+    ) -> Result<Vec<crate::contracts::ExecutorCensusEntry>, OrbitError> {
+        Ok(Vec::new())
+    }
     fn inspect_execution_claims(
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {

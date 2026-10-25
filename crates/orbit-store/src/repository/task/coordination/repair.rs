@@ -153,6 +153,10 @@ impl TaskCommitBoundary {
                 receipt.os_unavailable.push(diagnose(reason));
                 continue;
             }
+            if let Some(reason) = labels_unavailable(request.os, &request.labels, task) {
+                receipt.labels_unavailable.push(diagnose(reason));
+                continue;
+            }
             if let Some(reason) = browser_kit_unavailable(request.browser_kit, task) {
                 receipt.browser_kit_unavailable.push(diagnose(reason));
                 continue;

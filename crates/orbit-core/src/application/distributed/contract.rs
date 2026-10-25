@@ -305,6 +305,7 @@ impl crate::OrbitRuntime {
             crews: None,
             os: None,
             browser_kit: false,
+            labels: Vec::new(),
             admissible: None,
         };
         let identity = trusted_identity(&machine_id, session, None);

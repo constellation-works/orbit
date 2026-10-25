@@ -87,6 +87,10 @@ impl TaskV2Store {
         // dashboard, auto-task mint, import — so the reserved `os:` namespace
         // cannot be bypassed by any of them.
         validate_os_tags(&normalize_task_tags(params.tags.clone()))?;
+        let requires_labels = orbit_types::task::normalize_host_labels(
+            params.requires_labels.clone(),
+            orbit_types::task::REQUIRES_LABELS_FIELD,
+        )?;
         if let Some(boundary) = &self.coordination {
             boundary.guard_ordinary_footprint(params.status, &params.context_files)?;
         }
@@ -186,6 +190,7 @@ impl TaskV2Store {
                 relations,
                 tags: normalize_task_tags(params.tags),
                 required_tools: orbit_types::task::normalize_required_tools(params.required_tools),
+                requires_labels,
                 context_files: params.context_files,
                 external_refs: params.external_refs,
                 created_by: params.created_by,

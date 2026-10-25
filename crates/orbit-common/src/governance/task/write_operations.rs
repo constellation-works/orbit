@@ -159,6 +159,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             "dependencies",
             "tags",
             "required_tools",
+            "requires_labels",
             "plan",
             "external_refs",
             "context_files",
@@ -222,6 +223,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings",
                 flag_with_delimiter("required-tools", &["required-tool"], None),
                 "Exact canonical tool names the task adds to its agent activity baseline",
+            ),
+            both(
+                "requires_labels",
+                ParamType::StringList,
+                "Optional capability labels a host must carry, all of them, to run the task, as a string or array of strings. A host carries its `machine.labels` plus its OS (`linux`, `macos` or `windows`). Refused when no registered serving host carries them together with the task's `os:` tags",
+                flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
+                "Capability labels a host must carry, all of them, to run the task (its `machine.labels` plus its OS). Repeat or comma-separate for multiple labels",
             ),
             path(both(
                 "context_files",
@@ -386,6 +394,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             "acceptance_criteria",
             "dependencies",
             "tags",
+            "requires_labels",
             "plan",
             "execution_summary",
             "comment",
@@ -461,6 +470,13 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 flag_with_delimiter("tag", &[], None),
                 "Replacement task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected",
             ),
+            preserve_empty(both(
+                "requires_labels",
+                ParamType::StringList,
+                "Replacement capability labels a host must carry, all of them, to run the task from its next admission, as a string or array of strings; an empty array clears it. A host carries its `machine.labels` plus its OS. Refused when no registered serving host carries them together with the task's `os:` tags",
+                flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
+                "Replacement capability labels a host must carry, all of them, to run the task (empty string clears). Repeat or comma-separate for multiple labels",
+            )),
             both(
                 "allow_drop_system_tags",
                 ParamType::Switch,

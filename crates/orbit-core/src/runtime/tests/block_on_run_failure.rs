@@ -43,6 +43,7 @@ fn create_task(
         .stores()
         .task_records()
         .create(TaskCreateParams {
+            requires_labels: Vec::new(),
             actor: "test".to_string(),
             parent_id: None,
             title: format!("task {id_hint}"),
