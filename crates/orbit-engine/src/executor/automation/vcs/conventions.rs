@@ -106,14 +106,14 @@ impl TaskValues<'_> {
                 return (marker, shortened);
             }
             if suffix_chars <= COMMIT_SUBJECT_BUDGET.saturating_sub(1) {
-                // Ellipsis and a separating space precede the suffix.
+                // Add a separator only when the ellipsis leaves room for it.
                 let keep = COMMIT_SUBJECT_BUDGET
                     .saturating_sub(suffix_chars)
                     .saturating_sub(2);
                 let mut cut: String = subject[..start].chars().take(keep).collect();
                 cut = cut.trim_end().to_string();
                 cut.push(SUBJECT_ELLIPSIS);
-                if !cut.is_empty() && !suffix.starts_with(' ') {
+                if suffix_chars < COMMIT_SUBJECT_BUDGET.saturating_sub(1) {
                     cut.push(' ');
                 }
                 cut.push_str(suffix);
