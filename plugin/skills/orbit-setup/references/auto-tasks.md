@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The fourteen seeded definitions
+## The fifteen seeded definitions
 
-`orbit workspace init` seeds all fourteen, disabled, except any you deleted (see
+`orbit workspace init` seeds all fifteen, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -512,6 +512,19 @@ plugin being removed.
   coupling hotspot) rather than patching one regression. A run where every
   ranking sits below `min_support` is a successful no-op that reports each
   ranking's below-support counts and files nothing.
+- **`structure-sweep`** (`medium`) — weekly. Scans source files and test
+  files in one pass at the thresholds stated in its body and recorded in
+  every run summary (a non-test source file over 1,000 lines, a module
+  index file over 400 lines of mostly logic, and a test file over 2,000
+  lines). It discovers languages and source and test roots from tracked
+  files and keys layout candidates to the detected language's convention,
+  recording rejected leads with a reason. Each run files at most 4
+  `proposed` restructuring or test-reduction tasks, largest first and
+  grouped by package or subsystem, each with `context_files` and a
+  `spawned_from` relation to the minted chore, which is itself tagged
+  `no-diff-expected` and never builds or runs tests. A test-reduction
+  task keeps that file's coverage — every scenario survives or is named
+  with a reason — and reports the test count before and after.
 
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
