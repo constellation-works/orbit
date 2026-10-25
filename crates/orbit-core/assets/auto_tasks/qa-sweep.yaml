@@ -25,9 +25,11 @@ template:
     attempt write access to `.git` fail (such as `git worktree add` or `git checkout --`).
     Instead:
     - To build an arbitrary baseline revision without writing `.git` or creating
-      `.git/worktrees/*`, extract an archive to a writable scratch directory:
-      `mkdir -p /tmp/base && git archive <sha> | tar -x -C /tmp/base`,
-      then build there using a dedicated build cache/target directory.
+      `.git/worktrees/*`, extract an archive into a new, empty scratch directory:
+      `mkdir -p .orbit/tmp && mktemp -d .orbit/tmp/qa-base.XXXXXX` prints its path,
+      then `git archive <sha> | tar -x -C <that path>`. A fresh directory per
+      extraction keeps files from an earlier archive out of the baseline. Then
+      build there using a dedicated build cache/target directory.
     - To revert a modified tracked file when `git checkout -- <path>` fails
       because it cannot acquire `index.lock`, restore it from the commit tree:
       `git show HEAD:<path> > <path>`.

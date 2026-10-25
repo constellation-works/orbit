@@ -1627,6 +1627,32 @@
     },
     {
       "comments": [
+        "## File one surface-QA task per area",
+        "## File the roll-up",
+        "## Finish",
+        "## Inventory the user-facing surface",
+        "## Partition into bounded areas",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "5d98df98ceae3f610f63648bf3b1fbbc07362fbb4c216e0b1c88a1a07a0d8aa4",
+      "revision": "7e170d24c6b8c80d9367a362585d219f686f25fd",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 3 15 * *"
+        },
+        "tags": [
+          "qa-full-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# The portable system lane is seeded per machine and compatibility-aliased",
         "# for configs written before that crew existed.",
         "## File one surface-QA task per area",
