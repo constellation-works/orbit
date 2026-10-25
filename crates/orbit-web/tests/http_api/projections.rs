@@ -893,7 +893,8 @@ fn github_pr_refs_link_the_pull_request_from_the_origin_remote() {
 
 /// The dashboard serves the task JSON every read surface shares and adds only
 /// its own extras: the detail is the tool host's `orbit.task.show` record plus
-/// `status_transitions`, `job_run_navigable` and `readiness.preparing`, and a
+/// `status_transitions`, `job_run_navigable` and `readiness.preparing` (plus
+/// `escalation_triage` on a held proposed or blocked task), and a
 /// list row carries the same base keys as `orbit.task.list` minus the prose
 /// bodies. A crew this host no longer configures reads as `crew_unresolved` on
 /// the detail, as it does on the CLI and tool host, instead of being swapped
@@ -1065,8 +1066,10 @@ fn block_with_final_recovery(
 }
 
 /// `GET /api/tasks/:id` serves the shared show record plus the dashboard extras.
-/// A blocked task's explanation and guidance match `orbit.task.show`.
-/// List rows and mutation responses omit show-only guidance.
+/// A blocked task's explanation and guidance match `orbit.task.show`, and an
+/// escalated blocked task also carries the dashboard-only `escalation_triage`
+/// readout. List rows and mutation responses omit show-only guidance and the
+/// triage readout.
 #[test]
 fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
     isolated(
@@ -1118,10 +1121,17 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 "move the task back to backlog after fixing the cause"
             );
             assert!(raw["final_recovery"]["at"].as_str().unwrap().contains('T'));
+            assert_eq!(raw["escalation_triage"]["available"], true);
+            assert_eq!(raw["escalation_triage"]["subject"], "block");
+            assert_eq!(raw["escalation_triage"]["run_id"], Value::Null);
 
             let mut detail = raw.clone();
             let stripped = detail.as_object_mut().unwrap();
-            for key in ["status_transitions", "job_run_navigable"] {
+            for key in [
+                "status_transitions",
+                "job_run_navigable",
+                "escalation_triage",
+            ] {
                 assert!(stripped.remove(key).is_some(), "dashboard extra `{key}`");
             }
             if let Some(readiness) = stripped.get_mut("readiness").and_then(Value::as_object_mut) {
@@ -1132,7 +1142,11 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 .run_tool("orbit.task.show", json!({"id": blocked}))
                 .unwrap();
             assert_eq!(detail, shown, "the detail is the shared show record");
-            for extra in ["status_transitions", "job_run_navigable"] {
+            for extra in [
+                "status_transitions",
+                "job_run_navigable",
+                "escalation_triage",
+            ] {
                 assert!(
                     shown.get(extra).is_none(),
                     "the tool show does not add dashboard extra `{extra}`"
@@ -1147,7 +1161,9 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
             for id in [&blocked, &plain] {
                 let row = rows.iter().find(|row| row["id"] == id.as_str()).unwrap();
                 assert!(
-                    row.get("next_step").is_none() && row.get("final_recovery").is_none(),
+                    row.get("next_step").is_none()
+                        && row.get("final_recovery").is_none()
+                        && row.get("escalation_triage").is_none(),
                     "a list row omits show guidance: {row}"
                 );
             }
@@ -1173,17 +1189,24 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
             ));
             assert!(updated.get("status_transitions").is_some());
             assert!(
-                updated.get("next_step").is_none() && updated.get("final_recovery").is_none(),
+                updated.get("next_step").is_none()
+                    && updated.get("final_recovery").is_none()
+                    && updated.get("escalation_triage").is_none(),
                 "a mutation response omits show guidance: {updated}"
             );
             let again =
                 json_ok(server.get(&format!("/api/tasks/{blocked}?workspace=ws_http_fixture")));
             assert!(again.get("next_step").is_some() && again.get("final_recovery").is_some());
+            // The operator comment above is a human touch since the escalation,
+            // so the readout stays but no longer offers the action.
+            assert_eq!(again["escalation_triage"]["available"], false);
+            assert_eq!(again["escalation_triage"]["subject"], "block");
 
             let quiet =
                 json_ok(server.get(&format!("/api/tasks/{plain}?workspace=ws_http_fixture")));
             assert!(quiet.get("next_step").is_none() && quiet.get("final_recovery").is_none());
             assert!(quiet.get("block").is_none());
+            assert!(quiet.get("escalation_triage").is_none());
         },
     );
 }

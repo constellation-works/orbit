@@ -35,6 +35,7 @@ mod search;
 mod task_auto_fix;
 mod task_create;
 mod task_pilot;
+mod task_triage;
 mod tasks;
 mod workspaces;
 

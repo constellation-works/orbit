@@ -22,6 +22,7 @@ mod resume;
 mod review_hook;
 mod run;
 mod task_port;
+mod triage_submit;
 mod upgrade_resume;
 
 #[cfg(test)]
@@ -90,3 +91,4 @@ pub use run::{
 };
 pub(crate) use run::{RunOwnerLiveness, drain_deadline, pull_window_closed, run_owner_liveness};
 pub(crate) use run::{kept_candidate, kept_clause};
+pub use triage_submit::{EscalationTriageRefusal, EscalationTriageSubmitError};

@@ -140,6 +140,14 @@ const PILOT_REFUSAL_MS = 20000;
 const PILOT_POLL_MS = 3000;
 const PILOT_POLL_LIMIT = 600;
 const PILOT_TERMINAL_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held"]);
+// Triage: the escalation triage run this panel submitted for a task, keyed
+// like the pilot runs, while it is live. Absent after the run settles or a
+// reload, when the detail's own `escalation_triage` readout names the run.
+const triageRunsByTask = new Map();
+// A refused Triage submission's message, kept with the action like a refused
+// Run pilot so a refresh that rebuilds the panel does not drop it.
+const triageRefusals = new Map();
+const TRIAGE_REFUSAL_MS = 20000;
 // Fix PR: whether the server would start an out-of-run auto-fix of a review
 // task's pull request, keyed like the ship guard. Read once when the panel
 // shows the task and again after FIX_PR_READINESS_MS or a start, so a list
@@ -4170,6 +4178,7 @@ function buildActionsRow(task, detail, context, { includeLifecycle = true, inclu
   }
   if (includeLifecycle && task.status === "review" && taskPullRequestNumber(task)) appendFixPrControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status === "proposed") appendPilotControls(actions, task, detail, context, mutable);
+  if (includeLifecycle && escalationTriage(task)) appendTriageControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
     btn.disabled = !mutable;
@@ -4624,6 +4633,128 @@ async function watchPilotRun(task, key, runId, visit, context) {
   pilotRunsByTask.delete(key);
   if (!visit.isCurrent()) return;
   if (state) taskActionNotice = `${task.id}: pilot run ${runId} ${state}`;
+  await refreshTasks(context);
+}
+
+// The detail's escalation triage readout, or null when no Triage action is
+// shown: the task is neither held by pilot warnings nor blocked. The server
+// derives it from the pipeline's own candidacy, so the panel enables the
+// action exactly when the endpoint would submit.
+function escalationTriage(task) {
+  const triage = task && task.escalation_triage;
+  return triage && typeof triage === "object" ? triage : null;
+}
+
+// Why Triage is unavailable for this task, or "" when it is offered. The
+// readout's reason is the server's refusal too, so this only saves the
+// round trip.
+function triageDisabledReason(task, mutable, running) {
+  if (!mutable) return aggregateRefusalTitle("Triage", "triage a task");
+  if (running) return `A triage run (${running.runId}) is already triaging this task`;
+  const triage = escalationTriage(task);
+  if (!triage) return "Escalation triage is not available for this task";
+  if (triage.available) return "";
+  const detail = triage.detail || triage.reason || "it does not qualify now";
+  return `Triage unavailable — ${detail}`;
+}
+
+// Triage on a held proposed task or a blocked task: one explicit
+// escalation triage run for this task. It only proposes a decision or names
+// the human action (a blocked task may be requeued by the pipeline's own
+// bounded rule); it never approves, promotes or edits the task itself.
+function appendTriageControls(actions, task, detail, context, mutable) {
+  const triage = escalationTriage(task);
+  const running = triageRunsByTask.get(taskDispatchIdentity(task))
+    || (triage && triage.run_id ? { runId: String(triage.run_id) } : null);
+  const reason = triageDisabledReason(task, mutable, running);
+  const subjectWords = triage && triage.subject === "block"
+    ? "Triage this blocked task: a hard-tier triager requeues it within the final-recovery bound, proposes a decision, or names the human action. Nothing else on the task changes"
+    : "Triage this held pilot assessment: a hard-tier triager proposes a decision or names the human action that settles the hold. It never approves, promotes or edits the task";
+  const btn = el("button", {
+    class: "action triage",
+    text: running ? "triaging…" : "triage",
+    title: reason || subjectWords,
+  });
+  btn.disabled = Boolean(reason);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    runTriage(task, detail, btn, context);
+  });
+  actions.appendChild(btn);
+  if (running) {
+    const link = el("a", { class: "task-quick-link triage-run-link mono", text: running.runId, title: `Open triage run ${running.runId}` });
+    link.href = runHref(running.runId, task.workspace_id ? { workspace: task.workspace_id } : {});
+    actions.appendChild(link);
+  }
+  const refusal = triageRefusals.get(taskDispatchIdentity(task));
+  if (refusal) {
+    const note = actionErrorNode(refusal);
+    note.style.flexBasis = "100%";
+    actions.appendChild(note);
+  }
+}
+
+function triageSignature(task) {
+  const key = taskDispatchIdentity(task);
+  const running = triageRunsByTask.get(key);
+  return `${running ? running.runId : ""}|${triageRefusals.get(key) || ""}`;
+}
+
+async function runTriage(task, detail, btnNode, context) {
+  const visit = captureWorkspaceVisit();
+  const key = taskDispatchIdentity(task);
+  if (!canMutateTask(task) || triageRunsByTask.has(key)) return;
+  const requestPath = visit.path(taskMutationPath(task, "/triage"));
+  triageRefusals.delete(key);
+  const prior = detail.querySelector(".action-error");
+  if (prior) prior.remove();
+  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  btnNode.innerHTML = `<span class="spinner"></span>wait`;
+  let result;
+  try {
+    result = await postJson(requestPath, {});
+  } catch (error) {
+    if (!visit.isCurrent()) return;
+    const message = `triage failed: ${error.message || String(error)}`;
+    triageRefusals.set(key, message);
+    renderTasks(taskList(context), context);
+    setTimeout(() => {
+      if (triageRefusals.get(key) !== message) return;
+      triageRefusals.delete(key);
+      renderTasks(taskList(context), context);
+    }, TRIAGE_REFUSAL_MS);
+    return;
+  }
+  const runId = result && result.run_id ? String(result.run_id) : "";
+  if (!visit.isCurrent()) return;
+  if (runId) triageRunsByTask.set(key, { runId });
+  taskActionNotice = `${task.id}: triage run ${runId || "(no run id)"} ${result && result.state ? result.state : "submitted"}`;
+  renderTasks(taskList(context), context);
+  if (runId) watchTriageRun(task, key, runId, visit, context);
+}
+
+// Follow the submitted run until it settles, then refresh: the task then
+// shows the triage comment the run recorded. A run that cannot be read any
+// more is dropped; the readout's own run link takes over for a live one.
+async function watchTriageRun(task, key, runId, visit, context) {
+  const path = visit.path(taskWorkspacePath(task, `/api/runs/${encodeURIComponent(runId)}`));
+  let state = "";
+  for (let polls = 0; polls < PILOT_POLL_LIMIT; polls += 1) {
+    await new Promise((resolve) => setTimeout(resolve, PILOT_POLL_MS));
+    if (!visit.isCurrent()) return;
+    try {
+      // The run detail is `{ run, steps }`.
+      const detail = await fetchJson(path);
+      const run = detail && detail.run ? detail.run : detail;
+      state = run && run.state ? String(run.state) : "";
+    } catch (_) {
+      break;
+    }
+    if (PILOT_TERMINAL_STATES.has(state)) break;
+  }
+  triageRunsByTask.delete(key);
+  if (!visit.isCurrent()) return;
+  if (state) taskActionNotice = `${task.id}: triage run ${runId} ${state}`;
   await refreshTasks(context);
 }
 
@@ -5835,7 +5966,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${fixPrSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${fixPrSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
