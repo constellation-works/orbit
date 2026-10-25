@@ -285,6 +285,16 @@ try {
     assert.equal(state.length, 2, `the summary and +N more chips both exist ${step}`);
     for (const node of state) assert.equal(node.expanded, node.visible ? 'true' : 'false', `aria-expanded is on the visible chip only ${step}`);
   };
+  // Keyboard focus stays on the all-providers chip that is on screen: a breakpoint
+  // hides the focused chip, and focus must not fall to the body with it.
+  const assertFocusOnVisible = async step => {
+    const state = await page.evaluate(() => {
+      const active = document.activeElement;
+      const visible = [...document.querySelectorAll('#provider-usage-chips [data-usage-key="*"]')].find(node => node.getClientRects().length > 0);
+      return { onVisible: active === visible, active: active === document.body ? 'body' : active.className };
+    });
+    assert.equal(state.onVisible, true, `focus is on the visible chip ${step} (activeElement: ${state.active})`);
+  };
   const unchangedPoll = async () => {
     // The host poll runs every five seconds; the payload is the same override.
     await page.waitForResponse(response => response.url().endsWith('/api/host/resources'), { timeout: 15000 });
@@ -300,13 +310,18 @@ try {
   await shoot('provider-resize-narrow-dark-1440.png', 1440, 560);
   assert.equal(await open(), true, 'the dialog stays open across the breakpoint');
   await assertOpenOnVisible('after narrowing');
+  await assertFocusOnVisible('after narrowing');
   const narrowed = await dialog.boundingBox();
   const summaryBox = await chip('*').boundingBox();
   assert.ok(narrowed.y >= summaryBox.y + summaryBox.height - 1, 'the dialog sits under the summary chip after narrowing');
   await unchangedPoll();
   assert.equal(await open(), true);
   await assertOpenOnVisible('after an unchanged poll');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.className), 'usage-pin', 'Tab from the focused chip reaches Pin after narrowing');
   await page.keyboard.press('Escape');
+  assert.equal(await open(), false, 'Esc closes the dialog after narrowing');
+  await assertFocusOnVisible('after Esc, narrowed');
 
   // Open from the summary chip below 1900px, then widen past the breakpoint.
   await load(1440, () => document.querySelectorAll('#provider-usage-chips .provider-usage-summary').length === 1);
@@ -317,11 +332,39 @@ try {
   await shoot('provider-resize-wide-dark-1920.png', 1920, 560);
   assert.equal(await open(), true, 'the dialog stays open across the breakpoint');
   await assertOpenOnVisible('after widening');
+  await assertFocusOnVisible('after widening');
   await unchangedPoll();
   assert.equal(await open(), true);
   await assertOpenOnVisible('after an unchanged poll');
+  await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(() => document.activeElement.className), 'usage-pin', 'Tab from the focused chip reaches Pin after widening');
   await page.keyboard.press('Escape');
   assert.equal(await open(), false);
+  await assertFocusOnVisible('after Esc, widened');
+
+  // A focus preview (not pinned) follows the chip on screen too. The pointer is
+  // moved away first so that only keyboard focus opens the dialog.
+  await load(1920, () => document.querySelectorAll('#provider-usage-chips .provider-usage-item').length === 4);
+  await away();
+  await chip('*').focus();
+  assert.equal(await open(), true, 'focus opens the all-providers preview');
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await settle(300);
+  assert.equal(await open(), true, 'a focus preview stays open across the breakpoint');
+  await assertOpenOnVisible('after narrowing a focus preview');
+  await assertFocusOnVisible('after narrowing a focus preview');
+  await page.keyboard.press('Escape');
+  assert.equal(await open(), false);
+
+  // A provider's own chip is hidden below 1900px, so narrowing closes its dialog;
+  // focus moves to the summary chip rather than the body.
+  await load(1920, () => document.querySelectorAll('#provider-usage-chips .provider-usage-item').length === 4);
+  await chip('claude').click();
+  assert.equal(await open(), true);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await settle(300);
+  assert.equal(await open(), false, 'a provider dialog with no chip on screen closes at the breakpoint');
+  await assertFocusOnVisible('after a provider dialog closes at the breakpoint');
 
   // Touch: a tap toggles.
   const touch = await browser.newContext({ viewport: { width: 375, height: 800 }, hasTouch: true, isMobile: true });
