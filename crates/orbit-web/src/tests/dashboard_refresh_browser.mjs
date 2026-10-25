@@ -68,7 +68,7 @@ try {
           payload = { sections: [], scope: 'global', crews: [], paths: [], text: '' };
           break;
         case '/api/runs/fixture':
-          payload = { run_id: 'fixture', job_id: 'fixture', state: 'success', steps: [] };
+          payload = { run: { run_id: 'fixture', job_id: 'fixture', state: 'success' }, steps: [] };
           break;
         case '/api/routines':
           payload = { routines: [{ name: 'fixture', source: 'one', target: 'orbit://job/fixture', enabled: true }], clock: {} };
