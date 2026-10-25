@@ -388,15 +388,17 @@ matches what you are bounding:
 
 | Field | Where | Bounds |
 |-------|-------|--------|
-| `timeout_seconds` | On a `target` step, next to `target:` or `spec:` | That step's dispatch. The default `0` adds no step-level bound. |
-| `wall_clock_timeout_seconds` | On an `agent_loop` activity spec | One CLI agent invocation. This is the only bound on an agent run; `max_iterations` is inert (see Retired agent fields). |
+| `wall_clock_timeout_seconds` | On an `agent_loop` activity spec | One CLI agent invocation (`max_iterations` is inert; see Retired agent fields). For reviewer runs, the host's `review.minutes` deadline replaces this bound; a trusted-host or explorer run input `timeout_seconds` can also shorten it. |
 | `timeout_seconds` / `interval_seconds` | On a `loop:` block | The loop's total elapsed time and the pause between passes (see Loops). |
 | `timeout_ms` | In a deterministic `local_shell` activity's `config` | One child process; see Deterministic local shell below. |
+
+Agent steps are bounded by `wall_clock_timeout_seconds` on the referenced
+activity spec, not by step-level properties. The executor does not read
+`timeout_seconds` on a `target` or inline `spec` step as a dispatch deadline:
 
 ```yaml
 - id: implement_one
   target: activity:agent_implement
-  timeout_seconds: 21600
   default_input:
     task_id: "{{ item }}"
 ```
