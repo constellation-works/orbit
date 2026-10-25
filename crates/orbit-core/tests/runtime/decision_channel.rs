@@ -202,8 +202,12 @@ impl Fixture {
     }
 
     fn register(&self) {
+        self.register_with_senders(vec![SENDER.to_string()]);
+    }
+
+    fn register_with_senders(&self, allowed_senders: Vec<String>) {
         self.runtime
-            .register_decision_channel(CHANNEL, HUMAN, PLUGIN, vec![SENDER.to_string()])
+            .register_decision_channel(CHANNEL, HUMAN, PLUGIN, allowed_senders)
             .unwrap();
     }
 
@@ -214,6 +218,17 @@ impl Fixture {
         token: &str,
         caller: DecisionSubmitCaller,
     ) -> Result<DecisionRequest, orbit_core::OrbitError> {
+        self.submit_with_sender(request, answer, token, caller, Some(SENDER))
+    }
+
+    fn submit_with_sender(
+        &self,
+        request: &DecisionRequest,
+        answer: &str,
+        token: &str,
+        caller: DecisionSubmitCaller,
+        sender: Option<&str>,
+    ) -> Result<DecisionRequest, orbit_core::OrbitError> {
         self.runtime
             .submit_decision_via_channel(DecisionSubmitParams {
                 channel: CHANNEL.to_string(),
@@ -221,7 +236,7 @@ impl Fixture {
                 answer_id: answer.to_string(),
                 note: None,
                 token: token.to_string(),
-                sender: Some(SENDER.to_string()),
+                sender: sender.map(str::to_string),
                 auth_results: Some(AUTH_PASS.to_string()),
                 caller,
             })
@@ -344,6 +359,18 @@ fn every_refusal_applies_nothing() {
                         auth_results: Some(AUTH_PASS.into()),
                         caller: Fixture::plugin_caller(),
                     })
+            }),
+        ),
+        (
+            "sender_not_allowed".into(),
+            Box::new(|| {
+                fx.submit_with_sender(
+                    &request,
+                    "1",
+                    &token,
+                    DecisionSubmitCaller::Operator,
+                    Some("forged@example.net"),
+                )
             }),
         ),
         (
@@ -687,11 +714,51 @@ fn an_operator_caller_may_test_a_channel() {
         .mint_decision_token(CHANNEL, &request.id)
         .unwrap();
     let answered = fx
-        .submit(&request, "dismiss", &token, DecisionSubmitCaller::Operator)
+        .submit_with_sender(
+            &request,
+            "dismiss",
+            &token,
+            DecisionSubmitCaller::Operator,
+            None,
+        )
         .unwrap();
     assert_eq!(answered.state, DecisionRequestState::Answered);
     assert_eq!(answered.resolution.unwrap().answered_by, HUMAN);
     assert_eq!(fx.status(&task), TaskStatus::Blocked);
+}
+
+#[test]
+fn an_empty_plugin_sender_is_refused_with_or_without_an_allowlist() {
+    for allowed_senders in [vec![], vec![SENDER.to_string()]] {
+        let fx = fixture();
+        fx.register_with_senders(allowed_senders);
+        let (task, request) = fx.blocked_task_with_request();
+        let token = fx
+            .runtime
+            .mint_decision_token(CHANNEL, &request.id)
+            .unwrap();
+        let comments = fx.comments(&task);
+
+        for sender in ["", " \t "] {
+            let error = fx
+                .submit_with_sender(
+                    &request,
+                    "1",
+                    &token,
+                    Fixture::plugin_caller(),
+                    Some(sender),
+                )
+                .expect_err("an empty sender is absent transport evidence");
+            assert!(error.to_string().contains("sender_not_allowed"), "{error}");
+            assert_eq!(fx.status(&task), TaskStatus::Blocked);
+            assert_eq!(fx.comments(&task), comments, "the refusal wrote a comment");
+            assert_eq!(
+                fx.runtime.get_task_decision_requests(&task).unwrap()[0].state,
+                DecisionRequestState::Open,
+                "the refusal closed the request"
+            );
+        }
+    }
 }
 
 #[test]
