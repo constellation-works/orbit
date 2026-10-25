@@ -39,7 +39,7 @@ fn an_idle_pull_drain_records_what_its_owner_kept_off_this_host() {
     ) {
         return;
     }
-    let mut pair = Pair::with_crews(&[Some("antigravity"), None, None, None, None, None]);
+    let mut pair = Pair::with_crews(&[Some("gemini-flash"), None, None, None, None, None]);
     pair.follower_cli("antigravity", "orbit-test-no-such-provider-cli");
     pair.follower = pair.follower.clone().with_host_os(Some(HostOs::Linux));
     let [crewless, other_os, dependent, footprint, held, holder] =

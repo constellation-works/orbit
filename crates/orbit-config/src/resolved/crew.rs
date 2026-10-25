@@ -7,8 +7,8 @@ use orbit_common::OrbitError;
 use orbit_common::model_defaults::{
     ANTIGRAVITY_ARGON_MODEL, ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK,
     CLAUDE_FABLE_MODEL, CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
-    COPILOT_DEFAULT_MODEL, CURSOR_DEFAULT_MODEL, GEMINI_CREW_MODEL, GROK_DEFAULT_MODEL,
-    MUSE_DEFAULT_MODEL, OPENCODE_DEFAULT_MODEL, PI_DEFAULT_MODEL,
+    COPILOT_DEFAULT_MODEL, GROK_DEFAULT_MODEL, MUSE_DEFAULT_MODEL, MUSE_WONDER_FULL_MODEL,
+    MUSE_WONDER_MODEL,
 };
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
@@ -162,15 +162,13 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("sol", CODEX_SOL_MODEL, "codex"),
         ("luna", CODEX_LUNA_MODEL, "codex"),
         ("astra", CODEX_ASTRA_MODEL, "codex"),
-        ("gemini", GEMINI_CREW_MODEL, "gemini"),
-        ("antigravity", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
+        ("gemini-flash", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
         ("argon", ANTIGRAVITY_ARGON_MODEL, "antigravity"),
         ("grok", GROK_DEFAULT_MODEL, "grok"),
         ("copilot", COPILOT_DEFAULT_MODEL, "copilot"),
-        ("cursor", CURSOR_DEFAULT_MODEL, "cursor"),
-        ("pi", PI_DEFAULT_MODEL, "pi"),
-        ("opencode", OPENCODE_DEFAULT_MODEL, "opencode"),
-        ("muse", MUSE_DEFAULT_MODEL, "muse"),
+        ("muse-spark", MUSE_DEFAULT_MODEL, "muse"),
+        ("muse-wonder", MUSE_WONDER_MODEL, "muse"),
+        ("muse-wonder-full", MUSE_WONDER_FULL_MODEL, "muse"),
     ] {
         crews.insert(
             name.to_string(),

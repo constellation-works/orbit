@@ -25,25 +25,11 @@ use crate::resolved::default_crews;
 pub(crate) const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../assets/default-config.toml");
 
 /// Crew families Orbit ships crews for, in the order a seeded config prefers
-/// them. `ollama` is deliberately absent: Orbit ships no `ollama` crew.
-/// Antigravity occupies Gemini's previous default-provider slot so a host
-/// with `agy` prefers the current Google terminal CLI. Legacy `gemini` stays
-/// later so enterprise Gemini CLI-only hosts still seed. Copilot, Cursor, and
-/// Pi remain appended after the original families, then OpenCode, then Muse,
-/// so adding a lane never reorders an existing host's preference.
-/// [ORB-10946] [ORB-10945] [ORB-11296] [ORB-11299] [ORB-11295] [ORB-16577]
-const CREW_FAMILY_PREFERENCE: &[&str] = &[
-    "claude",
-    "codex",
-    "antigravity",
-    "gemini",
-    "grok",
-    "copilot",
-    "cursor",
-    "pi",
-    "opencode",
-    "muse",
-];
+/// them. Families with no built-in crew (`ollama`, the legacy `gemini` CLI,
+/// Cursor, Pi, OpenCode) are not seeded; an operator defines their crews by
+/// hand. [ORB-10946] [ORB-11299] [ORB-16577]
+const CREW_FAMILY_PREFERENCE: &[&str] =
+    &["claude", "codex", "antigravity", "grok", "copilot", "muse"];
 
 /// The crew each family's default lane runs on, in [`CREW_FAMILY_PREFERENCE`]
 /// order. The first available family's entry is the seeded
@@ -51,14 +37,10 @@ const CREW_FAMILY_PREFERENCE: &[&str] = &[
 const DEFAULT_CREW_BY_FAMILY: &[(&str, &str)] = &[
     ("claude", "opus"),
     ("codex", "astra"),
-    ("antigravity", "antigravity"),
-    ("gemini", "gemini"),
+    ("antigravity", "gemini-flash"),
     ("grok", "grok"),
     ("copilot", "copilot"),
-    ("cursor", "cursor"),
-    ("pi", "pi"),
-    ("opencode", "opencode"),
-    ("muse", "muse"),
+    ("muse", "muse-spark"),
 ];
 
 /// Seeded `workflow.*_complexity_crews` pools, keyed by detected codex/claude
@@ -166,11 +148,10 @@ impl ConfigSeed {
 
     /// The seeded complexity pools `[low, medium, hard, xhard]`, derived from
     /// the detected families. Codex and claude pick a base row; grok is
-    /// appended to medium; a Google CLI is appended to low, `antigravity` when
-    /// `agy` is present and `gemini` otherwise; `argon` is appended to hard
-    /// when `agy` is present. Families with no pool rule (copilot, cursor, pi,
-    /// opencode, muse) leave their pools as they are, and an empty pool routes
-    /// to `default_crew`.
+    /// appended to medium; `agy` appends `gemini-flash` to low and `argon` to
+    /// hard; `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full`
+    /// to low, medium and hard. Copilot has no pool rule, and an empty pool
+    /// routes to `default_crew`.
     pub fn complexity_pools(&self) -> [Vec<&'static str>; 4] {
         let (codex, claude) = (self.has_family("codex"), self.has_family("claude"));
         let mut pools: [Vec<&'static str>; 4] = BASE_POOLS
@@ -182,10 +163,13 @@ impl ConfigSeed {
             pools[1].push("grok");
         }
         if self.has_family("antigravity") {
-            pools[0].push("antigravity");
+            pools[0].push("gemini-flash");
             pools[2].push("argon");
-        } else if self.has_family("gemini") {
-            pools[0].push("gemini");
+        }
+        if self.has_family("muse") {
+            pools[0].push("muse-spark");
+            pools[1].push("muse-wonder");
+            pools[2].push("muse-wonder-full");
         }
         pools
     }
@@ -254,10 +238,19 @@ fn render_seeded_config(template: &str, seed: Option<&ConfigSeed>) -> Result<Str
     Ok(body)
 }
 
-/// The `[workflow]` keys a seed owns: the default crew, naming a crew the
-/// same file defines, and the four complexity pools seeded from the detected
-/// families (empty when no pool rule applies, so an operator still finds them
-/// without reading the docs).
+/// Crews final recovery is seeded with, in order, when this host seeds them
+/// enabled. Without any of them it falls back to [`FINAL_RECOVERY_FALLBACK`].
+const FINAL_RECOVERY_PREFERENCE: &[&str] = &["sol", "grok", "muse-wonder"];
+
+/// Final recovery's seeded crew on a host with none of
+/// [`FINAL_RECOVERY_PREFERENCE`].
+const FINAL_RECOVERY_FALLBACK: &str = "opus";
+
+/// The `[workflow]` keys a seed owns, written explicitly so no crew route is
+/// an invisible default: the default crew, the four complexity pools seeded
+/// from the detected families, and every `purpose_crews` pool. A purpose whose
+/// route no fixed list can express (the task's own complexity pool, the
+/// review pool) is written as `[]` with a comment naming that route.
 pub(crate) fn render_workflow_crew_keys(
     seed: &ConfigSeed,
     crews: &BTreeMap<String, Crew>,
@@ -269,22 +262,16 @@ pub(crate) fn render_workflow_crew_keys(
                 "workflow.default_crew names crew `{name}`, which this host does not seed enabled"
             )));
         }
-        rendered.push_str(
-            "# `default_crew` runs every task that declares no crew of its own and\n\
-             # whose complexity pool below is empty. It names a crew from the\n\
-             # `[crews.<name>]` tables below.\n",
-        );
+        rendered
+            .push_str("# Runs a task with no crew of its own whose complexity pool is empty.\n");
         rendered.push_str(&format!("default_crew = {}\n", toml::Value::String(name)));
     }
     rendered.push_str(
-        "# Automatic crew pools by task complexity. Entries are crew names, written\n\
-         # `name` or `name:weight` (all bare or all weighted). A task created without\n\
-         # a crew draws from the pool for its complexity, and so does system work:\n\
-         # auto-task templates by their complexity, the task pilot from `low`, and\n\
-         # step-failure and PR conflict recovery from `medium`. An empty pool routes\n\
-         # that complexity to `default_crew`.\n",
+        "# Crew pools by task complexity: `name` or `name:weight` entries, all bare or\n\
+         # all weighted.\n",
     );
-    for (key, pool) in POOL_KEYS.into_iter().zip(seed.complexity_pools()) {
+    let pools = seed.complexity_pools();
+    for (key, pool) in POOL_KEYS.into_iter().zip(&pools) {
         if let Some(name) = pool
             .iter()
             .find(|name| !crews.get(**name).is_some_and(|crew| crew.enabled))
@@ -293,13 +280,62 @@ pub(crate) fn render_workflow_crew_keys(
                 "workflow.{key} names crew `{name}`, which this host does not seed enabled"
             )));
         }
-        let entries = pool
-            .into_iter()
-            .map(|name| toml::Value::String(name.to_string()))
-            .collect::<Vec<_>>();
-        rendered.push_str(&format!("{key} = {}\n", toml::Value::Array(entries)));
+        rendered.push_str(&format!("{key} = {}\n", toml_array(pool)));
     }
+    rendered.push_str(&render_purpose_crews(&pools, crews));
     Ok(rendered)
+}
+
+/// Every `workflow.purpose_crews` key, each with the crews its route resolves
+/// to on this host.
+fn render_purpose_crews(pools: &[Vec<&'static str>; 4], crews: &BTreeMap<String, Crew>) -> String {
+    let [low, medium, ..] = pools;
+    let enabled = |name: &&str| crews.get(*name).is_some_and(|crew| crew.enabled);
+    let mut final_recovery: Vec<&str> = FINAL_RECOVERY_PREFERENCE
+        .iter()
+        .copied()
+        .filter(enabled)
+        .collect();
+    if final_recovery.is_empty() && enabled(&FINAL_RECOVERY_FALLBACK) {
+        final_recovery.push(FINAL_RECOVERY_FALLBACK);
+    }
+    let mut rendered =
+        String::from("# Crew pools by purpose of work, written like the pools above.\n");
+    let keys: [(&str, &[&str], &str); 9] = [
+        ("task_pilot", low, ""),
+        ("auto_fix", low, ""),
+        ("failure_recovery", medium, ""),
+        ("review", medium, ""),
+        ("pre_landing_review", &[], "  # [] uses the review pool"),
+        (
+            "final_recovery",
+            &final_recovery,
+            "  # [] turns final recovery off",
+        ),
+        (
+            "baseline_red_repair",
+            &[],
+            "  # [] uses the task's complexity pool",
+        ),
+        ("sweep_tasks", &[], "  # [] uses the task's complexity pool"),
+        ("explorer", &[], "  # [] offers no read-only explorers"),
+    ];
+    for (key, pool, note) in keys {
+        rendered.push_str(&format!(
+            "purpose_crews.{key} = {}{note}\n",
+            toml_array(pool)
+        ));
+    }
+    rendered
+}
+
+fn toml_array(names: &[&str]) -> toml::Value {
+    toml::Value::Array(
+        names
+            .iter()
+            .map(|name| toml::Value::String((*name).to_string()))
+            .collect(),
+    )
 }
 
 fn render_crews(crews: &BTreeMap<String, Crew>) -> String {

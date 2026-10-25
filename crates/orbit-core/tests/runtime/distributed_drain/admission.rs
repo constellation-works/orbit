@@ -1167,20 +1167,20 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
     }
 }
 
-/// A follower whose window preflight cannot find crew `antigravity`'s CLI is
-/// never handed an `antigravity` task [ORB-13941]. The owner admits the next
+/// A follower whose window preflight cannot find crew `gemini-flash`'s CLI is
+/// never handed a `gemini-flash` task [ORB-13941]. The owner admits the next
 /// task it can run instead and, once only the unrunnable one is left, answers
 /// idle and names it, so the task stays in the backlog for the owner or
 /// another follower rather than being claimed and failed here.
 fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
-    let pair = Pair::with_crews(&[Some("antigravity"), Some("sol")]);
+    let pair = Pair::with_crews(&[Some("gemini-flash"), Some("sol")]);
     pair.follower_cli("antigravity", "orbit-test-no-such-provider-cli");
     let (unrunnable, runnable) = (&pair.tasks[0], &pair.tasks[1]);
     let drain = pair.start_drain();
 
     let leaf = pair.running_leaf(&drain, 1);
     let first = pair.pass(&drain);
-    let exclusion = excluded(&first, "antigravity");
+    let exclusion = excluded(&first, "gemini-flash");
     assert_eq!(exclusion["source"], "preflight", "{first}");
     assert!(
         exclusion["reason"]
@@ -1203,7 +1203,7 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
             .as_array()
             .expect("declared crews");
         assert!(runnable.iter().any(|crew| crew == "sol"), "{pull}");
-        assert!(runnable.iter().all(|crew| crew != "antigravity"), "{pull}");
+        assert!(runnable.iter().all(|crew| crew != "gemini-flash"), "{pull}");
     }
     let idle_receipt = pair
         .follower_jobs
@@ -1227,7 +1227,7 @@ fn a_follower_never_receives_a_claim_for_a_crew_its_window_cannot_run() {
         window
             .excluded
             .iter()
-            .any(|exclusion| exclusion.crew == "antigravity"),
+            .any(|exclusion| exclusion.crew == "gemini-flash"),
         "{window:#?}"
     );
 }

@@ -23,13 +23,10 @@ use crate::review_after_landing_cli::{
 const CONSUMER: &str = "delivery-code-review";
 const POOL_KEY: &str = "workflow.purpose_crews.review";
 
-/// Two crews on the `muse` executor, which this fixture explicitly pins to
-/// `host_os: macos` (the shipped muse asset itself is unrestricted).
+/// A second crew on the `muse` executor beside the seeded `muse-wonder`; the
+/// fixture explicitly pins that executor to `host_os: macos` (the shipped muse
+/// asset itself is unrestricted).
 const MUSE_CREWS: &str = r#"
-[crews.muse-wonder]
-model = "muse-spark-1.3"
-provider = "muse"
-
 [crews.muse-calm]
 model = "muse-spark-1.3"
 provider = "muse"
@@ -60,6 +57,7 @@ fn linux_tagged_consumer() -> Fixture {
     pin_muse_macos_only(&fixture);
     enable_review_crew(&fixture);
     set_policy(&fixture, "crews.haiku.enabled", "true");
+    set_policy(&fixture, "crews.muse-wonder.enabled", "true");
     fs::OpenOptions::new()
         .append(true)
         .create(true)
