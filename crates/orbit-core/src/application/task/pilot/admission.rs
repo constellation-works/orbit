@@ -812,6 +812,23 @@ impl OrbitRuntime {
             })
     }
 
+    /// Whether the task currently carries a pilot-admission hold that an
+    /// evidenced operator `clear` or `approve-anyway` decision can resolve.
+    /// The dashboard's typed operator route checks this before writing, so a
+    /// task with no matching hold is refused without a comment.
+    pub fn has_resolvable_pilot_admission_hold(&self, task_id: &str) -> Result<bool, OrbitError> {
+        Ok(matches!(
+            self.pilot_admission_hold(task_id)?,
+            Some(
+                PilotAdmissionHold::OperatorValidation(_)
+                    | PilotAdmissionHold::NativeOs(_)
+                    | PilotAdmissionHold::HostOperational(_)
+                    | PilotAdmissionHold::Duplicate
+                    | PilotAdmissionHold::AlreadyLanded
+            )
+        ))
+    }
+
     /// Only the trusted human update path calls this. Agent-authored comment
     /// text cannot mint a resolution event or satisfy an operator handoff.
     /// Each typed hold records its own resolution event; one decision

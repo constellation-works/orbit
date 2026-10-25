@@ -191,6 +191,22 @@ pub const DASHBOARD_TASK_SETTLE_MERGED: GovernedOperation = GovernedOperation {
     rationale: "settling a task from a merged pull request completes it without a run; only an operator decides that",
 };
 
+/// Record an operator decision on a task-pilot admission hold from the dashboard.
+pub const DASHBOARD_TASK_PILOT_ADMISSION: GovernedOperation = GovernedOperation {
+    id: "task.pilot_admission",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "clearing or overriding a task-pilot admission hold releases held work on an operator's evidenced decision; only an operator decides that",
+};
+
+/// Record an operator measurement of an owed post-deploy criterion from the dashboard.
+pub const DASHBOARD_TASK_POST_DEPLOY: GovernedOperation = GovernedOperation {
+    id: "task.post_deploy",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "recording a deployed-build measurement settles an owed acceptance criterion; only an operator decides that",
+};
+
 /// Configuration write from the dashboard's Config tab [ORB-12724].
 pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
     id: "config.set",
@@ -614,6 +630,8 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_HANDOFF_RETRY,
     DASHBOARD_TASK_REQUEUE,
     DASHBOARD_TASK_SETTLE_MERGED,
+    DASHBOARD_TASK_PILOT_ADMISSION,
+    DASHBOARD_TASK_POST_DEPLOY,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
     DASHBOARD_HOST_EDIT,

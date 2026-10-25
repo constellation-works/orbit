@@ -89,6 +89,18 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
             "/tasks/:id/settle-merged",
             post(tasks::settle_merged_task_action),
         )
+        .route(
+            "/tasks/:id/pilot-admission",
+            post(tasks::pilot_admission_task_action),
+        )
+        .route(
+            "/tasks/:id/post-deploy",
+            post(tasks::post_deploy_task_action),
+        )
+        .route(
+            "/tasks/:id/post-deploy/:criterion/met",
+            post(tasks::post_deploy_met_task_action),
+        )
         // Fix PR: one task's out-of-run auto-fix, as an `--auto-fix` drain
         // would start it; GET answers whether it would start now.
         .route(

@@ -80,6 +80,8 @@ mod task_auto_fix;
 mod task_contracts;
 #[path = "http_api/task_create.rs"]
 mod task_create;
+#[path = "http_api/task_operator_records.rs"]
+mod task_operator_records;
 #[path = "http_api/task_pilot.rs"]
 mod task_pilot;
 #[path = "http_api/task_recovery.rs"]
