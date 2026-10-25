@@ -523,7 +523,9 @@ impl RegisteredRuntimeFactory {
         )
         .map(|runtime| {
             attach_registry_context(
-                runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
+                runtime
+                    .with_coordination_write_owner(replica_owner_for_checkout(checkout))
+                    .with_workspace_explicitly_selected(true),
                 global_root,
                 identity,
             )
@@ -585,7 +587,9 @@ impl RegisteredRuntimeFactory {
         )
         .map(|runtime| {
             attach_registry_context(
-                runtime.with_coordination_write_owner(replica_owner_for_checkout(checkout)),
+                runtime
+                    .with_coordination_write_owner(replica_owner_for_checkout(checkout))
+                    .with_workspace_explicitly_selected(true),
                 global_root,
                 identity,
             )

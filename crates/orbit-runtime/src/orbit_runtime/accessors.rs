@@ -49,6 +49,19 @@ impl RuntimeKernel {
         self.shared_root_path()
     }
 
+    /// Whether the composition layer opened this runtime for a workspace the
+    /// caller named explicitly, rather than one discovered from the cwd.
+    pub fn workspace_explicitly_selected(&self) -> bool {
+        self.workspace_explicitly_selected
+    }
+
+    /// Record that this runtime's workspace was explicitly selected. Only
+    /// the composition layer that resolved a selector may set this.
+    pub fn with_workspace_explicitly_selected(mut self, selected: bool) -> Self {
+        self.workspace_explicitly_selected = selected;
+        self
+    }
+
     pub(crate) fn shared_root_path(&self) -> &Path {
         self.context.shared_root()
     }
