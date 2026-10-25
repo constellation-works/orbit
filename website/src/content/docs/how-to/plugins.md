@@ -266,6 +266,8 @@ orbit plugin remove notes --yes
 
 ## Related
 
+- [Plugin manifest](../../reference/plugin-manifest/) covers authoring, backend
+  contracts, conformance cases, dashboard panels and legacy-tool migration.
 - [CLI commands](../../reference/cli/) lists every `orbit plugin` verb.
 - [Configuration](../../reference/config/) covers plugin settings and the workspace
   `config.toml`.
