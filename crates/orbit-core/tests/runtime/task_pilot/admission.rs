@@ -1087,6 +1087,32 @@ fn append_comment(workspace: &Workspace, task: &Task, by: &str, at: &str, messag
     .unwrap();
 }
 
+fn append_history(workspace: &Workspace, task: &Task, entry: orbit_types::task::TaskHistoryEntry) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &workspace.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        workspace.runtime.workspace_id().unwrap(),
+        workspace.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(
+        &task.id,
+        orbit_store::contracts::TaskHistoryUpdateParams {
+            actor: entry.by.clone(),
+            append_history: vec![entry],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
 fn an_override_comment_decides_only_when_written_before_the_store_recorded_typed_decisions() {
     for (decision, verdict) in [
         ("approve-anyway", PilotAdmissionVerdict::ApproveAnyway),
@@ -1229,12 +1255,185 @@ fn an_enabled_pilot_hold_raises_one_open_decision_request() {
             .iter()
             .map(|answer| answer.id.as_str())
             .collect::<Vec<_>>(),
-        vec!["approve_anyway", "clear", "evaluated"]
+        vec!["approve_anyway", "clear"]
     );
     assert!(
         matches!(&request.binding, orbit_types::task::DecisionBinding::PilotOperation { operation_id } if !operation_id.is_empty()),
         "{request:?}"
     );
+}
+
+fn an_evaluated_answer_on_a_finding_hold_is_refused_and_a_valid_answer_releases_it() {
+    for (field, reason) in [
+        ("duplicate_of", "pilot_duplicate"),
+        ("already_landed", "pilot_already_landed"),
+    ] {
+        let workspace = decision_channel_workspace();
+        let task = backlog_task(&workspace);
+        assess(&workspace, &task, Some(field));
+        assert_admission(&workspace, &task, Some(reason));
+        let request = decision_requests(&workspace, &task).pop().unwrap();
+        assert_eq!(
+            request
+                .answers
+                .iter()
+                .map(|answer| answer.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["approve_anyway", "clear"],
+            "{field}: evaluated does not resolve this hold, so it is not offered"
+        );
+        let comments_before = workspace.runtime.get_task_comments(&task.id).unwrap();
+        let history_before = workspace.runtime.get_task_history(&task.id).unwrap();
+        let refused = workspace
+            .runtime
+            .answer_decision_request_as_human(
+                &request.id,
+                "evaluated",
+                None,
+                "human:fixture".into(),
+                Some("dashboard".into()),
+            )
+            .expect_err("evaluated is not an answer for a finding hold");
+        let message = refused.to_string();
+        assert!(
+            message.contains("answer_not_allowed") && message.contains("nothing was applied"),
+            "{field}: {message}"
+        );
+        assert_eq!(
+            workspace.runtime.get_task_comments(&task.id).unwrap(),
+            comments_before,
+            "{field}: a refused answer writes no comment"
+        );
+        assert_eq!(
+            workspace.runtime.get_task_history(&task.id).unwrap(),
+            history_before,
+            "{field}: a refused answer writes no resolution or answered marker"
+        );
+        let open = decision_requests(&workspace, &task);
+        assert_eq!(open.len(), 1, "{field}");
+        assert_eq!(open[0].id, request.id);
+        assert_eq!(open[0].state, orbit_types::task::DecisionRequestState::Open);
+        assert!(open[0].resolution.is_none(), "{field}");
+        assert_admission(&workspace, &task, Some(reason));
+
+        let answered = workspace
+            .runtime
+            .answer_decision_request_as_human(
+                &request.id,
+                "clear",
+                None,
+                "human:fixture".into(),
+                Some("dashboard".into()),
+            )
+            .unwrap();
+        assert_eq!(
+            answered.state,
+            orbit_types::task::DecisionRequestState::Answered
+        );
+        assert_eq!(answered.resolution.unwrap().answer_id, "clear");
+        assert_admission(&workspace, &task, None);
+        let decided = workspace
+            .runtime
+            .get_task_history(&task.id)
+            .unwrap()
+            .into_iter()
+            .filter_map(|entry| match entry.decision {
+                Some(TaskDecision::PilotAdmission { verdict, .. }) => Some(verdict),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(decided, vec![PilotAdmissionVerdict::Clear], "{field}");
+    }
+}
+
+/// A request raised before the offer was hold-aware still lists `evaluated`.
+/// Answering it must refuse before the comment and the answered marker, and
+/// the same request must still accept a verdict that releases the hold.
+fn an_evaluated_answer_still_listed_on_an_older_request_is_refused() {
+    let workspace = decision_channel_workspace();
+    let task = backlog_task(&workspace);
+    assess(&workspace, &task, Some("duplicate_of"));
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+    let current = decision_requests(&workspace, &task).pop().unwrap();
+    let older_offer = orbit_types::task::DecisionRequest::new(
+        task.id.clone(),
+        orbit_types::task::DecisionGate::PilotAdmission,
+        PilotAdmissionVerdict::decision_answers(),
+        current.binding.clone(),
+        "task_pilot".into(),
+        current.raised_at + chrono::Duration::seconds(1),
+    );
+    append_history(&workspace, &task, older_offer.history_entry("task-pilot"));
+    let requests = decision_requests(&workspace, &task);
+    assert_eq!(requests.len(), 2, "{requests:?}");
+    assert_eq!(
+        requests[0].state,
+        orbit_types::task::DecisionRequestState::Superseded
+    );
+    let request_id = requests[1].id.clone();
+    assert_eq!(
+        requests[1].state,
+        orbit_types::task::DecisionRequestState::Open
+    );
+    assert!(
+        requests[1]
+            .answers
+            .iter()
+            .any(|answer| answer.id == "evaluated"),
+        "the pre-fix offer still lists evaluated: {requests:?}"
+    );
+    let comments_before = workspace.runtime.get_task_comments(&task.id).unwrap();
+    let history_before = workspace.runtime.get_task_history(&task.id).unwrap();
+    let refused = workspace
+        .runtime
+        .answer_decision_request_as_human(
+            &request_id,
+            "evaluated",
+            None,
+            "human:fixture".into(),
+            Some("dashboard".into()),
+        )
+        .expect_err("evaluated does not resolve a duplicate hold");
+    let message = refused.to_string();
+    assert!(
+        message.contains("answer_not_applicable") && message.contains("nothing was applied"),
+        "{message}"
+    );
+    assert_eq!(
+        workspace.runtime.get_task_comments(&task.id).unwrap(),
+        comments_before,
+        "a refused answer writes no comment"
+    );
+    assert_eq!(
+        workspace.runtime.get_task_history(&task.id).unwrap(),
+        history_before,
+        "a refused answer writes no resolution or answered marker"
+    );
+    let still = decision_requests(&workspace, &task);
+    assert_eq!(
+        still[1].state,
+        orbit_types::task::DecisionRequestState::Open
+    );
+    assert!(still[1].resolution.is_none());
+    assert_eq!(still[1].id, request_id);
+    assert_admission(&workspace, &task, Some("pilot_duplicate"));
+
+    let answered = workspace
+        .runtime
+        .answer_decision_request_as_human(
+            &request_id,
+            "approve_anyway",
+            Some("Not a duplicate: the deliverables differ.".into()),
+            "human:fixture".into(),
+            Some("dashboard".into()),
+        )
+        .unwrap();
+    assert_eq!(
+        answered.state,
+        orbit_types::task::DecisionRequestState::Answered
+    );
+    assert_eq!(answered.resolution.unwrap().answer_id, "approve_anyway");
+    assert_admission(&workspace, &task, None);
 }
 
 fn answering_a_pilot_request_records_the_verdict_and_releases_the_hold() {
@@ -1449,6 +1648,8 @@ fn agent_and_unregistered_submissions_leave_the_pilot_hold_held() {
 crate::scenario_table!(
     decision_channel_pilot_hold_scenarios,
     an_enabled_pilot_hold_raises_one_open_decision_request,
+    an_evaluated_answer_on_a_finding_hold_is_refused_and_a_valid_answer_releases_it,
+    an_evaluated_answer_still_listed_on_an_older_request_is_refused,
     answering_a_pilot_request_records_the_verdict_and_releases_the_hold,
     a_disabled_pilot_hold_writes_no_decision_request,
     a_second_pilot_hold_supersedes_the_first,

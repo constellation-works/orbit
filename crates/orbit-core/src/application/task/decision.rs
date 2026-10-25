@@ -9,7 +9,9 @@
 //! and later the delegated channel that submits a human's answer to core.
 //! It refuses a stale answer (superseded, expired, or an answer outside
 //! the request's allowed set) with the design's named refusals and writes
-//! nothing; an allowed answer lands through the human funnel
+//! nothing. An allowed pilot answer that cannot resolve the current
+//! duplicate or already-landed hold is refused the same way, before any
+//! comment. Every other allowed answer lands through the human funnel
 //! (`update_task_as_human`, or `approve_task_screened` / `reject_task` for
 //! approvals) and only then records `decision_answered`, which is what
 //! makes the request read `answered`.
@@ -280,24 +282,39 @@ impl OrbitRuntime {
                 Ok(())
             }
             DecisionGate::PilotAdmission => {
-                let verdict = match answer_id {
+                let (verdict, header) = match answer_id {
                     value if value == PilotAdmissionVerdict::ApproveAnyway.as_str() => {
-                        "approve-anyway"
+                        (PilotAdmissionVerdict::ApproveAnyway, "approve-anyway")
                     }
-                    value if value == PilotAdmissionVerdict::Clear.as_str() => "clear",
-                    value if value == PilotAdmissionVerdict::Evaluated.as_str() => "evaluated",
+                    value if value == PilotAdmissionVerdict::Clear.as_str() => {
+                        (PilotAdmissionVerdict::Clear, "clear")
+                    }
+                    value if value == PilotAdmissionVerdict::Evaluated.as_str() => {
+                        (PilotAdmissionVerdict::Evaluated, "evaluated")
+                    }
                     other => {
                         return Err(OrbitError::InvalidInput(format!(
                             "answer_not_allowed: `{other}` is not a pilot-admission verdict; nothing was applied"
                         )));
                     }
                 };
+                // Requests raised before the offer was hold-aware still list
+                // `evaluated`. Refuse it before the comment: a successful
+                // apply is what appends `decision_answered`, and this verdict
+                // records no resolution for a duplicate or already-landed hold.
+                if let Some(hold) = self.pilot_admission_hold(task_id)?
+                    && !hold.accepts_decision_answer(verdict)
+                {
+                    return Err(OrbitError::InvalidInput(format!(
+                        "answer_not_applicable: `{answer_id}` does not resolve a duplicate or already-landed pilot hold; nothing was applied and the request stays open"
+                    )));
+                }
                 // The trusted human path records the typed resolution from
                 // this comment's header; the lines after it are its evidence.
                 let evidence =
                     note.unwrap_or("The operator answered the decision request for this hold.");
                 let comment = format!(
-                    "task-pilot-admission: {verdict}\n{evidence}\nAnswered decision request {} via {via}.",
+                    "task-pilot-admission: {header}\n{evidence}\nAnswered decision request {} via {via}.",
                     request.id
                 );
                 self.update_task_as_human(
