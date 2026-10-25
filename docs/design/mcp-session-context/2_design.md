@@ -23,8 +23,8 @@ related_artifacts: []
 | workspace | Tool input, initialize metadata, or the server's launch binding | Address selector, resolved per call against the accepting server's registry |
 | workspace_id | Authoritative server resolution | Stable logical workspace selected for execution |
 | caller_machine_id | Local identity or SSH proxy argument | Opaque audit correlation label |
-| caller_host_id | Local accepting server | Local display label; unset for a remote caller |
-| process_machine_id, process_host_id | Accepting server | Machine that executes the call |
+| caller_machine_name (legacy read alias `caller_host_id`) | Local accepting server | Local display label; unset for a remote caller |
+| process_machine_id, process_machine_name (legacy read alias `process_host_id`) | Accepting server | Machine that executes the call |
 | transport | Accepting server | local or ssh-mcp |
 | caller_ip | Accepting SSH environment | Best-effort first field of SSH_CONNECTION |
 | trace_id | MCP adapter | Fresh correlation ID for one tools/call |

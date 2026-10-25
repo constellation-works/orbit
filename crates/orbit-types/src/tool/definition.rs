@@ -28,8 +28,8 @@ pub struct ToolSessionContext {
     /// metadata, not an authenticated principal; see [`Self::remote_caller_machine_id`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub caller_machine_id: Option<String>,
-    /// [ORB-12725] `caller_host_id` is read for one release so a session
-    /// envelope from an older peer still deserializes.
+    /// Permanent read alias [ORB-12725, ORB-18313]: `caller_host_id` stays
+    /// readable for session envelopes written before v0.24.
     #[serde(
         default,
         alias = "caller_host_id",
@@ -39,7 +39,7 @@ pub struct ToolSessionContext {
     /// Stable identity of the accepting machine, derived by the server.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_machine_id: Option<String>,
-    /// [ORB-12725] `process_host_id` is read for one release; see
+    /// Permanent read alias [ORB-12725, ORB-18313]: `process_host_id`; see
     /// [`Self::caller_machine_name`].
     #[serde(
         default,
