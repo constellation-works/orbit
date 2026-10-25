@@ -1357,7 +1357,7 @@ function buildDeliveryAttentionBanner(task) {
   ]);
 }
 
-function buildPilotWarnings(task, detail, context) {
+function buildPilotWarnings(task) {
   const findings = pilotWarnings(task);
   if (!findings.length) return null;
   const labels = {
@@ -1373,37 +1373,49 @@ function buildPilotWarnings(task, detail, context) {
       el("span", { text: finding.text }),
     ]))),
   ]);
-  if (detail && context) {
-    content.appendChild(el("p", {
-      class: "task-attention-body operator-record-note",
-      text: "Clear hold records that the held requirement is satisfied; Approve anyway records a deliberate override. Each records your evidence with the decision and releases the hold exactly as the same written record from the command line does.",
-    }));
-    const actions = el("div", { class: "task-attention-actions operator-record-actions" });
-    const mutable = canMutateTask(task);
-    const disabledTitle = mutable ? "" : aggregateRefusalTitle("Operator record", "record an operator decision");
-    const clear = el("button", {
-      class: "attention-action primary pilot-admission-clear",
-      type: "button",
-      text: "Clear hold",
-      title: disabledTitle || "Record that the held requirement is satisfied, with your evidence; this clears the pilot admission hold",
-    });
-    clear.disabled = !mutable;
-    clear.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, clear, context, { kind: "pilot", verdict: "clear" }); });
-    actions.appendChild(clear);
-    const approve = el("button", {
-      class: "attention-action pilot-admission-approve-anyway",
-      type: "button",
-      text: "Approve anyway",
-      title: disabledTitle || "Record a deliberate override of the pilot admission hold, with your reason; the task is admitted despite the finding",
-    });
-    approve.disabled = !mutable;
-    approve.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, approve, context, { kind: "pilot", verdict: "approve-anyway" }); });
-    actions.appendChild(approve);
-    content.appendChild(actions);
-    const refusal = operatorRecordRefusals.get(taskDispatchIdentity(task));
-    if (refusal) content.appendChild(actionErrorNode(refusal));
-  }
   return el("section", { class: "task-attention warning pilot-warnings", "aria-label": "Pilot warnings" }, [
+    el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
+    content,
+  ]);
+}
+
+// Admission holds apply beyond proposed promotion warnings. When the decision
+// channel carries this hold, its existing answer controls are the action set.
+function buildPilotAdmissionHold(task, detail, context) {
+  if (!task.resolvable_pilot_admission_hold) return null;
+  if ((task.open_decisions || []).some(request => request.gate === "pilot_admission")) return null;
+  const content = el("div", { class: "task-attention-content" }, [
+    el("h3", { class: "task-attention-title", text: "Pilot admission hold" }),
+  ]);
+  content.appendChild(el("p", {
+    class: "task-attention-body operator-record-note",
+    text: "Clear hold records that the held requirement is satisfied; Approve anyway records a deliberate override. Each records your evidence with the decision and releases the hold exactly as the same written record from the command line does.",
+  }));
+  const actions = el("div", { class: "task-attention-actions operator-record-actions" });
+  const mutable = canMutateTask(task);
+  const disabledTitle = mutable ? "" : aggregateRefusalTitle("Operator record", "record an operator decision");
+  const clear = el("button", {
+    class: "attention-action primary pilot-admission-clear",
+    type: "button",
+    text: "Clear hold",
+    title: disabledTitle || "Record that the held requirement is satisfied, with your evidence; this clears the pilot admission hold",
+  });
+  clear.disabled = !mutable;
+  clear.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, clear, context, { kind: "pilot", verdict: "clear" }); });
+  actions.appendChild(clear);
+  const approve = el("button", {
+    class: "attention-action pilot-admission-approve-anyway",
+    type: "button",
+    text: "Approve anyway",
+    title: disabledTitle || "Record a deliberate override of the pilot admission hold, with your reason; the task is admitted despite the finding",
+  });
+  approve.disabled = !mutable;
+  approve.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, approve, context, { kind: "pilot", verdict: "approve-anyway" }); });
+  actions.appendChild(approve);
+  content.appendChild(actions);
+  const refusal = operatorRecordRefusals.get(taskDispatchIdentity(task));
+  if (refusal) content.appendChild(actionErrorNode(refusal));
+  return el("section", { class: "task-attention warning pilot-admission-hold", "aria-label": "Pilot admission hold" }, [
     el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
     content,
   ]);
@@ -3636,8 +3648,10 @@ function buildTaskDetail(task, context, drain = null) {
   if (blockCallout) band.appendChild(blockCallout);
   const whyStuck = buildWhyStuckCard(task);
   if (whyStuck) band.appendChild(whyStuck);
-  const pilotCallout = buildPilotWarnings(task, detail, context);
+  const pilotCallout = buildPilotWarnings(task);
   if (pilotCallout) band.appendChild(pilotCallout);
+  const admissionCallout = buildPilotAdmissionHold(task, detail, context);
+  if (admissionCallout) band.appendChild(admissionCallout);
   const deliveryAttentionBanner = buildDeliveryAttentionBanner(task);
   if (deliveryAttentionBanner) band.appendChild(deliveryAttentionBanner);
   band.appendChild(attentionSlot);

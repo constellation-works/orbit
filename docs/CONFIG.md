@@ -643,6 +643,14 @@ Task list/detail JSON and MCP expose the same `pilot_warnings` array of
 `{kind, text}` entries, and CLI readiness uses that source for warning holds.
 The dashboard drain payload omits per-finding text.
 
+Full task records also expose `resolvable_pilot_admission_hold`, derived from
+the current admission finding and trusted resolutions independently of
+`pilot_warnings`. A held backlog task's detail offers **Clear hold** and
+**Approve anyway**, each requiring evidence through the operator-only typed
+route. Resolved holds remove these actions. When an open pilot-admission
+decision exists, its **Decision needed** answers serve as the single action
+set instead. Promotion warnings keep their proposed-only semantics.
+
 An `--approve-proposed` drain checks freshness under the approval lock against the exact material certified by the pilot's atomic write. The pilot's OS routing tag, selectors, complexity and automatic crew redraw therefore permit approval; later tag, crew, assignment provenance, relation or configured material edits withhold it. The `no-auto-approve` opt-out always wins. Replayed writes use their recorded audit rather than the task's current values; a pending approval from an older audit without that record needs a new assessment. Approval preserves routing and native-host admission holds.
 
 ### `[workflow.mid_run_steering]` — operator comments after dispatch
