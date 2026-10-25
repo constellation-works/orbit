@@ -197,8 +197,6 @@ pub enum Commands {
     // ── hidden compatibility commands ──
     #[command(hide = true)]
     Skill(skill::SkillCommand),
-    #[command(hide = true)]
-    Artifacts(task::artifacts::ArtifactsCommand),
     // Deprecated alias of `orbit agents --role orchestrators`, removed in the
     // next release.
     #[command(hide = true)]
