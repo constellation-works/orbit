@@ -382,10 +382,13 @@ impl TaskRegistryStore {
         let conn = self.read()?;
         let mut stmt = conn
             .prepare_cached(
-                "SELECT task_id, status, complexity, updated_at FROM task_bundle_index
-                 WHERE workspace_id = ?1
-                   AND terminal_month IS NOT NULL
-                   AND terminal_month >= ?2",
+                "SELECT i.task_id, i.status, i.complexity, i.updated_at, i.created_at,
+                        (SELECT group_concat(t.tag, char(31)) FROM task_bundle_tags t
+                         WHERE t.task_id = i.task_id)
+                 FROM task_bundle_index i
+                 WHERE i.workspace_id = ?1
+                   AND i.terminal_month IS NOT NULL
+                   AND i.terminal_month >= ?2",
             )
             .map_err(sqlite_store_error)?;
         let rows = stmt
@@ -395,32 +398,46 @@ impl TaskRegistryStore {
                     row.get::<_, String>(1)?,
                     row.get::<_, Option<String>>(2)?,
                     row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
                 ))
             })
             .map_err(sqlite_store_error)?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (task_id, raw_status, raw_complexity, raw_updated_at) =
-                row.map_err(sqlite_store_error)?;
-            let at = DateTime::parse_from_rfc3339(&raw_updated_at)
+        let parse_at = |task_id: &str, column: &str, raw: &str| {
+            DateTime::parse_from_rfc3339(raw)
+                .map(|at| at.with_timezone(&Utc))
                 .map_err(|e| {
                     OrbitError::Store(format!(
-                        "invalid indexed updated_at '{raw_updated_at}' for task '{task_id}': {e}"
+                        "invalid indexed {column} '{raw}' for task '{task_id}': {e}"
                     ))
-                })?
-                .with_timezone(&Utc);
+                })
+        };
+        let mut out = Vec::new();
+        for row in rows {
+            let (task_id, raw_status, raw_complexity, raw_updated_at, raw_created_at, raw_tags) =
+                row.map_err(sqlite_store_error)?;
+            let at = parse_at(&task_id, "updated_at", &raw_updated_at)?;
             if since.is_some_and(|since| at < since) {
                 continue;
             }
+            let created_at = parse_at(&task_id, "created_at", &raw_created_at)?;
+            let mut tags: Vec<String> = raw_tags
+                .as_deref()
+                .map(|raw| raw.split('\u{1f}').map(str::to_string).collect())
+                .unwrap_or_default();
+            tags.sort();
             let status = raw_status.parse::<TaskStatus>().map_err(|e| {
                 OrbitError::Store(format!(
                     "invalid indexed status '{raw_status}' for task '{task_id}': {e}"
                 ))
             })?;
             out.push(TaskTerminalTransition {
+                task_id,
                 status,
                 complexity: complexity_bucket(raw_complexity.as_deref()).to_string(),
                 at,
+                created_at: Some(created_at),
+                tags,
             });
         }
         out.sort_by_key(|transition| transition.at);

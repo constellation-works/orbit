@@ -1,9 +1,10 @@
 // Orbit dashboard Analytics › Metrics (ORB-15746): implement_one duration,
-// task completion and defect trends over the shared dashboard window, with
-// the per-actor tables beneath.
+// task completion, defect and tokens-per-task trends over the shared
+// dashboard window, with the per-actor tables beneath. The tokens trend's
+// filters and model live in metrics-tokens.js.
 // Pure vanilla JS, split into ES modules with no build step.
 //
-// One panel request reads the three endpoints together; the view state below
+// One panel request reads the trend endpoints together; the view state below
 // (trend tab, statistic, chart or table, visible series) is local and
 // re-renders from the cached payload without a fetch. Hover moves the
 // tooltip in place instead of rebuilding the chart.
@@ -15,6 +16,7 @@ import {
   bindTaskLink, DASHBOARD_WINDOWS,
 } from './common.js';
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
+import { fetchTokens, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -43,7 +45,7 @@ const SERIES = [
 const STACK = ["low", "medium", "hard", "other"];
 const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
-const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"]];
+const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"]];
 const DEFECT_GROUPS = [["lineage", "Lineage"], ["origin", "Origin"]];
 // Lineage: what a bug's `regression_from` relations name as its cause.
 const LINEAGE_SERIES = [
@@ -82,6 +84,8 @@ const view = {
     completed: { all: true, low: true, medium: true, hard: true },
     "defects-lineage": { all: true, fix_for_fix: true, regression: true, unattributed: true },
     "defects-origin": Object.fromEntries(["all", ...ORIGIN_CHART, "other"].map((key) => [key, true])),
+    // Series the API sends vary with the tag filter; absent keys are shown.
+    tokens: {},
   },
   hover: null,
   allActors: false,
@@ -132,13 +136,14 @@ export function fetchAndRenderMetrics() {
     fetchJson(`/api/diagnostics/defects?${since}`).catch((error) => ({
       unavailable: error.status === 404 ? "This host's Orbit does not report defects yet. Upgrade it to see this trend." : error.message,
     })),
-  ]), ([durations, completions, outcome, defects]) => {
+    fetchTokens(selectedWindow),
+  ]), ([durations, completions, outcome, defects, tokens]) => {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
-    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || durations.outcome !== selectedOutcome) {
+    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (!tokens.unavailable && windowKey(tokens) !== selectedWindow) || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    lastPayload = { windowKey: selectedWindow, durations, completions, defects, outcome: (outcome && outcome.by_complexity) || [] };
+    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens, outcome: (outcome && outcome.by_complexity) || [] };
     renderMetrics();
   }, "metrics-count");
 }
@@ -183,7 +188,7 @@ function sectionHash(index) {
   const { hover, ...state } = view;
   const p = lastPayload;
   const parts = [
-    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects],
+    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey)],
     [state.allActors, p.durations.actors, p.durations.slowest],
     [state.complexity, p.durations.implement_one_by_complexity, p.outcome],
   ];
@@ -359,10 +364,26 @@ function shownKey() {
   return view.trend === "defects" ? `defects-${view.group}` : view.trend;
 }
 
+// A tokens refetch after a filter change; `undefined` only redraws the
+// controls. A reply for a window no longer selected is dropped.
+function applyTokens(payload) {
+  if (!lastPayload) return;
+  if (payload !== undefined) {
+    if (!payload.unavailable && windowKey(payload) !== lastPayload.windowKey) return;
+    lastPayload.tokens = payload;
+    view.hover = null;
+  }
+  rerender();
+}
+
 function trendSection() {
   const isDuration = view.trend === "duration";
   const isDefects = view.trend === "defects";
-  const model = isDuration ? durationModel() : isDefects ? defectsModel() : completedModel();
+  const isTokens = view.trend === "tokens";
+  const model = isDuration ? durationModel()
+    : isDefects ? defectsModel()
+      : isTokens ? tokensModel(lastPayload.tokens, { windowKey: lastPayload.windowKey, shown: view.shown.tokens, bucketTitle, bucketWidthLabel })
+        : completedModel();
   const tools = el("div", { class: "mx-trend-tools" }, [
     isDuration ? segGroup("Run outcome", OUTCOMES, view.outcome, (key) => {
       if (key === view.outcome) return;
@@ -373,6 +394,7 @@ function trendSection() {
     }) : null,
     isDuration ? segGroup("Statistic", STATS, view.stat, (key) => { view.stat = key; rerender(); }) : null,
     isDefects ? segGroup("Group by", DEFECT_GROUPS, view.group, (key) => { view.group = key; view.hover = null; rerender(); }) : null,
+    ...(isTokens ? tokensTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.tokens, onChange: applyTokens }) : []),
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),
   ]);
   const panel = el("div", { class: "mx-trend-view", id: "metrics-trend-view", role: "tabpanel" }, [
@@ -392,13 +414,13 @@ function trendSection() {
 function seriesCards(cards) {
   return el("div", { class: "mx-series", role: "group", "aria-label": "Series" }, cards.map((card) => {
     const button = el("button", {
-      class: `mx-sc mx-s-${card.key}${card.on ? " on" : " off"}`,
+      class: `mx-sc mx-s-${card.swatch || card.key}${card.on ? " on" : " off"}`,
       type: "button",
       "aria-pressed": card.on ? "true" : "false",
       title: card.on ? `Hide ${card.label}` : `Show ${card.label}`,
     }, [
       el("span", { class: "mx-sc-label" }, [
-        el("span", { class: `mx-swatch${card.bar ? " bar" : ""}`, "aria-hidden": "true" }),
+        el("span", { class: `mx-swatch${card.bar ? " bar" : ""}${card.dashed ? " dashed" : ""}`, "aria-hidden": "true" }),
         card.label,
         card.tag && card.tag !== card.label.toLowerCase() ? el("span", { class: "mx-sc-tag", text: card.tag }) : null,
       ]),
@@ -411,9 +433,9 @@ function seriesCards(cards) {
     ]);
     button.addEventListener("click", () => {
       const shown = view.shown[shownKey()];
-      const next = { ...shown, [card.key]: !shown[card.key] };
+      const next = { ...shown, [card.key]: !card.on };
       // The chart always keeps one series.
-      if (!Object.values(next).some(Boolean)) return;
+      if (!cards.some((other) => (other.key === card.key ? !card.on : other.on))) return;
       view.shown[shownKey()] = next;
       rerender();
     });
@@ -829,8 +851,9 @@ function trendChart(chart) {
   // `all` draws last, over the complexity lines.
   for (const line of [...chart.lines].sort((a, b) => (a.key === "all") - (b.key === "all"))) {
     lines.appendChild(svg("path", {
-      d: linePath(line.points.map((point) => (point ? { x: x(point.i), y: point.y } : null))),
-      class: `mx-line mx-s-${line.key}`,
+      // A `joined` line spans buckets without a value instead of breaking.
+      d: linePath((line.joined ? line.points.filter(Boolean) : line.points).map((point) => (point ? { x: x(point.i), y: point.y } : null))),
+      class: `mx-line mx-s-${line.key}${line.cls ? ` ${line.cls}` : ""}`,
       "vector-effect": "non-scaling-stroke",
     }));
   }
@@ -910,7 +933,7 @@ function trendChart(chart) {
   if (view.hover != null && view.hover < count) queueMicrotask(() => show(view.hover));
 
   const legend = el("div", { class: "mx-notes" }, [
-    chart.hollowNote ? el("span", { class: "mx-note-hollow" }, [el("span", { class: "mx-pt-key", "aria-hidden": "true" }), `hollow = fewer than ${LOW_SAMPLE} runs`]) : null,
+    chart.hollowNote || chart.hollowText ? el("span", { class: "mx-note-hollow" }, [el("span", { class: "mx-pt-key", "aria-hidden": "true" }), chart.hollowText || `hollow = fewer than ${LOW_SAMPLE} runs`]) : null,
     ...chart.notes.map((text) => el("span", { text })),
   ]);
   const yWrap = el("div", { class: `mx-y-wrap${chart.volume ? " with-volume" : ""}` }, [

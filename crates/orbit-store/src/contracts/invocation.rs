@@ -117,6 +117,9 @@ pub struct InvocationAccountingFact {
     pub task_ids: Vec<String>,
     pub provider_cost_usd: Option<f64>,
     pub derived_cost_usd: Option<f64>,
+    /// The pipeline step (or activity) the invocation ran under.
+    #[serde(default)]
+    pub activity_id: Option<String>,
 }
 
 /// One invocation's spend as a provider budget reads it from the host ledger

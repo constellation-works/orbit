@@ -456,10 +456,10 @@ is scored on, and `orbit agents scorecard`, are in [Agents](#agents).
 ### Metrics
 
 Open **Metrics** to see whether implementation is getting slower, whether
-tasks are finishing, or where new bugs were filed, for the selected
-workspace.
+tasks are finishing, how many tokens a task takes, or where new bugs were
+filed, for the selected workspace.
 
-Three trends share **Chart** and **Table**. Select a series to hide it; one
+Four trends share **Chart** and **Table**. Select a series to hide it; one
 series stays visible. A duration point backed by fewer than three runs is
 drawn hollow. An empty trend offers the next wider window.
 
@@ -467,6 +467,7 @@ drawn hollow. An empty trend offers the next wider window.
 |---|---|
 | **implement_one duration** | Wall-clock time of `implement_one` runs that finished in each bucket, by complexity (**Low**, **Medium**, **Hard**, and **All runs**). **Succeeded**, the default, counts the final attempt in a successful run that committed a candidate. **All** also counts failed, cancelled, no-diff, and unknown outcomes. Pick **Avg**, **p50**, or **p95**. |
 | **Tasks completed** | Tasks that moved to done in each bucket, by the same complexities. |
+| **Tokens per task** | Mean normalized tokens of the tasks that closed in each bucket, one line per complexity. A task's total sums every managed invocation linked to it; **Implement only** keeps implement invocations. **Done**, the default, counts done tasks; **All closed** adds rejected and archived ones. **Implementing model** keeps tasks whose latest implement run used that model. **Compare a tag** splits each complexity into tasks that carry the tag now and a dashed line for the rest. The tooltip gives the task count, mean, and median; a point from fewer than three tasks is hollow. Tasks with a model that has no price, or with no linked invocation, are left out and counted. A task's time is its last write after it closed. |
 | **Defects** | Bug tasks filed in each bucket. **Lineage** groups them by what `regression_from` names as the cause. **Fix-for-a-fix** means that cause was itself a bug fix. **Origin** groups them by the review or sweep that filed them. |
 
 The run bars under a duration chart stack low, medium, and hard, then other.
