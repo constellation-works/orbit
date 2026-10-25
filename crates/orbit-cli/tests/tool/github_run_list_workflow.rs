@@ -42,9 +42,10 @@ impl Lane {
         }
     }
 
-    /// A stand-in `gh` that reproduces the two workflow-resolution failures
+    /// A stand-in `gh` that reproduces the workflow-resolution failures
     /// without credentials or network: an ambiguous value, an unknown value,
-    /// and one unrelated failure that must stay an execution failure.
+    /// an unknown file name and numeric id reported as HTTP 404, and
+    /// unrelated failures that must stay execution failures.
     fn install_gh(&self) {
         let script = r#"#!/bin/sh
 args="$*"
@@ -59,6 +60,18 @@ exit 1
 ;;
 *"Windows Compile Check"*)
 printf 'could not find any workflows named Windows Compile Check\n' >&2
+exit 1
+;;
+*"nonexistent.yml"*)
+printf 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/workflows/nonexistent.yml)\n' >&2
+exit 1
+;;
+*"99999999"*)
+printf 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/workflows/99999999)\n' >&2
+exit 1
+;;
+*"elsewhere-404"*)
+printf 'HTTP 404: Not Found (https://api.github.com/repos/o/r/actions/runs/123)\n' >&2
 exit 1
 ;;
 *"boom"*)
@@ -184,6 +197,68 @@ fn unknown_workflow_is_invalid_input_not_an_execution_failure() {
             "unknown-workflow message must tell callers {phrase} (ORB-18196): {message}"
         );
     }
+}
+
+#[test]
+fn unknown_workflow_file_404_is_invalid_input_not_an_execution_failure() {
+    let lane = Lane::new();
+    lane.install_gh();
+
+    let error = tool_error(&lane.run_list(r#"{"workflow":"nonexistent.yml"}"#));
+    assert_eq!(error["code"], "invalid_input", "{error}");
+    let message = error["error"].as_str().expect("error string");
+    assert!(message.contains("invalid input:"), "{message}");
+    assert!(!message.contains("execution failed"), "{message}");
+    for phrase in [
+        "workflow file name",
+        "numeric workflow id",
+        "job display name is not a workflow name",
+    ] {
+        assert!(
+            message.to_lowercase().contains(phrase),
+            "404 file-name message must tell callers {phrase} (ORB-18223): {message}"
+        );
+    }
+    assert!(message.contains("nonexistent.yml"), "{message}");
+}
+
+#[test]
+fn unknown_workflow_id_404_is_invalid_input_not_an_execution_failure() {
+    let lane = Lane::new();
+    lane.install_gh();
+
+    let error = tool_error(&lane.run_list(r#"{"workflow":"99999999"}"#));
+    assert_eq!(error["code"], "invalid_input", "{error}");
+    let message = error["error"].as_str().expect("error string");
+    assert!(message.contains("invalid input:"), "{message}");
+    assert!(!message.contains("execution failed"), "{message}");
+    for phrase in [
+        "workflow file name",
+        "numeric workflow id",
+        "job display name is not a workflow name",
+    ] {
+        assert!(
+            message.to_lowercase().contains(phrase),
+            "404 numeric-id message must tell callers {phrase} (ORB-18223): {message}"
+        );
+    }
+    assert!(message.contains("99999999"), "{message}");
+}
+
+#[test]
+fn workflow_404_outside_workflows_url_stays_an_execution_failure() {
+    let lane = Lane::new();
+    lane.install_gh();
+
+    let error = tool_error(&lane.run_list(r#"{"workflow":"elsewhere-404"}"#));
+    assert_eq!(error["code"], "execution_failed", "{error}");
+    let message = error["error"].as_str().expect("error string");
+    assert!(message.contains("execution failed:"), "{message}");
+    assert!(
+        message.contains("gh run list failed:"),
+        "a 404 outside actions/workflows/ keeps the shared execution-error path (ORB-18223): {message}"
+    );
+    assert!(!message.contains("invalid input:"), "{message}");
 }
 
 #[test]

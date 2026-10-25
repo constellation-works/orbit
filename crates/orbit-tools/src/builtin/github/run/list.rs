@@ -67,7 +67,7 @@ fn workflow_resolution_error(
     let display = if workflow.is_empty() {
         "unknown".to_string()
     } else {
-        workflow
+        workflow.clone()
     };
     if lowered.contains(AMBIGUOUS_WORKFLOW_MARKER) {
         let matches = ambiguous_workflow_matches(stderr).unwrap_or_else(|| stderr.to_string());
@@ -76,6 +76,19 @@ fn workflow_resolution_error(
         )));
     }
     if lowered.contains(UNKNOWN_WORKFLOW_MARKER) {
+        return Some(OrbitError::InvalidInput(format!(
+            "unknown workflow \"{display}\": gh {stderr}. Pass one workflow file name (for example codeql.yml) or a numeric workflow id; a job display name is not a workflow name."
+        )));
+    }
+    // A workflow file name or numeric id is resolved by the GitHub API, not
+    // by `gh` name matching, so a miss surfaces as `HTTP 404` on an
+    // `actions/workflows/<workflow>` URL instead of the markers above.
+    // Only a `workflow` input can produce that URL; any other 404 keeps the
+    // shared execution-error path.
+    if !workflow.is_empty()
+        && lowered.contains("http 404")
+        && lowered.contains("/actions/workflows/")
+    {
         return Some(OrbitError::InvalidInput(format!(
             "unknown workflow \"{display}\": gh {stderr}. Pass one workflow file name (for example codeql.yml) or a numeric workflow id; a job display name is not a workflow name."
         )));
