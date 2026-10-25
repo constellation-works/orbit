@@ -1,9 +1,11 @@
 # Task publication and recovery
 
-Publication writes a validated task snapshot to a **dedicated Git repository**.
-It supports offline inspection and deliberate recovery. It does not replicate a
-live Orbit store, transfer workspace ownership, ship source code, or mark tasks
-done. Publishing tasks and pushing an implementation branch are separate actions.
+Publication writes a validated task snapshot to a **Git repository dedicated
+to task publication**. One such repository may be shared by several
+workspaces, each on its own branch (see below). It supports offline inspection
+and deliberate recovery. It does not replicate a live Orbit store, transfer
+workspace ownership, ship source code, or mark tasks done. Publishing tasks
+and pushing an implementation branch are separate actions.
 
 These are CLI administration operations on the intended host. They are not
 advertised task MCP tools. Apply the authority rules in
@@ -31,8 +33,43 @@ The default branch is `main`; `--branch <name>` also accepts an ordinary
 unique on this machine. Binding is owner-local registry metadata, not a config
 file to copy between hosts. It records workspace ID, source remote fingerprint,
 authority machine ID, publication remote/branch, and the last successful
-snapshot generation/commit when one exists. Start with an empty publication
-branch; an ordinary README/source commit is not a valid publication envelope.
+snapshot generation/commit when one exists. Start with an absent publication
+branch for this lineage; an ordinary README/source commit already on that
+bound branch is not a valid publication envelope and is refused, never adopted
+or overwritten.
+
+### Share one repository across workspaces
+
+A lineage is scoped to its bound branch, not to the whole repository. Several
+workspaces may bind the same `--remote` when each uses a distinct `--branch`
+(for example `--branch ws/<workspace-name>`) and a distinct
+`--publication-id`:
+
+```bash
+# From workspace A's owner checkout:
+orbit workspace publication bind --remote <publication-git-url> --publication-id pub_a --branch ws/a
+# From workspace B's owner checkout, same remote:
+orbit workspace publication bind --remote <publication-git-url> --publication-id pub_b --branch ws/b
+```
+
+The first publish of each lineage creates generation 1 on its own branch
+(fast-forward compare-and-swap that only succeeds while that ref is still
+absent), even when the repository already holds other workspaces' publication
+branches; those other branches are never read, written, or validated, and
+their tips do not move. If the bound branch already exists but does not carry
+this lineage's valid envelope (foreign content, or a different publication
+ID, workspace, or authority), publishing still refuses as an authority
+conflict and changes nothing remotely.
+
+By design there is no repo-wide guard against an obviously foreign
+repository (for example a non-publication default branch carrying ordinary
+source commits): checking it would mean inspecting branches outside this
+lineage. The bound branch is the unit of trust — an absent bound branch is
+safe to create, and a present bound branch must already be this lineage's
+envelope. Keep the repository private and dedicated to publication anyway;
+task prose and attachments may contain sensitive information, and anyone with
+write access to the repository could create a bound branch first and block
+(or, with the matching identity facts, impersonate) a lineage.
 
 Credentials in a URL, a local path, a checkout-local alias such as `origin`,
 and a publication remote equivalent to the source repository are refused.
@@ -85,7 +122,9 @@ Orbit does not merge competing snapshots, choose by timestamp, or overwrite the
 remote. Inspect the binding and remote evidence before repairing authority.
 
 `status` reports `never-published`, `current`, or `authority-conflict` by comparing
-the owner-local last-success record with the validated remote tip. **Current
+the owner-local last-success record with the validated remote tip. A lineage
+whose bound branch is absent and which has no recorded success is
+`never-published`, regardless of what other branches the repository holds. **Current
 means that publication bookkeeping agrees; it does not prove that tasks have
 not changed since publication.** Publish again to capture later task mutations.
 

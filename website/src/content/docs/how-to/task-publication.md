@@ -20,8 +20,10 @@ checks that it landed. Ask the same way to publish again or to restore.
 
 ## What you need
 
-- An empty Git repository used only for this workspace's tasks, reachable over
-  SSH. HTTPS works too, but needs the credential bridge in the
+- A Git repository used only for task publications, reachable over SSH. It
+  may be shared by several workspaces, each on its own branch (below); what
+  must be unused is the branch for this workspace, not the whole repository.
+  HTTPS works too, but needs the credential bridge in the
   [runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/task-publication.md),
   because publication ignores your global Git credential helpers.
 - The workspace's owner checkout, not a replica, with a Git `origin` remote.
@@ -48,6 +50,30 @@ orbit task publication status
 `publish` writes snapshots to the same history, reusing an unchanged snapshot,
 and never force-pushes over another writer. `status` should report `current`, with matching local and
 remote generations and commits.
+
+## Share one repository across workspaces
+
+One repository can hold many workspaces' snapshots. Bind each workspace to
+the same repository with its own branch and its own publication ID:
+
+```bash
+# From each workspace's owner checkout, with that workspace's values:
+orbit workspace publication bind \
+  --remote git@example.com:backups/all-tasks.git \
+  --publication-id pub_my_workspace \
+  --branch ws/my-workspace
+orbit task publication publish
+```
+
+A workspace whose branch does not exist yet starts at generation 1 on that
+branch, even when the repository already holds other workspaces' branches.
+Publishing never reads, writes, or validates another workspace's branch, and
+the first push only succeeds while its own branch is still absent. If the
+branch already exists but is not this workspace's publication — foreign
+commits, or another publication ID, workspace, or owner — publishing refuses
+and changes nothing. Orbit does not check the rest of the repository (a
+default branch with ordinary commits, say), so keep the repository private
+and dedicated to publications.
 
 Attachments are opt-in. By default, `publish` refuses if any task has one and
 lists them. Pass `--attachments omit` to publish the task records without
@@ -82,7 +108,7 @@ tasks to a different machine identity, use `orbit task export` and
 | Symptom | What to do |
 |---|---|
 | Git asks for a username or password. | Use SSH, or pass a `GIT_ASKPASS` bridge (see the runbook). |
-| The first publish finds unrelated history. | Stop. Orbit won't adopt a repository it didn't create; use an empty one. |
+| The first publish finds unrelated history on its own branch. | Stop. Orbit won't adopt a branch it didn't create for this workspace; bind an unused branch (other workspaces' branches in the same repository are fine). |
 | Status reports a moved branch or an authority conflict. | Stop publishing and find the other writer or the stale binding. |
 
 The [task publication runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/task-publication.md)
