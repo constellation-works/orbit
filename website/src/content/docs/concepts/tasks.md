@@ -1,6 +1,6 @@
 ---
 title: Tasks
-description: "How Orbit models durable work: statuses, the two approval gates, transition rules, and acceptance criteria."
+description: "How Orbit models durable work: statuses, the two approval gates, transition rules, acceptance criteria, and task artifacts."
 sidebar:
   order: 2
 ---
@@ -144,6 +144,124 @@ A good task states:
 - where the change should happen
 - how to observe success
 - which files or selectors matter, when known
+
+## Task artifacts
+
+A task artifact is a file stored on the task, outside git, so you or an agent
+can open that evidence later. Use one for a note, a log, a check result, or a
+screenshot. The bytes live in the task bundle under
+`~/.orbit/tasks/workspaces/<workspace>/<task-id>`.
+
+There is no artifact-store setting. If a config file still sets
+`[task] artifact_store`, Orbit refuses to load it until you remove the key.
+Current task artifacts are always enabled.
+
+### Attach, list, and retrieve
+
+Write the file under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`). `put` reads that
+source file and stores a copy under a logical path on the task. Listing names
+comes from `orbit task show`, not from a separate artifact command. `get`
+prints text.
+
+```bash
+mkdir -p .orbit/tmp
+printf 'checked the build\n' > .orbit/tmp/notes.txt
+orbit task artifact put "$TASK_ID" .orbit/tmp/notes.txt --path evidence/notes.txt
+orbit task show "$TASK_ID" --fields artifacts
+orbit task artifact get "$TASK_ID" evidence/notes.txt
+```
+
+The source path and the logical path are not the same thing.
+
+- **Source path.** `<SOURCE_PATH>` is a file on disk. Orbit resolves it against
+  the current directory, not the checkout root, then confines it to the
+  workspace after resolving symlinks. A file outside the checkout, including
+  anything under `/tmp`, is refused. A file that exists only at the checkout
+  root is refused with the absolute path to pass.
+- **Logical path.** `--path` is the name stored on the task, relative to that
+  task's artifacts directory. It defaults to the source file's name. It is not
+  a filesystem path: an absolute path or `..` is rejected. `get` takes this
+  stored name, the same string `orbit task show <ID> --fields artifacts`
+  lists. The field is metadata only: path, media type, size, and who attached
+  the file when that was recorded. It does not include the bytes. There is no
+  list subcommand under `orbit task artifact`, only `put` and `get`.
+
+The media type comes from the file name. An unknown extension is stored as
+`application/octet-stream`.
+
+Attaching a file, and reading it back with `get` or
+`orbit.task.artifact.get`, both refuse more than 1 MiB (1,048,576 bytes). A
+file already stored on the task can still be downloaded from the dashboard
+when it is larger than that.
+
+A logical path that begins with `review-`, in any letter case, is reserved
+for the review gate. The only exception is the schema-checked
+`review-report.json`. Name ordinary evidence something else, such as
+`examination-checks.json`.
+
+`put` and `get` follow the task to the host its ID prefix names when you pass
+no `--workspace`. Pass `--workspace` to read or write a local mirror instead.
+See [Tasks](../../reference/cli/#tasks).
+
+For a short text payload with no file, on this machine:
+
+```bash
+orbit task update "$TASK_ID" --artifact evidence/notes.txt=checked
+```
+
+Repeat `--artifact` for more than one. That flag does not follow the task to
+another host. Write the bytes to a file and use `orbit task artifact put`,
+which does.
+
+### Binary files
+
+`get` prints text. An image or any other payload that is not printable text
+is not printed; the error tells you to save it with `--out`.
+
+```bash
+orbit task artifact put "$TASK_ID" .orbit/tmp/diagram.png --path screenshots/diagram.png
+orbit task artifact get "$TASK_ID" screenshots/diagram.png --out .orbit/tmp/diagram-out.png
+```
+
+`--out` writes the stored bytes to that file. It exists only on the CLI.
+
+### From an agent
+
+The MCP tools are `orbit.task.artifact.put` and `orbit.task.artifact.get`.
+Both run in the connected workspace.
+
+- `orbit.task.artifact.put` takes `id` and `source_path`, and an optional
+  `path` for the logical name. The same confinement, size, and reserved-name
+  rules apply. Pass `model` when you want that agent family recorded on the
+  write.
+- `orbit.task.artifact.get` takes `id` and `path` (the logical path). List
+  names first with `orbit.task.show` and `field` set to `artifacts`. An
+  optional `workspace` argument is a fail-closed filter: a workspace that does
+  not own the task is not found. There is no `out` argument.
+
+Text comes back as UTF-8 in `content` (`encoding` is `utf8`). Everything else
+comes back as base64 in `content_base64` (`encoding` is `base64`). Every read
+includes `media_type`, `size`, and `presentation`: `text`, `image`, or
+`opaque`.
+
+PNG, JPEG, GIF, and WebP are `image` only when the bytes match that type. A
+client that can show images then receives the picture as well as the base64.
+SVG, HTML, and any payload whose bytes do not match its declared type are
+`opaque`. They are never rendered. You can still save them with `--out`, or
+download them from the dashboard.
+
+### Dashboard
+
+Open the task and choose **Artifacts**. With nothing attached, the tab says
+"No artifacts attached." Each row shows the logical path, the media type, and
+the size. Expand a row to preview it.
+
+PNG, JPEG, GIF, and WebP are shown as images, with **Open** and **Download**.
+If the browser cannot decode one, the tab says the image could not be decoded
+and still offers the download. Plain text, CSV, JSON, and YAML are shown as
+text. HTML, SVG, Markdown, and other files are downloads, not rendered pages.
+The tab does not attach files. See
+[Use the Dashboard](../../how-to/dashboard/#tasks).
 
 ## Review layers
 

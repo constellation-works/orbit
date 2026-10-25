@@ -241,7 +241,10 @@ operating systems it can run on, who created and carried it, its run and the
 machine it ran on, its pull request, when it was created and updated, and its
 tags. A circled *i* beside a value explains it on hover or focus. Its tabs are
 **Overview**, **Delivery** (only for a task with a delivery claim), **History**,
-**Runs**, **Artifacts**, and **Comments**.
+**Runs**, [**Artifacts**](../../concepts/tasks/#task-artifacts), and
+**Comments**. The Artifacts tab lists files already stored on the task and
+previews the ones that are safe to show. It does not attach files. See
+[Task artifacts](../../concepts/tasks/#task-artifacts).
 
 ### Edit task metadata
 

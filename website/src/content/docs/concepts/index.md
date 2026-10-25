@@ -43,7 +43,7 @@ one layer: what it guarantees and what it refuses. For commands, see the
 <div class="orbit-card-grid">
   <a class="orbit-card" href="./tasks/" data-tag="01">
     <h3>Tasks</h3>
-    <p>Lifecycle, statuses, the two approval gates, and the transition rules.</p>
+    <p>Lifecycle, statuses, the two approval gates, transition rules, and task artifacts.</p>
   </a>
   <a class="orbit-card" href="./activities-jobs/" data-tag="02">
     <h3>Activities and jobs</h3>
