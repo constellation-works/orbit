@@ -318,6 +318,7 @@
   background: var(--bg-sunk); color: var(--fg-dim); font-size: 11.5px; line-height: 1.5;
   white-space: pre-wrap; word-break: break-all; max-height: 400px; overflow: auto;
 }
+.topic-raw-label { flex-basis: 100%; color: var(--fg-mute); font-size: 11px; }
 .topic-links { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .drawer-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
 .config-drawer {
