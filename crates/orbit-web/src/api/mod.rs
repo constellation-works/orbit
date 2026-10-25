@@ -33,6 +33,7 @@ pub(crate) mod routines;
 mod runs;
 mod search;
 mod task_create;
+mod task_pilot;
 mod tasks;
 mod workspaces;
 

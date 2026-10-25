@@ -440,7 +440,7 @@ impl OrbitRuntime {
     /// coordinators, the delivery leaves, and any plugin delivery job. The
     /// workspace drain and preparation jobs may list task IDs without holding
     /// it; their dispatched children do.
-    fn in_flight_ship_run_for_tasks(
+    pub(crate) fn in_flight_ship_run_for_tasks(
         &self,
         task_ids: &[String],
     ) -> Result<Option<OrbitError>, OrbitError> {

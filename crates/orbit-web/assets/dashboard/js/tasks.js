@@ -129,6 +129,17 @@ onWorkspaceChange(() => {
 // accepts it, the server's 409 protects the live run; releasing this guard lets
 // a task returned to backlog be shipped again without reloading the page.
 const shipInFlightTaskIds = new Set();
+// Run pilot: the pilot run this panel submitted for a task, keyed like the ship
+// guard, while it is live. Absent after the run settles or a reload, when the
+// row's own `readiness.preparing` marks a held task.
+const pilotRunsByTask = new Map();
+// A refused Run pilot's message, kept with the action so a refresh that rebuilds
+// the panel does not drop it before the operator has read it.
+const pilotRefusals = new Map();
+const PILOT_REFUSAL_MS = 20000;
+const PILOT_POLL_MS = 3000;
+const PILOT_POLL_LIMIT = 600;
+const PILOT_TERMINAL_STATES = new Set(["success", "failed", "timeout", "cancelled", "interrupted", "held"]);
 // Row shortcuts (Approve on proposed or review tasks, Ship on backlog): the
 // pending or failed state of each, keyed by task id, so a refresh repaints it.
 let quickActionState = new Map();
@@ -4068,6 +4079,7 @@ function buildActionsRow(task, detail, context, { includeLifecycle = true, inclu
     });
     actions.appendChild(btn);
   }
+  if (includeLifecycle && task.status === "proposed") appendPilotControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
     btn.disabled = !mutable;
@@ -4419,6 +4431,110 @@ function actionErrorNode(text, remedy) {
 function restoreActionFocus(actions, selector) {
   const opener = actions.querySelector?.(selector);
   if (opener && typeof opener.focus === "function") opener.focus();
+}
+
+// Why Run pilot is unavailable for this task, or "" when it is offered. A pilot
+// run already holding the task is the server's refusal too, so the reason here
+// only saves the round trip.
+function pilotDisabledReason(task, mutable, running) {
+  if (!mutable) return aggregateRefusalTitle("Run pilot", "run a pilot");
+  if (running) return `A pilot run (${running.runId}) is already assessing this task`;
+  const readiness = readinessOf(task);
+  if (readiness && readiness.preparing) return "A task-pilot run is already preparing this task";
+  return "";
+}
+
+// Run pilot on a proposed task: one explicit task-pilot run for this task. It
+// refreshes the task's selectors and complexity; it never approves or ships it.
+function appendPilotControls(actions, task, detail, context, mutable) {
+  const running = pilotRunsByTask.get(taskDispatchIdentity(task));
+  const reason = pilotDisabledReason(task, mutable, running);
+  const btn = el("button", {
+    class: "action pilot",
+    text: running ? "piloting…" : "run pilot",
+    title: reason || "Assess this task with a task-pilot run: it re-checks selectors and complexity and never approves or dispatches the task",
+  });
+  btn.disabled = Boolean(reason);
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    runPilot(task, detail, btn, context);
+  });
+  actions.appendChild(btn);
+  if (running) {
+    const link = el("a", { class: "task-quick-link pilot-run-link mono", text: running.runId, title: `Open pilot run ${running.runId}` });
+    link.href = runHref(running.runId, task.workspace_id ? { workspace: task.workspace_id } : {});
+    actions.appendChild(link);
+  }
+  const refusal = pilotRefusals.get(taskDispatchIdentity(task));
+  if (refusal) {
+    const note = actionErrorNode(refusal);
+    note.style.flexBasis = "100%";
+    actions.appendChild(note);
+  }
+}
+
+function pilotSignature(task) {
+  const key = taskDispatchIdentity(task);
+  const running = pilotRunsByTask.get(key);
+  return `${running ? running.runId : ""}|${pilotRefusals.get(key) || ""}`;
+}
+
+async function runPilot(task, detail, btnNode, context) {
+  const visit = captureWorkspaceVisit();
+  const key = taskDispatchIdentity(task);
+  if (!canMutateTask(task) || pilotRunsByTask.has(key)) return;
+  const requestPath = visit.path(taskMutationPath(task, "/pilot"));
+  pilotRefusals.delete(key);
+  const prior = detail.querySelector(".action-error");
+  if (prior) prior.remove();
+  for (const b of detail.querySelectorAll(".action")) b.disabled = true;
+  btnNode.innerHTML = `<span class="spinner"></span>wait`;
+  let result;
+  try {
+    result = await postJson(requestPath, {});
+  } catch (error) {
+    if (!visit.isCurrent()) return;
+    const message = `run pilot failed: ${error.message || String(error)}`;
+    pilotRefusals.set(key, message);
+    renderTasks(taskList(context), context);
+    setTimeout(() => {
+      if (pilotRefusals.get(key) !== message) return;
+      pilotRefusals.delete(key);
+      renderTasks(taskList(context), context);
+    }, PILOT_REFUSAL_MS);
+    return;
+  }
+  const runId = result && result.run_id ? String(result.run_id) : "";
+  if (!visit.isCurrent()) return;
+  if (runId) pilotRunsByTask.set(key, { runId });
+  taskActionNotice = `${task.id}: pilot run ${runId || "(no run id)"} ${result && result.state ? result.state : "submitted"}`;
+  renderTasks(taskList(context), context);
+  if (runId) watchPilotRun(task, key, runId, visit, context);
+}
+
+// Follow the submitted run until it settles, then refresh: the task then shows
+// the new `task_pilot_applied` entry or the pilot's warnings. A run that cannot
+// be read any more is dropped; `readiness.preparing` takes over for a live one.
+async function watchPilotRun(task, key, runId, visit, context) {
+  const path = visit.path(taskWorkspacePath(task, `/api/runs/${encodeURIComponent(runId)}`));
+  let state = "";
+  for (let polls = 0; polls < PILOT_POLL_LIMIT; polls += 1) {
+    await new Promise((resolve) => setTimeout(resolve, PILOT_POLL_MS));
+    if (!visit.isCurrent()) return;
+    try {
+      // The run detail is `{ run, steps }`.
+      const detail = await fetchJson(path);
+      const run = detail && detail.run ? detail.run : detail;
+      state = run && run.state ? String(run.state) : "";
+    } catch (_) {
+      break;
+    }
+    if (PILOT_TERMINAL_STATES.has(state)) break;
+  }
+  pilotRunsByTask.delete(key);
+  if (!visit.isCurrent()) return;
+  if (state) taskActionNotice = `${task.id}: pilot run ${runId} ${state}`;
+  await refreshTasks(context);
 }
 
 /* ORB-10444: one-click Ship. The dispatch carries only the task id — the
@@ -5471,7 +5587,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;

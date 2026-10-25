@@ -164,7 +164,7 @@ pub(crate) fn prepare(
         // status changes after valid preparation and their audited outcomes.
         let unsupported = selected
             .iter()
-            .filter(|task| !matches!(task.status, TaskStatus::Proposed | TaskStatus::Backlog))
+            .filter(|task| !super::pilot_assessable_status(task.status))
             .map(|task| format!("{} (status {})", task.id, task.status))
             .collect::<Vec<_>>();
         if !unsupported.is_empty() {
