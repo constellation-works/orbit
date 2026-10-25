@@ -12,10 +12,26 @@ Reference for Orbit's `config.toml`: every fixed key, its default and what it do
 
 | Path | Scope | Created by |
 |---|---|---|
-| `<workspace>/.orbit/config.toml` | Workspace-local (per user, gitignored) | Hand-authored, or `orbit config set --fresh` / `--seed-from-global` |
+| `<workspace>/.orbit/config.toml` | Workspace-local (per user, gitignored) | `orbit workspace init`, hand-authored, or `orbit config set --fresh` / `--seed-from-global` |
 | `~/.orbit/config.toml` | Global | `orbit init` (only when absent, or under `--force`) |
 
 Settings inherit per key: workspace overrides global, global fills omissions, built-in defaults fill the rest. Keep a workspace file to genuine overrides.
+
+`orbit workspace init` seeds missing review keys for the registered ship mode
+(a new registration defaults to `pr`; `--force` retains its mode unless
+`--ship-mode` changes it). A PR workspace gets `review.timing = "before_landing"`,
+`review.minutes = 30`, and `workflow.purpose_crews.pre_landing_review` containing
+the enabled members of `luna` and `haiku` in the effective host/workspace config.
+With neither enabled, timing is explicitly `"off"` and the pool is empty; init
+never substitutes a costlier reviewer. A local workspace gets timing `"off"`
+because before-landing review needs the PR route, plus the same explicit
+30-minute budget. Each seeded key has a short comment explaining the choice.
+Existing workspace values (including legacy review switches) win, and repeated
+init leaves them unchanged. Global `orbit init` seeds no review timing and
+keeps the built-in `off` default for other workspaces. When init creates the
+first workspace policy layer, it explicitly preserves the sandbox, approval
+policy and environment allowlist previously in effect; it leaves an existing
+workspace policy layer's security settings alone.
 
 Both config files must be regular files. Runtime loads and workspace plugin-toggle polling refuse symlink leaves (including dangling links), directories, FIFOs and other non-regular leaves. Symlinked parent directories are supported and resolved before opening the file. A missing file or parent directory contributes no layer, so global settings and built-in defaults still apply.
 

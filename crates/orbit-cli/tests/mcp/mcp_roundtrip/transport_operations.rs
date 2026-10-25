@@ -664,7 +664,8 @@ fn stdio_drain_and_ship_starts_report_their_notices() {
         )
         .unwrap();
     }
-    let config = workspace.home.join(".orbit/config.toml");
+    // The workspace policy seeded by init owns the effective allowlist.
+    let config = workspace.work.join(".orbit/config.toml");
     let mut document: toml_edit::DocumentMut =
         std::fs::read_to_string(&config).unwrap().parse().unwrap();
     let mut pass = toml_edit::Array::new();

@@ -77,12 +77,14 @@ mod unix {
                 })
             })
             .expect("fixture machine identity");
+            // Freeze the fixture crew registry before init chooses review crews;
+            // replacing it afterwards would invalidate the seeded workspace pool.
+            fixture_crew::configure_sol(&root);
             fixture
                 .command()
                 .args(["workspace", "init", "--name", "resume-test"])
                 .assert()
                 .success();
-            fixture_crew::configure_sol(&fixture.home.join(".orbit"));
             let jobs = fixture.home.join(".orbit/resources/jobs");
             fs::create_dir_all(&jobs).expect("job catalog");
             let job = json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "resume_cli_fixture"},

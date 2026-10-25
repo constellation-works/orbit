@@ -52,7 +52,7 @@ pub use types::{
 /// Security-sensitive settings that a workspace file must restate to keep.
 /// Inheriting a machine-global sandbox, approval, or environment allowlist
 /// into a workspace that never asked for it is the failure mode this prevents.
-const WORKSPACE_REPLACE_ONLY_KEYS: &[&str] = &[
+pub(crate) const WORKSPACE_REPLACE_ONLY_KEYS: &[&str] = &[
     "execution.codex.approval_policy",
     "execution.codex.sandbox",
     "execution.env.pass",
