@@ -13,7 +13,7 @@ import { captureWorkspaceVisit, copyText, el, infoHint, postJson, reviewLayerTex
 const $ = (id) => document.getElementById(id);
 
 // `null` is one admission pass: `orbit run auto` with no `--for`.
-const DRAIN_WINDOWS = [["once", "One pass"], ["30m", "30m"], ["1h", "1h"], ["2h", "2h"], ["4h", "4h"], ["8h", "8h"], ["12h", "12h"]];
+const DRAIN_WINDOWS = [["once", "One pass"], ["1h", "1h"], ["2h", "2h"], ["4h", "4h"], ["8h", "8h"], ["12h", "12h"], ["24h", "24h"]];
 const DRAIN_TIERS = [["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Extra hard"]];
 const CONCURRENCY_MAX = 4_294_967_295;
 const CONCURRENCY_PROBLEM = "Parallel tasks must be a whole number, 1 or more. Leave it blank for the runtime default.";

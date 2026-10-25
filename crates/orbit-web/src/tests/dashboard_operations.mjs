@@ -326,7 +326,7 @@ const drainText = () => `${drainBanner.textContent} ${get('auto-drain-body').tex
 const drainButton = label => button('auto-drain-body', label) || button('auto-drain-start-body', label);
 const startNode = id => descendants(get('auto-drain-start-body')).find(node => node.id === id);
 const durations = descendants(startBody.querySelector('.drain-durations')).filter(node => node.type === 'button');
-assert(durations.map(node => node.textContent).join(' ') === 'One pass 30m 1h 2h 4h 8h 12h', `duration segments: ${durations.map(node => node.textContent)}`);
+assert(durations.map(node => node.textContent).join(' ') === 'One pass 1h 2h 4h 8h 12h 24h', `duration segments: ${durations.map(node => node.textContent)}`);
 assert(durations.every(node => node.type === 'button' && ['true', 'false'].includes(node.getAttribute('aria-pressed'))), 'duration segments are pressed-state buttons');
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
 const pools = ids => ids.map(id => drainReadinessFor(id)?.pool).join(' ');
