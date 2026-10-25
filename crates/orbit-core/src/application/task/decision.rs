@@ -16,19 +16,23 @@
 //! comment. Every other allowed answer lands through the human funnel
 //! (`update_task_as_human`, or `approve_task_screened` / `reject_task` for
 //! approvals) and only then records `decision_answered`, which is what
-//! makes the request read `answered`.
+//! makes the request read `answered`. A proposed approval is screened
+//! first (`ensure_proposal_admissible`): work a pilot hold or a missing
+//! prepared footprint would keep out of the backlog is refused the same
+//! way, before any write.
 
 use orbit_common::OrbitError;
 use orbit_types::task::{
     DECISION_ANSWERED_EVENT, DecisionGate, DecisionRequest, DecisionRequestState,
-    DecisionResolution, PilotAdmissionVerdict, TaskHistoryEntry, TaskStatus,
+    DecisionResolution, PilotAdmissionVerdict, ReadinessGap, ReadinessStage, TaskHistoryEntry,
+    TaskStatus, readiness_gaps,
 };
 use serde_json::{Value, json};
 
 use super::TaskRecordUpdateParams;
 use super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::task::{TaskRecords, TriageTarget};
+use crate::application::task::{PilotAdmissionHold, TaskRecords, TriageTarget};
 
 /// JSON for one request as the decision surfaces serve it: the stored
 /// record with its effective (derived) state.
@@ -333,6 +337,9 @@ impl OrbitRuntime {
                 let comment = decision_comment(request, answer_id, chosen, via, note, "");
                 match answer_id {
                     "approve" => {
+                        if request.gate == DecisionGate::ProposedApproval {
+                            self.ensure_proposal_admissible(task_id)?;
+                        }
                         self.approve_task_screened(
                             task_id,
                             note.map(str::to_string),
@@ -355,6 +362,60 @@ impl OrbitRuntime {
                 }
             }
         }
+    }
+
+    /// The task-pilot preparation and admission checks a digest-raised
+    /// proposal approval runs before promotion, unlike the advisory
+    /// screened approval an operator surface runs beside its warnings.
+    ///
+    /// Refuses, before anything is written, while a pilot admission
+    /// hold or a `verified_no_diff` finding stands, or while a blocking
+    /// readiness gap stands at the proposed stage: no declared footprint
+    /// without the no-diff disposition, or an unassessed complexity.
+    /// The task stays proposed and the request stays open, so a later
+    /// answer can still land once the pilot prepares the task or a
+    /// verdict resolves the hold.
+    fn ensure_proposal_admissible(&self, task_id: &str) -> Result<(), OrbitError> {
+        let task = self.get_task(task_id)?;
+        if task.status != TaskStatus::Proposed {
+            // The approval path itself reports the wrong status.
+            return Ok(());
+        }
+        if let Some(hold) = self.pilot_admission_hold(task_id)? {
+            return Err(OrbitError::InvalidInput(format!(
+                "answer_not_applicable: task-pilot holds this proposal ({}) and an approval does not resolve that hold; nothing was applied, the task stays proposed and the request stays open",
+                pilot_hold_classification(&hold)
+            )));
+        }
+        if self
+            .verified_no_diff(task_id, task.status, &task.tags)?
+            .is_some()
+        {
+            return Err(OrbitError::InvalidInput(
+                "answer_not_applicable: task-pilot verified this proposal needs no change (pilot_verified_no_diff), so it is held for that disposition instead of promotion; nothing was applied, the task stays proposed and the request stays open"
+                    .to_string(),
+            ));
+        }
+        let gaps: Vec<ReadinessGap> = readiness_gaps(
+            ReadinessStage::Proposed,
+            &task.tags,
+            &task.context_files,
+            task.complexity,
+        )
+        .into_iter()
+        .filter(ReadinessGap::is_blocking)
+        .collect();
+        if !gaps.is_empty() {
+            let detail = gaps
+                .iter()
+                .map(|gap| format!("{} (fix: {})", gap.code.as_str(), gap.fix))
+                .collect::<Vec<_>>()
+                .join("; ");
+            return Err(OrbitError::InvalidInput(format!(
+                "answer_not_applicable: this proposal is not prepared for the backlog ({detail}); nothing was applied, the task stays proposed and the request stays open"
+            )));
+        }
+        Ok(())
     }
 
     /// The edit the chosen option of the triage proposal on `task_id`
@@ -444,6 +505,19 @@ impl OrbitRuntime {
             replacement: replacement.to_string(),
             criteria,
         })
+    }
+}
+
+/// The hold classification a refusal names, in the vocabulary drain
+/// approval and admission already report.
+fn pilot_hold_classification(hold: &PilotAdmissionHold) -> &'static str {
+    match hold {
+        PilotAdmissionHold::Duplicate => "pilot_duplicate",
+        PilotAdmissionHold::AlreadyLanded => "pilot_already_landed",
+        PilotAdmissionHold::OperatorValidation(_) => "operator_validation",
+        PilotAdmissionHold::HostOperational(_) => "host_operational",
+        PilotAdmissionHold::NativeOs(_) => "native_os",
+        PilotAdmissionHold::UnverifiedFinding(_) => "unverified_review_finding",
     }
 }
 

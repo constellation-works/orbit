@@ -41,10 +41,16 @@ the mechanisms below are built inside them.
    ([plugins](../plugins/1_scope.md) §1).
 3. **Closed decision scope.** Blocked `propose`/`report` choices, pilot-hold
    verdicts, proposed approve/reject (digest), review approve. A proposed approval
-   from email goes through task-pilot exactly like `approve_task`
-   (`crates/orbit-core/src/application/task/transitions.rs::approve_task`) does
-   today — it never lands in `backlog` with an empty footprint. No `--force`, no
-   free-form task edits, no requeue by email.
+   from a decision request is screened by the task-pilot preparation and
+   admission checks before promotion
+   (`crates/orbit-core/src/application/task/decision.rs::ensure_proposal_admissible`):
+   while a pilot admission hold or a `verified_no_diff` finding stands, or the
+   task has no prepared footprint (empty `context_files` without the
+   `no-diff-expected` disposition, or an unassessed complexity), the answer is
+   refused, nothing is written and the request stays open — it never lands in
+   `backlog` with an empty footprint. The direct operator approval beside its
+   warnings stays advisory. No `--force`, no free-form task edits, no requeue
+   by email.
 4. **Host: dk-server-2**, owner of the workspaces the channel serves. The channel
    registration, plugin install, and secrets all live on that host; a claimed or
    remote run never submits a decision.
@@ -101,9 +107,10 @@ per request:
   the hold's `operation_id`, so `operator_resolution`
   (`crates/orbit-core/src/application/task/pilot/admission.rs:377`) accepts it
   unchanged.
-- **Proposed / review approval:** `approve` / `reject`, applied through
-  `approve_task` / the existing reject path with their current guards (pilot on
-  proposed approval included).
+- **Proposed / review approval:** `approve` / `reject`, applied through the
+  screened approval / the existing reject path. A proposed `approve` first
+  passes the pilot preparation and admission screening above; a review
+  `approve` keeps its current guards.
 
 ### 2.2 States
 
