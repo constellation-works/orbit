@@ -48,6 +48,43 @@ const CONFIG_READ_FLAGS: &[&str] = &[
 ];
 const CONFIG_READ_SUBCOMMANDS: &[&str] = &["get", "list"];
 
+/// Modifiers that cannot select a write action. Unknown options fail closed;
+/// in particular, a write action must not override an earlier read flag.
+const CONFIG_READ_MODIFIERS: &[&str] = &[
+    "--global",
+    "--system",
+    "--local",
+    "--worktree",
+    "--includes",
+    "--no-includes",
+    "--null",
+    "-z",
+    "--name-only",
+    "--show-origin",
+    "--show-scope",
+    "--show-names",
+    "--fixed-value",
+    "--bool",
+    "--int",
+    "--bool-or-int",
+    "--bool-or-str",
+    "--path",
+    "--expiry-date",
+    "--no-type",
+];
+
+/// Consume these options' data before looking for a legacy read flag. Values
+/// such as `--get` and `--` are data even when passed as a separate argument.
+const VALUE_TAKING_CONFIG_OPTIONS: &[&str] = &[
+    "--file",
+    "-f",
+    "--blob",
+    "--type",
+    "-t",
+    "--default",
+    "--comment",
+];
+
 /// `git remote` invocations that only report. Every other remote subcommand —
 /// `add`, `rename`, `remove`, `set-url`, `set-head`, … — writes `.git/config`.
 const REMOTE_READ_SUBCOMMANDS: &[&str] = &["show", "get-url"];
@@ -184,15 +221,39 @@ fn is_read_only_config(args: &[String]) -> bool {
     {
         return true;
     }
-    // The flag form reads only when it names a read mode and carries no second
-    // positional to store: `git config --get a.b` reads, `git config a.b value`
-    // writes. The rule fails closed, so a read that spends a second positional
-    // — `--get-urlmatch`, or `--file <path>` with the path detached from its
-    // option — is refused along with the writes.
-    let read_flag = args
-        .iter()
-        .any(|arg| CONFIG_READ_FLAGS.contains(&arg.as_str()));
-    read_flag && args.iter().filter(|arg| !arg.starts_with('-')).count() <= 1
+    // Only recognized options can establish a read mode. After `--`, every
+    // token is an operand, including dash-leading keys and values. Retain the
+    // conservative single-operand limit for legacy reads.
+    let mut args = args.iter();
+    let mut read_flag = false;
+    let mut operands = 0;
+    while let Some(arg) = args.next() {
+        if arg == "--" {
+            operands += args.count();
+            break;
+        }
+        if CONFIG_READ_FLAGS.contains(&arg.as_str()) {
+            read_flag = true;
+        } else if CONFIG_READ_MODIFIERS.contains(&arg.as_str()) {
+            continue;
+        } else {
+            let (option, value) = arg
+                .split_once('=')
+                .map_or((arg.as_str(), None), |(option, value)| {
+                    (option, Some(value))
+                });
+            if VALUE_TAKING_CONFIG_OPTIONS.contains(&option) {
+                if value.is_none() && args.next().is_none() {
+                    return false;
+                }
+            } else if arg.starts_with('-') {
+                return false;
+            } else {
+                operands += 1;
+            }
+        }
+    }
+    read_flag && operands <= 1
 }
 
 fn is_read_only_remote(args: &[String]) -> bool {

@@ -353,6 +353,15 @@ fn command_line_options_cannot_hide_persistent_git_config_writes() {
             "remote.origin.url",
             "https://example.invalid/repo",
         ],
+        // `--get` is comment data; after `--`, `-evil` is a value to store.
+        &[
+            "config",
+            "--comment",
+            "--get",
+            "--",
+            "remote.origin.url",
+            "-evil",
+        ],
         &[
             "--attr-source",
             "HEAD",
