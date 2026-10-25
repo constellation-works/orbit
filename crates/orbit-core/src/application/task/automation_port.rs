@@ -1,16 +1,14 @@
 //! What task-owned deterministic steps need from the state scheduler
-//! [ORB-17924].
+//! [ORB-17924], [ORB-17943].
 //!
-//! Task-pilot prepare and apply, finding verification and escalation triage
-//! recheck the scheduler's claim, judge member freshness, fingerprint task
-//! material and read which live runs hold a task. `automation` owns all of
-//! that, and it also drives these steps, so a direct call from here would
-//! close a cycle. This port is the way in: `automation` implements it on
+//! Task-pilot prepare, apply and verified-no-diff proof, finding verification
+//! and escalation triage recheck the scheduler's claim, judge member
+//! freshness, fingerprint task material, read which live runs hold a task,
+//! reserve pilot tasks inside the commit boundary and read Git under a
+//! shared bounded command budget. `automation` owns all of that, and it also
+//! drives these steps, so a direct call from here would close a cycle. This
+//! port is the way in: `automation` implements it on
 //! [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
-//! Two task-pilot callers the task did not list still name `automation`
-//! directly, by the owner's stop-and-report ruling: the bounded `Source`
-//! reader in `pilot/no_diff.rs` and `pilot_reservation::reserve` in
-//! `pilot/prepare.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,9 +20,32 @@ use serde_json::Value;
 
 use crate::application::contracts::PilotFingerprints;
 
+/// One bounded Git reader pass whose commands share a single time and output
+/// budget, implemented by `automation`'s `Source`.
+pub(in crate::application) trait SourceGit {
+    /// Run `git` with `args` under the pass's shared budget, trimming stdout.
+    fn git(&self, args: &[&str]) -> Result<String, AutomationError>;
+
+    /// [`Self::git`] without trimming stdout, for NUL-delimited path output.
+    fn git_preserving_output(&self, args: &[&str]) -> Result<String, AutomationError>;
+}
+
 /// The state-scheduler operations task steps call, implemented by
 /// `automation`.
 pub(in crate::application) trait TaskAutomationPort {
+    /// Open one bounded Git reader on the workspace repository root whose
+    /// commands share a single deadline.
+    fn bounded_source(&self) -> Box<dyn SourceGit + '_>;
+
+    /// Atomically reserve `task_ids` for pilot run `run_id` inside the
+    /// workspace's commit boundary, returning those another live pilot run
+    /// already holds, with their holding run IDs.
+    fn reserve_pilot_tasks(
+        &self,
+        run_id: Option<&str>,
+        task_ids: &[String],
+    ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError>;
+
     /// The live state claim `value` carries under `state_automation`,
     /// rechecked at a deterministic prepare/apply boundary; `None` when it
     /// carries none.

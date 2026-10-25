@@ -348,7 +348,10 @@ impl<'a> Source<'a> {
 
     /// [`Self::git`] without trimming stdout. Use when leading or trailing
     /// bytes are data: a NUL-delimited path list, or instruction file content.
-    pub(crate) fn git_preserving_output(&self, args: &[&str]) -> Result<String, AutomationError> {
+    pub(in crate::application::automation) fn git_preserving_output(
+        &self,
+        args: &[&str],
+    ) -> Result<String, AutomationError> {
         self.command_with_output("git", args, &[], None, COMMAND_BUDGET, false)
     }
 

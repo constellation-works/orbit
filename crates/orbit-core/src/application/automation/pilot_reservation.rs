@@ -35,7 +35,7 @@ struct Reservations {
 }
 
 /// Tasks a live pilot run has reserved, with the reserving run IDs.
-pub(crate) fn live_reservations(
+pub(super) fn live_reservations(
     runtime: &OrbitRuntime,
 ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
     let mut by_task = BTreeMap::<String, BTreeSet<String>>::new();
@@ -55,7 +55,7 @@ pub(crate) fn live_reservations(
 /// holders. Held tasks stay with their holder; the rest replace whatever this
 /// run reserved before, so a retried prepare keeps its own tasks. Without a
 /// run ID nothing is reserved, but holders are still reported.
-pub(crate) fn reserve(
+pub(super) fn reserve(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
     task_ids: &[String],

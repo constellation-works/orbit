@@ -37,10 +37,10 @@ use serde_json::{Value, json};
 
 use super::super::TaskUpdateParams;
 use crate::OrbitRuntime;
-use crate::application::automation::source::Source;
 use crate::application::search::task_selectors_contain_path;
-use crate::application::task::PILOT_WARNING_TRIAGED_EVENT;
-use crate::application::task::TaskJobPort;
+use crate::application::task::{
+    PILOT_WARNING_TRIAGED_EVENT, SourceGit, TaskAutomationPort, TaskJobPort,
+};
 
 /// The hold reason, and the admission classification, for a proposed task
 /// whose latest pilot assessment is `verified_no_diff`.
@@ -138,21 +138,22 @@ impl VerifiedNoDiff {
         if self.cited_commits.is_empty() {
             return Err("the assessment cites no commit".into());
         }
-        let source = Source::new(&runtime.paths().repo_root);
+        let source = runtime.bounded_source();
+        let source = source.as_ref();
         let base = runtime.workspace_base_branch();
         let base_refs = [
             format!("refs/heads/{base}"),
             format!("refs/remotes/origin/{base}"),
         ]
         .into_iter()
-        .filter(|reference| resolve_commit(&source, reference).is_some())
+        .filter(|reference| resolve_commit(source, reference).is_some())
         .collect::<Vec<_>>();
         if base_refs.is_empty() {
             return Err(format!("base branch {base} does not resolve"));
         }
         let mut cited = Vec::with_capacity(self.cited_commits.len());
         for sha in &self.cited_commits {
-            let Some(full) = resolve_commit(&source, sha) else {
+            let Some(full) = resolve_commit(source, sha) else {
                 return Err(format!("cited {sha} is not a commit in this repository"));
             };
             cited.push((sha, full));
@@ -162,14 +163,14 @@ impl VerifiedNoDiff {
             .filter(|(_, full)| {
                 base_refs
                     .iter()
-                    .any(|reference| is_ancestor(&source, full, reference))
+                    .any(|reference| is_ancestor(source, full, reference))
             })
             .collect::<Vec<_>>();
         if on_base.is_empty() {
             return Err(format!("no cited commit is on {base}"));
         }
 
-        let named = named_commits(runtime, &source, task);
+        let named = named_commits(runtime, source, task);
         let mut paths = task.context_files.clone();
         paths.extend(self.context_files_before.iter().cloned());
         if named.is_empty() && paths.is_empty() {
@@ -183,8 +184,8 @@ impl VerifiedNoDiff {
                 !named.contains(full)
                     && named
                         .iter()
-                        .all(|culprit| is_ancestor(&source, culprit, full))
-                    && (paths.is_empty() || touches_paths(&source, full, &paths))
+                        .all(|culprit| is_ancestor(source, culprit, full))
+                    && (paths.is_empty() || touches_paths(source, full, &paths))
             })
             .map(|(sha, _)| sha.clone())
             .collect::<Vec<_>>();
@@ -371,7 +372,7 @@ fn hex_tokens<'a>(
 /// The full SHAs of the commits the finding itself names: every commit that
 /// resolves from its description, and the landed commit of each
 /// `regression_from` target that delivery observed as merged.
-fn named_commits(runtime: &OrbitRuntime, source: &Source, task: &Task) -> Vec<String> {
+fn named_commits(runtime: &OrbitRuntime, source: &dyn SourceGit, task: &Task) -> Vec<String> {
     let mut named = hex_tokens([task.description.as_str()], abbreviated_sha)
         .iter()
         .filter_map(|sha| resolve_commit(source, sha))
@@ -393,7 +394,7 @@ fn named_commits(runtime: &OrbitRuntime, source: &Source, task: &Task) -> Vec<St
     named
 }
 
-fn resolve_commit(source: &Source, revision: &str) -> Option<String> {
+fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
     source
         .git(&[
             "rev-parse",
@@ -405,7 +406,7 @@ fn resolve_commit(source: &Source, revision: &str) -> Option<String> {
         .filter(|sha| !sha.is_empty())
 }
 
-fn is_ancestor(source: &Source, ancestor: &str, descendant: &str) -> bool {
+fn is_ancestor(source: &dyn SourceGit, ancestor: &str, descendant: &str) -> bool {
     source
         .git(&["merge-base", "--is-ancestor", ancestor, descendant])
         .is_ok()
@@ -413,7 +414,7 @@ fn is_ancestor(source: &Source, ancestor: &str, descendant: &str) -> bool {
 
 /// Whether `commit` changes a path any of the task's selectors cover. A merge
 /// commit is judged by its change against the first parent.
-fn touches_paths(source: &Source, commit: &str, selectors: &[String]) -> bool {
+fn touches_paths(source: &dyn SourceGit, commit: &str, selectors: &[String]) -> bool {
     let Ok(revision) = source.git(&["rev-list", "--parents", "-n", "1", commit]) else {
         return false;
     };

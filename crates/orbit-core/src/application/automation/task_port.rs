@@ -1,5 +1,5 @@
 //! The state scheduler's side of the task-owned automation port
-//! [ORB-17924].
+//! [ORB-17924], [ORB-17943].
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -9,12 +9,35 @@ use orbit_types::task::Task;
 use orbit_types::workflow::automation::members::{MemberAttempt, PreparationPolicy};
 use serde_json::Value;
 
-use super::{members, preparation};
+use super::source::Source;
+use super::{members, pilot_reservation, preparation};
 use crate::OrbitRuntime;
 use crate::application::contracts::PilotFingerprints;
-use crate::application::task::TaskAutomationPort;
+use crate::application::task::{SourceGit, TaskAutomationPort};
+
+impl SourceGit for Source<'_> {
+    fn git(&self, args: &[&str]) -> Result<String, AutomationError> {
+        Source::git(self, args)
+    }
+
+    fn git_preserving_output(&self, args: &[&str]) -> Result<String, AutomationError> {
+        Source::git_preserving_output(self, args)
+    }
+}
 
 impl TaskAutomationPort for OrbitRuntime {
+    fn bounded_source(&self) -> Box<dyn SourceGit + '_> {
+        Box::new(Source::new(&self.paths().repo_root))
+    }
+
+    fn reserve_pilot_tasks(
+        &self,
+        run_id: Option<&str>,
+        task_ids: &[String],
+    ) -> Result<BTreeMap<String, BTreeSet<String>>, OrbitError> {
+        pilot_reservation::reserve(self, run_id, task_ids)
+    }
+
     fn state_claim(&self, value: &Value) -> Result<Option<MemberAttempt>, OrbitError> {
         members::claim(self, value)
     }

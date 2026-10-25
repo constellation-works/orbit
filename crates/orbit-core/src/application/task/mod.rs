@@ -59,7 +59,7 @@ mod write_response;
 /// claim's footprint all resolve declarations through it.
 pub use crate::runtime::task::{DeclaredContextFiles, declared_context_files};
 pub use artifact_export::TaskArtifactRead;
-pub(in crate::application) use automation_port::TaskAutomationPort;
+pub(in crate::application) use automation_port::{SourceGit, TaskAutomationPort};
 pub(crate) use baseline_hold::refresh_baseline_holds_step;
 pub use baseline_hold::{BASELINE_HOLD_REFRESH_JOB, BaselineHoldRefresh};
 pub(crate) use blocked_recovery::{
