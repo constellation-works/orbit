@@ -39,6 +39,7 @@ pub(crate) fn exclusions(
     source: &Source<'_>,
     state: &AutomationState,
     page: &mut SourcePage,
+    dry_run: bool,
 ) -> Result<(), AutomationError> {
     let store = runtime.review_store()?;
     for delivery in &page.deliveries {
@@ -93,7 +94,7 @@ pub(crate) fn exclusions(
             }
         }
         if !page.exclusions.contains_key(&delivery.key)
-            && let Some(decision) = light_delivery_exclusion(runtime, source, delivery)?
+            && let Some(decision) = light_delivery_exclusion(runtime, source, delivery, dry_run)?
         {
             page.exclusions.insert(delivery.key.clone(), decision);
         }
@@ -108,6 +109,7 @@ fn light_delivery_exclusion(
     runtime: &OrbitRuntime,
     source: &Source<'_>,
     delivery: &Delivery,
+    dry_run: bool,
 ) -> Result<Option<DeliveryExclusion>, AutomationError> {
     if delivery.task_ids.is_empty() || delivery.unattributed.is_some() {
         return Ok(None);
@@ -150,6 +152,12 @@ fn light_delivery_exclusion(
         if LightDeliveryJudgement::new(changed.len(), &filter.outside(&changed)).is_light() {
             return Ok(Some(exclusion(&digests)?));
         }
+    }
+    // Mapped decisions can execute repository guards and append task history.
+    // Preview keeps the landing as ordinary work until real evaluation can
+    // authorize those effects, even for a profile with no guard.
+    if dry_run {
+        return Ok(None);
     }
     // A mapped review-skip tag excludes the landing the same way, under
     // its own paths and guard (read at the landing's base).

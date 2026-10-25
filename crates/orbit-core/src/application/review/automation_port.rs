@@ -21,8 +21,9 @@ impl AutomationReviewPort for OrbitRuntime {
         source: &Source<'_>,
         state: &AutomationState,
         page: &mut SourcePage,
+        dry_run: bool,
     ) -> Result<(), AutomationError> {
-        exclusions(self, source, state, page)
+        exclusions(self, source, state, page, dry_run)
     }
 
     fn review_pool_members(

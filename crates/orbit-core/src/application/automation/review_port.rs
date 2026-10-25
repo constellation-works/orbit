@@ -25,11 +25,14 @@ use crate::application::contracts::{CrewCandidate, CrewPoolDraw};
 pub(in crate::application) trait AutomationReviewPort {
     /// Add to `page` the exclusions of the landings an accepted before-PR
     /// certificate proves reviewed, or that need no review.
+    /// A dry run defers mapped-tag decisions: they can run repository guards
+    /// and record task history only during real evaluation.
     fn certified_review_exclusions(
         &self,
         source: &Source<'_>,
         state: &AutomationState,
         page: &mut SourcePage,
+        dry_run: bool,
     ) -> Result<(), AutomationError>;
 
     /// The entries of review pool `key` as canonical, weighed members.
