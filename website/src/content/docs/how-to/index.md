@@ -67,6 +67,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Back Up and Move Orbit State</h3>
     <p>Find the state you can't regenerate, take consistent SQLite backups, verify a restore, and move tasks with export and import.</p>
   </a>
+  <a class="orbit-card" href="./workspace-maintenance/">
+    <h3>Maintain and Remove Workspaces</h3>
+    <p>Inspect bindings and ship mode, converge shipped defaults, inspect migrations, rebind remotes, and remove or tear down checkouts safely.</p>
+  </a>
   <a class="orbit-card" href="./distributed-drain/">
     <h3>Set Up a Distributed Drain</h3>
     <p>Spread one backlog across machines: one owner, replica checkouts, SSH access.</p>
