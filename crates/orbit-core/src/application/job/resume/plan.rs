@@ -52,6 +52,35 @@ pub(crate) struct ResumePlan {
     pub(super) completion_repair: bool,
 }
 
+impl ResumePlan {
+    /// Refuse a resume whose reused checkpoints name a worktree that no
+    /// longer exists. Checkpoint reuse skips `worktree_setup`, so every step
+    /// the resume reruns would start in that missing directory and fail,
+    /// after the task was already readmitted for it. Checked before the run
+    /// is inserted, so a refusal changes neither the task nor the lineage.
+    pub(crate) fn refuse_missing_reused_worktree(&self) -> Result<(), OrbitError> {
+        let Some(path) = self
+            .resume_state
+            .as_ref()
+            .and_then(|state| state.pipeline.get("worktree"))
+            .and_then(|worktree| worktree.get("workspace_path"))
+            .and_then(Value::as_str)
+        else {
+            return Ok(());
+        };
+        if std::path::Path::new(path).is_dir() {
+            return Ok(());
+        }
+        Err(OrbitError::JobValidation(format!(
+            "job run '{}' cannot be resumed: the worktree its checkpoints reuse ({path}) no \
+             longer exists, so the steps it would rerun cannot start. Nothing was changed. A \
+             blocked task whose run published a pull request is requeued instead (`orbit task \
+             requeue`), and its next run sets up a fresh worktree on the published branch",
+            self.source.run_id
+        )))
+    }
+}
+
 /// Exact job definition a snapshot-backed run must keep across resumes.
 #[derive(Clone)]
 pub(crate) struct PinnedRunDefinition {

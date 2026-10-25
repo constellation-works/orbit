@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 #[path = "source_repair/association.rs"]
 mod association;
+#[path = "source_repair/escalated_publication.rs"]
+mod escalated_publication;
 #[path = "source_repair/failed_publication.rs"]
 mod failed_publication;
 #[path = "source_repair/failed_successors.rs"]

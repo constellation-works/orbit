@@ -143,6 +143,14 @@ pub(in crate::application) trait TaskJobPort {
         task: &Task,
     ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError>;
 
+    /// The authenticated preservation record for the pull request `task`'s
+    /// escalated run published through its own pipeline steps and its
+    /// failure handoff kept, and the binding its next run resumes.
+    fn escalated_publication_preservation(
+        &self,
+        task: &Task,
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError>;
+
     /// The preservation record to append for `entry`, or `None` when an
     /// identical record is already on `task`.
     fn preservation_append(

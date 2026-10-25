@@ -17,6 +17,21 @@ impl OrbitRuntime {
             .as_ref()
             .ok_or_else(|| refuse("failure-handoff checkpoint missing"))?;
         let output = &checkpoint.output;
+        // A completion failure kept the PR the run published through its own
+        // pipeline steps; no `[BLOCKED]` PR exists to repair. A requeue of the
+        // blocked task resumes that PR once its required checks pass.
+        if matches!(
+            output.get("decision").and_then(Value::as_str),
+            Some("review_completion_failure" | "landing_review_failure")
+        ) {
+            return Err(refuse(
+                "the run published its pull request through its own pipeline steps and its \
+                 failure handoff kept that pull request, so there is no failure-handoff \
+                 publication to repair. Requeue the blocked task instead (`orbit task requeue`, \
+                 MCP `orbit.task.requeue`); it resumes the kept pull request once every required \
+                 check has passed on its recorded head",
+            ));
+        }
         let worktree = authenticated_checkpoint(&definition, &state, "worktree", "worktree_setup")?;
         // A generic resume's hook names the run whose worktree it reused; the
         // owner's immutable checkpoints then stand in for the preceding host
