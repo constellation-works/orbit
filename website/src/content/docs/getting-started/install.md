@@ -60,6 +60,10 @@ codex plugin add orbit@orbit
 mkdir -p ~/.cursor/plugins/local && ln -sfn "$(pwd)/plugin" ~/.cursor/plugins/local/orbit
 ```
 
+In Claude Code, the plugin also adds an in-session UI with a live task band,
+interactive board, and ship view. See
+[Use the Claude Code mod](../../how-to/claude-code/) to learn how to use it.
+
 Want to be walked through setup? Ask your agent to **set up Orbit for this
 repo**; the bundled `orbit-setup` skill takes it from there.
 

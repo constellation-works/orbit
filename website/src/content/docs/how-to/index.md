@@ -17,6 +17,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Use the Dashboard</h3>
     <p>Approve and ship tasks, follow runs, start a drain, and reach a remote host over SSH.</p>
   </a>
+  <a class="orbit-card" href="./claude-code/">
+    <h3>Use the Claude Code Mod</h3>
+    <p>Act on tasks from the prompt band, inspect the board, preflight ships, and track PR runs in Claude Code.</p>
+  </a>
   <a class="orbit-card" href="./continuous-delivery/">
     <h3>Run a Delivery Window</h3>
     <p>Prepare the backlog, drain it for a set time, retune or stop the window, and recover failed runs.</p>

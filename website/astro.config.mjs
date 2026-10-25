@@ -193,6 +193,7 @@ export default defineConfig({
           items: [
             { slug: 'how-to', label: 'Overview' },
             { slug: 'how-to/dashboard', label: 'Use the dashboard' },
+            { slug: 'how-to/claude-code', label: 'Use the Claude Code mod' },
             { slug: 'how-to/continuous-delivery', label: 'Run a delivery window' },
             { slug: 'how-to/recurring-work', label: 'Schedule recurring work' },
             { slug: 'how-to/write-activity', label: 'Write an activity' },
