@@ -21,7 +21,7 @@ use super::request::{FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecover
 use super::revision::FinalRecoveryTaskRevision;
 use super::verify::verify_on_base;
 use crate::OrbitRuntime;
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
 const COMPLETED_EVENT: &str = "final_recovery_completed";
 const REJECTED_EVENT: &str = "final_recovery_rejected";
@@ -454,7 +454,7 @@ impl OrbitRuntime {
             }),
         });
         let published = if matches!(plan.outcome, FinalRecoveryOutcome::Requeued) {
-            self.published_owner_requeue_record(task, &request.run_id)?
+            self.published_owner_preservation(task, &request.run_id)?
         } else {
             None
         };

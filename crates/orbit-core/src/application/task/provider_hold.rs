@@ -125,7 +125,7 @@ impl OrbitRuntime {
         // A collapsed `purpose:` assignment names only the chosen member.
         // Retry the pool's other enabled members before the complexity pool.
         if source.starts_with(PURPOSE_SOURCE_PREFIX)
-            && let Some((pool, pool_source)) = self.purpose_assignment_candidates(task)?
+            && let Some((pool, pool_source)) = self.purpose_candidates(task)?
         {
             let pool = permitted(&pool);
             if drawable(&pool) {

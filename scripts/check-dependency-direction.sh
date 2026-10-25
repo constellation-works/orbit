@@ -421,6 +421,22 @@ if rg -n "crate::application::(${task_upper_modules})\\b" \
   fail=1
 fi
 
+# [ORB-17972] The remaining inherent `OrbitRuntime` methods `job` defines
+# reach `task` only through `TaskJobPort` under distinct names, so a call on
+# a `self`/`runtime` receiver to any of them is a reintroduced task -> job
+# edge. Store reads (`stores().jobs().read_run_state`) are not job methods.
+task_job_inherent='get_job_run_backend|read_run_state|published_owner_requeue_record|failure_handoff_requeue_record|preservation_to_append|inspection_capable_default_crew|inspection_capable_pool|rerate_task_crew|auto_crew_pools_for_input|draw_crew_pool|purpose_assignment_candidates|observe_task_delivery'
+# Store reads through `stores().jobs()` are not `job` inherent methods; only
+# those exact lines are allowed.
+task_job_store_allowed='task/steering\.rs:[0-9]+:.*stores\(\)\.jobs\(\)\.read_run_state|task/steering\.rs:[0-9]+:\s+\.read_run_state\(run_id\)|task/steering\.rs:[0-9]+:\s+\.read_run_state\(&source\.run_id\)|task/pilot/drain_promotion\.rs:[0-9]+:\s+\.read_run_state\(run_id\)'
+if {
+  rg -n "\\.(${task_job_inherent})\\s*(::<[^>]*>)?\\s*\\(" \
+    "$app_src/task" -g '*.rs' -g '!**/tests/**' || true
+} | grep -Ev "$task_job_store_allowed"; then
+  echo "orbit-core task must reach job's remaining inherent methods through task::TaskJobPort [ORB-17972]"
+  fail=1
+fi
+
 # [ORB-17937] `job` reaches the distributed drain and pull settlement only
 # through the ports it owns (`JobDrainPort`, `JobPullSettlementPort`), which
 # `distributed` and `pull_drain` implement on `OrbitRuntime`; the shapes they

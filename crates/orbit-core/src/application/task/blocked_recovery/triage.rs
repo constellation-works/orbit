@@ -43,7 +43,7 @@ use super::MAX_EPISODE_AGE_HOURS;
 use super::episode::{FinalRecoveryRecord, LaterTouch, later_touch};
 use super::readout::{blocking_run_id, current_block, is_escalation};
 use crate::OrbitRuntime;
-use crate::application::task::TaskRecords;
+use crate::application::task::{TaskJobPort, TaskRecords};
 
 /// History event that marks a block episode triaged.
 pub const BLOCKED_TASK_TRIAGED_EVENT: &str = "blocked_task_triaged";
@@ -624,7 +624,7 @@ impl OrbitRuntime {
                     outcome: RecordedFinalRecovery::Requeued,
                 }),
             });
-            history.extend(self.published_owner_requeue_record(task, run_id)?);
+            history.extend(self.published_owner_preservation(task, run_id)?);
         }
         history.push(marker);
         let status_note = requeued.then(|| match &episode.run_id {

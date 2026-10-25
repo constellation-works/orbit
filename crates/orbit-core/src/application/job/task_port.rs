@@ -1,8 +1,12 @@
 //! Job dispatch's side of the task-owned job port [ORB-17936].
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskComplexity};
-use orbit_types::workflow::{HostValidationGates, JobRun, JobRunTrigger, ShipMode};
+use orbit_types::identity::Crew;
+use orbit_types::task::{Task, TaskComplexity, TaskHistoryEntry};
+use orbit_types::workflow::{
+    HostValidationGates, JobRun, JobRunTrigger, PipelineState, RunDeliveryObservation, ShipMode,
+    SourceRepairBinding,
+};
 use serde_json::{Value, json};
 
 use super::crew_pools::{CapturedCrewPools, random_crew_ticket, seeded_crew_ticket};
@@ -10,7 +14,9 @@ use super::delivery::{PrForgeCheck, tags_route_through_pr_pipeline};
 use super::pipeline::{PipelineSubmission, ROUTINE_DISPATCH_ORBIT_DIR_FIELD};
 use super::{RunOwnerLiveness, run_owner_liveness, running_run_has_verified_owner};
 use crate::OrbitRuntime;
-use crate::application::contracts::{CreationCrewAssignment, CrewCandidate, RetryKey};
+use crate::application::contracts::{
+    CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool, RetryKey,
+};
 use crate::application::task::TaskJobPort;
 
 impl TaskJobPort for OrbitRuntime {
@@ -99,5 +105,80 @@ impl TaskJobPort for OrbitRuntime {
 
     fn run_owner_stopped(&self, run: &JobRun) -> bool {
         run_owner_liveness(run) == RunOwnerLiveness::Stopped
+    }
+
+    fn stored_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        self.get_job_run_backend(run_id)
+    }
+
+    fn stored_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        self.read_run_state(run_id)
+    }
+
+    fn published_owner_preservation(
+        &self,
+        task: &Task,
+        run_id: &str,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        self.published_owner_requeue_record(task, run_id)
+    }
+
+    fn failure_handoff_preservation(
+        &self,
+        task: &Task,
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
+        self.failure_handoff_requeue_record(task)
+    }
+
+    fn preservation_append(
+        &self,
+        task: &Task,
+        entry: TaskHistoryEntry,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        self.preservation_to_append(task, entry)
+    }
+
+    fn inspection_default_crew(&self, tier: TaskComplexity) -> Result<Crew, OrbitError> {
+        self.inspection_capable_default_crew(tier)
+    }
+
+    fn inspection_pool(&self, tier: TaskComplexity) -> Result<Option<InspectionPool>, OrbitError> {
+        self.inspection_capable_pool(tier)
+    }
+
+    fn rerated_crew(
+        &self,
+        task: &mut Task,
+        complexity: Option<TaskComplexity>,
+    ) -> Result<Option<TaskHistoryEntry>, OrbitError> {
+        self.rerate_task_crew(task, complexity)
+    }
+
+    fn crew_pools_for_input(&self, input: &Value) -> Result<CapturedCrewPools, OrbitError> {
+        self.auto_crew_pools_for_input(input)
+    }
+
+    fn crew_pool_draw(
+        &self,
+        candidates: Vec<CrewCandidate>,
+        source: &str,
+        random: &mut dyn FnMut() -> Result<u64, OrbitError>,
+    ) -> Result<CrewPoolDraw, OrbitError> {
+        self.draw_crew_pool(candidates, source, &mut || random())
+    }
+
+    fn purpose_candidates(
+        &self,
+        task: &Task,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        self.purpose_assignment_candidates(task)
+    }
+
+    fn delivery_observation(
+        &self,
+        task_id: &str,
+        run_id: Option<&str>,
+    ) -> Result<RunDeliveryObservation, OrbitError> {
+        self.observe_task_delivery(task_id, run_id)
     }
 }

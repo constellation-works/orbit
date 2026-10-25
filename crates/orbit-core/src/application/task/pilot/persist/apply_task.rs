@@ -12,7 +12,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAutomationPort;
+use crate::application::task::{TaskAutomationPort, TaskJobPort};
 
 use super::super::apply::admission::{
     Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask,
@@ -311,8 +311,7 @@ pub(in super::super) fn apply_task(
             let mut assessed = current.clone();
             assessed.context_files = task.after.clone();
             assessed.tags = tags_after.clone();
-            let crew_redraw_history =
-                runtime.rerate_task_crew(&mut assessed, Some(task.complexity))?;
+            let crew_redraw_history = runtime.rerated_crew(&mut assessed, Some(task.complexity))?;
             assessed.complexity = Some(task.complexity);
             assessed.status = target_status;
             // The final crew (kept, or redrawn for the assessed complexity)

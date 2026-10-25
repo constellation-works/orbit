@@ -6,12 +6,12 @@ use orbit_config::{CrewPerformanceMode, CrewPerformancePolicy, UsagePressurePoli
 use orbit_store::contracts::CrewPerformanceSnapshot;
 use orbit_types::identity::Crew;
 use orbit_types::task::TaskComplexity;
+use orbit_types::workflow::ActivityCrewPoolMember;
 use orbit_types::workflow::activity_job::Provider;
-use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use crate::application::contracts::CrewCandidate;
+use crate::application::contracts::{CrewCandidate, CrewPoolDraw};
 use crate::application::task::UsagePressure;
 use crate::application::task::provider_limit::UsagePressureRead;
 use crate::runtime::engine::crew::{CrewAllowlist, enforce_crew_allowlist};
@@ -45,23 +45,6 @@ pub(crate) fn complexity_of_crews_key(key: &str) -> Option<TaskComplexity> {
     COMPLEXITIES
         .into_iter()
         .find(|complexity| complexity_crews_key(*complexity) == key)
-}
-
-/// A selected crew and the exact eligible weights used for this draw.
-pub(crate) struct CrewPoolDraw {
-    pub(crate) crew: Crew,
-    pub(crate) source: String,
-    pub(crate) eligible_pool: Vec<ActivityCrewPoolMember>,
-}
-
-impl CrewPoolDraw {
-    pub(crate) fn into_activity_draw(self) -> ActivityCrewDraw {
-        ActivityCrewDraw {
-            crew: self.crew.name,
-            source: self.source,
-            eligible_pool: self.eligible_pool,
-        }
-    }
 }
 
 impl crate::OrbitRuntime {

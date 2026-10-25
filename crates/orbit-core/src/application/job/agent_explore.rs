@@ -43,7 +43,8 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::job::crew_pools::{CrewPoolDraw, random_crew_ticket};
+use crate::application::contracts::CrewPoolDraw;
+use crate::application::job::crew_pools::random_crew_ticket;
 use crate::application::job::log_best_effort;
 use crate::application::job::pipeline::{PipelineInvokeResult, PipelineSubmission, input_hash};
 use crate::runtime::authorization::ManagedRunCaller;

@@ -21,8 +21,9 @@ mod review_layer;
 
 pub use claimed_leaf::{ClaimedLeafStage, DrainClaimedLeaf};
 pub(crate) use crew_draw::{
-    CreationCrewAssignment, CrewCandidate, InspectionPool, PROVIDER_LIMIT_REASSIGNMENT_PREFIX,
-    PURPOSE_SOURCE_PREFIX, auto_task_minted, automatic_crew_source,
+    CreationCrewAssignment, CrewCandidate, CrewPoolDraw, InspectionPool,
+    PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, auto_task_minted,
+    automatic_crew_source,
 };
 pub use drain_entry::DrainEntryPoint;
 pub(crate) use filing_tags::{

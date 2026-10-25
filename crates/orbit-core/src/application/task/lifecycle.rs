@@ -267,7 +267,7 @@ pub(crate) fn ensure_completion_run_stopped(
         if run_id.is_empty() || !visited.insert(run_id.to_string()) {
             continue;
         }
-        let Some(run) = runtime.get_job_run_backend(run_id)? else {
+        let Some(run) = runtime.stored_job_run(run_id)? else {
             continue;
         };
         if Some(run_id) != calling_run_id && runtime.run_owner_verified(&run) {
@@ -276,7 +276,7 @@ pub(crate) fn ensure_completion_run_stopped(
                 run_id: run_id.to_string(),
             });
         }
-        if let Some(state) = runtime.read_run_state(run_id)? {
+        if let Some(state) = runtime.stored_run_state(run_id)? {
             pending.extend(
                 state
                     .child_dispatches
@@ -349,7 +349,7 @@ fn completion_evidence_present(
     };
 
     Ok(runtime
-        .get_job_run_backend(job_run_id)?
+        .stored_job_run(job_run_id)?
         .is_some_and(|run| run.state == JobRunState::Success))
 }
 

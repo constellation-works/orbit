@@ -40,6 +40,7 @@ use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 use crate::application::search::task_selectors_contain_path;
 use crate::application::task::PILOT_WARNING_TRIAGED_EVENT;
+use crate::application::task::TaskJobPort;
 
 /// The hold reason, and the admission classification, for a proposed task
 /// whose latest pilot assessment is `verified_no_diff`.
@@ -380,7 +381,7 @@ fn named_commits(runtime: &OrbitRuntime, source: &Source, task: &Task) -> Vec<St
             continue;
         }
         let landed = runtime
-            .observe_task_delivery(relation.target.as_str(), None)
+            .delivery_observation(relation.target.as_str(), None)
             .ok()
             .filter(|observation| observation.landing.status == LandingObservationStatus::Merged)
             .and_then(|observation| observation.landing.landed_commit)
