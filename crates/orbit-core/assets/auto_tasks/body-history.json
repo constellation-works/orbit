@@ -2071,6 +2071,27 @@
         "## Persist the execution summary",
         "## Record the cursor"
       ],
+      "digest": "c72a05335178887ce3d6e8885f214ebdae0810435c951dda8fdd59c499e0b662",
+      "revision": "599dbaf99b582e30ca0cbd33fbb10b7f5d68e07b",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "50 * * * *"
+        },
+        "tags": [
+          "qa-sweep",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Persist the execution summary",
+        "## Record the cursor"
+      ],
       "digest": "de81d5c9cc0993a6db10a5d42b491af44c4d03aa7ce3ba03c15a98c8acea7c2e",
       "revision": "4f14e4ed63f609cd6ad1af3a0cc4b58c5e44c159",
       "settings": {

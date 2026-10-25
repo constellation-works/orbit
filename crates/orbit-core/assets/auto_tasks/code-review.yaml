@@ -43,10 +43,14 @@ template:
       File a module's grouped medium and low findings as its single cleanup task with
       `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown listing every grouped finding>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
       In the grouped payload, `context_files` is the deduplicated union of every
-      grouped finding's selectors, and `relations` carries one classified
-      `regression_from` entry for each attributable grouped finding (repeat the
-      entry per culprit task; omit it for a finding no task can be held
-      responsible for, and say why in the description). In either payload, omit
+      grouped finding's selectors, and `relations` carries at most one
+      classified `regression_from` entry per distinct culprit task among the
+      attributable grouped findings (omit it for a finding no task can be held
+      responsible for, and say why in the description; keep every grouped
+      finding listed in the description, including findings that share a
+      culprit; when grouped findings sharing a culprit have conflicting nature
+      or escape classifications, note them in the description and classify the
+      single `regression_from` link `unclassified`). In either payload, omit
       the `regression_from` relation only when no landed task can be held
       responsible. Derive canonical `file:` selectors from every evidenced
       source path, removing the line suffix, and add the matching
@@ -205,8 +209,10 @@ template:
     responsible; its `context_files` are the deduplicated union of the
     grouped findings' selectors; its priority is the highest grouped severity
     (`medium` when any grouped finding is medium, otherwise `low`); and it
-    carries a classified `regression_from` relation for each attributable
-    grouped finding. A module with no medium or low findings files no cleanup
+    carries at most one classified `regression_from` relation per distinct
+    culprit task among the attributable grouped findings (when findings sharing
+    a culprit differ in nature or escape, note both in the description and
+    classify the single link `unclassified`). A module with no medium or low findings files no cleanup
     task. Never group a high or critical finding into a cleanup task, and
     never file more than one cleanup task for one module in one run.
 
@@ -284,7 +290,7 @@ template:
   - The tracked tree was partitioned at one pinned integration-branch SHA into disjoint modules of at most 25,000 tracked text lines each, directory boundaries first, with every exclusion named, and the 2 modules selected were the least recently reviewed (never-reviewed first, then oldest last-reviewed time, then more commits since the last review, then the smaller module ID), or every module when fewer than 2 exist.
   - Each selected module was read in full at the pinned SHA in read partitions of at most 10,000 lines covering every included line exactly once, and incomplete reading is reported as `review_incomplete` with its uncovered partitions, files or ranges, never as a clean no-op.
   - The last-reviewed map was built only from `reviewed-modules.json` artifacts on done chores carrying `auto-task:code-review`; a sweep without a readable artifact counted as reviewing nothing, and a split module's children inherited its last-reviewed time.
-  - Every filed finding was verified against the pinned SHA, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag; each critical or high finding is its own `bug`, and each module's medium and low findings are grouped into at most one cleanup `bug` for that module listing every grouped finding, unioning their `context_files`, and carrying a classified `regression_from` for each attributable grouped finding.
+  - Every filed finding was verified against the pinned SHA, is non-duplicate, and carries file:line evidence with a severity-appropriate priority and the `code-review` tag; each critical or high finding is its own `bug`, and each module's medium and low findings are grouped into at most one cleanup `bug` for that module listing every grouped finding, unioning their `context_files`, and carrying at most one classified `regression_from` per distinct culprit of an attributable grouped finding.
   - Every attributable filed finding carries a `regression_from` relation targeting the task whose landed commit introduced the defect, classified with a `regression` nature and escape (`unclassified` when the evidence does not settle one), or its description states why no landed task can be held responsible.
   - The reviewed modules are attached as this task's `reviewed-modules.json` artifact (`schema_version` 1, the pinned SHA, and per module its ID, selectors, line count and filed finding IDs) and the pinned SHA is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA), on every completed run including one with no confirmed findings.
   - A run whose reviewed modules hold no confirmed findings succeeds as a no-op.

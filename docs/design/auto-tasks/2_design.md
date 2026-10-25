@@ -319,8 +319,10 @@ sampling), so the rotation also surfaces defects older than any recent
 change. Each confirmed high or critical finding is filed as its own task; a
 module's medium and low findings are grouped into at most one cleanup `bug`
 per module, listing each finding with its file:line evidence, unioning their
-`context_files`, and carrying a classified `regression_from` for each
-attributable finding. The run also still attaches `sweep-cursor.json` with
+`context_files`, and carrying at most one classified `regression_from` per
+distinct culprit of an attributable finding (findings sharing a culprit stay
+listed in the description, and the single link is classified `unclassified` when
+their classifications differ). The run also still attaches `sweep-cursor.json` with
 the pinned SHA, and its `skip_if_unchanged` gate (§4b) is unchanged, so the
 scheduler still skips a tick on a quiet tree. At two modules per fired
 six-hourly run, a tree of about 55 modules is covered in about a week of
