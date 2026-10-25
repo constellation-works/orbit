@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The fifteen seeded definitions
+## The sixteen seeded definitions
 
-`orbit workspace init` seeds all fifteen, disabled, except any you deleted (see
+`orbit workspace init` seeds all sixteen, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -525,7 +525,17 @@ plugin being removed.
   `no-diff-expected` and never builds or runs tests. A test-reduction
   task keeps that file's coverage — every scenario survives or is named
   with a reason — and reports the test count before and after.
-
+- **`auto-task-yield-review`** (`medium`) — monthly. Reports whether each
+  enabled auto-task definition in this workspace pays for itself over the
+  last 30 days: minted chores by final status and no-op successes, cost
+  per run from run evidence (unknown, never zero, when missing), tasks
+  filed through `spawned_from` and their outcomes, filed tasks that later
+  regressed, duplicate or invalid rejections, landed tasks per run and
+  cost per landed task. Each run attaches `auto-task-yield.json` diffed
+  against the previous run and files at most 3 `proposed` retuning tasks
+  (cadence, merge, template fix or disable), each naming its definition
+  and numbers. It never edits, toggles or mints definitions.
+>
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
 

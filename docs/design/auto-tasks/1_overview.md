@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These fifteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These sixteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -313,7 +313,25 @@ definition of the same name.
   and never builds or runs tests. A test-reduction task keeps that file's
   coverage — every scenario survives or is named with a reason — and
   reports the test count before and after.
-
+- `auto-task-yield-review` — disabled-by-default monthly review of whether
+  this workspace's enabled auto-task definitions pay for themselves. For
+  each enabled definition over the last 30 days it reports minted chores
+  by final status and no-op successes, cost per run from run evidence
+  (reported as `unknown`, never zero, when missing), the tasks those
+  chores filed through `spawned_from` and their outcomes, filed tasks that
+  later regressed through `regression_from`, and duplicate or invalid
+  rejections, deriving landed tasks per run and cost per landed task. Each
+  run attaches `auto-task-yield.json` diffed against the previous run,
+  carries the same table in its execution summary, and files at most 3
+  `proposed` retuning tasks (a cadence change, a merge of overlapping
+  definitions, a template fix, or disabling the definition), each naming
+  its definition and numbers with `context_files` and a `spawned_from`
+  relation to the minted chore. Filed tasks with no `spawned_from`
+  linkage count as `unknown`, and that gap is filed at most once after a
+  duplicate search. The minted chore is tagged `no-diff-expected` and
+  never edits, toggles or mints definitions; changing configuration is
+  the operator's decision.
+>
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
 it: its `block_escalated` state trigger admits each escalated block episode once
@@ -391,6 +409,11 @@ encode this repository's branches and gates. Re-init preserves them:
   inferred-layers fallback that files only cycles and up-calls, and
   measurement-first split, merge, and move filing capped at 3 improvement
   tasks per run.
+- ORB-18135 — Added the disabled monthly `auto-task-yield-review` default:
+  per-definition runs, cost, filed-task outcomes, regressions and
+  duplicate or invalid rejections over 30 days in an
+  `auto-task-yield.json` artifact diffed against the previous run, with at
+  most 3 proposed retuning tasks per run and no definition edits.
 - ORB-18128 — Added the disabled `path-risk-review` default (3-day cadence)
   over the codebase analytics rankings: min-support no-op reporting each
   ranking's below-support counts, at most five paths investigated, and fixes capped at 3

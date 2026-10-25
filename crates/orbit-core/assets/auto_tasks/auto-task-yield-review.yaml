@@ -1,0 +1,187 @@
+schemaVersion: 1
+name: auto-task-yield-review
+description: Monthly yield review of enabled auto-task definitions - runs, cost, filed-task outcomes, regressions and duplicate or invalid rejections per definition over the last 30 days; files at most 3 proposed retuning tasks and never edits, toggles or mints definitions
+enabled: false
+schedule:
+  cron: 0 9 1 * *
+template:
+  title: Review auto-task yield and propose retuning
+  description: |-
+    Measure whether this workspace's enabled auto-task definitions pay for
+    themselves over the last 30 days, and propose retuning where they do
+    not. The durable outputs are the `auto-task-yield.json` artifact on
+    this task and the proposed retuning tasks filed below; the execution
+    summary is only an audit trail. This task reports and proposes; it
+    never edits, toggles, enables, disables, deletes or mints an auto-task
+    definition, and it never mints a definition's chore itself. Changing
+    configuration is the operator's decision. A run where every enabled
+    definition is healthy, or where no definition is enabled, is a
+    successful no-op when the yield evidence is persisted.
+
+    ## Rules and command surfaces
+
+    - Use only Orbit's task, run, search and auto-task tools. List the
+      definitions in this workspace with
+      `orbit tool run orbit.auto_task.list --input '{"model":"<agent-family>"}'`
+      and keep only the definitions that report as enabled; report disabled
+      definitions as excluded, never as zero-yield. Find minted chores with
+      `orbit tool run orbit.task.list --input '{"tag":["auto-task:<name>"],"limit":200,"model":"<agent-family>"}'`
+      (one call per enabled definition, replacing `<name>`), and inspect a
+      chore or a filed task with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      Search before filing with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
+      (lexical search matches one substring: use a single distinctive
+      token, never a multi-word phrase, and never treat a 0-hit multi-word
+      query as proof that nothing covers a candidate).
+    - Read run cost evidence read-only with
+      `orbit run history --limit <n> --no-reconcile --json` and
+      `orbit run show <run-id> --no-reconcile --json`. Never use a run read
+      without `--no-reconcile`: without it the read can reconcile stale
+      runs and mutate the state this review only measures. Match runs to
+      minted chores by the run's task ID where the evidence carries one;
+      a run that cannot be matched to a chore is reported as unmatched,
+      not assigned to a definition.
+    - File a proposed retuning task (tool-created tasks start `proposed`)
+      with
+      `orbit tool run orbit.task.add --input '{"title":"<title naming the definition and the recommendation>","description":"<markdown: definition, 30-day numbers, evidence task and run IDs, and the one recommendation>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified definition file path>"],"complexity":"<assessed>","tags":["auto-task-yield-review"],"type":"chore","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Read each filed task back with `orbit.task.show` before recording it
+      as delivered. Never file a candidate without `context_files` naming
+      the definition file verified through the auto-task list or show
+      surface. Do not approve filed tasks.
+    - Put throwaway scripts under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`).
+      Fail open: missing evidence is recorded as unknown, never invented.
+
+    ## Measure each enabled definition (last 30 days)
+
+    The window is the 30 days before this run starts; record its exact
+    start and end in the artifact. For every enabled definition, record:
+
+    1. **Runs.** The chores minted in the window (tag `auto-task:<name>`
+       above), each chore's final status (`done`, `rejected`, or still
+       open in `proposed`, `backlog`, `in-progress`, `review` or
+       `blocked`), and how many were no-op successes: `done` chores that
+       filed no task (no task carries a `spawned_from` relation to the
+       chore; see step 3).
+    2. **Cost.** Tokens or cost per run from the run evidence above
+       (`orbit run history --limit <n> --no-reconcile --json`, then
+       `orbit run show <run-id> --no-reconcile --json` for a run whose
+       history row lacks the figures). Report the per-run values the
+       evidence carries and their total. When a run carries no token or
+       cost figure, report that run's cost as `unknown`, never as zero,
+       and report the definition's cost per run as `unknown` when any
+       counted run is unknown.
+    3. **Output.** The tasks the chores filed: tasks whose
+       `spawned_from` relation targets a minted chore of this definition,
+       found by reading each chore with `orbit.task.show`. For each filed
+       task record its outcome from `orbit.task.show`: `done`, `rejected`,
+       archived as a duplicate, or still open. When filed tasks carry no
+       `spawned_from` linkage to any chore, count them as `unknown`, do
+       not guess their definition, and report the linkage gap (see
+       "Linkage gap" below).
+    4. **Quality.** Filed tasks that later regressed: a later task whose
+       `regression_from` relation targets the filed task, read from the
+       filed task's `orbit.task.show` record. Filed tasks rejected as
+       duplicates or invalid: `rejected` filed tasks whose rejection
+       evidence on `orbit.task.show` (status reason, comments or
+       relations) marks them duplicate or invalid; a rejection whose
+       reason the evidence does not state is counted as `rejected` with
+       reason `unknown`, never assumed duplicate or invalid.
+    5. **Derived.** Landed tasks per run: filed tasks with outcome `done`
+       divided by runs in the window (`unknown` when runs is zero). Cost
+       per landed task: total known cost divided by landed tasks
+       (`unknown` when cost is unknown or landed tasks is zero). Never
+       report a derived value as zero when its inputs are unknown.
+
+    ## Linkage gap
+
+    When any filed task that a chore's summary or comments claim as its
+    output carries no `spawned_from` linkage, count it under `unknown`
+    linkage for that definition and record the gap in the artifact and
+    the execution summary. File the gap itself at most once: search first
+    with `orbit.search` for an existing task covering the missing linkage,
+    and only when none covers it file one proposed task naming the
+    affected definitions and the unknown counts, with `spawned_from` to
+    this task and `context_files` naming a verified definition file. That
+    gap task counts toward the 3-task cap below.
+
+    ## Propose retuning (at most 3 tasks)
+
+    Rank definitions by cost per landed task (unknown cost last), then by
+    duplicate or invalid rejections, then by no-op share. File at most 3
+    proposed tasks per run, one per definition or merged pair, highest
+    rank first. Each filed task names its definition and its numbers
+    (runs, no-op runs, cost per run, filed, landed, regressions,
+    duplicate or invalid rejections, landed per run, cost per landed)
+    and exactly one recommendation:
+
+    - **Cadence:** change the definition's schedule (name the current and
+      proposed cadence and the run counts behind them).
+    - **Merge:** merge overlapping definitions (name both definitions and
+      the overlapping filed-task evidence).
+    - **Template fix:** fix the definition's template (name the failure
+      the filed-task outcomes show, such as repeated duplicate filings).
+    - **Disable:** disable the definition (name the runs and cost spent
+      with zero or unknown landed tasks behind the recommendation).
+
+    Before filing, search open and closed tasks with one distinctive
+    token at a time (see above). Do not file what an open task already
+    covers; record the mapping in the artifact instead. A definition with
+    healthy yield (landed tasks at known, proportionate cost, no
+    duplicate or invalid pattern) is reported, never filed. Record the
+    overflow in the artifact; the next run files it first after
+    re-verifying.
+
+    ## Record and diff
+
+    Find the previous run with
+    `orbit tool run orbit.task.list --input '{"status":["done"],"tag":["auto-task-yield-review","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
+    and fetch its record with
+    `orbit tool run orbit.task.artifact.get --input '{"id":"<prior task ID>","path":"auto-task-yield.json","model":"<agent-family>"}'`.
+    Write `.orbit/tmp/auto-task-yield.json` with `schema_version: 1`, the
+    window start and end, and per enabled definition: runs by final
+    status, no-op runs, per-run cost or `unknown`, total cost or
+    `unknown`, filed task IDs with outcomes, later regressions, duplicate
+    or invalid rejections, unknown-linkage counts, landed tasks per run,
+    cost per landed task, and each candidate's disposition (filed task
+    ID, already tracked by an existing task ID, or overflow). Also record
+    the excluded disabled definitions and any unmatched runs. Attach it
+    with
+    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/auto-task-yield.json","path":"auto-task-yield.json","model":"<agent-family>"}'`.
+    Diff it against the previous run's artifact and record the delta per
+    definition (runs, cost, landed, regressions and rejections moving)
+    in the execution summary; absent or unreadable means this is the
+    baseline run, say so. The execution summary also carries a short
+    table, one row per enabled definition, with columns: definition,
+    runs, no-op, cost per run, filed, landed, landed per run, cost per
+    landed, regressions, duplicate/invalid — plus every filed task ID,
+    the overflow, the unknown-cost and unknown-linkage counts, and the
+    delta against the previous run. A run with nothing to file attaches
+    the record and succeeds.
+  acceptance_criteria:
+  - Each enabled definition was measured over the last 30 days for runs by final status, no-op runs, cost per run, filed tasks and their outcomes, later regressions, and duplicate or invalid rejections, with `auto-task-yield.json` attached to this task
+  - Missing cost or `spawned_from` linkage is reported as `unknown` in `auto-task-yield.json` and the execution summary, never as zero, and landed tasks per run and cost per landed task are `unknown` when their inputs are unknown or zero
+  - 'auto-task-yield.json was diffed against the previous run''s artifact fetched through the artifact tools, or the execution summary states this is the baseline run, and the summary carries the per-definition table'
+  - At most 3 proposed tasks were filed, each naming its definition, its 30-day numbers and exactly one recommendation (cadence, merge, template fix or disable), with a `spawned_from` relation to this task and `context_files` naming a verified definition file, after a duplicate search
+  - No auto-task definition was edited, toggled, enabled, disabled, deleted or minted during the run, and no filed task was approved
+  - Filed tasks with no `spawned_from` linkage were counted as `unknown`, the gap was recorded in `auto-task-yield.json`, and the gap was filed at most once after searching for an existing task covering it
+  task_type: chore
+  tags:
+  - auto-task-yield-review
+  - no-diff-expected
+  required_tools:
+  - orbit.auto_task.list
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.artifact.get
+  - orbit.task.artifact.put
+  - orbit.task.list
+  - orbit.task.show
+  priority: medium
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-25T00:00:00Z
+updated_by: system
+updated_at: 2026-10-25T00:00:00Z
