@@ -45,6 +45,15 @@ pub fn task_record_json(
     let mut object = task_base_json(task, status_by_id);
     TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
     object.insert(
+        "resolvable_pilot_admission_hold".into(),
+        serde_json::json!(
+            !task.status.is_terminal()
+                && runtime
+                    .pilot_admission_hold_in(task, &row.comments, &|| Ok(row.history.clone()))?
+                    .is_some_and(|hold| hold.is_resolvable())
+        ),
+    );
+    object.insert(
         "pilot_warnings".into(),
         serde_json::json!(task_pilot_warnings(
             task.status,

@@ -87,6 +87,18 @@ impl HostOperationalHold {
 }
 
 impl PilotAdmissionHold {
+    /// Whether evidenced operator clear/override actions can resolve this hold.
+    pub(crate) fn is_resolvable(&self) -> bool {
+        matches!(
+            self,
+            Self::OperatorValidation(_)
+                | Self::NativeOs(_)
+                | Self::HostOperational(_)
+                | Self::Duplicate
+                | Self::AlreadyLanded
+        )
+    }
+
     /// Answers a decision request for this hold may offer.
     ///
     /// Duplicate and already-landed findings resolve only through a verdict
@@ -817,16 +829,9 @@ impl OrbitRuntime {
     /// The dashboard's typed operator route checks this before writing, so a
     /// task with no matching hold is refused without a comment.
     pub fn has_resolvable_pilot_admission_hold(&self, task_id: &str) -> Result<bool, OrbitError> {
-        Ok(matches!(
-            self.pilot_admission_hold(task_id)?,
-            Some(
-                PilotAdmissionHold::OperatorValidation(_)
-                    | PilotAdmissionHold::NativeOs(_)
-                    | PilotAdmissionHold::HostOperational(_)
-                    | PilotAdmissionHold::Duplicate
-                    | PilotAdmissionHold::AlreadyLanded
-            )
-        ))
+        Ok(self
+            .pilot_admission_hold(task_id)?
+            .is_some_and(|hold| hold.is_resolvable()))
     }
 
     /// Only the trusted human update path calls this. Agent-authored comment

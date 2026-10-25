@@ -4,7 +4,7 @@ use orbit_engine::RuntimeHost;
 use orbit_types::workflow::OwedCriterion;
 use serde_json::json;
 
-use super::support::{Fixture, error_code, isolated};
+use super::support::{Fixture, error_code, isolated, json_ok};
 
 const WS: &str = "?workspace=ws_http_fixture";
 
@@ -142,6 +142,16 @@ fn operator_record_routes_gate_refusals_and_success() {
             );
 
             let operator = fixture.server(true);
+            let assert_hold = |id: &str, expected: bool| {
+                let record = json_ok(operator.get(&format!("/api/tasks/{id}{WS}")));
+                assert_eq!(record["status"], "backlog");
+                assert_eq!(record["pilot_warnings"], json!([]));
+                assert_eq!(record["resolvable_pilot_admission_hold"], expected);
+            };
+            // Admission-held backlog records must advertise controls even
+            // though their promotion-only warning array is empty.
+            assert_hold(&held, true);
+            assert_hold(&plain, false);
             // Empty evidence refused, nothing written.
             let held_history = fixture.runtime.get_task_history(&held).unwrap().len();
             error_code(
@@ -224,6 +234,7 @@ fn operator_record_routes_gate_refusals_and_success() {
                     == "task-pilot-admission: clear\nOperator ran the live evaluation."),
                 "comments should carry the exact grammar: {comments:?}"
             );
+            assert_hold(&held, false);
 
             // Approve anyway: same route, override verdict.
             let held2 = held_task(&fixture);
@@ -240,6 +251,45 @@ fn operator_record_routes_gate_refusals_and_success() {
                     .any(|e| e.event == "operator_validation_resolved"),
                 "approve-anyway should resolve the hold: {history:?}"
             );
+            assert_hold(&held2, false);
+
+            // Native-OS admission holds use the same public read/action pair.
+            // This fixture tests the record, not a native host's capability.
+            for verdict in ["clear", "approve-anyway"] {
+                let native = plain_task(&fixture, "Native validation held");
+                let task = fixture.runtime.get_task(&native).unwrap();
+                let criteria = orbit_common::security::release::sha256_hex(
+                    json!(task.acceptance_criteria).to_string().as_bytes(),
+                );
+                seed_pilot_receipt(
+                    &fixture,
+                    &native,
+                    json!({
+                        "assessment": {"task_id": native, "disposition": "selectors"},
+                        "native_os_hold": {
+                            "criteria": criteria,
+                            "requirements": [{"criterion": 1, "os": "macos"}],
+                        },
+                    }),
+                );
+                assert_hold(&native, true);
+                let response = operator.send(
+                    "POST",
+                    &pilot(&native),
+                    json!({"verdict":verdict,"evidence":"Operator verified native evaluation."}),
+                );
+                assert_eq!(
+                    response.status().as_u16(),
+                    200,
+                    "{}",
+                    response.text().unwrap()
+                );
+                assert_hold(&native, false);
+                let history = fixture.runtime.get_task_history(&native).unwrap();
+                assert!(history.iter().any(|entry| {
+                    entry.event == "native_os_requirement_resolved" && entry.by == "dashboard"
+                }));
+            }
 
             // Mark met: settles the owed criterion as the CLI comment does.
             let resp = operator.send(
