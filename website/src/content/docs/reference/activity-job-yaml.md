@@ -412,7 +412,7 @@ declared by activity name and resolve against the catalog at load:
 | Field | Where | Behavior |
 |-------|-------|----------|
 | `recovery_activity` | On a step, or on the job's `spec` | Runs once after the step's retries are exhausted (a step-level declaration overrides the job-level one for that step). It gets one attempt to repair the situation; the failed step's outcome stands if recovery does not succeed. |
-| `final_recovery_activity` | On the job's `spec` | The last automated look at a failed run: invoked at most once per run, after step recovery is exhausted and before `failure_activity`. Its typed decision either resumes the run from an earlier step or settles the task without the failure hook. |
+| `final_recovery_activity` | On the job's `spec` | The last automated look at a failed run: invoked at most once per run, after step recovery is exhausted and before `failure_activity`. It returns one typed decision: `resume` (reruns the run from an earlier step), a settled decision (`complete_no_diff`, `reject`, `archive`, or `requeue`, which does not run `failure_activity`), or `escalate` (which, like a missing or malformed result, still runs `failure_activity`). |
 | `failure_activity` | On the job's `spec` | A best-effort terminal hook invoked once after a step failure. Unlike `recovery_activity`, it does not retry or replace the failed step — use it for notification and cleanup, not repair. |
 
 ```yaml
