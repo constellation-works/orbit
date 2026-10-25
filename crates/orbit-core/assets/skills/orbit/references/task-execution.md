@@ -183,7 +183,9 @@ lost evidence.
 - Add a before shot from the base revision when it is practical and it shows
   the change.
 - Write each under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`) and give it a stable
-  stored path such as `screenshots/<view>-<theme>-<width>.png`. Owner mode
+  stored path such as `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`.
+  A file with no suffix is an After shot, and the Before shot stays optional.
+  Owner mode
   attaches screenshots with `orbit.task.artifact.put`. A claimed implementer
   returns each screenshot in `task_artifacts`, setting `path` to its stable
   stored path and `source_path` to its file under `.orbit/tmp/`, for
@@ -194,6 +196,12 @@ lost evidence.
 - Keep each under the 1 MiB per-artifact limit: prefer a viewport capture to a
   full-page one, or JPEG or WebP when a PNG is too large.
 - List the artifact paths in the execution summary.
+- Orbit publishes these artifacts into the PR's `## Screenshots` table by
+  itself. When `pr.screenshot_section` applies, `pr_open` commits the shots to
+  the task's permanent evidence ref `refs/orbit/evidence/<task-id>` and renders
+  the Before/After table in the PR body. Do not push your own evidence branch:
+  Orbit replaces the hand-pushed evidence branch used for
+  constellation-works/orbit#6155.
 
 When the host has no browser kit or the view cannot render, say so in the
 handoff instead of claiming visual verification.
