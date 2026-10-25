@@ -13,19 +13,9 @@ use orbit_store::contracts::{
 use orbit_types::tool::{McpTransport, ToolSessionContext};
 use orbit_types::workflow::REVIEW_CONTRACT_VERSION;
 
+use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 use crate::application::job::crew_pools::random_crew_ticket;
 use crate::application::review::crew::pre_landing_review_crew_unset;
-
-/// Whether the mutating distributed entry points are reachable from any public
-/// surface.
-///
-/// It is a constant rather than configuration on purpose: the feature must not
-/// become reachable, or unreachable, because an operator set a key or an
-/// environment variable. [ORB-13625] opened it once the routed follower peer,
-/// the owner's pull/bind/settle tools and `orbit run auto --pull` landed
-/// together; every gated entry point still names it, so closing the feature
-/// again is one deliberate source change.
-pub const DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED: bool = true;
 
 /// The authorization reference an owner-policy completion carries: the config
 /// key that grants it. A claim admitted under `completion: done` pins this

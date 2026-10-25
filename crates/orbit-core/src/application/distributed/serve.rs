@@ -55,7 +55,9 @@ use crate::application::task::PilotAdmissionHold;
 use crate::runtime::run_input::recorded_task_ids;
 
 use super::contract::{is_remote, session_machine_id, trusted_identity};
-use super::{ensure_distributed_mutation_available, owner_binary_version};
+use super::{
+    DistributedAdmissionPort, ensure_distributed_mutation_available, owner_binary_version,
+};
 
 /// A remote claimed implementer's restrictions, using the same deny set as
 /// the engine and the same coordination classification and closed bridge as
@@ -781,7 +783,7 @@ impl crate::OrbitRuntime {
         // census, the requester declaring itself by this request.
         let census = (!repairs_only)
             .then(|| {
-                self.executor_census(
+                self.pull_requester_census(
                     &identity.location().machine_id,
                     ExecutorCapability::of_request(request),
                 )

@@ -480,7 +480,47 @@ if rg -n "crate::application::(${job_upper_modules})\\b" \
   fail=1
 fi
 
-shared_contracts='PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery'
+# [ORB-17939] Above `job`, each module names only the modules below it in
+# `automation < review < distributed < pull_drain < admission <
+# workspace_auto < sweep_filing`. The cut edges go through ports the lower
+# module owns: `automation::AutomationReviewPort` (before-PR coverage and the
+# reviewer pools, implemented by `review`), `review::ReviewDistributedPort`
+# (the owner's ship contract and machine) and `distributed::
+# DistributedAdmissionPort` (the executor census); automation's pilot
+# reservations and review's handoff console take the owner's commit boundary
+# and completion authority through `job::JobDrainPort`, and admission's
+# backlog listing takes the live leaves' tasks through
+# `task::TaskWorkspaceAutoPort`. The distributed mutation gate is a contract.
+# A path, a grouped tree, a `super::` chain into a higher module, or a call
+# to the inherent methods and functions those ports wrap is a reintroduced
+# edge.
+
+# Fail when production code under application module `$1` names one of the
+# `|`-separated higher modules `$2` or calls one of the `|`-separated inherent
+# methods and functions `$3` (empty for none).
+guard_upper_layer() {
+  local module="$1" higher="$2" calls="$3"
+  if rg -n "crate::application::(${higher})\\b" \
+    "$app_src/$module" -g '*.rs' -g '!**/tests/**' ||
+    rg -n -U "crate::application::\\{[^}]*\\b(${higher})\\b" \
+      "$app_src/$module" -g '*.rs' -g '!**/tests/**' ||
+    { [[ -n "$calls" ]] && rg -n "\\b(${calls})\\s*(::<[^>]*>)?\\s*\\(" \
+      "$app_src/$module" -g '*.rs' -g '!**/tests/**'; } ||
+    ! super_chains_into "$app_src" "$module" "$higher"; then
+    echo "orbit-core ${module} must reach ${higher//|/, } only through ports the lower module owns"
+    fail=1
+  fi
+}
+guard_upper_layer automation 'review|distributed|pull_drain|admission|workspace_auto|sweep_filing' \
+  'configured_pool_members|review_pool_by_os|select_review_crew|review_crew_candidates|admission_boundary'
+guard_upper_layer review 'distributed|pull_drain|admission|workspace_auto|sweep_filing' \
+  'admission_boundary|owner_completion_authority|owner_ship_contract|distributed_owner_machine_id'
+guard_upper_layer distributed 'pull_drain|admission|workspace_auto|sweep_filing' 'executor_census'
+guard_upper_layer pull_drain 'admission|workspace_auto|sweep_filing' ''
+guard_upper_layer admission 'workspace_auto|sweep_filing' 'read_live_leaf_runs'
+guard_upper_layer workspace_auto 'sweep_filing' ''
+
+shared_contracts='DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED|PULL_DRAIN_JOB|DrainClaimedLeaf|ClaimedLeafStage|HostProviderHold|ESCALATION_TRIAGE_JOB|FINDING_VERIFICATION_JOB|DrainEntryPoint|PullSettlementEntry|PullSettlementOutcome|SUPERSEDED_BY_SOURCE|PilotFingerprints|review_layer_json|CreationCrewAssignment|CrewCandidate|InspectionPool|PURPOSE_SOURCE_PREFIX|PROVIDER_LIMIT_REASSIGNMENT_PREFIX|auto_task_minted|automatic_crew_source|RetryKey|LOCAL_ROUTE_JOB|CI_FAILURE_TAG|DEPENDABOT_TAG|CODE_SCANNING_TAG|RECONCILIATION_FOLLOW_UP_TAG_PREFIX|PublishedDelivery'
 if rg -n "\\b(const|enum|struct|fn) (${shared_contracts})\\b" \
   "$repo_root/crates/orbit-core/src" -g '*.rs' -g "!**/application/contracts/**" ||
   rg -n "\\b(${app_modules})(::[a-z_]+)*::(${shared_contracts})\\b" \

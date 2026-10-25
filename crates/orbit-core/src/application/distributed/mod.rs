@@ -41,6 +41,7 @@
 
 #[cfg(feature = "test-support")]
 pub(crate) mod admission_checkpoint;
+mod admission_port;
 mod auth_failures;
 mod auth_recovery;
 mod claimed_review;
@@ -54,14 +55,16 @@ mod leaf_settlements;
 mod owner_repair;
 mod probe;
 mod pull_waiting;
+mod review_port;
 mod serve;
 mod settlement;
 mod task_port;
 mod work_fit;
 
+pub(in crate::application) use admission_port::DistributedAdmissionPort;
 pub use contract::{
-    DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED, DeclaredCallerContract, OWNER_COMPLETION_POLICY,
-    ensure_distributed_mutation_available, owner_binary_version,
+    DeclaredCallerContract, OWNER_COMPLETION_POLICY, ensure_distributed_mutation_available,
+    owner_binary_version,
 };
 pub(crate) use contract::{owner_protocol_error, probe_pull_contract};
 pub use entry::{DrainEntryAdmission, DrainEntryRefusal, RESOURCE_THROTTLED};
