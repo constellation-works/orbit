@@ -31,6 +31,9 @@ Options:
       --shadow
           Compare recorded draw shares with the shares the recorded factor would have given
 
+      --per-task
+          Export one row per implemented task for offline analysis
+
       --format <MODE>
           Output format (default: auto — a table on a terminal, plain text when piped)
 
@@ -56,3 +59,6 @@ units and the term definitions. Follow a row to its tasks with
 
 `--by-type --shadow` (implementers only) replaces the cell matrix with each crew's static,
 drawn and would-be share from recorded draws in the window.
+
+`--per-task` (implementers only) exports one row per implemented task for offline analysis;
+use --json for the machine-readable export.

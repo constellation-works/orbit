@@ -1,0 +1,4631 @@
+{
+ "per_task": true,
+ "terms": [
+  {
+   "key": "weighted_landed",
+   "weight": 1.0
+  },
+  {
+   "key": "first_pass_accepts",
+   "weight": 1.0
+  },
+  {
+   "key": "review_rejects",
+   "weight": -1.0
+  },
+  {
+   "key": "reviewer_repairs",
+   "weight": -0.5
+  },
+  {
+   "key": "crew_rework",
+   "weight": -1.0
+  },
+  {
+   "key": "escaped_regressions",
+   "weight": -2.0
+  }
+ ],
+ "tasks": [
+  {
+   "task_id": "synthetic-0000",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0001",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0002",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0003",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0004",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0005",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0006",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0007",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0008",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0009",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0010",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0011",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0012",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0013",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0014",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0015",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0016",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0017",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0018",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0019",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0020",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0021",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0022",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0023",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0024",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0025",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0026",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0027",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0028",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0029",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0030",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0031",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0032",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0033",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0034",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0035",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0036",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0037",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0038",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0039",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0040",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0041",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0042",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0043",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0044",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0045",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0046",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0047",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0048",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0049",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0050",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0051",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0052",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0053",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0054",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0055",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0056",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0057",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0058",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0059",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0060",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0061",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0062",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0063",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0064",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0065",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0066",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0067",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0068",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0069",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0070",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0071",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0072",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0073",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0074",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0075",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0076",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0077",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0078",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0079",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0080",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0081",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0082",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0083",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0084",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0085",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0086",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0087",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0088",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0089",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0090",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0091",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0092",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0093",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0094",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0095",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0096",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0097",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0098",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0099",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [
+    "ui"
+   ],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0100",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0101",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0102",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0103",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0104",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0105",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0106",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0107",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0108",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0109",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0110",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0111",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0112",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0113",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0114",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0115",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0116",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0117",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0118",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0119",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0120",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0121",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0122",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0123",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0124",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0125",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0126",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0127",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0128",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0129",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 1,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0130",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0131",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0132",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0133",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0134",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0135",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0136",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0137",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0138",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0139",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0140",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0141",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0142",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0143",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0144",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0145",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0146",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0147",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0148",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0149",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0150",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0151",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0152",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0153",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0154",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0155",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0156",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0157",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0158",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0159",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0160",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0161",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0162",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0163",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0164",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0165",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0166",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0167",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0168",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0169",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0170",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0171",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0172",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0173",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0174",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0175",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0176",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0177",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0178",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0179",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0180",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0181",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0182",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0183",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0184",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0185",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0186",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0187",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0188",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0189",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0190",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0191",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0192",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0193",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0194",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0195",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0196",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0197",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0198",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  },
+  {
+   "task_id": "synthetic-0199",
+   "crew": "alpha",
+   "model": "model-a",
+   "tier": "medium",
+   "type": "other",
+   "tags": [],
+   "context_files": [
+    "file:crates/example/src/lib.rs"
+   ],
+   "path_prefixes": [
+    "crates"
+   ],
+   "counts": {
+    "weighted_landed": 1,
+    "first_pass_accepts": 0,
+    "review_rejects": 0,
+    "reviewer_repairs": 0,
+    "crew_rework": 0,
+    "escaped_regressions": 0
+   }
+  }
+ ]
+}

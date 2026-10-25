@@ -41,6 +41,18 @@ impl OrbitRuntime {
         ))
     }
 
+    /// Scan, then export one row per implemented task, with a cache period
+    /// of zero as on [`Self::agent_role_scorecard`]. Read-only: it writes no
+    /// snapshot and refreshes no cache beyond that scan.
+    pub fn agent_per_task_export(&self, query: &AgentQuery) -> Result<Value, OrbitError> {
+        Ok(agent_per_task_export(
+            &self.agent_scan()?,
+            query,
+            self.crew_performance_types(),
+            Duration::ZERO,
+        ))
+    }
+
     /// The implementer shadow share report for `query`: each crew's static,
     /// drawn and would-be share per pool and type, from recorded draws in
     /// the window. This does not scan tasks.
@@ -141,6 +153,34 @@ pub fn agent_by_type_scorecard(
             .collect::<Vec<_>>()
     );
     payload["cells"] = json!(roles::implementer_by_type_cells(facts, since, types));
+    payload
+}
+
+/// The per-task implementer export for `query`: one row per implemented
+/// task and the crew and model that worked it, with the type list the
+/// tasks were classified with. The offline counterpart of the cell
+/// matrix; summed per `(crew, model, tier, type)` it reproduces it.
+pub fn agent_per_task_export(
+    facts: &AgentFacts,
+    query: &AgentQuery,
+    types: &[orbit_config::CrewPerformanceType],
+    cache_ttl: Duration,
+) -> Value {
+    let since = query.since();
+    let role = AgentRole::Implementers;
+    let mut payload = role_header(facts, role, query, since, cache_ttl);
+    payload["per_task"] = json!(true);
+    payload["types"] = json!(
+        types
+            .iter()
+            .map(|entry| json!({
+                "name": entry.name,
+                "tags": entry.tags,
+                "paths": entry.paths,
+            }))
+            .collect::<Vec<_>>()
+    );
+    payload["tasks"] = json!(roles::implementer_per_task_rows(facts, since, types));
     payload
 }
 

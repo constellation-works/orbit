@@ -90,6 +90,15 @@ const BY_TYPE: &[ParamSpec] = &[both(
     "Show implementers split by task type within each tier",
 )];
 
+/// The per-task evidence export, implementers only.
+const PER_TASK: &[ParamSpec] = &[both(
+    "per_task",
+    ParamType::Switch,
+    "Export one row per implemented task for offline analysis, with its crew, model, tier, configured type, tags, context-file path prefixes and per-term counts; implementers only, and not with by_type or shadow.",
+    CliArgKind::flag("per-task"),
+    "Export one row per implemented task for offline analysis",
+)];
+
 /// The shadow share report, implementers with `--by-type` only.
 const SHADOW: &[ParamSpec] = &[both(
     "shadow",
@@ -109,18 +118,18 @@ const SCORECARD: OperationSpec<AgentsVerb> = OperationSpec {
     verb: AgentsVerb::Scorecard,
     cli_path: &["scorecard"],
     tool_name: "orbit.agents.scorecard",
-    tool_description: "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere on that scorecard. Other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. With by_type, implementers instead return one cell per (crew, model, tier, type) with n, raw, crew_mean and score, plus the type list used. With shadow as well, implementers instead return each crew's draw count and its static, drawn and would-be share per pool and type over the window; draws with no performance record are counted separately as static. Calls without those switches keep this ranking. Scans the workspace once per call (cache_ttl_seconds 0), except the shadow report, which reads recorded draws only. The payload the dashboard's Agents view reads.",
+    tool_description: "Rank one agent role's crews and models over the window: weighted outcome rates per 100 units of work, then pulled down toward the fleet average when above it. Implementers start at 100 and score actual counts against fleet expectations for the same tier mix; tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere on that scorecard. Other roles sum weighted actual rates. Rows below the minimum support are listed last without a rank; a role whose terms are not computed yet answers status not_computed with its terms and no rows. With by_type, implementers instead return one cell per (crew, model, tier, type) with n, raw, crew_mean and score, plus the type list used. With shadow as well, implementers instead return each crew's draw count and its static, drawn and would-be share per pool and type over the window; draws with no performance record are counted separately as static. With per_task, implementers instead return one row per implemented task with its crew, model, tier, configured type, tags, context-file selectors and path prefixes and per-term counts, plus the type list used. Calls without those switches keep this ranking. Scans the workspace once per call (cache_ttl_seconds 0), except the shadow report, which reads recorded draws only. The payload the dashboard's Agents view reads.",
     cli_about: "Show one role's scorecard rows by crew and model",
     cli_help: CliHelp {
         long_about: None,
         after_help: Some(
-            "The table shows each row's units, score and term counts; --json carries every rate per 100\nunits and the term definitions. Follow a row to its tasks with\n`orbit agents show --role <role> --crew <crew>`.\n\n`--by-type --shadow` (implementers only) replaces the cell matrix with each crew's static,\ndrawn and would-be share from recorded draws in the window.",
+            "The table shows each row's units, score and term counts; --json carries every rate per 100\nunits and the term definitions. Follow a row to its tasks with\n`orbit agents show --role <role> --crew <crew>`.\n\n`--by-type --shadow` (implementers only) replaces the cell matrix with each crew's static,\ndrawn and would-be share from recorded draws in the window.\n\n`--per-task` (implementers only) exports one row per implemented task for offline analysis;\nuse --json for the machine-readable export.",
         ),
         flag_order: &[],
         constraints: &[],
     },
     effect: Effect::Read,
-    params: &[ROLE, SELECTION, BY_TYPE, SHADOW, MODEL],
+    params: &[ROLE, SELECTION, BY_TYPE, SHADOW, PER_TASK, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

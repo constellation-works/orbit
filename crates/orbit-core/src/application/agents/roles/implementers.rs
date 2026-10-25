@@ -372,6 +372,117 @@ fn stat(key: &'static str, label: &'static str, value: Value) -> Stat {
     Stat { key, label, value }
 }
 
+/// The tags in force when a task's counted work was admitted (its earliest
+/// counted attempt in the window), so a tag added after an attempt started
+/// cannot reclassify work already scored.
+fn admitted_tags(task: &TaskFacts, since: DateTime<Utc>) -> &[String] {
+    task.attempts
+        .iter()
+        .filter(|a| counted(a, since))
+        .min_by_key(|a| a.start)
+        .map_or(&task.tags, |a| &a.tags)
+}
+
+/// The currently configured type of a task, classified as the by-type
+/// cells classify it.
+fn configured_type(
+    task: &TaskFacts,
+    since: DateTime<Utc>,
+    types: &[CrewPerformanceType],
+) -> String {
+    classify_task_type(types, admitted_tags(task, since), &task.context_files).to_string()
+}
+
+/// The path a context-file selector names, without its prefix. `module:`
+/// and `command:` selectors name no path.
+fn selector_path(selector: &str) -> Option<&str> {
+    if let Some(path) = selector.strip_prefix("file:") {
+        Some(path)
+    } else if let Some(path) = selector.strip_prefix("dir:") {
+        Some(path)
+    } else if let Some(remainder) = selector.strip_prefix("symbol:") {
+        let (path, _) = remainder.split_once('#')?;
+        if path.is_empty() { None } else { Some(path) }
+    } else if selector.starts_with("module:") || selector.starts_with("command:") {
+        None
+    } else {
+        Some(selector)
+    }
+}
+
+/// The top-level path prefixes of a task's context-file selectors: the
+/// first path component of each named path, deduplicated and sorted.
+fn path_prefixes(task: &TaskFacts) -> Vec<String> {
+    let mut prefixes = BTreeSet::new();
+    for selector in &task.context_files {
+        if let Some(path) = selector_path(selector)
+            && let Some(first) = path.split('/').find(|part| !part.is_empty())
+        {
+            prefixes.insert(first.to_string());
+        }
+    }
+    prefixes.into_iter().collect()
+}
+
+/// One row per implemented task and the row (crew, model) that worked it:
+/// the task's configured type, its tags as admitted, its context-file
+/// selectors and top-level path prefixes, and its per-term counts under
+/// that row. Summed per `(crew, model, tier, type)`, the counts reproduce
+/// the by-type cells' `n` and, through [`raw_against`] with the same fleet
+/// references, their `raw` values. Read-only: it only slices the scan the
+/// scorecard already made.
+pub(super) fn per_task_rows(
+    facts: &AgentFacts,
+    since: DateTime<Utc>,
+    types: &[CrewPerformanceType],
+) -> Vec<Value> {
+    let work = work_by_row(facts, since);
+    let mut charges: BTreeMap<&str, Vec<&Charge>> = BTreeMap::new();
+    let mut credits: BTreeMap<&str, Vec<&Credit>> = BTreeMap::new();
+    for charge in &facts.charges {
+        charges.entry(&charge.task_id).or_default().push(charge);
+    }
+    for credit in &facts.credits {
+        credits.entry(&credit.task_id).or_default().push(credit);
+    }
+    let mut rows = Vec::new();
+    for (row, tasks) in &work {
+        for &task in tasks {
+            let tallies = compute_tallies(row, &[task], &charges, &credits, since);
+            let counts: serde_json::Map<String, Value> = TERMS
+                .iter()
+                .map(|term| {
+                    (
+                        term.key.to_string(),
+                        number(tallies.get(term.key).map_or(0.0, Tally::count)),
+                    )
+                })
+                .collect();
+            rows.push(json!({
+                "task_id": task.id,
+                "crew": row.0,
+                "model": row.1,
+                "tier": tier(task),
+                "type": configured_type(task, since, types),
+                "tags": admitted_tags(task, since),
+                "context_files": task.context_files,
+                "path_prefixes": path_prefixes(task),
+                "counts": counts,
+            }));
+        }
+    }
+    rows.sort_by(|left, right| {
+        left["crew"]
+            .as_str()
+            .cmp(&right["crew"].as_str())
+            .then(left["model"].as_str().cmp(&right["model"].as_str()))
+            .then(left["tier"].as_str().cmp(&right["tier"].as_str()))
+            .then(left["type"].as_str().cmp(&right["type"].as_str()))
+            .then(left["task_id"].as_str().cmp(&right["task_id"].as_str()))
+    });
+    rows
+}
+
 /// Shrinkage strength of the by-type matrix, at both levels.
 const CELL_SHRINKAGE: f64 = 30.0;
 
@@ -418,15 +529,7 @@ pub(super) fn by_type_cells(
     // Classify by the tags in force when the counted work was admitted
     // (the earliest counted attempt in the window), so a tag added after
     // an attempt started cannot retype work already scored.
-    let task_type = |task: &TaskFacts| {
-        let tags = task
-            .attempts
-            .iter()
-            .filter(|a| counted(a, since))
-            .min_by_key(|a| a.start)
-            .map_or(&task.tags, |a| &a.tags);
-        classify_task_type(types, tags, &task.context_files).to_string()
-    };
+    let task_type = |task: &TaskFacts| configured_type(task, since, types);
     let mut fleet_tier: BTreeMap<&str, Fleet> = BTreeMap::new();
     let mut fleet_cell: BTreeMap<(&str, String), Fleet> = BTreeMap::new();
     for tasks in work.values() {
