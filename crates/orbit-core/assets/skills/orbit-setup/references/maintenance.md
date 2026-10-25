@@ -127,6 +127,17 @@ tracks is kept (`skipped:tracked_content`). The scheduled pipeline does the
 same for every kept terminal worktree. `bytes_reclaimed` reports the size of
 the removed paths.
 
+`worktree.reclaim_below_free_mib` adds admission-time reclamation: unset by
+default, or a non-negative integer MiB (`u64`; `0` never triggers). While free
+space beneath the state directory is below it, admission reclaims the declared
+`worktree.reclaim` paths from oldest terminal worktrees first, keeping their
+checkouts and protecting active runs. Read the effective mark with
+`orbit config show --all`. Inspect eligible output without deletion using
+`orbit gc worktrees --reclaim --dry-run --estimate-bytes`; this previews GC
+eligibility, not a forced low-space admission. Actual admission reclamation
+records a `worktree.reclaim` audit event with reclaimed bytes. See
+[Configuration](configuration.md#common-settings) for the setting and limits.
+
 With `workflow.validation_env.build_output_env` configured, required validation
 binds the workspace's output variables to host-owned output under
 `.orbit/state/host-validation-targets/`, outside the checkout. Native Linux and macOS
