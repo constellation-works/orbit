@@ -331,7 +331,7 @@ definition of the same name.
   duplicate search. The minted chore is tagged `no-diff-expected` and
   never edits, toggles or mints definitions; changing configuration is
   the operator's decision.
->
+
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
 it: its `block_escalated` state trigger admits each escalated block episode once

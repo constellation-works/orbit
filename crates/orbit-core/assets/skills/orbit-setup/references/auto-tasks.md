@@ -535,7 +535,7 @@ plugin being removed.
   against the previous run and files at most 3 `proposed` retuning tasks
   (cadence, merge, template fix or disable), each naming its definition
   and numbers. It never edits, toggles or mints definitions.
->
+
 Read them before enabling. They are also the best worked examples of how much
 instruction a minted task's body should carry.
 
