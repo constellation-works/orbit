@@ -50,7 +50,9 @@ impl PilotSteps {
                 "repair_count",
             ),
             // Settled from triage markers, never from an apply checkpoint.
-            StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
+            StateTriggerKind::PilotWarningsHeld
+            | StateTriggerKind::BlockEscalated
+            | StateTriggerKind::DecisionRequested => {
                 return Ok(Self {
                     prepare: None,
                     apply: None,
