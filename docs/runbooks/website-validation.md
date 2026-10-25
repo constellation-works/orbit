@@ -412,9 +412,13 @@ After the maintainer's manual publication, verify the public result independentl
 ```bash
 curl --fail --show-error --silent --dump-header /tmp/security-txt.headers \
   --output "$SANDBOX_ROOT/security.txt" https://orbit-cli.com/.well-known/security.txt
-grep -Eiq '^content-type:[[:space:]]*text/plain(?:;|$)' /tmp/security-txt.headers
+grep -Eiq '^content-type:[[:space:]]*text/plain[[:space:]]*(;.*)?$' /tmp/security-txt.headers
 npm --prefix "$REPO/website" run validate:security-txt -- "$SANDBOX_ROOT/security.txt"
 ```
+
+The header check accepts `text/plain` in any case, with or without parameters such
+as `charset=utf-8`, and with CRLF or LF line endings. It rejects `text/html` and
+`text/plainx`.
 
 Then rerun the security scan. A 404, HTML response, stale `Expires`, failed
 HSTS check, or missing redirect is evidence that the maintainer's external publication

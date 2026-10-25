@@ -920,9 +920,9 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   `required_tools` cannot be satisfied in a remote claimed implementer. The
   pull receipt names the required tool and restriction in `deferred_conflicts`:
   `orbit.task.update` is denied in claimed mode; owner coordination outside
-  the closed bridge, including `orbit.task.list` and `orbit.search`, is
-  unavailable. Search on a replica cannot establish the authoritative owner
-  window. These tasks stay in backlog without a claim, worktree or failed leaf,
+  the closed bridge is unavailable. `orbit.search` and `orbit.task.list` are
+  inside the bridge and satisfiable, so they do not hold a task. These tasks
+  stay in backlog without a claim, worktree or failed leaf,
   and the follower may select another eligible task. Plain and auto-task
   records follow the same rule. The owner's ordinary local activity admission
   still decides its own requirements; no tool grant or requirement is changed.
@@ -943,8 +943,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
 - An agent in a claimed leaf reaches the owner only through the run's
   coordinator (the step runner's broker, outside the sandbox), for a closed
   list of calls: `orbit.task.show` of the claimed task,
-  `orbit.task.add` of a task `spawned_from` the claimed task and related to
-  nothing else (a claimed `delivery-code-review` or `code-review` task's
+  `orbit.search` and `orbit.task.list` against the owner workspace the claim
+  is bound to (a federated scope is refused, and neither is carried to any
+  other workspace), `orbit.task.add` of a task `spawned_from` the claimed task
+  and related to nothing else (a claimed `delivery-code-review` or `code-review` task's
   finding may also name its culprit as `regression_from`, which the owner
   checks), `orbit.friction.add` (during the claimed task, if it names
   one), and `orbit.task.artifact.get`/`put` on the claimed task. Its nested
@@ -961,8 +963,10 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   handoff. A settlement refused with `regression_from attribution was
   refused` names a target the owner cannot resolve. Retries cannot change
   that, so recover the claim and requeue the task.
-  The broker does not carry `orbit.search`, so a claimed review files its
-  findings without a duplicate search, and the owner's triage dedupes them.
+  A claimed review runs the duplicate `orbit.search` its brief requires
+  through the broker, in the owner workspace, before filing a finding; the
+  owner's triage remains the backstop. A search that asks for a federated
+  scope (`workspaces`, `workspace_scope` or `all_workspaces`) is refused.
   A finding the owner still refuses arrives as the claimed task's
   `unfiled-findings.json` artifact: file each entry on the owner, keeping its
   relations. The implement step refuses `unfiled_findings` that is not an array
