@@ -488,6 +488,16 @@ admission, verify the persisted `native_os_hold.machine` names the owner and
 that followers report `Machine requirement:`. An already-minted task does not
 inherit template edits; assess its existing owner-evidence contract separately.
 
+The shipped `qa-full-sweep` roll-up already carries this kind of contract in
+the brief the coordinator copies onto the roll-up task: area-task status and
+`qa-progress.json` reads are owner-task-store evidence, so preparation records
+`required_machine` for that criterion before admission. Area tasks stay
+portable. The coordinator sets the roll-up's dependencies with owner-local
+`orbit.task.update` and, when that write is unavailable, returns a
+`qa_rollup_dependencies_unwired` blocker instead of treating a comment as the
+wiring. Do not re-apply the manual adoption above to the bundled default, and
+do not edit a live workspace definition to copy it.
+
 Admission honours an OS finding while the task's `os:` tags do not name the
 required OS. A local drain, ship discovery or `orbit run ship` on a host of
 another OS leaves the task in `backlog` as `native_os_required`, and the owner

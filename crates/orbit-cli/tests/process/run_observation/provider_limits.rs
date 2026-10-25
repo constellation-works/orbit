@@ -2,7 +2,7 @@
 //! surface: `run readiness` text and JSON, a pull drain's `run show` crew
 //! window, and the `doctor` and `doctor providers` provider-limits rows.
 use super::*;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{TaskComplexity, TaskStatus, TaskType};
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
@@ -108,11 +108,17 @@ fn native_provider_usage_events_are_visible_in_readiness_and_weekly_pressure() {
         assert_eq!(limit["scope"].as_str(), scope);
         assert_eq!(limit["used_percent"], 2.0);
         assert_eq!(
-            limit["resets_at"],
+            limit["resets_at"]
+                .as_str()
+                .unwrap()
+                .parse::<DateTime<Utc>>()
+                .unwrap(),
             observation
                 .resets_at
                 .unwrap()
                 .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+                .parse::<DateTime<Utc>>()
+                .unwrap()
         );
         let pressure = readiness["provider_pressures"]
             .as_array()

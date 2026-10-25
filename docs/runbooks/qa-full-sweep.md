@@ -5,7 +5,7 @@ tags: [operations, qa, release, automation]
 paths: [".orbit/auto_tasks/qa-full-sweep.yaml", "scripts/qa-full-sweep*", "crates/orbit-core/assets/auto_tasks/qa-full-sweep.yaml"]
 related_features: [auto-tasks, activity-job, dashboard, task-publication]
 related_artifacts: [ORB-12010, ORB-15327]
-last_validated: 2026-10-19
+last_validated: 2026-10-25
 ---
 
 # Full pre-release QA sweep
@@ -17,6 +17,12 @@ It complements the recent-change `qa-sweep`.
 Orbit also ships a generic, product-agnostic `qa-full-sweep` default that
 coordinates per-area surface-QA chores and a roll-up release decision
 ([auto-task overview](../design/auto-tasks/1_overview.md#embedded-default-catalog)).
+That roll-up's description and acceptance criteria require the owning
+machine: preparation records `required_machine` because area status and
+`qa-progress.json` reads are owner-task-store evidence, and the coordinator
+wires dependencies with `orbit.task.update` or a
+`qa_rollup_dependencies_unwired` handoff. Area tasks in that default stay
+portable. This runbook does not change the generic default.
 This workspace's own `.orbit/auto_tasks/qa-full-sweep.yaml` predates it and
 overrides it: `orbit workspace sync` and `orbit update` keep the file byte for
 byte and never retire it, and sync warns that it occupies the bundled
