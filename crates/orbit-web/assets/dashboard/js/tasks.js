@@ -5057,7 +5057,7 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     if (typeof window.prompt !== "function") return;
     const reason = window.prompt(`Reason for requeueing ${task.id} (recorded in task history):`, "");
     if (!reason || !reason.trim()) {
-      const message = "requeue_refused: requeue needs a reason; it is recorded with the decision";
+      const message = "requeue_reason_required: requeue needs a reason; it is recorded with the decision";
       recoveryRefusals.set(key, message);
       renderTasks(taskList(context), context);
       return;

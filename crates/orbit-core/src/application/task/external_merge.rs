@@ -549,7 +549,7 @@ impl OrbitRuntime {
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         match &candidate.revoked {
             Some(revoked) => {
-                self.write_revoked_handoff_settlement(&candidate.task, revoked, landing)
+                self.write_revoked_handoff_settlement(&candidate.task, revoked, landing, actor)
             }
             None => self.write_external_merge_settlement_as(&candidate.task, landing, actor),
         }
@@ -567,6 +567,7 @@ impl OrbitRuntime {
         observed: &Task,
         revoked: &RevokedHandoff,
         landing: &MergedPullRequest,
+        actor: Option<&str>,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         let id = observed.id.as_str();
         let number = landing.pull.number;
@@ -578,10 +579,11 @@ impl OrbitRuntime {
             return Err(refused(id, &owed));
         }
         self.ensure_resolves_are_workspace_local(observed)?;
+        let history_actor = actor.unwrap_or(SYSTEM_ACTOR_LABEL).to_string();
         let context = ClaimInvocation::trusted_operator(
             id.to_string(),
             revoked.claim_id.clone(),
-            SYSTEM_ACTOR_LABEL.to_string(),
+            history_actor,
         );
         self.with_mutation(|| {
             self.mutate_execution_claim(
