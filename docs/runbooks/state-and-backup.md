@@ -359,8 +359,10 @@ from the captured settings only after the old source identity is restored.
 
 ### Preserve SQLite consistency
 
-All Orbit DBs run in WAL mode. A plain `cp` of a live `*.db` without its `-wal` and
-`-shm` sidecars can produce a torn copy. Use one of these options, in order of preference:
+All Orbit DBs run in WAL mode, so a committed change can sit in `-wal` until SQLite checkpoints
+it. Copying a live `*.db` is not a safe backup, even with its `-wal` and `-shm` copied too: a
+checkpoint between the copies can leave committed changes out of the copy, and the copy can still
+pass `quick_check`. Use one of these options, in order of preference:
 
 ```sh
 # 1. Cold copy—no Orbit processes running (stop orbit-web and timers first):
@@ -374,11 +376,14 @@ sqlite3 ~/.orbit/orbit.db "VACUUM INTO '/backups/orbit.db'"
 orbit task export --all -o tasks-backup.tar.zst
 ```
 
-Both `VACUUM INTO` and `.backup` produce a checkpointed, sidecar-free file. If you must
-file-copy a live DB, copy `*.db`, `*.db-wal`, and `*.db-shm` together.
+Both `VACUUM INTO` and `.backup` produce a checkpointed, sidecar-free file. Plain file copies
+of DB files (`cp`, `rsync`, or a backup agent) are safe only when no Orbit process is writing, or
+when they come from one atomic filesystem snapshot of the volume that holds `~/.orbit`, taken at a
+single instant. Copying `-wal` and `-shm` beside a live database is not enough.
 
-For a store copy named `~/.orbit/orbit.db.bak-<date>`, keep the corresponding sidecars
-as `orbit.db.bak-<date>-wal` and `orbit.db.bak-<date>-shm` beside it. Deployment GC
+For a store copy named `~/.orbit/orbit.db.bak-<date>` taken from a stopped or atomically
+snapshotted set, keep the corresponding sidecars as `orbit.db.bak-<date>-wal` and
+`orbit.db.bak-<date>-shm` beside it. Deployment GC
 counts these files as one backup for `--keep`, ordered by the newest modification
 time in the set, and keeps or removes them together. It still reports each path and
 its bytes separately. Keep recovery copies outside `~/.orbit` to exclude them from
