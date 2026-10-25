@@ -43,6 +43,7 @@ impl Host<'_> {
             TaskStatus::Someday,
             TaskStatus::Blocked,
         ];
+        let workspace_key = self.runtime.shared_root().display().to_string();
         let tasks = match self.inspection_cache {
             Some(cache)
                 if filter
@@ -50,21 +51,18 @@ impl Host<'_> {
                     .as_ref()
                     .is_some_and(|values| values.iter().all(|s| SNAPSHOT_STATUSES.contains(s))) =>
             {
-                let snapshot = cache.task_snapshot(
-                    &self.runtime.shared_root().display().to_string(),
-                    || {
-                        Ok(self
-                            .runtime
-                            .task_candidates(
-                                &TaskListFilter {
-                                    statuses: Some(SNAPSHOT_STATUSES.to_vec()),
-                                    ..Default::default()
-                                },
-                                usize::MAX,
-                            )?
-                            .items)
-                    },
-                )?;
+                let snapshot = cache.task_snapshot(&workspace_key, || {
+                    Ok(self
+                        .runtime
+                        .task_candidates(
+                            &TaskListFilter {
+                                statuses: Some(SNAPSHOT_STATUSES.to_vec()),
+                                ..Default::default()
+                            },
+                            usize::MAX,
+                        )?
+                        .items)
+                })?;
                 let mut items: Vec<_> = snapshot
                     .into_iter()
                     .filter(|task| {
@@ -111,22 +109,26 @@ impl Host<'_> {
 
         let active_preparations = match self.trigger.kind {
             StateTriggerKind::PreparationEligible => match self.inspection_cache {
-                Some(cache) => cache.preparations("task_pilot", || {
+                Some(cache) => cache.preparations(&workspace_key, "task_pilot", || {
                     preparation::active_task_pilot_preparations(self.runtime)
                 })?,
                 None => preparation::active_task_pilot_preparations(self.runtime)?,
             },
             StateTriggerKind::FindingUnverified => match self.inspection_cache {
-                Some(cache) => cache.preparations("finding_verification", || {
-                    preparation::active_finding_verifications(self.runtime)
-                })?,
+                Some(cache) => {
+                    cache.preparations(&workspace_key, "finding_verification", || {
+                        preparation::active_finding_verifications(self.runtime)
+                    })?
+                }
                 None => preparation::active_finding_verifications(self.runtime)?,
             },
             StateTriggerKind::PilotWarningsHeld | StateTriggerKind::BlockEscalated => {
                 match self.inspection_cache {
-                    Some(cache) => cache.preparations("escalation_triage", || {
-                        preparation::active_escalation_triages(self.runtime)
-                    })?,
+                    Some(cache) => {
+                        cache.preparations(&workspace_key, "escalation_triage", || {
+                            preparation::active_escalation_triages(self.runtime)
+                        })?
+                    }
                     None => preparation::active_escalation_triages(self.runtime)?,
                 }
             }
@@ -140,7 +142,9 @@ impl Host<'_> {
 
         for envelope in tasks.items {
             let task = match self.inspection_cache {
-                Some(cache) => cache.task(&envelope.id, || self.runtime.get_task(&envelope.id))?,
+                Some(cache) => cache.task(&workspace_key, &envelope.id, || {
+                    self.runtime.get_task(&envelope.id)
+                })?,
                 None => self.runtime.get_task(&envelope.id)?,
             };
 

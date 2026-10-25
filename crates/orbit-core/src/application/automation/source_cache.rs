@@ -33,8 +33,12 @@ pub(crate) struct SourceCache {
     // Only a status inspection populates it; it lives for one request, so a
     // later request re-reads the store.
     task_snapshots: RefCell<BTreeMap<String, Vec<orbit_types::task::TaskEnvelopeV2>>>,
-    tasks: RefCell<BTreeMap<String, Task>>,
-    preparations: RefCell<BTreeMap<&'static str, Preparations>>,
+    // Hydrated tasks and active-preparation scans are workspace-scoped: the
+    // status report shares one cache across every discovered workspace, so
+    // the workspace key keeps one checkout's tasks from serving another's
+    // routines.
+    tasks: RefCell<BTreeMap<(String, String), Task>>,
+    preparations: RefCell<BTreeMap<(String, &'static str), Preparations>>,
 }
 
 impl SourceCache {
@@ -81,29 +85,33 @@ impl SourceCache {
 
     pub(super) fn task(
         &self,
+        workspace: &str,
         id: &str,
         fetch: impl FnOnce() -> Result<Task, OrbitError>,
     ) -> Result<Task, OrbitError> {
-        if let Some(task) = self.tasks.borrow().get(id) {
+        let key = (workspace.to_string(), id.to_string());
+        if let Some(task) = self.tasks.borrow().get(&key) {
             return Ok(task.clone());
         }
         let task = fetch()?;
-        self.tasks.borrow_mut().insert(id.to_string(), task.clone());
+        self.tasks.borrow_mut().insert(key, task.clone());
         Ok(task)
     }
 
     pub(super) fn preparations(
         &self,
+        workspace: &str,
         kind: &'static str,
         fetch: impl FnOnce() -> Result<Preparations, OrbitError>,
     ) -> Result<Preparations, OrbitError> {
-        if let Some(preparations) = self.preparations.borrow().get(kind) {
+        let key = (workspace.to_string(), kind);
+        if let Some(preparations) = self.preparations.borrow().get(&key) {
             return Ok(preparations.clone());
         }
         let preparations = fetch()?;
         self.preparations
             .borrow_mut()
-            .insert(kind, preparations.clone());
+            .insert(key, preparations.clone());
         Ok(preparations)
     }
 
