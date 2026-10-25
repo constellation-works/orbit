@@ -793,8 +793,7 @@ fn a_non_git_triage_run_pins_no_revision_and_its_decisions_report_none() {
 }
 
 fn decision_requests(fx: &Fixture, task: &str) -> Vec<orbit_types::task::DecisionRequest> {
-    let history = fx.runtime.get_task_history(task).unwrap();
-    orbit_types::task::decision_requests_from_history(&history, Utc::now())
+    fx.runtime.get_task_decision_requests(task).unwrap()
 }
 
 fn propose(fx: &Fixture, task: &str) -> Value {
@@ -863,6 +862,41 @@ fn a_disabled_or_absent_channel_writes_no_decision_request() {
 }
 
 #[test]
+fn leaving_a_block_episode_supersedes_its_request_without_a_new_proposal() {
+    let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
+    let task = fx.task(&[]);
+    fx.escalate(&task);
+    propose(&fx, &task);
+    fx.human()
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": task, "status": "backlog"}),
+        )
+        .unwrap();
+    for new_episode in [false, true] {
+        if new_episode {
+            fx.escalate(&task);
+        }
+        let requests = decision_requests(&fx, &task);
+        assert_eq!(requests.len(), 1, "no replacement request was raised");
+        assert_eq!(
+            requests[0].state,
+            orbit_types::task::DecisionRequestState::Superseded
+        );
+        let history = fx.runtime.get_task_history(&task).unwrap();
+        assert!(
+            orbit_types::task::open_decision_requests(
+                &fx.runtime.get_task(&task).unwrap(),
+                &history,
+                None,
+                Utc::now()
+            )
+            .is_empty()
+        );
+    }
+}
+
+#[test]
 fn a_second_proposal_supersedes_the_first() {
     let fx = fixture_with_config("[decision_channel]\nenabled = true\n");
     let task = fx.task(&[]);
@@ -884,7 +918,13 @@ fn a_second_proposal_supersedes_the_first() {
     assert_ne!(requests[0].binding.key(), requests[1].binding.key());
     let history = fx.runtime.get_task_history(&task).unwrap();
     assert_eq!(
-        orbit_types::task::open_decision_requests(&history, Utc::now()).len(),
+        orbit_types::task::open_decision_requests(
+            &fx.runtime.get_task(&task).unwrap(),
+            &history,
+            None,
+            Utc::now()
+        )
+        .len(),
         1,
         "at most one request per task is open"
     );
