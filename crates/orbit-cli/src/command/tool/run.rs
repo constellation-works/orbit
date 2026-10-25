@@ -58,9 +58,6 @@ pub struct ToolRunArgs {
     /// `comments` and `history`; request them with `--input '{"fields":["comments","history"]}'`.
     #[arg(long)]
     pub full: bool,
-    /// Compatibility alias for pretty-printing JSON error output
-    #[arg(long, hide = true)]
-    pub pretty: bool,
     /// Host that the input's `workspace` (or `--workspace`) names, by
     /// registered host name or `machine_id` (see `orbit host list`). Orbit
     /// reads that host's live workspace list and delivers the call to the
