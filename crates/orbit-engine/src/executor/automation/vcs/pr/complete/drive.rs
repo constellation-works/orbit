@@ -300,9 +300,9 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         let pending_required = matches!(state, PrMergeState::Pending);
         let mut infrastructure_wait = base_refresh_wait;
         // Set only when this poll's failed checks are an inherited red base:
-        // the base has not moved, or it moved and the same job has not
-        // concluded. A later poll that is no longer that hold must not keep
-        // the reason.
+        // the base has not moved, or it moved to a tip that cannot prove the
+        // failure fixed yet. A later poll that is no longer that hold must
+        // not keep the reason.
         let mut base_red_reason: Option<String> = None;
         if let Some(auto_fix) = auto_fix
             && !base_refresh_wait
@@ -500,9 +500,15 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                             pin.adopt_refreshed_candidate(Some(to));
                             landed_refresh_attempted = true;
                             continue;
-                        } else if let Some(reason) =
-                            red_base_wait(host, input, workspace_path, pr_number, &status, &failed)
-                        {
+                        } else if let Some(reason) = red_base_wait(
+                            host,
+                            auto_fix,
+                            input,
+                            workspace_path,
+                            pr_number,
+                            &status,
+                            &failed,
+                        ) {
                             record_base_path(
                                 host,
                                 auto_fix,

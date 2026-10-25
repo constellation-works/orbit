@@ -23,8 +23,14 @@
 //!   a stale PR without an agent attempt or hold a matching known-red failure.
 //!   The latest push run of each workflow on that exact tip supplies the jobs;
 //!   historical fork-point logs are unnecessary for a green-tip refresh.
-//!   The existing inherited-base hold also waits while the moved tip's same
-//!   jobs have not concluded. Other failures retain the ordinary repair path.
+//!   A base commit whose CI skipped the job, or lists no such job, says
+//!   nothing about it, so that read moves back along the base branch's
+//!   first-parent history to the newest commit whose same job ran to success
+//!   or failure. The inherited-base hold also waits while the moved tip
+//!   cannot prove the failure fixed (its same job pending, skipped, missing
+//!   or unreadable), and a head an earlier poll recorded as inherited keeps
+//!   that hold through a read it cannot repeat. Other failures retain the
+//!   ordinary repair path.
 //!
 //! An optional-only failure first passes the narrowly evidenced prerequisite
 //! recovery in `infrastructure`: one durable rerun, no crew or source repair.
@@ -323,15 +329,22 @@ pub(super) fn check_repair_handoff(
 
 /// A required failure the base's own job already fails the same way, while
 /// the base branch has not moved past that commit, or has moved to a commit
-/// whose same job has not concluded.
+/// that cannot prove yet whether the base fixed it: its same job has not
+/// concluded, did not run to a result, or cannot be read.
 ///
-/// `Some(reason)` waits for the base and spends no repair attempt. `None`
-/// keeps the ordinary repair path, including a candidate-caused failure, a
-/// moved tip whose same job has concluded, and any git state or evidence
-/// this classification could not read, such as a head object that is not
-/// local. Only required failures take part in the hold.
+/// `Some(reason)` waits for the base and spends no repair attempt; the next
+/// poll evaluates it again. `None` keeps the ordinary repair path, including
+/// a candidate-caused failure and a moved tip whose same jobs ran to success
+/// or failure. Only required failures take part in the hold.
+///
+/// Git state or evidence this classification could not read (a base that
+/// cannot be resolved, a head object that is not local, an unreadable job or
+/// log) is not itself a red base. It holds only when an earlier poll already
+/// recorded this head's failure as inherited (`pr_auto_fix_base_red`): a
+/// read gap must not turn that recorded inheritance into a repair.
 pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
     host: &H,
+    auto_fix: &AutoFix,
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
@@ -339,24 +352,61 @@ pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
     failed: &[(Option<String>, String)],
 ) -> Option<String> {
     let head = status.head_sha.as_deref()?;
+    match evaluate_red_base(host, input, workspace_path, pr_number, head, failed) {
+        Ok(hold) => hold,
+        Err(gap) => recorded_base_red(host, auto_fix, head).then(|| {
+            tracing::warn!(pr_number, head, %gap, "auto-fix kept the recorded base_red hold");
+            format!(
+                "base_red: head {head} was recorded failing as its base does, and this poll \
+                 could not read the base evidence again, so no repair agent runs on this poll"
+            )
+        }),
+    }
+}
+
+/// [`red_base_wait`]'s reading: `Ok(Some)` holds, `Ok(None)` does not, and
+/// `Err` names what could not be read.
+fn evaluate_red_base<H: RuntimeHost + ?Sized>(
+    host: &H,
+    input: &Value,
+    workspace_path: &str,
+    pr_number: &str,
+    head: &str,
+    failed: &[(Option<String>, String)],
+) -> Result<Option<String>, String> {
     // [ORB-16416] An optional failure that no job answers would otherwise
     // switch the hold off for a required inherited failure beside it.
-    let (failed, _) = required_failures(host, workspace_path, pr_number, head, failed).ok()?;
-    let base_name = input_string_field(input, "base")?;
+    let (failed, _) = required_failures(host, workspace_path, pr_number, head, failed)?;
+    let base_name =
+        input_string_field(input, "base").ok_or_else(|| "the input names no base".to_string())?;
     let workspace = Path::new(workspace_path);
     let base_ref = resolve_worktree_start_point(
         workspace,
         &base_name,
-        base_sync_mode_from_input(input).ok()?,
+        base_sync_mode_from_input(input).map_err(|error| error.to_string())?,
     )
-    .ok()?;
-    let tip = commit_sha(workspace, &base_ref).ok()?;
-    let base = git_output(workspace, &["merge-base", head, &tip]).ok()?;
-    // An unreadable answer is not itself a red base. The repair read still
-    // stops when the head evidence is missing.
-    unmoved_red_base(host, workspace, head, &base, &tip, &failed)
-        .ok()
-        .flatten()
+    .map_err(|error| format!("base '{base_name}' could not be resolved: {error}"))?;
+    let tip = commit_sha(workspace, &base_ref).map_err(|error| error.to_string())?;
+    let base = git_output(workspace, &["merge-base", head, &tip])
+        .map_err(|error| format!("the fork point of {head} could not be read: {error}"))?;
+    unmoved_red_base(host, workspace, head, base.trim(), &tip, &failed)
+}
+
+/// Whether an earlier poll recorded `head`'s failure as inherited from the
+/// base on a task this run watches. An unreadable history is no record.
+fn recorded_base_red<H: RuntimeHost + ?Sized>(host: &H, auto_fix: &AutoFix, head: &str) -> bool {
+    auto_fix.task_ids.iter().any(|task| {
+        host.get_task_history(task).is_ok_and(|history| {
+            history.iter().any(|entry| {
+                entry.event == "pr_auto_fix_base_red"
+                    && entry
+                        .note
+                        .as_deref()
+                        .and_then(|note| serde_json::from_str::<Value>(note).ok())
+                        .is_some_and(|note| note["failed_head"] == head)
+            })
+        })
+    })
 }
 
 /// Read the failed checks on the pinned head and admit their repair. Returns

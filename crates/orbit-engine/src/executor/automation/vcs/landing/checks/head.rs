@@ -208,14 +208,22 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
 
 /// Whether every failed check on `head` is a workflow job the base already
 /// fails the same way, and either `tip` has not moved past `base` or the
-/// moved tip's same jobs have not concluded.
+/// moved tip cannot yet prove whether the base fixed it.
 ///
-/// `Ok(Some(reason))` is that hold: auto-fix waits and spends no repair.
-/// `Ok(None)` was read far enough to say this is not that hold, including a
-/// candidate-caused job, a check no workflow job answers, a moved tip whose
-/// same job has concluded (pass or fail), and a moved tip that lists no such
-/// job. `Err` is a head job whose log or identity could not be read. An
-/// unreadable tip listing is `Ok(None)`, not a hold.
+/// `Ok(Some(reason))` is that hold: auto-fix waits and spends no repair. A
+/// moved tip holds while a same job on it has not concluded, while one of
+/// the failed checks has no same job there that ran to success or failure
+/// (its CI skipped the job, or lists no such job yet), and while its jobs
+/// cannot be read. The watcher re-reads it on the next poll, so the hold
+/// ends once the tip's job concludes.
+///
+/// `Ok(None)` was read far enough to say this is not that hold: a
+/// candidate-caused job, a runner or network failure, a check no workflow
+/// job answers, or a moved tip whose same jobs all ran to success or
+/// failure. A succeeded tip job is the base-refresh path, decided before
+/// this one. `Err` is evidence this read could not establish: a head job
+/// whose identity or log could not be read, or a classification left
+/// inconclusive, such as an unreadable base job or log.
 pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
@@ -229,6 +237,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     let mut base_jobs = None;
     let mut tip_jobs = None;
     let mut reasons = Vec::new();
+    let mut inconclusive = None;
     for check in failed {
         let Some(job) = head_jobs
             .iter()
@@ -252,33 +261,36 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             &mut base_jobs,
             &mut tip_jobs,
         );
-        if class != CheckFailureClass::Inherited {
-            return Ok(None);
+        match class {
+            CheckFailureClass::Inherited => reasons.push(why),
+            // A candidate-caused sibling still decides; an unread one does not.
+            CheckFailureClass::Inconclusive => {
+                inconclusive.get_or_insert(format!("'{label}' is inconclusive: {why}"));
+            }
+            _ => return Ok(None),
         }
-        reasons.push(why);
+    }
+    if let Some(gap) = inconclusive {
+        return Err(gap);
     }
     if reasons.is_empty() {
         return Ok(None);
     }
-    // A moved tip is not the unmoved hold. It is still a hold while every
-    // failed check's same job on that tip exists and has no conclusion:
-    // repairing now would spend an attempt on a failure the new base is
-    // already running. A concluded job (pass or fail) and a tip that lists
-    // no such job are not this hold. A succeeded tip job is the
-    // landed-refresh path, decided before this one. The landing's own
-    // branch update does not use this hold.
+    // A moved tip is not the unmoved hold. It is still a hold while the tip
+    // cannot prove whether the base fixed every failed check: repairing now
+    // would spend an attempt on a failure the new base may already clear.
+    // The landing's own branch update does not use this hold.
     if let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) {
         tip_jobs.get_or_insert_with(|| {
             commit_jobs(host, workspace, tip).map_err(|error| error.to_string())
         });
-        if moved_tip_ci_open(&head_jobs, failed, &tip_jobs) {
-            return Ok(Some(format!(
-                "base_red: {} and the base branch moved to {tip}, whose same job has not \
-                 concluded, so no repair agent runs on this poll",
+        return Ok(unproven_tip(&head_jobs, failed, &tip_jobs).map(|unproven| {
+            format!(
+                "base_red: {} and the base branch moved to {tip}, {unproven}, so no repair agent \
+                 runs on this poll",
                 reasons.join("; ")
-            )));
-        }
-        return Ok(None);
+            )
+        }));
     }
     Ok(Some(format!(
         "base_red: {} and the base branch has not moved past it, so the base is still red and no \
@@ -287,33 +299,39 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     )))
 }
 
-/// Whether every failed check has a same job on the moved tip and none of
-/// those jobs has a conclusion yet. A missing job, a concluded job, or an
-/// unreadable tip listing is not this hold.
-fn moved_tip_ci_open(
+/// Why the moved tip cannot prove yet whether the base fixed the failed
+/// checks, or `None` when each failed check's same job on it ran to success
+/// or failure.
+fn unproven_tip(
     head_jobs: &[Value],
     failed: &[(Option<String>, String)],
     tip_jobs: &CommitJobs,
-) -> bool {
+) -> Option<&'static str> {
     let Some(Ok(tip_jobs)) = tip_jobs.as_ref() else {
-        return false;
+        return Some("whose jobs could not be read");
     };
-    failed.iter().all(|check| {
-        let Some(job) = head_jobs
+    let mut unproven = None;
+    for check in failed {
+        let job = head_jobs
             .iter()
-            .find(|job| unsuccessful(job) && answers(job, check))
-        else {
-            return false;
-        };
-        let mut saw = false;
-        for candidate in tip_jobs.iter().filter(|candidate| same_job(candidate, job)) {
-            saw = true;
-            if job_concluded(candidate) {
-                return false;
-            }
+            .find(|job| unsuccessful(job) && answers(job, check))?;
+        let same = tip_jobs
+            .iter()
+            .filter(|candidate| same_job(candidate, job))
+            .collect::<Vec<_>>();
+        if same.iter().any(|candidate| !job_concluded(candidate)) {
+            return Some("whose same job has not concluded");
         }
-        saw
-    })
+        if !same.iter().any(|candidate| {
+            matches!(
+                candidate["conclusion"].as_str(),
+                Some("success" | "failure")
+            )
+        }) {
+            unproven = Some("whose same job did not run to a result there");
+        }
+    }
+    unproven
 }
 
 /// A job GitHub has given a conclusion. An empty or absent conclusion is
