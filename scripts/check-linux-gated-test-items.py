@@ -332,6 +332,10 @@ class Unit:
     def reference(self, k):
         """Whether the identifier token at k can refer to an item brought into scope by name."""
         values = self.values
+        # The original binding in an alias import also references the item.
+        # The token's `ulive` value keeps a cfg on the use item in force.
+        if self.in_use[k] and k + 1 < len(values) and values[k + 1] == "as":
+            return True
         if k >= 1 and values[k - 1] in (".", "'", "$"):
             return False
         if k >= 2 and values[k - 1] == ":" and values[k - 2] == ":":
