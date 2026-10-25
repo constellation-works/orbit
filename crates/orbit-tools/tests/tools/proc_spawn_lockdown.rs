@@ -59,6 +59,33 @@ fn disallowed_program_denied_when_activity_scoped() {
     assert!(matches!(err, OrbitError::PolicyDenied(_)));
 }
 
+/// A dropped argument would run a different command than the one requested.
+#[test]
+fn malformed_args_are_refused_rather_than_dropped() {
+    let ctx = ToolContext {
+        proc_allowed_programs: vec!["git".to_string()],
+        proc_spawn_activity_scoped: true,
+        ..Default::default()
+    };
+    for args in [
+        json!("commit -m x"),
+        json!(["commit", "-m", 123]),
+        json!({"0": "x"}),
+    ] {
+        let err = registry()
+            .execute(
+                "proc.spawn",
+                &ctx,
+                json!({ "program": "git", "args": args }),
+            )
+            .expect_err("malformed args must be refused");
+        assert!(
+            matches!(err, OrbitError::InvalidInput(_)),
+            "{args}: expected InvalidInput, got {err:?}"
+        );
+    }
+}
+
 #[test]
 fn empty_allowlist_denies_every_program_when_scoped() {
     let ctx = ToolContext {
@@ -318,6 +345,34 @@ fn command_line_options_cannot_hide_persistent_git_config_writes() {
         &["--config-env=ALIAS.x=ORBIT_GIT_ALIAS", "x"],
         &["-c", "alias.x", "x"],
         &["-c", "alias.x=status", "status"],
+        // `get` is the value of `--comment`, so git stores the key. [ORB-18331]
+        &[
+            "config",
+            "--comment",
+            "get",
+            "remote.origin.url",
+            "https://example.invalid/repo",
+        ],
+        &[
+            "--attr-source",
+            "HEAD",
+            "remote",
+            "add",
+            "evil",
+            "https://example.invalid/repo",
+        ],
+        &["-c", "include.path=.git/evil.gitconfig", "x"],
+        &["-cinclude.path=.git/evil.gitconfig", "status"],
+        &["-c", "includeIf.gitdir:/.path=.git/evil.gitconfig", "x"],
+        &["--config-env=INCLUDE.path=ORBIT_GIT_INCLUDE", "x"],
+        &["config", "--global", "get", "remote.origin.url"],
+        &[
+            "--attr-source",
+            "HEAD",
+            "config",
+            "remote.origin.url",
+            "https://example.invalid/repo",
+        ],
         &[
             "--config-env",
             "core.bare=ORBIT_GIT_BARE",
@@ -338,6 +393,39 @@ fn command_line_options_cannot_hide_persistent_git_config_writes() {
         );
     }
     assert_eq!(fs::read(config).expect("read final Git config"), original);
+}
+
+/// The dashed builtins are the same programs as `git config` and `git remote`.
+#[test]
+fn dashed_git_builtins_cannot_write_persistent_git_config() {
+    let workspace = tempdir().expect("workspace tempdir");
+    let ctx = workspace_activity_context(workspace.path(), &["git-config", "git-remote"]);
+    let registry = registry();
+    let cases: &[(&str, &[&str])] = &[
+        (
+            "git-config",
+            &["remote.origin.url", "https://example.invalid/repo"],
+        ),
+        (
+            "git-config",
+            &["--comment", "get", "remote.origin.url", "x"],
+        ),
+        (
+            "git-remote",
+            &["add", "evil", "https://example.invalid/repo"],
+        ),
+    ];
+    for &(program, args) in cases {
+        let result = registry.execute(
+            "proc.spawn",
+            &ctx,
+            json!({ "program": program, "args": args }),
+        );
+        assert!(
+            matches!(result, Err(OrbitError::PolicyDenied(_))),
+            "{program} {args:?} must not write persistent Git config: {result:?}"
+        );
+    }
 }
 
 #[test]
@@ -373,6 +461,10 @@ fn direct_git_config_and_remote_reads_remain_available() {
     let cases: &[(&[&str], &str)] = &[
         (
             &["config", "--get", "remote.origin.url"],
+            "https://example.invalid/repo",
+        ),
+        (
+            &["config", "get", "remote.origin.url"],
             "https://example.invalid/repo",
         ),
         (&["remote", "-v"], "https://example.invalid/repo"),

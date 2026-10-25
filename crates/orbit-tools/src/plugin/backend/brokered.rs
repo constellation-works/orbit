@@ -349,9 +349,17 @@ fn covers(pattern: &str, root: &Path) -> bool {
 }
 
 /// Whether everything `pattern` names lies beneath `root`.
+///
+/// A wildcard reaches siblings of the component it sits in, so only the
+/// directory part of the literal prefix counts: `/wt/build*` names `/wt/build.sh`
+/// beside the root `/wt/build`, and is not within it.
 fn within(pattern: &str, root: &Path) -> bool {
-    let wildcard = pattern.find(['*', '?']).unwrap_or(pattern.len());
-    Path::new(&pattern[..wildcard]).starts_with(root)
+    let Some(wildcard) = pattern.find(['*', '?']) else {
+        return Path::new(pattern).starts_with(root);
+    };
+    let literal = &pattern[..wildcard];
+    let directory = &literal[..literal.rfind('/').map_or(0, |slash| slash + 1)];
+    Path::new(directory).starts_with(root)
 }
 
 /// A directory as a subtree rule in the profile grammar.

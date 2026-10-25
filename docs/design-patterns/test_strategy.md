@@ -420,6 +420,9 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 
 - `schema` in `crates/orbit-runtime/src/recovery_authority/tests/mod.rs` (criterion 3, persisted-authority safety): exercises adoption from a frozen pre-ledger SQL fixture across the shipped certificate and optional binding shapes, preserving each existing SQLite table definition and row, and checks newer-schema writer/read-only/refusal decisions and WAL sidecar retention after those opens close. Host authority is private and cannot be seeded or opened directly through the public leaf runtime API without weakening its trust boundary. Mutable cases re-execute in isolated children.
 
+- `crates/orbit-tools/src/plugin/tests/callback/mod.rs::a_failed_credential_open_removes_the_minted_record` (criterion 2, fault injection). Opening the credential fails only under descriptor exhaustion, or on a host with no inherited descriptors, so the test supplies a failing opener through the crate-private `mint_with` seam and proves the unowned `pid: 0` record is removed, since the sweep skips it forever.
+  `crates/orbit-tools/src/plugin/tests/line_queue.rs::a_reader_stays_blocked_until_the_consumer_drains_bytes` and `dropping_the_consumer_releases_a_blocked_reader` (criterion 2, deterministic interleaving). A plugin MCP server's stdout reader may queue at most `MAX_QUEUED_BYTES` ahead of the consumer. A boundary test would need 64 MiB lines and a memory probe, so the tests drive the crate-private queue with a 10-byte budget: the reader cannot run more than one line ahead, and dropping the consumer releases a reader blocked on the budget.
+
 ## Goldens
 
 - A golden's fixture input is real or realistic, checked in, and small.

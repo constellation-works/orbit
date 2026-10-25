@@ -111,6 +111,18 @@ impl PluginCallbackSession {
         provenance: &PluginProvenance,
         effective_tools: &[String],
     ) -> Result<Self, OrbitError> {
+        Self::mint_with(global_root, provenance, effective_tools, open_credential)
+    }
+
+    /// [`Self::mint`] with the credential opener supplied. Opening fails only
+    /// under descriptor exhaustion or on a host with no inherited descriptors,
+    /// so a test drives that path through here.
+    pub(crate) fn mint_with(
+        global_root: &Path,
+        provenance: &PluginProvenance,
+        effective_tools: &[String],
+        open: impl Fn(&Path) -> Result<File, OrbitError>,
+    ) -> Result<Self, OrbitError> {
         let effective_tools = normalize_tools(effective_tools);
         let dir = callback_dir(global_root);
         ensure_private_session_dir(&dir).map_err(|error| {
@@ -135,7 +147,16 @@ impl PluginCallbackSession {
             };
             match write_session_exclusive(&path, &record) {
                 Ok(()) => {
-                    let credential = open_credential(&path)?;
+                    // The record exists and nothing owns it yet: its `pid` is
+                    // zero, so the sweep reads it as a mint in progress and
+                    // never reaps it. Remove it rather than strand it.
+                    let credential = match open(&path) {
+                        Ok(credential) => credential,
+                        Err(error) => {
+                            let _ = fs::remove_file(&path);
+                            return Err(error);
+                        }
+                    };
                     return Ok(Self {
                         path,
                         record,
@@ -144,6 +165,9 @@ impl PluginCallbackSession {
                 }
                 Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                 Err(error) => {
+                    // `create_new` may have made the file before the write
+                    // failed; a partial record is skipped by the sweep forever.
+                    let _ = fs::remove_file(&path);
                     return Err(OrbitError::Io(format!(
                         "write plugin callback session `{}`: {error}",
                         path.display()
