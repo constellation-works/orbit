@@ -11,7 +11,7 @@ SCRIPTS = Path(__file__).resolve().parent
 CHECKER = SCRIPTS / "check-dashboard-browser-fixtures.py"
 
 ASSETS = '<div id="keep-id" class="keep-class" data-keep="1"></div>\n'
-ROUTES = 'fn router() { let _ = app.route("/tasks/:id", get(show)); }\n'
+ROUTES = 'fn router() { let _ = app.route("/tasks/{id}", get(show)); }\n'
 PASSING_FIXTURE = """\
 import assert from 'node:assert/strict';
 const panel = page.locator('#keep-id .keep-class[data-keep="1"]');

@@ -134,7 +134,6 @@ impl IntoResponse for WsRejection {
 /// replacement for the former `State(runtime): State<Arc<OrbitRuntime>>`.
 pub(crate) struct Ws(pub(crate) Arc<OrbitRuntime>);
 
-#[axum::async_trait]
 impl FromRequestParts<DashboardState> for Ws {
     type Rejection = WsRejection;
 
@@ -175,7 +174,6 @@ impl FromRequestParts<DashboardState> for Ws {
 /// Handlers destructure it as `ConfigFileWs(runtime)`.
 pub(crate) struct ConfigFileWs(pub(crate) Arc<OrbitRuntime>);
 
-#[axum::async_trait]
 impl FromRequestParts<DashboardState> for ConfigFileWs {
     type Rejection = WsRejection;
 

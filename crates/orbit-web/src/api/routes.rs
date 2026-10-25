@@ -19,7 +19,7 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // the same operations as `orbit host`.
         .route("/hosts", get(host::list_hosts).post(host::add_host))
         .route(
-            "/hosts/:host",
+            "/hosts/{host}",
             get(host::show_host)
                 .patch(host::rename_host)
                 .delete(host::remove_host),
@@ -27,9 +27,9 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // Another registered host's dashboard API through this one, over an
         // on-demand SSH forward [ORB-14679]. Methods are listed, not `any`,
         // so OPTIONS and the rest stay a local 405.
-        .route("/hosts/:host/connection", get(forward::connection))
+        .route("/hosts/{host}/connection", get(forward::connection))
         .route(
-            "/on/:host/*rest",
+            "/on/{host}/{*rest}",
             get(forward::forward)
                 .post(forward::forward)
                 .put(forward::forward)
@@ -52,7 +52,7 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         .route("/workspaces", get(workspaces::list_workspaces))
         .route("/fleet/drains", get(workspaces::list_fleet_drains))
         .route(
-            "/tasks/:id",
+            "/tasks/{id}",
             get(tasks::get_task).patch(tasks::update_task_action),
         )
         .route("/crews", get(crews::list_crews))
@@ -63,48 +63,54 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         .route("/config/file", get(config::get_config_file))
         .route("/config/keys", get(config::get_config_keys))
         .route(
-            "/config/keys/:key",
+            "/config/keys/{key}",
             put(config::put_config_key).delete(config::delete_config_key),
         )
         .route(
-            "/config/crews/:name",
+            "/config/crews/{name}",
             put(config::put_config_crew).delete(config::delete_config_crew),
         )
-        .route("/tasks/:id/artifacts/*path", get(tasks::get_task_artifact))
-        .route("/automation/:kind/:name/state", get(automation::full_state))
         .route(
-            "/automation/:kind/:name/coverage/:batch/evidence",
+            "/tasks/{id}/artifacts/{*path}",
+            get(tasks::get_task_artifact),
+        )
+        .route(
+            "/automation/{kind}/{name}/state",
+            get(automation::full_state),
+        )
+        .route(
+            "/automation/{kind}/{name}/coverage/{batch}/evidence",
             get(automation::accepted_evidence),
         )
-        .route("/tasks/:id/comments", post(tasks::add_task_comment_action))
-        .route("/tasks/:id/approve", post(tasks::approve_task_action))
-        .route("/tasks/:id/reject", post(tasks::reject_task_action))
-        .route("/tasks/:id/archive", post(tasks::archive_task_action))
+        .route("/tasks/{id}/comments", post(tasks::add_task_comment_action))
+        .route("/tasks/{id}/approve", post(tasks::approve_task_action))
+        .route("/tasks/{id}/reject", post(tasks::reject_task_action))
+        .route("/tasks/{id}/archive", post(tasks::archive_task_action))
         .route("/decisions", get(decisions::list_decisions))
-        .route("/decisions/:id/answer", post(decisions::answer_decision))
-        .route("/tasks/:id/pilot", post(task_pilot::pilot_task_action))
-        .route("/tasks/:id/triage", post(task_triage::triage_task_action))
-        .route("/tasks/:id/requeue", post(tasks::requeue_task_action))
+        .route("/decisions/{id}/answer", post(decisions::answer_decision))
+        .route("/tasks/{id}/pilot", post(task_pilot::pilot_task_action))
+        .route("/tasks/{id}/triage", post(task_triage::triage_task_action))
+        .route("/tasks/{id}/requeue", post(tasks::requeue_task_action))
         .route(
-            "/tasks/:id/settle-merged",
+            "/tasks/{id}/settle-merged",
             post(tasks::settle_merged_task_action),
         )
         .route(
-            "/tasks/:id/pilot-admission",
+            "/tasks/{id}/pilot-admission",
             post(tasks::pilot_admission_task_action),
         )
         .route(
-            "/tasks/:id/post-deploy",
+            "/tasks/{id}/post-deploy",
             post(tasks::post_deploy_task_action),
         )
         .route(
-            "/tasks/:id/post-deploy/:criterion/met",
+            "/tasks/{id}/post-deploy/{criterion}/met",
             post(tasks::post_deploy_met_task_action),
         )
         // Fix PR: one task's out-of-run auto-fix, as an `--auto-fix` drain
         // would start it; GET answers whether it would start now.
         .route(
-            "/tasks/:id/auto-fix",
+            "/tasks/{id}/auto-fix",
             get(task_auto_fix::task_auto_fix_readiness).post(task_auto_fix::start_task_auto_fix),
         )
         .route(
@@ -113,17 +119,17 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         )
         .route("/frictions/stats", get(frictions::friction_stats))
         .route(
-            "/frictions/:id",
+            "/frictions/{id}",
             get(frictions::get_friction).patch(frictions::update_friction_action),
         )
         .route(
-            "/frictions/:id/resolve",
+            "/frictions/{id}/resolve",
             post(frictions::resolve_friction_action),
         )
         .route("/jobs", get(jobs::list_jobs))
-        .route("/jobs/:id/run", post(jobs::run_job_action))
+        .route("/jobs/{id}/run", post(jobs::run_job_action))
         .route("/job-runs", get(jobs::list_job_runs))
-        .route("/job-runs/:id/resume", post(jobs::resume_job_run_action))
+        .route("/job-runs/{id}/resume", post(jobs::resume_job_run_action))
         .route("/workflows/ship", post(runs::ship_workflow_action))
         .route("/workflows/auto", post(runs::auto_drain_workflow_action))
         .route("/workflows/auto/stop", post(runs::auto_drain_stop_action))
@@ -134,33 +140,33 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // public navigation entry of its own.
         .route("/distributed/claims", get(distributed::list_claims))
         .route(
-            "/distributed/handoffs/:id/retry",
+            "/distributed/handoffs/{id}/retry",
             post(distributed::retry_handoff_action),
         )
         .route(
-            "/distributed/handoffs/:id/approve",
+            "/distributed/handoffs/{id}/approve",
             post(distributed::approve_handoff_action),
         )
         .route(
-            "/distributed/handoffs/:id/revoke",
+            "/distributed/handoffs/{id}/revoke",
             post(distributed::revoke_handoff_action),
         )
         .route(
-            "/distributed/claims/:id/recover",
+            "/distributed/claims/{id}/recover",
             post(distributed::recover_claim_action),
         )
-        .route("/runs/:id", get(runs::get_run))
-        .route("/runs/:id/cancel", post(runs::cancel_run_action))
-        .route("/runs/:id/replay", post(runs::replay_run_action))
-        .route("/runs/:id/events", get(runs::list_run_events))
-        .route("/runs/:id/logs", get(runs::list_run_logs))
+        .route("/runs/{id}", get(runs::get_run))
+        .route("/runs/{id}/cancel", post(runs::cancel_run_action))
+        .route("/runs/{id}/replay", post(runs::replay_run_action))
+        .route("/runs/{id}/events", get(runs::list_run_events))
+        .route("/runs/{id}/logs", get(runs::list_run_logs))
         .route("/audit", get(audit::list_audit))
         .route("/log", get(log::get_log))
         .route("/log/stream", get(log::stream_log))
         .route("/audit/summary", get(audit::audit_summary))
         .route("/audit/incidents", get(incidents::list_failure_incidents))
         .route(
-            "/audit/events/:id/message",
+            "/audit/events/{id}/message",
             get(incidents::incident_event_message),
         )
         .route("/routines", get(routines::list_routine_health))
@@ -175,7 +181,7 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         .route("/metrics/knowledge", get(metrics::knowledge_metrics))
         .route("/metrics/activity", get(metrics::activity_metrics))
         .route("/metrics/tools", get(metrics::tool_metrics))
-        .route("/metrics/task/:id", get(metrics::task_metrics))
+        .route("/metrics/task/{id}", get(metrics::task_metrics))
         .route("/metrics/orchestrators", get(metrics::orchestrator_metrics))
         .route(
             "/metrics/reliability",
@@ -223,8 +229,8 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // Observe › Agents: one scorecard per agent role ranked by crew and
         // model, and who each problem counts against, from one cached scan.
         .route("/agents/attribution", get(agents::agent_attribution))
-        .route("/agents/:role/scorecard", get(agents::agent_scorecard))
-        .route("/agents/:role/detail", get(agents::agent_detail))
+        .route("/agents/{role}/scorecard", get(agents::agent_scorecard))
+        .route("/agents/{role}/detail", get(agents::agent_detail))
         // `orbit doctor` for the selected workspace: read-only, on demand and
         // cached [ORB-14830]. GET only; repairs stay on the CLI.
         .route("/doctor", get(doctor::doctor))
@@ -232,10 +238,13 @@ pub(crate) fn router() -> Router<crate::state::DashboardState> {
         // remain safe for every session; operator-only enable/disable writes
         // preserve recorded consent. Install and grant decisions stay on CLI.
         .route("/plugins", get(plugins::list_plugins))
-        .route("/plugins/:namespace/enable", post(plugins::enable_plugin))
-        .route("/plugins/:namespace/disable", post(plugins::disable_plugin))
+        .route("/plugins/{namespace}/enable", post(plugins::enable_plugin))
         .route(
-            "/plugins/:namespace/panels/:panel",
+            "/plugins/{namespace}/disable",
+            post(plugins::disable_plugin),
+        )
+        .route(
+            "/plugins/{namespace}/panels/{panel}",
             get(plugins::read_panel),
         )
         .layer(middleware::map_response(json_client_error))
