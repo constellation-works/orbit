@@ -453,6 +453,9 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 [workflow.review_skip_tags."auto-task:delivery-code-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
+[workflow.review_skip_tags."auto-task:dependency-freshness"]
+paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
+
 [workflow.review_skip_tags."auto-task:code-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 

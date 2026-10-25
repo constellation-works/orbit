@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These twelve YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These thirteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -270,6 +270,20 @@ definition of the same name.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore, which is itself tagged `no-diff-expected` and never
   builds or runs tests.
+- `dependency-freshness` — disabled-by-default monthly inventory of direct
+  dependencies across every detected ecosystem (for example
+  `Cargo.toml`/`Cargo.lock`, `package.json` with a lockfile,
+  `pyproject.toml`/`uv.lock`, `go.mod`), using each ecosystem's own
+  outdated, unused, and duplicate tooling and recording unavailable tooling
+  as a gap. Dependencies covered by a security advisory or an open advisory
+  task are excluded (that work belongs to the security sweeps). Each run
+  attaches `dependency-freshness.json` diffed against the previous run, and
+  files at most 3 `proposed` upgrade or removal tasks ranked by how far
+  behind multiplied by import or call-site usage, each quoting the breaking
+  changes that apply from upstream release notes. The minted chore is
+  tagged `no-diff-expected`, never bumps the repository's own version,
+  tags, or publishes, and with no network or registry access finishes as a
+  successful no-op stating why.
 
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
