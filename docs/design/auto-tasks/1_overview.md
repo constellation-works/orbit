@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These thirteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These fourteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -272,6 +272,24 @@ definition of the same name.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore, which is itself tagged `no-diff-expected` and never
   builds or runs tests.
+- `auto-task-yield-review` — disabled-by-default monthly review of whether
+  this workspace's enabled auto-tasks pay for themselves. For each enabled
+  definition over the last 30 days it reports minted chores by final status
+  and no-op successes, token or cost per run from `orbit run history` /
+  `orbit run show` evidence (unknown when missing, never zero), filed tasks
+  verified by their `spawned_from` relation with outcomes done, rejected,
+  archived as a duplicate and still open, filed tasks later named by a
+  `regression_from` relation, duplicate or invalid rejections, and the
+  derived landed tasks per run and cost per landed task. Each run attaches
+  `auto-task-yield.json` diffed against the previous run, carries the same
+  table in its execution summary, counts tasks claimed without
+  `spawned_from` linkage as unknown, and files at most 3 `proposed`
+  retuning tasks (cadence change, merge of overlapping definitions,
+  template fix, or disabling the definition), each naming its definition
+  and numbers with `context_files` and a `spawned_from` relation. The run
+  itself never edits, toggles or mints a definition; changing
+  configuration is the operator's decision. The minted chore is tagged
+  `no-diff-expected`.
 - `dependency-freshness` — disabled-by-default monthly inventory of direct
   dependencies across every detected ecosystem (for example
   `Cargo.toml`/`Cargo.lock`, `package.json` with a lockfile,

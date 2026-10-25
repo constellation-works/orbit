@@ -68,6 +68,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/architecture-audit.yaml"),
     ),
     (
+        "auto-task-yield-review",
+        include_str!("../../../assets/auto_tasks/auto-task-yield-review.yaml"),
+    ),
+    (
         "backlog-hygiene",
         include_str!("../../../assets/auto_tasks/backlog-hygiene.yaml"),
     ),

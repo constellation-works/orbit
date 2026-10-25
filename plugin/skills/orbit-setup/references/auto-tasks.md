@@ -336,9 +336,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The thirteen seeded definitions
+## The fourteen seeded definitions
 
-`orbit workspace init` seeds all thirteen, disabled, except any you deleted (see
+`orbit workspace init` seeds all fourteen, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -488,6 +488,16 @@ plugin being removed.
   prerequisites, each with `context_files` and a `spawned_from` relation to
   the minted chore. The chore itself is tagged `no-diff-expected` and never
   builds or runs tests.
+- **`auto-task-yield-review`** (`medium`) — monthly. Reports, per enabled
+  definition over the last 30 days, minted chores by final status and no-op
+  successes, token or cost per run from run evidence (unknown when missing,
+  never zero), filed tasks verified by `spawned_from` with their outcomes,
+  later regressions, duplicate or invalid rejections, landed tasks per run
+  and cost per landed task, in an `auto-task-yield.json` artifact diffed
+  against the previous run and a table in the execution summary. It files
+  at most 3 `proposed` retuning tasks (cadence, merge, template fix or
+  disable), each naming its definition and numbers, and never edits,
+  toggles or mints a definition itself.
 - **`dependency-freshness`** (`medium`) — monthly. Inventories direct
   dependencies in every detected ecosystem (for example
   `Cargo.toml`/`Cargo.lock`, `package.json` with a lockfile,

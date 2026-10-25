@@ -32,6 +32,7 @@
       }
     }
   ],
+  "auto-task-yield-review": [],
   "backlog-hygiene": [
     {
       "comments": [
@@ -1095,7 +1096,34 @@
       }
     }
   ],
-  "dependency-freshness": [],
+  "dependency-freshness": [
+    {
+      "comments": [
+        "## Detect ecosystems and inventory",
+        "## Handoff",
+        "## No network",
+        "## Prioritize and file",
+        "## Read the changelog before filing",
+        "## Rules and command surfaces",
+        "## Security exclusion"
+      ],
+      "digest": "db1e6e89e42fed92821964c272344cb94e77a954896fc6a3313ed8a353eef704",
+      "revision": "8cfbbaa89a3f93bb4cf8af57ac8ec943004464e1",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 9 1 * *"
+        },
+        "tags": [
+          "dependency-freshness",
+          "no-diff-expected"
+        ]
+      }
+    }
+  ],
   "doc-duties": [
     {
       "comments": [
