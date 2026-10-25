@@ -91,7 +91,7 @@ additional activation opportunities.
 
 1. The ORB-11365 agent performed broad and repeated validation, including the
    `orbit-core` library test suite.
-2. [`unmanaged_environment_admits_operator_ship_and_resume`](../../crates/orbit-core/src/adapter/tool_host/tests/workflow_tools.rs#L180)
+2. [`unmanaged_environment_admits_operator_ship_and_resume`](../../../crates/orbit-core/src/adapter/tool_host/tests/workflow_tools.rs#L180)
    exercised `orbit.workflow.ship` and `orbit.workflow.run.resume`. Both calls
    created real runs, but the test did not install the test-only pipeline-worker
    command override.
@@ -105,7 +105,7 @@ additional activation opportunities.
    session. Process inspection confirmed nested `orbit_core` test binaries
    running with `job run-pipeline-worker jrun-...` arguments.
 5. Recursive test entry reached
-   [`duplicate_worker_exit_leaves_real_owner_authoritative_and_non_terminal`](../../crates/orbit-core/src/application/tests/job_pipeline.rs#L313),
+   [`duplicate_worker_exit_leaves_real_owner_authoritative_and_non_terminal`](../../../crates/orbit-core/src/application/tests/job_pipeline.rs#L313),
    which detached the 10 ms shell waiter before later assertions.
 6. The fixture released the owner only near the end of the normal path. It had
    no scope guard that would terminate and reap the child during unwinding or

@@ -1,7 +1,7 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-10-23
+last_updated: 2026-10-24
 last_validated: 2026-10-23
 status: Accepted
 ---
@@ -175,8 +175,18 @@ A spec is **prescriptive**. It names invariants ("writes do not fall back"), fai
 
 - **Draft** — pre-first-review. Owner is still shaping it.
 - **Accepted** — reviewed, approved, load-bearing.
+- **Implemented** — accepted and fully shipped; the doc is now reference for the code.
+- **Deprecated** — superseded, retired or parked. The doc is kept for history, is not authoritative, and lives under [`_archived/`](./_archived/README.md).
 
-There is no `Deprecated` status at the doc level. If the feature is retired, delete the entire folder in the retiring change and fix inbound links; git history preserves the old docs. Live docs that must mention the retirement name the decision and its task ID in plain text instead of linking to the deleted folder.
+A feature that is gone for good (nothing worth keeping as reference) may still be deleted outright in the retiring change, with inbound links fixed; git history preserves the old docs. Live docs that must mention a deleted feature name the decision and its task ID in plain text instead of linking to the deleted folder.
+
+### Archiving a design
+
+1. Set `status: Deprecated` in the entry doc's frontmatter (and bump its `last_updated`).
+2. Add a one-line pointer near the top of the entry doc: the replacement design, or the reason it is parked or retired.
+3. Move the folder into `docs/design/_archived/<feature>/` with `git mv` and fix inbound links (the move adds one `../` to every relative link out of the folder).
+
+[`_archived/README.md`](./_archived/README.md) says what belongs there. The generated index lists archived designs under their own heading, not in the main design table.
 
 ---
 
@@ -249,7 +259,7 @@ Retired features are removed from this table along with their folder.
 | Executors | [docs/design/executors/](./executors/) | claude |
 | Federated MCP | [docs/design/federated-mcp/](./federated-mcp/) | grok |
 | Finding Verification | [docs/design/finding-verification/](./finding-verification/) | claude |
-| Hidden Acceptance | [docs/design/hidden-acceptance/](./hidden-acceptance/) | claude |
+| Hidden Acceptance (archived) | [docs/design/_archived/hidden-acceptance/](./_archived/hidden-acceptance/) | claude |
 | Host Registry | [docs/design/host-registry/](./host-registry/) | codex |
 | MCP Bridge | [docs/design/mcp-bridge/](./mcp-bridge/) | codex |
 | MCP Session Context | [docs/design/mcp-session-context/](./mcp-session-context/) | codex |

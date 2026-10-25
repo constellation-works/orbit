@@ -129,7 +129,7 @@ entries.
   route for transport and worker calls. It changes no grants, writer policy,
   receipt validator, claim lineage or legacy artifacts. After deployment,
   only a genuine operator's supported resubmission of both files can provide
-  trusted evidence; see [review evidence receipt](../runbooks/review-gate.md).
+  trusted evidence; see [review evidence receipt](../../runbooks/review-gate.md).
   This implementation does not resubmit or rewrite the real receipts.
 - **Prevention:** a public native CLI process regression checks both writer
   stamps, exact bytes, single-member hold retention, one fresh-review queue
@@ -307,7 +307,7 @@ entries.
   14-core Mac), timing-bound tests go red on the candidate and the base alike,
   and implementers spend their wall clock proving base failures. Set
   `test-threads` so that slots × threads fits the cores; see
-  [build budget](../runbooks/build-budget.md). On 2026-10-11 the Mac was
+  [build budget](../../runbooks/build-budget.md). On 2026-10-11 the Mac was
   capped instead by starting pull drains with `NEXTEST_TEST_THREADS=4` and
   `RUST_TEST_THREADS=4`, which its ws_orbit `execution.env.pass` lists.
 - **Release bump without the follower.** Drain admission requires the exact owner

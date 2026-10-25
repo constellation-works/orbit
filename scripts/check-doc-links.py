@@ -18,7 +18,7 @@ EXCLUSIONS = (
     "docs/design/*/4_decisions.md",
     "docs/design/_templates/*",
     "docs/design/CONVENTIONS.md",
-    "docs/rca/*",
+    "docs/dev/rca/*",
     "CHANGELOG.md",
     "crates/*/tests/fixtures/*",
 )

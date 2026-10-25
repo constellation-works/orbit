@@ -25,10 +25,12 @@ repo_root="${1:-${ORBIT_REPO_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 docs_dir="$repo_root/docs"
 runbooks_dir="$docs_dir/runbooks"
 design_dir="$docs_dir/design"
-rca_dir="$docs_dir/rca"
+qa_dir="$docs_dir/dev/qa"
+rca_dir="$docs_dir/dev/rca"
+archived_dir="$design_dir/_archived"
 
 if [[ ! -d "$runbooks_dir" || ! -d "$design_dir" || ! -d "$rca_dir" ]]; then
-  echo "error: expected docs/runbooks, docs/design, and docs/rca under $repo_root" >&2
+  echo "error: expected docs/runbooks, docs/design, and docs/dev/rca under $repo_root" >&2
   exit 1
 fi
 
@@ -306,7 +308,7 @@ render_design_rows() {
       "$(markdown_escape "$summary")" \
       "$(markdown_escape "$status")" \
       "$(markdown_escape "$owner")"
-  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '_templates' | sort)
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '_templates' ! -name '_archived' | sort)
 }
 
 render_index() {
@@ -343,7 +345,7 @@ render_index() {
     printf 'These records describe evidence at the recorded commit or date; they do not certify the current tree.\n\n'
     printf '| Record | Purpose |\n'
     printf '| --- | --- |\n'
-    render_guide_rows "$docs_dir/qa"
+    render_guide_rows "$qa_dir"
     printf '\n'
     printf '## Runbooks\n\n'
     printf 'Each runbook is scoped to one goal or tightly coupled failure mode.\n'
@@ -375,6 +377,14 @@ render_index() {
     printf '| Feature | Summary | Status | Lead |\n'
     printf '| --- | --- | --- | --- |\n'
     render_design_rows "$design_dir"
+    if [[ -d "$archived_dir" ]]; then
+      printf '\n### Archived designs\n\n'
+      printf 'Superseded, retired or parked designs live under `docs/design/_archived/<feature>/`.\n'
+      printf 'They are reference only and are not authoritative.\n\n'
+      printf '| Feature | Summary | Status | Lead |\n'
+      printf '| --- | --- | --- | --- |\n'
+      render_design_rows "$archived_dir"
+    fi
     printf '\nFolder layout, frontmatter, ADR, and ownership rules live in\n'
     printf '[design conventions](./design/CONVENTIONS.md).\n\n'
     printf 'Regenerate this file with `scripts/generate-doc-indexes.sh`.\n'

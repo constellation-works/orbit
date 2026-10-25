@@ -102,10 +102,10 @@ agent transcript. Host events come from the previous boot's journal.
    authorized request through the router into the real
    `OrbitRuntime::submit_job_run`. The code was never committed; it survives only
    in the run worktree.
-2. [`WorkerCommandConfig::build`](../../crates/orbit-core/src/application/job/pipeline/worker/command.rs#L216)
+2. [`WorkerCommandConfig::build`](../../../crates/orbit-core/src/application/job/pipeline/worker/command.rs#L216)
    selects the worker program at compile time. Under `#[cfg(test)]` it requires
    the thread-local
-   [`worker_command_override`](../../crates/orbit-core/src/application/job/pipeline/worker/command.rs#L152)
+   [`worker_command_override`](../../../crates/orbit-core/src/application/job/pipeline/worker/command.rs#L152)
    and fails closed without it. That is the ORB-11418 fix. Under
    `#[cfg(not(test))]` it re-executes `std::env::current_exe()`.
 3. `cfg(test)` is a per-crate compile flag. When `orbit-web`'s tests are built,

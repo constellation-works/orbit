@@ -2,7 +2,7 @@
   "schema_version": 1,
   "task_id": "ORB-15854",
   "run_id": "jrun-20261013-1351-c1",
-  "audit_path": "docs/reviews/unit-test-audit-2026-10-12.json",
+  "audit_path": "docs/dev/reviews/unit-test-audit-2026-10-12.json",
   "audit_head": "dd268d0d5a1640b709bcac0d3759b04879f77a14",
   "delivery_base": "9ad59080955cb86df219b0bbfc1d11ba80d34417",
   "counts": {
@@ -454,7 +454,7 @@
       "crates/orbit-web/tests/http_api/task_contracts.rs",
       "docs/design-patterns/test_layout.md",
       "docs/design-patterns/test_strategy.md",
-      "docs/reviews/unit-test-admission-orbit-web-2026-10-13.json",
+      "docs/dev/reviews/unit-test-admission-orbit-web-2026-10-13.json",
       "scripts/qa-full-sweep-inventory.json",
       "scripts/unit-test-baseline.json"
     ],

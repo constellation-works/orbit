@@ -284,7 +284,7 @@ Admitted unit tests:
   single CI run.
 
 - `orbit-exec` retains six corrected security-seam admissions from the
-  [applied audit](../reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md).
+  [applied audit](../dev/reviews/unit-test-audit-orbit-exec-applied-2026-10-12.md).
   `build_sandbox/tests/supervise.rs` checks host process-group reaping before
   Bubblewrap changes PID identity and isolates the fetch TCP ruleset from
   filesystem/namespace restrictions (criterion 3). The credential alias test
@@ -346,7 +346,7 @@ Admitted unit tests:
 
 - `crates/orbit-engine/src/activity_job/cli_runner/orchestrator/tests/completion.rs::a_stalled_provider_fails_transient_without_a_wall_clock_timeout` (criterion 1, terminal-outcome mapping) checks the stalled and wall-clock-timeout rows through completion projection. It preserves the distinct `stalled` and `timed_out` outputs, transient marker, step error code and claim retry class without running another provider process; the supervisor test above covers the actual stall detection.
 
-The [orbit-config audit delivery](../reviews/unit-test-audit-orbit-config-delivery.md) maps the retired and relocated identities to their public boundaries. Config loading, compatibility warnings, environment projection, plugin toggles and store admission live in the existing crate-root integration binaries. The malformed-pool grammar table remains admitted under criterion 1; ordinary pool loading uses the public loader.
+The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-delivery.md) maps the retired and relocated identities to their public boundaries. Config loading, compatibility warnings, environment projection, plugin toggles and store admission live in the existing crate-root integration binaries. The malformed-pool grammar table remains admitted under criterion 1; ordinary pool loading uses the public loader.
 
 - `crates/orbit-config/src/tests/seed.rs`: `every_family_combination_seeds_valid_defaults_pools_and_enabled_flags` (criterion 1, combinatorial seed rendering) checks all detected-family subsets in memory: defaults name enabled crews, pools parse and reference enabled crews, and each crew's enabled flag follows its provider availability. It avoids filesystem setup for every subset. `rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled` (criterion 2, fault injection) removes or disables a dynamically selected pool member in the private renderer's crew map; the public seeder always constructs that map itself. Neither test fixes crew choices, models or weights as policy.
 
@@ -696,7 +696,7 @@ do not need a private `LexicalStore` or migration seam.
 
 ## Orbit-core audit reconciliation
 
-The [delivery reconciliation](../reviews/unit-test-admission-orbit-core-2026-10-13.json)
+The [delivery reconciliation](../dev/reviews/unit-test-admission-orbit-core-2026-10-13.json)
 accounts for all 208 non-admitted identities in the pinned orbit-core audit:
 130 cases move to the existing crate-root runtime target, six retirements remove
 policy/redundant controls, four retired allowances were already absent, and 68
@@ -775,7 +775,7 @@ SSH proxy argv seam in `remote/tests/proxy.rs`.
 
 ## Orbit-engine audit reconciliation
 
-The [per-identity delivery record](../reviews/unit-test-admission-orbit-engine-2026-10-13.json)
+The [per-identity delivery record](../dev/reviews/unit-test-admission-orbit-engine-2026-10-13.json)
 accounts for all 85 owned decisions: 39 cases move to the existing `engine`
 integration binary, eight identities retire through consolidation, and 38 moves
 are corrected to admissions at specific private seams. The audit's 29 admitted
@@ -810,7 +810,7 @@ collector independently of those final-removal seams. No production visibility
 is widened and no implementation is copied into a boundary fixture.
 
 
-The [orbit-store per-identity reconciliation](../reviews/unit-test-admission-orbit-store-2026-10-13.json)
+The [orbit-store per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-store-2026-10-13.json)
 checks the pinned audit against the current export surface. Twenty-nine existing
 cases now use crate-root boundaries in `tests/store/main.rs`: catalog and
 definition composition in `file_store.rs`, task/history/document mutations in
@@ -863,7 +863,7 @@ as one of the five retirements, not as a current private-seam keep.
 
 ## Orbit-web admission audit boundary
 
-The [per-identity reconciliation](../reviews/unit-test-admission-orbit-web-2026-10-13.json)
+The [per-identity reconciliation](../dev/reviews/unit-test-admission-orbit-web-2026-10-13.json)
 moves 32 existing cases into the `http_api` integration binary. Real HTTP responses
 cover origin/operator guards, artifact confinement and media types, task lifecycle
 and readiness, claim summaries, cancellation, aggregate paging and security headers.
