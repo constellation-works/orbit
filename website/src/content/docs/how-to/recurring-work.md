@@ -207,13 +207,17 @@ policy:
   never synced, and survive reboots. To retire a routine, set
   `enabled: false`.
 
-An invalid file never fires with defaults; Orbit skips it.
+An invalid file never fires with defaults; Orbit skips it. Field-by-field
+shapes for cron, state, and delivery triggers are in
+[Scheduling YAML](../../reference/scheduling-yaml/).
 
 ## 3. Define recurring chores as auto-tasks
 
 An auto-task is a task template that the clock files on a schedule. A new
 chore is a new definition, never new code or a new routine. The tick files
-tasks itself, so there is no routine to enable.
+tasks itself, so there is no routine to enable. The file's schedule,
+template, dedupe, and preconditions are in
+[Scheduling YAML](../../reference/scheduling-yaml/).
 
 ```bash
 orbit auto-task add \

@@ -212,6 +212,7 @@ export default defineConfig({
             { slug: 'reference/cli', label: 'CLI commands' },
             { slug: 'reference/config', label: 'Configuration' },
             { slug: 'reference/activity-job-yaml', label: 'Activity and job YAML' },
+            { slug: 'reference/scheduling-yaml', label: 'Scheduling YAML' },
             { slug: 'reference/policy-format', label: 'Policy format' },
             { slug: 'reference/plugin-manifest', label: 'Plugin manifest' },
             { slug: 'reference/executor-yaml', label: 'Executor YAML' },
