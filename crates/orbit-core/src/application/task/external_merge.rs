@@ -63,6 +63,7 @@ use orbit_types::task::{
     ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM, Task, TaskStatus, names_task_delivery_pull_request,
     push_external_ref_if_missing,
 };
+use orbit_types::workflow::ConventionTemplate;
 use orbit_types::workflow::handoff::{HandoffDelivery, LandingAttemptState, LandingStartState};
 use serde_json::Value;
 
@@ -172,9 +173,18 @@ impl OrbitRuntime {
             .merged_pull_requests(&repo_root)?
             .into_iter()
             .filter(|merged| {
-                candidates
-                    .iter()
-                    .any(|candidate| names_delivery(merged, &candidate.task.id))
+                candidates.iter().any(|candidate| {
+                    names_delivery(
+                        &self
+                            .context
+                            .settings()
+                            .pr_settings()
+                            .conventions
+                            .branch_name,
+                        merged,
+                        &candidate.task.id,
+                    )
+                })
             })
             .collect::<Vec<_>>();
         // The delivery identity costs a forge call; only a merge that names a
@@ -224,7 +234,18 @@ impl OrbitRuntime {
         }
         let merged = fetched
             .iter()
-            .filter(|merged| names_delivery(merged, id))
+            .filter(|merged| {
+                names_delivery(
+                    &self
+                        .context
+                        .settings()
+                        .pr_settings()
+                        .conventions
+                        .branch_name,
+                    merged,
+                    id,
+                )
+            })
             .cloned()
             .collect::<Vec<_>>();
         // A revoked handoff's PR proves itself by the handoff, not its author.
@@ -235,7 +256,17 @@ impl OrbitRuntime {
         };
         let Some(landing) = self.delivery_merge(&candidate, &merged, &authors) else {
             let reason = match &candidate.revoked {
-                Some(revoked) => revoked_handoff_unmerged(revoked, fetched.first(), id),
+                Some(revoked) => revoked_handoff_unmerged(
+                    &self
+                        .context
+                        .settings()
+                        .pr_settings()
+                        .conventions
+                        .branch_name,
+                    revoked,
+                    fetched.first(),
+                    id,
+                ),
                 None => format!(
                     "none of its delivery pull requests is merged into its target branch {}",
                     self.delivery_target_branch(&candidate.task)
@@ -446,7 +477,18 @@ impl OrbitRuntime {
         let target = self.delivery_target_branch(task);
         merged
             .iter()
-            .filter(|merged| names_delivery(merged, &task.id))
+            .filter(|merged| {
+                names_delivery(
+                    &self
+                        .context
+                        .settings()
+                        .pr_settings()
+                        .conventions
+                        .branch_name,
+                    merged,
+                    &task.id,
+                )
+            })
             .filter(
                 |merged| match candidate.follower_prs.get(&merged.pull.number) {
                     Some(landing) => merged.base_branch == *landing,
@@ -670,6 +712,7 @@ pub(crate) fn settled_merge_commit(note: &str) -> Option<&str> {
 /// forge returned it (`None` when it is not merged), is not merged, names
 /// another task, or merged into another branch.
 fn revoked_handoff_unmerged(
+    branch_template: &ConventionTemplate,
     revoked: &RevokedHandoff,
     fetched: Option<&MergedPullRequest>,
     task_id: &str,
@@ -681,7 +724,7 @@ fn revoked_handoff_unmerged(
             "{prefix} the handoff's pull request #{number} is not merged; if it will not merge, \
              recover the claim to blocked or backlog"
         ),
-        Some(merged) if !names_delivery(merged, task_id) => format!(
+        Some(merged) if !names_delivery(branch_template, merged, task_id) => format!(
             "{prefix} the handoff's pull request #{number} does not name it as its delivery"
         ),
         Some(merged) => format!(
@@ -692,9 +735,19 @@ fn revoked_handoff_unmerged(
     }
 }
 
-/// Whether `merged` is on the task's delivery branch and names it.
-fn names_delivery(merged: &MergedPullRequest, task_id: &str) -> bool {
-    names_task_delivery_pull_request(&merged.pull.head_branch, &merged.pull.body, task_id)
+/// Whether `merged` is on the task's delivery branch, as `branch_template`
+/// names it, and names the task.
+fn names_delivery(
+    branch_template: &ConventionTemplate,
+    merged: &MergedPullRequest,
+    task_id: &str,
+) -> bool {
+    names_task_delivery_pull_request(
+        branch_template,
+        &merged.pull.head_branch,
+        &merged.pull.body,
+        task_id,
+    )
 }
 
 impl OrbitRuntime {

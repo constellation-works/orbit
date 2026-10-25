@@ -7,8 +7,8 @@ use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
     Crew, resolve_crew, validate_machine_id, validate_machine_name, validate_stored_task_prefix,
 };
-use orbit_types::workflow::Provider;
 use orbit_types::workflow::automation::members::MaterialField;
+use orbit_types::workflow::{ConventionTemplate, PrBodyTemplateSource, Provider, TemplateSurface};
 use serde::de::DeserializeOwned;
 
 use super::super::{
@@ -607,4 +607,98 @@ pub(super) fn resolve_build_output_env(
         names.insert(name.to_string());
     }
     Ok(names.into_iter().collect())
+}
+
+fn convention_error(error: orbit_types::workflow::ConventionTemplateError) -> OrbitError {
+    OrbitError::InvalidInput(error.to_string())
+}
+
+/// Admit an optional `{{ }}` text template (`pr.title_template`,
+/// `commit.body_template`), refusing an unknown placeholder by name.
+pub(super) fn resolve_text_template(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty_raw(raw, key)? else {
+        return Ok(None);
+    };
+    ConventionTemplate::parse(key, &raw, TemplateSurface::Text).map_err(convention_error)?;
+    Ok(Some(raw))
+}
+
+/// Admit `commit.subject_template`, which must carry `[{{task_id}}]`.
+pub(super) fn resolve_commit_subject_template(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
+        return Ok(None);
+    };
+    ConventionTemplate::parse_commit_subject(key, &raw).map_err(convention_error)?;
+    Ok(Some(raw))
+}
+
+/// Admit `branch.name_template`, which must carry `{{task_id}}` and
+/// `{{hash}}`.
+pub(super) fn resolve_branch_template(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
+        return Ok(None);
+    };
+    ConventionTemplate::parse_branch(key, &raw).map_err(convention_error)?;
+    Ok(Some(raw))
+}
+
+/// Admit `pr.body_template`: `"repo"` or a repository-relative path.
+pub(super) fn resolve_pr_body_template(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    let Some(raw) = resolve_optional_non_empty(raw, key)? else {
+        return Ok(None);
+    };
+    PrBodyTemplateSource::parse(key, &raw).map_err(convention_error)?;
+    Ok(Some(raw))
+}
+
+/// Trimmed, non-empty entries in first-seen order without duplicates.
+pub(super) fn resolve_name_list(
+    raw: Option<Vec<String>>,
+    key: &str,
+) -> Result<Vec<String>, OrbitError> {
+    let mut names: Vec<String> = Vec::new();
+    for name in raw.unwrap_or_default() {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(OrbitError::InvalidInput(format!(
+                "{key} must not contain an empty entry"
+            )));
+        }
+        // Labels and reviewers reach `gh` as option values.
+        if name.starts_with('-') {
+            return Err(OrbitError::InvalidInput(format!(
+                "{key} entry '{name}' must not start with '-'"
+            )));
+        }
+        if !names.iter().any(|known| known.eq_ignore_ascii_case(name)) {
+            names.push(name.to_string());
+        }
+    }
+    Ok(names)
+}
+
+/// A text template keeps its whitespace: a body template may begin or end
+/// with blank lines on purpose. Only an all-blank value is refused.
+fn resolve_optional_non_empty_raw(
+    raw: Option<String>,
+    key: &str,
+) -> Result<Option<String>, OrbitError> {
+    match raw {
+        Some(value) if value.trim().is_empty() => {
+            Err(OrbitError::InvalidInput(format!("{key} must not be empty")))
+        }
+        other => Ok(other),
+    }
 }

@@ -14,9 +14,51 @@
       "path": null,
       "shadowed_by": []
     },
+    "branch.name_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "ci_failure.operator_suppression_hours": {
       "scope": "built-in",
       "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.body_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.implemented_by_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.orchestrated_by_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.planned_by_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "commit.subject_template": {
+      "scope": "built-in",
+      "state": "unset",
       "tier": "advanced",
       "path": null,
       "shadowed_by": []
@@ -224,6 +266,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "pr.agent_sections": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.body_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "pr.close_on_terminal": {
       "scope": "built-in",
       "state": "default",
@@ -238,7 +294,70 @@
       "path": null,
       "shadowed_by": []
     },
+    "pr.draft": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.freshness_section": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.labels": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.missing_required_section": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.orchestration_trailer": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.required_sections": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.reviewers": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.signature": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "pr.task_url_template": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "pr.title_template": {
       "scope": "built-in",
       "state": "unset",
       "tier": "advanced",

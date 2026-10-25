@@ -5,7 +5,9 @@ use orbit_common::OrbitError;
 use orbit_types::identity::Crew;
 use orbit_types::workflow::automation::members::{MaterialField, SourceSensitivity};
 use orbit_types::workflow::automation::recovery::DEFAULT_STALL_WINDOW_MINUTES;
-use orbit_types::workflow::{CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_REVIEW_MINUTES};
+use orbit_types::workflow::{
+    CODEX_PROVIDER_SANDBOX_MODES, DEFAULT_REVIEW_MINUTES, MissingSectionPolicy,
+};
 use serde_json::{Value as JsonValue, json};
 
 use super::super::{
@@ -17,14 +19,15 @@ use super::resolve::{
     DEFAULT_STORE_WARN_BYTES, DEFAULT_WORKER_MEMORY_HIGH, DEFAULT_WORKER_MEMORY_MAX,
     default_log_rotation, default_pass_list, normalize_logins, normalize_pass_list, read_optional,
     resolve_agent_stall_minutes, resolve_at, resolve_bounded_count, resolve_bounded_minutes,
-    resolve_bounded_range, resolve_build_output_env, resolve_choice, resolve_cpu_light_leaves,
-    resolve_distributed_completion, resolve_generated_paths, resolve_host_shutdown_hold_minutes,
-    resolve_light_delivery_paths, resolve_machine_id, resolve_machine_name,
-    resolve_material_fields, resolve_memory_limit, resolve_mid_run_steering_max_rounds,
-    resolve_non_empty, resolve_optional_choice, resolve_optional_non_empty, resolve_percent,
-    resolve_reclaim, resolve_retention_days, resolve_task_prefix, resolve_unlocked_context_paths,
-    resolve_unlocked_path_validation_commands, resolve_validation_path_mode,
-    resolve_worker_tasks_max,
+    resolve_bounded_range, resolve_branch_template, resolve_build_output_env, resolve_choice,
+    resolve_commit_subject_template, resolve_cpu_light_leaves, resolve_distributed_completion,
+    resolve_generated_paths, resolve_host_shutdown_hold_minutes, resolve_light_delivery_paths,
+    resolve_machine_id, resolve_machine_name, resolve_material_fields, resolve_memory_limit,
+    resolve_mid_run_steering_max_rounds, resolve_name_list, resolve_non_empty,
+    resolve_optional_choice, resolve_optional_non_empty, resolve_percent, resolve_pr_body_template,
+    resolve_reclaim, resolve_retention_days, resolve_task_prefix, resolve_text_template,
+    resolve_unlocked_context_paths, resolve_unlocked_path_validation_commands,
+    resolve_validation_path_mode, resolve_worker_tasks_max,
 };
 use crate::crew_performance::CrewPerformanceType;
 use crate::memory_limit::MemoryLimit;
@@ -415,6 +418,125 @@ define_config_settings! {
         section: ConfigSection::Delivery, order: 141,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(normalize_logins(raw.unwrap_or_default())),
+    },
+    pr_title_template: Option<String> => String {
+        key: "pr.title_template", value_type: "string",
+        description: "Template for a single-task pull request title; unset uses the task title.",
+        section: ConfigSection::Delivery, order: 170,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_text_template(raw, "pr.title_template"),
+    },
+    pr_body_template: Option<String> => String {
+        key: "pr.body_template", value_type: "string",
+        description: "Pull request body template: \"repo\" or a repository-relative path read at the delivery base; unset uses Orbit's layout.",
+        section: ConfigSection::Delivery, order: 171,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_pr_body_template(raw, "pr.body_template"),
+    },
+    pr_agent_sections: Vec<String> => Vec<String> {
+        key: "pr.agent_sections", value_type: "array<string>",
+        description: "Pull request body headings the implementer may fill through the pr-sections.json task artifact.",
+        section: ConfigSection::Delivery, order: 172,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "pr.agent_sections"),
+    },
+    pr_required_sections: Vec<String> => Vec<String> {
+        key: "pr.required_sections", value_type: "array<string>",
+        description: "Pull request body headings the implementer must fill through the pr-sections.json task artifact.",
+        section: ConfigSection::Delivery, order: 173,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "pr.required_sections"),
+    },
+    pr_missing_required_section: String => String {
+        key: "pr.missing_required_section", value_type: "string",
+        description: "When a required pull request section is unfilled: draft (open as a draft) or refuse.",
+        section: ConfigSection::Delivery, order: 174,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "draft", "pr.missing_required_section", MissingSectionPolicy::VALUES),
+    },
+    pr_freshness_section: bool => bool {
+        key: "pr.freshness_section", value_type: "bool",
+        description: "Include the Branch Freshness section in generated pull request bodies.",
+        section: ConfigSection::Delivery, order: 175,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    pr_signature: bool => bool {
+        key: "pr.signature", value_type: "bool",
+        description: "Append the authoring model's signature to generated pull request bodies.",
+        section: ConfigSection::Delivery, order: 176,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    pr_orchestration_trailer: bool => bool {
+        key: "pr.orchestration_trailer", value_type: "bool",
+        description: "Append the Orchestrated-By trailer to generated pull request bodies.",
+        section: ConfigSection::Delivery, order: 177,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    pr_labels: Vec<String> => Vec<String> {
+        key: "pr.labels", value_type: "array<string>",
+        description: "Labels applied to each pull request Orbit opens.",
+        section: ConfigSection::Delivery, order: 178,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "pr.labels"),
+    },
+    pr_reviewers: Vec<String> => Vec<String> {
+        key: "pr.reviewers", value_type: "array<string>",
+        description: "Reviewers (logins or org/team) requested on each pull request Orbit opens.",
+        section: ConfigSection::Delivery, order: 179,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "pr.reviewers"),
+    },
+    pr_draft: bool => bool {
+        key: "pr.draft", value_type: "bool",
+        description: "Open every pull request Orbit creates as a draft.",
+        section: ConfigSection::Delivery, order: 180,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    commit_subject_template: Option<String> => String {
+        key: "commit.subject_template", value_type: "string",
+        description: "Template for single-task commit subjects; must contain [{{task_id}}]. Unset keeps Orbit's subjects.",
+        section: ConfigSection::Delivery, order: 181,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_commit_subject_template(raw, "commit.subject_template"),
+    },
+    commit_body_template: Option<String> => String {
+        key: "commit.body_template", value_type: "string",
+        description: "Template for single-task commit bodies, before trailers. Unset keeps Orbit's bodies.",
+        section: ConfigSection::Delivery, order: 182,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_text_template(raw, "commit.body_template"),
+    },
+    commit_planned_by_trailer: bool => bool {
+        key: "commit.planned_by_trailer", value_type: "bool",
+        description: "Add the Planned-By trailer to commit messages that carry it.",
+        section: ConfigSection::Delivery, order: 183,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    commit_implemented_by_trailer: bool => bool {
+        key: "commit.implemented_by_trailer", value_type: "bool",
+        description: "Add the Implemented-By trailer to commit messages that carry it.",
+        section: ConfigSection::Delivery, order: 184,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    commit_orchestrated_by_trailer: bool => bool {
+        key: "commit.orchestrated_by_trailer", value_type: "bool",
+        description: "Add the Orchestrated-By trailer to commit messages.",
+        section: ConfigSection::Delivery, order: 185,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
+    branch_name_template: Option<String> => String {
+        key: "branch.name_template", value_type: "string",
+        description: "Template for single-task delivery branch names; must contain {{task_id}} and {{hash}}.",
+        section: ConfigSection::Delivery, order: 186,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_branch_template(raw, "branch.name_template"),
     },
     pr_task_url_template: Option<String> => String {
         key: "pr.task_url_template", value_type: "string",

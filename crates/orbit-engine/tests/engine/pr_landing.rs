@@ -58,6 +58,7 @@ mod absent_context;
 pub(super) use absent_context::adopted_policy_cases;
 mod auto_fix;
 mod check_annotations;
+mod conventions;
 mod flaky;
 mod infrastructure;
 mod landing_transport;
@@ -5150,6 +5151,8 @@ struct DeliveryHost {
     probes: Mutex<Vec<(String, Option<String>, PathBuf)>>,
     /// The OS this host runs implementers on [ORB-15587].
     os: Mutex<Option<EvidenceHostOs>>,
+    /// The workspace's PR settings and delivery conventions.
+    pr_config: Mutex<orbit_engine::PrConfig>,
 }
 type Widening = (String, ContextWideningStep, String, Vec<String>);
 type StatusEvent = (String, Option<String>, Option<String>);
@@ -5165,6 +5168,12 @@ impl DeliveryHost {
     }
     fn ship_pr(&self) {
         *locked(&self.ship_mode) = "pr".to_string();
+    }
+    fn set_conventions(&self, conventions: orbit_types::workflow::DeliveryConventions) {
+        locked(&self.pr_config).conventions = conventions;
+    }
+    fn put_artifact(&self, task_id: &str, path: &str, content: &str) {
+        locked(&self.artifacts).insert((task_id.into(), path.into()), content.into());
     }
     fn set_os(&self, os: EvidenceHostOs) {
         *locked(&self.os) = Some(os);
@@ -5286,6 +5295,9 @@ impl DeliveryHost {
     }
 }
 impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        locked(&self.pr_config).clone()
+    }
     fn get_job_run(&self, run_id: &str) -> Res<Option<JobRun>> {
         Ok(locked(&self.runs).get(run_id).cloned())
     }
@@ -5920,6 +5932,9 @@ create() {
             --base) printf '%s\n' "$2" > "$forge/pr-base"; shift 2 ;;
             --head) printf '%s\n' "$2" > "$forge/pr-head"; shift 2 ;;
             --body) printf '%s' "$2" > "$forge/pr-body"; shift 2 ;;
+            --draft) touch "$forge/pr-draft"; shift ;;
+            --label) printf '%s\n' "$2" >> "$forge/pr-labels"; shift 2 ;;
+            --reviewer) printf '%s\n' "$2" >> "$forge/pr-reviewers"; shift 2 ;;
             *) shift ;;
         esac
     done

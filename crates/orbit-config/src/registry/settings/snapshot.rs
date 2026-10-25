@@ -4,8 +4,11 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::LogRotationConfig;
 use orbit_types::identity::Crew;
-use orbit_types::workflow::CrewPurpose;
 use orbit_types::workflow::automation::members::PreparationFreshness;
+use orbit_types::workflow::{
+    ConventionTemplate, CrewPurpose, DeliveryConventions, MissingSectionPolicy,
+    PrBodyTemplateSource, TemplateSurface,
+};
 
 use super::machine::{
     AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
@@ -397,6 +400,47 @@ impl ConfigSnapshot {
             disk_resume_percent: self.workflow_resource_throttle_disk_resume_percent,
             io_full_high_percent: self.workflow_resource_throttle_io_full_high_percent,
             io_full_resume_percent: self.workflow_resource_throttle_io_full_resume_percent,
+        }
+    }
+}
+
+impl ConfigSnapshot {
+    /// The admitted `pr.*`, `commit.*` and `branch.*` delivery conventions.
+    /// Admission already parsed every template, so each parses again here.
+    pub fn delivery_conventions(&self) -> DeliveryConventions {
+        let text = |key: &str, raw: &Option<String>| {
+            raw.as_deref()
+                .and_then(|raw| ConventionTemplate::parse(key, raw, TemplateSurface::Text).ok())
+        };
+        let defaults = DeliveryConventions::default();
+        DeliveryConventions {
+            pr_title: text("pr.title_template", &self.pr_title_template),
+            pr_body: self
+                .pr_body_template
+                .as_deref()
+                .and_then(|raw| PrBodyTemplateSource::parse("pr.body_template", raw).ok()),
+            agent_sections: self.pr_agent_sections.clone(),
+            required_sections: self.pr_required_sections.clone(),
+            missing_section: MissingSectionPolicy::parse(&self.pr_missing_required_section)
+                .unwrap_or_default(),
+            freshness_section: self.pr_freshness_section,
+            signature: self.pr_signature,
+            pr_orchestration_trailer: self.pr_orchestration_trailer,
+            labels: self.pr_labels.clone(),
+            reviewers: self.pr_reviewers.clone(),
+            draft: self.pr_draft,
+            commit_subject: self.commit_subject_template.as_deref().and_then(|raw| {
+                ConventionTemplate::parse_commit_subject("commit.subject_template", raw).ok()
+            }),
+            commit_body: text("commit.body_template", &self.commit_body_template),
+            planned_by_trailer: self.commit_planned_by_trailer,
+            implemented_by_trailer: self.commit_implemented_by_trailer,
+            orchestrated_by_trailer: self.commit_orchestrated_by_trailer,
+            branch_name: self
+                .branch_name_template
+                .as_deref()
+                .and_then(|raw| ConventionTemplate::parse_branch("branch.name_template", raw).ok())
+                .unwrap_or(defaults.branch_name),
         }
     }
 }

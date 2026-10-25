@@ -8,6 +8,7 @@ mod candidate_validate;
 pub mod claim;
 mod commit;
 mod completion_deadline;
+mod conventions;
 mod deferral_probe;
 mod deferred_sandbox;
 mod delivery_marker;

@@ -263,6 +263,7 @@ pub(crate) fn build_context_from_roots(
         task_url_template: runtime_config.pr.task_url_template.clone(),
         close_superseded: runtime_config.pr.close_on_terminal,
         delivery_authors: runtime_config.pr.delivery_authors.clone(),
+        conventions: runtime_config.pr.conventions.clone(),
     };
     let workflow_base_branch = runtime_config.workflow_base_branch.clone();
     let workflow_auto_ship = runtime_config.workflow_auto_ship;

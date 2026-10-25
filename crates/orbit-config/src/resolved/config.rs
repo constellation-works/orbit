@@ -49,6 +49,9 @@ pub struct PrSettings {
     /// Normalized forge logins whose PRs count as Orbit-authored; empty means
     /// the forge CLI's authenticated login (`pr.delivery_authors`).
     pub delivery_authors: Vec<String>,
+    /// The `pr.*`, `commit.*` and `branch.*` templates and switches that
+    /// shape what a delivery publishes.
+    pub conventions: orbit_types::workflow::DeliveryConventions,
 }
 
 /// Every setting a runtime consumer needs, admitted and defaulted.
@@ -121,6 +124,7 @@ impl ResolvedConfig {
                 task_url_template: snapshot.pr_task_url_template.clone(),
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
+                conventions: snapshot.delivery_conventions(),
             },
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),
@@ -353,6 +357,7 @@ impl ResolvedConfig {
                 task_url_template: snapshot.pr_task_url_template.clone(),
                 close_on_terminal: snapshot.pr_close_on_terminal,
                 delivery_authors: snapshot.pr_delivery_authors.clone(),
+                conventions: snapshot.delivery_conventions(),
             },
             automation_stall_window_minutes: snapshot.automation_stall_window_minutes,
             workflow_base_branch: snapshot.workflow_base_branch.clone(),

@@ -6,6 +6,7 @@ mod auto_task;
 pub use auto_concurrency::AutoConcurrencyMode;
 mod child_dispatch;
 mod crew_purpose;
+mod delivery_conventions;
 mod error;
 mod executor_def;
 mod final_recovery;
@@ -21,10 +22,17 @@ mod run;
 mod ship;
 mod skill;
 mod tag_instructions;
+pub use delivery_conventions::{
+    BRANCH_HASH_LEN, COMMIT_SUBJECT_BUDGET, ConventionTemplate, DEFAULT_BRANCH_PREFIX,
+    DEFAULT_BRANCH_TEMPLATE, DeliveryConventions, MissingSectionPolicy, PR_SECTION_GAP_EVENT,
+    PR_SECTIONS_ARTIFACT, Placeholder, PrBodyTemplateSource, REPO_PR_BODY_TEMPLATE,
+    REPO_PR_TEMPLATE_LOCATIONS, SUBJECT_ELLIPSIS, TemplateSurface, default_branch_template,
+    same_section_name, unsafe_branch_name_reason,
+};
 pub use error::{
-    FinalRecoveryError, JobRunStateError, ProviderSandboxError, RetiredBackendError,
-    ReviewAdmissionError, ReviewHistoryError, ReviewReportError, TagInstructionError,
-    WorkflowError,
+    ConventionTemplateError, FinalRecoveryError, JobRunStateError, ProviderSandboxError,
+    RetiredBackendError, ReviewAdmissionError, ReviewHistoryError, ReviewReportError,
+    TagInstructionError, WorkflowError,
 };
 
 pub use activity_job::{

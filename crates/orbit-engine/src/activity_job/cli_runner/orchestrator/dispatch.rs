@@ -205,6 +205,14 @@ pub(crate) fn run_cli_backend_for_step(
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
     }
+    // `pr.agent_sections` / `pr.required_sections`: the implementer writes
+    // their content to a task artifact `pr_open` reads.
+    if activity_name == "agent_implement"
+        && let Some(instruction) = host.pr_config().conventions.implement_instruction()
+    {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(&instruction);
+    }
     // Trusted per-tag guidance goes last, after every built-in rule it may
     // not override. The audit row names what the prompt carried.
     let tag_instructions = host.tag_instructions_for_activity(run_id, activity_name, input)?;

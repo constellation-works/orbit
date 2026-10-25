@@ -45,7 +45,8 @@ use orbit_types::workflow::activity_job::{
     ActivityV2, ActivityV2Spec, AgentLoopSpec, OnDenial, Provider,
 };
 use orbit_types::workflow::{
-    FailureActivityCheckpoint, FinalRecoveryDecision, JobRun, JobRunState, PipelineState,
+    ConventionTemplate, FailureActivityCheckpoint, FinalRecoveryDecision, JobRun, JobRunState,
+    PipelineState,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -569,6 +570,57 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
     let tip = git(&fixture.repo, &["rev-parse", &checkout.branch]);
     assert_eq!(tip, retained);
     assert_eq!(host.admitted().len(), 2);
+}
+
+/// A `branch.name_template` branch keeps one name across a run's retries,
+/// even once only the orphaned branch remains, and a name the task's values
+/// make unsafe is refused before any ref is created.
+fn worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render() {
+    let fixture = Fixture::new();
+    let host = LifecycleHost::new(&fixture.repo);
+    let template = "feature/{{task_id}}/{{hash}}";
+    host.pr_config.lock().unwrap().conventions.branch_name =
+        ConventionTemplate::parse_branch("branch.name_template", template).unwrap();
+    let (first, checkout) = setup_checkout(&host, "T-BR", "jrun-branch");
+    assert!(
+        checkout.branch.starts_with("feature/T-BR/") && checkout.branch.len() == 21,
+        "{first:#}"
+    );
+    let input = setup_input(&["T-BR"], "jrun-branch");
+    let again = action(&host, "worktree_setup", &input).expect("reattach");
+    assert_eq!(again["head_ref"], first["head_ref"]);
+
+    let remove = ["worktree", "remove", "--force", path_str(&checkout.path)];
+    git(&fixture.repo, &remove);
+    let retried = action(&host, "worktree_setup", &input).expect("retry on the orphan branch");
+    assert_eq!(retried["head_ref"], first["head_ref"]);
+
+    let (other, _) = setup_checkout(&host, "T-BR2", "jrun-branch-2");
+    assert_ne!(other["head_ref"], first["head_ref"]);
+
+    // With no `jira` ref the name would start with `-`, which Git reads as
+    // an option: setup refuses it and creates no branch.
+    let template = "{{ext.jira}}-{{task_id}}-{{hash}}";
+    host.pr_config.lock().unwrap().conventions.branch_name =
+        ConventionTemplate::parse_branch("branch.name_template", template).unwrap();
+    host.add_task("T-DASH", TaskStatus::Backlog);
+    let error = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-DASH"], "jrun-dash"),
+    )
+    .expect_err("a leading-dash branch is refused");
+    let message = error.to_string();
+    assert!(
+        message.contains("branch.name_template renders '-T-DASH-")
+            && message.contains("start with '-'"),
+        "{message}"
+    );
+    let branches = git(
+        &fixture.repo,
+        &["for-each-ref", "--format=%(refname:short)"],
+    );
+    assert!(!branches.contains("T-DASH"), "{branches}");
 }
 
 /// A registered checkout whose admin `HEAD` is corrupt (a crash mid-commit)
@@ -3487,6 +3539,8 @@ struct LifecycleHost {
     generated_paths: Mutex<Vec<orbit_engine::GeneratedPath>>,
     /// The host's record of each run's last fully validated tree.
     validated_trees: Mutex<BTreeMap<String, orbit_engine::ValidatedTree>>,
+    /// `[pr]`, `[commit]` and `[branch]` delivery settings.
+    pr_config: Mutex<orbit_engine::PrConfig>,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -3714,6 +3768,10 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
+    fn pr_config(&self) -> orbit_engine::PrConfig {
+        self.pr_config.lock().unwrap().clone()
+    }
+
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {
         let mut environment = orbit_exec::ValidationEnvironment::launcher(
             RuntimeHost::agent_subprocess_environment(self, &[]),
@@ -4521,6 +4579,7 @@ fn worktree_contracts_2() {
     isolated("worktree_contracts_2", || {
         crate::git_fixture::run_scenarios(scenarios![
             worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched,
+            worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render,
             worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits,
             local_landing_precheck_uses_the_normalized_base_checkout,
             local_landing_preserves_unrelated_untracked_files,

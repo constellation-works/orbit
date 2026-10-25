@@ -1,27 +1,29 @@
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
-use orbit_types::task::TaskHistoryEntry;
+use orbit_types::task::{Task, TaskHistoryEntry};
 use orbit_types::workflow::{
     FLAKY_VALIDATION_EVENT, FlakyValidation, KNOWN_RED_VALIDATION_EVENT, KnownRedValidation,
+    MissingSectionPolicy, PR_SECTION_GAP_EVENT, PR_SECTIONS_ARTIFACT, PrBodyTemplateSource,
+    REPO_PR_TEMPLATE_LOCATIONS,
 };
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{PrConfig, RuntimeHost, TaskAutomationUpdate};
 
 use super::super::super::input::{input_string_field, required_input_string};
 use super::super::base::obsolescence::ensure_base_can_still_land;
 use super::super::freshness::branch_freshness_against_ref;
-use super::super::git::git_output;
+use super::super::git::{git_output, git_output_raw};
 use super::super::handoff::{
     FailedHandoffPhase, HandoffContext, load_handoff_context, record_failed_handoff,
 };
 use super::super::operations;
 use super::answers::{PullRequestStatus, PullRequestSummary, read_pr_status};
 use super::body::{
-    GITHUB_PR_BODY_BYTE_LIMIT, bound_pr_body, build_batch_pr_body, default_pr_title,
-    render_known_red_section,
+    BODY_TEMPLATE_KEY, BodyInputs, GITHUB_PR_BODY_BYTE_LIMIT, bound_pr_body, build_batch_pr_body,
+    pr_title, render_known_red_section,
 };
 
 pub(in crate::executor::automation) fn pr_open<H: RuntimeHost + Sync + ?Sized>(
@@ -131,22 +133,56 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
         }));
     }
 
+    let pr_config = host.pr_config();
     let title = input_string_field(input, "title")
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| default_pr_title(&context.tasks));
-    let pr_config = host.pr_config();
+        .unwrap_or_else(|| pr_title(&context.tasks, &pr_config));
     let pr_opener_model = host.actor_model_identity();
-    let body = input_string_field(input, "body")
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or_else(|| {
-            build_batch_pr_body(
-                &context.tasks,
-                &freshness,
-                &changed_files,
-                &pr_config,
-                pr_opener_model.as_deref(),
-            )
-        });
+    let (body, missing_required) =
+        match input_string_field(input, "body").filter(|value| !value.trim().is_empty()) {
+            Some(body) => (body, Vec::new()),
+            None => {
+                let template = body_template_text(
+                    &context.workspace_path,
+                    &context.tasks,
+                    &pr_config,
+                    base_sha,
+                )
+                .map_err(|error| Box::new((FailedHandoffPhase::PrBody, error)))?;
+                let inputs = BodyInputs {
+                    template: template.as_deref(),
+                    filled: filled_sections(host, &context.tasks, &pr_config),
+                };
+                let rendered = build_batch_pr_body(
+                    &context.tasks,
+                    &freshness,
+                    &changed_files,
+                    &pr_config,
+                    pr_opener_model.as_deref(),
+                    &inputs,
+                )
+                .map_err(|error| Box::new((FailedHandoffPhase::PrBody, error)))?;
+                (rendered.body, rendered.missing_required)
+            }
+        };
+    let draft = pr_config.conventions.draft
+        || (!missing_required.is_empty()
+            && pr_config.conventions.missing_section == MissingSectionPolicy::Draft);
+    if !missing_required.is_empty() {
+        record_section_gap(host, context, &missing_required, &pr_config)
+            .map_err(|error| Box::new((FailedHandoffPhase::PrBody, error)))?;
+        if pr_config.conventions.missing_section == MissingSectionPolicy::Refuse {
+            return Err(Box::new((
+                FailedHandoffPhase::PrBody,
+                OrbitError::Execution(format!(
+                    "pr_required_section_missing: required pull request section(s) {} have no \
+                     filled content in task artifact `{PR_SECTIONS_ARTIFACT}`; \
+                     pr.missing_required_section = \"refuse\" holds the pull request",
+                    quoted_sections(&missing_required)
+                )),
+            )));
+        }
+    }
     let known_red = collect_validation_records(
         host,
         context,
@@ -213,6 +249,9 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                         "base": base,
                         "head": head,
                         "workspace_path": context.workspace_path,
+                        "draft": draft,
+                        "labels": pr_config.conventions.labels,
+                        "reviewers": pr_config.conventions.reviewers,
                     }),
                 ) {
                     Ok(created) => created,
@@ -250,7 +289,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                     })?;
                 let (pr_number, viewed_url) = view_pr(host, &context.workspace_path, &pr_url)
                     .map_err(|error| Box::new((FailedHandoffPhase::PrView, error)))?;
-                return Ok(pr_output(PrOutput {
+                let mut output = pr_output(PrOutput {
                     decision: "performed",
                     pr_created: true,
                     pr_reused: false,
@@ -261,11 +300,176 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                     base_ref,
                     base_sha,
                     freshness: &freshness,
-                }));
+                });
+                output["draft"] = json!(draft);
+                output["missing_required_sections"] = json!(missing_required);
+                return Ok(output);
             }
             Err(error) => return Err(Box::new((FailedHandoffPhase::PrLookup, error))),
         }
     }
+}
+
+/// The text of the configured body template for a single-task delivery, as
+/// committed at `base_sha`, so a delivery cannot rewrite the template it is
+/// published with. `None` keeps Orbit's layout: no template is configured,
+/// the delivery carries several tasks, or `"repo"` finds no template.
+fn body_template_text(
+    workspace_path: &std::path::Path,
+    tasks: &[Task],
+    pr_config: &PrConfig,
+    base_sha: &str,
+) -> Result<Option<String>, OrbitError> {
+    let (Some(source), [_]) = (pr_config.conventions.pr_body.as_ref(), tasks) else {
+        return Ok(None);
+    };
+    let path = match source {
+        PrBodyTemplateSource::Path(path) => path.clone(),
+        PrBodyTemplateSource::Repository => {
+            match repository_template_path(workspace_path, base_sha)? {
+                Some(path) => path,
+                None => {
+                    tracing::info!(
+                        base_sha,
+                        "pr.body_template = \"repo\" found no pull request template at the base; \
+                     using Orbit's layout"
+                    );
+                    return Ok(None);
+                }
+            }
+        }
+    };
+    let text = git_output_raw(workspace_path, &["show", &format!("{base_sha}:{path}")]).map_err(
+        |error| {
+            OrbitError::InvalidInput(format!(
+                "pr_open: {BODY_TEMPLATE_KEY}: cannot read '{path}' at base {base_sha}: {error}"
+            ))
+        },
+    )?;
+    Ok(Some(text))
+}
+
+/// The repository's GitHub pull request template at `base_sha`: the first of
+/// [`REPO_PR_TEMPLATE_LOCATIONS`] that names a file there, matched
+/// case-insensitively as GitHub does.
+fn repository_template_path(
+    workspace_path: &std::path::Path,
+    base_sha: &str,
+) -> Result<Option<String>, OrbitError> {
+    for (directory, name) in REPO_PR_TEMPLATE_LOCATIONS {
+        let tree = if directory.is_empty() {
+            base_sha.to_string()
+        } else {
+            format!("{base_sha}:{directory}")
+        };
+        // A missing directory is not an error: the next location is tried.
+        let Ok(listing) = git_output_raw(workspace_path, &["ls-tree", "-z", &tree]) else {
+            continue;
+        };
+        for entry in listing.split('\0') {
+            let Some((meta, file)) = entry.split_once('\t') else {
+                continue;
+            };
+            if meta.split_whitespace().nth(1) == Some("blob") && file.eq_ignore_ascii_case(name) {
+                return Ok(Some(if directory.is_empty() {
+                    file.to_string()
+                } else {
+                    format!("{directory}/{file}")
+                }));
+            }
+        }
+    }
+    Ok(None)
+}
+
+/// The agent-filled sections the implement step wrote to the task's
+/// [`PR_SECTIONS_ARTIFACT`]: `{"sections": {"<heading>": "<markdown>"}}`.
+/// Only a single-task delivery with agent-filled sections configured reads
+/// it. A missing or malformed artifact fills nothing, so required sections
+/// surface as gaps rather than as a failed step.
+fn filled_sections<H: RuntimeHost + ?Sized>(
+    host: &H,
+    tasks: &[Task],
+    pr_config: &PrConfig,
+) -> BTreeMap<String, String> {
+    let [task] = tasks else {
+        return BTreeMap::new();
+    };
+    if pr_config.conventions.agent_filled_sections().is_empty() {
+        return BTreeMap::new();
+    }
+    let artifact = match host.get_task_artifact(&task.id, PR_SECTIONS_ARTIFACT) {
+        Ok(Some(artifact)) => artifact,
+        Ok(None) => return BTreeMap::new(),
+        Err(error) => {
+            tracing::warn!(
+                task_id = task.id,
+                "pr_open could not read {PR_SECTIONS_ARTIFACT}: {error}"
+            );
+            return BTreeMap::new();
+        }
+    };
+    #[derive(serde::Deserialize)]
+    struct Sections {
+        sections: BTreeMap<String, String>,
+    }
+    match serde_json::from_slice::<Sections>(&artifact.content) {
+        Ok(parsed) => parsed.sections,
+        Err(error) => {
+            tracing::warn!(
+                task_id = task.id,
+                "pr_open ignored a malformed {PR_SECTIONS_ARTIFACT}: {error}"
+            );
+            BTreeMap::new()
+        }
+    }
+}
+
+fn quoted_sections(sections: &[String]) -> String {
+    sections
+        .iter()
+        .map(|section| format!("`{section}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Record in each task's history which required sections had no content and
+/// what delivery did about it.
+fn record_section_gap<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &HandoffContext,
+    missing: &[String],
+    pr_config: &PrConfig,
+) -> Result<(), OrbitError> {
+    let action = match pr_config.conventions.missing_section {
+        MissingSectionPolicy::Draft => "opens the pull request as a draft",
+        MissingSectionPolicy::Refuse => "refuses to open the pull request",
+    };
+    let note = format!(
+        "Required pull request section(s) {} have no filled content in task artifact \
+         `{PR_SECTIONS_ARTIFACT}`; pr_open {action} (pr.missing_required_section = \"{}\").",
+        quoted_sections(missing),
+        pr_config.conventions.missing_section.as_str()
+    );
+    for task in &context.tasks {
+        host.apply_task_automation_update(
+            &task.id,
+            TaskAutomationUpdate {
+                append_history: vec![TaskHistoryEntry {
+                    at: chrono::Utc::now(),
+                    by: "system".to_string(),
+                    event: PR_SECTION_GAP_EVENT.to_string(),
+                    note: Some(note.clone()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..TaskAutomationUpdate::default()
+            },
+        )?;
+    }
+    Ok(())
 }
 
 /// [ORB-15308] Close the pull request an earlier claim opened for the
@@ -424,7 +628,12 @@ pub(in crate::executor::automation::vcs) fn close_earlier_task_pull_requests<
         }
         let body = pull_request.body.as_deref().unwrap_or_default();
         let Some(task) = tasks.iter().find(|task| {
-            orbit_types::task::names_task_delivery_pull_request(branch, body, &task.id)
+            orbit_types::task::names_task_delivery_pull_request(
+                &config.conventions.branch_name,
+                branch,
+                body,
+                &task.id,
+            )
         }) else {
             continue;
         };

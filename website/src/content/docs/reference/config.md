@@ -418,6 +418,23 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `automation.stall_window_minutes` | **Advanced.** integer · **Default:** `60`<br>Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
 | `pr.close_on_terminal` | **Advanced.** bool · **Default:** `true`<br>Close a task's open Orbit-authored pull requests, including preservation PRs for blocked tasks, when the task lands, is rejected, or is archived, with a comment naming the landing or decision. Branches are kept; a forge error is a warning, never a failure. |
 | `pr.delivery_authors` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Forge logins whose pull requests count as Orbit-authored for `pr.close_on_terminal` and for settling a task to done from its delivery pull request merged outside Orbit. Empty means the login the forge CLI is authenticated as on this machine. |
+| `pr.title_template` | **Advanced.** string · **Default:** Unset<br>Template for a single-task pull request title, using the [delivery template placeholders](#delivery-templates). Unset uses the task title. |
+| `pr.body_template` | **Advanced.** string · **Default:** Unset<br>Pull request body template: `"repo"` (the repository's `pull_request_template.md`) or a repository-relative path, read at the delivery's base revision. Unset uses Orbit's own layout. |
+| `pr.agent_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer may fill through the `pr-sections.json` task artifact. |
+| `pr.required_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer must fill. An unfilled one is handled by `pr.missing_required_section` and recorded in task history. |
+| `pr.missing_required_section` | **Advanced.** string · **Default:** `draft`<br>What happens when a required section is unfilled: `draft` opens the pull request as a draft with a note under the heading; `refuse` opens no pull request. |
+| `pr.freshness_section` | **Advanced.** bool · **Default:** `true`<br>Include the Branch Freshness section (and the `{{freshness}}` value) in pull request bodies. |
+| `pr.signature` | **Advanced.** bool · **Default:** `true`<br>Append the authoring model's signature to pull request bodies. |
+| `pr.orchestration_trailer` | **Advanced.** bool · **Default:** `true`<br>Append the `Orchestrated-By` trailer to pull request bodies. |
+| `pr.labels` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Labels applied to each pull request Orbit opens. |
+| `pr.reviewers` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Reviewers (logins or `org/team`) requested on each pull request Orbit opens. |
+| `pr.draft` | **Advanced.** bool · **Default:** `false`<br>Open every pull request as a draft. A draft is never merged automatically. |
+| `commit.subject_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit subjects; must contain `[{{task_id}}]`. Subjects keep a 72-character budget: the title is shortened first, with an ellipsis, and kept whole in the body. |
+| `commit.body_template` | **Advanced.** string · **Default:** Unset<br>Template for single-task commit bodies, before the trailers. |
+| `commit.planned_by_trailer` | **Advanced.** bool · **Default:** `true`<br>Add the `Planned-By` trailer to commit messages that carry it. |
+| `commit.implemented_by_trailer` | **Advanced.** bool · **Default:** `true`<br>Add the `Implemented-By` trailer to commit messages that carry it. |
+| `commit.orchestrated_by_trailer` | **Advanced.** bool · **Default:** `true`<br>Add the `Orchestrated-By` trailer to commit messages. |
+| `branch.name_template` | **Advanced.** string · **Default:** `{{prefix}}/{{task_id}}-{{hash}}`<br>Template for single-task delivery branch names; must contain `{{task_id}}` and `{{hash}}`. A name containing `..` or starting with `-` is refused. |
 | `pr.task_url_template` | **Advanced.** string · **Default:** Unset<br>URL template that links a task ID in PR descriptions. |
 | `execution.env.pass` | array&lt;string&gt; · **Default:** `HOME`, `PATH`, `CODEX_HOME`, `TMPDIR`, `USER`<br>Environment variables passed to agent subprocesses. Replaces the default list rather than extending it. macOS also passes `__CF_USER_TEXT_ENCODING` by default. A name you add that the launching shell does not set reaches no agent: drains, `orbit run ship` and `orbit run job` warn on stderr and record it on the run, and `orbit doctor` reports it (start drains from a login shell). |
 | `execution.codex.sandbox` | string · **Default:** `workspace-write`<br>Codex sandbox mode: `read-only`, `workspace-write`, or `danger-full-access`. The global file `orbit init` writes sets `danger-full-access`. |
@@ -493,6 +510,72 @@ Declare only rebuildable paths; evidence matching a declared pattern is reclaima
 Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working
 across audit, run and journal pruning. Upgrade backfills retained denial and commit
 facts once before pruning; history deleted before upgrade cannot be recovered.
+
+## Delivery templates
+
+The `[pr]`, `[commit]` and `[branch]` templates shape what a single-task
+delivery publishes. With none set, Orbit's own titles, bodies, commit messages
+and `orbit/<task>-<hash>` branches are unchanged. A delivery that bundles
+several tasks keeps Orbit's own shapes.
+
+```toml
+[pr]
+title_template = "{{type}}: {{title}} ({{ext.jira}})"
+body_template = "repo"
+agent_sections = ["Risk"]
+required_sections = ["Rollback"]
+missing_required_section = "draft"
+labels = ["orbit"]
+reviewers = ["my-org/reviewers"]
+
+[commit]
+subject_template = "{{type}}({{ext.jira}}): {{title}} [{{task_id}}]"
+
+[branch]
+name_template = "feature/{{ext.jira}}-{{task_id}}-{{hash}}"
+```
+
+Placeholders are written `{{name}}`; spaces inside the braces are ignored.
+A template naming an unknown placeholder fails the configuration load with
+the key and the placeholder.
+
+| Placeholder | Value | Where |
+|---|---|---|
+| `{{task_id}}` | The task's ID | Everywhere |
+| `{{title}}` | The task title | PR title and body, commit |
+| `{{type}}` | `feat`, `fix`, `refactor` or `chore`, from the task type | PR title and body, commit |
+| `{{description}}` | The task description | PR title and body, commit |
+| `{{acceptance_criteria}}` | The acceptance criteria as a checklist | PR title and body, commit |
+| `{{execution_summary}}` | The implementer's execution summary | PR title and body, commit |
+| `{{validation}}` | The validation section | PR title and body, commit |
+| `{{freshness}}` | The branch's base and head and how far it is behind and ahead; empty in commits or with `pr.freshness_section = false` | PR title and body, commit |
+| `{{task_url}}` | The task link from `pr.task_url_template`; empty when unset | PR title and body, commit |
+| `{{ext.<system>}}` | The ID of the task's external ref for `<system>`, such as `{{ext.jira}}`; empty when the task has none | Everywhere |
+| `{{prefix}}` | The delivery's branch prefix: `orbit` unless a job sets another | Branch only |
+| `{{hash}}` | Eight hex characters derived from the run, so a retry reuses the branch | Branch only |
+
+`pr.body_template = "repo"` reads the repository's pull request template
+at the delivery's base revision, never from the candidate branch. Orbit looks
+for `pull_request_template.md` (any letter case) in `.github/`, the
+repository root and `docs/`, in that order, and uses its own layout when none
+exists. A repository-relative path must exist at the base revision.
+
+The implementer fills agent and required sections by attaching a
+`pr-sections.json` task artifact shaped
+`{"sections": {"Risk": "Low: one file."}}`. Each heading replaces the body
+under the matching Markdown heading of the template, matched without regard
+to letter case. With Orbit's own layout, filled sections are appended as
+`## <heading>`. An unfilled optional section keeps the template's text. An
+unfilled required section is never published as an empty heading: with
+`missing_required_section = "draft"` the pull request opens as a draft with a
+note under the heading, and with `"refuse"` no pull request opens. Both are
+recorded in the task's history. Orbit never merges a draft automatically.
+
+Commit subjects keep a 72-character budget: the title is shortened first, with
+an ellipsis, and kept whole in the commit body. A subject template must carry
+the `[{{task_id}}]` marker Orbit uses to recognise delivered work. A branch
+template must contain `{{task_id}}` and `{{hash}}`; a branch name that would
+contain `..`, start with `-`, or break Git's ref-name rules is refused.
 
 ## Workspace build output
 

@@ -7,7 +7,7 @@ use crate::executor::automation::vcs::delivery_marker::delivery_markers;
 fn delivery_markers_survive_a_title_truncated_inside_brackets() {
     let title = format!("Fix [see {}]", "é".repeat(200));
     let task = task_with_file("ORB-5", &title, "README.md", "codex");
-    let message = batch_commit_message(&task);
+    let message = batch_commit_message(&task, &crate::context::PrConfig::default());
     let (subject, body) = message
         .split_once("\n\n")
         .expect("a truncated title is preserved in the body");
