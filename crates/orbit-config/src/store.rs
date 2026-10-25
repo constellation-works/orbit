@@ -221,6 +221,14 @@ impl ConfigStore {
         &self.path
     }
 
+    /// The exact bytes this store was opened from (empty when absent).
+    ///
+    /// These are the bytes the no-follow config opener returned, so callers
+    /// needing the raw document reuse this instead of rereading the path.
+    pub fn raw_text(&self) -> &str {
+        &self.opened
+    }
+
     /// Whether the file backing this store exists on disk.
     pub fn exists_on_disk(&self) -> bool {
         self.path.exists()

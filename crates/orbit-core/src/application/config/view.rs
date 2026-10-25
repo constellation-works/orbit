@@ -113,11 +113,13 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
     };
     let sections = file_sections(&context, &settings);
 
-    let text = if file.exists {
-        std::fs::read_to_string(&file.path).unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // Reuse the bytes `ConfigStore::open` already read through the no-follow
+    // opener. A second `read_to_string` of the joined path would follow a
+    // leaf swapped for a symlink after the exists probe, and swallowing its
+    // error as empty text would render a failure as "(empty file)". A
+    // missing leaf opens as empty text; a refused or unreadable leaf is
+    // already an error from `ConfigStore::open` above.
+    let text = store.raw_text().to_owned();
     Ok(json!({
         "scope": scope.label(),
         "text": text,
