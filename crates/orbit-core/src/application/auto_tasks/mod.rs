@@ -119,6 +119,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         "security-review",
         include_str!("../../../assets/auto_tasks/security-review.yaml"),
     ),
+    (
+        "structure-sweep",
+        include_str!("../../../assets/auto_tasks/structure-sweep.yaml"),
+    ),
 ];
 
 /// Placeholder the shipped delivery definitions carry for the workspace's

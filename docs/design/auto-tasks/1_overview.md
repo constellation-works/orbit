@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18125, ORB-18128]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069, ORB-18125, ORB-18126, ORB-18128]
 ---
 
 # Auto-tasks — Overview
@@ -106,7 +106,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These fourteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These fifteen YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -300,6 +300,19 @@ definition of the same name.
   successful no-op that reports each ranking's below-support counts and files
   nothing.
   The minted chore is tagged `no-diff-expected` and never builds or runs tests.
+- `structure-sweep` — disabled-by-default weekly scan in one pass over
+  source files and test files. It records the thresholds in every run
+  summary (a non-test source file over 1,000 lines, a module index file
+  over 400 lines of mostly logic, and a test file over 2,000 lines),
+  discovers languages and source and test roots from tracked files, and
+  keys layout candidates to the detected language's convention, recording
+  rejected leads with a reason. Each run files at most 4 `proposed`
+  restructuring or test-reduction tasks, largest first and grouped by
+  package or subsystem, each with `context_files` and a `spawned_from`
+  relation to the minted chore, which is itself tagged `no-diff-expected`
+  and never builds or runs tests. A test-reduction task keeps that file's
+  coverage — every scenario survives or is named with a reason — and
+  reports the test count before and after.
 
 The former `blocked-task-triage` default (an hourly reader of escalated blocks)
 is retired and is not seeded. The seeded `blocked_task_triage` routine replaces
@@ -363,6 +376,15 @@ encode this repository's branches and gates. Re-init preserves them:
   preparation holds it on the owner machine, and the coordinator wires
   dependencies with `orbit.task.update` or a blocker handoff rather than a
   comment.
+- ORB-18126 — Added the disabled, portable `structure-sweep` default
+  (weekly): one pass over source and test files at the thresholds of 1,000
+  lines for a non-test source file, 400 lines of mostly logic for a module
+  index file and 2,000 lines for a test file, with layout candidates keyed
+  to the detected language's convention, rejected leads recorded with a
+  reason, and at most 4 `proposed` restructuring or test-reduction tasks
+  per run, largest first and grouped by package or subsystem. A
+  test-reduction task keeps that file's coverage and reports the test
+  count before and after.
 - ORB-18125 — Added the disabled, portable `architecture-audit` default
   (14-day cadence): graph discovery from the ecosystem's metadata tool or an
   import scan, documented-architecture layering checks with an

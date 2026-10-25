@@ -1,0 +1,290 @@
+schemaVersion: 1
+name: structure-sweep
+description: Weekly scan for oversized and misgrouped source files and oversized test files in one pass, using each detected language's own layout conventions; files at most 4 proposed restructuring or test-reduction tasks per run, largest first, grouped by package or subsystem
+enabled: false
+schedule:
+  every_minutes: 10080
+template:
+  title: Structure sweep — file restructuring and test-reduction tasks for oversized or misgrouped files
+  description: |-
+    Find file-structure problems in one pass over this repository's source
+    files and test files: non-test source files that have grown too large,
+    module index files carrying substantive logic, file/directory layouts
+    that fight the detected language's convention, flat directories whose
+    files share one concern, and test files that have grown too large. Group
+    the candidates by package or subsystem and file one proposed task per
+    group. This task files work; it does not restructure or shrink anything
+    itself, and it never builds or runs tests. It may legitimately finish
+    with no new tasks when the tree is clean or every candidate is already
+    covered by an open task.
+
+    ## Thresholds (state them in every run summary)
+
+    - A non-test source file over 1,000 lines.
+    - A module index file over 400 lines where most of the file is logic,
+      not declarations, imports or re-exports. Module index means the file a
+      language uses to declare a module or package's contents (examples, one
+      per ecosystem, are listed under Discovery).
+    - A test file over 2,000 lines.
+
+    Record all three thresholds, the pinned commit and the languages and
+    source and test roots discovered in the execution summary of every run,
+    including a run that files nothing.
+
+    ## Rules and command surfaces
+
+    - Use the registered Orbit tool surface, never direct lifecycle CLI
+      subcommands. Search coverage with
+      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"task","all":true,"model":"<agent-family>"}'`
+      (lexical search matches one substring: use a single distinctive token
+      such as a file stem, never a multi-word phrase, and never treat a
+      0-hit multi-word query as proof that nothing covers a candidate).
+      Inspect a candidate task with
+      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
+      List open work with
+      `orbit tool run orbit.task.list --input '{"status":["proposed","backlog","in-progress","review","blocked"],"tag":"structure-sweep","limit":200,"model":"<agent-family>"}'`.
+    - Before filing, read the installed `orbit` skill's task-authoring
+      reference and follow it for task shape. File each group (tool-created
+      tasks start `proposed`) with
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["structure-sweep","tech-debt"],"type":"refactor","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"low","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      Read each filed task back with `orbit.task.show` before recording it
+      as delivered. Chain tasks whose moves rewrite each other's import or
+      load paths with a follow-up
+      `orbit tool run orbit.task.update --input '{"id":"<filed task ID>","dependencies":["<predecessor task ID>"],"model":"<agent-family>"}'`,
+      and read the task back to confirm the field took effect.
+    - Static analysis only: no builds, tests or timing runs in this task.
+      Put throwaway scripts under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`).
+    - Fail open. A run with no candidate above the thresholds is a
+      successful no-op. Do not invent work to justify the run.
+
+    ## Pin
+
+    Fetch `__ORBIT_BASE_BRANCH__` and record the full SHA of its tip; read
+    every file at that SHA.
+
+    ## Discovery
+
+    Discover everything below from tracked files; hard-code nothing from
+    another repository. Record each answer in the execution summary:
+
+    1. **Languages, packages and roots.** From the tracked manifests,
+       lockfiles and directory layout, list each language present, each
+       package (or module, in a single-package repository), its non-test
+       source root and its test root or test-file convention. Discover the
+       repository's gate commands and CI configuration from its tracked
+       build, script and CI files at the same time; filed tasks name those
+       discovered commands, never commands copied from another repository.
+       Exclude vendored and generated trees, build output and dependency
+       checkouts from every count, and name the exclusions.
+    2. **Test identification.** A file is a test file when the detected
+       language's convention says so: its test root, its test-file name
+       pattern, or the test marker its framework uses. Everything else
+       under a source root is a non-test source file.
+
+    Layout conventions by detected language — use only the rows for
+    languages this repository actually contains, and apply no layout row
+    to a language it does not describe:
+
+    - Rust example (one ecosystem among several): the module index files
+      are `mod.rs` and `lib.rs`, which hold module declarations, re-exports
+      and at most small shared types; the mixed layout is a `foo.rs` file
+      beside a sibling `foo/` directory; test files live under a `tests/`
+      directory, are named `tests.rs`, or sit in a test-attributed module.
+    - Python example (one ecosystem among several): the module index file
+      is `__init__.py`, which holds imports, re-exports and package
+      metadata, not substantive logic; the mixed layout is a `foo.py`
+      module beside a sibling `foo/` package directory of the same name;
+      test files are named `test_*.py` or `*_test.py` or live under a
+      `tests/` directory.
+    - TypeScript/JavaScript example (one ecosystem among several): the
+      module index files are `index.ts`, `index.tsx`, `index.js` and
+      `index.jsx` barrel files, which hold re-exports, not substantive
+      logic; the mixed layout is a `foo.ts` (or `.tsx`/`.js`/`.jsx`) file
+      beside a sibling `foo/` directory of the same name; test files are
+      named `*.test.*` or `*.spec.*` or live under a `__tests__/`
+      directory.
+    - Go example (one ecosystem among several): there is no module index
+      file, so the module-index threshold does not apply; a package is one
+      directory, so there is no mixed file/directory layout to report;
+      test files are named `*_test.go`.
+    - Any other detected language: apply the three line thresholds with
+      that language's own test-file convention, and report a layout
+      candidate only when the language has a documented module-index or
+      mixed-layout convention this run can name; otherwise record that no
+      layout convention was applied.
+
+    ## Candidate shapes
+
+    Measure line counts at the pinned SHA over the discovered roots. Five
+    candidate shapes:
+
+    1. **Oversized source file**: a non-test source file over 1,000 lines.
+    2. **Logic-heavy module index**: a module index file over 400 lines.
+       Confirm by reading its top-level items that most of the file is
+       logic, not declarations, imports and re-exports.
+    3. **Mixed layout**: a file and a sibling directory of the same stem
+       where the detected language's row above names that pair, any size.
+    4. **Flat cluster**: in a directory with 12 or more source files,
+       three or more files sharing a name prefix, or two files sharing a
+       prefix where one is over 500 lines. Read the files before treating
+       a cluster as a candidate: a shared prefix is a lead, not a
+       candidate. Keep it only when the files really share one concern and
+       grouping them into a named subdirectory or module would make that
+       concern easier to find. Record every rejected lead with its reason.
+    5. **Oversized test file**: a test file over 2,000 lines. Record its
+       line count, its test count and scenario count under the detected
+       framework's counting convention, its creation date and growth from
+       version-control history, and its most repeated setup and assertion
+       lines. Reject a test file, with the reason recorded, when its size
+       is mostly data rather than scenario code: golden fixtures, embedded
+       expected outputs, or tables already holding one row per case. Read
+       the file before deciding.
+
+    For each candidate record its path, shape, line count, the package or
+    subsystem it belongs to and the proposed target: the named files or
+    subdirectory it should split or group into. For an oversized file,
+    also name the seams to split along, taken from its top-level items, so
+    the implementer starts from evidence.
+
+    ## Duplicate safety
+
+    Before filing, list open `structure-sweep` tasks (the list command
+    above), then search each candidate's distinctive file stem with
+    `orbit.search`. Also check tasks closed (done, rejected or archived)
+    in the last 30 days that covered the same path: a recently closed
+    reduction or restructuring of the same file either finished as far as
+    it could or was refused for a reason a re-file would repeat.
+
+    - A candidate is covered when its path, or a directory containing it,
+      appears in an open task's `context_files` or description. Skip
+      covered candidates and cite the covering task in the summary.
+    - If an uncovered candidate sits in a package or subsystem an open
+      `proposed` or `backlog` task from this sweep already owns, do not
+      file a second task and do not rewrite that task's scope. Add a
+      comment to it with
+      `orbit tool run orbit.task.update --input '{"id":"<owning task ID>","comment":"<candidate path, shape, line count and proposed target>","model":"<agent-family>"}'`
+      and cite it in the summary.
+    - If the owning task is `in-progress` or `review`, file a new task and
+      make it depend on the owner with the update command above.
+    - Never file a second task for a covered file.
+
+    ## Grouping and filing cap
+
+    - File at most 4 tasks per run, largest candidate first. Count every
+      filed restructuring and test-reduction task toward the cap. List
+      the candidates left over in the summary as deferred to the next run.
+    - Group source candidates by package or subsystem: one task per
+      package, and one task per top-level subsystem directory inside a
+      package whose candidates span several subsystems, not one task per
+      file. A single non-test file of 2,000 lines or more gets its own
+      task. An oversized test file gets its own task, one per file.
+    - Tasks whose moves rewrite each other's import or load paths (same
+      package, or subsystems that import each other) must not run in
+      parallel; chain them with `dependencies` as above.
+
+    ## Filing
+
+    For each group, file with the `orbit.task.add` payload above:
+
+    - `type: refactor`, tags `structure-sweep` and `tech-debt`, status
+      `proposed` (never approve), no pinned crew. `complexity` is `medium`
+      for a group of up to three moderate files or a test file below
+      5,000 lines, and `hard` for a subsystem regroup, any single file of
+      2,000 lines or more, or a test file of 5,000 lines or more.
+    - `context_files`: verified `file:` or `dir:` selectors for the files
+      to be moved, split or shrunk and, for a source group, their matching
+      test files. For a test-reduction task, only `file:<the test file>`.
+      Do not list files that do not exist yet.
+    - A title of at most 62 characters naming the package, subsystem or
+      file and its dominant shape.
+    - A description with **Outcome** (every candidate in the group with
+      its path, shape and line count), **Scope** (the target modules or
+      files and suggested seams, and what is left alone), any
+      **Prerequisite**, and the **Conventions** block below, copied
+      verbatim.
+
+    Conventions block:
+
+    > - Pure move, split or regroup. No behaviour, signature or logic
+    >   changes, and no widened visibility beyond what a split requires.
+    > - A test file splits or moves in the same task as the source file it
+    >   covers, keeping its test and scenario names.
+    > - The repository's own gate commands, discovered from its tracked
+    >   build and CI files, pass for the affected packages, and the
+    >   execution summary lists every non-mechanical edit with its reason.
+
+    Acceptance criteria for a source restructuring task include:
+
+    - The listed shapes are gone at the stated thresholds: no mixed
+      layout the detected language names, no module index file over 400
+      lines of mostly logic, and no non-test source file over 1,000 lines
+      unless the execution summary names the file and the reason it stays.
+    - Tests moved with their sources keep their names, and the affected
+      package's test count reported before and after is unchanged.
+    - The repository's discovered gate commands pass for the affected
+      packages, and the execution summary confirms moves and splits only,
+      listing every non-mechanical edit with its reason.
+
+    Acceptance criteria for a test-file reduction task include:
+
+    - The file is at most 70% of its current lines, rounded down to the
+      nearest 50. If it stops above that, the delivery shows that the
+      remaining scenarios share no further foldable setup. Before and
+      after line counts are reported.
+    - Coverage is kept: every scenario in the file at the pinned SHA
+      either survives as a test or table row, or is named with a one-line
+      reason it is redundant or dropped. No surviving assertion is
+      weakened, and failure messages still name the case. Shared helpers
+      replace the repeated setup and assertion lines recorded at filing,
+      and one-off scenarios fold into table rows where the framework
+      supports them.
+    - A test command that actually selects this file's tests, derived
+      from how the file is wired into its test target rather than from
+      its file name alone, passes, and the test count before and after is
+      reported. When a name filter cannot select the file, the task says
+      so and names the whole-target command or the explicit test list it
+      ran instead.
+    - Production code and any sibling submodule directory of the same
+      stem stay out of scope, and CI or documentation commands that name
+      a moved test are updated in the same change.
+
+    ## Handoff
+
+    Persist an `execution_summary` recording the three thresholds (1,000
+    lines for a non-test source file, 400 lines for a module index file,
+    2,000 lines for a test file), the pinned SHA, the discovered languages
+    with their source and test roots, and every candidate found with its
+    path, shape, line count and proposed target. Map each candidate to
+    its outcome: covered by a cited open task, commented onto a cited
+    owning task, filed as a new task ID, deferred past the 4-task cap, or
+    rejected with its reason. List every rejected flat-cluster lead and
+    every rejected data-heavy test file with its reason. A clean or fully
+    covered tree is a successful no-diff outcome when that scan evidence
+    is persisted.
+  acceptance_criteria:
+  - Every candidate at the pinned `__ORBIT_BASE_BRANCH__` SHA (non-test source file over 1,000 lines, module index file over 400 lines of mostly logic under the detected language's convention, mixed file/directory layout that language names, verified flat same-concern cluster, test file over 2,000 lines) is enumerated with path, shape, line count and proposed target, and rejected leads are recorded with a reason.
+  - The execution summary records the three thresholds (1,000, 400 and 2,000 lines), the pinned SHA, and the discovered languages with their source and test roots, gate commands and CI configuration.
+  - Open `structure-sweep` tasks and tasks closed in the last 30 days covering the same paths were checked first; no filed task overlaps a covered candidate, and an uncovered candidate in a package or subsystem an open proposed or backlog task owns was commented onto that task instead of filed again.
+  - At most 4 tasks were filed, largest candidate first, grouped by package or subsystem, each `proposed` with a `spawned_from` relation to this task, verified `context_files`, the Conventions block, and the filing acceptance criteria above; candidates past the cap are listed as deferred.
+  - Every filed test-reduction task's criteria require keeping that file's coverage (each scenario survives or is named with a reason) and reporting the test count before and after.
+  - The persisted execution summary maps every candidate to a covering task, a commented-onto task, a newly filed task ID, a deferral, or a rejection with its reason.
+  - A tree with 0 uncovered candidates succeeds as a no-diff outcome with the scan evidence persisted in the execution summary.
+  task_type: chore
+  tags:
+  - structure-sweep
+  - no-diff-expected
+  - tech-debt
+  required_tools:
+  - orbit.search
+  - orbit.task.add
+  - orbit.task.list
+  - orbit.task.show
+  - orbit.task.update
+  priority: low
+  complexity: medium
+  status: backlog
+dedupe: skip_if_open
+created_by: system
+created_at: 2026-10-24T00:00:00Z
+updated_by: system
+updated_at: 2026-10-24T00:00:00Z
