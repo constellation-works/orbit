@@ -134,6 +134,128 @@ fn pr_open_refuses_an_unfilled_required_section_or_an_unknown_template_placehold
     );
 }
 
+/// A repository template whose `Rollback` heading is the one required section,
+/// with no filled content behind it. `Risk` is an optional agent section.
+fn unfilled_template(
+    sandbox: &Path,
+    template: &str,
+    policy: MissingSectionPolicy,
+) -> (Fixture, DeliveryHost) {
+    let mut fx = Fixture::new(sandbox);
+    fx.commit_on_base(TEMPLATE_PATH, template);
+    fx.rebase_candidate();
+    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
+    host.set_conventions(DeliveryConventions {
+        pr_body: Some(PrBodyTemplateSource::Repository),
+        agent_sections: vec!["Risk".into()],
+        required_sections: vec!["Rollback".into()],
+        missing_section: policy,
+        ..DeliveryConventions::default()
+    });
+    (fx, host)
+}
+
+/// A tilde line sits inside a backtick fence. The `Rollback` heading after the
+/// fence closes is still a real, required section.
+const TILDE_IN_BACKTICK_FENCE: &str =
+    "## Summary\n\n{{title}}\n\n```text\n~~~\n```\n\n## Rollback\n\n<!-- required rollback -->\n";
+
+#[test]
+fn pr_open_drafts_for_a_required_heading_after_a_tilde_line_in_a_backtick_fence() {
+    isolated(
+        "conventions::pr_open_drafts_for_a_required_heading_after_a_tilde_line_in_a_backtick_fence",
+        |sandbox| {
+            let (fx, host) = unfilled_template(
+                sandbox,
+                TILDE_IN_BACKTICK_FENCE,
+                MissingSectionPolicy::Draft,
+            );
+            let opened = open_ok(&fx, &host);
+            assert_eq!(opened["draft"], true, "{opened}");
+            assert_eq!(opened["missing_required_sections"], json!(["Rollback"]));
+            let body = fx.forge_state("pr-body").unwrap();
+            assert!(
+                body.contains("## Rollback\n\n> **Missing required section.**"),
+                "{body}"
+            );
+            assert!(!body.contains("required rollback"), "{body}");
+            assert!(fx.forge_state("pr-draft").is_some());
+            let notes = gap_notes(&host);
+            assert_eq!(notes.len(), 1, "{notes:?}");
+            assert!(
+                notes[0].contains("`Rollback`") && notes[0].contains("draft"),
+                "{notes:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn pr_open_refuses_for_a_required_heading_after_a_tilde_line_in_a_backtick_fence() {
+    isolated(
+        "conventions::pr_open_refuses_for_a_required_heading_after_a_tilde_line_in_a_backtick_fence",
+        |sandbox| {
+            let (fx, host) = unfilled_template(
+                sandbox,
+                TILDE_IN_BACKTICK_FENCE,
+                MissingSectionPolicy::Refuse,
+            );
+            let error = action(
+                &host,
+                "pr_open",
+                &fx.open_input(&fx.candidate, &fx.base_sha),
+            )
+            .unwrap_err()
+            .to_string();
+            assert!(
+                error.contains("pr_required_section_missing") && error.contains("`Rollback`"),
+                "{error}"
+            );
+            assert!(!fx.forge_calls().iter().any(|call| call == "pr create"));
+            let notes = gap_notes(&host);
+            assert!(
+                notes.iter().any(|note| note.contains("refuses")),
+                "{notes:?}"
+            );
+        },
+    );
+}
+
+/// The fenced sample is a four-backtick block holding a three-backtick line,
+/// which is shorter, and a tilde line, which is another kind, plus a `Risk`
+/// heading. The sample stays literal, the real `Risk` heading takes the filled
+/// content, and the real `Rollback` heading is still required.
+const FENCED_SAMPLE_HEADINGS: &str = "## Summary\n\n{{title}}\n\n````markdown\n```\n~~~\n## Risk\n<!-- sample risk -->\n```\n````\n\n## Risk\n\n<!-- describe the risk -->\n\n## Rollback\n\n<!-- how to roll back -->\n";
+
+#[test]
+fn pr_open_keeps_fenced_sample_headings_literal_and_drafts_the_real_required_heading() {
+    isolated(
+        "conventions::pr_open_keeps_fenced_sample_headings_literal_and_drafts_the_real_required_heading",
+        |sandbox| {
+            let (fx, host) =
+                unfilled_template(sandbox, FENCED_SAMPLE_HEADINGS, MissingSectionPolicy::Draft);
+            host.put_artifact(
+                TASK_ID,
+                PR_SECTIONS_ARTIFACT,
+                r#"{"sections": {"risk": "Low: one fixture file."}}"#,
+            );
+            let opened = open_ok(&fx, &host);
+            assert_eq!(opened["missing_required_sections"], json!(["Rollback"]));
+            let body = fx.forge_state("pr-body").unwrap();
+            let sample = "````markdown\n```\n~~~\n## Risk\n<!-- sample risk -->\n```\n````";
+            assert!(
+                body.contains(&format!(
+                    "{sample}\n\n## Risk\n\nLow: one fixture file.\n\n## Rollback\n\n> **Missing required section.**"
+                )),
+                "{body}"
+            );
+            assert!(!body.contains("describe the risk"), "{body}");
+            assert!(!body.contains("how to roll back"), "{body}");
+            assert_eq!(gap_notes(&host).len(), 1);
+        },
+    );
+}
+
 /// A repository template with no task placeholder still publishes the task
 /// id, and that body is what supersession recognizes. Author and branch
 /// checks stay in force, and a body with no whole-token id is left open.
