@@ -1,3 +1,4 @@
+use orbit_common::OrbitError;
 use orbit_engine::{CrewConfig, DispatchError};
 use orbit_types::task::TaskComplexity;
 use orbit_types::workflow::CrewPurpose;
@@ -123,4 +124,17 @@ pub(super) fn agent_crew_config_for_input(
     Ok(Some(
         crate::runtime::engine::environment_host::typed_crew_config(&crew),
     ))
+}
+
+pub(super) fn resolved_crew_model(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+) -> Result<Option<String>, OrbitError> {
+    Ok(runtime
+        .get_job_run_backend(run_id)?
+        .and_then(|run| run.crew_model)
+        .and_then(|model| {
+            let model = model.trim();
+            (!model.is_empty()).then(|| model.to_string())
+        }))
 }
