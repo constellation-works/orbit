@@ -202,10 +202,14 @@ spec:
         `pre_fix` (reproduction on the base or with the fix reverted),
         `superseded_assertion` (an assertion the change retires, run on the
         candidate) or `counterfactual` (a mutation the candidate's checks must
-        reject). `sources` lists the code it exercises, all within the task's
-        selectors or changed paths. `passed` contradicts it; a control on the
-        candidate cannot share its check with a required pass; an unrelated
-        failure is never a control.
+        reject). Label a reproduction with the fix reverted `pre_fix`, never
+        `counterfactual`: only `pre_fix` runs on another tree and may share
+        its check with a passing `required` record on the candidate (the fix
+        is what makes it pass). `sources` lists the code it exercises, all
+        within the task's selectors or changed paths. `passed` contradicts
+        it; a control on the candidate (`superseded_assertion`,
+        `counterfactual`) cannot share its check with a required pass; an
+        unrelated failure is never a control.
       - A counterfactual lists the files it temporarily changed in
         `mutation_target` (never `sources`; often the production file a test-only
         change guards), and `sources` names the checks that rejected it. Restore
