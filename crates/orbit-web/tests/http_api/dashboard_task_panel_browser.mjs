@@ -213,9 +213,10 @@ try {
         assert.deepEqual(await actions.locator('.action').allTextContents(), ['approve', 'reject', 'archive'], 'A proposed task keeps its gated lifecycle actions in Overview');
         assert.equal(await panel.locator('.action.comment:visible').count(), 0, 'Comment is absent from Overview');
       } else if (name === 'comments') {
-        assert.equal(await panel.locator('.task-action-row.comment-actions:visible').count(), 1, 'Comments contains its own task-level Comment action row');
-        assert.equal(await panel.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'Comment keeps its accessible name in Comments');
-        assert.equal(await panel.locator('.task-action-row.lifecycle-actions:visible').count(), 0, 'Lifecycle actions are absent from Comments');
+        const footer = detail.locator('.task-action-footer[data-footer-tab="comments"]');
+        assert.equal(await footer.locator('.task-action-row.comment-actions:visible').count(), 1, 'Comments has its own sticky Comment action row');
+        assert.equal(await footer.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'Comment keeps its accessible name in Comments');
+        assert.equal(await detail.locator('.task-action-row.lifecycle-actions:visible').count(), 0, 'Lifecycle actions are absent from Comments');
         await panel.locator('.comment-card').first().waitFor({ state: 'visible' });
       } else {
         assert.equal(await panel.locator('.task-action-row:visible').count(), 0, `${name} has no task-level action row`);
@@ -314,9 +315,10 @@ try {
     const commentsPanel = detail.locator('#detail-PANEL-2-panel-comments');
     await detail.locator('[role="tab"][data-tab="comments"]').click();
     assert.equal(await commentsPanel.getByText('No comments yet.').isVisible(), true, 'The empty Comments tab explains that there is no thread yet');
-    assert.equal(await commentsPanel.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'An empty thread still offers Comment');
-    await commentsPanel.getByRole('button', { name: 'comment', exact: true }).click();
-    const form = commentsPanel.locator('.comment-form');
+    const commentFooter = detail.locator('.task-action-footer[data-footer-tab="comments"]');
+    assert.equal(await commentFooter.getByRole('button', { name: 'comment', exact: true }).isVisible(), true, 'An empty thread still offers Comment');
+    await commentFooter.getByRole('button', { name: 'comment', exact: true }).click();
+    const form = commentFooter.locator('.comment-form');
     const draft = 'Keep this unsent comment through tabs and refresh.';
     await form.locator('textarea').fill(draft);
     await detail.locator('[role="tab"][data-tab="overview"]').click();
@@ -347,7 +349,7 @@ try {
     await detail.locator('.comment-card').filter({ hasText: draft }).waitFor({ state: 'visible' });
     assert.equal(await detail.locator('.comment-card').count(), 1, 'Posting refreshes the empty thread with the new comment');
     assert.equal(await detail.locator('.comment-card .comment-by').first().innerText(), 'human', 'The refreshed comment keeps the human author');
-    assert.equal(await commentsPanel.locator('.comment-actions .action.comment:visible').count(), 1, 'The Comment action returns after posting');
+    assert.equal(await detail.locator('.task-action-footer[data-footer-tab="comments"] .comment-actions .action.comment:visible').count(), 1, 'The Comment action returns after posting');
     assert.deepEqual(errors, []);
     await context.close();
     results.emptyCommentDraftRefreshAndPost = true;
@@ -394,13 +396,13 @@ try {
     await contextTab.click();
     const contextPanel = page.locator('#' + await contextTab.getAttribute('aria-controls'));
     assert.equal(await contextPanel.getAttribute('aria-labelledby'), await contextTab.getAttribute('id'));
-    await contextPanel.getByRole('button', { name: 'Edit context files for PANEL-8', exact: true }).click();
+    await page.locator('#detail-PANEL-8 .task-action-footer[data-footer-tab="context_files"]').getByRole('button', { name: 'Edit context files for PANEL-8', exact: true }).click();
     await contextPanel.getByRole('textbox', { name: 'Edit context files for PANEL-8', exact: true }).fill('file:src/main.rs\n dir:docs');
     await contextPanel.getByRole('button', { name: 'save', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#detail-PANEL-8-tab-context_files .detail-tab-count')?.textContent === '2');
     assert.equal(await contextTab.getAttribute('aria-selected'), 'true', 'Saving keeps Context files selected');
-    assert.deepEqual(await contextPanel.locator('.context-selector').evaluateAll(links => links.map(link => link.getAttribute('title').split(' · ')[0])), ['file:src/main.rs', 'dir:docs'], 'full selector identity remains in the link titles');
-    assert.deepEqual(await contextPanel.locator('.context-selector').allTextContents(), ['main.rs', 'dir:docs'], 'file rows render the basename and dir rows render the kind-prefixed name');
+    assert.deepEqual(await contextPanel.locator('.context-selector').evaluateAll(links => links.map(link => link.getAttribute('title').split(' · ')[0])), ['dir:docs', 'file:src/main.rs'], 'full selector identity remains in the link titles, sorted by path');
+    assert.deepEqual(await contextPanel.locator('.context-selector').allTextContents(), ['dir:docs', 'src/main.rs'], 'file rows render the path and dir rows render the kind-prefixed name');
     assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches.at(-1).body), { context_files: ['file:src/main.rs', 'dir:docs'] }, 'Save patches only selectors');
     await capture(page, 'context-files-dark-1440.png');
     await contextTab.focus();

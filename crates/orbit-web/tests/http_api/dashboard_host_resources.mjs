@@ -138,7 +138,7 @@ const chip = name => chips().find(node => node.dataset.resource === name);
 const readings = () => chips().map(text);
 renderHostResources(payload);
 assert.deepEqual(chips().map(node => node.dataset.resource), ['cpu', 'memory', 'disk'], 'cpu, memory and disk each keep their own chip');
-assert.deepEqual(readings(), [{ k: 'load', v: '1.9× cores' }, { k: 'mem', v: '82%' }, { k: 'disk', v: '88%' }], 'load reads relative to cores; memory and disk read as percentages');
+assert.deepEqual(readings(), [{ k: 'load', v: '1.9×' }, { k: 'mem', v: '82%' }, { k: 'disk', v: '88%' }], 'load reads as a multiple of cores; memory and disk read as percentages');
 assert.doesNotMatch(chip('cpu').textContent, /cpu|193/, 'the cpu chip never shows load as a bare cpu percentage');
 assert.deepEqual(chips().map(node => node.className), [
   'host-resource critical throttled', 'host-resource elevated', 'host-resource critical throttled',
@@ -178,7 +178,7 @@ assert.equal(descendants(topbar).some(node => node.dataset && node.dataset.resou
 // the bar's width and height cannot move with it.
 renderHostResources({ ...payload, throttle: false, pressures: [] });
 assert.deepEqual(chips().map(node => node.className), ['host-resource critical', 'host-resource elevated', 'host-resource critical']);
-assert.deepEqual(readings(), [{ k: 'load', v: '1.9× cores' }, { k: 'mem', v: '82%' }, { k: 'disk', v: '88%' }]);
+assert.deepEqual(readings(), [{ k: 'load', v: '1.9×' }, { k: 'mem', v: '82%' }, { k: 'disk', v: '88%' }]);
 assert.ok(chips().every(node => heldWords(node).length === 0));
 assert.match(chip('disk').title, /Throttle verdict: open/);
 
@@ -189,7 +189,7 @@ renderHostResources({ ...payload, disk: null });
 assert.deepEqual(readings()[2], { k: 'disk', v: '–' }, 'an unknown disk reads as a dash');
 assert.equal(chip('disk').className, 'host-resource unknown throttled', 'a held resource stays marked while its reading is unknown');
 assert.match(chip('disk').title, /^disk unavailable/);
-assert.deepEqual(readings().slice(0, 2), [{ k: 'load', v: '1.9× cores' }, { k: 'mem', v: '82%' }], 'an unknown disk does not hide the known readings');
+assert.deepEqual(readings().slice(0, 2), [{ k: 'load', v: '1.9×' }, { k: 'mem', v: '82%' }], 'an unknown disk does not hide the known readings');
 renderHostResources({ ...payload, memory: { percent: null, severity: 'unknown', unknown_reason: 'meminfo unreadable' } });
 assert.deepEqual(readings()[1], { k: 'mem', v: '–' });
 assert.match(chip('memory').title, /^memory meminfo unreadable/, 'the unknown reason reaches the title');
@@ -214,7 +214,7 @@ assert.match(chip('disk').title, /Throttle verdict: unknown.*Resource sample exp
 const recovered = { ...payload, throttle: false, severity: 'ok', cpu: reading(20), memory: reading(42), disk: { path: '/known', ...reading(50) }, pressures: [], reason: 'recovered' };
 resolvePending({ ok: true, json: async () => recovered });
 await pendingPoll;
-assert.deepEqual(readings(), [{ k: 'load', v: '0.2× cores' }, { k: 'mem', v: '42%' }, { k: 'disk', v: '50%' }]);
+assert.deepEqual(readings(), [{ k: 'load', v: '0.2×' }, { k: 'mem', v: '42%' }, { k: 'disk', v: '50%' }]);
 assert.ok(chips().every(node => node.className === 'host-resource ok'));
 assert.equal(warn.hidden, true, 'normal readings leave the top bar without a host element');
 assert.match(chip('disk').title, /Throttle verdict: open.*recovered/);

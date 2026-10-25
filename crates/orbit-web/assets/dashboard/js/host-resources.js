@@ -195,7 +195,7 @@ export function renderHostResources(payload, host = document.getElementById('hos
         title: row.title, role: 'group', 'aria-label': row.title,
       }, [
         el('span', { class: 'k', text: row.label }),
-        el('span', { class: 'v', text: row.shown }, row.suffix ? [el('span', { class: 'unit', text: row.suffix })] : []),
+        el('span', { class: 'v', text: row.shown }),
         el('span', { class: 'host-resource-bar', 'aria-hidden': 'true' }, [meterFill(row.fill)]),
         ...(row.held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
       ]);
