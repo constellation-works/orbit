@@ -31,14 +31,20 @@ template:
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.
     - Area tasks carry exactly the tags `qa-full-sweep` and `no-diff-expected`,
       complexity `hard` at most (never `xhard`), and no `crew`, so each is
-      routed by automatic selection. Give the roll-up no `crew` either.
+      routed by automatic selection. Give the roll-up no `crew` and no `os:`
+      tag either: machine routing is the owner-evidence contract in its
+      brief, not a tag or a crew. Area tasks stay portable. Do not copy that
+      contract or an `os:` tag onto an area task.
     - The roll-up carries this definition's `auto-task:qa-full-sweep`
       provenance tag on purpose: the scheduler's open-instance dedupe then
       refuses to mint another sweep until the roll-up is done, and the roll-up
       waits for every area.
     - If any task listed above other than this one is still open (area tasks
       or a roll-up from an earlier sweep), do not file a second set. Record
-      their IDs in the execution summary and finish.
+      their IDs in the execution summary and finish. A roll-up this
+      coordinator already filed for the commit it pinned is not an earlier
+      sweep: wire its dependencies as specified below instead of finishing
+      while that field is unset.
     - Never repair what you find, dispatch agents or jobs, release, tag,
       publish or deploy.
     - This coordinator, its area tasks and the roll-up are `no-diff-expected`,
@@ -275,18 +281,49 @@ template:
     After every area task is filed, file one roll-up task titled
     `Full QA decision @ <short SHA>`. Its description carries the roll-up
     brief below with the pinned SHA, integration branch and the area table
-    (area name and task ID) filled in. Then make it wait for every area by
-    setting its dependencies with
+    (area name and task ID) filled in, including the owner-evidence contract.
+    Then make it wait for every area by setting its dependencies on the
+    owner, the only place `orbit.task.update` is authorized:
     `orbit tool run orbit.task.update --input '{"id":"<roll-up task ID>","dependencies":["<area task ID>"],"model":"<agent-family>"}'`,
-    listing every area task ID. When `orbit.task.update` is unavailable (in
-    claimed mode), record in the returned `comment` that the roll-up's
-    dependencies must be set to the listed area IDs.
+    listing every area task ID. The dependencies are set only when the
+    returned task's `dependencies` field lists every area task ID. A comment,
+    an execution summary, or any other prose that names those IDs does not
+    set the field and does not satisfy this step.
+
+    Claimed mode denies `orbit.task.update`, so a follower cannot wire
+    another task's dependencies. When that call is unavailable or the write
+    is refused, do not finish. Return `result.blocker` with
+    `kind: qa_rollup_dependencies_unwired` and evidence naming the roll-up
+    task ID and every area task ID. In claimed mode return that blocker in
+    the result, and name the same IDs in `comment` only as the handoff the
+    owner must apply with `orbit.task.update`. The comment is not the
+    wiring. Leave lifecycle transitions to the pipeline. A later owner-local
+    run of this coordinator sets the field on the roll-up already filed for
+    this sweep instead of filing a second roll-up, and finishes only after
+    the returned `dependencies` field lists every area task ID.
 
     Roll-up brief:
 
     > Decide the full QA sweep of commit `<full SHA>` on
     > `<integration branch>` from its areas `<area table>`. File nothing,
     > repair nothing, dispatch nothing.
+    >
+    > ## Owner evidence
+    >
+    > Execute on the owning machine. Each area's status is an
+    > `orbit.task.show` of that area task, and each area's progress is an
+    > `orbit.task.artifact.get` of that area task's `qa-progress.json`. Both
+    > reads are evidence only the owner task store can produce. A claimed
+    > follower refuses each of them because the request names a task other
+    > than the claimed task. Declaring `orbit.task.show` and
+    > `orbit.task.artifact.get` does not authorize those reads and does not
+    > widen what the broker accepts. Preparation must record
+    > `required_machine` for this owner-evidence contract before admission,
+    > so a follower is not offered this roll-up; the owner's own drain may
+    > start it, and on the owner those reads stay authorized. Do not guess a
+    > missing artifact, substitute another host's copy, or record `PASS`
+    > from anything except the owner-local reads below. Routing grants no
+    > additional tool scope.
     >
     > First confirm with `orbit.task.show` that every listed area task is
     > `done`. If any is not, do not decide: return `result.blocker` with
@@ -315,22 +352,32 @@ template:
 
     Give the roll-up these acceptance criteria: every area task was `done`
     before the decision; `qa-full-sweep-decision.json` records `PASS` only
-    when every required scenario in every area passed, and `INCOMPLETE`
-    otherwise, with each non-`PASS` required scenario named;
-    `sweep-cursor.json` records the pinned SHA.
+    when every required scenario in every area passed at the pinned SHA, and
+    `INCOMPLETE` otherwise, including when an area's `qa-progress.json` is
+    missing, unreadable, or names another SHA or area, with each non-`PASS`
+    required scenario named; `sweep-cursor.json` records the pinned SHA;
+    the decision was executed on the owning machine from that machine's
+    area-task statuses and per-area `qa-progress.json` artifacts, and
+    preparation recorded `required_machine` for this owner-evidence contract
+    before admission. A follower claim is not evidence: claimed
+    `orbit.task.show` and `orbit.task.artifact.get` of another task are
+    refused, and supported tool names do not authorize them.
 
     ## Finish
 
     Finish once every area task and the roll-up are filed and the roll-up's
-    dependencies are set. Record in the execution summary the integration
-    branch and pinned SHA, the inventory source, the area table (area name,
-    surface, required scenario count, complexity, task ID) with any
-    exclusions, and the roll-up task ID.
+    `dependencies` field lists every area task. A comment or summary that
+    only names those IDs is not that field; if the owner update could not
+    be written, the `qa_rollup_dependencies_unwired` handoff is still open
+    and this coordinator is not finished. Record in the execution summary
+    the integration branch and pinned SHA, the inventory source, the area
+    table (area name, surface, required scenario count, complexity, task ID)
+    with any exclusions, and the roll-up task ID.
   acceptance_criteria:
   - One integration-branch commit was pinned by full SHA and every area task and the roll-up name it.
   - '`qa-full-sweep-inventory.json` is attached to this task with `schema_version`, `pinned_sha`, the areas and their scenarios, and every exclusion with its reason; each area holds at most 20 required scenarios.'
   - Each area has exactly one filed `chore` tagged `qa-full-sweep` and `no-diff-expected`, complexity `hard` at most, no crew, source or documentation context selectors, a `spawned_from` relation to this task, and the hands-on area brief.
-  - One roll-up chore tagged `qa-full-sweep`, `qa-full-sweep-rollup`, `no-diff-expected` and `auto-task:qa-full-sweep` was filed with a `spawned_from` relation to this task and dependencies on every area task.
+  - One roll-up chore tagged `qa-full-sweep`, `qa-full-sweep-rollup`, `no-diff-expected` and `auto-task:qa-full-sweep` was filed with a `spawned_from` relation to this task, the roll-up brief's owner-evidence contract in its description and acceptance criteria, and dependencies on every area task. Those dependencies are the roll-up's `dependencies` field after `orbit.task.update` on the owner; a comment or summary that only names the area IDs does not satisfy this criterion.
   - When tasks from an earlier sweep were still open, no new area tasks or roll-up were filed and their IDs are in the execution summary.
   - The execution summary records the pinned SHA, the area table with every area task ID, the exclusions and the roll-up task ID.
   task_type: chore

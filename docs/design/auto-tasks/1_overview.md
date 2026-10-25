@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-21
-last_validated: 2026-10-20
+last_updated: 2026-10-25
+last_validated: 2026-10-25
 status: Accepted
 feature: auto-tasks
 doc_role: overview
@@ -11,7 +11,7 @@ summary: Dynamically-defined recurring task templates minted by the host clock t
 tags: [auto-tasks]
 paths: ["crates/orbit-core/src/application/auto_tasks/**"]
 related_features: [auto-tasks, routines]
-related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327]
+related_artifacts: [ORB-10149, ORB-10318, ORB-10348, ORB-10439, ORB-10446, ORB-10514, ORB-10549, ORB-10950, ORB-11054, ORB-11095, ORB-12931, ORB-12932, ORB-15327, ORB-18069]
 ---
 
 # Auto-tasks — Overview
@@ -164,12 +164,24 @@ definition of the same name.
   deploy.
   **The release decision lives on a roll-up chore.** The coordinator files it
   after the areas, tagged `qa-full-sweep` + `qa-full-sweep-rollup` +
-  `no-diff-expected` + `auto-task:qa-full-sweep`, and sets its `dependencies`
-  to every area task, so it is dispatched only once every area is `done`. It
-  reads each area's `qa-progress.json` and attaches
-  `qa-full-sweep-decision.json`: `PASS` only when every required scenario in
-  every area passed; any required `FAIL`, `BLOCKED` or `NOT_RUN`, or an area
-  whose progress is missing or incomplete, makes it `INCOMPLETE`. Because the
+  `no-diff-expected` + `auto-task:qa-full-sweep`, with no crew and no `os:`
+  tag. Its description and acceptance criteria carry an owner-evidence
+  contract: area-task status reads and each area's `qa-progress.json` are
+  evidence only the owner task store can produce, because a claimed
+  `orbit.task.show` or `orbit.task.artifact.get` refuses an id other than
+  the claimed task. Preparation records that contract as `required_machine`,
+  so a follower is not offered the roll-up and the owner's drain may start
+  it. The coordinator sets the roll-up's `dependencies` to every area task
+  with `orbit.task.update` on the owner, and finishes only when that field
+  lists every area. When the update is unavailable or refused, it returns a
+  `qa_rollup_dependencies_unwired` blocker for the owner to apply; a comment
+  that names the area IDs is not the wiring. The roll-up is dispatched only
+  once every area is `done`. It reads each area's `qa-progress.json` on the
+  owner and attaches `qa-full-sweep-decision.json`: `PASS` only when every
+  area is done and every required scenario passed at the pinned SHA; any
+  required `FAIL`, `BLOCKED` or `NOT_RUN`, or an area whose progress is
+  missing, unreadable, or names another SHA or area, makes it `INCOMPLETE`.
+  Area tasks stay portable: they do not carry the contract. Because the
   roll-up carries the definition's provenance tag, `skip_if_open` sees the
   sweep as open until the decision is made, so a scheduled tick never files a
   second set while areas are open. The roll-up also writes the swept commit as
@@ -289,6 +301,10 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-15327 — Added the disabled, product-agnostic `qa-full-sweep`
   coordinator default with per-area surface-QA chores and a roll-up release
   decision.
+- ORB-18069 — The generic roll-up carries an owner-evidence contract so
+  preparation holds it on the owner machine, and the coordinator wires
+  dependencies with `orbit.task.update` or a blocker handoff rather than a
+  comment.
 - ORB-17245 — Added the disabled hourly `blocked-task-triage` default and the
   `skip_unless_blocked_candidates` precondition.
 - ORB-17744 — Retired the `blocked-task-triage` default in favour of the

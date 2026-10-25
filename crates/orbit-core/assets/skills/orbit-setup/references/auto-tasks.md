@@ -391,8 +391,19 @@ plugin being removed.
   never `PASS`. Non-duplicate failures become bugs tagged `qa-full-sweep`. The
   coordinator also files a roll-up chore that depends on every area and
   records the release decision in `qa-full-sweep-decision.json`: `PASS` only
-  when every required scenario in every area passed, otherwise `INCOMPLETE`.
-  The roll-up carries `auto-task:qa-full-sweep`, so no new sweep is minted by
+  when every area is done and every required scenario passed at the pinned
+  SHA, otherwise `INCOMPLETE`, including when an area's progress is missing,
+  unreadable, or names another SHA or area. The roll-up's description and
+  acceptance criteria carry an owner-evidence contract. Area status and
+  `qa-progress.json` reads name other tasks, which a claimed worker cannot
+  do, so preparation records `required_machine` and only the owning machine
+  runs the roll-up. Area tasks stay portable, with no crew and no `os:` tag.
+  The coordinator sets those dependencies with `orbit.task.update` on the
+  owner and finishes only when the roll-up's `dependencies` field lists
+  every area. If that write is unavailable, it returns a
+  `qa_rollup_dependencies_unwired` blocker for the owner to apply; a comment
+  that names the IDs is not the wiring. The roll-up carries
+  `auto-task:qa-full-sweep`, so no new sweep is minted by
   the schedule until it is done, and it records the swept commit as the
   `skip_if_unchanged` cursor. A workspace that already has its own
   `qa-full-sweep.yaml` keeps it as its active definition: sync preserves the
