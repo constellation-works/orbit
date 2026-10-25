@@ -1287,3 +1287,73 @@ assert.equal(paneHost.hidden, true);
 assert.deepEqual(selectedRows(), []);
 assert.ok(!window.location.hash.includes('open='), 'a closed pane names no task');
 delete window.history;
+
+// ORB-18240: `open_decisions` is compact (answer ids only), so a triage
+// request's numeric ids "1" and "2" say nothing. The detail reads the full
+// request from the decisions API and shows each option's label and consequence
+// beside its button; the button still submits the stable id.
+common.setWorkspace('ws_orbit');
+const decisionRequest = {
+  id: 'DR-1', gate: 'block_triage', state: 'open', expires_at: '2026-11-01T00:00:00Z',
+  answers: [
+    { id: '1', label: 'Drop criterion 2', consequence: 'The retired API stays retired and the task returns to backlog.' },
+    { id: '2', label: 'Restore the v1 API', consequence: 'The v1 API comes back and criterion 2 is kept as written.' },
+  ],
+};
+const decisionTask = task(120, {
+  status: 'blocked', open_decisions: [{ id: 'DR-1', gate: 'block_triage', expires_at: decisionRequest.expires_at, answers: ['1', '2'] }],
+});
+const decisionReads = [];
+const decisionPosts = [];
+let decisionList = null;
+context.fetch = (path, options = {}) => {
+  const url = new URL(path, 'http://dashboard.test');
+  if (options.method === 'POST') {
+    decisionPosts.push({ path: url.pathname, workspace: url.searchParams.get('workspace'), body: JSON.parse(options.body) });
+    return new Promise(() => {});
+  }
+  assert.equal(url.pathname, '/api/decisions', `the detail reads only the decisions API: ${path}`);
+  decisionReads.push({ task_id: url.searchParams.get('task_id'), workspace: url.searchParams.get('workspace') });
+  return decisionList.promise;
+};
+const decisionContext = { ...taskContext, getActiveStatuses: () => new Set(['blocked']), statusOrder: ['blocked'] };
+const paintDecision = item => {
+  served = { total: 1, limit: 50, offset: 0, next_cursor: null };
+  currentTasks = [item];
+  renderTasks([item], decisionContext);
+};
+decisionList = holdRead();
+paintDecision(decisionTask);
+clickTitle(byId['tasks-body'].querySelector('.row button.title'));
+assert.equal(paneBody.querySelectorAll('.decision-answer').length, 0, 'no answer control is offered before its meaning is known');
+assert.ok(paneBody.querySelector('.decision-pending').textContent.includes('Loading'), 'the detail says the options are loading');
+decisionList.resolve(readinessResponse({ items: [decisionRequest], total: 1 }));
+await settleReads();
+assert.deepEqual(decisionReads, [{ task_id: 'ORB-120', workspace: 'ws_orbit' }], 'one workspace-scoped read for the task');
+const decisionButtons = paneBody.querySelectorAll('.decision-answer');
+assert.deepEqual(decisionButtons.map(node => node.textContent), ['Drop criterion 2', 'Restore the v1 API'], 'each button reads its label, not its numeric id');
+assert.deepEqual(
+  paneBody.querySelectorAll('.decision-option').map(node => node.querySelector('.decision-consequence').textContent),
+  decisionRequest.answers.map(answer => answer.consequence),
+  'each consequence sits beside its own option',
+);
+paneBody.querySelector('.decision-note').value = '';
+decisionButtons[1].dispatch('click');
+assert.deepEqual(decisionPosts.map(post => [post.path, post.workspace, post.body]), [['/api/decisions/DR-1/answer', 'ws_orbit', { answer: '2' }]], 'the stable id is what is submitted');
+
+// A failed read offers no blind buttons, and Retry reads again.
+decisionPosts.length = 0;
+decisionReads.length = 0;
+decisionList = holdRead();
+paintDecision({ ...decisionTask, id: 'ORB-121' });
+clickTitle(byId['tasks-body'].querySelector('.row button.title'));
+decisionList.resolve(readinessResponse({ error: 'decisions unavailable' }, false));
+await settleReads();
+assert.equal(paneBody.querySelectorAll('.decision-answer').length, 0, 'a failed read leaves no unlabeled answer buttons');
+assert.ok(paneBody.querySelector('.decision-pending').textContent.includes('decisions unavailable'));
+decisionList = holdRead();
+decisionList.resolve(readinessResponse({ items: [decisionRequest], total: 1 }));
+paneBody.querySelector('.decision-requests').querySelectorAll('button').find(node => node.textContent === 'Retry').dispatch('click');
+await settleReads();
+assert.equal(decisionReads.length, 2, 'Retry reads the decisions again');
+assert.equal(paneBody.querySelectorAll('.decision-answer').length, 2, 'the retried read restores the labeled options');

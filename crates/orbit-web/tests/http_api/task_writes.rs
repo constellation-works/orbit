@@ -544,6 +544,20 @@ fn dashboard_answers_a_decision_request_as_human() {
             assert_eq!(listed["total"], 1, "{listed}");
             assert_eq!(listed["items"][0]["id"], request_id);
             assert_eq!(listed["items"][0]["state"], "open");
+            // The dashboard shows each option's meaning from this read, since the
+            // task detail's `open_decisions` carries answer ids only.
+            let for_task =
+                json_ok(server.get(&format!("/api/decisions?task_id={id}&{}", &WORKSPACE[1..])));
+            assert_eq!(for_task["items"][0]["answers"][0]["id"], "1", "{for_task}");
+            assert_eq!(
+                for_task["items"][0]["answers"][0]["label"],
+                "Drop criterion 2"
+            );
+            assert_eq!(
+                for_task["items"][0]["answers"][0]["consequence"],
+                "the old API stays retired"
+            );
+            assert_eq!(for_task["items"][0]["answers"][1]["label"], "Dismiss");
 
             let detail = json_ok(server.get(&format!("/api/tasks/{id}{WORKSPACE}")));
             assert_eq!(detail["open_decisions"][0]["id"], request_id, "{detail}");

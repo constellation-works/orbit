@@ -1763,4 +1763,7 @@ input.field-editor-input {
   background: var(--bg); color: var(--fg); border: 1px solid var(--border); border-radius: 2px;
   padding: 4px 8px; font-size: 12px; width: 100%; box-sizing: border-box;
 }
-.decision-answers { display: flex; flex-wrap: wrap; gap: 6px; }
+.decision-answers { display: grid; gap: 8px; }
+.decision-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
+.decision-pending { color: var(--fg-mute); font-size: 12px; }
