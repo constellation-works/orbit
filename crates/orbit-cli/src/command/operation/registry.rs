@@ -428,8 +428,13 @@ impl Commands {
             }
             // Decision requests are registry-driven like friction; the
             // answer verb's write effect makes its runtime need required.
+            // Answering is the operator's, so it is authorized before
+            // dispatch; the handler applies it as a human write.
             Commands::Decision(command) => {
+                use orbit_common::governance::decision::DecisionVerb;
+                let answers = command.command.spec.verb == DecisionVerb::Answer;
                 registry_operation(&command.command, runtime_dispatch!(Decision))
+                    .governed_when(answers, "decision", "answer")
             }
             Commands::Audit(command) => {
                 use super::super::audit::AuditSubcommand;

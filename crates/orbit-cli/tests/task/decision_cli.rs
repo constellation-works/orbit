@@ -115,15 +115,46 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
     assert_eq!(shown["gate"], "block_triage", "{shown}");
     assert_eq!(shown["answers"][0]["label"], "Drop criterion 2");
 
-    let answered = fixture.json(&[
-        "decision",
-        "answer",
-        &request_id,
-        "1",
-        "--note",
-        "Criterion 2 goes.",
-        "--json",
-    ]);
+    // A process that declares an agent identity is refused before any
+    // write: the request stays open and the task stays blocked.
+    let before = fixture.json(&["task", "show", &task_id, "--json"]);
+    fixture
+        .command(&["decision", "answer", &request_id, "1", "--json"])
+        .env("ORBIT_AGENT_NAME", "codex")
+        .env("ORBIT_AGENT_MODEL", "gpt-6.1-sol")
+        .assert()
+        .failure();
+    let still_open = fixture.json(&["decision", "show", &request_id, "--json"]);
+    assert_eq!(still_open["state"], "open", "{still_open}");
+    assert!(
+        still_open["resolution"].is_null(),
+        "a refused answer records no resolution: {still_open}"
+    );
+    let still_blocked = fixture.json(&["task", "show", &task_id, "--json"]);
+    assert_eq!(still_blocked["status"], "blocked", "{still_blocked}");
+    assert_eq!(
+        still_blocked["comments"], before["comments"],
+        "a refused answer writes no comment"
+    );
+
+    // The operator (a scripted one uses the audited override) answers.
+    let output = fixture
+        .command(&[
+            "decision",
+            "answer",
+            &request_id,
+            "1",
+            "--note",
+            "Criterion 2 goes.",
+            "--json",
+        ])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let answered: serde_json::Value = serde_json::from_slice(&output).unwrap();
     assert_eq!(answered["state"], "answered", "{answered}");
     assert_eq!(answered["resolution"]["answer_id"], "1");
 
