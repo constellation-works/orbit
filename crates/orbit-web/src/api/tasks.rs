@@ -421,7 +421,8 @@ fn task_list_page_json(
     })?;
     let total = page.total_without_cursor;
     let status_by_id = page.status_by_id;
-    let projection = TaskListProjection::new(runtime);
+    let attention = runtime.delivery_attention_map(page.items.iter())?;
+    let projection = TaskListProjection::new(runtime).with_delivery_attention(attention);
     let items = page
         .items
         .iter()

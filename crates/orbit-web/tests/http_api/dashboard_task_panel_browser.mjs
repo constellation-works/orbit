@@ -26,6 +26,10 @@ const tasks = statuses.map((status, index) => ({
   job_run_id: status === 'in-progress' ? 'jrun-fixture-' + (index + 1) : null,
   status_transitions: [{ status: status === 'backlog' ? 'in-progress' : 'backlog' }],
   comment_count: index === 1 ? 0 : 2, artifact_count: 1,
+  ...(index === 2 ? {
+    external_refs: [{ system: 'github-pr', id: '42', url: 'https://github.com/o/r/pull/42' }],
+    delivery_attention: { run_id: 'jrun-delivery-failed', run_state: 'failed', failed_step_id: 'complete_pr', blocker: 'failed_checks', head_sha: 'abc123', attempt: 1, budget: 3, repairing: false, pr_number: '42', as_of: '2026-10-18T12:00:00Z', observed_at: '2026-10-18T12:00:00Z' },
+  } : {}),
 }));
 const sampleComments = [
   { at: '2026-10-18T11:00:00Z', by: 'operator', message: 'Please keep the list still while I read.' },

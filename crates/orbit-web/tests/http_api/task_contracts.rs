@@ -637,6 +637,116 @@ fn body_json(response: Response) -> Value {
 }
 
 #[test]
+fn delivery_attention_flags_failed_review_and_omits_healthy() {
+    isolated(
+        "task_contracts::delivery_attention_flags_failed_review_and_omits_healthy",
+        || {
+            use orbit_core::{JobRun, JobRunState};
+            use orbit_types::task::ExternalRef;
+            use orbit_types::workflow::PipelineState;
+
+            let fixture = Fixture::new();
+            let runtime = fixture.runtime.clone();
+            let seed = |title: &str, status: TaskStatus, pr: Option<&str>| {
+                runtime
+                    .add_task(TaskAddParams {
+                        title: title.to_string(),
+                        description: "Delivery attention fixture".to_string(),
+                        status: Some(status),
+                        external_refs: pr
+                            .map(|id| {
+                                vec![ExternalRef {
+                                    system: "github-pr".to_string(),
+                                    id: id.to_string(),
+                                    url: Some(format!("https://github.com/o/r/pull/{id}")),
+                                }]
+                            })
+                            .unwrap_or_default(),
+                        ..Default::default()
+                    })
+                    .expect("seed task")
+            };
+            let failed = seed("Failed review", TaskStatus::Review, Some("42"));
+            let healthy = seed("Healthy review", TaskStatus::Review, Some("43"));
+            let blocked = seed("Blocked with PR", TaskStatus::Blocked, Some("44"));
+
+            let seed_run = |task_id: &str, run_id: &str, state: JobRunState| {
+                let now = chrono::Utc::now();
+                let input = json!({ "task_ids": [task_id] });
+                let run = JobRun {
+                    executed_on: None,
+                    run_id: run_id.to_string(),
+                    job_id: "task_pr_pipeline".to_string(),
+                    attempt: 1,
+                    state,
+                    scheduled_at: now,
+                    started_at: Some(now),
+                    finished_at: Some(now),
+                    duration_ms: None,
+                    created_at: now,
+                    pid: None,
+                    pid_start_time: None,
+                    input: Some(input.clone()),
+                    retry_source_run_id: None,
+                    knowledge_metrics: None,
+                    resolved_crew: None,
+                    crew_model: None,
+                    steps: Vec::new(),
+                };
+                fixture.save_run(&run);
+                let mut state_doc =
+                    PipelineState::new(run_id.to_string(), "task_pr_pipeline".to_string(), input);
+                state_doc.record_failure_activity(
+                    "pr_complete".to_string(),
+                    "complete_pr".to_string(),
+                    json!({}),
+                );
+                fixture
+                    .runtime
+                    .write_run_state(run_id, &state_doc)
+                    .expect("write run state");
+            };
+            seed_run(&failed.id, "jrun-delivery-failed", JobRunState::Failed);
+            seed_run(&healthy.id, "jrun-delivery-ok", JobRunState::Success);
+            seed_run(&blocked.id, "jrun-delivery-timeout", JobRunState::Timeout);
+
+            let server = fixture.server(true);
+            let page = body_json(request(&server, "/tasks"));
+            let items = page["items"].as_array().expect("items");
+            let row = |id: &str| {
+                items
+                    .iter()
+                    .find(|item| item["id"] == id)
+                    .unwrap_or_else(|| panic!("row {id}"))
+            };
+            let attention = &row(&failed.id)["delivery_attention"];
+            assert_eq!(attention["run_id"], "jrun-delivery-failed", "{attention}");
+            assert_eq!(attention["run_state"], "failed", "{attention}");
+            assert_eq!(attention["failed_step_id"], "complete_pr", "{attention}");
+            assert_eq!(attention["pr_number"], "42", "{attention}");
+            assert_eq!(attention["repairing"], false, "{attention}");
+            assert!(
+                row(&healthy.id).get("delivery_attention").is_none(),
+                "healthy review row must omit delivery_attention"
+            );
+            let blocked_attention = &row(&blocked.id)["delivery_attention"];
+            assert_eq!(
+                blocked_attention["run_state"], "timeout",
+                "{blocked_attention}"
+            );
+
+            let detail = body_json(request(&server, &format!("/tasks/{}", failed.id)));
+            assert_eq!(
+                detail["delivery_attention"], *attention,
+                "detail matches list"
+            );
+            let healthy_detail = body_json(request(&server, &format!("/tasks/{}", healthy.id)));
+            assert!(healthy_detail.get("delivery_attention").is_none());
+        },
+    );
+}
+
+#[test]
 fn aggregate_tasks_name_inactive_and_unopenable_workspaces_as_unavailable() {
     isolated(
         "task_contracts::aggregate_tasks_name_inactive_and_unopenable_workspaces_as_unavailable",

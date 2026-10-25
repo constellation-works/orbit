@@ -1031,3 +1031,13 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
   border-color: var(--warn-line);
   white-space: nowrap;
 }
+
+.delivery-attention-badge {
+  color: var(--warn-fg);
+  background: var(--warn-wash);
+  border: 1px solid var(--warn-line);
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 11px;
+  white-space: nowrap;
+}
