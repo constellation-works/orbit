@@ -131,7 +131,7 @@ impl TaskListFilter {
 }
 
 /// Ordered metadata matches. Counts do not certify off-page bundle integrity.
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TaskCandidates {
     pub items: Vec<TaskEnvelopeV2>,
     /// Matches remaining after `scan_before`, before `limit`.

@@ -92,6 +92,21 @@ impl crate::contracts::RoutineStoreBackend for Store {
         Self::routine_recent_fires(self, routine_name, limit)
     }
 
+    fn routine_cursors_for(
+        &self,
+        names: &[String],
+    ) -> Result<BTreeMap<String, RoutineCursor>, OrbitError> {
+        Self::routine_cursors_for(self, names)
+    }
+
+    fn routine_recent_fires_for(
+        &self,
+        names: &[String],
+        limit: usize,
+    ) -> Result<BTreeMap<String, Vec<RoutineFireRecord>>, OrbitError> {
+        Self::routine_recent_fires_for(self, names, limit)
+    }
+
     fn routine_pause(&self, routine_name: &str, actor: &str) -> Result<bool, OrbitError> {
         Self::routine_pause(self, routine_name, actor)
     }
