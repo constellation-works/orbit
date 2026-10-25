@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use orbit_common::storage::sqlite::{
-    is_readonly_or_access_sqlite_error, sqlite_error, sqlite_store_error,
+    is_readonly_or_access_sqlite_error, pragma, sqlite_error, sqlite_store_error,
 };
 use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, OpenFlags};
@@ -62,10 +62,10 @@ impl TaskRegistryStore {
         // fsync cost is negligible. Scoped to this connection only — the shared
         // Store::open stays at NORMAL for higher-write stores.
         if !read_only
-            && let Err(error) = conn.pragma_update(
-                None,
+            && let Err(error) = pragma::set(
+                &conn,
                 "synchronous",
-                orbit_common::fs::io::sqlite_synchronous("FULL"),
+                &orbit_common::fs::io::sqlite_synchronous("FULL"),
             )
         {
             if is_readonly_or_access_sqlite_error(&error) {
@@ -95,14 +95,13 @@ impl TaskRegistryStore {
         {
             // A newer registry this binary may only read: pin the writer as
             // `Store::open` does, and route reads through it.
-            conn.pragma_update(None, "query_only", true)
-                .map_err(|error| {
-                    sqlite_error(
-                        StorageLayer::Store,
-                        &error,
-                        format!("failed to hold a newer task registry read-only: {error}"),
-                    )
-                })?;
+            pragma::set(&conn, "query_only", &true).map_err(|error| {
+                sqlite_error(
+                    StorageLayer::Store,
+                    &error,
+                    format!("failed to hold a newer task registry read-only: {error}"),
+                )
+            })?;
             read_only = true;
         }
 

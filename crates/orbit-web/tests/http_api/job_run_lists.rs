@@ -42,19 +42,25 @@ fn page_work(
 
     let instructions = Arc::new(AtomicUsize::new(0));
     let counter = instructions.clone();
-    store.connection().lock().unwrap().progress_handler(
-        1,
-        Some(move || {
-            counter.fetch_add(1, Ordering::Relaxed);
-            false
-        }),
-    );
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .progress_handler(
+            1,
+            Some(move || {
+                counter.fetch_add(1, Ordering::Relaxed);
+                false
+            }),
+        )
+        .unwrap();
     let runs = store.list_job_runs_for_workspace("ws_http_fixture", query);
     store
         .connection()
         .lock()
         .unwrap()
-        .progress_handler(0, None::<fn() -> bool>);
+        .progress_handler(0, None::<fn() -> bool>)
+        .unwrap();
     (
         runs.unwrap().into_iter().map(|run| run.run_id).collect(),
         instructions.load(Ordering::Relaxed),

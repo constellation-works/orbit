@@ -18,6 +18,8 @@ use rusqlite::{Connection, OpenFlags};
 
 use crate::{OrbitError, SqliteContention, StorageLayer};
 
+pub mod pragma;
+
 /// Default `busy_timeout` applied to every Orbit SQLite connection, in
 /// milliseconds. Writers under WAL still serialize; this bounds how long a
 /// contending connection spins before surfacing `database is locked`.
@@ -97,11 +99,9 @@ pub fn lease_wal_file_set(path: &Path) -> Result<Option<WalFileSetLease>, OrbitE
             DEFAULT_BUSY_TIMEOUT_MS,
         )))
         .map_err(|error| sqlite_operation_error(Some(path), "set lease busy_timeout", &error))?;
-    let journal_mode = connection
-        .pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
-        .map_err(|error| {
-            sqlite_operation_error(Some(path), "inspect lease journal mode", &error)
-        })?;
+    let journal_mode = pragma::get::<String>(&connection, "journal_mode").map_err(|error| {
+        sqlite_operation_error(Some(path), "inspect lease journal mode", &error)
+    })?;
     if !journal_mode.eq_ignore_ascii_case("wal") {
         return Ok(None);
     }
@@ -485,14 +485,14 @@ fn apply_default_pragmas_inner(
     path: Option<&Path>,
 ) -> Result<PragmaOutcome, OrbitError> {
     let (journal_mode, mut write_denied) = request_wal_journal_mode(conn, path);
-    conn.pragma_update(None, "busy_timeout", DEFAULT_BUSY_TIMEOUT_MS)
+    pragma::set(conn, "busy_timeout", &DEFAULT_BUSY_TIMEOUT_MS)
         .map_err(|error| sqlite_operation_error(path, "set busy_timeout", &error))?;
-    conn.pragma_update(None, "foreign_keys", "ON")
+    pragma::set(conn, "foreign_keys", &"ON")
         .map_err(|error| sqlite_operation_error(path, "enable foreign keys", &error))?;
-    if let Err(error) = conn.pragma_update(
-        None,
+    if let Err(error) = pragma::set(
+        conn,
         "synchronous",
-        crate::fs::io::sqlite_synchronous("NORMAL"),
+        &crate::fs::io::sqlite_synchronous("NORMAL"),
     ) {
         let mapped = sqlite_operation_error(path, "set synchronous=NORMAL", &error);
         if mapped.is_readonly_or_access_failure() {
@@ -713,11 +713,11 @@ fn open_read_only_connection(
         )
     })?;
 
-    conn.pragma_update(None, "query_only", "ON")
+    pragma::set(&conn, "query_only", &"ON")
         .map_err(|error| sqlite_operation_error(Some(path), "set query_only", &error))?;
-    conn.pragma_update(None, "busy_timeout", DEFAULT_BUSY_TIMEOUT_MS)
+    pragma::set(&conn, "busy_timeout", &DEFAULT_BUSY_TIMEOUT_MS)
         .map_err(|error| sqlite_operation_error(Some(path), "set busy_timeout", &error))?;
-    conn.pragma_update(None, "foreign_keys", "ON")
+    pragma::set(&conn, "foreign_keys", &"ON")
         .map_err(|error| sqlite_operation_error(Some(path), "enable foreign keys", &error))?;
     Ok(conn)
 }
@@ -782,7 +782,7 @@ pub fn filesystem_is_read_only(_path: &Path) -> Result<bool, OrbitError> {
 /// WAL is a performance/concurrency upgrade, not a correctness requirement,
 /// so refusals degrade to a warning plus the active mode.
 fn request_wal_journal_mode(conn: &Connection, path: Option<&Path>) -> (String, bool) {
-    match conn.pragma_update_and_check(None, "journal_mode", "WAL", |row| row.get::<_, String>(0)) {
+    match pragma::set_and_check::<String>(conn, "journal_mode", &"WAL") {
         Ok(mode) => {
             if !mode.eq_ignore_ascii_case("wal") && !mode.eq_ignore_ascii_case("memory") {
                 tracing::warn!(
@@ -803,7 +803,7 @@ fn request_wal_journal_mode(conn: &Connection, path: Option<&Path>) -> (String, 
             );
             let write_denied = is_readonly_or_access_sqlite_error(&error);
             (
-                conn.pragma_query_value(None, "journal_mode", |row| row.get::<_, String>(0))
+                pragma::get::<String>(conn, "journal_mode")
                     .unwrap_or_else(|_| "unknown".to_string()),
                 write_denied,
             )

@@ -3,12 +3,12 @@ use std::sync::{Arc, Mutex};
 
 use orbit_common::fs::lock_mode::FootprintLockModes;
 use orbit_common::storage::sqlite::{
-    apply_default_pragmas, open_private, sqlite_error, sqlite_store_error,
+    apply_default_pragmas, open_private, pragma, sqlite_error, sqlite_store_error,
 };
 use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::functions::FunctionFlags;
 use rusqlite::types::{Value, ValueRef};
-use rusqlite::{Connection, DatabaseName, OpenFlags, Transaction, TransactionBehavior};
+use rusqlite::{Connection, MAIN_DB, OpenFlags, Transaction, TransactionBehavior};
 
 use crate::contracts::ForwardCompatibleOpen;
 use crate::contracts::incident::classify_failure;
@@ -47,7 +47,7 @@ pub(crate) fn register_sql_functions(conn: &Connection) -> Result<(), OrbitError
                 ValueRef::Text(bytes) | ValueRef::Blob(bytes) => {
                     Value::Text(unicode_lower(&String::from_utf8_lossy(bytes)))
                 }
-                other => Value::from(other),
+                other => Value::try_from(other)?,
             })
         },
     )
@@ -195,17 +195,16 @@ impl Store {
             .as_ref()
             .is_some_and(|forward: &ForwardCompatibleOpen| !forward.writable)
         {
-            conn.pragma_update(None, "query_only", "ON")
-                .map_err(|error| {
-                    sqlite_error(
-                        StorageLayer::Store,
-                        &error,
-                        format!(
-                            "cannot pin '{}' read-only for a forward-compatible open: {error}",
-                            path.display()
-                        ),
-                    )
-                })?;
+            pragma::set(&conn, "query_only", &"ON").map_err(|error| {
+                sqlite_error(
+                    StorageLayer::Store,
+                    &error,
+                    format!(
+                        "cannot pin '{}' read-only for a forward-compatible open: {error}",
+                        path.display()
+                    ),
+                )
+            })?;
         }
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -447,7 +446,7 @@ impl Store {
             return true;
         }
         orbit_common::fs::lock_wait::mutex(&self.conn)
-            .map(|conn| conn.is_readonly(DatabaseName::Main).unwrap_or(false))
+            .map(|conn| conn.is_readonly(MAIN_DB).unwrap_or(false))
             .unwrap_or(false)
     }
 

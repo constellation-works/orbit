@@ -24,7 +24,7 @@
 //! Ledger-aware binaries ignore `user_version` once a registry has a ledger.
 
 use orbit_common::OrbitError;
-use orbit_common::storage::sqlite::sqlite_error;
+use orbit_common::storage::sqlite::{pragma, sqlite_error};
 use orbit_common::{StorageLayer, fs::generation::LedgerCompatibility};
 use rusqlite::Connection;
 
@@ -100,12 +100,11 @@ fn write_user_version_fence(
     } else {
         PRE_LEDGER_REFUSED
     };
-    conn.pragma_update(None, "user_version", i64::from(fence))
-        .map_err(|e| {
-            sqlite_error(
-                StorageLayer::Migration,
-                &e,
-                format!("failed to set the task registry user_version fence: {e}"),
-            )
-        })
+    pragma::set(conn, "user_version", &i64::from(fence)).map_err(|e| {
+        sqlite_error(
+            StorageLayer::Migration,
+            &e,
+            format!("failed to set the task registry user_version fence: {e}"),
+        )
+    })
 }
