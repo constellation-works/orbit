@@ -1,17 +1,11 @@
+# Orbit configuration. Omitted keys use their built-in defaults:
+# `orbit config keys` lists every key with its default and description, and
+# https://orbit-cli.com/reference/config/ explains them.
+
 [execution.env]
-# Ordinary workspace settings inherit from the global config per key. The
-# environment allowlist and the Codex sandbox/approval keys below are the
-# security exceptions: when a workspace config exists, omitted values use
-# built-in defaults instead of inheriting the global file.
-# Agent subprocesses start from a cleared environment and receive only: a
-# built-in baseline (HOME, LANG, LC_ALL, LOGNAME, PATH, SHELL, TERM, TMPDIR, TZ,
-# USER), the `pass` names below, the variables the selected provider declares it
-# requires, and Orbit's own ORBIT_* execution envelope. The orbit process's full
-# environment is never inherited (not configurable, by design).
-# This is an allowlist, not a secret filter: a variable that is not named here
-# does not reach an agent whatever it is called, so a benignly named credential
-# such as DATABASE_URL stays out unless you add it.
-# User-specific vars (GITHUB_TOKEN, ANTHROPIC_API_KEY, DATABASE_URL, etc.) are opt-in — add them as needed.
+# Agent subprocesses start from a cleared environment and receive only these
+# names, a fixed baseline and what their provider requires. Add credentials
+# such as GITHUB_TOKEN here only when an agent needs them.
 pass = [
     "HOME",
     "PATH",
@@ -23,102 +17,5 @@ pass = [
 
 [execution.codex]
 sandbox = "danger-full-access"
-# Optional: enable escalation requests for workflows that legitimately need approval.
-# approval_policy = "on-request"
 
 [workflow]
-# Config fallback for ship/auto/pilot when no registered workspace
-# base_branch is bound. Override per-invocation with `--base <branch>`.
-base_branch = "main"
-# `orbit init` writes `default_crew` and the four `*_complexity_crews` pools
-# at the top of this table when it detects a supported agent CLI, each naming
-# a real crew from the crew tables it seeds. Tasks and system work (auto-task
-# templates, the task pilot, step-failure and PR conflict recovery) draw from
-# the pool for their complexity. Without those keys Orbit uses the built-in
-# crew registry and runs everything on `opus`.
-#
-# Final recovery takes one last look at a task whose run failed after step
-# recovery, using one crew drawn per run from this weighted pool (`name` or
-# `name:weight`, all bare or all weighted). Unset, the pool below applies and
-# keeps only the crews your registry defines; `[]` turns final recovery off.
-# purpose_crews.final_recovery = ["sol:100", "opus:20"]
-
-# [workflow.task_pilot_freshness]
-# Which changes make an accepted task-pilot assessment stale, so the task is
-# piloted again. The built-in defaults below apply when a key is omitted; a
-# routine's `trigger.state.freshness` overrides them.
-# `material_fields` names at least one of: title, description, criteria, plan,
-# selectors, tags, crew, tools, type, complexity, relations, dependencies,
-# instructions. `source_sensitivity` is one of: ignore (a branch-head move
-# invalidates nothing), context_files (only when the head changed a path the
-# task's selectors name), any (every head move).
-# material_fields = ["title", "description", "criteria", "plan", "selectors"]
-# source_sensitivity = "ignore"
-
-[workflow.resource_throttle]
-# Host pressure verdict: high readings sustained for 10 seconds, held until
-# below resume. Unknown/stale readings fail open and are shown distinctly.
-enabled = true
-# Linux: load or utilization (excludes idle and I/O wait).
-# macOS uses Mach utilization for either source.
-cpu_source = "load"
-cpu_high_percent = 90
-cpu_resume_percent = 85
-# While only CPU holds admissions, up to this many `no-diff-expected`
-# auto-task leaves (reviews, curation) still start; memory, disk and I/O
-# pressure hold them too. 0 holds them with everything else.
-cpu_light_leaves = 2
-memory_high_percent = 90
-memory_resume_percent = 85
-disk_high_percent = 90
-disk_resume_percent = 85
-# Linux only: `full avg60` of /proc/pressure/io, the share of the last minute
-# in which every runnable task was stalled on disk I/O. Hosts without PSI are
-# not gated.
-io_full_high_percent = 20
-io_full_resume_percent = 10
-
-[runtime]
-# Rotation + retention for the global JSONL log (~/.orbit/state/logs/orbit.jsonl).
-# Applied opportunistically at process start. All optional; the conservative
-# defaults below are used when a key is omitted. Invalid values
-# (0, or log_max_file_mb > log_max_total_mb) are rejected at config load.
-# log_retention_days = 7    # delete archives older than N days (>= 1)
-# log_max_total_mb   = 500  # total MiB budget across archives; oldest pruned first (>= 1)
-# log_max_file_mb    = 100  # roll the active log once it exceeds N MiB (>= 1, <= log_max_total_mb)
-
-# [review]
-# timing = "off" | "before_pr" | "before_landing" (default "off"); one review
-# layer before landing, drawn from workflow.purpose_crews.pre_landing_review,
-# or from workflow.purpose_crews.review while that is unset.
-#
-# before_pr holds PR creation for a fresh reviewer on the PR route. The
-# reviewer fixes what it finds in its own commit on the candidate; findings it
-# cannot fix block the task.
-#
-# before_landing opens the PR first, then has the same kind of reviewer review
-# the open PR while hosted CI runs on it. A reviewer fix is validated and
-# pushed to the PR; the PR lands only at the head the review settled, and any
-# other outcome leaves it open with the task in review.
-#
-# A drain or ship captures the timing at submission, so a run in flight keeps
-# it. Each candidate gets one review, bounded by `minutes` (its fix commit and
-# final validation included).
-# timing = "off"
-# minutes = 30
-#
-# After-landing review has no key here: it is the `delivery-code-review`
-# auto-task, switched with `orbit auto-task toggle delivery-code-review on`.
-# It freezes landed deliveries into batches and mints one review task per
-# batch on the machine that owns the workspace; `orbit doctor` fails while it
-# is enabled but cannot run.
-
-# [workflow.purpose_crews]
-# review = "sol"          # crew for after-landing review tasks, and before landing
-#                          # while pre_landing_review is unset
-# review = ["sol", "grok"] # or a pool (`name` or `name:weight`, like the complexity
-#                          # pools): each review draws one crew by weight, preferring one
-#                          # that did not implement the reviewed work and skipping
-#                          # disabled or provider-limited crews; [] unsets it
-# pre_landing_review = ["luna", "haiku"] # before-PR and before-landing reviewer,
-#                          # written like review; unset or [] falls back to review
