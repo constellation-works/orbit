@@ -456,27 +456,6 @@
 
 ## 0.10.0
 
-- **Telemetry no longer discards completed runs**: the `invocations` insert-bound columns (`cache_create_1h_tokens`, `provider_cost_usd`) reach existing databases through a new `invocation_telemetry_columns` migration (schema v10) instead of only the v1 baseline, and a failed invocation-trace write is now logged and recorded as a `telemetry.persist_failed` event on the run rather than failing the job. ([ORB-10367])
-- **PR review status clearing is documented**: `orbit.task.update` now describes its empty-string clear convention, with tool-host coverage for the persisted null result. ([ORB-10229])
-- **Task PR status updates persist in v2 storage**: local tool and dashboard PATCH updates now retain `pr_status` alongside status and execution-summary changes. ([ORB-10223])
-- **Bundled skills are repository-agnostic**: the embedded skill tree drops Orbit-source paths, private Constellation names, workspace-local artifact IDs, and fixed design-doc filenames; a portability regression test and byte-aligned plugin mirrors guard against reintroduction. ([ORB-10208])
-- **CLI agent envelopes reach workflows**: provider-wrapped, prose-prefixed successful responses now validate and project their result object before workflow templating; malformed or failed envelopes fail closed. ([ORB-10216])
-- **Temporary init validation isolates skill discovery**: test fixtures now sandbox HOME before seeding skills, preserving existing agent discovery links after temporary-root cleanup. ([ORB-10220])
-- **Verbose CLI agent runs stay healthy**: stdout and stderr capture now retain bounded diagnostic prefixes and protocol-safe tails while continuing to drain providers, preserving final response envelopes and recording observed byte counts instead of killing successful runs. ([ORB-10221])
-- **Scheduled provider discovery fixed**: systemd routine sweeps now use a portable user PATH so provider launchers installed in `~/.local/bin` remain available. ([ORB-10214])
-- **Log rotation and pipeline spawning tolerate replaced paths**: missing log archive directories are silent no-ops, while long-lived Orbit processes resolve Linux deleted-inode executable paths back to the installed binary before spawning workers. ([ORB-10213])
-- **Skill guidance reflects friction triage**: shipped skills use positional learning-show IDs and document mutable friction statuses, direct triage commands, and task-driven resolution. ([ORB-10210])
-- **Store schema v4 compatibility restored**: the append-only `job_run_archive_stage` migration remains supported after an `agent-main` history rewrite dropped its registry entry, so current CLIs reopen already-upgraded stores without a destructive downgrade. ([ORB-10209])
-- **Workspace routines are opt-in**: init seeds disabled auto-task, triage, and workspace-local ship-sweep definitions, preserves authored routines on re-init, and delegates shipment synchronously to the normal backlog pipeline. ([ORB-10207])
-- **Workspace re-init honors explicit routing**: re-running init safely merges explicit ship-mode/base-branch changes while preserving identity, creation time, and authored routines; workspace list/show report the effective ship mode. ([ORB-10215])
-- **Legacy task friction status removed**: tasks no longer deserialize, list, update, admit, or render `status: friction`; standalone friction artifacts are the only supported surface. Task attribution and record-parameter construction now share implementations without changing admission or triage behavior. ([ORB-10202])
-- **Activity and job catalogs share layered loading**: typed adapters now share recursive discovery, directory deduplication, first-wins layering, and duplicate detection while preserving their distinct precedence and validation policies. ([ORB-10201])
-- **Configuration admission is table-driven**: fixed settings now declare parsing, defaults, validation metadata, and CLI projection once, with generated registry/snapshot lookup completeness checks. ([ORB-10199])
-- **Activity/job precedence docs match execution trust rules**: the design now distinguishes workspace-preferred job listings from default-authoritative named job and activity execution. ([ORB-10203])
-- **Systemd routine workers survive sweep exit**: the user sweep service now limits shutdown to its main oneshot process, allowing detached pipeline workers to claim and complete clock-dispatched runs. ([ORB-10153])
-- **Task creation surface is narrower and consistent**: task creation now exposes only legal initial statuses, list flags share repeat/comma parsing, and redundant agent/comment/instructions inputs are removed while model and managed identity attribution remain intact. ([ORB-10155])
-- **CLI command meaning has one compiler-enforced registry**: dispatch, runtime bootstrap, audit metadata, JSON error formatting, and hook suppression now derive from one exhaustive command-operation declaration, eliminating wildcard policy defaults without changing CLI behavior. ([ORB-10200])
-
 ### Breaking Changes
 
 - **Task locks returned to task administration**: `orbit locks` is now `orbit task locks`. This partially reverses ORB-10000: unlike the other removed task verbs, which were consolidated into existing verbs, locks were only relocated to a more prominent top-level surface. Moving them back completes the original surface-reduction intent without changing the MCP tool surface. ([ORB-10428])
@@ -486,49 +465,27 @@
 ### Highlights
 
 - **Graph-tool guidance lives only in the MCP surface**: removed graph-tool invocation instructions from activity prompts and deleted the `orbit-graph` skill; graph tools self-describe when present, and essential selector/usage knowledge now lives in the `orbit.graph.*` tool descriptions. ([ORB-10151])
-- **CI green again — MCP `tools/list` snapshot synced**: ORB-10149's four `orbit_auto_task_*` tools reached the MCP surface without a snapshot refresh, failing `mcp_serve_tools_list_matches_production_snapshot` on every push; the round-trip snapshot now includes them (additive — no tools removed). ([ORB-10152])
 - **QA sweep is an auto-task**: the checked-in six-hour definition routes hands-on validation to `crews.qa`, dedupes open runs, and files findings through Orbit; `no-diff-expected` exempts side-effect-only tasks from workflow diff gates. Legacy QA code, config, CLI, routines, and deployment units are removed. ([ORB-10148])
 - **Auto-task primitive**: recurring chores are data, not code. `orbit auto-task add/list/show/update/toggle` (+ `orbit.auto_task.*` tools) define `.orbit/auto_tasks/*.yaml` templates with a cron/interval schedule and dedupe policy; one seeded scheduler routine mints tasks from the due ones with catch-up collapse and `skip_if_open` dedupe. Provider-neutral (ADR-0217). ([ORB-10149])
-- **Ship `--mode pr` fails loudly on an empty diff**: an implement step that writes nothing no longer reports success — an empty commit and a `0 commits ahead` branch now hard-fail (no empty branch pushed, no PR, no promote-to-review), the premature pre-commit `push` is removed, and the agent envelope gets `repo_root` plus a fail-closed `workspace_path`. ([ORB-10134])
-- **Codex plugin documentation parity**: Website install/MCP guides now cover Codex plugin installation, upgrades, fresh-task discovery, and read-only MCP smoke checks alongside Claude; the npm proxy README clarifies how both supported plugins consume the binary without manual asset copying. ([ORB-10117])
 - **Routine scheduler health over HTTP**: `GET /api/routines` on the dashboard exposes each routine's last fire (timestamp, ok/error outcome, duration) and next-due slot, so a stopped scheduler is visible remotely as a stale `last_fire` without box ssh. ([ORB-10138])
 - **ADR create over HTTP**: `POST /api/adrs` records a Proposed ADR (mirroring `orbit.adr.add`), so remote orchestrators can author decisions without an on-box run; malformed payloads get a structured 400. Friction/learning create routes stay absent. ([ORB-10141])
 - **Learning + ADR update routes on the HTTP API**: `PATCH /learnings/:id` (summary/scope/tags/body/evidence/priority) and `PATCH /adrs/:id` (status/tags and mutable metadata) delegate to the CLI tools, preserving supersede-don't-delete and invalid-transition rejection; no create routes added. ([ORB-10143])
 - **Default failed-run triage**: a seeded `task_triage_pipeline` (+ hourly routine, `orbit run triage`) diagnoses tasks blocked by failed runs, re-backlogs environmental failures with a bounded retry budget, and leaves the rest blocked with a diagnosis attached. See ADR-0215/ADR-0216. ([ORB-10129])
 - **Orphaned pending job runs now reconcile to `interrupted`**: workers claim their queued run's pid, the open-time orphan scan and `orbit doctor` cover pending runs, and `orbit run cancel <run_id>` terminalizes stuck runs. ([ORB-10070])
 - **Remote dashboard task actions now reach the selected workspace**: `approve`/`reject`/`archive` used a raw `fetch()` that skipped the workspace-routing helper, so they silently no-op'd against a non-default remote workspace; the workspace selector also no longer renders its filesystem path beneath the dropdown. ([ORB-10124])
-- **CI runner ENOSPC fixes**: the coverage and `ci` jobs reclaim ~25-30 GB of preinstalled runner bloat before building, set `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_TEST_DEBUG=line-tables-only` to shrink `target/`, and the coverage cache is now deps-only (no instrumented `target/`). ([ORB-10126])
-
-- **Constellation crew catalog uses model-level names**: the checked-in Orbit workspace now offers Claude `opus`/`sonnet`/`fable` and Codex `sol`/`terra`/`luna` crews, defaulting to `opus`. ([ORB-10133])
-
 - **Codex init default avoids nested sandboxing**: fresh Orbit configurations now seed Codex with `danger-full-access`, leaving Orbit and the host as the execution boundary. ([ORB-10131])
 - **Crews are one provider-model assignment**: `[crews.<name>]` now uses flat `model`, `provider`, and `backend` fields shared by every activity role; legacy three-role crews load through their implementer assignment. See ADR-0213. ([ORB-10130])
-- **Model defaults de-hardcoded and centralized**: a new `orbit-common::model_defaults` module is the single source of truth for production model defaults; default Claude CLI models are now the unversioned `opus`/`sonnet` aliases and default Codex is `gpt-5.6-terra`. Existing workspaces are unchanged until `orbit init --refresh-defaults`. See ADR-0211. ([ORB-10051])
 - **`orbit web serve` defaults to global (multi-workspace) mode**: the all-workspaces dashboard dropdown is always present; `--global` is now a deprecated no-op. ([ORB-10029])
-- **`orbit-cmd` extracted from `orbit-core`**: the CLI-facing command layer moved into a new internal `orbit-cmd` crate (depends on orbit-core, never the reverse). Import paths `orbit_core::command::{doctor,migrate,diagnostics,…}` → `orbit_cmd::…`; CLI/MCP/on-disk behavior unchanged. See ADR-0203. ([ORB-10016])
-- **Ops runbook — `docs/OPERATIONS.md`**: a command-first day-2 operations guide (state inventory, WAL-safe backup/restore, stuck-job debugging, corrupted-DB recovery, log rotation, health checks, `orbit migrate`), linked from the README. ([ORB-10014])
-- **Crate-boundary error translators enforced**: every typed error crossing into `OrbitError` now goes through its owning crate's `*_error_to_orbit` translator, enforced mechanically by a new `scripts/check-error-translation.sh` guardrail. ([ORB-10013])
 - **Versioned `.orbit/` upgrade path — `orbit migrate`**: the whole workspace layout is now versioned via a `state/layout.version` marker and an ordered migration registry; older layouts auto-migrate on open, newer ones refuse to open. `orbit migrate [--dry-run]` reports and inspects. ([ORB-10012])
-- **One `Selector` parser instead of two**: the duplicated selector grammar is unified on the `orbit-common` implementation, with `orbit-graph-extract`'s module now a re-export shim; orbit-common's surface now recognizes `module:`/`command:`. See ADR-0202. ([ORB-10011])
-- **CI guardrails: coverage visibility, CHANGELOG freshness, declared MSRV**: an informational `cargo-llvm-cov` coverage job, a new `check-changelog-freshness.sh` guardrail, and a declared `rust-version = "1.88"` MSRV enforced by a pinned-toolchain CI job. ([ORB-10010])
 - **Policy deny rules can no longer be dodged by respelling a path**: glob-path normalization rebuilds paths from their normal components so `secret/./key.txt`, `secret//key.txt`, and trailing-slash spellings all match rules for `secret/key.txt`; adds Linux enforcement integration tests and a CI sandbox/policy job. ([ORB-10009])
-- **MCP round-trip integration tests + a session-workspace wire fix**: end-to-end MCP coverage over real transports with snapshotted `tools/list` payloads; fixes a wire bug where `_meta.orbit.workspace` never reached tool dispatch over a real transport. ([ORB-10007])
-- **Dashboard endpoint integration tests**: axum-level coverage of the `/api` surface over on-disk temp workspaces — `GET /api/audit`, adversarial artifact-serving traversal/symlink cases, `POST /workflows/ship` in global mode, and workspace-selection error paths. Test-only. ([ORB-10008])
 - **Task migration between machines**: new `orbit task export`/`import` pack and restore task bundles as a portable `tar.zst` with integrity validation and collision renumbering; `orbit task reindex` rebuilds the index from bundles, and `--task-id-start` seeds disjoint id ranges. ([ORB-00034])
 - **`orbit web connect <ssh-host>`**: view a remote workspace's dashboard over an auto-managed SSH tunnel — picks a free port, starts remote serve, forwards, opens the browser, and tears down on Ctrl-C. ([ORB-00029])
 - **Global, multi-workspace dashboard**: `orbit web serve` outside any workspace (or with `--global`) serves every registered workspace via a workspace-keyed runtime map, with a header selector and an aggregate "All workspaces" task view. ([ORB-00030])
 - **Dashboard shows each workspace's filesystem location**: the global dashboard surfaces where each workspace lives on disk (home-abbreviated) in the header selector and task Details box, disambiguating same-named workspaces. ([ORB-00037])
 - **Aggregate dashboard view no longer 400s**: an `isAggregateView()` predicate gates per-workspace fetches so the "All workspaces" view fetches only the aggregate task list and shows a placeholder for workspace-specific panels instead of erroring. ([ORB-00039])
-- **Aggregate 400-guard extended to the remaining dashboard tabs**: the shared `isAggregateView()` guard now also covers the Audit, Knowledge, and scoreboard-window fetches in the "All workspaces" view. ([ORB-00040])
-- **Aggregate 400-guard completed**: closes the last gaps — the Diagnostics tab and the stale learning/ADR/friction detail panels now show the aggregate-mode placeholder instead of firing per-workspace endpoints. ([ORB-00044])
 - **Versioned store-schema migrations**: the store SQLite DB tracks numbered migrations in a `schema_meta` ledger, applies each atomically, adopts pre-ledger DBs via an idempotent baseline, and refuses to open a DB written by a newer orbit. ([ORB-10003])
-- **SQLite reads no longer queue behind writes**: the shared store checks out per-call read-only connections from a small pool while writes keep the single WAL writer, so a read completes even while a write transaction is open. ([ORB-10004])
 - **Job-run checkpoint/resume for hard interruptions**: the v2 executor persists a recovery checkpoint after each completed step; dead-owner runs finalize to a new `interrupted` state, and `orbit job resume <run_id>` replays only the remaining steps. ([ORB-10002])
-- **One shared SQLite pragma helper**: WAL/busy_timeout/foreign_keys/synchronous setup is now centralized in `orbit_common::utility::sqlite::apply_default_pragmas`, fixing per-store drift. ([ORB-10004])
 - **Always-on operability: detailed healthz and `orbit doctor`**: `/healthz?detailed=true` runs per-check probes, and `orbit doctor` runs workspace pass/warn/fail health checks. ([ORB-10005])
-- **Retry hygiene for external calls**: step backoff now uses full jitter, the agent-CLI and embedding-companion transports classify retryable-vs-permanent failures, and `validate_job` rejects invalid `retry:` blocks before execution. ([ORB-10006])
-- **Internal refactor — execution-context decomposition + scoreboard consolidation**: `orbit-engine`'s `context.rs` is split into a `context/` module by concern, and `orbit-store`'s scoreboard shapes share one implementation. No behavior change. ([ORB-10015])
-- **Dashboard task-create workspace selection hardened**: `POST /api/tasks` uses `?workspace=<id>` for selection (unknown → 404, inactive → 400) and now rejects a stray `workspace` body key with a 400 — fixing the bridge `task_create` workspace no-op. ([ORB-00042])
 
 ## 0.9.2
 
@@ -620,13 +577,6 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 
 ## 0.6.0
 
-### Release scope
-
-- **Grok onboarded as the fourth first-class agent family**: `all_agent_families()` 3 → 4, sandbox profile, MCP init, executor YAML, commit identity, and a parity sweep across scoreboards/duels/docs. ([ORB-00043], [ORB-00044], [ORB-00045], [ORB-00046], [ORB-00047], [ORB-00048], [ORB-00049], [ORB-00050], [ORB-00052])
-- **Agent identity collapsed to family**: model strings are configuration-only; family (`codex` / `claude` / `gemini` / `grok`) is the durable identity across tasks, scoreboards, friction, audit, planning-duel artifacts, and git author lines. ([ORB-00080], [ORB-00081], [ORB-00088], [ORB-00089], [ORB-00090], [ORB-00091], [ORB-00106])
-- **Per-task `crew` abstraction**: replaces role-keyed `[agent.<role>]` config with named `[crews.*]` registries selectable per task, and gives the duel-plan agent pool the same configurable surface. ([ORB-00058], [ORB-00072], [ORB-00076], [ORB-00078])
-- **First-class Knowledge tab in dashboard**: Learnings/Frictions/ADRs subtabs with inline lifecycle controls, plus task-detail enrichment (tags, external_refs, relations, job_run_id, review_threads, locked-files panel, per-task crew selector). ([ORB-00060], [ORB-00061], [ORB-00062], [ORB-00063], [ORB-00067], [ORB-00068], [ORB-00069], [ORB-00073], [ORB-00076], [ORB-00082], [ORB-00083], [ORB-00084], [ORB-00097])
-
 ### Breaking Changes
 
 - **Branching model flipped**: `main` is now the release/production branch; `agent-main` is the dev integration branch where task PRs land. Each release tags on `agent-main` then promotes to `main` via merge commit; hotfixes branch from `main` and back-merge to `agent-main`. Install URLs in `README.md` and the website now point at `main`. Retired stub `crates/orbit-core/assets/activities/examples/promote_agent_main.yaml` removed. See `RELEASING.md` §10b and §Hotfix flow. ([ORB-00054])
@@ -644,7 +594,7 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 - **MCP schema emitter no longer degrades `object_list` params to `"string"`**: `evidence` and similar fields now emit array-shaped schemas. MCP clients that worked around the bug by string-encoding payloads must send arrays. ([ORB-00102])
 - **Ship batch commit message template**: `feat: parallel batch [ORB-id]` is replaced by a deterministic template — `<type>: <truncated title>… [ORB-id] [EXT-id]…` with an optional full-title line, execution-summary paragraph, and `Planned-By` / `Implemented-By` trailers. Release-note builders and `git log --grep 'parallel batch'` workflows break. ([ORB-00107])
 
-### Features
+### Highlights
 
 - **Grok onboarded as fourth agent family**: sandbox state dir + SBPL allowances; CLI runner + executor YAML; `orbit mcp init --client grok` writes `.grok/config.toml`; duel / scoreboard / friction-stats render zero-grok rows; design folder, commit identity, and docs updated. ([ORB-00043], [ORB-00044], [ORB-00045], [ORB-00046], [ORB-00047], [ORB-00048], [ORB-00049], [ORB-00050], [ORB-00052])
 - **Knowledge tab in dashboard**: Learnings subtab (list, supersede, stats), Frictions subtab (triage, resolve, stats, tag-picker sourced from YAML), ADRs subtab (accept, supersede, related-task deep-links), task-detail enrichment, Locked Files panel, per-task crew selector, markdown rendering. ([ORB-00060], [ORB-00061], [ORB-00062], [ORB-00063], [ORB-00067], [ORB-00068], [ORB-00069], [ORB-00073], [ORB-00076], [ORB-00083])
@@ -655,26 +605,6 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 - **Ship command unified to async-by-default**: `orbit run ship` empty-task-IDs → auto mode, explicit IDs → gated; waiting-reason fields surfaced through `orbit run history` / `show`. ([ORB-00074], [ORB-00075])
 - **Backlog dependency gating**: `list_backlog_tasks` filters by `task_dependencies_ready`, fixing out-of-order auto-pipeline execution. ([ORB-00057])
 - **Skill quality nudges**: `orbit-create-task` now teaches optional `complexity`, `dependencies`, `parent_id`, and cross-artifact `relations`; `orbit.friction.add` description enumerates the tag taxonomy from YAML. ([ORB-00064], [ORB-00070], [ORB-00104])
-
-### Fixes
-
-- **Identity attribution end-to-end**: runtime ToolContext wire-up, automation-driven Review / Done transitions, git author resolver, and the ship-batch Done loop closed the recurring `implemented_by: "system"` bug across PR-open, ship, and review paths. ([ORB-00067], [ORB-00088], [ORB-00089], [ORB-00090], [ORB-00091], [ORB-00106])
-- **Concurrent worktree setup**: SHA-resolution + bounded retry eliminates `.git/config` lock races; post-failure cleanup is idempotent. ([ORB-00059])
-- **Policy dashboard denial identity**: real `JobRun` IDs are separated from synthetic audit `execution_id`; task-lock denials now expose actor / requested-files / conflicts. ([ORB-00066])
-- **CI failure-recovery task type**: corrected from invalid `"issue"` to `"bug"` (valid types: feature / bug / refactor / chore). ([ORB-00056])
-- **Clippy `expect()` violations** in `orbit-store::legacy_models_warns` that blocked PRs after the branching flip. ([ORB-00055])
-- **Dashboard task-row ID column** no longer leaves 50px of dead space before the title — column sizes to content. ([ORB-00097])
-- **YAML stack-overflow advisory** resolved (pre-ORB-scheme task). ([T20260430-16])
-
-### Chores
-
-- **Family-identity migration script** (`scripts/migrate_family_identity.py`) ships with backups, dry-run-by-default, SQLite normalization, and scoreboard regeneration. ([ORB-00081])
-- **Learning storage migration helper** (`orbit learning migrate-layout`) ships alongside the flat → per-entity layout flip. ([ORB-00096])
-- **ADR corpus reconciled**: backfilled agent-families, project-learnings, and design-docs orphan ADRs into the global allocation. ([ORB-00103])
-- **ORB-00080 coverage gap closed**: end-to-end planning-duel regression test, crew-driven CLI invocation test, and projection field labeling. ([ORB-00087])
-- **Dashboard cleanup**: API route inventory footer removed; "rejected" status chip removed. ([ORB-00082], [ORB-00084])
-- **Local CI cleanup**: warning-deny clippy across MCP / tools / core / engine / CLI (large-enum boxing, items-after-test ordering, expect formatting, bind-vs-map); task-review scoring coverage extended to the Grok reviewer; design-doc `Last updated:` refresh across eight docs. ([ORB-00108])
-- **Unattributed commits**: README refreshes ([commit b35724da], [commit 836b307c], [commit 64f9685d], [commit f9397605], [commit 008d172a]); artifact backfill (ADR-0164, L20260517-7, L20260517-8) ([commit 44889e63]); `make cleanup-branches` target ([commit 51d0777a]); `.gitignore` lock files ([commit 8f00912a]); track `.orbit/learnings/` + `.orbit/adrs/` in git ([commit 0106ff3a]); duel configuration in orbit settings ([commit bcefa2a4]); learning-search absolute-path handling fix ([commit 052376ff]); agent model-pair updates for Codex and Claude ([commit 0657b991]); rename executor model-pair override (PR #240) ([commit 2925a4b7]).
 
 ## 0.5.4
 
@@ -687,25 +617,6 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 - **Inline task status transitions in the dashboard**: per-task actions row gains a status selector wired through the existing `PATCH /tasks/:id` backend, ordered by `STATUS_ORDER` with `done` last and excluding `rejected`/`archived`/`friction`. Surfaces a "no longer shown in dashboard list" notice when transitioning to `done`. ([ORB-00025])
 - **`orbit.learning.*` exposed over MCP**: the full eight-tool learning surface (`add`, `list`, `search`, `show`, `update`, `supersede`, `prune`, `reindex`) is now reachable from every MCP client, not just `orbit tool run`. Restores parity with the `orbit-learning` skill instructions. ([ORB-00039])
 
-### Fixes
-
-- **PID identity & stale-run probe stability**: versioned `ps-lstart-utc-v1:` token replaces raw `lstart` output (recorded under `TZ=UTC`/`LC_ALL=C`) so live workers are no longer falsely marked failed across timezone changes; a new `OwnerIdentity::ProbeUnavailable` outcome distinguishes transient `ps` failures from genuinely dead PIDs, preventing single-probe terminalization of live workers. Adds arbiter-side `orbit.duel.plan.winner` regression coverage. Backward-compat read path (`LegacyLiveUnverified`) handles existing persisted tokens. ([ORB-00036], [ORB-00037])
-- **Job-step error messages reach the dashboard**: `V2AuditEventKind::{StepFinished, RunFinished}` gain an optional `error_message` field; the failure reason is preserved at emit time and surfaced by the audit reader so the Steps and Events tabs no longer show a bare red dot. Backward-compatible — older audit files load unchanged. ([ORB-00026])
-- **Gemini direct-agent sandbox + planner/arbiter artifact persistence**: narrow macOS sandbox allowances for Orbit child-runtime writes (global logs, DB sidecars, task workspace bundles, workspace semantic DB), tightened HOME-derived defaults, and improved planning-duel missing-artifact diagnostics so `orbit.duel.plan.add`/`winner` work under sandbox without home-directory re-allow. ([ORB-00027], [commit f3919a99], [commit e706d596])
-- **Gemini CLI token accounting**: the shared response usage parser now reads `stats.models.<model>.tokens.{input,prompt,cached,candidates}` without double-counting role aggregates, so Gemini direct-agent invocations no longer persist as zero-token traces. ([ORB-00028])
-- **Graph diagnostics quality**: `orbit.graph.show` now returns `did_you_mean` suggestions for unresolvable method selectors; exact-name `orbit.graph.search` ranks definition kinds (`trait`/`struct`/`enum`/`type`/`function`/`module`) above impl-method selectors; `orbit.graph.pack` carries typed `unresolved` reasons (`not_found` / `outside_indexed_roots` / `stale_snapshot`); `orbit.graph.overview` carries a typed `downgrade_reason` with threshold/actual. ([ORB-00029], [ORB-00030], [ORB-00031], [ORB-00032])
-- **Task bundle creation no longer leaks a lock sentinel or double-dots its name**: `TaskBundleStoreV2::create_bundle` now locks on the bundle directory target and unlinks the `.ORB-XXXXX.lock` sentinel inside the locked closure; the old pre-dotted `create_lock_path` helper was removed. Concurrent-create serialization preserved. ([ORB-00033])
-- **PR signature attribution corrected**: `batch_pr_signature` no longer falls back to `created_by` (which often names a planner or a human filer); when no task carries `implemented_by`, the signature falls back to the PR-opening agent's model identity, which is by construction the author of the commits. ([ORB-00034])
-- **Dashboard AGENT LOGS rendering**: `<pre>` switched to `white-space: pre` with horizontal scroll so long single-line stdout (e.g. Codex JSON envelopes) and multi-word stderr stay legible instead of fragmenting one token per row. ([ORB-00035])
-- **Dashboard friction-chip cleanup**: removed dead `friction` task-status references from `STATUS_ORDER` and the approve/reject eligibility sets. The diagnostics-tab friction surface (`/api/diagnostics/friction`) is untouched. ([ORB-00024])
-
-### Chores
-
-- **`make ci-fast` introduced for pre-handoff checks**: fmt-check + guardrail scripts, no compile. `make ci` stays the canonical merge gate via PR CI. Agent guidance updated to clarify when `make ci` failures classify as unrelated CI blockers vs task regressions. ([commit 4c22fa19], [commit 89ebc578])
-- **Release docs cross-linked**: `RELEASING.md` and `docs/RELEASE.md` now reference each other so a first-time releaser landing on either file finds both. ([ORB-00040])
-- **Deprecated activity/executor YAML assets removed**: cleanup of seeded resources that are no longer referenced by the runtime. ([commit c9cf36cc])
-- **`devalue` bumped 5.7.1 → 5.8.1** in `website/`. ([commit f08446e1])
-
 ## 0.5.3
 
 ### Features
@@ -716,26 +627,13 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 
 - **No-diff PR handoffs**: `pr_open` now treats branches with zero commits ahead of the configured base as successful repository-noop handoffs, moves completed tasks to `review`, returns `pr_created: false`, and avoids creating an empty GitHub PR. ([ORB-00016])
 
-### Chores
-
-- **Workspace lint guardrails**: codified Rust practice lints for panic surfaces, stdout/stderr usage, and async lock guards in `[workspace.lints]`, with scoped allowlists and `CLAUDE.md` updated to separate enforced rules from conventions. ([ORB-00013])
-- **README workspace and MCP surface docs**: documented the `.orbit/` workspace layout, committed project-memory directories, and the agent-facing MCP tool namespaces. ([commit b99d3796])
-
 ## 0.5.1
 
 ### Fixes
 
 - **Deprecation warning routes through `tracing`**: the `knowledge.task_id_pattern` deprecation notice was emitted via `writeln!` directly to stderr from `orbit-core`, contradicting the `CLAUDE.md` "`tracing` for diagnostics; `eprintln!` only in `orbit-cli`" rule and leaking into `cargo test` output. Now goes through `tracing::warn!` with a structured `config` field.
 
-### Chores
-
-- **Release metadata recovery**: backfilled the CHANGELOG entry for v0.5.0 (tagged without one) and aligned `Cargo.toml` workspace version + `Cargo.lock` to v0.5.1. v0.5.0 binaries shipped reporting `orbit --version` `0.4.0` because the workspace Cargo version was not bumped at tag time; v0.5.1 binaries report `0.5.1`. Tag-message and commit-message formats now follow `RELEASING.md`.
-
 ## 0.5.0
-
-### Release scope
-
-- **Task artifact v2 cutover**: the v1 single-file task store is replaced end-to-end by a bundle-based v2 store with status-neutral directories, append-heavy sidecar layout, a SQLite registry for fast lookups, a runtime backend, generated indexes, atomic delete, reservation scoping by workspace binding, search refinements (binary-artifact gating, UTF-8 validation), and a forward-only YAML migration framework keyed on `schema_version`. ADRs 001/002/003/004/007 for the v2 design flipped to Accepted; the v1 store, the legacy migration helpers, and the `[task] artifact_store = "legacy"` config gate are all gone.
 
 ### Breaking Changes
 
@@ -753,36 +651,7 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 - **Forward-only YAML migration framework**: `orbit_common::migration::Plan` chains `Value → Value` steps keyed on `schema_version`; `OrbitError::Migration` separates chain failures from store/parse errors; the v2 task-bundle envelope read path now flows through `task_migrations::envelope_plan()` (empty chain today — next schema bump adds one `add_step` call). ([commit 01928e76])
 - **Semantic companion install hardening**: companion installation is version-aware, `--force` reinstalls supported, and background-companion stderr is suppressed during task-mutation indexing. ([T20260510-26])
 
-### Fixes
-
-- **`pr_open` template tolerates legacy `batch_id` overrides**: `worktree_setup` emits `batch_id` as a deprecated alias equal to `job_run_id`, and `required_job_run_id` accepts `job_run_id` → `run_id` → legacy `batch_id` in that precedence. Recovers `task_pr_pipeline` runs whose stale resource overrides still reference `{{ steps.worktree.output.batch_id }}`. ([ORB-00010])
-- **Retired v1 / stub paths fail loudly instead of silent success**: `OrbitRuntime::get_job` and `RuntimeHost` v1 job lookup return an explicit retired-v1 error instead of `Ok(None)`; the `promote_agent_main` and `revert_on_red` deterministic actions fail with a "retired stub" error instead of returning skipped JSON. Tightens validation on inputs that were already invalid by spec. ([ORB-00007])
-- **Architecture and design-doc drift fixed**: `ARCHITECTURE.md` was regenerated from `cargo metadata` to reflect the live workspace graph; `make check-design-docs` was cleared by refreshing stale `Last updated:` metadata and replacing moved/deleted file references across ten design folders. ([ORB-00006])
-- **Smoke plugin-install assertion fixed**: assertion was checking `"orbit\.` but MCP wire names use underscores (`sanitize_tool_name` in `orbit-mcp/src/adapter.rs` replaces `.` with `_`). Without this fix the on-tag smoke would have false-failed. ([ORB-00014])
-
-### Chores
-
-- **Per-crate stability tier markers**: `[package.metadata.orbit] stability = ...` added to all fourteen workspace crates (`stable`: `orbit-common`, `orbit-store`; `experimental`: `orbit-embed-companion`, `orbit-registry`; `internal`: the remaining ten). `scripts/check-stability.sh` enumerates members via `cargo metadata`, validates the marker, and fails closed with named offenders; wired into `make stability` and `make ci`. ([ORB-00005])
-- **Missing-docs guardrail**: workspace-wide `missing_docs = "warn"` in `[workspace.lints.rust]`; `RUSTDOCFLAGS=-D warnings cargo doc --no-deps --workspace` wired into `scripts/ci-guardrails.sh`; 278 accidentally-`pub` items narrowed to `pub(crate)` (6.8% of the 4,116-item baseline). Legacy allow-fences in place for the remainder. ([ORB-00004])
-- **Community health files**: `CODE_OF_CONDUCT.md` (Contributor Covenant v2.1, contact via GitHub Security Advisories), `.github/PULL_REQUEST_TEMPLATE.md` with linked Orbit task ID + `make ci` / `make check-design-docs` checkboxes, and three `.github/ISSUE_TEMPLATE/*.yml` issue forms with a 14-crate dropdown sourced from live `crates/` listing. ([ORB-00011])
-- **Release runbook (`RELEASING.md`)**: pre-1.0 versioning policy with explicit breaking-vs-non-breaking criteria, 11-step release checklist, CHANGELOG conventions, and tag-push CI workflow description. ([T20260510-24])
-- **Semantic search surfaced in agent instructions**: new semantic-search skill modeled on `orbit-graph`, plus pointers from `orbit-create-task`, `orbit-execute-task`, `orbit-review-task`, `agent_implement.yaml`, `agent_review.yaml`, `epic_orchestrator.yaml`, and `dispatch_agent.yaml`. All references use "if available" / "optional" language so missing companion never hard-fails a workflow. ([T20260511-4])
-- **Design-pattern reference docs added**: `docs/design-patterns/{command,strategy,raii_guard,newtype,error_translation}.md` so feature work can copy from documented references instead of inventing new shapes. ([commit 3adcd838], [commit c713cc30], [commit 66389575], [commit f2f82bf1], [commit aa407aa0])
-- **Design-doc decay check**: new `scripts/check_design_doc_decay.py` and `make check-design-docs` flag `docs/design/*` docs whose `Last updated:` precedes the last commit on any referenced `crates/.../*.rs` file. ([commit 18c48744])
-- **Workspace lint table introduced**: `[workspace.lints]` in root `Cargo.toml` with each crate inheriting via `lints.workspace = true`; mechanical lint rules moved out of `CLAUDE.md` prose. ([commit 0cbb037d])
-- **`CLAUDE.md` refactored to point at `ARCHITECTURE.md`**: crate layering moved to a dedicated architecture doc; `CLAUDE.md` shrinks to project rules and judgment calls. ([commit b7c590aa], [commit 9362730b], [commit 7582af9d])
-- **MCP server configuration for additional environments**: `.codex/config.toml`, `.gemini/settings.json`, and `.vscode/mcp.json` added so Codex/Gemini/VS Code agents pick up Orbit MCP out of the box. ([commit 200ee6fd])
-- **README simplification**: Quick Start trimmed; positioning sentences moved to design docs. ([commit 75699824])
-- **Agent skills symlink**: `.agents/skills` symlink added so external agent harnesses pick up the seeded skill set. ([commit 9f7bf89b])
-- **Lessons log update**: `docs/LESSONS.md` extended with a workflow lesson. ([commit 024013af])
-
 ## 0.4.0
-
-### Release scope
-
-- **Pivot to "auditable agentic task management"**: README and landing-page positioning realigned around intent attribution and audit trails, with throughput and parallel-execution sections refreshed to match.
-- **Knowledge graph reads on SQLite**: per-build `graph_index.sqlite` sidecar with read-only fast paths for `graph.overview`, `graph.search`, and `graph.show`, plus an output-equivalence harness against the JSON fallback.
-- **Semantic search foundation (preview)**: hybrid (BM25 + cosine + RRF) retrieval over tasks, delivered as a separately-installed `orbit-embed-companion` binary. Preview status — surface may change before v1.
 
 ### Breaking Changes
 
@@ -796,7 +665,6 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 
 ### Features
 
-- **Knowledge graph SQLite read facade**: per-build `graph_index.sqlite` with versioned schema, read-only facade with graceful JSON fallback, and SQL fast paths for `graph.overview` (aggregation), `graph.search` (exact-name, path-prefix, and substring), and `graph.show` (selector lookup with `children` repopulated via a forward-pointer edge table). ([T20260509-70], [T20260509-71], [T20260509-72], [T20260509-73], [T20260509-74])
 - **Knowledge graph latency wins**: lazy source hydration via `GraphReadOptions`, a bounded default-ranking work cap on search, and a `BinaryHeap` top-K in `overview.top_files`. ([T20260509-65], [T20260509-67], [T20260509-68])
 - **Knowledge command surface**: graph business logic — ranking, classification, fast-path orchestration — relocated into `orbit_knowledge::commands::*` so non-tool consumers share canonical behavior. ([T20260510-5])
 - **Semantic search subsystem**: `orbit-embed` client, `orbit-embed-companion` binary, `embeddings` and `tasks_fts` SQLite schema, paragraph chunker, BLAKE3 dedup, task-mutation index hooks, and `orbit semantic install/uninstall/reindex/stats/search/related` CLI plus MCP surface. ([T20260510-3], [T20260510-9], [T20260510-10], [T20260510-20])
@@ -805,45 +673,6 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 - **Recovery role configurability**: seeded step-failure recovery activity uses `role: reviewer` and resolves agent/model from `[agent.reviewer]` config instead of hardcoded Codex. ([T20260509-14])
 - **Done-task sync cap**: website task sync caps generated pages to the 100 most recent `done` tasks. ([T20260509-20])
 - **Debug-job-failure skill**: seeded `orbit-debug-job-failure` SKILL.md teaching agents how to investigate failed/stuck/cancelled job runs across run state, audit events, blobs, and live processes. ([T20260509-79])
-- **Graph-latency benchmark**: split `benchmarks/CONVENTIONS.md` into agent vs perf RESULTS schemas, scaffolded `benchmarks/graph-latency/` with three-tier Python/Java/Rust corpora, and ran v1/v2 sweeps against the post-SQLite read paths. ([T20260509-63], [T20260509-87], [T20260510-4])
-
-### Fixes
-
-- **Output-equivalence between SQL and fallback paths**: `graph.search` SQL widened to substring match aligned with the navigator and `graph.show` repopulates `children` via a forward-pointer edge table. ([T20260510-1], [T20260510-2])
-- **Workflow stop on implementer envelope failure**: `peek_response_status` extracts embedded Orbit envelopes from CLI stdout that contains explanatory prose before the JSON, so failed implementations no longer advance to push/PR. ([T20260509-15])
-- **`ship-auto` empty backlog**: condition evaluator skip guards no longer fail when `bundle_count` is zero. ([T20260509-11])
-- **Parallel dispatcher hang on worker timeout**: scoped-thread workers now exit through a cancellable boundary so the pipeline returns within its own timeout. ([T20260509-38])
-- **Subprocess timeout cleanup**: bare `spawn_with_timeout` starts children in a process group/session so grandchildren are killed and pipes don't leak. ([T20260509-40])
-- **Stdout no longer duplicated into `DispatchOutcome`**: blob refs are the source of truth, with a bounded preview retained. ([T20260509-43])
-- **Path-traversal hardening**: task store ID validation, policy candidate-path component checks, resource-name validation in policy/executor stores, and an absolute-path probe for `sandbox-exec`. ([T20260509-26], [T20260509-27], [T20260509-28], [T20260509-30])
-- **Tool deletion guard**: `orbit.task.delete` MCP tool respects the same protected-status guard as `orbit task delete`. ([T20260509-44])
-- **Backend resolution**: invalid `[runtime] backend` values reject before dispatch instead of falling through to preview HTTP. ([T20260509-45])
-- **Architecture guardrail**: `scripts/check-dependency-direction.sh` derives the workspace-crate list from `cargo metadata` so new crates can't drift past the check. ([T20260509-46])
-- **JSON output purity**: `orbit task approve --all-proposed --json` and reject equivalents emit pure JSON on stdout. ([T20260509-47])
-- **Dashboard dependencies**: dependency-status index includes `done` and `archived` tasks so visible rows don't misreport completed deps as missing. ([T20260509-48])
-- **Reject help/help-truth alignment**: top-level task help describes the actual reject transition matrix. ([T20260509-50])
-- **Symlink scanning**: knowledge scanner skips and canonicalizes symlinked dirs to prevent index escape and cycles. ([T20260509-33])
-- **Graph freshness**: manifest persists exact Git identity rather than relying on committer timestamp. ([T20260509-34])
-- **GitHub PR result validation**: `github.pr.review` and `github.pr.comment.reply` validate JSON shape before reporting success with id `0`. ([T20260509-36])
-- **MCP name collisions**: dot-to-underscore name mapping detects ambiguity on startup. ([T20260509-37])
-- **Git author identity**: workflow commits set per-implementer author dynamically without writing repo-local `git config user.*`. ([T20260508-22], [T20260509-12])
-- **CI clippy guardrails**: cleared `manual_contains`, `needless_borrow`, `useless_conversion`, `match_like_matches_macro`, `empty_line_after_doc_comments`, `too_many_arguments`, `doc_lazy_continuation`, and `question_mark` violations under `-D warnings`. ([T20260509-18], [T20260509-61], [T20260510-15], [T20260510-22])
-- **`fast-uri` Dependabot alerts**: addressed and documented dev-only `fast-uri` advisories on `website/package-lock.json`. ([T20260509-57])
-
-### Chores
-
-- **Module decomposition**: split `command/web/api.rs` (3,376 LOC), `activity_job/job_executor.rs` (2,841 LOC), `activity_job/cli_runner.rs` (2,161 LOC), `runtime/orbit_tool_host/mod.rs` (2,033 LOC), `command/mcp/setup.rs` (1,964 LOC), and the `activity_job/groundhog.rs` runner. ([T20260509-1], [T20260509-2], [T20260509-3], [T20260509-4], [T20260509-5], [T20260509-19])
-- **Embed crate ownership**: relocated `vector::*` and the semantic command surface from `orbit-store` and `orbit-core` into `orbit-embed`, reversing the dep arrow so `orbit-store` no longer knows the embedding feature exists. ([T20260510-20])
-- **Panic audit**: classified ~1,864 `unwrap` / `expect` / `panic!` sites and removed the accidental ones in execution-critical paths. ([T20260509-6])
-- **Test coverage on highest-risk seams**: focused tests for the activity/job DAG executor and the macOS sandbox/policy boundary. ([T20260509-7])
-- **Plan-duel `context_files` extraction**: duel resolver auto-populates `task.context_files` from the winning plan's Context Files section. ([T20260509-9])
-- **Knowledge-graph, policy-sandbox, and Groundhog doc hygiene**: refreshed owned design docs to current surface.
-- **Task lineage design (first draft)**: seeded `docs/design/task-lineage/` with edge schema, three derivers, bipartite bridge, `feature` closure, and symbol-biography renderer. ([T20260510-21])
-- **Project learnings design (seed)**: seeded `docs/design/project-learnings/` with hook-injection layer rationale; deferred until semantic search is Accepted. ([T20260510-11])
-- **Semantic search v2 design pivot**: switched to companion-binary architecture per ADR-005. ([T20260510-3])
-- **Orbit-create-task skill**: tightened `context_files` rule (existing modified or deleted files only, prefer file-level selectors). ([T20260509-83])
-- **`make ci` alignment**: `make build` failures resolved alongside the dep-direction script. ([T20260510-22])
-- **Release metadata**: bumped Cargo workspace, plugin manifests, and npm proxy metadata to v0.4.0.
 
 ## 0.3.1
 
@@ -858,11 +687,6 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 - **macOS sandbox and CLI execution**: allowed Claude's `$HOME/.claude.json` lock/tmp siblings, re-allowed the active job-run worktree after global deny rules, and demoted successful CLI exits when the inner Orbit envelope reported failure. ([T20260508-13], [T20260508-17])
 - **Workflow defaults and links**: made workflow base branches resolve from `[workflow] base_branch` when CLI flags are omitted, and fixed task-ID links in generated PR bodies with an opt-in URL template. ([T20260508-11], [T20260508-12])
 - **CI clippy guardrails**: grouped macOS sandbox spawn inputs into a request struct so strict workspace clippy passes under `-D warnings`. ([T20260508-21])
-
-### Chores
-
-- **Release metadata**: bumped Cargo workspace crates, plugin manifests, install examples, and npm proxy metadata to v0.3.1. ([T20260508-21])
-- **Release packaging**: kept GitHub Release tarballs, checksums, Homebrew tap updates, and installer smoke tests as the supported release path, while removing the npm publish step from the tag workflow.
 
 ## 0.3.0
 
@@ -887,21 +711,6 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 - **Groundhog execution model (preview)**: added Groundhog chronicle serialization, workspace snapshots, verb tools, checkpoint verification, and a dedicated Groundhog v1 activity runner. ([T20260420-0509], [T20260420-0509-3], [T20260420-0509-4], [T20260420-0510], [T20260420-0510-2])
 - **Provider and evaluation support**: added Gemini support, configurable agent/model selection, provider invocation traces, HTTP LoopTransport implementations for Anthropic/OpenAI-compatible/Gemini providers, planning duels, scoreboard attribution improvements, and versioned knowledge-graph benchmark harnesses. ([T20260411-1937-2], [T20260412-0457-2], [T20260412-1939], [T20260412-2129], [T20260418-0645], [T20260418-0759], [T20260422-1609])
 
-### Fixes
-
-- **Job run observability**: `orbit run ship --json`, `orbit run history`, `orbit run show`, and direct `orbit job run` now retain actionable failure details and durable run-state/job-history records, including synthetic job-level steps for early v2 pipeline failures. ([T20260423-0445], [T20260423-2004-4], [T20260425-2010], [T20260426-0742])
-- **Branch-scoped knowledge graph refs**: graph builds now write `.orbit/knowledge/graph/refs/heads/<branch>.json` files that point at immutable per-build indexes, reads default to the current git branch with default-branch fallback, and legacy `.orbit/knowledge/graph/refs/current.json` stores auto-migrate on first open/write. ([T20260421-0358])
-- **Knowledge graph hardening**: graph reads and refreshes recover from corrupted stores, avoid stale worktree data, gate refresh/search hot paths, prune missing context files from locks, and hydrate task IDs idempotently during attribution. ([T20260416-0719], [T20260417-0307], [T20260420-0540], [T20260421-0652])
-- **Dispatch and locking correctness**: task locks now detect directory/file overlaps, backlog selection filters locked groups, failed task-scoped runs move tasks to blocked with job/run/error context, and drained local batches no longer fail spuriously. ([T20260412-0443], [T20260417-0301], [T20260419-2109], [T20260420-0014])
-- **Workflow compatibility**: merged object-valued job defaults with caller input, aligned the Quick Start approval flow with the current task lifecycle, and routed retired workflow inspection docs/errors to `orbit run history/show`. ([T20260423-0445], [T20260423-0447], [T20260423-2004-2], [T20260425-2010], [T20260426-0742])
-- **Release and developer tooling**: restored release CI targets, repaired advertised developer targets, kept custom roots isolated, and fixed crashes/empty listings after seeded activity/job initialization. ([T20260419-2347], [T20260423-2004], [T20260423-2004-3], [T20260423-2004-5])
-- **Security and concurrency hardening**: added localhost origin checks for web write endpoints, serialized diagnostics JSONL appends, hardened task-store concurrency, tightened filesystem/tool-runtime path boundaries, and strengthened agent protocol handling. ([T20260417-0557], [T20260417-0558], [T20260418-1928])
-
-### Chores
-
-- **Crate architecture**: extracted `orbit-common`, `orbit-knowledge`, and `orbit-mcp`, merged the older `orbit-types` surface into `orbit-common`, decomposed execution/runtime modules, and kept crate dependency direction aligned with the documented architecture. ([T20260411-0008], [T20260419-2014])
-- **Documentation and positioning**: added Orbit positioning docs, design-doc conventions, activity-job/knowledge-graph/Groundhog design docs, benchmark reports, and README updates for the current workflow and MCP surfaces.
-
 ## 0.2.0
 
 ### Features
@@ -914,12 +723,6 @@ This is a security-hardening release: the bulk of the changes close secret-leak,
 - **`--parallelism` flag**: serialized as JSON integer instead of string, fixing schema validation failure on `orbit run ship --parallelism N`
 - **Stale default artifacts**: `orbit workspace init` now always refreshes default skills, activities, and jobs to their latest embedded versions (custom artifacts are preserved)
 - **Clippy warning**: resolved unused-mut warning and removed clippy from CI
-
-### Chores
-
-- Default branch renamed from `agent-main` to `main`
-- Removed `orbit` label from PR creation
-- Agent configuration updates
 
 ## 0.1.0
 
