@@ -321,7 +321,8 @@ fn review_timing_writes_remain_readable_by_previous_readers() {
                 .expect("review timing write round trip");
             store.save().expect("review timing write round trip");
             let text = std::fs::read_to_string(&path).expect("review timing write round trip");
-            let document: toml::Value = text.parse().expect("review timing write round trip");
+            let document: toml::Value =
+                toml::from_str(&text).expect("review timing write round trip");
             assert_eq!(
                 document["review"]["timing"].as_str(),
                 Some(canonical),

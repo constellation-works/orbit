@@ -48,7 +48,7 @@ fn cleanup_legacy_grok_path(target: &ConfigTarget, server_id: &str) -> Result<()
     {
         return Ok(());
     }
-    let parsed: toml::Value = doc.to_string().parse().map_err(|err| {
+    let parsed: toml::Value = toml::from_str(&doc.to_string()).map_err(|err| {
         OrbitError::InvalidInput(format!("invalid TOML '{}': {err}", path.display()))
     })?;
     let owned = parsed
@@ -127,7 +127,7 @@ fn legacy_grok_entry(
         return Ok(None);
     };
     let doc = load_toml_document(path)?;
-    let parsed: toml::Value = doc.to_string().parse().map_err(|err| {
+    let parsed: toml::Value = toml::from_str(&doc.to_string()).map_err(|err| {
         OrbitError::InvalidInput(format!("invalid TOML '{}': {err}", path.display()))
     })?;
     parsed

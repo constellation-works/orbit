@@ -1061,8 +1061,9 @@ arbitrary = { nested = true }
             && !updated.contains("delegate_approval"),
         "the repair removes only the retired keys: {updated}"
     );
-    let parsed: Value = serde_json::to_value(updated.parse::<toml::Value>().expect("updated TOML"))
-        .expect("json config");
+    let parsed: Value =
+        serde_json::to_value(toml::from_str::<toml::Value>(&updated).expect("updated TOML"))
+            .expect("json config");
     assert_eq!(
         parsed["plugins"]["future"]["arbitrary"]["nested"], true,
         "plugin config survives cleanup"
@@ -2142,17 +2143,14 @@ fn doctor_fixes_unknown_config_without_retired_keys() {
         fs::read_to_string(fixture.work.join(".orbit/config.toml.bak")).expect("workspace backup"),
         workspace_body
     );
-    let updated: toml::Value = fs::read_to_string(&global)
-        .expect("global")
-        .parse()
-        .expect("TOML");
+    let updated: toml::Value =
+        toml::from_str(&fs::read_to_string(&global).expect("global")).expect("TOML");
     assert_eq!(updated["workflow"]["base_branch"].as_str(), Some("main"));
     assert!(updated["workflow"].get("base_branc").is_none());
     let updated = fs::read_to_string(&workspace).expect("workspace");
     assert!(updated.contains("# keep this note"));
     assert!(
-        updated
-            .parse::<toml::Value>()
+        toml::from_str::<toml::Value>(&updated)
             .expect("TOML")
             .get("future")
             .is_none()

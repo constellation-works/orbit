@@ -722,10 +722,9 @@ fn workspace_config_set_validates_crews_against_the_effective_config() {
         .args(["config", "set", "workflow.base_branch", "qa"])
         .assert()
         .success();
-    let valid_workspace: toml::Value = fs::read_to_string(&workspace_config)
-        .expect("read workspace config")
-        .parse()
-        .expect("parse workspace config");
+    let valid_workspace: toml::Value =
+        toml::from_str(&fs::read_to_string(&workspace_config).expect("read workspace config"))
+            .expect("parse workspace config");
     assert_eq!(
         valid_workspace["workflow"]["base_branch"].as_str(),
         Some("qa"),

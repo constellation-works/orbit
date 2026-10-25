@@ -1058,7 +1058,8 @@ pub(super) fn timing_alias_rewrites_preserve_published_completion_authentication
     let original = f.runtime.operation_policy().clone();
     let config = f.repo.join(".orbit/config.toml");
     for spelling in ["after_landing", "after-landing", "none", "off"] {
-        let mut document: toml::Value = std::fs::read_to_string(&config).unwrap().parse().unwrap();
+        let mut document: toml::Value =
+            toml::from_str(&std::fs::read_to_string(&config).unwrap()).unwrap();
         document["review"]["timing"] = toml::Value::String(spelling.into());
         std::fs::write(&config, toml::to_string(&document).unwrap()).unwrap();
         // Authenticate both the historical spelling and its canonical save.

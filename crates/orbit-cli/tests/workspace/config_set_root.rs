@@ -237,7 +237,7 @@ fn config_set_preserves_bytes_and_confirmations_in_each_mode() {
             "['A', 'B']",
         ])
         .success();
-    let parsed: toml::Value = fs::read_to_string(&workspace).unwrap().parse().unwrap();
+    let parsed: toml::Value = toml::from_str(&fs::read_to_string(&workspace).unwrap()).unwrap();
     assert_eq!(
         parsed["execution"]["env"]["pass"].as_array().unwrap(),
         &vec![

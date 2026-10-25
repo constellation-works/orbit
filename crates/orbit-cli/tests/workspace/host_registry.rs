@@ -79,7 +79,7 @@ fn host_add_reads_identity_from_the_remote_and_refusals_leave_the_file_untouched
     );
     assert_eq!(added["host"]["reachable"], true, "{added}");
     let written = fs::read_to_string(fleet.hosts_file()).expect("hosts.toml written");
-    let parsed: toml::Value = written.parse().expect("hosts.toml parses");
+    let parsed: toml::Value = toml::from_str(&written).expect("hosts.toml parses");
     assert_eq!(parsed["schema_version"].as_integer(), Some(1), "{written}");
     assert_eq!(
         parsed["hosts"][0]["machine_id"].as_str(),
@@ -422,7 +422,7 @@ fn doctor_migration_command_adds_an_existing_legacy_host_and_clears_the_warning(
     let output = String::from_utf8_lossy(&migrated.stdout);
     assert!(output.contains("migrated alpha"), "{output}");
     let written = fs::read_to_string(fleet.hosts_file()).expect("hosts.toml written");
-    let parsed: toml::Value = written.parse().expect("hosts.toml parses");
+    let parsed: toml::Value = toml::from_str(&written).expect("hosts.toml parses");
     assert_eq!(parsed["hosts"].as_array().map(Vec::len), Some(1));
     assert_eq!(
         parsed["hosts"][0]["machine_id"].as_str(),
