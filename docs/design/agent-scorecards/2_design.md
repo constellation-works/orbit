@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-24
+last_updated: 2026-10-25
 last_validated: 2026-10-23
 status: Draft
 feature: agent-scorecards
@@ -111,6 +111,7 @@ Every problem counts against exactly one role, or against none (**Not scored**).
 | Description or criteria edited after the first implementation run started | task-field history naming the document | Orchestrator | the task's orchestrator attribution |
 | Agent blocker whose kind names a criterion, spec, requirement, scope or ambiguity | `task_blocked_by_agent` | Orchestrator | the task's orchestrator attribution |
 | Final-recovery escalation citing the criteria | `final_recovery_escalated` | Orchestrator | the task's orchestrator attribution |
+| Confirmed task-pilot hold with a qualifying scope finding (§5.1), once per task and deduplicated against its confirming event | task-pilot receipt and shared history settlement | Orchestrator | the task's orchestrator attribution |
 | Repeat run, `[BLOCKED]` PR, unmerged delivery PR or operator requeue with cause `spec` | history, failure handoff, PR refs | Orchestrator | the task's orchestrator attribution |
 | The same rework with cause `crew` | same records | Implementer | the implementation run that ended the attempt |
 | Review verdict `reject`, unless it is a false reject | review report | Implementer | the implementation run whose candidate was reviewed |
@@ -207,8 +208,12 @@ Rows are keyed by `(orchestrator, orchestrator_model)`: the crew the task names 
 | Term | Weight | Definition |
 |---|---|---|
 | Landed | +1 | Landed tasks, one each whatever their complexity. |
-| Spec defects | −1 | Description or criteria edited after the first run started, criteria blocks, criteria escalations, and regressions with escape `spec_ambiguous`. |
+| Spec defects | −1 | Description or criteria edited after the first run started, criteria blocks, criteria escalations, regressions with escape `spec_ambiguous`, and confirmed task-pilot scope holds (deduplicated below). |
 | Spec-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues whose cause is `spec`. |
+
+A confirmed held task-pilot assessment adds one spec-defect charge when its holding findings include `validation_tool_warnings`, `adr_conflicts`, `surface_warnings` or `utility_warnings`. These identify a specification that cannot be delivered as written: unavailable validation tools or host capabilities, conflicts with current code or contracts, or holding surface and utility findings. `blocked_by` reports prerequisite ordering and never qualifies by itself; advisory findings never hold. The shared pilot settlement (§5.4) decides confirmation. Dismissed, missed, pending, excluded and clean assessments add no orchestrator charge. The pilot terms and their minimum of 10 settled assessments are unchanged; that threshold does not apply to orchestrator charges.
+
+Pilot warnings charge a task at most once, however many assessments or findings are confirmed. If the history event confirming any qualifying warning already counts as a spec edit, criteria block or criteria escalation on that task, retain that existing charge and add no pilot-warning charge. This deduplicates the confirming event, not unrelated defects later on the same task. The occurrence detail names the qualifying finding kinds and full text, the pilot run (or explicitly says it is unknown), and the confirming event. It appears among **Biggest penalty** tasks when spec defects are the largest penalty. Like other orchestrator problems, its window follows the task's creation, not the pilot settlement time.
 
 A row's raw score is the percent of its owned tasks that landed, less its spec problems per 100 owned tasks. A spec problem costs as much as a landing earns, so a task whose spec needed fixing earns nothing, and spec defects on a tenth of a row's tasks cost it 10 points on a scale where every row lands most of its work.
 
@@ -415,7 +420,7 @@ Missed scope blocks have one source: block-triage markers. The blocked-task tria
 
 Each assessment counts against the crew and model of the pilot run its receipt names, through the same attribution as graded tasks (above), never the task's own crew. A row can therefore have settled assessments but no graded done task (`units` 0).
 
-The warning terms are not problems in the attribution strip (§3.3). They grade the pilot's warnings and do not reassign the block or edit, which keeps its own owner.
+The pilot warning terms are not problems in the attribution strip (§3.3). They grade the pilot's warnings and do not reassign the block or edit, which keeps its own owner. A confirmed qualifying hold can separately yield the orchestrator spec-defect charge in §5.1, deduplicated against its confirming event.
 
 Shown, not scored (`stats`): recall, precision and F1 pooled over the row's tasks, the filer's F1, landed files no pilot selector covered, unused selectors, selectors per task, the share of placed tasks assessed within one tier, cost per assessment (null when a pilot run is missing or unpriced), median pilot run duration, `tier_matrix`, warning precision (confirmed ÷ (confirmed + dismissed), null with neither), holds per 100 assessments written in the window, and the settled, excluded-or-pending and missed-scope-block counts.
 

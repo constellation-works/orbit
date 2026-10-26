@@ -20,6 +20,7 @@ use serde_json::{Map, Value, json};
 
 use super::facts::{Problem, Record, RegressionLink, Review, TaskFacts, filing_attempt};
 use super::records::{Cause, label};
+use super::roles::pilot_warnings::{Assessment, Outcome};
 use super::roles::pilots::{Graded, costly_charge_detail, wait_charge_detail};
 use super::{AgentFacts, AgentRole, MODEL_UNKNOWN};
 use crate::application::task::FindingVerdict;
@@ -89,6 +90,7 @@ pub(super) fn attribute(
         for record in &task.records {
             charges.push(record_charge(task, record));
         }
+        charges.extend(pilot_warning_charge(task));
         for review in &task.reviews {
             charges.extend(review_charge(task, review));
             for finding in review.disposed() {
@@ -153,6 +155,69 @@ pub(super) fn attribute(
             .then(left.task_id.cmp(&right.task_id))
     });
     (charges, credits)
+}
+
+/// A confirmed scope warning charges its orchestrator once per task. The
+/// shared pilot settlement is authoritative, without the pilot score's
+/// minimum support. Keep existing charges when they already count the event
+/// that confirmed any qualifying warning; unrelated later defects still count.
+fn pilot_warning_charge(task: &TaskFacts) -> Option<Charge> {
+    task.orchestrator.as_ref()?;
+    let mut confirmed = None;
+    for assessment in &task.warnings.assessments {
+        if assessment.outcome != Outcome::Confirmed
+            || !assessment
+                .held
+                .iter()
+                .any(|finding| spec_warning(&finding.kind))
+        {
+            continue;
+        }
+        let Some((at, _)) = &assessment.settled else {
+            continue;
+        };
+        if task.records.iter().any(|record| {
+            record.at == *at
+                && matches!(
+                    record.problem,
+                    Problem::SpecEdit | Problem::CriteriaBlock | Problem::CriteriaEscalation
+                )
+        }) {
+            return None;
+        }
+        confirmed.get_or_insert(assessment);
+    }
+    let assessment: &Assessment = confirmed?;
+    let (at, settlement) = assessment.settled.as_ref()?;
+    let findings: Vec<String> = assessment
+        .held
+        .iter()
+        .filter(|finding| spec_warning(&finding.kind))
+        .map(|finding| format!("{}: {}", finding.kind, finding.text))
+        .collect();
+    let run_id = assessment.run_id();
+    Some(
+        Draft {
+            task,
+            problem: Problem::PilotWarning,
+            at: *at,
+            detail: format!(
+                "confirmed task-pilot hold (pilot run {}): {}; {settlement}",
+                run_id.as_deref().unwrap_or("unknown"),
+                findings.join("; ")
+            ),
+            cause: None,
+        }
+        .orchestrator(),
+    )
+}
+
+/// Prerequisite ordering (`blocked_by`) is not an unattainable specification.
+fn spec_warning(kind: &str) -> bool {
+    matches!(
+        kind,
+        "validation_tool_warnings" | "adr_conflicts" | "surface_warnings" | "utility_warnings"
+    )
 }
 
 /// A problem on `task` before its owner is decided.
@@ -304,7 +369,8 @@ fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
         }
         // Read from settlements, verdicts, relations and pilot grading, never
         // from records.
-        Problem::ReviewReject
+        Problem::PilotWarning
+        | Problem::ReviewReject
         | Problem::ReviewFixes
         | Problem::Regression
         | Problem::DisposedFinding
