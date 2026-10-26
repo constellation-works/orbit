@@ -14,7 +14,7 @@
 // config-topics.js; this module owns the tab, Crews and the throttle panel.
 
 import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
-import { renderAllKeys, renderExecution, renderMachine, renderReview, renderWorkflow, resetTopics } from './config-topics.js';
+import { renderAllKeys, renderExecution, renderMachine, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
 
@@ -361,11 +361,11 @@ function keyEditor(row, payload, node) {
   return cancelOnEscape(editor);
 }
 
-/// The fail-closed first write: when the workspace file does not exist yet,
+/// The fail-closed first write: when the workspace has no policy yet,
 /// the refusal is shown with the same two explicit choices `orbit config set`
 /// offers, rather than a silent file creation.
 function initChoices(payload, retry) {
-  if (!editing?.error || payload?.workspace_file_exists !== false || writeScope() !== "workspace") {
+  if (!editing?.error || !workspacePolicyMissing(payload) || writeScope() !== "workspace") {
     return [];
   }
   return [

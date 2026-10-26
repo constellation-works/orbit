@@ -64,6 +64,8 @@ class Node {
   }
   setAttribute(name, value) { this.attrs[name] = String(value); }
   getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; }
+  set href(value) { this.setAttribute('href', value); }
+  get href() { return this.getAttribute('href') || ''; }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
   contains(node) { for (let current = node; current; current = current.parentNode) if (current === this) return true; return false; }
   focus() { document.activeElement = this; }

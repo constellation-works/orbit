@@ -668,7 +668,7 @@ function jobLink(target) {
   const jobId = jobIdFromTarget(target);
   if (!jobId) return el("span", { class: "mono", text: target || "—" });
   const link = el("a", { class: "mono operation-run-link operation-job-link operation-link", text: jobId, title: `Open ${jobId} under Jobs` });
-  link.href = `#jobs/catalogue?job=${encodeURIComponent(jobId)}`;
+  link.href = "#jobs/catalogue";
   return link;
 }
 
@@ -1655,11 +1655,6 @@ function jobRow(job, workspace) {
 
 function renderJobs(payload) {
   if (payload.view !== "live") lastJobs = payload;
-  if (payload.routines) {
-    lastOperations = payload.routines;
-    noteCronZone(lastOperations);
-    updateRoutineFailureBadge(scopedRoutines(lastOperations));
-  }
   const isLive = payload.view === "live";
   const body = $(isLive ? "jobs-live-body" : "jobs-body");
   const count = $(isLive ? "jobs-live-count" : "jobs-count");
@@ -1734,7 +1729,14 @@ export function fetchAndRenderJobs() {
       fetchJson(withInactivePlugins("/api/routines")),
       fetchJson(`/api/job-runs?limit=${JOB_RUN_LIMIT}${live ? "&state=active" : ""}`),
     ]).then(([routines, runs]) => ({ routines, runs, view: live ? "live" : "catalogue" })),
-    renderJobs, countId);
+    (payload) => {
+      // Only a fresh catalogue/live read adopts its routines snapshot. A
+      // repaint from cached jobs must retain a newer Routines readback.
+      lastOperations = payload.routines;
+      noteCronZone(lastOperations);
+      updateRoutineFailureBadge(scopedRoutines(lastOperations));
+      renderJobs(payload);
+    }, countId);
 }
 
 function operationCountId(bodyId) {

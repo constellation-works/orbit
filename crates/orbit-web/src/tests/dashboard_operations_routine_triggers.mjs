@@ -2,7 +2,7 @@
 // A state-triggered routine reports its own cadence, waiting text and latest
 // run, and the next-hour strip plots every slot of a frequent cron routine.
 const { setWorkspace } = await import('./js/common.js');
-const { initOperations, fetchAndRenderOperations, peekRoutineFailures } = await import('./js/operations.js');
+const { initOperations, fetchAndRenderOperations, fetchAndRenderJobs, peekRoutineFailures } = await import('./js/operations.js');
 const get = id => document.getElementById(id);
 const assert = (condition, message) => { if (!condition) throw new Error(message); };
 const response = (payload, status = 200) => ({ ok: status === 200, status, json: async () => payload, text: async () => JSON.stringify(payload) });
@@ -12,6 +12,8 @@ const capabilities = { routine_toggle: allowed, routine_trigger: allowed, job_ru
 const frozenNow = Date.parse('2026-10-08T12:48:00Z');
 Date.now = () => frozenNow;
 let streakCount = 3;
+let sweepEnabled = true;
+const toggles = [];
 let truncated = false;
 let missedRunPolicy = 'skip';
 let triggerPost = null;
@@ -25,6 +27,13 @@ const routine = (name, extra) => ({
 });
 globalThis.fetch = async (path, options = {}) => {
   const url = new URL(path, 'http://dashboard.test');
+  if (url.pathname === '/api/routines/toggle' && options.method === 'POST') {
+    const body = JSON.parse(options.body);
+    toggles.push(body);
+    assert(body.expected_enabled === sweepEnabled, 'a second toggle uses the freshly read enabled state');
+    sweepEnabled = body.enabled;
+    return response({ message: 'Saved' });
+  }
   if (url.pathname === '/api/routines/trigger' && options.method === 'POST') {
     triggerPost = JSON.parse(options.body);
     if (triggerPostError) return response({ error: triggerPostError }, 409);
@@ -35,7 +44,7 @@ globalThis.fetch = async (path, options = {}) => {
     machine_name: 'fixture-host', capabilities, controls_authorized: true, cron_zone: { name: null, offset_seconds: 0 },
     routines: [
       routine('ci-failure-sweep-orbit', {
-        recent_fires: recentFires, last_fire: recentFires[0], failure_streak: { count: streakCount, since: '2026-10-08T12:04:00Z', truncated },
+        enabled: sweepEnabled, recent_fires: recentFires, last_fire: recentFires[0], failure_streak: { count: streakCount, since: '2026-10-08T12:04:00Z', truncated },
         cron: '*/20 * * * *', next_evaluation: { state: 'scheduled', at: '2026-10-08T13:00:00Z', hypothetical: false },
       }),
       routine('daily-digest', {
@@ -64,6 +73,8 @@ globalThis.fetch = async (path, options = {}) => {
 };
 setWorkspace('one');
 initOperations({ getOperationsSubtab: () => 'routines', getWorkspaces: () => [{ id: 'one', name: 'one', status: 'active' }, { id: 'two', name: 'two', status: 'active' }] });
+// Prime the catalogue cache before the independent routines refresh.
+await fetchAndRenderJobs();
 await fetchAndRenderOperations('routines');
 
 const rowText = name => Array.from(get('routines-body').querySelectorAll('.operation-row')).find(row => row.textContent.includes(name))?.textContent || '';
@@ -117,6 +128,15 @@ strip.lastElementChild.click();
 assert(runId === 'jrun-strip-0' && location.hash === '#runs/jrun-strip-0' && new URL(location.href).searchParams.get('workspace') === 'one', 'clicking the newest dot opens its run in the originating workspace');
 setActiveTab('operations/routines');
 
+// A toggle's final repaint must retain the new snapshot.
+const sweepSwitch = () => sweepRow().querySelector('[role="switch"]');
+sweepSwitch().click();
+await new Promise(requestAnimationFrame);
+assert(sweepSwitch().getAttribute('aria-checked') === 'false', 'toggle final repaint keeps the routine disabled after visiting Catalogue');
+sweepSwitch().click();
+await new Promise(requestAnimationFrame);
+assert(toggles.length === 2 && sweepSwitch().getAttribute('aria-checked') === 'true', 'a second toggle succeeds without stale state');
+
 streakCount = 2;
 await fetchAndRenderOperations('routines');
 assert(!get('routines-body').querySelector('.routine-failures') && badge.hidden, 'two failures retain their row label but clear the header and Health warnings');
@@ -124,6 +144,12 @@ streakCount = 100;
 truncated = true;
 await fetchAndRenderOperations('routines');
 assert(sweepRow().querySelector('.routine-failure-streak').textContent.includes('at least 100') && sweepRow().querySelector('.routine-failure-streak').textContent.includes('or earlier'), 'bounded history never claims an exact streak or exact starting time');
+
+// Opening and closing an editor also retains the latest routine read.
+sweepRow().querySelector('.schedule-edit').click();
+assert(sweepRow().querySelector('.routine-failure-streak').textContent.includes('at least 100') && !badge.hidden, 'opening a trigger editor retains the fresh failure streak');
+[...sweepRow().querySelectorAll('.schedule-editor button')].find(button => button.textContent === 'Cancel').click();
+assert(sweepRow().querySelector('.routine-failure-streak').textContent.includes('at least 100') && !badge.hidden, 'closing a trigger editor retains the fresh failure streak');
 
 setWorkspace('two');
 assert(badge.hidden, 'workspace change immediately clears the Health warning');

@@ -106,6 +106,7 @@ function errorMessageDisclosure(value, row, ctx, td) {
   const shortened = shortenWorktreePaths(full);
   td.title = row.target ? `${row.target}: ${full}` : full;
   const details = el("details", { class: "error-message" });
+  details.addEventListener("click", event => event.stopPropagation());
   const summary = el("summary");
   summary.appendChild(el("span", {
     class: "error-message-preview",

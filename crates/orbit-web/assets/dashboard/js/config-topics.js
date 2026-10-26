@@ -204,7 +204,7 @@ async function submitDrawerMutation(session, context, request) {
 // when a workspace file separate from the global one sets policy. The first
 // workspace write then needs an explicit init choice, as `orbit config set`
 // asks for --seed-from-global or --fresh, and is refused without one.
-function workspacePolicyMissing(payload) {
+export function workspacePolicyMissing(payload) {
   if (payload?.workspace_file_exists === false) return true;
   const layers = payload?.layers;
   return Boolean(layers?.workspace?.path) && layers.workspace.path !== layers.global?.path && layers.execution_not_inherited === false;

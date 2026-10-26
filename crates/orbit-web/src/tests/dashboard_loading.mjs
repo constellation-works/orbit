@@ -664,7 +664,9 @@ for (const selectedWindow of ['24h', '7d']) {
   check(errorsBounds.left >= panelBounds.left - 1 && errorsBounds.right <= panelBounds.right + 1
     && getComputedStyle(errorsMain).overflowX === 'auto'
     && previewStyle.webkitLineClamp === '2', 'at 1440x900 the Errors table stays in its panel and the message preview wraps to two lines');
-  messageDisclosure.open = true;
+  const errorsHash = location.hash;
+  messageDisclosure.querySelector('summary').click();
+  check(messageDisclosure.open && location.hash === errorsHash, 'clicking a message disclosure expands it without opening its run');
   check(messageDisclosure.querySelector('.error-message-full').textContent === longErrorMessage, 'expanding an error message reveals its full text');
   const errorRunLink = node('diag-body').querySelector('.diagnostics-errors-main .c-job_run a');
   const errorRunUrl = new URL(errorRunLink.href);

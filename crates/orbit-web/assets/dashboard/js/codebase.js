@@ -16,7 +16,7 @@
 // `syncNodes`, so a poll that answers the same payload leaves the page exactly
 // as it was.
 
-import { captureWorkspaceVisit, onWorkspaceChange, el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, scopedHashHref, syncNodes, taskHref, formatDateTime } from './common.js';
+import { bindTaskLink, captureWorkspaceVisit, onWorkspaceChange, el, fetchJson, isAggregateView, renderPanelPlaceholder, requestPanel, scopedHashHref, syncNodes, formatDateTime } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -486,7 +486,8 @@ function signalDot(key) {
 function followLink(event, target) {
   if (event && (event.defaultPrevented || event.button > 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) return;
   if (event && typeof event.preventDefault === "function") event.preventDefault();
-  navigate(target);
+  if (typeof target === "string") window.location.hash = target;
+  else navigate(target);
 }
 
 function viewLink(target, children, extraClass = "") {
@@ -731,6 +732,7 @@ function notesNode(model) {
   lines.push(riskMarksLine(data));
   const defects = el("a", { text: "Metrics › Defects" });
   defects.setAttribute("href", scopedHashHref("#analytics/metrics"));
+  defects.addEventListener("click", (event) => followLink(event, "#analytics/metrics"));
   lines.push(["Defect trends are on ", defects, "."]);
   const node = el("div", { class: "codebase-notes" }, lines.map((parts) => el("p", { class: "codebase-note" }, parts)));
   const marks = section(data, "regressions").risk_marks || {};
@@ -795,7 +797,7 @@ function fileTiles(model, path) {
 function regressedTaskNode(task, regressedPaths) {
   const wide = regressedPaths.get(task.task_id) || 0;
   const link = el("a", { class: "codebase-task-link", text: task.task_id });
-  link.setAttribute("href", taskHref(task.task_id));
+  bindTaskLink(link, task.task_id);
   const top = el("div", { class: "codebase-task-top" }, [
     link,
     el("span", { class: "codebase-crew", text: task.crew || "unassigned" }),
@@ -808,7 +810,7 @@ function regressedTaskNode(task, regressedPaths) {
   const links = Array.isArray(task.regressions) ? task.regressions : [];
   for (const id of task.regression_tasks || []) {
     const regression = el("a", { class: "codebase-task-link", text: id });
-    regression.setAttribute("href", taskHref(id));
+    bindTaskLink(regression, id);
     const line = el("div", { class: "codebase-task-by" }, [el("span", { text: "regressed by" }), regression]);
     line.dataset.task = id;
     const found = links.find((entry) => entry.task_id === id);
@@ -926,7 +928,7 @@ function relatedRow(row) {
     const evidence = el("details", { class: "codebase-related-evidence" }, [el("summary", { text: `Changed together in ${plural(tasks.length, "task")}` })]);
     for (const task of tasks) {
       const link = el("a", { class: "codebase-task-link", text: task.title || task.task_id, title: task.commit || "" });
-      link.setAttribute("href", taskHref(task.task_id));
+      bindTaskLink(link, task.task_id);
       evidence.appendChild(link);
     }
     item.appendChild(evidence);

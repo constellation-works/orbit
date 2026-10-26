@@ -1,8 +1,9 @@
-// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup|--clock]
+// Usage: node dashboard_loading_browser.mjs /path/to/playwright/index.mjs /evidence/directory [--run-detail|--locks-only|--auth-exclusions|--task-lookup|--clock|--review-repairs]
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
+import { assertDashboardNavigationRepairs } from './dashboard_navigation_repairs_browser.mjs';
 import { dashboardFile } from './dashboard_static.mjs';
 import { assertRunDetailActions, assertRunDetailPresentation } from './dashboard_run_detail_browser.mjs';
 import { assertWorkspaceScope } from './dashboard_workspace_scope_browser.mjs';
@@ -18,6 +19,7 @@ fs.mkdirSync(evidence, { recursive: true });
 const scenarios = fileURLToPath(new URL('./dashboard_loading.mjs', import.meta.url));
 const locksOnly = process.argv[4] === '--locks-only';
 const authExclusionsOnly = process.argv[4] === '--auth-exclusions';
+const repairsOnly = process.argv[4] === '--review-repairs';
 const clockOnly = process.argv[4] === '--clock';
 const locksOnlyScenario = `
 const tasks = Array.from({ length: 20 }, (_, index) => ({
@@ -38,6 +40,17 @@ await import('/app.js');
 await new Promise(resolve => setTimeout(resolve, 0));
 globalThis.loadingTestsPassed = true;
 `;
+
+async function runNavigationRepairs(browser, origin) {
+  const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  try {
+    await page.goto(`${origin}/?workspace=one#tasks`);
+    await page.evaluate(() => { globalThis.setInterval = () => 0; globalThis.EventSource = class { close() {} }; });
+    await page.addScriptTag({ type: 'module', content: locksOnlyScenario });
+    await page.waitForFunction(() => globalThis.loadingTestsPassed);
+    await assertDashboardNavigationRepairs(page, evidence);
+  } finally { await page.close(); }
+}
 
 async function assertAccentFocusRing(control) {
   const focused = await control.evaluate(element => {
@@ -1507,7 +1520,7 @@ async function assertSkipLinkAndFocusRings(page) {
 
 const server = http.createServer((req, res) => {
   const name = new URL(req.url, 'http://fixture').pathname;
-  const testScenario = (locksOnly || authExclusionsOnly) ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
+  const testScenario = (locksOnly || authExclusionsOnly || repairsOnly) ? Buffer.from(locksOnlyScenario) : fs.readFileSync(scenarios);
   const served = name === '/test.mjs' ? { data: testScenario, type: 'text/javascript' } : dashboardFile(name);
   if (!served) { res.writeHead(404); res.end(); return; }
   let data = served.data;
@@ -1519,7 +1532,9 @@ await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 let browser;
 try {
   browser = await chromium.launch({ headless: true });
-  if (process.argv[4] === '--pilot-admission') {
+  if (repairsOnly) {
+    await runNavigationRepairs(browser, `http://127.0.0.1:${server.address().port}`);
+  } else if (process.argv[4] === '--pilot-admission') {
     await assertPilotAdmission(browser, `http://127.0.0.1:${server.address().port}`, evidence);
   } else {
   if (!locksOnly && !authExclusionsOnly) await assertPilotAdmission(browser, `http://127.0.0.1:${server.address().port}`, evidence);
@@ -1548,6 +1563,7 @@ try {
     throw new Error(`${error.message}\nPage errors: ${failures.join('\n')}`);
   });
   if (failures.length) throw new Error(failures.join('\n'));
+  if (!locksOnly && !authExclusionsOnly && !clockOnly && !process.argv[4]) await runNavigationRepairs(browser, `http://127.0.0.1:${server.address().port}`);
   if (!locksOnly && !authExclusionsOnly && process.argv[4] !== '--run-detail') {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.evaluate(() => globalThis.showHealthEvidence('errors'));
