@@ -8,7 +8,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_auth::scope::{
     HardLeasePermission, LeasePriorityCeiling, LeaseTokenRefusal, LeaseTokenScope, LeaseTokenVerb,
     PrincipalClass,
@@ -164,6 +164,56 @@ fn a_minted_token_is_stored_as_a_hash_and_verified_until_revoked() {
         assert!(
             !listed_text.contains(random_part),
             "the listing shows a secret"
+        );
+    }
+}
+
+#[test]
+fn fractional_expiry_survives_listing_reopening_and_verification() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = provisioned_home(dir.path());
+    let minted_at = DateTime::parse_from_rfc3339("2026-10-26T10:25:34.900Z")
+        .expect("fixed mint instant")
+        .with_timezone(&Utc);
+    let before_expiry = minted_at + Duration::milliseconds(200);
+    let expires_at = minted_at + Duration::seconds(1);
+    let mut store = LeaseTokenStore::open_in_orbit_home(&home).expect("open store");
+    let minted = store
+        .mint(
+            scope("alice", PrincipalClass::Human, LeaseTokenVerb::Lease),
+            expires_at,
+            "operator",
+            minted_at,
+        )
+        .expect("mint one-second token");
+    let secret = minted.secret.expose_secret().to_string();
+
+    assert_eq!(minted.record.expires_at, expires_at);
+    assert_eq!(store.list().expect("list token")[0].expires_at, expires_at);
+    drop(store);
+
+    let mut reopened = LeaseTokenStore::open_in_orbit_home(&home).expect("reopen store");
+    assert_eq!(
+        reopened.list().expect("list reopened token")[0].expires_at,
+        expires_at
+    );
+    assert!(matches!(
+        reopened
+            .verify(
+                &secret,
+                "ws_alpha",
+                LeaseTokenVerb::Lease,
+                before_expiry,
+            )
+            .expect("verify before expiry"),
+        LeaseTokenDecision::Allow(record) if record.expires_at == expires_at
+    ));
+    for at in [expires_at, expires_at + Duration::nanoseconds(1)] {
+        assert_eq!(
+            reopened
+                .verify(&secret, "ws_alpha", LeaseTokenVerb::Lease, at)
+                .expect("verify expired token"),
+            LeaseTokenDecision::Deny(LeaseTokenRefusal::Expired)
         );
     }
 }

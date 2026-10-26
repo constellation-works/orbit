@@ -372,7 +372,7 @@ fn insert_audit(connection: &Connection, row: &AuditRow<'_>) -> Result<(), Orbit
 }
 
 fn timestamp(at: DateTime<Utc>) -> String {
-    at.to_rfc3339_opts(SecondsFormat::Secs, true)
+    at.to_rfc3339_opts(SecondsFormat::Nanos, true)
 }
 
 fn joined_verbs(verbs: &[LeaseTokenVerb]) -> String {
