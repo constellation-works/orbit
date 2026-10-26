@@ -18,7 +18,7 @@ use super::lifecycle::{
     in_progress_transition_requires_plan,
 };
 use super::params::TaskUpdateParams;
-use super::update::admit_agent_artifact;
+use super::update::admit_task_artifact;
 use crate::application::task::TaskRecords;
 
 /// Status event recorded when `orbit task recheck-blocked --confirm` returns a
@@ -398,7 +398,7 @@ impl OrbitRuntime {
             // A start accepts the same caller-supplied artifacts as an ordinary
             // update. Admit the whole batch before approval or record writes.
             for artifact in &mut start_edits.upsert_artifacts {
-                admit_agent_artifact(artifact)?;
+                admit_task_artifact(self, &task, artifact)?;
             }
             // A start has no operator-decision grant. An attributed agent or
             // model, or an agent envelope, still cannot add a light-delivery

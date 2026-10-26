@@ -35,6 +35,7 @@ mod lifecycle;
 pub(crate) mod light_delivery;
 mod lint;
 mod listing;
+mod mutation_proposals;
 mod os_readout;
 mod params;
 mod paths;

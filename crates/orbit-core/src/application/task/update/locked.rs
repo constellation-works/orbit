@@ -20,7 +20,7 @@ use super::super::lifecycle::{
     ensure_status_change_allowed, ensure_status_change_not_run_owned,
 };
 use super::super::params::TaskUpdateParams;
-use super::artifacts::admit_agent_artifact;
+use super::artifacts::admit_task_artifact;
 use super::entry::{LockedTaskUpdate, StatusAuthority, TaskUpdateContext, task_field_writer};
 use crate::OrbitRuntime;
 use crate::application::task::TaskReviewPort;
@@ -133,7 +133,7 @@ impl OrbitRuntime {
             if system_writer {
                 artifact.path = canonical_artifact_path(&artifact.path)?;
             } else {
-                admit_agent_artifact(artifact)?;
+                admit_task_artifact(self, &task, artifact)?;
             }
         }
         if let Some(expected_status) = expected_status
@@ -167,7 +167,15 @@ impl OrbitRuntime {
                 && !agent_context_declared();
             if !human_force {
                 ensure_post_deploy_criteria_met(self, &task)?;
+                self.ensure_mutation_proposals_applied(&task)?;
             }
+        }
+        // [granted-tools §4] An attributed completion is held the same way:
+        // a task is never done while a mutation it proposed did not happen.
+        if requested_status == Some(TaskStatus::Done)
+            && status_authority == StatusAuthority::Lifecycle
+        {
+            self.ensure_mutation_proposals_applied(&task)?;
         }
         let status_note = status_note
             .as_deref()

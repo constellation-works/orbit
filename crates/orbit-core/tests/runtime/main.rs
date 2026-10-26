@@ -70,6 +70,7 @@ mod flaky_validation;
 mod forecast_accuracy;
 mod forge_hold_resume;
 mod git_protection;
+mod granted_mutation_proposals;
 mod granted_tools;
 mod granted_tools_window;
 mod held_child_guard;

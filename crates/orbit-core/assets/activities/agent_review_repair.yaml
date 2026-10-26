@@ -139,6 +139,11 @@ spec:
        - `owner_owed_evidence`: do not attempt, record or name these in
          `external_evidence`; they never hold this review. A check not listed,
          including other Linux CodeQL, is handled normally.
+       - `mutation_proposals`: live changes from operator-granted tools that the
+         pipeline applies, exactly as recorded, only if you accept. Review each
+         `proposal` (`tool`, `input`, `rationale`) as part of the change against
+         the criteria. You cannot repair a proposal: one that is wrong, unjustified
+         or outside the task's intent is an open finding naming its `artifact`.
     4. Review spec compliance: every acceptance criterion against
        `git diff <base.commit>..HEAD`, the affected callers, and the implementer's
        execution summary in the manifest. A green summary or CI result is not

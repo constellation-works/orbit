@@ -1591,6 +1591,7 @@ fn manifest(task: &str, attempt_id: &str, candidate: &SourceRevision) -> ReviewM
     ReviewManifest {
         satisfied_external_evidence: BTreeMap::new(),
         evidence_carried: None,
+        mutation_proposals: Vec::new(),
         previous_report: None,
         schema_version: REVIEW_CONTRACT_VERSION,
         attempt_id: attempt_id.to_string(),
