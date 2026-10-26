@@ -70,6 +70,7 @@ mod flaky_validation;
 mod forecast_accuracy;
 mod forge_hold_resume;
 mod git_protection;
+mod granted_tools;
 mod held_child_guard;
 #[cfg(unix)]
 mod local_provider_holds;

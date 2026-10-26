@@ -37,8 +37,8 @@ pub(crate) fn drops_disallowed_requirements(activity: &str) -> bool {
 
 /// Why `tool_name` cannot be granted beyond an activity's baseline: it is not
 /// an exact canonical name, or not a registered, agent-facing, enabled tool.
-/// `None` when it can be. Task `required_tools` and experiment arm additions
-/// are admitted by this one rule.
+/// `None` when it can be. Task requirements, grants and experiment arm additions
+/// share this availability rule; task grants also check governed capability.
 pub(crate) fn granted_tool_refusal(
     runtime: &OrbitRuntime,
     tool_name: &str,
