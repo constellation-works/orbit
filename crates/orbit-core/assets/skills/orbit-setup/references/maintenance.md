@@ -37,9 +37,9 @@ is pinned at `refs/orbit/rescue/worktree-gc/<run>-<tree>` until a deleting
 sweep sees that the patch file is gone. `recovery` in the
 report names which source. Kept terminal worktrees report `retained_bytes`, and
 `orbit run show <gc-run>` lists them with their reasons. Details:
-`docs/runbooks/worktree-reclaim.md` in the Orbit repository. Run the report a
-few times before automating it, then enable the `worktree-gc` routine for
-hourly reclamation — [automation.md](automation.md).
+[worktree reclaim runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/worktree-reclaim.md).
+Run the report a few times before automating it, then enable the `worktree-gc`
+routine for hourly reclamation — [automation.md](automation.md).
 
 ### Workspace scratch
 

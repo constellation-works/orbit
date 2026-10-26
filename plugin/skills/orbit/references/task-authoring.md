@@ -199,8 +199,10 @@ rule, for implementers), `skip-validation` (no local validation while the
 change stays light, for implementers) and `ui` (the screenshot rule, for
 implementers and reviewers). A workspace can map any tag to a repository file per role
 (implement, review, recovery) under `[workflow.tag_instructions.<tag>]`,
-replace a shipped default, or switch one off (docs/CONFIG.md). QA sweeps are
-implement tasks tagged `qa-sweep`, so that tag's implement file instructs QA.
+replace a shipped default, or switch one off ([tag instructions in the published
+configuration reference](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).
+QA sweeps are implement tasks tagged `qa-sweep`, so that tag's implement file
+instructs QA.
 
 The text comes only from those defaults and from the mapped file as committed
 at the delivery's base revision. Nothing you write on the task supplies it:
