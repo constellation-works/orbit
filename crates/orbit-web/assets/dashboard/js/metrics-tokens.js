@@ -197,7 +197,7 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
 
   const notes = [
     `${bucketWidthLabel(seconds)}, aligned to the clock`,
-    "lines skip buckets where no task closed",
+    "lines join across buckets where no task closed",
     "time = the task's last write after it closed",
     payload.scope === "implement" ? "implement invocations only" : "every linked invocation",
   ];

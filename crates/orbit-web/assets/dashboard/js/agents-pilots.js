@@ -23,13 +23,18 @@ const label = (tier) => TIER_LABELS[tier] || tier;
 
 function matrixTable(row, matrix) {
   const caption = `${row.crew} · ${row.model}: assessed tier by observed tier`;
+  const header = (text, scope, className = "") => {
+    const cell = el("th", { class: className, text });
+    cell.setAttribute("scope", scope);
+    return cell;
+  };
   const head = el("tr", {}, [
-    el("th", { scope: "col", text: "Assessed ↓ · observed →" }),
-    ...matrix.tiers.map((tier) => el("th", { scope: "col", class: "agents-num", text: label(tier) })),
+    header("Assessed ↓ · observed →", "col"),
+    ...matrix.tiers.map((tier) => header(label(tier), "col", "agents-num")),
   ]);
   const body = matrix.rows.map((line, assessed) => {
     const tr = el("tr", {}, [
-      el("th", { scope: "row", text: label(line.assessed) }),
+      header(label(line.assessed), "row"),
       ...matrix.tiers.map((tier, observed) => {
         const value = count(line.observed && line.observed[observed]);
         const place = assessed === observed ? "on" : assessed < observed ? "easy" : "hard";

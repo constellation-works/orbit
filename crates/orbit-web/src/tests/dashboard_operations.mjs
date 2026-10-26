@@ -1139,7 +1139,7 @@ assert(routineGroups.some(text => text.startsWith('Active1')) && routineGroups.s
 const routineSwitch = descendants(get('routines-body')).find(node => String(node.className || '').includes('operation-switch'));
 const routineSwitchName = routineSwitch?.getAttribute('aria-label');
 assert(routineSwitch?.getAttribute('role') === 'switch' && routineSwitch.getAttribute('aria-checked') === 'true' && routineSwitch.textContent === 'Disable' && routineSwitchName?.includes('Routine one'), 'routine switch names its item and keeps its visible readback text');
-assert(descendants(get('routines-body')).some(node => node.getAttribute?.('href') === '#jobs/catalogue?job=fixture'), 'routine row links the job it runs');
+assert(descendants(get('routines-body')).some(node => node.getAttribute?.('href') === '#jobs/catalogue'), 'routine row links the job catalogue without an ignored selection query');
 assert(descendants(get('routines-body')).some(node => String(node.className || '').includes('operation-timeline')), 'routines pane projects the next hour');
 assert(!get('routines-body').textContent.includes('Routine two'), 'routines stay scoped to the selected workspace');
 assert(descendants(get('clock-body')).some(node => String(node.className || '').includes('operation-clock-bar')), 'clock renders as a bar');

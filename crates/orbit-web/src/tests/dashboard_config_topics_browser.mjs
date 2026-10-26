@@ -617,7 +617,7 @@ try {
   // -------------------------------------------------------------------------
   // Case (c): array cliCmd line executed in isolated CLI fixture yields PUT value
   // -------------------------------------------------------------------------
-  const mutationAssertions = await checkSettingsMutationOwnership(browser, `http://127.0.0.1:${port}`);
+  const mutationAssertions = await checkSettingsMutationOwnership(browser, `http://127.0.0.1:${port}`, evidence);
 
   const fixtureBase = path.join(evidence, 'cli-child-fixture');
   fs.rmSync(fixtureBase, { recursive: true, force: true });

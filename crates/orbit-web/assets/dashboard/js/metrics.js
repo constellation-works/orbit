@@ -268,10 +268,12 @@ function niceScale(value, ladder, coarse) {
 
 function bucketWidthLabel(seconds) {
   const names = { 300: "5-minute", 3600: "1-hour", 21600: "6-hour", 86400: "1-day (UTC)", 604800: "1-week (UTC, from Monday)" };
+  if (seconds > 604800 && seconds % 604800 === 0) return `${seconds / 604800}-week (UTC, from Monday) buckets`;
   return `${names[seconds] || `${seconds}s`} buckets`;
 }
 
 function perBucketUnit(seconds) {
+  if (seconds > 604800 && seconds % 604800 === 0) return `${seconds / 604800} weeks`;
   return { 300: "5 min", 3600: "hour", 21600: "6h", 86400: "day", 604800: "week" }[seconds] || "bucket";
 }
 

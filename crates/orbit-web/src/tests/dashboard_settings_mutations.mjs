@@ -2,8 +2,9 @@
 // containing browser fixture supplies the real dashboard document and CSS;
 // this page omits app.js so no background poll can race request assertions.
 import assert from 'node:assert/strict';
+import path from 'node:path';
 
-export async function checkSettingsMutationOwnership(browser, origin) {
+export async function checkSettingsMutationOwnership(browser, origin, evidence = null) {
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   try {
     await page.route('**/settings-mutations', async (route) => route.fulfill({
@@ -190,9 +191,46 @@ export async function checkSettingsMutationOwnership(browser, origin) {
         click('.config-editor button', action); await settled();
         check(!body.querySelector('.config-editor'), `${kind}: current success closes the editor after refresh`);
       }
+      // A plugin-only file exists, but is not a workspace policy. Both
+      // editor families must let the operator make the explicit first choice.
+      payload.workspace_file_exists = true;
+      payload.layers = {
+        global: { path: '/global/config.toml' }, workspace: { path: '/workspace/.orbit/config.toml' },
+        execution_not_inherited: false,
+      };
+      for (const init of ['seed-from-global', 'fresh']) {
+        reset();
+        config.setConfigSubtab('all-keys'); await config.fetchAndRenderConfig();
+        openDrawer();
+        click('.drawer-actions button', init === 'fresh' ? 'Start empty' : 'Seed from global');
+        await settled();
+        check(writes.length === 1 && writes[0].body.init === init, `plugin-only key editor sends ${init}`);
+        reset();
+        config.setConfigSubtab('crews'); await config.fetchAndRenderConfig();
+        click('button', '+ Add crew');
+        const name = body.querySelector('.config-editor input');
+        name.value = 'first-policy'; name.dispatchEvent(new Event('input', { bubbles: true }));
+        hold = true;
+        click('.config-editor button', 'Save'); await release(true);
+        check(body.querySelector('.config-editor'), 'refused first crew save keeps the draft');
+        click('.config-editor button', init === 'fresh' ? 'Start empty' : 'Copy global policy');
+        await settled();
+        check(writes.length === 2 && writes[1].body.init === init, `plugin-only crew editor sends ${init}`);
+        results.push(`plugin-only-workspace-key-and-crew-${init}`);
+      }
+      // Leave the refusal and its initialization choices visible for review.
+      reset(); config.setConfigSubtab('crews'); await config.fetchAndRenderConfig();
+      click('button', '+ Add crew');
+      const name = body.querySelector('.config-editor input');
+      name.value = 'first-policy'; name.dispatchEvent(new Event('input', { bubbles: true }));
+      hold = true; click('.config-editor button', 'Save'); await release(true);
       return results;
     });
     assert.ok(results.length > 0);
+    if (evidence) for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.screenshot({ path: path.join(evidence, `config-init-dark-${width}.png`) });
+    }
     return results;
   } finally {
     await page.close();
