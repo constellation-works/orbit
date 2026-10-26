@@ -10,12 +10,15 @@ use orbit_common::OrbitError;
 use orbit_common::fs::git::{
     GIT_CHECKOUT_TIMEOUT, GIT_LOCAL_TIMEOUT, GIT_REMOTE_TIMEOUT, run_git_within,
 };
-use orbit_common::text::ceil_char_boundary;
+use orbit_common::security::redaction::redact_all;
+use orbit_common::text::{ceil_char_boundary, floor_char_boundary};
 #[cfg(target_os = "linux")]
 use orbit_exec::{EnvironmentMode, ExecRequest, Sandbox, StdinMode, run_process};
 #[cfg(target_os = "linux")]
 use orbit_types::policy::ResolvedFsProfile;
-use orbit_types::workflow::ReviewEvidenceRequirement;
+use orbit_types::workflow::{
+    ReviewEvidenceFinding, ReviewEvidenceFlowStep, ReviewEvidenceRequirement,
+};
 use serde_json::{Value, json};
 
 use super::{EvidenceRun, FulfilmentRefusal};
@@ -31,6 +34,13 @@ const MAX_CAPTURED_STREAM_BYTES: usize = 128 * 1024;
 /// The script's own markers: where it keeps this run, and that analysis ran.
 const RUN_DIRECTORY_MARKER: &str = "codeql-rust-local: run directory: ";
 const ANALYSIS_COMPLETED_MARKER: &str = "codeql-rust-local: analysis completed";
+/// [ORB-18660] Results summarized for the repair; the rest are counted.
+const MAX_SUMMARIZED_RESULTS: usize = 50;
+/// Data-flow steps kept per result: the first ones and the sink.
+const MAX_FLOW_STEPS: usize = 8;
+/// Bytes kept of each message or path taken from the SARIF, so the
+/// summarized results stay well inside the task artifact size limit.
+const MAX_SARIF_TEXT_BYTES: usize = 512;
 
 /// Bubblewrap confines candidate-controlled CodeQL scripts to the disposable
 /// evidence checkout. The checkout is the only writable task-controlled path;
@@ -333,8 +343,26 @@ impl OrbitRuntime {
             judge_sarif(checkout, &output)
         };
         match judged {
-            Ok(sarif) => {
-                run.log.insert("sarif".to_string(), sarif);
+            Ok(judged) if judged.results == 0 => {
+                run.log.insert("sarif".to_string(), judged.summary);
+            }
+            Ok(judged) => {
+                run.refusal = Some(FulfilmentRefusal::FindingsReported);
+                run.detail = format!(
+                    "{} result(s) for rule(s) {}",
+                    judged.results,
+                    judged.rules.join(", ")
+                );
+                run.log.insert("sarif".to_string(), judged.summary);
+                run.findings = judged
+                    .findings
+                    .into_iter()
+                    .map(|finding| ReviewEvidenceFinding {
+                        check: requirement.name.clone(),
+                        ..finding
+                    })
+                    .collect();
+                run.omitted_findings = judged.results.saturating_sub(run.findings.len());
             }
             Err((refusal, detail)) => {
                 run.log.insert("sarif".to_string(), Value::Null);
@@ -403,9 +431,23 @@ pub(super) fn admitted_codeql_args(command: &str) -> Result<Vec<String>, String>
     Ok(args)
 }
 
+/// What a complete run's SARIF reported.
+struct SarifJudgement {
+    /// The log's `sarif` record: run, result and rule counts.
+    summary: Value,
+    results: usize,
+    rules: Vec<String>,
+    /// Up to [`MAX_SUMMARIZED_RESULTS`] results, without their check name.
+    findings: Vec<ReviewEvidenceFinding>,
+}
+
 /// The run's SARIF, from the run directory the script printed inside
-/// `checkout`. Any result is refused: a fresh review must judge findings.
-fn judge_sarif(checkout: &Path, output: &str) -> Result<Value, (FulfilmentRefusal, String)> {
+/// `checkout`. A result is not evidence: the caller refuses it, keeping each
+/// result's rule, location and data flow for the repair [ORB-18660].
+fn judge_sarif(
+    checkout: &Path,
+    output: &str,
+) -> Result<SarifJudgement, (FulfilmentRefusal, String)> {
     let incomplete = |detail: String| (FulfilmentRefusal::AnalysisIncomplete, detail);
     let run_dir = output
         .lines()
@@ -442,30 +484,108 @@ fn judge_sarif(checkout: &Path, output: &str) -> Result<Value, (FulfilmentRefusa
         .ok_or_else(|| unreadable("SARIF has no runs".to_string()))?;
     let mut results = 0usize;
     let mut rules = std::collections::BTreeSet::new();
+    let mut findings = Vec::new();
     for run in runs {
         let found = run
             .get("results")
             .and_then(Value::as_array)
             .ok_or_else(|| unreadable("a SARIF run has no results array".to_string()))?;
         results += found.len();
-        rules.extend(
-            found
-                .iter()
-                .filter_map(|result| result.get("ruleId").and_then(Value::as_str))
-                .map(str::to_string),
-        );
+        for result in found {
+            let rule = result_rule(result);
+            if findings.len() < MAX_SUMMARIZED_RESULTS {
+                findings.push(sarif_finding(result, &rule));
+            }
+            rules.insert(rule);
+        }
     }
+    let rules = rules.into_iter().collect::<Vec<_>>();
     let summary = json!({"runs": runs.len(), "results": results, "rules": rules});
-    if results > 0 {
-        return Err((
-            FulfilmentRefusal::FindingsReported,
-            format!(
-                "{results} result(s) for rule(s) {}",
-                rules.into_iter().collect::<Vec<_>>().join(", ")
-            ),
-        ));
+    Ok(SarifJudgement {
+        summary,
+        results,
+        rules,
+        findings,
+    })
+}
+
+/// A result's rule: its `ruleId`, else its `rule.id`.
+fn result_rule(result: &Value) -> String {
+    result
+        .get("ruleId")
+        .or_else(|| result.pointer("/rule/id"))
+        .and_then(Value::as_str)
+        .map_or_else(|| "unknown rule".to_string(), sarif_text)
+}
+
+/// One result's rule, message, primary location and first data flow, each
+/// redacted and bounded: the text comes from candidate-controlled source.
+fn sarif_finding(result: &Value, rule: &str) -> ReviewEvidenceFinding {
+    let (file, line) = result
+        .pointer("/locations/0/physicalLocation")
+        .map(physical_location)
+        .unwrap_or_default();
+    let mut steps = result
+        .pointer("/codeFlows/0/threadFlows/0/locations")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .map(|step| {
+            let (file, line) = step
+                .pointer("/location/physicalLocation")
+                .map(physical_location)
+                .unwrap_or_default();
+            ReviewEvidenceFlowStep {
+                file,
+                line,
+                message: step
+                    .pointer("/location/message/text")
+                    .and_then(Value::as_str)
+                    .map(sarif_text),
+            }
+        })
+        .collect::<Vec<_>>();
+    if steps.len() > MAX_FLOW_STEPS {
+        let sink = steps.split_off(steps.len() - 1);
+        steps.truncate(MAX_FLOW_STEPS - 1);
+        steps.extend(sink);
     }
-    Ok(summary)
+    ReviewEvidenceFinding {
+        check: String::new(),
+        rule: rule.to_string(),
+        message: result
+            .pointer("/message/text")
+            .and_then(Value::as_str)
+            .map(sarif_text)
+            .unwrap_or_default(),
+        file,
+        line,
+        code_flow: steps,
+    }
+}
+
+/// A SARIF `physicalLocation`'s file and start line.
+fn physical_location(location: &Value) -> (Option<String>, Option<u64>) {
+    (
+        location
+            .pointer("/artifactLocation/uri")
+            .and_then(Value::as_str)
+            .map(sarif_text),
+        location
+            .pointer("/region/startLine")
+            .and_then(Value::as_u64),
+    )
+}
+
+/// SARIF text, redacted and cut to [`MAX_SARIF_TEXT_BYTES`].
+fn sarif_text(text: &str) -> String {
+    let text = redact_all(text.trim());
+    if text.len() <= MAX_SARIF_TEXT_BYTES {
+        return text;
+    }
+    let end = floor_char_boundary(&text, MAX_SARIF_TEXT_BYTES);
+    format!("{} […]", &text[..end])
 }
 
 /// The last [`MAX_CAPTURED_STREAM_BYTES`] of a stream.

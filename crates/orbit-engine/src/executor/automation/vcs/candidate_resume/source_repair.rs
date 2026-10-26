@@ -87,6 +87,7 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
         pull_request_head: Some(binding.branch.clone()),
         interrupted_review: None,
         landing_stop: None,
+        evidence_findings: None,
     };
     // A refusal never falls back to a new branch/PR or a fresh implementation.
     match adopt_published_branch(workspace, &task.id, &candidate)? {
@@ -168,6 +169,7 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
         pull_request_head: Some(binding.branch.clone()),
         interrupted_review: None,
         landing_stop: None,
+        evidence_findings: None,
     };
     let outcome = match apply(&candidate, &candidate.head_sha, workspace, base)? {
         Applied::Clean => Outcome::Carried,

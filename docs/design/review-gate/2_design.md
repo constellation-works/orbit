@@ -943,6 +943,20 @@ the results above as `system`, with `os` for a test; anything else attaches
 only the log, and the hold stays with a typed reason (`self_skipped`,
 `no_tests_ran`, `test_failed`, `sandbox_unavailable`, …). Every attempt is
 audited as `review.evidence_fulfilment` and commented on the task.
+
+[ORB-18660] Results in a complete CodeQL run (`findings_reported`) are the one
+refusal no later evidence on the same tree can clear, so they do not wait
+under the hold. When every refusal of the run is that one, the run also
+attaches `review-evidence-findings.json` as `system`: each result's check,
+rule, message, file, line and first data flow, redacted and bounded, since
+the SARIF is removed with the run's checkout. It then requeues the task to
+`backlog` with `review_evidence_findings`, guarded like receipt (the hold is
+still persisted and current). The next run's `candidate_resume` resumes the
+held candidate for its implementer, `resumed_repaired` with trigger `review`,
+whose output is the findings; a claimed leaf's implementer reads them in the
+task's comments. This is not a reviewer's rework loop: a review's own
+findings still settle as its verdict, and the repaired candidate gets a fresh
+review that needs CodeQL on its new tree again.
 The owner already runs its required validation on foreign heads under the
 same host trust and with no sandbox, so the fulfilment is no new trust in the
 candidate's own script or tests. Details are in the
@@ -1405,6 +1419,7 @@ so for a `codeql` or `linux` `host_sandbox_test` hold on its next tick.
 - [ORB-14192] — adds the `diagnostic` role, binds controls and diagnostics to scope-checked sources, and retains report revisions so a replacement cannot drop a required check.
 - [ORB-14434] — a reviewer's host-verified claim that a failed required check fails the same way on the pinned base holds the task for the red base instead of blocking it.
 - [ORB-14334] — a Linux owner fulfils held `host_sandbox_test` evidence that nested agent sandboxes cannot produce, and a pass that deferred its sandbox-confined path no longer counts as executing it.
+- [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
 - [ORB-14849] — adds `review.before_landing`: the reviewer reviews the open PR while hosted CI runs, completion merges only the head it settled, any other outcome keeps the PR open in review, and a claimed leaf reviews its PR before handing it off.
 - [ORB-14684] — a failed check the owner trusts (`workflow.required_validation_commands` or `review.baseline_commands`) can no longer be filed as a `diagnostic`; the baseline list is captured with the admission and recorded on the certificate.
 - [ORB-15328] — settlement attributes a failed check to the base by replaying only its failing tests there, or reading a full result cached for that base, and reserves a quarter of the review budget for that replay, naming a candidate rerun cut at the reserve.

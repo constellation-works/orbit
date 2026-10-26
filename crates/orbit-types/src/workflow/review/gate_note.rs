@@ -1,8 +1,9 @@
 //! Review-gate history notes [ORB-15834].
 //!
-//! `review_timeout_incomplete`, `review_awaiting_evidence` and
-//! `review_evidence_received` are written as task-history note text and read
-//! back to decide which run and which implementation tree they name.
+//! `review_timeout_incomplete`, `review_awaiting_evidence`,
+//! `review_evidence_received` and `review_evidence_findings` are written as
+//! task-history note text and read back to decide which run and which
+//! implementation tree they name.
 //! [`ReviewGateHistoryNote`] is the only producer and parser of that text.
 //! Rendered bytes stay the historical strings, including each producer's
 //! separator, so rows already stored still parse. The history record stays a
@@ -71,6 +72,16 @@ impl ReviewGateHistoryNote {
     #[must_use]
     pub fn evidence_received_text(run_id: &str, next: &str) -> String {
         format!("run={run_id}; all named external checks arrived for the held candidate; {next}.")
+    }
+
+    /// [ORB-18660] Semicolon note written when an owner evidence run reported
+    /// findings on the held candidate and queued it for repair.
+    #[must_use]
+    pub fn evidence_findings_text(run_id: &str, candidate: &str, results: usize) -> String {
+        format!(
+            "run={run_id}; candidate={candidate}; owner evidence reported {results} finding(s) \
+             on the held candidate; queued to repair it."
+        )
     }
 
     /// Parse a stored note. `None` when it names no run.

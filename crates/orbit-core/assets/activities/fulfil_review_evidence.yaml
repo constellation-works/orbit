@@ -23,7 +23,10 @@ spec:
     every run passed (CodeQL with no findings, a test that executed without
     skipping or deferring) does it also attach the results, which queues a
     fresh review; it never approves a candidate. Otherwise `reason` names the
-    refusal and the hold stays in place. Always audited.
+    refusal and the hold stays in place, except when every refusal is
+    `findings_reported`: then it attaches each result's rule, message,
+    location and data flow as `review-evidence-findings.json` and queues the
+    task to repair its kept candidate from them. Always audited.
   input_schema_json:
     type: object
     required: [task_id, hold_key]
@@ -62,7 +65,8 @@ spec:
       # Whether a later tick may run the same hold again.
       retryable:
         type: boolean
-      # Whether receipt moved the task back to the backlog for review.
+      # Whether receipt (for review) or reported findings (for repair) moved
+      # the task back to the backlog.
       requeued:
         type: boolean
   action: fulfil_review_evidence
