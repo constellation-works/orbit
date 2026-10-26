@@ -100,6 +100,7 @@ const ids = [
   'plugins-body', 'plugins-count',
   'scoreboard-orchestration', 'scoreboard-orchestration-count',
   'scoreboard-exploration', 'scoreboard-explore-count',
+  'forecast-body', 'forecast-count',
 ];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 const document = {
@@ -113,7 +114,7 @@ const document = {
 const window = { location: { search: '?window=24h', hash: '' }, confirm: () => true };
 const pending = [];
 const response = (payload, status = 200) => ({ ok: status >= 200 && status < 300, status, headers: { get: () => null }, json: async () => payload, text: async () => JSON.stringify(payload) });
-const fetch = (path, options = {}) => new Promise(resolve => pending.push({ url: new URL(path, 'http://dashboard.test'), options, resolve }));
+const fetch = (path, options = {}) => new Promise((resolve, reject) => pending.push({ url: new URL(path, 'http://dashboard.test'), options, resolve, reject }));
 const context = vm.createContext({
   URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch, document, window, Node,
 });
@@ -145,6 +146,10 @@ const pluginsModule = load('plugins.js');
 await pluginsModule.link(specifier => load(specifier.replace(/^\.\//, '')));
 await pluginsModule.evaluate();
 const plugins = pluginsModule.namespace;
+const forecastModule = load('forecast.js');
+await forecastModule.link(specifier => load(specifier.replace(/^\.\//, '')));
+await forecastModule.evaluate();
+const forecast = forecastModule.namespace;
 const ctx = {};
 const text = id => document.getElementById(id).textContent;
 const settle = async () => { for (let i = 0; i < 6; i += 1) await new Promise(resolve => setTimeout(resolve, 0)); };
@@ -394,4 +399,43 @@ for (const [certified, host, behind] of [
   assert.equal(Boolean(chip), Boolean(certified), 'uncertified plugins have no certification chip');
 }
 
-console.log('audit, codebase, cost, and plugin panel behaviors passed');
+// Analytics › Forecast on a host whose Orbit predates the route. A 404 with no
+// error text is a route miss: the panel names the host's Orbit and the upgrade,
+// with no API path and no Refresh advice. A 404 that carries its own message
+// keeps it, and a transient failure (5xx or network) still offers Refresh.
+const forecastBody = () => text('forecast-body');
+const bodiless = status => ({ ok: false, status, headers: { get: () => null }, text: async () => '' });
+common.setWorkspace('ws-a');
+await settle();
+for (const [label, answer] of [
+  ['an empty 404', () => bodiless(404)],
+  ['a 404 with an empty error', () => response({ error: '' }, 404)],
+]) {
+  const forecastLoad = forecast.fetchAndRenderForecast();
+  pending.at(-1).resolve(answer());
+  await assert.rejects(forecastLoad);
+  await settle();
+  assert.equal(forecastBody(), 'Unable to load: This host\'s Orbit does not offer this view yet. Upgrade it to see this view.',
+    `${label} should read as a host without the view: ${forecastBody()}`);
+}
+{
+  const forecastLoad = forecast.fetchAndRenderForecast();
+  pending.at(-1).resolve(response({ error: 'forecast for this workspace not found' }, 404));
+  await assert.rejects(forecastLoad);
+  await settle();
+  assert.equal(forecastBody(), 'Unable to load: forecast for this workspace not found. Use Refresh to retry.',
+    `a 404 with its own message keeps it: ${forecastBody()}`);
+}
+for (const [label, fail] of [
+  ['a 500', () => pending.at(-1).resolve(response({ error: 'forecast store busy' }, 500))],
+  ['a network failure', () => pending.at(-1).reject(vm.runInContext('new TypeError("Failed to fetch")', context))],
+]) {
+  const forecastLoad = forecast.fetchAndRenderForecast();
+  fail();
+  await assert.rejects(forecastLoad);
+  await settle();
+  assert.ok(forecastBody().includes('Use Refresh to retry.'), `${label} should still offer Refresh: ${forecastBody()}`);
+  assert.ok(!forecastBody().includes('does not offer this view'), `${label} must not read as a host without the view: ${forecastBody()}`);
+}
+
+console.log('audit, codebase, cost, plugin, and forecast panel behaviors passed');

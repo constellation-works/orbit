@@ -485,8 +485,12 @@ function panelMessage(bodyId, state) {
     : quiet ? "panel-placeholder quiet" : "panel-placeholder";
   if (state.error) {
     const label = state.loaded ? "Refresh failed; showing stale data" : "Unable to load";
-    const remedy = state.error.remedy || "Use Refresh to retry.";
-    note.textContent = `${label}: ${state.error.message}. ${remedy}`;
+    // Refresh cannot reach a route the host lacks, so the note names the upgrade
+    // instead of the API path and the retry advice.
+    const { message, remedy } = state.error.routeMissing
+      ? { message: "This host's Orbit does not offer this view yet", remedy: "Upgrade it to see this view." }
+      : { message: state.error.message, remedy: state.error.remedy || "Use Refresh to retry." };
+    note.textContent = `${label}: ${message}. ${remedy}`;
   } else if (state.pending) {
     note.textContent = state.loaded ? "Refreshing… showing previous data." : "Loading…";
   } else {
@@ -986,14 +990,22 @@ export async function fetchJsonPage(path) {
       const text = await res.text();
       let message = `${path}: HTTP ${res.status}`;
       let code = null;
+      // Orbit's own 404s name what is missing. A route this host's Orbit does not
+      // serve answers with no error text (an empty body, or `{"error":""}` from
+      // json_client_error), so it is read as a host without the view.
+      let routeMissing = res.status === 404;
       try {
         const body = JSON.parse(text);
-        if (body && body.error) message = body.error;
+        if (body && body.error) {
+          message = body.error;
+          routeMissing = false;
+        }
         if (body && typeof body.code === "string") code = body.code;
       } catch (_) {}
       const error = new Error(message);
       error.status = res.status;
       if (code) error.code = code;
+      if (routeMissing) error.routeMissing = true;
       throw error;
     }
     return { body: await res.json(), header: (name) => res.headers.get(name) };
