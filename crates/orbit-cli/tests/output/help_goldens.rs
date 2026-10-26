@@ -148,6 +148,8 @@ const CASES: &[(&[&str], &str)] = &[
     (&["mcp", "init"], "mcp/init.txt"),
     (&["mcp", "listen"], "mcp/listen.txt"),
     (&["tool", "run"], "tool/run.txt"),
+    (&["web"], "web.txt"),
+    (&["web", "open"], "web/open.txt"),
     (&["web", "serve"], "web/serve.txt"),
     (&["web", "connect"], "web/connect.txt"),
 ];

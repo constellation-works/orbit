@@ -482,6 +482,12 @@ pub(super) fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> C
             orbit_web::connect(args, context.root_override)?;
             Ok(CommandOutput::Silent)
         }
+        Commands::Web(WebCommand {
+            command: WebSubcommand::Open(args),
+        }) => {
+            orbit_web::open_dashboard(args)?;
+            Ok(CommandOutput::Silent)
+        }
         _ => dispatch_mismatch("Web"),
     }
 }

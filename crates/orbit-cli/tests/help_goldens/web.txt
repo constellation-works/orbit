@@ -1,0 +1,19 @@
+Run the Orbit dashboard
+
+Usage: orbit web [OPTIONS] <COMMAND>
+
+Commands:
+  serve    Run the Orbit dashboard
+  connect  Open a remote workspace's dashboard over an SSH tunnel
+  open     Open a running dashboard with a fresh browser-session URL
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

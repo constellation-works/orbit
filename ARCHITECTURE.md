@@ -42,7 +42,7 @@ Domain crates own their data and transport. Application layers compose them. Ker
 | `orbit-mcp` | internal | common, registry, tools, types (dev: mcp) |
 | `orbit-core` | internal | automation, common, config, engine, exec, registry, runtime, search, store, tools, types (dev: core, policy) |
 | `orbit-cmd` | internal | common, config, core, mcp, registry, store, tools, types |
-| `orbit-web` | internal | auth, cmd, common, core, registry, types (dev: engine, store) |
+| `orbit-web` | internal | auth, cmd, common, config, core, registry, types (dev: engine, store) |
 | `orbit-cli` | internal | auth, cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
 
 `PipelineState` exposes drain controls, pull admission checkpoints and forge

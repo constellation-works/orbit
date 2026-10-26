@@ -33,11 +33,17 @@ pub enum WebSubcommand {
     Serve(orbit_web::ServeArgs),
     /// Open a remote workspace's dashboard over an SSH tunnel
     Connect(orbit_web::ConnectArgs),
+    /// Open a running dashboard with a fresh browser-session URL
+    Open(orbit_web::OpenArgs),
 }
 
 impl Execute for WebSubcommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         match self {
+            WebSubcommand::Open(args) => {
+                orbit_web::open_dashboard(args)?;
+                Ok(CommandOutput::Silent)
+            }
             WebSubcommand::Serve(args) => {
                 orbit_web::serve(runtime, args)?;
                 Ok(CommandOutput::Silent)
