@@ -135,6 +135,8 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 "conclusion": job["conclusion"],
                 "failed_step": failed_step,
                 "failed_steps": failed_steps,
+                "started_at": job["started_at"],
+                "completed_at": job["completed_at"],
             }));
         }
     }

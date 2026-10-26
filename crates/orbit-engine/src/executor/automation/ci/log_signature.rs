@@ -7,6 +7,42 @@
 
 use orbit_tools::github_cli::strip_ansi_sequences;
 
+/// File names cited as `path:line[:column]` in emitted failed-step output.
+///
+/// This deliberately has no extension list: lockfiles and generated files
+/// can carry diagnostics too. Callers must validate these untrusted tokens
+/// as repository paths and check that they name blobs at the observed head.
+pub(crate) fn cited_location_paths(log: &str) -> std::collections::BTreeSet<String> {
+    let mut paths = std::collections::BTreeSet::new();
+    for (kind, line) in classify_log_lines(log) {
+        if matches!(
+            kind,
+            LineKind::RunCommand | LineKind::CommandBody | LineKind::ParamDump | LineKind::EndGroup
+        ) {
+            continue;
+        }
+        let payload = strip_ansi_sequences(log_payload(line));
+        for token in payload.split_whitespace() {
+            let token = token.trim_start_matches(['\'', '"', '`', '(', '[']);
+            let Some((path, location)) = token.split_once(':') else {
+                continue;
+            };
+            let line_number = location
+                .split(':')
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches([',', ')', ']', '\'', '"', '`']);
+            if !path.is_empty()
+                && !line_number.is_empty()
+                && line_number.bytes().all(|byte| byte.is_ascii_digit())
+            {
+                paths.insert(path.strip_prefix("./").unwrap_or(path).to_string());
+            }
+        }
+    }
+    paths
+}
+
 /// Lines a runner emits when something breaks.
 pub const ERROR_MARKERS: &[&str] = &[
     "error",

@@ -1658,6 +1658,23 @@ one. From then on:
     fetch stops adoption without spending rerun, update or repair budgets.
   - **transient**: the log shows the network or the runner giving out. The
     landing reruns the failed jobs once and judges the rerun.
+  - **base-suspect**: a failure the base's recorded run does not show,
+    whose log cites repository files (`path:line` locations that name files
+    at the head) that all lie outside the candidate's changed paths. An
+    earlier passing base run cannot attribute it to the candidate: something
+    outside the repository may have changed since, such as an advisory
+    database or a toolchain release. The landing records one
+    `ci_base_suspect` history event per task and failure, spends no rerun,
+    update or repair, and keeps polling the latest push run of the same job
+    on the landing tip. Only a base job that started after the candidate's
+    job completed decides: the same failure there makes it **inherited**,
+    and a pass makes it **candidate** (for example a test in an untouched
+    file that the candidate's change breaks). A base that gets no such run
+    before `max_wait_seconds` stops the landing in `review` without a
+    repair, with the suspicion in the stop evidence. `orbit run auto
+    --auto-fix` holds the same failure as a red base, and its repair
+    evidence read refuses a repair for it. A log that cites no repository
+    file, or cites a file the candidate changed, is classified as before.
   - **candidate**: anything else. The landing stops for the claim's one
     automatic repair, the same repair a conflicting base gets, and the stop
     evidence carries the failed step's signature and log excerpt for the
