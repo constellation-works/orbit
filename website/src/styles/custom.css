@@ -109,6 +109,60 @@ body {
   line-height: 1.65;
 }
 
+/* Build-time Mermaid SVGs retain readable native dimensions. Scrolling stays
+   inside a keyboard-focusable region, including on narrow screens. */
+.sl-markdown-content .orbit-diagram {
+  margin-inline: 0;
+  min-width: 0;
+}
+
+.orbit-diagram figcaption {
+  color: var(--sl-color-gray-2);
+  font-size: 0.875rem;
+  margin-block-end: 0.75rem;
+}
+
+.orbit-diagram-viewport {
+  max-width: 100%;
+  max-height: 38rem;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--sl-color-hairline-light);
+  border-radius: 8px;
+  background: var(--sl-color-bg);
+}
+
+.orbit-diagram-viewport:focus-visible {
+  outline: 2px solid var(--sl-color-text-accent);
+  outline-offset: 2px;
+}
+
+.orbit-diagram-viewport svg {
+  display: block;
+  max-width: none;
+  --_text: var(--sl-color-text);
+  --_text-sec: var(--sl-color-gray-2);
+  --_text-muted: var(--sl-color-gray-3);
+  --_text-faint: var(--sl-color-gray-4);
+  --_line: var(--sl-color-gray-3);
+  --_arrow: var(--sl-color-text-accent);
+  --_node-fill: var(--sl-color-bg-inline-code);
+  --_node-stroke: var(--sl-color-gray-4);
+  --_group-fill: var(--sl-color-bg);
+  --_group-hdr: var(--sl-color-bg-inline-code);
+  --_inner-stroke: var(--sl-color-hairline-light);
+  --_key-badge: var(--sl-color-bg-inline-code);
+}
+
+.orbit-diagram-viewport text {
+  font-family: var(--sl-font);
+}
+
+.orbit-diagram details pre {
+  max-height: 24rem;
+  overflow: auto;
+}
+
 .sl-markdown-content h2 {
   margin-top: 5rem;
   padding-top: 2rem;

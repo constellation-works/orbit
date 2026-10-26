@@ -5,6 +5,7 @@ import { defineHastPlugin } from 'satteri';
 import { changelogLinks, changelogReleases } from './plugins/changelog.mjs';
 import { inlineCodeWrap } from './plugins/inline-code.mjs';
 import { pagefindIgnoreFrameChrome } from './plugins/expressive-code-pagefind.mjs';
+import { mermaidDiagrams } from './plugins/mermaid.mjs';
 
 function findFirstTh(node) {
   for (const child of node.children || []) {
@@ -108,6 +109,7 @@ export default defineConfig({
   site: 'https://orbit-cli.com',
   markdown: {
     processor: satteri({
+      mdastPlugins: [mermaidDiagrams],
       hastPlugins: [inlineCodeWrap, tablePlugin, changelogLinks, changelogReleases],
     }),
   },
