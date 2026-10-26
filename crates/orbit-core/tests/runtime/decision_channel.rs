@@ -1806,6 +1806,117 @@ fn core_dkim_accepts_legal_folding_around_a_b_value_with_a_following_tag() {
     }
 }
 
+/// A DKIM-requiring channel with one blocked task awaiting an answer.
+fn dkim_required_request() -> (Fixture, String, DecisionRequest, String) {
+    let fx = fixture();
+    fx.runtime
+        .register_decision_channel_with_dkim_requirement(
+            CHANNEL,
+            HUMAN,
+            PLUGIN,
+            vec![SENDER.to_string()],
+            true,
+        )
+        .unwrap();
+    let (task, request) = fx.blocked_task_with_request();
+    let token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &request.id)
+        .unwrap();
+    (fx, task, request, token)
+}
+
+#[test]
+fn core_dkim_verifies_a_body_ending_in_non_wsp_unicode_whitespace() {
+    // RFC 6376 §3.4.4 trims only SP and HTAB from body lines, so U+00A0 is
+    // signed content: a signature computed over it must still verify.
+    let (fx, task, request, token) = dkim_required_request();
+    let signed = dkim_signed_message("approve\u{a0}");
+
+    let answered = fx
+        .submit_dkim(&request, &token, Some(signed), &FixtureResolver)
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+}
+
+#[test]
+fn core_dkim_refuses_non_wsp_bytes_added_to_a_signed_body() {
+    let (fx, task, request, token) = dkim_required_request();
+    let signed = dkim_signed_message("approve");
+
+    // U+00A0 added before the CRLF, or substituted for the last byte, is
+    // body content the signer did not hash.
+    for (label, tampered) in [
+        (
+            "added",
+            signed.replacen("approve\r\n", "approve\u{a0}\r\n", 1),
+        ),
+        (
+            "changed",
+            signed.replacen("approve\r\n", "approv\u{a0}\r\n", 1),
+        ),
+    ] {
+        let refused = fx
+            .submit_dkim(&request, &token, Some(tampered), &FixtureResolver)
+            .expect_err("a non-WSP byte the signer did not hash is refused");
+        assert!(
+            refused.to_string().contains("dkim_verification_failed"),
+            "{label}: {refused}"
+        );
+        assert_eq!(fx.status(&task), TaskStatus::Blocked, "{label}");
+        assert_eq!(
+            fx.requests(&task)[0].state,
+            DecisionRequestState::Open,
+            "{label}"
+        );
+    }
+
+    // SP and HTAB at line end are WSP under relaxed canonicalisation, so the
+    // unchanged signature still verifies and applies the answer.
+    let trailing_wsp = signed.replacen("approve\r\n", "approve \t\r\n", 1);
+    let answered = fx
+        .submit_dkim(&request, &token, Some(trailing_wsp), &FixtureResolver)
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+}
+
+#[test]
+fn core_dkim_refuses_non_wsp_bytes_added_to_a_signed_header() {
+    // Subject is in h=, so U+00A0 added to its name or its value changes
+    // bytes the signer hashed. Relaxed canonicalisation trims only SP and
+    // HTAB from both.
+    let (fx, task, request, token) = dkim_required_request();
+    let signed = dkim_signed_message("approve");
+    let subject = "Subject: Re: decision\r\n";
+    for (label, tampered) in [
+        (
+            "value",
+            signed.replacen(subject, "Subject: Re: decision\u{a0}\r\n", 1),
+        ),
+        (
+            "name",
+            signed.replacen(subject, "Subject\u{a0}: Re: decision\r\n", 1),
+        ),
+    ] {
+        let refused = fx
+            .submit_dkim(&request, &token, Some(tampered), &FixtureResolver)
+            .expect_err("a non-WSP byte added to a signed header is refused");
+        assert!(
+            refused.to_string().contains("dkim_verification_failed"),
+            "{label}: {refused}"
+        );
+        assert_eq!(fx.status(&task), TaskStatus::Blocked, "{label}");
+    }
+
+    let answered = fx
+        .submit_dkim(&request, &token, Some(signed), &FixtureResolver)
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+}
+
 #[test]
 fn a_channel_requiring_dkim_refuses_a_submission_without_a_raw_message() {
     let fx = fixture();
