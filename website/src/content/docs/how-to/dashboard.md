@@ -280,6 +280,109 @@ state and the accepted handoff.
 - A replica shows the claim as held by its owner and refuses all three
   actions.
 
+### Diagnose and recover blocked work
+
+A blocked task, or a delivery the pipeline is holding, opens with a **Why
+stuck** card above its tabs. Read the card before you choose an action. The
+card is read-only and shows five facts:
+
+| Row | What it shows |
+|---|---|
+| **Escalation** | The escalation note the run recorded. When it repeats the block's reason, it reads **See blocked note above** and jumps to that note. |
+| **Landing review** | The verdict of the review that checked the candidate, with its finding count. |
+| **Root cause** | The root cause the run recorded. |
+| **Mergeable** | Whether the task's pull request is `mergeable` or `conflicting`. |
+| **Required checks** | Each required check on the pull request, as `passed`, `failed` or `pending`. |
+
+A note longer than 280 characters or five lines is clamped. Use **Show full
+escalation** or **Show full root cause** to expand it. A fact the dashboard
+could not read shows `unavailable`. A note the run recorded as absent shows
+`none`. For **Mergeable**, `unavailable` is followed by the reason.
+
+Use the detail's **Runs** tab to open the failed step behind a block. For the
+failed run's own **Resume**, see [Runs and errors](#runs-and-errors).
+
+Blocked tasks show **Resume candidate** and **Discard and re-implement**.
+Blocked, in-progress and review tasks, and any task with a Why stuck card,
+also show **Settle merged PR**.
+
+- **Resume candidate** (`blocked` tasks). Returns the task to backlog and
+  keeps the candidate and pull request its stopped run published. The next run
+  adopts them, then validates, reviews and lands them. Nothing is
+  re-implemented.
+- **Discard and re-implement** (`blocked` tasks). Discards that candidate,
+  closes the task's undelivered pull requests, and returns the task to backlog.
+  The next run implements from scratch.
+- **Settle merged PR** (`blocked`, `in-progress` or `review` tasks, and any
+  task with a Why stuck card). If its delivery pull request already merged
+  outside the pipeline into its target branch, the task moves to `done` with a
+  landing note that names the pull request and merge commit. If it has not
+  merged, nothing changes and the refusal shows.
+
+The same three actions from the command line:
+
+```bash
+orbit task requeue "$TASK_ID" --reason "flaky test fixed; rerun the candidate"
+orbit task requeue "$TASK_ID" --reason "candidate is stale" --discard-candidate
+orbit task settle-merged "$TASK_ID"
+```
+
+Choose by what the evidence shows:
+
+- The cause is fixed and the candidate is sound: **Resume candidate**.
+- The candidate is wrong or stale: **Discard and re-implement**.
+- You merged the delivery pull request yourself: **Settle merged PR**.
+
+**Resume candidate** and **Discard and re-implement** each open a
+confirmation that states their effect, then ask for a reason. The reason is
+recorded in task history. An empty reason sends nothing and shows
+`[requeue_reason_required]`. Cancelling either prompt sends nothing.
+**Discard and re-implement** is destructive. The dashboard does not restore
+the discarded candidate or reopen the pull requests it closed. **Settle merged
+PR** asks only for confirmation.
+
+Write the reason for the next reader of the task history, for example
+`flaky test fixed; rerun the candidate`.
+
+### Clear a pilot admission hold
+
+A backlog task that a pilot assessment held from admission shows a **Pilot
+admission hold** callout in its detail, with two actions:
+
+- **Clear hold** records that the held requirement is satisfied.
+- **Approve anyway** records a deliberate override. The task is admitted
+  despite the finding.
+
+Each action asks you to confirm, then asks for evidence. **Approve anyway**
+asks for a reason instead. The evidence is recorded with the decision. Blank
+evidence sends nothing and shows `[pilot_admission_evidence_required]`. The
+callout does not appear while an open **Decision needed** request exists for
+the pilot-admission gate. Answer that request's options instead.
+
+The same decision from the command line is a comment whose first line is
+exact. Put the evidence on the following lines:
+
+```bash
+orbit task update "$TASK_ID" \
+  --comment $'task-pilot-admission: clear\nThe duplicate finding is wrong: the migration is new.'
+```
+
+Read [Continuous delivery](../continuous-delivery/) for what each hold means
+and the other admission checks that still apply after a decision.
+
+### Scope and refusals
+
+- The **Why stuck** card and the **Pilot admission hold** callout are visible
+  to every viewer. Only the actions need operator capability. Without it, the
+  server refuses with `403` and `code: authorization_denied`. See
+  [Authorization](#authorization).
+- Recovery and pilot-admission actions are disabled, with the reason on hover,
+  in **All workspaces** unless the row names its owner. They are also disabled
+  on a host that refuses forwarded writes, which shows `Read-only on <host>:`.
+  Select the task's workspace or host, then try again.
+- A refused action changes nothing. The code and message stay on the task
+  until you start another attempt on it.
+
 ## Auto-drain
 
 The auto-drain card starts and stops a
