@@ -16,7 +16,7 @@ not repeated here.
 | **Bound branch** | The branch or pull request whose landing on the lease's base releases the lease. [2_design.md §4](../2_design.md#4-lifetime) |
 | **Hard lease** | A lease that holds its paths exclusively, as a task context lock does, after path policy. [2_design.md §3](../2_design.md#3-granting-queueing-and-the-drain) |
 | **Landing notice** | The `overlap_landed` notice: a landed commit on the lease's base changed paths the lease holds. [2_design.md §5](../2_design.md#5-notices) |
-| **Lease listener** | The opt-in, lease-only HTTP listener that accepts lease tokens. [2_design.md §7](../2_design.md#7-authority-and-authentication) |
+| **Lease listener** | The lease-only HTTP listener that accepts lease tokens, through which every principal other than the operator reaches the owner. Off until `lease.listener.bind` is set. [2_design.md §7](../2_design.md#7-authority-and-authentication) |
 | **Lease queue** | Hard requests waiting on an overlapping hard holder, ordered by priority then age, with aging. [2_design.md §3](../2_design.md#3-granting-queueing-and-the-drain) |
 | **Lease token** | A bearer credential for one principal, scoped to workspaces, verbs, a priority ceiling and an expiry, valid only on the lease listener. [2_design.md §7](../2_design.md#7-authority-and-authentication) |
 | **Notice** | A durable, sequenced event on a lease, read by cursor poll or SSE. [2_design.md §5](../2_design.md#5-notices) |

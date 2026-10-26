@@ -7,7 +7,7 @@ status: Draft
 feature: path-leases
 doc_role: design
 type: design
-summary: "Proposed mechanics for path leases: lease rows on the owner's reservation store and lock index, advisory and hard modes, a priority queue, TTL plus heartbeat and release on landing, durable notices read by poll or SSE, MCP/CLI/REST surfaces, and a lease-only token listener for principals without SSH."
+summary: "Proposed mechanics for path leases: lease rows on the owner's reservation store and lock index, advisory and hard modes, a priority queue, TTL plus heartbeat and release on landing, durable notices read by poll or SSE, MCP/CLI/REST surfaces, and a lease-only token listener so several people and their agents coordinate on one owner."
 tags: [path-leases, locks, admission, reservations, notifications, authentication]
 paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**", "crates/orbit-mcp/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
@@ -173,11 +173,13 @@ so these callers are trusted, and the lease's principal is attribution: the decl
 agent name plus `--remote-caller-machine-id`. Priority ceilings and `lease.hard` per principal
 are **guards**, applied the way `agent_context_declared` guards operator propagation: a managed
 agent run gets the `agent` principal class and its ceiling, and nothing stops an operator from
-lifting it. That is enough for one person's machines and agents, which is all Orbit has today.
+lifting it. This serves the operator's own machines and agents.
 
-**The lease listener (phase 4).** For principals with no SSH login to the owner — another
-person, a cloud agent, CI — the owner can run a separate, opt-in listener that serves only the
-lease routes of §6.
+**The lease listener (phase 2).** Leases exist so that several people, and their agents, can
+coordinate on one repository. Those people do not have, and should not get, an SSH login to the
+owner, because that login is ownership of it. So the owner runs a separate listener that serves
+only the lease routes of §6, for every principal that is not the operator: teammates, their
+agents, cloud agents and CI.
 
 - **Bearer lease tokens**, minted by the operator on the owner
   (`orbit lease token create --principal <name> --workspace <ws> [--max-priority] [--hard allow|never] [--expires]`),
@@ -197,9 +199,13 @@ lease routes of §6.
 - **No browser sessions.** The listener has no cookie or Origin-based session, so it has no
   CSRF surface; the dashboard's Leases view reads through Orbit Web as today.
 
-The listener is the first Orbit surface with application authentication. It needs an STD-05
-security review before it ships, and it does not reintroduce caller authorization on any SSH
-path.
+- **One token per person, one per agent.** A person's agents get their own tokens under the
+  person's name (`alice/claude-code`), with the `agent` class ceiling, so notices and audit rows
+  say which of Alice's sessions holds a path and revoking one agent leaves the others working.
+
+The listener is the first Orbit surface with application authentication. It ships with an
+STD-05 security review in the same phase, and it does not reintroduce caller authorization on
+any SSH path: the operator keeps reaching the owner over SSH as today.
 
 ## 8. Configuration
 
@@ -224,26 +230,33 @@ unchanged.
 1. **Lease rows and SSH surfaces.** Advisory and hard leases, TTL and renew, explicit release,
    `check`, MCP tools and CLI, drain admission honoring hard leases, leases in
    `orbit task locks list` and the denial log.
-2. **Notices.** The notice stream, `overlap` and `overlap_landed`, poll by cursor, SSE on Orbit
-   Web, and the Claude Code hook recipe in the skill docs.
-3. **Queue and lifetime.** Waiting instead of refusal, aging, expansion, release on landing for
+2. **Lease listener.** Lease tokens and their CLI, the lease-only router, TLS or proxy binding,
+   audit and rate limiting, with its STD-05 review. From here several people can coordinate on
+   one owner.
+3. **Notices.** The notice stream, `overlap` and `overlap_landed`, poll by cursor, SSE on both
+   Orbit Web and the lease listener, and the Claude Code hook recipe in the skill docs.
+4. **Queue and lifetime.** Waiting instead of refusal, aging, expansion, release on landing for
    bound branches and pull requests, and the dashboard Leases view.
-4. **Lease listener.** Tokens, the lease-only router, TLS or proxy binding, audit, after an
-   STD-05 review.
 5. **Later.** Preemption, webhooks with signed payloads, and conflict-budget pricing that weighs
    advisory holders by their measured landing rate.
 
-Each phase is useful alone; phase 1 already makes outside work visible to drains.
+Phase 1 already makes the operator's outside work visible to drains; phase 2 is what makes the
+feature multi-person.
 
 ## 10. Concerns & Honest Limitations
 
 - **Advisory leases depend on clients.** A session that never asks is still invisible, and one
   that under-declares (footprints miss about a third of touched files today) still collides. The
   editor hook narrows the gap for Claude Code only.
-- **Authentication cuts against a recent choice.** Orbit removed its caller-authorization
-  machinery because SSH login already is ownership. The listener brings application auth back
-  for one narrow surface. It is worth it only if principals without SSH actually appear; until
-  then phase 4 should stay unbuilt.
+- **Orbit gains a network-facing, authenticated surface.** Orbit removed its
+  caller-authorization machinery because, for a single user, SSH login already is ownership.
+  Coordinating several people breaks that premise for leases, so the listener brings application
+  authentication back for this one surface, and with it token storage, rotation, TLS and a
+  public attack surface to keep reviewed. The lease-only router bounds what a stolen token can
+  do; it does not remove the need to operate the listener carefully.
+- **Advisory leases make honesty a social contract.** With several people, a teammate who never
+  leases, or leases a whole directory, degrades everyone's notices. Orbit can show
+  declared-versus-landed accuracy per principal; it cannot make anyone use leases well.
 - **Release on landing is heuristic.** Ancestry fails on squash merges and a pull-request
   binding needs a forge. A missed landing is caught only by the TTL, so a careless 4-hour TTL
   holds a hard lease for up to 4 hours.

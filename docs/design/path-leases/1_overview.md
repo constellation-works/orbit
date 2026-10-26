@@ -7,7 +7,7 @@ status: Draft
 feature: path-leases
 doc_role: overview
 type: design
-summary: "Proposed: let agents and people outside Orbit's drains lease repository paths on the owner, so their work and drain tasks share one lock index, wait for a green light when needed, and hear when overlapping work lands; push and poll over MCP, CLI, REST and SSE."
+summary: "Proposed: let several people and their agents, outside Orbit's drains, lease repository paths on one owner, so their work and drain tasks share one lock index, wait for a green light when needed, and hear when overlapping work lands; push and poll over MCP, CLI, REST and SSE, with lease tokens for everyone but the operator."
 tags: [path-leases, locks, admission, reservations, notifications]
 paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
@@ -25,7 +25,9 @@ Work that does not run through a drain, such as a Claude Code or Codex session, 
 person at the keyboard, is invisible to that lock. A **path lease** lets any such client ask the
 owner "I'm about to work on these paths", get a green light now or a place in line, and be told
 when work that overlaps it lands. The engine is the owner's existing lock index; what is new is a
-user-level surface (push a request, then poll or stream) instead of host-level drain pull.
+user-level surface (push a request, then poll or stream) instead of host-level drain pull, and
+a token-authenticated listener so that several people and their agents can coordinate on one
+repository through one owner.
 
 ## 1. Motivation
 
@@ -42,6 +44,9 @@ Measured on ws_orbit on 2026-10-25 (read-only; the queries are described in
   (31%) never changed a file in common.
 - **Outside work is unaccounted for.** Interactive sessions on the same repository take no lock
   at all, so neither they nor the drain can see each other until a rebase fails.
+- **Only one person can reach the lock.** The owner is reached over SSH, and an SSH login is
+  ownership of it. A second person working on the same repository, or their agents, has no way
+  to see or take a lock without being handed the whole owner.
 
 So the target is best-effort conflict reduction, not a guarantee: tell people and agents about
 overlap early, let exclusive holds exist where a path policy wants them, and keep git, rebase and
@@ -62,7 +67,8 @@ overlap early, let exclusive holds exist where a path policy wants them, and kee
 - **Landing notice** — the notice that work which changed paths an active lease holds has just
   landed on its base, so the holder should rebase now.
 - **Lease token** — a bearer credential that authorizes lease operations, and nothing else, on
-  the lease listener, for principals that have no SSH login to the owner.
+  the lease listener. Every principal other than the operator uses one: each person, and each of
+  their agents.
 
 Full definitions: [references/glossary.md](./references/glossary.md).
 

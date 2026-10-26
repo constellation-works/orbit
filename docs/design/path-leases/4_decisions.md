@@ -77,24 +77,27 @@ doubt between telling and blocking, tell.
 ### Context
 
 Orbit's remote authority is an SSH login, which is ownership of the destination, and Orbit Web
-has no application authentication. Principals without an SSH login need a credential, but a
-general Orbit API token would reopen the multi-tenant authorization problem Orbit deliberately
-stopped solving.
+has no application authentication. That fits one operator. Leases exist so that several people
+and their agents can coordinate on one owner, and none of them except the operator should own
+it, so they need a credential. A general Orbit API token would reopen the multi-tenant
+authorization problem Orbit deliberately stopped solving.
 
 ### Decision
 
-A credential Orbit issues to a principal without an SSH login is scoped to one narrow surface,
+A credential Orbit issues to anyone other than the operator is scoped to one narrow surface,
 and the surface is narrow by construction: the listener that accepts it routes only that
 surface's operations. Widening what such a credential can do means a new listener or route set
-with its own review, never a broader scope on an existing token.
+with its own review, never a broader scope on an existing token. SSH stays the operator's way in
+and keeps meaning ownership.
 
 ### Consequences
 
 - A leaked lease token can hold paths and read lease state in its workspaces, up to its priority
   ceiling, until it expires or is revoked. It cannot reach tasks, runs, configuration or operator
   routes.
-- Rejected alternative: bearer tokens on Orbit Web's whole API with per-route scopes, which
-  reuses one server but makes every route's scope check a security boundary.
+- Rejected alternatives: bearer tokens on Orbit Web's whole API with per-route scopes, which
+  reuses one server but makes every route's scope check a security boundary; and giving each
+  collaborator an SSH login, which makes each of them an owner.
 - Cost: Orbit carries two authentication stories, SSH ownership and lease tokens, and a second
   listener to configure, monitor and review.
 
