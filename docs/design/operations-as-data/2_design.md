@@ -776,10 +776,13 @@ the guarded start and approval transitions. A claimed worker's `add` refuses
 
 `--host` routing for `update` is unchanged: the preflight sends the derived
 input to the owning host as `orbit.task.update`, refusing the flags with no
-tool field, as before. The retired-field and unknown-field refusals the tools
-shipped are spec entries (§2.1, §4), and over MCP and `orbit tool run` the
-registry's schema check still answers first with the same plain `unknown
-field` message. The Step 0 baseline and its differences are in
+tool field, as before. For ordinary `orbit.task.add` calls over MCP and
+`orbit tool run`, the registry admits declared retired fields so spec parsing
+can return their replacement-specific refusal (§2.1, §4). Ordinary unknown
+fields still get the registry's plain `unknown field` refusal, and other task
+operations keep their registry-level unknown-field handling. Guarded creation
+preempts ordinary parsing and keeps its separate field rules. The Step 0
+baseline and its differences are in
 [Migrated CLI verbs execute through the tool path](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
 
 ### Phase 3c: task artifacts and locks (Implemented)

@@ -617,10 +617,11 @@ reviewed:
   model or name, as the tool's `model`, so attribution goes through tool
   identity resolution. The baseline's `created_by`, `updated_by` and history
   actors are unchanged.
-- **Unknown and retired fields.** Unchanged on every surface: the tool
-  registry's schema check refuses them first with "unknown field '<name>'".
-  The specs keep the tools' own retired-field messages for a direct handler
-  call, and both writes refuse unknown fields rather than warn (§4).
+- **Unknown and retired fields (historical migration behavior).** At the time
+  of this migration, the tool registry's schema check refused retired and
+  unknown fields first with "unknown field '<name>'". The specs kept the
+  tools' own retired-field messages for a direct handler call, and both
+  writes refused unknown fields rather than warn (§4).
 - **Schemas and help.** The MCP snapshot and the `add` and `update` help
   goldens are byte-identical.
 - **Not migrated.** The dashboard's task create and update routes still
