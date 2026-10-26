@@ -159,7 +159,7 @@ const REQUEST: OperationSpec<LeaseVerb> = OperationSpec {
                 both(
                     "base_branch",
                     ParamType::String,
-                    "Optional base branch binding (no automatic release in this phase).",
+                    "Base branch whose landing releases the lease (defaults to the workspace base).",
                     CliArgKind::flag("base"),
                     "Base branch binding",
                 ),
@@ -169,9 +169,9 @@ const REQUEST: OperationSpec<LeaseVerb> = OperationSpec {
                 both(
                     "branch",
                     ParamType::String,
-                    "Optional working branch binding (no automatic release in this phase).",
+                    "Working branch or #<pull-request-number> whose landing releases the lease. The owner checks on its clock cadence; TTL is the backstop.",
                     CliArgKind::flag("branch"),
-                    "Working branch binding",
+                    "Working branch or #<pull-request-number> binding",
                 ),
                 &["bound_branch"],
             ),

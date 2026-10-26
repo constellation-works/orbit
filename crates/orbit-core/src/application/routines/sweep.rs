@@ -277,6 +277,16 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
+    // Lifetime maintenance starts no work and must also run during an
+    // admission hold. Load the clock credentials before checking the forge.
+    let clock_env_loaded = if options.dry_run {
+        Vec::new()
+    } else {
+        let loaded = load_clock_env_for(global_root, &mut discovered, &mut load_errors);
+        super::leases::sweep_owner_lease_lifetimes(&discovered, deadline, &mut skipped_workspaces);
+        loaded
+    };
+
     // [ORB-12968] A host shutdown inside the hold horizon would kill anything
     // this tick starts, so the whole fire phase — routines and auto-tasks —
     // stands down for it. A later schedule does not. Cursors are not advanced
@@ -314,20 +324,12 @@ pub(crate) fn run_sweep_at_with_providers_at(
                 .collect(),
             auto_task_reports: Vec::new(),
             load_errors,
-            clock_env_loaded: Vec::new(),
+            clock_env_loaded,
             no_workspace_loaded,
             deadline_exceeded: Instant::now() >= deadline,
             skipped_workspaces: skipped_workspaces.into_iter().collect(),
         });
     }
-
-    // [ORB-15154] The OS clock gives this process no login environment, so
-    // operator credentials the runs below need come from the clock env file.
-    let clock_env_loaded = if options.dry_run {
-        Vec::new()
-    } else {
-        load_clock_env_for(global_root, &mut discovered, &mut load_errors)
-    };
 
     let dispatch = RuntimeDispatch {
         runtimes: discovered

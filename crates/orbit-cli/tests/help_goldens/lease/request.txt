@@ -33,7 +33,7 @@ Options:
           Base branch binding
 
       --branch <BRANCH>
-          Working branch binding
+          Working branch or #<pull-request-number> binding
 
       --ttl <TTL>
           Lifetime from now, e.g. 45m or 2h (default: 30m, maximum: 4h)

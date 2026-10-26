@@ -19,7 +19,7 @@ related_artifacts: []
 This document proposes how path leases work. The lease row of §2, the advisory/hard grant rules
 of §3 without the queue, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
 runtime operations, CLI, MCP and loopback REST surfaces (see §6). Phase 3 durable notices,
-including Web poll and SSE replay, are implemented; queueing, advanced lifetime handling,
+including Web poll and SSE replay, and owner-clock lifetime handling are implemented; queueing,
 preemption and listener streaming remain later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
 [conflict-budget](../conflict-budget/1_scope.md), and open directions to
 [3_vision.md](./3_vision.md).
@@ -150,6 +150,23 @@ expansion with a `deadlock` notice.
   useless, so a pull-request binding is preferred when the forge has one.
 - **Backstop.** Whatever else fails, the TTL ends the lease. Nothing is held by a client that has
   gone away for longer than one TTL.
+
+**Implemented lifetime handling.** Each non-dry-run owner clock tick expires elapsed leases
+and writes an `expiring` notice once at or after 80% of the interval from `heartbeat_at` to
+`expires_at`. Renewal starts a new interval and permits one new warning. Maintenance also
+runs during a host shutdown admission hold, and never runs in a replica checkout. Reads do
+not renew leases; renewal remains explicit.
+
+The existing `branch` / `bound_branch` binding accepts a local branch name or an explicit
+`#<pull-request-number>`. A branch lookup prefers the newest forge PR for that branch,
+including open or closed-unmerged PRs: only `merged` on the lease's base releases it. A PR
+on a different base does not permit ancestry fallback. Without a PR,
+the local `refs/heads/<branch>` head must be reachable from `refs/heads/<base>`.
+Missing refs, an unavailable forge or a failed lookup leave the lease to its TTL; the clock
+does not fetch refs. Explicit PR bindings never fall back to ancestry. A landing releases
+the row with reason `landed` and transactionally appends a `released` notice with that reason.
+The current tick finishes its local expiry/warning transaction before checking the forge,
+and a failed landing check does not stop checks for the remaining leases.
 
 ## 5. Notices
 

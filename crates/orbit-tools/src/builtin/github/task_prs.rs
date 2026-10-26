@@ -75,6 +75,27 @@ pub fn view_pull_request(number: u64) -> ExecRequest {
     )
 }
 
+/// The newest PR for a branch, including closed and
+/// merged PRs so squash landings and an unmerged PR both override ancestry.
+pub fn bound_branch_pull_request(branch: &str) -> ExecRequest {
+    super::gh_exec_request(
+        vec![
+            "pr".into(),
+            "list".into(),
+            "--state".into(),
+            "all".into(),
+            "--head".into(),
+            branch.into(),
+            "--limit".into(),
+            "1".into(),
+            "--json".into(),
+            "number,state,baseRefName".into(),
+        ],
+        None,
+        TIMEOUT_DEFAULT_MS,
+    )
+}
+
 /// What holds open pull request `number` back from merging, as an
 /// out-of-run auto-fix repair reads it: its author, body and head, whether it
 /// conflicts with its base, and each status context on its head with whether

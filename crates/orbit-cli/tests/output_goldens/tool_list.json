@@ -1716,13 +1716,13 @@
       },
       {
         "name": "base_branch",
-        "description": "Optional base branch binding (no automatic release in this phase).",
+        "description": "Base branch whose landing releases the lease (defaults to the workspace base).",
         "param_type": "string",
         "required": false
       },
       {
         "name": "branch",
-        "description": "Optional working branch binding (no automatic release in this phase).",
+        "description": "Working branch or #<pull-request-number> whose landing releases the lease. The owner checks on its clock cadence; TTL is the backstop.",
         "param_type": "string",
         "required": false
       },

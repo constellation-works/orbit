@@ -146,6 +146,14 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         workspace_id: Option<&str>,
     ) -> Result<LeaseListResult, OrbitError>;
 
+    /// Expire elapsed leases and publish one 80%-TTL warning per heartbeat.
+    /// Returns the remaining active leases for the owner's landing checks.
+    fn sweep_lease_lifetimes(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<LeaseListResult, OrbitError>;
+
     /// Durable notices strictly after a cursor, optionally for one lease.
     fn list_lease_notices(
         &self,
