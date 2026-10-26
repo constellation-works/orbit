@@ -77,6 +77,24 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_count(raw, 600, 3_600, "workflow.explore.timeout_seconds"),
     },
+    workflow_explore_brief_enabled: bool => bool {
+        key: "workflow.explore_brief.enabled", value_type: "bool",
+        description: "Ask the task pilot for an explore brief, a bounded map of the change stored as a task artifact.",
+        section: ConfigSection::Delivery, order: 166,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    workflow_explore_brief_tags: Vec<String> => Vec<String> {
+        key: "workflow.explore_brief.tags", value_type: "array<string>",
+        description: "Task tags that request an explore brief; empty requests one for every piloted task.",
+        section: ConfigSection::Delivery, order: 167,
+        resolve: |raw: Option<Vec<String>>| resolve_name_list(raw, "workflow.explore_brief.tags"),
+    },
+    workflow_explore_brief_deliver: bool => bool {
+        key: "workflow.explore_brief.deliver", value_type: "bool",
+        description: "Give a stored explore brief to the implementer; false keeps briefs in shadow.",
+        section: ConfigSection::Delivery, order: 168,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
     workflow_generated_paths: BTreeMap<String, String> => BTreeMap<String, String> {
         key: "workflow.generated_paths", value_type: "table<string,string>",
         description: "Generated files and the command that regenerates each one.",

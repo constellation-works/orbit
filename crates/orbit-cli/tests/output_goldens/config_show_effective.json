@@ -694,6 +694,27 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.explore_brief.deliver": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.explore_brief.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.explore_brief.tags": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.generated_paths": {
       "scope": "built-in",
       "state": "default",

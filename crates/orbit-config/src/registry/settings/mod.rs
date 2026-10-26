@@ -8,6 +8,7 @@ pub use machine::{
 };
 pub(crate) use resolve::{read_optional, resolve_percent};
 pub use snapshot::{
-    ExperimentSettings, ExploreSettings, MidRunSteeringSettings, RegressionRiskSettings,
+    ExperimentSettings, ExploreBriefSettings, ExploreSettings, MidRunSteeringSettings,
+    RegressionRiskSettings,
 };
 pub use table::{CONFIG_KEY_REGISTRY, ConfigSnapshot};

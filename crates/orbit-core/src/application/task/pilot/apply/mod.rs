@@ -20,7 +20,7 @@ use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
-use crate::application::task::{TaskAutomationPort, TaskSweepFilingPort};
+use crate::application::task::{TaskAutomationPort, TaskJobPort, TaskSweepFilingPort};
 
 use super::drain_promotion::DrainAuthority;
 use super::requested_workspace_root;
@@ -66,6 +66,8 @@ struct ApplyContext<'a> {
     /// The pilot job run applying these results, recorded on each receipt so
     /// the assessment can be attributed to the run's crew and model.
     run_id: Option<&'a str>,
+    /// That run's crew, recorded in an explore brief's provenance.
+    pilot_crew: Option<&'a str>,
 }
 
 /// What the applied tasks of every partition contribute to the report.
@@ -131,6 +133,13 @@ pub(crate) fn apply(
     )?;
     let partitions = partitions(action, &envelope.partitions, &prepared_before)?;
 
+    // Best effort: a brief's provenance names the crew when the run says.
+    let pilot_crew = envelope
+        .authority
+        .run_id
+        .as_deref()
+        .and_then(|run_id| runtime.stored_job_run(run_id).ok().flatten())
+        .and_then(|run| run.resolved_crew);
     let context = ApplyContext {
         runtime,
         action,
@@ -142,6 +151,7 @@ pub(crate) fn apply(
         authority: &authority,
         source_superseded: &source_superseded,
         run_id: envelope.authority.run_id.as_deref(),
+        pilot_crew: pilot_crew.as_deref(),
     };
     let mut applied = Applied::default();
     let mut partition_decisions = partitions

@@ -33,6 +33,11 @@
 //! `user_facing_ui` finding adds the `ui` tag to a task that lacks it; apply
 //! never removes one.
 //!
+//! A task whose preparation requested an explore brief may carry one in its
+//! assessment. Apply validates it and writes the system-written
+//! `explore-brief.json` artifact before the receipt; an invalid brief is
+//! dropped with its reason in the audit and never fails the assessment.
+//!
 //! An applied assessment also holds or gates the task: backlog holds from
 //! applied findings (`admission`), prerequisite resolution (`blockers`) and
 //! verified-no-diff holds (`no_diff`).
@@ -44,6 +49,7 @@ mod attachment_budget;
 mod blockers;
 mod cfg_gate;
 mod drain_promotion;
+mod explore_brief;
 mod freshness;
 pub(crate) mod input;
 mod no_diff;
@@ -151,6 +157,13 @@ pub(super) const VALIDATION_TOOL_WARNINGS: &str = "validation_tool_warnings";
 /// grant: the exact selectors it authorizes and the identity of the record.
 pub(super) const CONTEXT_CREATION_SELECTORS: &str = "context_creation_selectors";
 pub(super) const CONTEXT_CREATION_IDENTITY: &str = "context_creation_identity";
+
+/// Prepared-snapshot field marking a task the configuration requests an
+/// explore brief for, and the partition field listing those tasks for the
+/// pilot (`workflow.explore_brief.*`). Both are written only when a task
+/// requests one, so a workspace without briefs keeps its prepared shape.
+pub(super) const EXPLORE_BRIEF_REQUESTED: &str = "explore_brief_requested";
+pub(super) const EXPLORE_BRIEF_TASK_IDS: &str = "explore_brief_task_ids";
 
 /// Assessment fields apply attaches: granted creation targets the pilot
 /// omitted and apply kept, and dropped missing selectors no grant covers,

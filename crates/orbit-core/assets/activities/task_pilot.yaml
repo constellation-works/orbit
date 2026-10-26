@@ -47,6 +47,16 @@ spec:
         type: [string, "null"]
       partition_index:
         type: number
+      partition:
+        description: >
+          The prepared partition. `explore_brief_task_ids` lists the tasks
+          whose explore brief the workspace requests; absent means none.
+        type: object
+        properties:
+          explore_brief_task_ids:
+            type: array
+            items:
+              type: string
       crew:
         type: string
       crew_config_key:
@@ -248,6 +258,74 @@ spec:
                     type: string
             user_facing_ui:
               type: [boolean, "null"]
+            explore_brief:
+              description: >
+                Only for a task in `partition.explore_brief_task_ids`. Apply
+                validates it and drops an invalid brief without failing the
+                assessment.
+              type: [object, "null"]
+              properties:
+                change:
+                  type: array
+                  items:
+                    type: object
+                    required: [target, what]
+                    properties:
+                      target:
+                        type: string
+                      what:
+                        type: string
+                call_path:
+                  type: array
+                  items:
+                    type: object
+                    required: [target, role]
+                    properties:
+                      target:
+                        type: string
+                      role:
+                        type: string
+                pattern:
+                  type: array
+                  items:
+                    type: object
+                    required: [target, why]
+                    properties:
+                      target:
+                        type: string
+                      why:
+                        type: string
+                tests:
+                  type: array
+                  items:
+                    type: object
+                    required: [target, covers]
+                    properties:
+                      target:
+                        type: string
+                      covers:
+                        type: string
+                gotchas:
+                  type: array
+                  items:
+                    type: object
+                    required: [text, cite]
+                    properties:
+                      text:
+                        type: string
+                      cite:
+                        type: string
+                out_of_scope:
+                  type: array
+                  items:
+                    type: string
+                maps:
+                  type: array
+                  items:
+                    type: string
+                confidence:
+                  type: string
+                  enum: [high, medium, low]
       summary:
         type: string
   instruction: |
@@ -261,7 +339,8 @@ spec:
     a non-Git workspace; `base_branch` is provenance, not a ref to resolve.
     `implementation_lane` lists the implementing activity's callable `tools`
     and its `artifact_attachment` paths, or is null when that activity could
-    not be read.
+    not be read. `partition.explore_brief_task_ids` names the tasks that also
+    get an explore brief.
 
     ## Hard rules
 
@@ -292,7 +371,8 @@ spec:
        workspace, inspect the filesystem directly and report both as null.
     3. Then work through, in order: Selector rules, Dispositions (CI-failure
        sweeps for a `ci-failure-sweep` task), Acceptance-criteria checks,
-       Assessment and Findings.
+       Assessment and Findings, then Explore brief for a task that requests
+       one.
 
     ## Selector rules
 
@@ -516,6 +596,42 @@ spec:
 
     For any other finding you are unsure of, use false.
 
+    ## Explore brief
+
+    For a task in `partition.explore_brief_task_ids` whose disposition is
+    `selectors` and whose complexity is assessed, return `explore_brief`: a
+    short map, from the reading you already did, that lets the implementer
+    start without exploring cold. Every other task gets `null`, and so does a
+    non-Git workspace. It is a map, not a transcript.
+
+    - `change` (1 to 12): `{"target","what"}` for each target the change
+      creates, modifies or deletes; `what` is one sentence of at most 200
+      characters. Every target lies inside `context_files_after`, exactly or
+      under a `dir:` or `file:` selector there.
+    - `call_path` (up to 10): `{"target","role"}`, ordered from the entry
+      point to the change site.
+    - `pattern` (up to 3): `{"target","why"}`, existing code to copy and why
+      it is the precedent.
+    - `tests` (up to 6): `{"target","covers"}`, tests and goldens that cover
+      the change targets.
+    - `gotchas` (up to 6): `{"text","cite"}`, a non-obvious constraint of at
+      most 300 characters, citing a target or doc as a selector.
+    - `out_of_scope` (up to 5): strings of at most 200 characters naming
+      adjacent work the task does not own.
+    - `maps` (up to 4): `file:` selectors of checked-in maps the workspace
+      guide links that cover part of the task; cite them instead of
+      repeating them.
+    - `confidence`: `high`, `medium` or `low`.
+
+    Every target, `cite` and map is a `file:`, `dir:` or
+    `symbol:<path>#<symbol>:<kind>` selector whose anchor exists at
+    `source_revision` (a `symbol:` name must occur in its file), or a creation
+    target the task's latest `context_creation_authorized` entry names. Never
+    write a line number anywhere, as a target or as `path:<digits>` in text:
+    they break with the next merge. Text describes; it never pastes code (no
+    fences, no line breaks). The serialized brief stays under 8 KiB. Apply
+    drops an invalid brief and records why; it never fails the assessment.
+
     ## CI-failure sweeps
 
     For a `ci-failure-sweep` task, compare the runner-tested commit and run
@@ -540,7 +656,8 @@ spec:
     When `repair_attempt` is true, apply rejected an earlier assessment.
     Reassess only the supplied task IDs at the original `source_revision` and
     fix every message in `validation_errors`. Do not revisit successful siblings
-    or resolve a new source revision.
+    or resolve a new source revision. Return `explore_brief` again for a task
+    in `partition.explore_brief_task_ids`; apply validates it the same way.
 
     ## Return
 
@@ -574,14 +691,16 @@ spec:
         "required_os":[],
         "required_machine":[],
         "post_deploy":[],
-        "user_facing_ui":false
+        "user_facing_ui":false,
+        "explore_brief":null
       }],
       "summary":"one short partition summary"
     },"error":null}
 
     When set, `duplicate_of` is `{"task_id":"...","evidence":"..."}`,
     `already_landed` is `{"evidence":"..."}`, and `release_action_required` is
-    `{"action":"...","evidence":"..."}`.
+    `{"action":"...","evidence":"..."}`. A requested `explore_brief` is
+    `{"change":[{"target":"file:...","what":"..."}],"call_path":[],"pattern":[],"tests":[],"gotchas":[],"out_of_scope":[],"maps":[],"confidence":"high|medium|low"}`.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add

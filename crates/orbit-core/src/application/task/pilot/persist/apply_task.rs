@@ -17,6 +17,7 @@ use crate::application::task::{TaskAutomationPort, TaskJobPort};
 use super::super::apply::admission::{
     Admission, AppliedTaskMaterial, PreparedTaskSnapshot, ValidatedTask,
 };
+use super::super::explore_brief::{BriefProvenance, store_explore_brief};
 use super::atomic::{
     applied_material, apply_atomic_with_retries, resulting_fingerprint, with_task_locks,
 };
@@ -388,6 +389,25 @@ pub(in super::super) fn apply_task(
                     task.post_deploy.clone(),
                 )
             });
+            // Artifact first, receipt second. The brief names this receipt and
+            // the material it seals, so a crash between the two writes leaves
+            // a brief no receipt matches, which is never delivered.
+            let explore_brief = task.explore_brief.as_ref().map(|decision| {
+                store_explore_brief(
+                    runtime,
+                    decision,
+                    &BriefProvenance {
+                        task_id: &task.task_id,
+                        material_fingerprint: written
+                            .material
+                            .as_ref()
+                            .map(|(fingerprint, _)| fingerprint.as_str()),
+                        receipt_operation_id: &task.operation_id,
+                        pilot_run_id: task.pilot_run_id.as_deref(),
+                        pilot_crew: task.pilot_crew.as_deref(),
+                    },
+                )
+            });
             let mutation_params = AtomicTaskMutationParams {
                 actor: super::super::PILOT_ACTOR.to_string(),
                 operation_id: task.operation_id.clone(),
@@ -430,6 +450,7 @@ pub(in super::super) fn apply_task(
                     "complexity_after": task.complexity,
                     "applied_material": written,
                     "pilot_run_id": task.pilot_run_id,
+                    "explore_brief": explore_brief,
                 }))
                 .map_err(|error| {
                     OrbitError::Execution(format!("serialize task-pilot audit: {error}"))

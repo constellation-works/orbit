@@ -33,8 +33,12 @@ fn assessment_summary(comment: &TaskComment) -> Option<String> {
         Some(before) if !before.is_empty() && before != after => format!("{before} → {after}"),
         _ => after.to_owned(),
     };
+    // Ahead of the rationale, so the bound below never cuts it off.
+    let brief = explore_brief(&receipt)
+        .map(|brief| format!("{brief}; "))
+        .unwrap_or_default();
     let summary = format!(
-        "{disposition} ({confidence}); crew {}; complexity {}; {rationale}",
+        "{disposition} ({confidence}); crew {}; complexity {}; {brief}{rationale}",
         change("crew_before", crew),
         change("complexity_before", complexity),
     );
@@ -47,4 +51,16 @@ fn assessment_summary(comment: &TaskComment) -> Option<String> {
     } else {
         bounded
     })
+}
+
+/// The receipt's explore brief record as one clause: written with its size,
+/// or dropped with the reason. `None` when the receipt records no brief.
+fn explore_brief(receipt: &Value) -> Option<String> {
+    let brief = receipt.get("explore_brief")?;
+    if let Some(reason) = brief.get("dropped").and_then(Value::as_str) {
+        return Some(format!("explore brief dropped: {reason}"));
+    }
+    brief.get("written")?;
+    let bytes = brief.get("bytes").and_then(Value::as_u64)?;
+    Some(format!("explore brief written ({bytes} bytes)"))
 }

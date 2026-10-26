@@ -37,6 +37,8 @@ pub(in super::super) struct PreparedTaskSnapshot {
     /// Identity of the durable context creation grant the task held at
     /// preparation, `None` for none (or a payload prepared before grants).
     pub(in super::super) context_creation_identity: Option<String>,
+    /// Whether preparation requested an explore brief for the task.
+    pub(in super::super) explore_brief_requested: bool,
 }
 
 pub(in super::super) struct ValidatedTask {
@@ -67,6 +69,10 @@ pub(in super::super) struct ValidatedTask {
     /// The pilot job run that produced the assessment, persisted as the
     /// audit's `pilot_run_id`.
     pub(in super::super) pilot_run_id: Option<String>,
+    /// The pilot run's crew, recorded in an explore brief's provenance.
+    pub(in super::super) pilot_crew: Option<String>,
+    /// The explore brief decision, `None` when none was owed or returned.
+    pub(in super::super) explore_brief: Option<super::super::explore_brief::BriefDecision>,
 }
 
 impl ValidatedTask {

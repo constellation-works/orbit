@@ -1,5 +1,7 @@
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskArtifact, canonical_artifact_path};
+use orbit_types::task::{
+    EXPLORE_BRIEF_ARTIFACT, TaskArtifact, canonical_artifact_path, is_explore_brief_artifact,
+};
 use orbit_types::workflow::{REVIEW_REPORT_ARTIFACT, ReviewReport, is_reserved_review_artifact};
 
 /// Admit only review decisions understood by the merge gate. Keep the caller's
@@ -15,15 +17,23 @@ pub(super) fn validate_pr_status(value: &str) -> Result<Option<String>, OrbitErr
     }
 }
 
-/// Canonicalize an artifact a caller other than the review gate's system
-/// writer supplies, and refuse it in the reserved review namespace. Gate
-/// records are certificates and authority, not agent claims, so every
-/// agent-originated write applies this one rule: task updates, task starts and
-/// a claimed worker's claim evidence, which a remote owner's broker also
-/// reaches. The only exception is the live reviewer's schema-checked report;
-/// the store retains its revisions and settlement certifies it.
+/// Canonicalize an artifact a caller other than Orbit's system writer
+/// supplies, and refuse it in a reserved name: the review namespace and the
+/// task-pilot's explore brief. Gate records are certificates and authority,
+/// and the brief is the pilot's validated product, not agent claims, so every
+/// agent- or operator-originated write applies this one rule: task updates,
+/// task starts and a claimed worker's claim evidence, which a remote owner's
+/// broker also reaches. The only exception is the live reviewer's
+/// schema-checked report; the store retains its revisions and settlement
+/// certifies it.
 pub(crate) fn admit_agent_artifact(artifact: &mut TaskArtifact) -> Result<(), OrbitError> {
     artifact.path = canonical_artifact_path(&artifact.path)?;
+    if is_explore_brief_artifact(&artifact.path) {
+        return Err(OrbitError::InvalidInput(format!(
+            "{} is reserved for the task-pilot's system writer: only an applied pilot assessment writes {EXPLORE_BRIEF_ARTIFACT}; rename ordinary supporting evidence to a nonreserved name",
+            artifact.path
+        )));
+    }
     if !is_reserved_review_artifact(&artifact.path) {
         return Ok(());
     }

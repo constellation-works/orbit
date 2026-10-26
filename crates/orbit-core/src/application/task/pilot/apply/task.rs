@@ -18,6 +18,7 @@ use super::super::attachment_budget::{
     CONTEXT_ATTACHMENT_WARNINGS, over_attachment_findings, resolve_applied_complexity,
 };
 use super::super::drain_promotion;
+use super::super::explore_brief::{BriefScope, decide_explore_brief, take_explore_brief};
 use super::super::persist::{
     ApplyTaskOutcome, apply_task, operation_was_applied, record_applied_assessment,
     source_superseded, stale_task, superseded_task, task_operation_id, task_outcome,
@@ -57,6 +58,8 @@ struct Scope {
     /// A review-filed task's evidence the pilot omitted.
     evidence: Vec<String>,
     reauthorization: Vec<String>,
+    /// Creation targets the task's durable grant names.
+    authorized_creation: Vec<String>,
 }
 
 /// The assessment as apply records it, with the host's findings attached.
@@ -87,8 +90,31 @@ pub(super) fn settle_task(
     {
         return Err(outcome);
     }
-    let scope = scope(context, task_id, assessment, snapshot)?;
-    let assessed = assess(context, task_id, assessment, snapshot, scope)?;
+    // The brief is the artifact's, never the receipt's: it is removed before
+    // the assessment is validated, fingerprinted or audited.
+    let mut assessment = assessment.clone();
+    let brief = take_explore_brief(&mut assessment);
+    let scope = scope(context, task_id, &assessment, snapshot)?;
+    let authorized_creation = scope.authorized_creation.clone();
+    let assessed = assess(context, task_id, &assessment, snapshot, scope)?;
+    // Decided only once the assessment itself is valid, so an invalid brief
+    // never makes the task `invalid` or spends the repair pass.
+    let explore_brief = decide_explore_brief(
+        context.action,
+        brief,
+        &BriefScope {
+            requested: snapshot.explore_brief_requested,
+            disposition: assessed.assessment["disposition"]
+                .as_str()
+                .unwrap_or_default(),
+            recommended_complexity: assessed.assessment["recommended_complexity"].as_str(),
+            after: &assessed.after,
+            authorized_creation: &authorized_creation,
+            workspace_root: context.workspace_root,
+            source: context.source,
+            source_tree: context.source_tree,
+        },
+    );
     let operation_id = task_operation_id(context.prepared, task_id, &assessed.assessment);
     let validated = ValidatedTask {
         task_id: task_id.clone(),
@@ -105,6 +131,8 @@ pub(super) fn settle_task(
         user_facing_ui: assessed.user_facing_ui,
         applied_material: None,
         pilot_run_id: context.run_id.map(str::to_string),
+        pilot_crew: context.pilot_crew.map(str::to_string),
+        explore_brief,
     };
     write(context, applied, validated, snapshot)
 }
@@ -221,6 +249,7 @@ fn scope(
         retained,
         evidence,
         reauthorization,
+        authorized_creation: authorized_creation.to_vec(),
     })
 }
 

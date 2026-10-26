@@ -755,6 +755,29 @@ Every refusal is an ordinary tool error with its reason; the calling agent conti
 
 Settings are read when the runtime opens.
 
+### `[workflow.explore_brief]` — explore briefs from the task pilot
+
+```toml
+[workflow.explore_brief]
+enabled = true
+tags = ["explore-brief"]
+deliver = false
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.explore_brief.enabled` | `false` | Ask the task pilot for an explore brief for each requested task. |
+| `workflow.explore_brief.tags` | `[]` | Task tags that request a brief. Empty requests one for every piloted task. |
+| `workflow.explore_brief.deliver` | `true` | Give a stored brief to the implementer. `false` keeps briefs in shadow: produced and stored, never delivered. |
+
+The task pilot already reads the code a task will change to propose its lock footprint. An **explore brief** keeps a bounded map of that reading: the targets the change creates, modifies or deletes, the call path to them, the existing pattern to copy, the covering tests, gotchas, adjacent work the task does not own, and the checked-in maps it builds on. Every location is a `file:`, `dir:` or `symbol:` selector, never a line number.
+
+- **Which tasks.** With the switch on, preparation marks each task whose tags include one of `tags` (or every task, when `tags` is empty) and the pilot returns a brief for it. Tags are read when the task is piloted, so tag a task at filing; one tagged later gets a brief only when it is piloted again. A non-Git workspace gets no brief, and neither does a `verified_no_diff`, `host_operational` or `unassessed` assessment.
+- **Validation.** Apply checks the brief's shape and per-field caps, a serialized size of at most 8 KiB, that no target or free text cites a line number or pastes code, that every target exists at the pilot's pinned revision (a `symbol:` name must also occur in its file), and that every `change` target lies inside the applied `context_files`. A brief that fails is dropped: the assessment applies as usual, the task is never marked invalid for it, and no repair pass is spent. When a task is repaired for another reason, the repair pilot returns a brief again.
+- **Storage.** A valid brief is written as the task artifact `explore-brief.json` by the system writer, before the pilot's receipt, with its provenance: the task, the inspection revision and tree, the material fingerprint and operation id of the receipt, and the pilot run and crew. Re-piloting replaces it. The name is reserved: an agent or operator write to it is refused. The receipt records `explore_brief` as `{written, sha256, bytes}` or `{dropped: <reason>}`, and `orbit task show` prints that outcome in the pilot comment.
+
+Delivery to the implementer is not built yet: today every brief stays in shadow whatever `deliver` says. Settings are read when the runtime opens.
+
 ### `[workflow.tag_instructions.<tag>]` — extra instructions for tagged tasks
 
 ```toml

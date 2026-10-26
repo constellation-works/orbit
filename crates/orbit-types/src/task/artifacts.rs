@@ -25,6 +25,18 @@ pub const TASK_ARTIFACTS_DIR_NAME: &str = "artifacts";
 pub const TASK_ARTIFACT_MANIFEST_FILE_NAME: &str = "manifest.yaml";
 pub const TASK_ARTIFACT_FILES_DIR_NAME: &str = "files";
 
+/// Task artifact holding the task-pilot's explore brief: a bounded,
+/// revision-keyed map of the change. Only the pilot's apply step writes it,
+/// as the system writer; agent and operator writes to the name are refused.
+pub const EXPLORE_BRIEF_ARTIFACT: &str = "explore-brief.json";
+
+/// Whether a canonical task artifact path names the explore brief. Callers
+/// must first use [`canonical_artifact_path`]; ASCII case folding protects
+/// owners on case-insensitive filesystems.
+pub fn is_explore_brief_artifact(path: &str) -> bool {
+    path.eq_ignore_ascii_case(EXPLORE_BRIEF_ARTIFACT)
+}
+
 pub fn is_valid_orb_task_id(id: &str) -> bool {
     let Some((prefix, suffix)) = id.split_once('-') else {
         return false;
