@@ -16,6 +16,8 @@ tags: [experiments, admission, tag-instructions, crew-pools, analytics, decision
 # Scope: randomized experiments over agent treatments
 
 Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role. The per-arm readout (`orbit experiment readout`, `orbit.experiment.readout` and `GET /api/diagnostics/experiments/{id}/readout`) computes outcomes, intervals, the sample-ratio and drift checks and the verdict on read. The read-only Analytics › Experiments dashboard page lists each experiment's per-arm progress toward `min_sample` (`GET /api/diagnostics/experiments`) and opens one (`GET /api/diagnostics/experiments/{id}`, plus the readout with its cumulative primary-metric series) to arm cards, a forest plot, the per-complexity table, crew mix, health warnings and the event timeline; the conclude action is not built yet.
+Skills, crew pools and allowlisted config values are also live. Skill replacement currently supports Claude on Unix through an invocation-local discovery root; other providers refuse the overlay. Bundles are pinned to the run base, carried in claimed captures, and recorded with per-bundle digests (see [configuration](../../CONFIG.md#experiments--experiments-over-agent-treatments)).
+
 Bearing: Orbit already has most of the parts an experiment needs, scattered across
 mechanisms that were each built for one purpose. **Tag instructions**
 (`[workflow.tag_instructions.<tag>]`,
@@ -135,7 +137,7 @@ activities themselves.
 | Surface | What an arm can set | Seam | Validated at start |
 |---|---|---|---|
 | Instructions | A repository file per role (`implement`, `review`, `recovery`), or `false` to suppress a shipped default | The tag-instruction slot; an experiment's text follows tag-instruction text | File exists at the current base |
-| Skills | Replace a named skill with a bundle directory in the repository | **New seam.** Skills reach agents today only as global symlinks (`application/skill.rs::seed_default_skills`, `bootstrap/init.rs::ensure_skill_links`); a per-run skill root is needed | Bundle exists and parses |
+| Skills | Replace a named skill with a bundle directory in the repository | Invocation-local Claude skill root on Unix; control keeps global links, other providers refuse | Bundle exists and parses at the base; provider supports isolated replacement |
 | Tools | Add tools to, or remove optional tools from, the activity baseline | Adding reuses `admit_required_tools`. Removing is **new**: a per-run denial applied after `resolve_activity_tool_grant` | Tools exist and are agent-facing; a tool the activity contract requires cannot be removed |
 | Crew | A crew pool (members and weights) for the arm | The admission crew draw, as the run-level `<complexity>_complexity_crews` override does today; the arm's pool skips performance weighting | Crews exist and may run the task's complexity |
 | Config | Values for allowlisted keys only | **New:** no typed list of per-run overridable `workflow.*` keys exists; `orbit-config` gains one, each key opted in by code | Key is on both the code list and the workspace allowlist |
@@ -285,9 +287,9 @@ Policy only. Experiment definitions are store records.
 - **Crew and model mix.** The crew draw is independent of the arm, so the mix balances in
   expectation, not in a small sample. The readout shows each arm's crew mix and can cut by
   crew; crew-changing arms bypass performance weighting by design.
-- **Skills are global today.** Every run on a host sees the same skill symlinks. A per-run
-  skill root is real new plumbing across providers, which is why skills come after
-  instructions and tools.
+- **Skill discovery differs by provider.** Control runs retain the shared skill links.
+  Treated Claude invocations use a private discovery root; the other provider families
+  refuse skill overlays until they have an adapter that can replace a name in isolation.
 - **Repository-file drift.** Instructions and skills are read at each base revision, so an
   edit to an arm's file changes the treatment. Digests make this visible; they do not prevent
   it. Freezing small instruction files into the store at start is an open question.

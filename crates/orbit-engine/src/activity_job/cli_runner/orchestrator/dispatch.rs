@@ -199,14 +199,6 @@ pub(crate) fn run_cli_backend_for_step(
         tool_disallow_list: tool_disallow_list.clone(),
         omitted_requirement_notes: activity_tools.omitted_requirement_notes.clone(),
     });
-    if !experiment_records.is_empty() {
-        audit.emit_lossy(V2AuditEventKind::ExperimentOverlayApplied {
-            step_id: step_id.to_string(),
-            activity_name: activity_name.to_string(),
-            task_id: task_id.unwrap_or_default().to_string(),
-            overlays: experiment_records,
-        });
-    }
 
     let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
     let regression_risk_instruction =
@@ -435,6 +427,20 @@ pub(crate) fn run_cli_backend_for_step(
         })?;
     let scratch = orbit_common::fs::path::ensure_orbit_scratch_dir(&scratch_root)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    let _skill_root = super::skills::prepare_experiment_skill_root(
+        &provider,
+        &experiment_overlays,
+        &scratch,
+        &mut child_env,
+    )?;
+    if !experiment_records.is_empty() {
+        audit.emit_lossy(V2AuditEventKind::ExperimentOverlayApplied {
+            step_id: step_id.to_string(),
+            activity_name: activity_name.to_string(),
+            task_id: task_id.unwrap_or_default().to_string(),
+            overlays: experiment_records,
+        });
+    }
     // [ORB-16577] A CLI that cannot read stdin gets its prompt through a
     // private file in this run's scratch directory instead, so the envelope
     // still never reaches argv. The file is deleted when dispatch returns.

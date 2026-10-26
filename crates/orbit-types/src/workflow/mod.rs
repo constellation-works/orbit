@@ -11,7 +11,8 @@ mod error;
 mod experiments;
 pub use experiments::{
     CapturedExperiment, CapturedExperimentInstruction, CapturedExperiments,
-    ExperimentActivityOverlay, ExperimentOverlayRecord,
+    ExperimentActivityOverlay, ExperimentOverlayRecord, ExperimentSkillBundle, ExperimentSkillFile,
+    experiment_skill_provider_supported,
 };
 mod executor_def;
 mod explore_brief;

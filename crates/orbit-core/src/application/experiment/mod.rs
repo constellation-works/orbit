@@ -11,6 +11,7 @@ mod overlay;
 mod progress;
 mod readout;
 mod run_policy;
+mod skills;
 mod view;
 
 pub use lifecycle::{ExperimentActor, ExperimentChange, ExperimentDefinitionInput};

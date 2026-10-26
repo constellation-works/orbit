@@ -114,7 +114,7 @@ impl RunTagInstructions {
     pub fn header_lines(&self) -> Vec<String> {
         let arms = self.experiment_overlays.iter().flat_map(|dispatch| {
             dispatch.overlays.iter().map(move |overlay| {
-                format!(
+                let mut line = format!(
                     "Experiment applied: {} ({}): {} / {} segment {}, digest {}",
                     dispatch.step_id,
                     dispatch.activity_name,
@@ -122,7 +122,11 @@ impl RunTagInstructions {
                     overlay.arm,
                     overlay.segment,
                     overlay.digest
-                )
+                );
+                for (name, digest) in &overlay.skills {
+                    line.push_str(&format!(", skill {name} {digest}"));
+                }
+                line
             })
         });
         self.dispatches

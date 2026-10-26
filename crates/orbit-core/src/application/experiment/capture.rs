@@ -72,6 +72,7 @@ impl OrbitRuntime {
                 overlay_json: arm.overlay_json.clone(),
                 live: record.experiment.mode == super::overlay::LIVE,
                 instructions: Vec::new(),
+                skills: Vec::new(),
             });
         }
         let capture = CapturedExperiments {
@@ -157,6 +158,21 @@ pub(crate) fn validate_experiment_capture(
             || overlay_digest(&entry.overlay_json) != entry.digest
         {
             return Err(refused("overlay digest mismatch"));
+        }
+        let mut names = std::collections::BTreeSet::new();
+        for bundle in &entry.skills {
+            bundle.verify().map_err(|reason| refused(&reason))?;
+            super::skills::validate_skill_manifest(bundle).map_err(|reason| refused(&reason))?;
+            if !names.insert(&bundle.name)
+                || !entry.live
+                || overlay
+                    .skills
+                    .as_ref()
+                    .and_then(|skills| skills.replace.get(&bundle.name))
+                    != Some(&bundle.path)
+            {
+                return Err(refused("unexpected or duplicate skill bundle"));
+            }
         }
     }
     Ok(())
