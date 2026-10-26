@@ -234,3 +234,64 @@ fn assert_input_error_precedes_bootstrap(error: &str) {
         "workspace bootstrap must not replace the input error: {error}"
     );
 }
+
+#[test]
+fn unknown_task_tools_suggest_visible_registered_tools_without_aliasing() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    orbit_command(&work, &home)
+        .args(["workspace", "init", "--name", "unknown-tool-hints"])
+        .assert()
+        .success();
+    for (name, hint) in [
+        ("orbit.task.get", Some("orbit.task.show")),
+        (
+            "orbit.task.artifact.list",
+            Some("orbit.task.show with field: \"artifacts\""),
+        ),
+        ("orbit.workflow.run.get", None),
+        ("orbit.auto_task.get", None),
+        ("orbit.definitely.missing", None),
+    ] {
+        let output = orbit_command(&work, &home)
+            .env("ORBIT_TASK_ACTOR_KIND", "agent")
+            .env("ORBIT_AGENT_NAME", "codex")
+            .args(["tool", "run", name, "--input", "{}", "--format", "json"])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        let error: Value = serde_json::from_slice(&output.stderr)
+            .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stderr)));
+        assert_eq!(error["code"], "tool_not_found", "{error}");
+        let expected = match hint {
+            Some(hint) => format!("tool not found: {name} (did you mean {hint}?)"),
+            None => format!("tool not found: {name}"),
+        };
+        assert_eq!(error["error"], expected);
+    }
+    // The name itself may pass the activity policy, but its replacement may not.
+    let output = orbit_command(&work, &home)
+        .env("ORBIT_TASK_ACTOR_KIND", "agent")
+        .env("ORBIT_AGENT_NAME", "codex")
+        .env("ORBIT_ACTIVITY_TOOLS", "orbit.task.get")
+        .args([
+            "tool",
+            "run",
+            "orbit.task.get",
+            "--input",
+            "{}",
+            "--format",
+            "json",
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let error: Value = serde_json::from_slice(&output.stderr)
+        .unwrap_or_else(|error| panic!("{error}: {}", String::from_utf8_lossy(&output.stderr)));
+    assert_eq!(error["error"], "tool not found: orbit.task.get");
+}

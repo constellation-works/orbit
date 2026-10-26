@@ -123,7 +123,7 @@ impl McpHost for ServerMcpHost {
         if name == orbit_mcp::FEDERATED_DESTINATION_WORKSPACE_LIST_TOOL {
             return self.call_global_tool(name, input, context);
         }
-        let definition = match self.definition(name) {
+        let definition = match self.definition(name, &context) {
             Ok(definition) => definition,
             Err(error) => return self.audit_global_failure(name, input, context, error),
         };

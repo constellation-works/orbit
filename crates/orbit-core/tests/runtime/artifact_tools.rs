@@ -738,6 +738,70 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
     assert_eq!(read["content"], v2);
 }
 
+fn unknown_task_tools_preserve_audit_classification_and_suppress_disabled_hints() {
+    use orbit_core::adapter::command::ToolEntryPoint;
+    use orbit_store::contracts::{FailureClass, classify};
+    use orbit_types::tool::{McpCapability, ToolSessionContext};
+
+    let fixture = Fixture::new();
+    for entry_point in [ToolEntryPoint::Cli, ToolEntryPoint::Mcp] {
+        for name in ["orbit.task.get", "orbit.task.artifact.list"] {
+            let error = fixture
+                .runtime
+                .execute_tool_command_dispatch_with_session_context(
+                    name,
+                    json!({}),
+                    None,
+                    Some("codex".into()),
+                    entry_point,
+                    ToolSessionContext {
+                        effective_capabilities: std::collections::BTreeSet::from([
+                            McpCapability::Agent,
+                        ]),
+                        ..Default::default()
+                    },
+                )
+                .expect_err("invented names must not become aliases");
+            assert!(
+                matches!(&error, OrbitError::NotFound { kind: NotFoundKind::Tool, id, .. } if id == name)
+            );
+            assert!(error.to_string().contains("orbit.task.show"), "{error}");
+        }
+    }
+    for name in ["orbit.task.get", "orbit.task.artifact.list"] {
+        let rows = fixture
+            .runtime
+            .list_audit_events(None, Some(name.into()), None, None, 100)
+            .unwrap();
+        assert_eq!(
+            rows.len(),
+            2,
+            "each entry point records exactly one failure"
+        );
+        for row in rows {
+            let (status, classification) = match row.subcommand.as_deref() {
+                Some("run") => (AuditEventStatus::Failure, FailureClass::Expected),
+                Some("run-mcp") => (AuditEventStatus::Denied, FailureClass::Denied),
+                other => panic!("unexpected tool entry point: {other:?}"),
+            };
+            assert_eq!(row.status, status);
+            assert_eq!(classify(&row), classification);
+            assert!(row.error_message.as_deref().unwrap().contains(name));
+        }
+    }
+    fixture.runtime.disable_tool("orbit.task.show").unwrap();
+    let error = fixture
+        .runtime
+        .execute_tool_command("orbit.task.get", json!({}), None, Some("codex".into()))
+        .expect_err("a disabled replacement must not be suggested");
+    assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+}
+
+crate::scenario_table!(
+    unknown_task_tool_suggestions_preserve_audit_and_visibility,
+    unknown_task_tools_preserve_audit_classification_and_suppress_disabled_hints
+);
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     task_starts_admit_artifacts_before_any_persistence_scenarios,
