@@ -7,6 +7,68 @@ use orbit_types::task::{
 use serde_json::json;
 
 #[test]
+fn decision_listing_warns_when_a_bundle_has_a_missing_artifact() {
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    use orbit_types::task::TaskArtifact;
+
+    isolated(
+        "decisions::decision_listing_warns_when_a_bundle_has_a_missing_artifact",
+        || {
+            let fixture = Fixture::new();
+            let runtime = &fixture.runtime;
+            let task = runtime
+                .add_task(TaskAddParams {
+                    title: "Task with missing evidence".into(),
+                    ..Default::default()
+                })
+                .unwrap();
+            runtime
+                .update_task_with_identity(
+                    &task.id,
+                    TaskUpdateParams {
+                        upsert_artifacts: vec![TaskArtifact::from_text(
+                            "checks/owner-gates-after.log",
+                            "passed",
+                        )],
+                        ..Default::default()
+                    },
+                    None,
+                    Some("codex".into()),
+                )
+                .unwrap();
+            let file = runtime
+                .get_task_artifact_manifest(&task.id)
+                .unwrap()
+                .remove(0);
+            let registry = TaskRegistryStore::open(&task_registry_path(&fixture.global)).unwrap();
+            let bundle = registry
+                .canonical_task_bundle_path(&runtime.workspace_id().unwrap(), &task.id)
+                .unwrap();
+            std::fs::remove_file(bundle.join("artifacts").join(file.blob)).unwrap();
+            let server = fixture.server(true);
+            let listed =
+                super::support::json_ok(server.get("/api/decisions?workspace=ws_http_fixture"));
+            assert_eq!(listed["total"], 0);
+            assert!(listed["items"].as_array().unwrap().is_empty());
+            assert!(
+                listed["warnings"][0].as_str().unwrap().contains(&task.id),
+                "{listed}"
+            );
+            assert!(
+                !server
+                    .get(&format!(
+                        "/api/decisions?workspace=ws_http_fixture&task_id={}",
+                        task.id
+                    ))
+                    .status()
+                    .is_success()
+            );
+        },
+    );
+}
+
+#[test]
 fn decision_answer_refusals_keep_structured_client_errors() {
     isolated(
         "decisions::decision_answer_refusals_keep_structured_client_errors",

@@ -995,6 +995,129 @@ fn the_digest_raises_one_proposed_approval_per_proposed_task_idempotently() {
 }
 
 #[test]
+fn dangling_artifacts_do_not_abort_workspace_decision_and_task_listings() {
+    use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
+    use orbit_types::task::TaskArtifact;
+
+    if !crate::dispatch_admission::isolated(
+        "decision_channel::dangling_artifacts_do_not_abort_workspace_decision_and_task_listings",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    fx.register();
+    let healthy = fx.proposed_task("Readable proposal");
+    let damaged = fx.proposed_task("Proposal with missing evidence");
+    let digest = fx.digest(Fixture::plugin_caller()).unwrap();
+    let damaged_request = digest
+        .requests
+        .iter()
+        .find(|r| r.task_id == damaged)
+        .unwrap();
+    let healthy_request = digest
+        .requests
+        .iter()
+        .find(|r| r.task_id == healthy)
+        .unwrap();
+    // The workspace scan must also tolerate a broken task with no decisions.
+    let no_decisions = fx.task();
+    let registry = TaskRegistryStore::open(&task_registry_path(&fx.runtime.global_root())).unwrap();
+    for id in [&damaged, &no_decisions] {
+        fx.runtime
+            .update_task_with_identity(
+                id,
+                TaskUpdateParams {
+                    upsert_artifacts: vec![TaskArtifact::from_text(
+                        "checks/owner-gates-after.log",
+                        "passed",
+                    )],
+                    ..Default::default()
+                },
+                None,
+                Some("codex".into()),
+            )
+            .unwrap();
+        let file = fx.runtime.get_task_artifact_manifest(id).unwrap().remove(0);
+        let bundle = registry
+            .canonical_task_bundle_path(&fx.runtime.workspace_id().unwrap(), id)
+            .unwrap();
+        // Reproduce the observed dangling manifest in this disposable store.
+        std::fs::remove_file(bundle.join("artifacts").join(file.blob)).unwrap();
+    }
+    let decisions = fx.runtime.run_tool("orbit.decision.list", json!({}));
+    let tasks = fx.runtime.run_tool(
+        "orbit.task.list",
+        json!({"fields": ["id", "title", "open_decisions"], "limit": 10}),
+    );
+    assert!(
+        decisions.is_ok() && tasks.is_ok(),
+        "decisions: {decisions:?}; tasks: {tasks:?}"
+    );
+    let decisions = decisions.unwrap();
+    let tasks = tasks.unwrap();
+    assert_eq!(decisions["count"], 1);
+    assert_eq!(decisions["requests"][0]["id"], healthy_request.id);
+    assert_eq!(tasks["tasks"].as_array().unwrap().len(), 3);
+    for value in [&decisions, &tasks] {
+        let warnings = value["warnings"]
+            .as_array()
+            .expect("partial listings disclose warnings");
+        assert_eq!(warnings.len(), 2, "{value}");
+        for id in [&damaged, &no_decisions] {
+            assert!(
+                warnings
+                    .iter()
+                    .any(|warning| warning.as_str().is_some_and(|text| text.contains(id))),
+                "{value}"
+            );
+        }
+    }
+    for row in tasks["tasks"].as_array().unwrap() {
+        if row["id"] == healthy {
+            assert_eq!(row["open_decisions"][0]["id"], healthy_request.id);
+        } else {
+            assert!(
+                row["open_decisions"].is_null(),
+                "unreadable differs from no open decisions: {row}"
+            );
+        }
+    }
+    let digest = fx
+        .digest(Fixture::plugin_caller())
+        .expect("digest skips corrupt bundles too");
+    assert_eq!(digest.requests.len(), 1);
+    assert_eq!(digest.requests[0].id, healthy_request.id);
+    assert_eq!(digest.warnings.len(), 2, "{digest:?}");
+    for error in [
+        fx.runtime.get_task(&damaged).unwrap_err(),
+        fx.runtime
+            .get_decision_request(&damaged_request.id)
+            .unwrap_err(),
+        fx.human()
+            .answer_decision_request_as_human(
+                &damaged_request.id,
+                "reject",
+                None,
+                HUMAN.into(),
+                Some("cli".into()),
+            )
+            .unwrap_err(),
+        fx.runtime
+            .run_tool("orbit.decision.list", json!({"task_id": damaged}))
+            .unwrap_err(),
+    ] {
+        assert!(
+            matches!(error, orbit_core::OrbitError::TaskBundleCorrupt { .. }),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains(&damaged) || error.to_string().contains(&no_decisions),
+            "strict scans identify the corrupt bundle they encounter: {error}"
+        );
+    }
+}
+
+#[test]
 fn a_changed_proposal_supersedes_its_request_and_the_digest_raises_a_fresh_one() {
     let fx = fixture();
     fx.register();

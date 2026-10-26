@@ -131,6 +131,8 @@ pub struct DecisionDigest {
     pub raised: Vec<DecisionRequest>,
     /// Still-open requests expiring within the digest window.
     pub expiring: Vec<DecisionRequest>,
+    /// Corrupt task bundles omitted from the digest.
+    pub warnings: Vec<String>,
 }
 
 /// A registered decision channel as operator surfaces show it: everything
@@ -644,6 +646,7 @@ impl OrbitRuntime {
                 requests: Vec::new(),
                 raised: Vec::new(),
                 expiring: Vec::new(),
+                warnings: Vec::new(),
             });
         }
         let registration = self.active_registration(channel)?;
@@ -660,14 +663,16 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let mut raised = Vec::new();
         let mut approvals = Vec::new();
+        let mut warnings = Vec::new();
         for (status, gate) in [
             (TaskStatus::Proposed, DecisionGate::ProposedApproval),
             (TaskStatus::Review, DecisionGate::ReviewApproval),
         ] {
             for task in self.list_tasks_filtered(Some(status), None, None, None, None, None)? {
-                if let Some((request, fresh)) =
-                    self.raise_approval_decision_request(&task.id, gate)?
-                {
+                if let Some(Some((request, fresh))) = super::listing::task_bundle_scan_result(
+                    self.raise_approval_decision_request(&task.id, gate),
+                    &mut warnings,
+                )? {
                     if fresh {
                         raised.push(request.clone());
                     }
@@ -677,8 +682,14 @@ impl OrbitRuntime {
         }
         let horizon =
             chrono::Utc::now() + chrono::Duration::hours(DECISION_DIGEST_EXPIRY_WINDOW_HOURS);
-        let expiring: Vec<DecisionRequest> = self
-            .list_decision_requests(None, None, false)?
+        let listing = self.list_decision_requests_with_warnings(None, None, false)?;
+        for warning in listing.warnings {
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+        }
+        let expiring: Vec<DecisionRequest> = listing
+            .requests
             .into_iter()
             .filter(|request| request.expires_at <= horizon)
             .collect();
@@ -693,6 +704,7 @@ impl OrbitRuntime {
             requests,
             raised,
             expiring,
+            warnings,
         })
     }
 

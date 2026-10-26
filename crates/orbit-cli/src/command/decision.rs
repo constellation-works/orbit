@@ -233,7 +233,16 @@ fn list_blocks(value: &Value) -> Vec<Block> {
             text(&request["expires_at"]),
         ]);
     }
-    vec![Block::table(table)]
+    let mut blocks = vec![Block::table(table)];
+    for warning in value["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        blocks.push(Block::text(format!("warning: {warning}")));
+    }
+    blocks
 }
 
 fn digest_blocks(value: &Value) -> Vec<Block> {

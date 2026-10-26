@@ -164,6 +164,15 @@ token fingerprint.
   workspace-level open-requests list aggregates them. Answering there is the
   existing human path and supersedes the email token.
 
+Workspace decision listings and digests omit corrupt task bundles and return
+per-task `warnings` when the results are partial. The CLI displays those warnings;
+`GET /api/decisions` includes them beside `items` and `total`. A task listing that
+projects `open_decisions` retains a damaged task's row with that field set to
+`null` (unknown), plus a warning; `[]` still means no open decisions. Task-list
+CLI warnings go to stderr, preserving its JSON record array. Explicit single-task
+reads, request lookup and answering stay strict. I/O and authorization failures
+still fail the operation.
+
 ## 3. Delegated-human authority
 
 ### 3.1 The gap, precisely

@@ -66,8 +66,13 @@ pub(super) async fn list_decisions(
     let task_id = query.task_id;
     let include_closed = query.include_closed;
     match blocking("decision list", move || {
-        let requests = runtime.list_decision_requests(gate, task_id.as_deref(), include_closed)?;
-        let items = requests
+        let listing = runtime.list_decision_requests_with_warnings(
+            gate,
+            task_id.as_deref(),
+            include_closed,
+        )?;
+        let items = listing
+            .requests
             .iter()
             .map(|request| {
                 serde_json::to_value(request).map_err(|error| {
@@ -75,7 +80,11 @@ pub(super) async fn list_decisions(
                 })
             })
             .collect::<Result<Vec<Value>, _>>()?;
-        Ok(json!({ "items": items, "total": items.len() }))
+        let mut value = json!({ "items": items, "total": items.len() });
+        if !listing.warnings.is_empty() {
+            value["warnings"] = json!(listing.warnings);
+        }
+        Ok(value)
     })
     .await
     {
