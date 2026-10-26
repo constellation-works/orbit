@@ -102,6 +102,13 @@ pub(super) fn execute(
             agent.as_deref(),
             model.as_deref(),
         ),
+        OrbitBuiltinAction::Experiment(verb) => super::experiment_tools::dispatch(
+            runtime,
+            verb,
+            input,
+            agent.as_deref(),
+            model.as_deref(),
+        ),
         OrbitBuiltinAction::Orchestrator(verb) => {
             super::orchestrator_tools::dispatch(runtime, verb, input)
         }

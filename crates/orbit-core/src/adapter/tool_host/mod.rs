@@ -8,6 +8,7 @@ mod decision_tools;
 mod desktop;
 mod dispatch;
 mod drain_tools;
+mod experiment_tools;
 mod friction_tools;
 mod host;
 mod hub_registry;

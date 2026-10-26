@@ -52,6 +52,42 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
         "a decision request id is workspace-local and carries no host prefix",
     ),
     (
+        "orbit.experiment.update",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.clone",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.start",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.pause",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.resume",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.reweight",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.conclude",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.abandon",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
+        "orbit.experiment.show",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
         "orbit.workflow.run.show",
         "a run id is host-local: a run executes where it was admitted",
     ),

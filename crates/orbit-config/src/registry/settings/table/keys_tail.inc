@@ -492,6 +492,26 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_choice(raw, "normal", "lease.max_priority.agent", &["low", "normal", "high"]),
     },
+    experiments_enabled: bool => bool {
+        key: "experiments.enabled", value_type: "bool",
+        description: "Whether experiments may start in this workspace.",
+        section: ConfigSection::Housekeeping, order: 150,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    experiments_max_running: u32 => u32 {
+        key: "experiments.max_running", value_type: "integer",
+        description: "Experiments that may run at once in this workspace (1-20).",
+        section: ConfigSection::Housekeeping, order: 151,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u32>| resolve_bounded_count(raw, 3, 20, "experiments.max_running"),
+    },
+    experiments_config_keys: Vec<String> => Vec<String> {
+        key: "experiments.config_keys", value_type: "array<string>",
+        description: "Config keys an experiment arm may override in this workspace.",
+        section: ConfigSection::Housekeeping, order: 152,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
         }
     };
 }

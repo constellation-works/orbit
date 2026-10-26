@@ -986,6 +986,428 @@
     ]
   },
   {
+    "name": "orbit.experiment.abandon",
+    "description": "Abandon a draft, running or paused experiment without a conclusion. It enrolls no new tasks; tasks already assigned keep their arm. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.clone",
+    "description": "Copy an experiment's definition (hypothesis, arms with their current weights and overlays, population, metrics, sample rules, mode) into a new draft under a new name and a fresh assignment salt. Retired arms are not copied. The source is unchanged. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "name",
+        "description": "The new draft's name, unique among this workspace's experiments.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.conclude",
+    "description": "Conclude a running or paused experiment, recording the chosen arm (or none) and the reason. A concluded experiment enrolls no new tasks; tasks already assigned keep their arm. Concluding changes no configuration or repository file. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "arm",
+        "description": "The arm chosen as the winner. Omit to conclude with no winner.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.create",
+    "description": "Define a new experiment in draft: its arms (one control plus treatments, each with a weight and an overlay), the tasks it enrolls, its primary metric, guardrails and sample rules. Arms and overlays are validated on write and each overlay's digest is recorded. A draft assigns nothing. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "name",
+        "description": "A name unique among this workspace's experiments.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "hypothesis",
+        "description": "What the experiment expects the treatment arms to change, and why.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "arms",
+        "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused.",
+        "param_type": "array",
+        "required": false
+      },
+      {
+        "name": "population",
+        "description": "Which tasks the experiment enrolls, as a JSON object with any of: complexity, task_type, tags_include, tags_exclude and origin, each a list of strings. Empty enrolls every task.",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "name": "primary_metric",
+        "description": "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "guardrails",
+        "description": "Guardrail metrics as a JSON object from metric name to the threshold its difference from control may not pass, such as {\"delivery_done_rate\": \"-5pt\", \"escaped_regressions\": \"+0\"}.",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "name": "min_sample",
+        "description": "Tasks every arm needs before a verdict is given.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "max_days",
+        "description": "Days after start at which a verdict is given whatever the sample.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "mode",
+        "description": "shadow (default) assigns and records arms but applies no overlay; live applies each arm's overlay.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.list",
+    "description": "List the workspace's experiments, oldest first, with status, mode, current segment and arms. Filter by status. Read-only.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "status",
+        "description": "Only experiments in this status: draft, running, paused, concluded or abandoned.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.pause",
+    "description": "Pause a running experiment: it enrolls no new tasks until resumed. Tasks already assigned keep their arm. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.resume",
+    "description": "Resume a paused experiment. Refused while experiments.max_running other experiments are already running. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.reweight",
+    "description": "Change a running or paused experiment's arm weights, retire arms, or both. Each call opens a new segment, recorded in the event log with the weights before and after, so tasks assigned under different weights stay distinguishable. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "weights",
+        "description": "New weights as a JSON object from arm name to a positive integer. Arms not named keep their weight.",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "name": "retire",
+        "description": "Arms to retire: they take no new tasks. The control cannot be retired, and at least one treatment must remain.",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.show",
+    "description": "Show one experiment: its definition, status and current segment, each arm with its weight, overlay and overlay digest, and every event in order with its actor, time and reason. Read-only.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.start",
+    "description": "Start a draft experiment, opening segment 1; from then on its definition is frozen. Refused unless experiments.enabled is true, while experiments.max_running experiments are already running, and unless the definition is complete: at least two arms with unique names, exactly one control, positive weights, a primary metric, and config overlays only for keys on experiments.config_keys. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.experiment.update",
+    "description": "Edit a draft experiment's definition: name, hypothesis, arms (the given list replaces every arm), population, metrics and sample rules. Only a draft can be edited; a started experiment is refused and changes only through pause, resume, reweight, conclude or abandon, or is cloned into a new draft. Operator only: an agent session is refused.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "name",
+        "description": "A new name, unique among this workspace's experiments.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "hypothesis",
+        "description": "What the experiment expects the treatment arms to change, and why.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "arms",
+        "description": "The arms as a JSON array, each {\"name\", \"control\", \"weight\", \"overlay\"}. Exactly one arm is the control; weights are positive integers (default 1). An overlay is an object with any of: instructions (role implement, review or recovery to a repository file path, or false to suppress the shipped default), skills ({\"replace\": {skill name: bundle directory}, \"roles\"}), tools ({\"add\", \"remove\", \"roles\"}), crew ({\"pool\": [{\"crew\", \"weight\"}]}) and config ({\"values\": {key: value}, \"roles\"}). Roles default to implement. Unknown fields are refused.",
+        "param_type": "array",
+        "required": false
+      },
+      {
+        "name": "population",
+        "description": "Which tasks the experiment enrolls, as a JSON object with any of: complexity, task_type, tags_include, tags_exclude and origin, each a list of strings. Empty enrolls every task.",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "name": "primary_metric",
+        "description": "The metric the verdict is read on: implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "guardrails",
+        "description": "Guardrail metrics as a JSON object from metric name to the threshold its difference from control may not pass, such as {\"delivery_done_rate\": \"-5pt\", \"escaped_regressions\": \"+0\"}.",
+        "param_type": "object",
+        "required": false
+      },
+      {
+        "name": "min_sample",
+        "description": "Tasks every arm needs before a verdict is given.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "max_days",
+        "description": "Days after start at which a verdict is given whatever the sample.",
+        "param_type": "integer",
+        "required": false
+      },
+      {
+        "name": "mode",
+        "description": "shadow (default) assigns and records arms but applies no overlay; live applies each arm's overlay.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "reason",
+        "description": "Why, recorded on the experiment's event.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.friction.add",
     "description": "Append a friction report",
     "enabled": true,

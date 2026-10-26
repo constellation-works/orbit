@@ -4,6 +4,7 @@ pub mod auto_task;
 pub mod codebase;
 pub mod decision;
 pub mod drain;
+pub mod experiment;
 pub mod friction;
 pub mod operation;
 pub mod orchestrator;

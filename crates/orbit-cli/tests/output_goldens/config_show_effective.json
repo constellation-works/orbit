@@ -154,6 +154,27 @@
       "path": null,
       "shadowed_by": []
     },
+    "experiments.config_keys": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "experiments.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "experiments.max_running": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "lease.default_mode": {
       "scope": "built-in",
       "state": "default",

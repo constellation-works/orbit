@@ -191,6 +191,14 @@ reported as `skipped:owner_unreachable` (transport failure),
 | `orbit job list` \| `show` \| `run` \| `replay` \| `resume` | List job definitions and the activity each step runs. Run a job by ID or YAML path, replay a previous run from step 0, or resume an interrupted run from its step checkpoints. See [Activities and Jobs](../../concepts/activities-jobs/). |
 | `orbit tool list` \| `show` \| `run` \| `add` \| `scaffold` \| `remove` \| `enable` \| `disable` \| `doctor` | List, inspect, and run registered tools; manage external tools and MCP plugins; check tool health. `scaffold` is a deprecated alias for `orbit plugin scaffold`. |
 
+### Experiments
+
+| Command | Purpose |
+|---|---|
+| `orbit experiment create <name>` \| `update <id>` \| `clone <id> --name <name>` | Define a draft experiment: `--arms` (a JSON array of `{name, control, weight, overlay}` with exactly one control), `--hypothesis`, `--population`, `--primary-metric`, `--guardrails`, `--min-sample`, `--max-days` and `--mode shadow\|live`. Only a draft can be edited; `clone` copies a definition into a new draft. |
+| `orbit experiment start` \| `pause` \| `resume` \| `reweight` \| `conclude` \| `abandon <id>` | Move an experiment through its lifecycle. `start` needs `experiments.enabled` and a free `experiments.max_running` slot; `reweight --weights '{"arm":2}'` or `--retire <arm>` opens a new segment; `conclude --arm <arm>` records the chosen arm. `pause`, `reweight`, `conclude` and `abandon` require `--reason`. Only an operator may run these. |
+| `orbit experiment show <id>` \| `list` | Show one experiment with its arms and every event in order, with actor, time and reason, or list the workspace's experiments (`--status` filters). Agents may call `orbit.experiment.show` and `orbit.experiment.list`. |
+
 ## Observe
 
 | Command | Purpose |

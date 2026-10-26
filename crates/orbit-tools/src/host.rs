@@ -8,6 +8,7 @@ use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
+use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::orchestrator::OrchestratorVerb;
 use orbit_common::governance::search::SearchVerb;
@@ -116,6 +117,8 @@ pub enum OrbitBuiltinAction {
     DesktopTaskWrite,
     /// Distributed-drain verbs, including the historical task pull tool.
     Drain(DrainVerb),
+    /// Experiment verbs: lifecycle writes and their reads.
+    Experiment(ExperimentVerb),
     /// ADR-0209 bearing 1 [ORB-10358]: friction verbs are registry data, so one
     /// action variant carries the verb instead of one variant per verb.
     Friction(FrictionVerb),
@@ -137,6 +140,12 @@ pub enum OrbitBuiltinAction {
 impl From<DecisionVerb> for OrbitBuiltinAction {
     fn from(verb: DecisionVerb) -> Self {
         Self::Decision(verb)
+    }
+}
+
+impl From<ExperimentVerb> for OrbitBuiltinAction {
+    fn from(verb: ExperimentVerb) -> Self {
+        Self::Experiment(verb)
     }
 }
 

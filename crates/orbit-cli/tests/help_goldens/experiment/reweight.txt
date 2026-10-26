@@ -1,0 +1,27 @@
+Change arm weights or retire arms, opening a new segment
+
+Usage: orbit experiment reweight [OPTIONS] --reason <REASON> <ID>
+
+Arguments:
+  <ID>
+          The experiment's id or name
+
+Options:
+      --weights <WEIGHTS>
+          New weights as a JSON object from arm name to a positive integer
+
+      --retire <RETIRE>
+          An arm to retire (repeatable)
+
+      --reason <REASON>
+          Why, recorded on the event
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

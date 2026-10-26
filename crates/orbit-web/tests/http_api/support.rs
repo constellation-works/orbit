@@ -764,7 +764,8 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
         .with_transaction(|tx| {
             tx.connection()
                 .execute_batch(
-                    "DELETE FROM schema_meta WHERE key = 'migration.v0062';
+                    "DELETE FROM schema_meta WHERE key = 'migration.v0063';
+             DELETE FROM schema_meta WHERE key = 'migration.v0062';
              DELETE FROM schema_meta WHERE key = 'migration.v0061';
              DROP TABLE landed_diff_stats;
              DELETE FROM schema_meta WHERE key = 'migration.v0060';

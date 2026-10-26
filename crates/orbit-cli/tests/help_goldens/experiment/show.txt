@@ -1,0 +1,18 @@
+Show one experiment with its arms and event log
+
+Usage: orbit experiment show [OPTIONS] <ID>
+
+Arguments:
+  <ID>
+          The experiment's id or name
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

@@ -1,0 +1,27 @@
+Define, run and conclude experiments over agent treatments
+
+Usage: orbit experiment [OPTIONS] <COMMAND>
+
+Commands:
+  create    Define a new draft experiment
+  update    Edit a draft experiment's definition
+  clone     Copy an experiment's definition into a new draft
+  start     Start a draft experiment
+  pause     Pause a running experiment
+  resume    Resume a paused experiment
+  reweight  Change arm weights or retire arms, opening a new segment
+  conclude  Conclude an experiment with the chosen arm, or none
+  abandon   Abandon an experiment without a conclusion
+  show      Show one experiment with its arms and event log
+  list      List the workspace's experiments
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

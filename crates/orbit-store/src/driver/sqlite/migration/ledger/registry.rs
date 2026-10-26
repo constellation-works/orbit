@@ -591,12 +591,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_backlog_forecasts,
     },
+    // Experiments slice 1: experiment definitions, their arms, an
+    // append-only event log and per-task assignments. New tables only,
+    // which an older binary never reads or writes.
+    Migration {
+        version: 63,
+        name: "experiments",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_experiments,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 62;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 63;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
