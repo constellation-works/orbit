@@ -3,6 +3,118 @@
 
 const CHILD: &str = "guard_child";
 const MISSING: &str = "removed_child_entry_point";
+const NESTED_ENV_GUARD_CHILD: &str = "nested_env_guard_child";
+const CONTENDED_ENV_GUARD_CHILD: &str = "contended_env_guard_child";
+const CONTENDED_ENV: &str = "ORBIT_COMMON_CONTENDED_ENV_TEST";
+
+#[test]
+fn a_nested_test_env_guard_panics_within_a_bounded_time() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command.args([
+        "--exact",
+        NESTED_ENV_GUARD_CHILD,
+        "--ignored",
+        "--nocapture",
+    ]);
+    let output = orbit_common::test_env::run_child_test_within(
+        &mut command,
+        NESTED_ENV_GUARD_CHILD,
+        dir.path(),
+        Duration::from_millis(500),
+        Duration::from_secs(10),
+    );
+    assert_child_test_passed(
+        NESTED_ENV_GUARD_CHILD,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+}
+
+#[test]
+#[ignore = "re-executed by the nested test_env guard regression"]
+fn nested_env_guard_child() {
+    let _ = std::io::Write::write_all(
+        &mut std::io::stdout(),
+        b"attempting a nested test_env guard\n",
+    );
+    let _first = orbit_common::test_env::scoped([("ORBIT_COMMON_NESTED_ENV_TEST", Some("first"))]);
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _second = orbit_common::test_env::unset(["ORBIT_COMMON_NESTED_ENV_TEST"]);
+    }))
+    .expect_err("a nested test_env guard must panic immediately");
+    let message = panic_message(panic);
+    assert!(
+        message.contains("only one `ScopedEnv` may be held per scope")
+            && message.contains("combine variables into one `scoped` call"),
+        "the nested guard panic must explain the one-guard rule: {message}"
+    );
+}
+
+#[test]
+fn a_test_env_guard_on_another_thread_waits_and_restores_values() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args([
+            "--exact",
+            CONTENDED_ENV_GUARD_CHILD,
+            "--ignored",
+            "--nocapture",
+        ])
+        .env(CONTENDED_ENV, "baseline");
+    let output = orbit_common::test_env::run_child_test_within(
+        &mut command,
+        CONTENDED_ENV_GUARD_CHILD,
+        dir.path(),
+        Duration::from_secs(2),
+        Duration::from_secs(10),
+    );
+    assert_child_test_passed(
+        CONTENDED_ENV_GUARD_CHILD,
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    );
+}
+
+#[test]
+#[ignore = "re-executed by the cross-thread test_env guard regression"]
+fn contended_env_guard_child() {
+    let first = orbit_common::test_env::scoped([(CONTENDED_ENV, Some("outer"))]);
+    assert_eq!(std::env::var(CONTENDED_ENV).as_deref(), Ok("outer"));
+
+    let (attempting_tx, attempting_rx) = std::sync::mpsc::channel();
+    let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+    let other = std::thread::spawn(move || {
+        attempting_tx.send(()).unwrap();
+        let second = orbit_common::test_env::scoped([(CONTENDED_ENV, Some("inner"))]);
+        assert_eq!(std::env::var(CONTENDED_ENV).as_deref(), Ok("inner"));
+        acquired_tx.send(()).unwrap();
+        drop(second);
+        assert_eq!(std::env::var(CONTENDED_ENV).as_deref(), Ok("baseline"));
+    });
+
+    attempting_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the other thread should attempt to acquire its guard");
+    assert!(
+        matches!(
+            acquired_rx.recv_timeout(Duration::from_millis(100)),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout)
+        ),
+        "the other thread must wait while the first guard is held"
+    );
+    drop(first);
+    acquired_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the other thread should acquire its guard after the first drops");
+    other
+        .join()
+        .expect("the other thread should restore the baseline value");
+    assert_eq!(std::env::var(CONTENDED_ENV).as_deref(), Ok("baseline"));
+}
 
 #[test]
 fn reexec_guard_rejects_missing_ignored_and_failed_children() {
