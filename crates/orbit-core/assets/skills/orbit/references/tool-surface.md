@@ -370,10 +370,10 @@ or revoked channel is refused with `channel_not_registered` or `channel_revoked`
 - Either request reads `superseded` once its binding stops matching.
 
 The result carries `requests` (the digest), `raised` (what this call raised) and
-`expiring` (every still-open request expiring within 24 hours). A repeated call
-raises nothing new and returns the same request IDs. With the decision channel
-disabled in this workspace, the call raises nothing, writes nothing and returns
-no requests.
+`expiring` (every still-open request expiring within 24 hours). Repeated calls
+reuse requests for unchanged task bindings, while newly eligible tasks can add
+requests. With the decision channel disabled in this workspace, the call raises
+nothing, writes nothing and returns no requests.
 
 ### Agent scorecards
 

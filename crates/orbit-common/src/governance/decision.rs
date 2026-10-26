@@ -252,7 +252,7 @@ const DIGEST: OperationSpec<DecisionVerb> = OperationSpec {
     verb: DecisionVerb::Digest,
     cli_path: &["digest"],
     tool_name: "orbit.decision.digest",
-    tool_description: "Raise the approval decision requests a decision channel's digest presents, and return the whole digest in one call. Callable only by the plugin the channel is bound to, through its callback session, or by the operator, never by an agent session. Repeat calls raise nothing new and return the same request IDs. With the decision channel disabled, it returns no requests. The binding rules and result fields are in the orbit skill's references/tool-surface.md, section `Decision requests`.",
+    tool_description: "Raise the approval decision requests a decision channel's digest presents, and return the whole digest in one call. Callable only by the plugin the channel is bound to, through its callback session, or by the operator, never by an agent session. Repeated calls reuse requests for unchanged task bindings; newly eligible tasks can add requests. With the decision channel disabled, it returns no requests. The binding rules and result fields are in the orbit skill's references/tool-surface.md, section `Decision requests`.",
     cli_about: "Raise missing approval requests and show the decision digest",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
