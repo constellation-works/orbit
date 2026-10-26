@@ -1,9 +1,34 @@
+use std::cell::Cell;
 use std::sync::{
     Mutex, MutexGuard, OnceLock,
     atomic::{AtomicUsize, Ordering},
 };
 
 static ACTIVE_SCOPED_ENVS: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    static SCOPED_ENV_HELD: Cell<bool> = const { Cell::new(false) };
+}
+
+struct ScopedEnvThreadOwner;
+
+impl ScopedEnvThreadOwner {
+    fn acquire() -> Self {
+        SCOPED_ENV_HELD.with(|held| {
+            assert!(
+                !held.replace(true),
+                "only one `ScopedEnv` may be held per scope; combine variables into one `scoped` call"
+            );
+        });
+        Self
+    }
+}
+
+impl Drop for ScopedEnvThreadOwner {
+    fn drop(&mut self) {
+        SCOPED_ENV_HELD.with(|held| held.set(false));
+    }
+}
 
 pub(crate) fn scoped_env_active() -> bool {
     ACTIVE_SCOPED_ENVS.load(Ordering::SeqCst) != 0
@@ -152,15 +177,19 @@ pub fn clear_inherited_authority(mut clear: impl FnMut(&str)) {
 /// interleave environment mutations. Keep the guard's scope tight — in
 /// particular, drop it before an `.await` (`clippy::await_holding_lock`); the
 /// env is typically read during synchronous construction, so binding it around
-/// just that call is enough.
+/// just that call is enough. A thread may hold only one `ScopedEnv` at a time;
+/// creating another with [`scoped`] or [`unset`] panics. Combine the variables
+/// into one [`scoped`] call.
 #[must_use = "the environment is restored as soon as the guard is dropped"]
 pub struct ScopedEnv {
+    _thread_owner: ScopedEnvThreadOwner,
     _lock: MutexGuard<'static, ()>,
     saved: Vec<(String, Option<String>)>,
 }
 
 /// Clear `names` for the returned guard's lifetime, restoring prior values on
-/// drop. Names that are already unset are restored as unset.
+/// drop. Names that are already unset are restored as unset. A thread may hold
+/// only one `ScopedEnv` at a time; combine variables into one [`scoped`] call.
 pub fn unset<'a>(names: impl IntoIterator<Item = &'a str>) -> ScopedEnv {
     scoped(names.into_iter().map(|name| (name, None)))
 }
@@ -173,8 +202,11 @@ pub fn unset<'a>(names: impl IntoIterator<Item = &'a str>) -> ScopedEnv {
 /// and takes the same process-wide lock, so a test that populates
 /// `ORBIT_MANAGED_RUN_CONTEXT` cannot interleave with a sibling asserting the
 /// unmanaged default (ORB-10540). A guard built here and a guard built by
-/// [`unset`] are mutually exclusive; two independent locks would not be.
+/// [`unset`] are mutually exclusive; two independent locks would not be. A
+/// thread may hold only one `ScopedEnv` at a time; creating another guard
+/// panics, so combine all variables into one `scoped` call.
 pub fn scoped<'a>(vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) -> ScopedEnv {
+    let thread_owner = ScopedEnvThreadOwner::acquire();
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     let lock = LOCK
         .get_or_init(|| Mutex::new(()))
@@ -196,7 +228,11 @@ pub fn scoped<'a>(vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) ->
         }
     }
     ACTIVE_SCOPED_ENVS.fetch_add(1, Ordering::SeqCst);
-    ScopedEnv { _lock: lock, saved }
+    ScopedEnv {
+        _thread_owner: thread_owner,
+        _lock: lock,
+        saved,
+    }
 }
 
 impl Drop for ScopedEnv {

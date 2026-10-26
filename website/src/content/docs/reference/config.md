@@ -518,7 +518,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `pr.agent_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer may fill through the `pr-sections.json` task artifact. |
 | `pr.required_sections` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Body headings the implementer must fill. An unfilled one is handled by `pr.missing_required_section` and recorded in task history. |
 | `pr.missing_required_section` | **Advanced.** string · **Default:** `draft`<br>What happens when a required section is unfilled: `draft` opens the pull request as a draft with a note under the heading; `refuse` opens no pull request. |
-| `pr.screenshot_section` | **Advanced.** string · **Default:** `auto`<br>When a single-task pull request body carries a `## Screenshots` table of the task's `screenshots/` image artifacts: `auto` for tasks tagged `ui`, `always`, or `off`. |
+| `pr.screenshot_section` | **Advanced.** string · **Default:** `auto`<br>When a single-task body carries the optional `## Screenshots` section: `auto` for tasks tagged `ui`, `always`, or `off`. If no screenshots are publishable, it shows `No screenshots attached.`; this does not count as a missing required section and never drafts or refuses the PR. |
 | `pr.freshness_section` | **Advanced.** bool · **Default:** `true`<br>Include the Branch Freshness section (and the `{{freshness}}` value) in pull request bodies. |
 | `pr.signature` | **Advanced.** bool · **Default:** `true`<br>Append the authoring model's signature to pull request bodies. |
 | `pr.orchestration_trailer` | **Advanced.** bool · **Default:** `true`<br>Append the `Orchestrated-By` trailer to pull request bodies. |
@@ -671,13 +671,17 @@ Orbit ships these defaults:
   gates or `no-diff.json`.
 - `skip-validation`, for `implement`: no local validation while every
   changed path matches `workflow.light_delivery_paths`.
-- `ui`, for `implement` and `review`: capture screenshots and check that
-  they are attached, respectively.
+- `ui`, for `implement` and `review`: route implementers to a host with a
+  verified browser kit and select the optional PR screenshots section.
+  Visual task artifact evidence follows the workspace guide and the actual
+  diff, not the tag.
 
 Replacing or disabling a tag instruction changes the added prompt text.
 Built-in safety, sandbox, gate and handoff rules still win over it. The full
 screenshot rule also remains in the task-execution and task-review
-references: it follows a visible change, even without the `ui` tag.
+references: it follows a visible change, even without the `ui` tag. An empty
+optional PR screenshots section shows `No screenshots attached.` and never
+blocks opening.
 Instruction mappings do not themselves grant a validation or review skip;
 see [Review-skip tags](#review-skip-tags) for review policy.
 
@@ -912,16 +916,18 @@ note under the heading, and with `"refuse"` no pull request opens. Both are
 recorded in the task's history. Orbit never merges a draft automatically.
 
 With `pr.screenshot_section` on (`auto` turns it on for tasks tagged `ui`),
-Orbit renders a `## Screenshots` table of Before and After images from the
+Orbit renders the optional `## Screenshots` section with a table of Before
+and After images from the
 task's artifacts named
 `screenshots/<view>-<theme>-<width>[-before|-after].<ext>`; a name without a
 suffix is an After shot. Only PNG, JPEG, GIF and WebP images up to 1 MiB are
 published. Orbit commits them to `refs/orbit/evidence/<task-id>` on `origin`,
 a ref that is never merged or deleted, and links each image by that commit's
 sha, so a merged pull request keeps its images. A template's `## Screenshots`
-heading is filled in place; otherwise the section is added. With no
-screenshot, the section carries the missing-section note and
-`missing_required_section` applies.
+heading is filled in place; otherwise the section is added. If no screenshot
+is publishable, the section shows `No screenshots attached.`; no gap is
+recorded, and `pr.missing_required_section` does not draft or refuse the PR
+for it.
 
 Commit subjects keep a 72-character budget: the title is shortened first, with
 an ellipsis, and kept whole in the commit body. A subject template must carry

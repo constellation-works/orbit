@@ -658,6 +658,7 @@ pub(super) fn mutate(
                 // snapshot so the follower can re-draw an automatic
                 // assignment under its own usage pressure.
                 let mut input = serde_json::json!({"task_ids": [claim.task_id], "base_branch": record.request.ship.base_branch, "base_sync": if job == CLAIMED_LOCAL_PIPELINE {"local"} else {"remote"}, "claimed_task": {"id": task.id, "crew": task.crew, "crew_source": task.crew_source, "complexity": task.complexity}});
+                input["experiment_capture"] = serde_json::to_value(record.receipt.as_ref().and_then(|receipt| receipt.experiments.as_ref())).map_err(|error| OrbitError::Store(format!("serialize experiment capture: {error}")))?;
                 // Carry the profile key already chosen by admission into the
                 // queued leaf. The host forecast then exchanges its reservation
                 // for a run with the same price before the worker starts.

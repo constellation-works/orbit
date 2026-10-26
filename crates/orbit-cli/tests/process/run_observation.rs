@@ -1221,6 +1221,11 @@ fn linux_start_identity_without_ps_matches_pre_change_owner_tokens() {
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 #[test]
 fn cancelling_owners_with_pre_change_ps_tokens_still_signals_them() {
+    if !isolated_run_observation(
+        "run_observation::cancelling_owners_with_pre_change_ps_tokens_still_signals_them",
+    ) {
+        return;
+    }
     use orbit_common::process::identity::{
         STABLE_TOKEN_PREFIX, STABLE_TOKEN_PREFIX_V1, current_pid_namespace, process_is_alive,
     };

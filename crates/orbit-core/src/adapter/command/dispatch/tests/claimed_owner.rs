@@ -30,6 +30,8 @@ const SHOW: &str = "orbit.task.show";
 const ADD: &str = "orbit.task.add";
 const FRICTION: &str = "orbit.friction.add";
 
+mod pagination;
+
 fn spawned_from(target: &str) -> Value {
     json!([{"type": "spawned_from", "target": target}])
 }

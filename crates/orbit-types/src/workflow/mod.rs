@@ -8,6 +8,8 @@ mod child_dispatch;
 mod crew_purpose;
 mod delivery_conventions;
 mod error;
+mod experiments;
+pub use experiments::{CapturedExperiment, CapturedExperiments};
 mod executor_def;
 mod final_recovery;
 pub mod handoff;

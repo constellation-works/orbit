@@ -112,7 +112,45 @@ pub enum ExperimentWriteOutcome {
     },
 }
 
+/// A sticky assignment, or a durable surface-conflict exclusion.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExperimentAssignment {
+    pub experiment: String,
+    pub task_id: String,
+    pub arm: Option<String>,
+    pub segment: Option<u32>,
+    pub digest: Option<String>,
+    pub assigned_at: DateTime<Utc>,
+    pub forced: bool,
+    pub exclusion_reason: Option<String>,
+}
+
+/// Pure assignment decision inside the store transaction. Existing rows cannot
+/// be replaced. `admitted` includes prior admissions that matched no population.
+pub type ExperimentAssignmentDecision<'a> = dyn Fn(
+        &[ExperimentRecord],
+        &[ExperimentAssignment],
+        bool,
+    ) -> Result<Vec<ExperimentAssignment>, OrbitError>
+    + 'a;
+
 pub trait ExperimentStoreBackend: Send + Sync {
+    /// Serialize assignment decisions with lifecycle changes and other admissions.
+    fn assign_experiments(
+        &self,
+        workspace_id: &str,
+        task_id: &str,
+        mark_admitted: bool,
+        decide: &ExperimentAssignmentDecision<'_>,
+    ) -> Result<Vec<ExperimentAssignment>, OrbitError>;
+
+    /// All assignments and exclusions for the task, in experiment creation order.
+    fn task_experiment_assignments(
+        &self,
+        workspace_id: &str,
+        task_id: &str,
+    ) -> Result<Vec<ExperimentAssignment>, OrbitError>;
+
     /// Apply `write` in one immediate transaction.
     fn write_experiment(
         &self,

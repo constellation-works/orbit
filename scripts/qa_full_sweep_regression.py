@@ -39,6 +39,16 @@ from pathlib import Path
 mode = json.loads(Path("mode.json").read_text())
 if "metadata" in sys.argv:
     print(json.dumps({"packages": [{"name": "fixture", "targets": [{"name": "boundary", "kind": ["test"]}]}]}))
+elif "build" in sys.argv:
+    import shutil
+    target = Path(sys.argv[sys.argv.index("--target-dir") + 1]) / "debug/orbit"
+    if mode != "build-failed":
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2("bin/orbit", target)
+    print("fixture candidate build stdout")
+    print("fixture candidate build stderr", file=sys.stderr)
+    if mode in ("build-failed", "build-failed-with-binary"):
+        raise SystemExit(42)
 elif "--list" in sys.argv:
     print(("unrelated" if mode == "stale" else "boundary::contracts") + ": test")
 elif mode.startswith("native-"):
@@ -193,6 +203,7 @@ def self_test():
     harness = Path(os.environ.get("QA_SWEEP_HARNESS_UNDER_TEST", Path(__file__).with_name("test-qa-full-sweep.py"))).resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
+    candidate_build_report_self_test(harness, scratch)
     native_recorder_prefix_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
     scratch_cleanup_race_self_test(harness, scratch)
@@ -311,7 +322,7 @@ def self_test():
         assert row(report, "macos-platform")["outcome"] == "NOT_RUN" and not row(report, "macos-platform")["assertions"], report
         builtin = {"id": "isolated-cli-lifecycle", "required": True, "kind": "builtin", "capability": "local",
                    "assertions": ["global-init-persists-isolated-root"]}
-        report = sweep([builtin], "builtin-skip")
+        report = sweep([builtin], "builtin-skip", ["--build-candidate"])
         builtin_row = row(report, "isolated-cli-lifecycle")
         assert builtin_row["outcome"] == "FAIL" and builtin_row["exit_code"] == 1, report
         assert builtin_row["missing_capabilities"] and report["decision"] == "INCOMPLETE", builtin_row
@@ -538,6 +549,78 @@ def self_test():
         assert all(row(report, name)["outcome"] == "NOT_RUN" for name in ["first", "second"]), report
         # Repeated invocations also retain earlier report bytes.
         assert all(Path(directory).is_dir() for directory in directories), directories
+
+
+def candidate_build_report_self_test(harness, scratch):
+    """Failed builds and unavailable binaries retain reports without running built-ins."""
+    with tempfile.TemporaryDirectory(prefix="qa-candidate-build-", dir=scratch) as tmp:
+        repo = Path(tmp)
+        for directory in ["bin", "scripts", ".orbit/tmp"]:
+            (repo / directory).mkdir(parents=True, exist_ok=True)
+        driver = repo / "driver.py"
+        driver.write_text(DRIVER.replace("qa.main()", '''
+def builtins(*args):
+    (repo / "builtin-invoked").write_text("ran")
+    return ([{"scenario": "fixture-builtin", "outcome": "PASS",
+              "assertions": ["fixture-builtins-ran"], "candidate_id": "fixture-candidate"}], None)
+qa.run_builtins = builtins
+qa.main()
+''', 1))
+        cargo = repo / "bin/cargo"
+        cargo.write_text(f"#!{sys.executable}\n" + CARGO)
+        cargo.chmod(0o755)
+        orbit = repo / "bin/orbit"
+        orbit.write_text(f"#!{sys.executable}\nprint('fixture orbit')\n")
+        orbit.chmod(0o755)
+        (repo / "scripts/test-qa-full-sweep.py").write_bytes(harness.read_bytes())
+        assertions = ["binary-built-from-current-source", "source-stable-through-build", "binary-hash-recorded"]
+        inventory = {"scenarios": [
+            {"id": "source-binary-provenance", "kind": "builtin", "capability": "local",
+             "required": True, "assertions": assertions},
+            {"id": "fixture-builtin", "kind": "builtin", "capability": "local",
+             "required": True, "assertions": ["fixture-builtins-ran"]},
+        ]}
+        (repo / "scripts/qa-full-sweep-inventory.json").write_text(json.dumps(inventory))
+        for mode, options in [
+            ("build-failed", ["--build-candidate"]),
+            ("build-failed-with-binary", ["--build-candidate"]),
+            ("external-missing", ["--orbit-bin", str(repo / "missing-orbit")]),
+            ("external-unverified", []),
+            ("complete", ["--build-candidate"]),
+        ]:
+            (repo / "mode.json").write_text(json.dumps(mode))
+            # Distinct outputs ensure an earlier report cannot hide a crash.
+            output = repo / f".orbit/tmp/{mode}.json"
+            child = subprocess.run(
+                [sys.executable, str(driver), str(harness), str(repo), "--output", str(output), *options],
+                cwd=repo, env={**os.environ, "PATH": f"{cargo.parent}:{os.environ['PATH']}",
+                               "TMPDIR": str(repo / ".orbit/tmp")},
+                capture_output=True, text=True, timeout=60)
+            assert output.is_file(), (mode, child.returncode, child.stdout, child.stderr)
+            report = json.loads(output.read_text())
+            assert child.returncode == 0, (mode, child.stderr)
+            provenance = next(row for row in report["results"] if row["scenario"] == "source-binary-provenance")
+            builtin = next(row for row in report["results"] if row["scenario"] == "fixture-builtin")
+            if mode == "complete":
+                assert report["decision"] == "PASS" and provenance["outcome"] == "PASS", report
+                assert provenance["assertions"] == assertions, provenance
+                assert report["binary"]["sha256"] == hashlib.sha256(orbit.read_bytes()).hexdigest(), report
+                assert report["binary"]["version"] == "fixture orbit", report
+                assert builtin["outcome"] == "PASS" and (repo / "builtin-invoked").is_file(), report
+            else:
+                assert report["decision"] == "INCOMPLETE" and provenance["outcome"] == "FAIL", report
+                assert not provenance["assertions"], provenance
+                assert builtin["outcome"] == "NOT_RUN" and not (repo / "builtin-invoked").exists(), report
+                if mode.startswith("build-failed"):
+                    command = provenance["command"]
+                    assert command[:-1] == ["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit", "--target-dir"], command
+                    assert command[-1].endswith("/candidate-target"), command
+                    assert provenance["exit_code"] == 42, provenance
+                    assert provenance["stdout"] == "fixture candidate build stdout\n", provenance
+                    assert provenance["stderr"].startswith("fixture candidate build stderr\n"), provenance
+                    assert report["binary"]["sha256"] is None, report
+                elif mode == "external-missing":
+                    assert provenance["exit_code"] == 127 and report["binary"]["sha256"] is None, report
 
 
 def retired_cases_orphan_proof_self_test(harness, scratch):

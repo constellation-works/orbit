@@ -72,6 +72,10 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
         "an experiment id is workspace-local and carries no host prefix",
     ),
     (
+        "orbit.experiment.assign",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
         "orbit.experiment.reweight",
         "an experiment id is workspace-local and carries no host prefix",
     ),

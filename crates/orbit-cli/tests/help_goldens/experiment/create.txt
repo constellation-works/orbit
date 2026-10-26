@@ -33,7 +33,7 @@ Options:
 
           Possible values:
           - shadow: Assign and record arms but apply no overlay
-          - live:   Apply each arm's overlay to the tasks it is assigned
+          - live:   Apply overlays; starting or resuming live experiments is not supported yet
 
       --reason <REASON>
           Why, recorded on the event

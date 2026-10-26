@@ -414,3 +414,7 @@ v63 experiments
 + ["trigger","experiment_events_no_delete","experiment_events","CREATE TRIGGER experiment_events_no_delete\n                BEFORE DELETE ON experiment_events\n                BEGIN SELECT RAISE(ABORT, 'experiment_events is append-only'); END"]
 + ["trigger","experiment_events_no_update","experiment_events","CREATE TRIGGER experiment_events_no_update\n                BEFORE UPDATE ON experiment_events\n                BEGIN SELECT RAISE(ABORT, 'experiment_events is append-only'); END"]
 
+v64 experiment_admissions
++ ["index","sqlite_autoindex_experiment_admissions_1","experiment_admissions",null]
++ ["table","experiment_admissions","experiment_admissions","CREATE TABLE experiment_admissions (workspace_id TEXT NOT NULL, task_id TEXT NOT NULL, PRIMARY KEY (workspace_id, task_id))"]
+

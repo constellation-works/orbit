@@ -73,6 +73,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.decision.show",
             "orbit.decision.submit",
             "orbit.experiment.abandon",
+            "orbit.experiment.assign",
             "orbit.experiment.clone",
             "orbit.experiment.conclude",
             "orbit.experiment.create",

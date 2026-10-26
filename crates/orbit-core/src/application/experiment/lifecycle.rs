@@ -197,6 +197,7 @@ impl OrbitRuntime {
                         current.name
                     )));
                 }
+                ensure_shadow_mode(current)?;
                 validate_startable(&record, &settings.config_keys)?;
                 running_limit = Some(settings.max_running);
                 experiment.status = RUNNING.into();
@@ -213,6 +214,7 @@ impl OrbitRuntime {
             }
             ExperimentChange::Resume => {
                 require_status(current, &[PAUSED], "resume")?;
+                ensure_shadow_mode(current)?;
                 running_limit = Some(self.experiment_settings().max_running);
                 experiment.status = RUNNING.into();
                 ("resumed", json!({}))
@@ -407,6 +409,17 @@ fn input_fields(input: &ExperimentDefinitionInput) -> Vec<&'static str> {
     .into_iter()
     .filter_map(|(field, set)| set.then_some(field))
     .collect()
+}
+
+/// Live overlays are unavailable in this assignment slice, which records
+/// shadow treatments without applying any part of them.
+fn ensure_shadow_mode(experiment: &ExperimentRow) -> Result<(), OrbitError> {
+    if experiment.mode == "shadow" {
+        return Ok(());
+    }
+    Err(OrbitError::PolicyDenied(
+        "live experiment overlays are not supported yet; only shadow experiments may start or resume".into(),
+    ))
 }
 
 fn apply_definition(

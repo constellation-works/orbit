@@ -8,8 +8,8 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-10-21
-last_validated: 2026-10-21
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 ---
 
 # Design: host-side broker for agent-initiated plugin calls
@@ -171,6 +171,16 @@ task's finding may also name the task that introduced it as `regression_from` ([
 friction may name only the claimed task as the one it was found during. Internal
 (`_`-prefixed) fields are refused; task show and artifact calls also use closed field
 allowlists. The activity's own tool policy still applies.
+For `orbit.task.show`, supplying `limit`, `comments_offset`, `history_offset` or
+`artifacts_offset` selects the owner's existing bounded detail view. The broker supplies
+the workspace and `view: "bounded"`; the caller cannot supply `workspace`, `snapshot` or
+`view` in the broker payload. The response carries `task`, the three detail arrays and
+their `*_pagination` metadata. The owner validates the page size (1–50, default 25) and
+nonnegative integer offsets. A paginated call accepts only `id`, `model` and those four
+pagination fields: `field`, `fields` and `run_id` are refused with the accepted fields
+named, since the bounded owner view cannot honor them. Without pagination, the existing
+task projections remain available. A delivery projection still uses only the leaf's
+delivery route and refuses pagination; artifact get/put keep their own allowlists.
 Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
 read scoped to the claimed task. The claimed task's own `regression_from` relation does not cross
 the broker either: the implementer returns the culprit in its output, and the owner records the

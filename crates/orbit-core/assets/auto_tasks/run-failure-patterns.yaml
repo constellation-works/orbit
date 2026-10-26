@@ -1,273 +1,223 @@
 schemaVersion: 1
 name: run-failure-patterns
-description: Weekly mining of this workspace's run evidence for recurring failures that nobody has filed
+description: Weekly rate-driven measurement of this workspace's pipeline failures, with Pareto classes, dispositions and fix-effectiveness checks
 enabled: false
 schedule:
   cron: 20 7 * * 1
 template:
-  title: Mine recurring run failures
+  title: Reduce the pipeline failure rate
   description: |-
-    Mine this workspace's own run evidence for recurring failure patterns that
-    are not yet tracked. The durable output is one proposed fix task per
-    untracked pattern (a friction only when no cause can be established) plus
-    the recorded scan cursor; the execution summary is the audit trail.
-    Narrative-only output does not count as delivery.
+    Reduce this workspace's pipeline failure rate. Measure it, find the failure classes that
+    drive it, and make sure each significant class has a working fix in flight: file the fix,
+    push an existing fix forward with fresh evidence, or file a regression when a landed fix
+    did not hold. Success is measured by the failure rate going down pass over pass, not by the
+    number of tasks filed. The durable outputs are the `run-failure-report.json` artifact, the
+    cursor artifact, and the filed or commented tasks. Narrative-only output does not count.
 
     ## Rules and command surfaces
 
-    - Read-only against run state. Never retry, resume, cancel, or edit a run,
-      and never change the status of a task a run touched. Read runs only with
-      `orbit run history --limit <n> --no-reconcile --json`,
-      `orbit run show <run-id> --no-reconcile --json`,
-      `orbit run logs <run-id> --no-reconcile`, and
-      `orbit run events <run-id> --no-reconcile`, and read the settlements
-      claimed leaves on follower hosts sent this owner only with
-      `orbit run settlements --since <window start> --no-reconcile --json`;
-      do not read or edit the Orbit database or state files directly. Never
-      drop `--no-reconcile`: without it the run reads finalize an orphaned
-      `pending` or `running` run as `interrupted` and release its task
-      reservations, and the settlement read recovers an interrupted
-      coordination commit.
-    - Use the registered Orbit tool surface for records. Find the newest completed
-      prior instance with
-      `orbit tool run orbit.task.list --input '{"status":["done"],"type":"chore","tag":["run-failure-patterns","no-diff-expected"],"limit":1,"model":"<agent-family>"}'`
-      (tag filters use AND semantics) and read its cursor artifact with
-      `orbit tool run orbit.task.artifact.get --input '{"id":"<id>","path":"run-failure-cursor.json","model":"<agent-family>"}'`.
-      Search existing coverage with
-      `orbit tool run orbit.search --input '{"query":"<one distinctive token>","kind":"all","all":true,"model":"<agent-family>"}'`
-      and inspect a candidate with
-      `orbit tool run orbit.task.show --input '{"id":"<id>","model":"<agent-family>"}'`.
-      Lexical search matches one case-insensitive substring: pass a single
-      distinctive token (an error code, step name, or tool name), never a
-      multi-word phrase, and do not treat a 0-hit multi-word query as proof that
-      nothing covers the pattern.
-    - Before filing a fix task, read the installed `orbit` skill's
-      task-authoring reference (`references/task-authoring.md`) and follow it
-      for task shape. File every fix task (tool-created tasks start `proposed`)
-      with a `spawned_from` relation targeting this mining chore:
-      `orbit tool run orbit.task.add --input '{"title":"<surface and failure>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified path>"],"complexity":"<assessed>","tags":["run-failure-patterns","no-auto-approve"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
-      Read every created task back with `orbit.task.show` and verify that exact
-      `spawned_from` edge before recording it as delivered; if missing or
-      incorrect, report the linkage error and do not count it as delivered.
-      The `no-auto-approve` tag keeps the task `proposed` for human approval:
-      an `--approve-proposed` drain never promotes it. File a friction instead
-      only when the evidence cannot establish a cause, with
-      `orbit tool run orbit.friction.add --input '{"title":"<surface and failure>","body":"<markdown>","tags":["automation"],"during_task":"<this task ID>","model":"<agent-family>"}'`.
-      Never file both for one pattern: friction curation turns frictions into
-      tasks, so a friction beside a fix task duplicates the work. Do not use
-      direct lifecycle CLI subcommands; they skip agent provenance.
-    - Fail open. A window with no new untracked pattern is a successful no-op. Do
-      not invent work to justify the run.
+    - **Owner host only.** Run history and follower settlements live on the workspace owner.
+      Preparation must record `required_machine` for this owner-evidence contract before
+      admission, naming the owning machine, so a follower is not offered this scan; the
+      owner's own drain may start it, and on the owner those reads stay authorized. Routing
+      grants no additional tool scope. Do not use an `os:` tag for placement: it pins an
+      operating system, not the owning machine. First confirm this checkout is the owner:
+      `orbit run settlements --since <7 days ago> --no-reconcile --json` must not refuse as a
+      follower replica, and `orbit run history --limit 50 --no-reconcile --json` must list
+      runs executed on this host. If this is a follower replica, stop: record `wrong_host`
+      with the evidence in the execution summary, attach no cursor, and finish without filing
+      anything.
+    - Read-only against run state. Never retry, resume, cancel or edit a run, and never change
+      the status of a task a run touched. Read runs only with `orbit run history --since <d>
+      --limit <n> --no-reconcile --json`, `orbit run show <run-id> --no-reconcile --json`,
+      `orbit run logs <run-id> --no-reconcile [--step <id>]`, `orbit run events <run-id>
+      --no-reconcile`, and `orbit run settlements --since <d> --no-reconcile --json`. Never drop
+      `--no-reconcile`: without it the reads finalize orphaned runs as `interrupted` and release
+      their reservations. Do not read the Orbit database or state files directly.
+    - Records go through registered tools: `orbit tool run orbit.task.list --input '{"limit":50}'`
+      invokes a tool by name, and `orbit tool show orbit.task.list` prints its schema.
+      Available tools include `orbit.task.list`, `orbit.task.show`,
+      `orbit.search` (one distinctive token per query: an error code, step or tool name; a
+      0-hit multi-word query proves nothing), `orbit.task.add`, `orbit.task.update` (comments
+      only), `orbit.task.artifact.get/put`, `orbit.friction.add`. Read the installed `orbit`
+      skill's `references/task-authoring.md` before filing.
+    - A pass that finds nothing new still succeeds, with the report stored. Don't invent work.
 
-    ## Determine the scan window
+    ## 1. Windows
 
-    Run the prior-instance query above. When it returns a task, read its
-    `run-failure-cursor.json` artifact; its `cursor` is the RFC 3339 upper bound
-    that instance scanned through, and this scan starts strictly after it. A
-    selected instance without a readable cursor artifact is an error to report,
-    not a first run: fall back to the cursor recorded in its execution summary,
-    and fail the task if neither exists. Only when no prior instance exists, start
-    the window seven days before now. The window ends at the moment this scan
-    starts; record that timestamp before reading any run.
+    - **Cursor.** Find the newest completed prior pass with `orbit.task.list`
+      `{"status":["done"],"tag":["run-failure-patterns","no-diff-expected"],"limit":1}` and read
+      its `run-failure-cursor.json` and `run-failure-report.json`. The new cursor is the moment
+      this scan starts; record it before reading any run. A prior pass whose artifacts can't be
+      read is reported, and this pass uses the 7-day window alone.
+    - **Analysis window: the 7 days before scan start**, always, regardless of the cursor.
+      Recurring failures spread over days; clustering only the hours since the last pass hides
+      them. Also compute the 30-day rates for trend.
+    - **New since cursor:** occurrences that finished after the prior cursor. Report them
+      separately; they decide whether a tracked class is still firing.
 
-    The window contains every run whose `finished_at` falls inside it. Page
-    `orbit run history --limit <n> --no-reconcile --json` (newest first by
-    creation) by raising `<n>` until the oldest returned run was created at
-    least seven days before the window start, so long-running runs that
-    finished inside the window are included. Runs still `pending` or `running` at scan start belong to the
-    window in which they finish.
+    Page `orbit run history --since 30d --no-reconcile --json` with a large enough `--limit`
+    that the oldest returned run predates the 30-day start.
 
-    ## Collect failure evidence
+    ## 2. Measure the rate
 
-    From the window, collect:
+    For every job with runs in the window, compute runs, failed (`failed` or `interrupted`, and
+    `cancelled` runs that recorded an error), and failure rate, for 7 days and 30 days. Add
+    follower leaf failures from `orbit run settlements`: each settlement whose `settled_at`
+    falls in the window is one occurrence in its `leaf_run_id` on its host, attributed to the
+    claimed pipeline job. `evidence_hold` releases and `operator_cancel` are designed outcomes,
+    not failures; a leaf that also appears in this host's history counts once.
 
-    1. Runs whose state is `failed` or `interrupted`, and `cancelled` runs that
-       recorded an error message.
-    2. Step failure records: every non-success, non-skipped entry in a run's
-       `steps` list, including failed steps inside runs that later succeeded
-       after a retry or a recovery activity such as `step_failure_recovery`.
-       Use `orbit run show <run-id> --no-reconcile --json` for the step detail.
-    3. Worker log evidence for those runs from
-       `orbit run logs <run-id> --no-reconcile` (and `--step <step-id>` for one
-       step), read only as far as needed to name the error.
-    4. Follower leaf failures. A claimed leaf runs on a follower host, so this
-       host's run history never lists it; its owner keeps the failure or
-       release settlement the leaf sent. Each entry of
-       `orbit run settlements --since <window start> --no-reconcile --json`
-       whose `settled_at` falls in the window is one occurrence in one run
-       (its `leaf_run_id`) on host `machine_name` or `machine_id`. Its
-       `evidence` names the class (`provider_unavailable`, `baseline_red`,
-       `forge_unavailable`, `final_recovery`, `failure`, `summary`),
-       `failure_class` the typed failure, `failed_step_id` the step, and
-       `reason` the leaf's own diagnostic. An `unrecorded` entry settled
-       before the owner kept settlements: take its reason from the task's
-       history `note` or comment at `settled_at` through `orbit.task.show`.
-       An `evidence_hold` release, and an `operator_cancel` failure class,
-       are designed outcomes, not failures. A leaf run that also appears in
-       this host's run history is one occurrence, not two. When the read
-       refuses because a coordination commit is pending, record that in the
-       summary and continue without follower evidence. In a follower's
-       replica checkout the list is empty; leave its claimed leaves (jobs
-       `task_claimed_pr_pipeline` and `task_claimed_local_pipeline`) to the
-       owner's scan, which counts them from these settlements.
+    Fold cascades by recorded cause, never by matching text: read `root_cause` with
+    `orbit run show <run-id> --no-reconcile --json` for every failed run. A run whose
+    `root_cause.run_id` names another run is an echo of
+    it; count the occurrence once, at the root. A `pipeline_success_guard` root whose child
+    dispatch is `held` is a designed hold: neither it nor the parents folded into it count.
+    Report raw and folded counts per job, so the dashboard's raw rate can be reconciled with
+    the folded one.
 
-    ## Fold cascades by recorded cause
+    Compare with the prior pass's report: per-job rate delta, 7-day and 30-day.
 
-    A parent pipeline whose child fails also fails, in
-    `pipeline_success_guard`. Fold parents by the recorded cause, never by
-    judgment or by matching error text: read `root_cause` from
-    `orbit run show <run-id> --no-reconcile --json` for every failed run.
-    When `root_cause.run_id` names another run, the run is an echo of that
-    run: count the occurrence once, at the root cause. When the root cause is
-    a `pipeline_success_guard` failure, read its run's
-    `pipeline_state.child_dispatches[].child_run_id` and their states: a
-    `held` child is a designed hold (review evidence, a red base, a forge
-    outage), so neither that run nor any parent folded into it is a failure.
-    Report the fold count and the held-chain count in the summary.
+    ## 3. Find the classes that drive it
 
-    ## Cluster by normalized signature
+    For each job whose folded 7-day failure rate is at least 2% or that had at least 5 folded
+    failures, cluster its failures by normalized signature: error class (the bracketed code
+    such as `[provider_capacity]`, an `error_code`, the guard name, a settlement's `evidence`
+    and `failure_class`, or the leading error kind), failing step or deterministic action, and
+    tool. Strip ids, SHAs, paths, PR numbers, timestamps, hosts and counts. Split review
+    refusals by escalation category as before (`base_red`, `external_evidence`,
+    `report_revision`, `scope_or_criteria`, `timeout`, `other`), reading `review-gate.json` and
+    `review-report.json` with `orbit.task.artifact.get` for the task's latest attempt:
 
-    Normalize each failure to a signature of error class, failing step, and
-    tool: the error class is the stable code or leading error kind (for example
-    an `error.code=` value, an HTTP status, the failing guard name, or a
-    settlement's `evidence` and `failure_class`); the failing step is the step
-    or deterministic action named in the error; the tool is the provider CLI,
-    Orbit tool, or command that raised it. Strip run ids, task ids, timestamps,
-    paths, SHAs, host names, and counts before comparing, and group by the
-    signature with the job ID and host as context. One pattern seen on this
-    host and on a follower is one pattern.
-
-    Split review refusals. A `review_gate_settle` or `review` refusal also
-    carries an escalation category, read from the refusal's error message
-    (`review_gate_blocked: verdict <verdict> (<escalation>)`, a
-    `[baseline_red]` marker, or `review_timeout_incomplete`; a follower
-    settlement's `reason`) and, for the
-    task's latest attempt, from the stored review evidence read with
-    `orbit.task.artifact.get`: `review-gate.json` (`verdict`, `escalation`)
-    and `review-report.json` (`verdict`, `escalation`, `external_evidence`,
-    and each `validation[]` record's `outcome` and `role`). Each category is a
-    pattern by itself:
-
-    - `base_red`: a `[baseline_red]` refusal, or an escalation saying a
-      required check fails on the base, is pre-existing, or needs a green base.
-    - `external_evidence`: a non-empty `external_evidence`, or an escalation
-      asking for evidence the reviewer's host cannot produce: a native OS
-      (`native_os`), a hosted CI result (`hosted_ci`), or CodeQL (`codeql`).
-    - `report_revision`: the gate refused the reviewer's report or its
-      revisions, such as `validation_incomplete` for a required check an
-      earlier revision recorded and the final one omits, a superseded attempt
-      with no replacing pass, or a report or certificate mismatch.
-    - `scope_or_criteria`: a `reject` whose escalation says the task's scope,
-      acceptance criteria or approach must change.
+    - `base_red`: a `[baseline_red]` refusal, or an escalation saying a required check fails on
+      the base, is pre-existing, or needs a green base.
+    - `external_evidence`: a non-empty `external_evidence`, or an escalation asking for evidence
+      the reviewer's host cannot produce: a native OS (`native_os`), a hosted CI result
+      (`hosted_ci`), or CodeQL (`codeql`).
+    - `report_revision`: the gate refused the reviewer's report or its revisions, such as
+      `validation_incomplete` for a required check an earlier revision recorded and the final
+      one omits, a superseded attempt with no replacing pass, or a report or certificate mismatch.
+    - `scope_or_criteria`: a `reject` whose escalation says the task's scope, acceptance criteria
+      or approach must change.
     - `timeout`: the reviewer exceeded its wall clock or review budget.
     - `other`: anything else.
 
-    A cluster is a pattern when it has **at least 3 occurrences across at
-    least 2 distinct runs** in the window. Below that threshold, a single
-    occurrence is still a pattern when all of these hold:
+    Rank the classes by folded occurrences and take the **Pareto set**: the top classes that
+    together cover at least 80% of that job's folded failures, plus every class with at least 3
+    occurrences across 2 runs in the 7 days. These are the classes this pass must account for.
 
-    - it came from a deterministic Orbit action (a step such as `git_push`,
-      `git_commit`, `pr_open`, `pr_complete` or a guard) or a tool limit (a
-      timeout clamp, a size cap), not a provider (authentication, capacity,
-      rate limit), capacity or network error (DNS, TLS, status 000, a
-      connection reset), which stay counted only;
-    - it blocked a task (the task is `blocked`, or its claim failed) or
-      needed an operator rerun or resume;
-    - the code verification below shows it would recur under the same
-      conditions.
+    **No class is dismissed by its kind.** "Designed refusal", "provider", "agent-declared",
+    "CI flake" and "operator resume" are causes, not exemptions: each still counts in the rate
+    the operator sees. For every Pareto class decide which of these it is, with evidence:
 
-    Count every other one-off and single-run retry loop in the summary only.
+    - **Product defect:** Orbit raised or permitted a failure it could have prevented. File a
+      fix.
+    - **Misclassified hold:** the outcome is a correct, designed refusal or wait that is
+      recorded as a run *failure* (for example a review gate that held a task for evidence, a
+      red base, a draft awaiting a section). File a task that records it as a held/blocked
+      outcome rather than a failed run, or that excludes it from the failure rate with its own
+      counter, so the metric means "something broke".
+    - **Provider or capacity:** capacity, rate limit, usage limit, outage. File the resilience
+      fix that would have avoided the failed run (fall back to another crew or model, hold and
+      retry admission later, back off), not the provider itself. Pure network one-offs stay
+      counted only.
+    - **Upstream task quality:** agent-declared blocks, scope or criteria rejects, validation
+      that a leaf can't reach. File the fix where the bad input came from (task-pilot checks,
+      authoring guidance, an auto-task template that writes unreachable criteria), naming the
+      tasks.
+    - **Environment or flake:** host tooling, sandbox, CI flake. File the host or test fix, or
+      attach to the open flake task.
+    - **True one-off:** a single occurrence that the code shows will not recur. Counted only.
 
-    ## Check coverage before filing
+    ## 4. Check coverage and effectiveness
 
-    For each pattern, search open and closed tasks and frictions with one
-    distinctive token at a time from its signature (the error code, the step
-    name, the tool name, the escalation category), and inspect every plausible
-    hit. A pattern is already tracked when an open task (including a
-    `proposed` one) or open friction describes the same underlying failure, a
-    done task does and no occurrence postdates its completion, or a rejected
-    task's rationale decided the same failure is not to be fixed; record the
-    `<signature> -> <id>` mapping and do not file. Occurrences after a done fix
-    are a regression: file them as a new pattern that names the done task.
-    Never file duplicates, including two records for one pattern in the same
-    scan.
+    For each Pareto class, search tasks and frictions (one token at a time from its signature)
+    and inspect plausible hits.
 
-    ## Verify the mechanism in code
+    - **Open task covers it** (any status before done): don't file. Comment on it once per
+      pass with this pass's counts (7-day occurrences, new since cursor, share of the job's
+      failures, representative run ids). If it is `proposed` and its class is in the top three
+      for its job, say so in the comment: that is the operator's cue to promote it.
+    - **Done task covers it:** find the commit it landed in and whether that commit is
+      deployed on the host the failures ran on (the installed binary's source commit in
+      `~/.orbit/deploy-*.log` or the run's recorded build, if present; when it can't be
+      established, say so). Occurrences on a binary that predates the fix are "fix not yet
+      deployed": report, don't refile. Occurrences on a binary that includes the fix are a
+      regression: file a new task that names the done task.
+    - **Rejected task decided it is not to be fixed:** record the mapping and don't file, but
+      list it in the report with its share of failures, so the decision can be revisited.
+    - **Untracked:** verify the mechanism in this checkout (record `git rev-parse HEAD`): name
+      the file and function that raise or permit the failure and quote the guard, comment or
+      constant (a few lines). File one record per class: a fix task, or a friction only when
+      evidence and code cannot establish the cause. Never both.
 
-    For every untracked pattern, find the mechanism in this checkout, which
-    is at the workspace's current integration base; record
-    `git rev-parse HEAD`. Name the file and function that raise or permit the
-    failure, and quote the guard, comment or constant that explains it (a
-    few lines). A pattern whose cause the evidence and code cannot establish
-    is filed as a friction, not a task.
+    **Effectiveness of earlier fixes.** For every task this auto-task filed (tag
+    `run-failure-patterns`) that reached done in the last 30 days, compare its class's weekly
+    occurrences before its landing with the period after it was deployed. Report each as
+    `effective`, `not effective`, `not yet deployed` or `too early` (under 3 days deployed).
+    A `not effective` fix gets a regression task as above.
 
-    ## File untracked patterns
+    ## 5. Filing
 
-    File exactly one record per untracked pattern: a proposed fix task, or a
-    friction when no cause could be established. The body carries:
+    - File at most 5 new tasks per pass, ranked by folded failures per week they would
+      prevent. List the rest in the report as deferred.
+    - Each fix task: `type` `bug`, tags `["run-failure-patterns", "no-auto-approve"]` plus the
+      job's area (`delivery`, `review`, `providers`, `pilot`, `landing`), `complexity` assessed
+      honestly (never `xhard`), `context_files` with verified `file:` selectors for files the fix
+      will modify (never `docs/CONFIG.md`), and a `spawned_from` relation to this task. Read
+      every created task back and confirm that edge.
+    - Body: the problem in a sentence or two; an evidence table (signature, 7-day and 30-day
+      occurrences, distinct runs, share of the job's folded failures, hosts, first and last
+      seen, up to three run ids, one short redacted excerpt); the verified mechanism; the
+      decision category from section 3 and why; the proposed change; and the expected effect on
+      the job's failure rate.
+    - Acceptance criteria are reachable inside one leaf on its own host: a deterministic
+      reproduction of the signature through the same code path, the fix, and proof that the
+      reproduction now passes. Never "after deploy", never numbers from another host.
+    - When a landed task's change caused the class, add
+      `{"type":"regression_from","target":"<culprit>","regression":{"nature":"<nature>","escape":"<escape>"}}`
+      (natures: broke_existing, defect_in_new, incomplete, merge_reintroduced,
+      contract_drift, unclassified; escapes: no_test, test_not_selected, platform_only,
+      review_missed, spec_ambiguous, nondeterministic, unclassified). Never blame a bystander;
+      choose `unclassified` rather than guess.
+    - Redact excerpts: at most a few lines, with tokens, credentials, authorization headers,
+      cookies, email addresses and home paths replaced. Put excerpts only in text sent through
+      `orbit.task.add`, `orbit.task.update` or `orbit.friction.add`; when a response reports
+      `redactions_applied: true`, read the record back. Never attach raw logs.
 
-    - the problem, in a sentence or two;
-    - an evidence table: normalized signature, occurrence count, distinct
-      run count, hosts, first and last seen timestamps, up to three
-      representative run ids, the affected job IDs, and one short redacted
-      excerpt;
-    - the verified mechanism: file, function, quoted guard and commit;
-    - for a task, the proposed change; then observable acceptance criteria,
-      `context_files` naming the verified files, and an assessed complexity.
+    ## 6. Report and cursor
 
-    When the verified mechanism shows that a landed task's change caused the
-    pattern, including one that reintroduced a done fix, add
-    `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}`
-    to the fix task's `relations` alongside its required `spawned_from` edge
-    and name that commit in its body. Never blame a bystander task.
-    Choose `unclassified` rather than guess. `nature` is what kind of regression
-    the link records:
-    - `broke_existing`: the culprit broke behavior that worked before it landed.
-    - `defect_in_new`: the defect is in code the culprit itself introduced.
-    - `incomplete`: the culprit shipped without part of what its task required.
-    - `merge_reintroduced`: a merge restored code or assets an earlier change had removed.
-    - `contract_drift`: docs, schemas or a contract drifted from the behavior the culprit shipped.
-    - `unclassified`: the evidence does not settle the nature.
-    `escape` is why the delivery gates missed it:
-    - `no_test`: no test covered the broken behavior.
-    - `test_not_selected`: a covering test existed but the delivery's gates did not run it.
-    - `platform_only`: it shows only on a platform or host the gates did not exercise.
-    - `review_missed`: it was visible in the diff and review did not flag it.
-    - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
-    - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
-    - `unclassified`: the evidence does not settle the escape.
+    Write `.orbit/tmp/run-failure-report.json` (`$ORBIT_SCRATCH_DIR`) and attach it as
+    `run-failure-report.json`:
 
-    Excerpts must be redacted. Quote at most a few lines, and replace tokens,
-    credentials, authorization headers, cookies, email addresses, and home or
-    user paths with placeholders before writing. Put excerpts only in text sent
-    through `orbit.friction.add` or `orbit.task.add`, which also apply Orbit's
-    write-time redaction; when the response reports `redactions_applied: true`,
-    read the record back and confirm no secret-bearing context survived. Never
-    attach raw logs as artifacts or copy them into other files.
+    ```json
+    {"schema_version": 2, "scan_start": "<RFC 3339>", "head": "<sha>",
+     "jobs": [{"job": "...", "runs_7d": 0, "failed_raw_7d": 0, "failed_folded_7d": 0,
+               "rate_7d": 0.0, "rate_30d": 0.0, "rate_7d_prev": 0.0}],
+     "classes": [{"job": "...", "signature": "...", "occurrences_7d": 0, "new_since_cursor": 0,
+                  "share": 0.0, "category": "product_defect|misclassified_hold|provider|upstream_quality|environment|one_off",
+                  "disposition": "filed:<id>|commented:<id>|not_yet_deployed:<id>|regression:<id>|rejected:<id>|deferred|counted"}],
+     "fix_effectiveness": [{"task": "...", "landed": "...", "deployed": "...", "before_per_week": 0, "after_per_week": 0, "verdict": "..."}]}
+    ```
 
-    ## Record the cursor
+    Write `{"schema_version":1,"cursor":"<scan start>","runs_scanned":<n>}` to
+    `.orbit/tmp/run-failure-cursor.json` and attach it as `run-failure-cursor.json`, on every
+    completed owner pass including an empty one.
 
-    Always record the window bounds and the new cursor (the scan start
-    timestamp) in the persisted execution summary, with runs scanned,
-    follower settlements read, failures collected, the fold and held-chain
-    counts, patterns found, filed ids, already-tracked mappings, and the
-    one-offs counted but not filed. Write
-    `{"schema_version":1,"cursor":"<RFC 3339 scan start>","runs_scanned":<count>}`
-    to `.orbit/tmp/run-failure-cursor.json` (`$ORBIT_SCRATCH_DIR`) and attach it with
-    `orbit tool run orbit.task.artifact.put --input '{"id":"<this task ID>","source_path":".orbit/tmp/run-failure-cursor.json","path":"run-failure-cursor.json","model":"<agent-family>"}'`.
-    `orbit tool show <tool.name>` prints the tool's schema.
-    Write it on every completed scan, including an empty window.
+    Execution summary: the per-job rate table with deltas against the prior pass, the Pareto
+    classes with their disposition, the fix-effectiveness verdicts, filed and commented ids,
+    deferred classes, and anything unreadable.
   acceptance_criteria:
-  - The scan window started at the previous completed instance's recorded cursor, or seven days before the scan on the first run, and ended at the recorded scan start.
-  - Follower leaf settlements from `orbit run settlements --no-reconcile` were counted with this host's runs, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
-  - Failures were clustered by normalized signature, with review refusals split by escalation category, and only clusters with at least 3 occurrences across at least 2 distinct runs, or a blocking deterministic Orbit-action or tool-limit one-off, were treated as patterns.
-  - Open and closed tasks and frictions were searched for every pattern before filing, and no duplicate record was filed.
-  - Every untracked pattern's mechanism was verified in code, and it was filed as one proposed fix task tagged `run-failure-patterns` and `no-auto-approve`, or as a friction only when no cause could be established, never both.
-  - Every filed record carries the signature, occurrence count, first and last seen, representative run ids, and a redacted excerpt.
-  - Every filed fix task carries a verified `spawned_from` relation targeting this mining chore, alongside any justified `regression_from` relation.
+  - The scan used the 7 days before scan start as its analysis window, computed per-job runs, raw and folded failed counts and failure rates for 7 days and 30 days, and reported new-since-cursor occurrences separately in `run-failure-report.json` with `schema_version` 2.
+  - Follower leaf settlements from `orbit run settlements --no-reconcile` were counted once with this host's runs, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
+  - Failures were clustered by normalized signature with review refusals split by escalation category, and the Pareto set covers at least 80% of each qualifying job's folded failures plus every class with at least 3 occurrences across 2 runs in 7 days.
+  - Every Pareto class carries a category and a disposition in the report, and no class was dismissed by kind alone as designed refusal, provider, agent-declared, CI flake or operator resume.
+  - Open tasks covering a Pareto class received one comment with 7-day counts and new-since-cursor counts, and at most 5 new tasks were filed, ranked by folded failures per week they would prevent.
+  - For every done covering task, the report states the landed commit and whether it was deployed on each failing host, with pre-deploy occurrences reported as not yet deployed and post-deploy occurrences filed as regressions.
+  - Every fix this auto-task filed that reached done in the last 30 days has a fix-effectiveness verdict of effective, not effective, not yet deployed or too early in the report.
+  - The pass ran on the owning machine under a `required_machine` owner-evidence contract, or stopped with `wrong_host` in the execution summary without filing and without attaching a cursor.
   - No run was retried, resumed, cancelled, or edited, and no run state was mutated.
-  - The execution summary reports runs scanned, patterns found, filed versus already-tracked ids, and the window bounds, and the new cursor is attached as `run-failure-cursor.json`.
-  - A window with no new untracked pattern succeeds as a no-op.
+  - The execution summary reports the per-job rate table with deltas, Pareto dispositions, effectiveness verdicts, filed and commented ids and deferred classes, and `run-failure-cursor.json` is attached on every completed owner pass.
   task_type: chore
   tags:
   - run-failure-patterns
@@ -280,6 +230,7 @@ template:
   - orbit.task.artifact.put
   - orbit.task.list
   - orbit.task.show
+  - orbit.task.update
   priority: medium
   complexity: medium
   status: backlog

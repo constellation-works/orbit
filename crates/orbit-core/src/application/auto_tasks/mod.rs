@@ -104,6 +104,10 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/comment-hygiene.yaml"),
     ),
     (
+        "design-sync",
+        include_str!("../../../assets/auto_tasks/design-sync.yaml"),
+    ),
+    (
         "doc-duties",
         include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
     ),

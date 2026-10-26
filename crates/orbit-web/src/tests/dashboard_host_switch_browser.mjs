@@ -63,6 +63,17 @@ let logStreams = [];
 // A held host's workspace list waits in `heldWorkspaces` the same way.
 const workspaceHolds = new Set();
 let heldWorkspaces = [];
+let heldConfigDelete = null;
+let holdConfigDelete = false;
+const redundantConfig = {
+  config_set: { authorized: true },
+  sections: [{ token: 'workflow', keys: ['workflow.base_branch', 'workflow.auto_ship'].map((key) => ({
+    key, label: key, value: 'same', value_type: 'string', state: 'set', settable: true,
+    source: { layer: 'workspace' }, equals: { built_in: true },
+  })).concat([{ key: 'workflow.resource_throttle.enabled', label: 'Enabled', value: true, value_type: 'bool', state: 'set', settable: true, source: { layer: 'global' } }]) }],
+  crews: [{ name: 'fixture', provider: 'codex', model: 'fixture', source: 'workspace' }],
+  crew_fields: ['model'],
+};
 
 function tasksFor(host, workspace) {
   // On the serving host a run recorded on hostb links there; on hostb it
@@ -119,6 +130,11 @@ function hostApi(host, req, rest, url, res) {
   const workspaces = WORKSPACES[host] || [];
   const workspace = url.searchParams.get('workspace') || (workspaces.find((ws) => ws.is_default) || {}).id;
   if (req.method !== 'GET') {
+    if (holdConfigDelete && req.method === 'DELETE' && rest.startsWith('config/keys/')) {
+      holdConfigDelete = false;
+      heldConfigDelete = res;
+      return;
+    }
     const approved = rest.match(/^tasks\/([^/]+)\/approve$/);
     if (approved) return json({ ...tasksFor(host, workspace).find((task) => task.id === approved[1]), status: 'backlog' });
     return json({ ok: true });
@@ -153,6 +169,7 @@ function hostApi(host, req, rest, url, res) {
   if (run) return json({ run_id: decodeURIComponent(run[1]), job_name: 'auto', state: 'running', steps: [], workspace_id: workspace });
   if (rest.startsWith('runs/')) return json([]);
   if (rest === 'audit/summary') return json({ window: '24h', events: 0, failed_runs: 0 });
+  if (rest === 'config/effective' || rest === 'config/file') return json(redundantConfig);
   if (rest.startsWith('config/')) return json({ entries: [], rows: [], config_set: { authorized: true, reason: null } });
   return json({ items: [], total: 0 });
 }
@@ -262,7 +279,61 @@ async function assertNamed(label) {
 try {
   browser = await chromium.launch({ headless: true });
 
+  // A bulk deletion cannot follow the picker into another host, even when
+  // both hosts name the same workspace. Keep the first response held until
+  // the destination Settings page has rendered.
+  await openPage('/?workspace=ws_orbit#config/all-keys', { fresh: true });
+  await page.evaluate(() => {
+    const original = window.fetch;
+    window.settingsSettled = 0;
+    window.settingsDeletes = [];
+    window.fetch = async (...args) => {
+      if (args[1]?.method === 'DELETE') window.settingsDeletes.push(String(args[0]));
+      const response = await original(...args);
+      if (args[1]?.method === 'DELETE') {
+        const text = response.text.bind(response);
+        response.text = async () => { const body = await text(); window.settingsSettled++; return body; };
+      }
+      return response;
+    };
+  });
+  const bulk = page.getByRole('button', { name: 'Remove all 2 workspace values', exact: true });
+  await bulk.waitFor({ state: 'visible' });
+  routeLog = [];
+  holdConfigDelete = true;
+  await bulk.click();
+  await until('the held Settings DELETE', () => heldConfigDelete !== null);
+  await switchHost('hostb');
+  await until('the remote Settings payload', () => logged(/^GET \/api\/on\/hostb\/config\/effective\?workspace=ws_orbit$/));
+  await bulk.waitFor({ state: 'visible' });
+  heldConfigDelete.writeHead(200, { 'content-type': 'application/json' });
+  heldConfigDelete.end('{"ok":true}');
+  heldConfigDelete = null;
+  await page.waitForFunction(() => window.settingsSettled >= 1);
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  const sentDeletes = await page.evaluate(() => window.settingsDeletes);
+  assert(sentDeletes.length === 1, `a retired bulk loop begins no second fetch: ${JSON.stringify(sentDeletes)}`);
+  const deletes = routeLog.filter((entry) => entry.method === 'DELETE');
+  assert(deletes.length === 1 && deletes[0].path === '/api/config/keys/workflow.base_branch?scope=workspace&workspace=ws_orbit',
+    `bulk removal stays in its initiating host and visit: ${JSON.stringify(deletes)}`);
+  assert(!(await page.locator('#config-body').textContent()).includes('Removed '), 'the new host receives no stale bulk completion');
+  evidenceLog.settingsBulkRoutes = deletes;
+  for (const view of ['all-keys', 'machine', 'crews']) {
+    await page.evaluate((view) => { window.location.hash = `config/${view}`; }, view);
+    await until(`Settings ${view}`, () => page.evaluate(async (view) => (await import('/static/js/config.js')).getConfigSubtab() === view, view));
+    if (view === 'machine') await page.locator('.config-sys-enabled .config-pencil').click();
+    if (view === 'crews') await page.locator('.config-crew-row .config-pencil').click();
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+      if (view !== 'all-keys') await page.locator('.config-editor-actions').scrollIntoViewIfNeeded();
+      await capture(`settings-${view}-dark-${width}`);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  }
+  await page.close();
+
   // 1. Picker order, the switch, and every request after it.
+  routeLog = [];
   await openPage('/', { fresh: true });
   await taskRow('alpha-RUN').waitFor({ state: 'visible' });
   const options = await page.locator('#host-select option').evaluateAll((nodes) => nodes.map((node) => [node.value, node.textContent]));
@@ -808,6 +879,7 @@ try {
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
+      'browser-settings-bulk-delete-retires-at-host-switch',
       'browser-host-picker-lists-serving-host-first',
       'browser-every-request-follows-the-selected-host',
       'browser-host-url-and-memory-precedence',

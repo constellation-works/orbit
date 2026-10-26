@@ -160,6 +160,13 @@ impl OrbitRuntime {
             .as_ref()
             .and_then(|receipt| receipt.claim.clone())
             .ok_or_else(|| refused("claimed leaf has no admitted claim"))?;
+        crate::application::experiment::validate_experiment_capture(
+            admission
+                .receipt
+                .as_ref()
+                .and_then(|receipt| receipt.experiments.as_ref()),
+            &claim.task_id,
+        )?;
         if admission.leaf_run_id.as_deref() != Some(run_id) {
             return Err(refused("claimed leaf run binding mismatch"));
         }
