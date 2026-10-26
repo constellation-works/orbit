@@ -196,6 +196,33 @@ fn fence_run(line: &str) -> Option<(Fence, &str)> {
     (len >= 3).then(|| (Fence { marker, len }, &trimmed[len..]))
 }
 
+/// Required headings still carrying Orbit's gap note in the live PR body.
+/// Ignore quoted code samples, as the body renderer does for headings.
+pub(super) fn missing_section_names(body: &str) -> Vec<String> {
+    let mut missing = Vec::new();
+    let mut section = "unnamed required section";
+    let mut open_fence = None;
+    for line in body.lines() {
+        if let Some(fence) = open_fence {
+            if closes_fence(line, fence) {
+                open_fence = None;
+            }
+            continue;
+        }
+        if let Some(fence) = opens_fence(line) {
+            open_fence = Some(fence);
+            continue;
+        }
+        if let Some((_, name)) = heading(line) {
+            section = name;
+        } else if line.trim() == MISSING_SECTION_NOTE && !missing.iter().any(|name| name == section)
+        {
+            missing.push(section.to_string());
+        }
+    }
+    missing
+}
+
 /// Render a body template. Each agent-filled heading keeps its heading line
 /// and takes the implementer's content in place of the template text under
 /// it (up to the next heading of the same or a higher level); an unfilled

@@ -1623,6 +1623,15 @@ one. From then on:
   merge request was sent is never resent: the attempt keeps its unresolved
   merge intent, and the next attempt (**Retry landing**) reconciles that
   intent against the pull request before anything else.
+- A section-gap draft (the live body carries Orbit's missing-required-section
+  note) returns for the same automatic repair described below. The
+  `landing_stopped` reason names the missing headings and asks the repair to
+  fill them or attach their evidence, then resume `pr_open`, which refreshes
+  the body and marks the PR ready. If the automatic repair is already spent,
+  the preserved candidate returns to the backlog under the same bounded
+  requeue policy. A configured draft (`pr.draft = true`) or a draft without
+  section-gap evidence still stops in review; its reason asks the operator
+  to mark the PR ready on the forge and retry landing.
 - When a pull request's hosted check fails, the landing classifies each
   failed job from its failed-step log (the CI sweep's log read and error
   signature) before it stops anything:
