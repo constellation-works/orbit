@@ -159,6 +159,24 @@ macro_rules! dispatch_methods {
             input: &Value,
         ) -> Result<Vec<TagInstruction>, DispatchError>;
 
+        /// What `activity_name` of `run_id` does with the explore brief of the
+        /// task its `input` names: the outcome its audit row records and, for
+        /// a `fresh` or `drifted` brief with delivery on, the task context's
+        /// `explore_brief` value.
+        ///
+        /// The engine asks only for an activity that declares an
+        /// `explore_brief_instruction`. The host checks the stored brief's
+        /// currency against the task's material first and its code drift
+        /// against the run's base second; it fails closed to an undelivered
+        /// outcome and never refuses the dispatch. `None` when the input names
+        /// no single task.
+        fn explore_brief_for_activity(
+            &self,
+            run_id: &str,
+            activity_name: &str,
+            input: &Value,
+        ) -> Option<ExploreBriefAdmission>;
+
         /// The live experiment arms `activity_name` of `run_id` applies for the
         /// task its `input` names: each arm's instruction for the activity's
         /// role (already part of [`Self::tag_instructions_for_activity`]) and

@@ -24,7 +24,7 @@ use super::source::{GitPathKind, SourceSnapshot};
 /// Assessment field carrying the pilot's brief. Apply removes it before the
 /// assessment is fingerprinted or audited: only the validated artifact keeps it.
 pub(super) const EXPLORE_BRIEF_FIELD: &str = "explore_brief";
-const EXPLORE_BRIEF_SCHEMA: &str = "explore_brief.v1";
+pub(super) const EXPLORE_BRIEF_SCHEMA: &str = "explore_brief.v1";
 /// The whole stored document, provenance included: about 2k tokens, the same
 /// limit a tag instruction has, so a brief stays a map and not a transcript.
 const MAX_DOCUMENT_BYTES: usize = 8 * 1024;

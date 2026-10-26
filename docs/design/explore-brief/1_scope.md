@@ -5,7 +5,7 @@ last_updated: 2026-10-26
 last_validated: 2026-10-25
 status: Draft
 stage: building
-next: "File slice S3, delivering a fresh or drifted brief to owner runs"
+next: "File slice S4, capturing the brief into the admission claim for claimed runs"
 feature: explore-brief
 doc_role: scope
 type: design
@@ -16,7 +16,8 @@ tags: [explore-brief, task-pilot, task-artifacts, explore, implement-prompt]
 # Scope: explore briefs from task-pilot
 
 Status: building. Direction approved by Daniel on 2026-10-25. S2 is implemented: the pilot
-produces and stores briefs in shadow ([ORB-18539]); no brief reaches an implementer yet.
+produces and stores briefs in shadow ([ORB-18539]). S3 is implemented: owner runs receive a
+fresh or drifted brief ([ORB-18540]); claimed runs do not receive one until S4.
 Bearing: task-pilot already inspects every prepared task read-only at a pinned revision
 before it runs. The `task_pilot_pipeline` job runs `prepare_task_pilot`, fans `task_pilot`
 out over partitions of one to five tasks, then validates the results in the deterministic
@@ -167,7 +168,10 @@ forge one.
   Receipt/fingerprint self-consistency alone is not currency: a material task edit
   (title, description, criteria, plan or selectors under the default `material_fields`)
   with no intervening re-pilot leaves the receipt and the stored fingerprint mutually
-  consistent while the task has moved on. Otherwise (receipt mismatch or superseded
+  consistent while the task has moved on. The dispatch-time comparison is status-neutral
+  (the receipt's `status_neutral_fingerprint` against the same hash recomputed now): the
+  sealed fingerprint was taken while the task awaited admission, and admission itself moves
+  the task's status, which the material hash includes through its eligibility verdict. Otherwise (receipt mismatch or superseded
   fingerprint) the brief is ignored as superseded; a current-fingerprint mismatch is
   classified at admission as `dropped: material_changed` (see Staleness).
 - **Replacement.** Re-piloting after a task edit upserts the same path. A re-pilot that
@@ -484,5 +488,6 @@ and orchestrator tasks. Anchors are `path::symbol`, not line numbers.
 - [ORB-18363] — designed explore briefs (this doc).
 - [ORB-18364] — charts average normalized tokens per task over time by complexity and tag cohort.
 - [ORB-18539] — S2: the pilot produces and stores briefs in shadow.
+- [ORB-18540] — S3: owner runs receive a fresh or drifted brief.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

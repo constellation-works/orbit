@@ -14,6 +14,10 @@ pub use experiments::{
     ExperimentActivityOverlay, ExperimentOverlayRecord,
 };
 mod executor_def;
+mod explore_brief;
+pub use explore_brief::{
+    ExploreBriefAdmission, ExploreBriefDropReason, ExploreBriefOutcome, ExploreBriefRecord,
+};
 mod final_recovery;
 pub mod handoff;
 mod host_evidence;

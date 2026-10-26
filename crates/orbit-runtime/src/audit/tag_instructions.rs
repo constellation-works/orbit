@@ -1,10 +1,13 @@
-//! Which tag instructions and live experiment arms each activity of a run
-//! received, read back from the `activity.tag_instructions_applied` and
-//! `activity.experiment_overlay_applied` rows its dispatches wrote.
+//! Which tag instructions, live experiment arms and explore briefs each
+//! activity of a run received, read back from the
+//! `activity.tag_instructions_applied`, `activity.experiment_overlay_applied`
+//! and `activity.explore_brief_applied` rows its dispatches wrote.
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_types::workflow::{ExperimentOverlayRecord, TagInstructionRecord, V2AuditEventKind};
+use orbit_types::workflow::{
+    ExperimentOverlayRecord, ExploreBriefRecord, TagInstructionRecord, V2AuditEventKind,
+};
 use serde_json::{Value, json};
 
 use crate::RuntimeKernel;
@@ -35,8 +38,18 @@ pub struct RunExperimentOverlayDispatch {
     pub overlays: Vec<ExperimentOverlayRecord>,
 }
 
-/// The tag instructions and live experiment arms a run's activities
-/// received, oldest dispatch first.
+/// One implement dispatch's explore-brief outcome.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RunExploreBriefDispatch {
+    pub at: DateTime<Utc>,
+    pub step_id: String,
+    pub activity_name: String,
+    pub task_id: String,
+    pub brief: ExploreBriefRecord,
+}
+
+/// The tag instructions, live experiment arms and explore-brief outcomes a
+/// run's activities received, oldest dispatch first.
 ///
 /// `unavailable` means the run has no v2 audit evidence; `none` means its
 /// trail records no dispatch that received any.
@@ -45,6 +58,7 @@ pub struct RunTagInstructions {
     pub state: &'static str,
     pub dispatches: Vec<RunTagInstructionDispatch>,
     pub experiment_overlays: Vec<RunExperimentOverlayDispatch>,
+    pub explore_briefs: Vec<RunExploreBriefDispatch>,
     pub truncated: bool,
 }
 
@@ -54,6 +68,7 @@ impl RunTagInstructions {
             state: "unavailable",
             dispatches: Vec::new(),
             experiment_overlays: Vec::new(),
+            explore_briefs: Vec::new(),
             truncated: false,
         }
     }
@@ -78,6 +93,14 @@ impl RunTagInstructions {
                 "task_id": dispatch.task_id,
                 "overlays": dispatch.overlays,
             })).collect::<Vec<_>>(),
+            "explore_briefs": self.explore_briefs.iter().map(|dispatch| json!({
+                "at": dispatch.at.to_rfc3339(),
+                "step_id": dispatch.step_id,
+                "activity_name": dispatch.activity_name,
+                "task_id": dispatch.task_id,
+                "outcome": dispatch.brief.label(),
+                "brief": dispatch.brief,
+            })).collect::<Vec<_>>(),
         })
     }
 
@@ -85,7 +108,9 @@ impl RunTagInstructions {
     /// `Tag instructions: implement (agent_implement): ui (Orbit default)`,
     /// then one per applied experiment arm, e.g.
     /// `Experiment applied: implement (agent_implement): exp-1a2b / treatment
-    /// segment 1, digest sha256:…`.
+    /// segment 1, digest sha256:…`, then one per implement dispatch's
+    /// explore brief, e.g. `Explore brief: implement (agent_implement):
+    /// drifted (2 paths)` or `… dropped: stale`.
     pub fn header_lines(&self) -> Vec<String> {
         let arms = self.experiment_overlays.iter().flat_map(|dispatch| {
             dispatch.overlays.iter().map(move |overlay| {
@@ -121,6 +146,22 @@ impl RunTagInstructions {
                 )
             })
             .chain(arms)
+            .chain(self.explore_briefs.iter().map(|dispatch| {
+                let mut outcome = dispatch.brief.label();
+                if !dispatch.brief.drifted_paths.is_empty() {
+                    outcome.push_str(&format!(
+                        " ({} changed paths)",
+                        dispatch.brief.drifted_paths.len()
+                    ));
+                }
+                if dispatch.brief.deliverable() && !dispatch.brief.delivered {
+                    outcome.push_str(", not delivered");
+                }
+                format!(
+                    "Explore brief: {} ({}): {outcome}",
+                    dispatch.step_id, dispatch.activity_name
+                )
+            }))
             .collect()
     }
 }
@@ -151,6 +192,7 @@ impl RuntimeKernel {
             body_kinds: vec![
                 "tag_instructions_applied".to_string(),
                 "experiment_overlay_applied".to_string(),
+                "explore_brief_applied".to_string(),
             ],
             oldest_first: true,
             limit: Some(MAX_TAG_INSTRUCTION_DISPATCHES + 1),
@@ -160,6 +202,7 @@ impl RuntimeKernel {
         rows.truncate(MAX_TAG_INSTRUCTION_DISPATCHES);
         let mut dispatches = Vec::new();
         let mut experiment_overlays = Vec::new();
+        let mut explore_briefs = Vec::new();
         for row in rows {
             let Ok(event) =
                 serde_json::from_str::<orbit_types::workflow::V2AuditEvent>(&row.payload_json)
@@ -191,17 +234,33 @@ impl RuntimeKernel {
                     task_id,
                     overlays,
                 }),
+                V2AuditEventKind::ExploreBriefApplied {
+                    step_id,
+                    activity_name,
+                    task_id,
+                    brief,
+                } => explore_briefs.push(RunExploreBriefDispatch {
+                    at: event.envelope.ts,
+                    step_id,
+                    activity_name,
+                    task_id,
+                    brief,
+                }),
                 _ => {}
             }
         }
         Ok(RunTagInstructions {
-            state: if dispatches.is_empty() && experiment_overlays.is_empty() {
+            state: if dispatches.is_empty()
+                && experiment_overlays.is_empty()
+                && explore_briefs.is_empty()
+            {
                 "none"
             } else {
                 "observed"
             },
             dispatches,
             experiment_overlays,
+            explore_briefs,
             truncated,
         })
     }

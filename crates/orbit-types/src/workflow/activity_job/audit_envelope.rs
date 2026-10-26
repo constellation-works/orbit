@@ -251,6 +251,18 @@ pub enum V2AuditEventKind {
         task_id: String,
         instructions: Vec<crate::workflow::TagInstructionRecord>,
     },
+    /// What an implement dispatch did with the task's explore brief, emitted
+    /// once per dispatch of an activity that declares an
+    /// `explore_brief_instruction`, before the subprocess starts, whatever
+    /// the outcome (`absent` included). The brief itself is not recorded:
+    /// its hash and revision identify it.
+    ExploreBriefApplied {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        task_id: String,
+        brief: crate::workflow::ExploreBriefRecord,
+    },
     /// What live experiment arms changed in a CLI backend invocation, emitted
     /// once per invocation before the subprocess starts, and only when an arm
     /// applied. Each record carries the digest of what the dispatch received.
@@ -441,6 +453,7 @@ impl V2AuditEventKind {
                 "trusted_host.execution_admitted"
             }
             V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
+            V2AuditEventKind::ExploreBriefApplied { .. } => "activity.explore_brief_applied",
             V2AuditEventKind::ExperimentOverlayApplied { .. } => {
                 "activity.experiment_overlay_applied"
             }

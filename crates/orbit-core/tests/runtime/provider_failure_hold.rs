@@ -780,6 +780,7 @@ pub(super) fn implementation_job(provider: Provider) -> JobV2 {
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,

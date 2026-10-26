@@ -143,6 +143,7 @@ pub(in crate::activity_job::cli_runner) fn test_agent_loop_spec_for(
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: Vec::new(),
         on_denial: OnDenial::Terminate,
         model: None,

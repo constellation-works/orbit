@@ -3,7 +3,7 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-10-24
+last_updated: 2026-10-26
 last_validated: 2026-10-19
 status: Draft
 feature: activity-job
@@ -62,6 +62,12 @@ The common `agent_loop` fields are:
   regression-risk marks; the engine adds them to the envelope's task snapshot
   as `regression_risk` and appends this text only when a path is marked — see
   [`[workflow.regression_risk]`](../../CONFIG.md#workflowregression_risk--regression-prone-context-files-in-prompts))
+- optional `explore_brief_instruction` (declaring it asks the host, through
+  `RuntimeHost::explore_brief_for_activity`, for the task's explore brief and
+  records the outcome as `activity.explore_brief_applied`; the engine adds a
+  delivered brief to the task snapshot as `explore_brief` and appends this
+  text only then — see
+  [`[workflow.explore_brief]`](../../CONFIG.md#workflowexplore_brief--explore-briefs-from-the-task-pilot))
 
 A former `Groundhog(GroundhogSpec)` variant (a sibling activity kind from [T20260420-0510-2]) was removed as unused in [ORB-10332]; activity specs are now only `agent_loop` and `deterministic`.
 

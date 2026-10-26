@@ -593,6 +593,24 @@ spec:
     Delegate only reading, never edits, validation, commits or dispatch. An
     explorer's answer is a lead: read what you rely on yourself before you
     change or cite it.
+  explore_brief_instruction: |
+    Explore brief
+
+    `task.explore_brief` is a starting map of this change from a cheaper
+    read-only pass at `inspection_revision`: the targets to change, the
+    call path, the pattern to copy, the tests that cover them, gotchas and
+    what is out of scope. Start from its `change` and `pattern` targets
+    instead of searching the tree.
+    - It is not authority. The task text, its criteria and the code at your
+      base win. Read each file before you edit or cite it.
+    - A wrong brief anchors. When an entry does not match the code, discard
+      it; never bend the change to fit it.
+    - `status` is `fresh` or `drifted`. A drifted brief lists, under
+      `drift.files`, covered files that changed since `inspection_revision`
+      with their added and deleted line counts. Treat entries on those files
+      as unverified until you have run `drift.diff_command` and read it.
+    - In the execution summary, list the brief entries that turned out wrong
+      or missing.
   tool_disallow_list:
     - orbit.auto_task.add
     - orbit.auto_task.mint
