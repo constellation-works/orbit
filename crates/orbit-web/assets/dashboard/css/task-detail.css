@@ -243,6 +243,9 @@
    bottom edge is its 1px border line. */
 .detail-band {
   display: grid;
+  /* Keep intrinsic child widths, such as the delivery-stage strip, from
+     widening the band beyond the pane's available width. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   margin: -16px -20px 0;
   padding: 16px 20px 0;
@@ -613,6 +616,7 @@
   padding: 0;
   display: flex;
   gap: 3px;
+  min-width: 0;
 }
 .task-stage-step { flex: 1 1 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .task-stage-step.current { flex-grow: 2.6; }
