@@ -1,0 +1,24 @@
+Conclude an experiment with the chosen arm, or none
+
+Usage: orbit experiment conclude [OPTIONS] --reason <REASON> <ID>
+
+Arguments:
+  <ID>
+          The experiment's id or name
+
+Options:
+      --arm <ARM>
+          The arm chosen as the winner (omit for none)
+
+      --reason <REASON>
+          Why, recorded on the event
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

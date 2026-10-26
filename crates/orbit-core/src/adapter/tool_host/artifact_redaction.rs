@@ -6,6 +6,7 @@ use orbit_common::governance::auto_task::AutoTaskVerb;
 use orbit_common::governance::codebase::CodebaseVerb;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::drain::DrainVerb;
+use orbit_common::governance::experiment::ExperimentVerb;
 use orbit_common::governance::friction::FrictionVerb;
 use orbit_common::governance::operation::{OperationVerb, ParamSpec, ParamType, Redaction};
 use orbit_common::governance::orchestrator::OrchestratorVerb;
@@ -347,6 +348,23 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         },
         OrbitBuiltinAction::Codebase(verb) => match verb {
             CodebaseVerb::Analytics | CodebaseVerb::Show | CodebaseVerb::Related => ActionPolicy {
+                declared: verb.spec().params,
+                ..NO_REDACTION
+            },
+        },
+        // Free-text hypothesis and reason redact per their declared class.
+        OrbitBuiltinAction::Experiment(verb) => match verb {
+            ExperimentVerb::Create
+            | ExperimentVerb::Update
+            | ExperimentVerb::Clone
+            | ExperimentVerb::Start
+            | ExperimentVerb::Pause
+            | ExperimentVerb::Resume
+            | ExperimentVerb::Reweight
+            | ExperimentVerb::Conclude
+            | ExperimentVerb::Abandon
+            | ExperimentVerb::Show
+            | ExperimentVerb::List => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -863,6 +881,7 @@ fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
         OrbitBuiltinAction::Task(verb) => verb.tool_name(),
         OrbitBuiltinAction::Decision(verb) => verb.tool_name(),
+        OrbitBuiltinAction::Experiment(verb) => verb.tool_name(),
         OrbitBuiltinAction::Friction(verb) => verb.tool_name(),
         OrbitBuiltinAction::AutoTask(verb) => verb.tool_name(),
         OrbitBuiltinAction::Drain(verb) => match verb {

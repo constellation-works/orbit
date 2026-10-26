@@ -1,0 +1,24 @@
+Copy an experiment's definition into a new draft
+
+Usage: orbit experiment clone [OPTIONS] --name <NAME> <ID>
+
+Arguments:
+  <ID>
+          The experiment's id or name
+
+Options:
+      --name <NAME>
+          The new draft's name
+
+      --reason <REASON>
+          Why, recorded on the event
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

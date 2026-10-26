@@ -2162,6 +2162,23 @@ hard = { human = "allow", agent = "never" }
 max_priority = { human = "high", agent = "normal" }
 ```
 
+### `[experiments]` — experiments over agent treatments
+
+An experiment compares a control arm against one or more treatment arms, each an overlay of instructions, skills, tools, crew or allowlisted config ([scope](design/experiments/1_scope.md)). An operator defines it with `orbit experiment create`, edits it only while it is a draft, and moves it through `start`, `pause`, `resume`, `reweight`, `conclude` or `abandon`; each change is an event with its actor, time and reason, listed by `orbit experiment show`. Agents may show and list experiments but not change them.
+
+| Key | Default | What it does |
+|---|---|---|
+| `experiments.enabled` | `false` | Allow experiments to start in this workspace. While false, `start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
+| `experiments.max_running` | `3` | **Advanced.** Experiments that may run at once in this workspace (`1`–`20`). `start` and `resume` are refused while that many are running; a paused experiment does not count. |
+| `experiments.config_keys` | `[]` | **Advanced.** Config keys an arm's `config` overlay may set. `start` is refused while any arm sets a key not on this list, so the default allows no config overlay. |
+
+```toml
+[experiments]
+enabled = true
+max_running = 2
+config_keys = ["workflow.explore.enabled"]
+```
+
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 
 Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`); enable state and grants are host-local. A checkout keeps only its gitignored pin file, and `orbit plugin sync` installs what it names. Linked Git worktrees share the main checkout's `.orbit/plugins.yaml`: runtime loading, `orbit plugin sync` and `orbit plugin doctor` read that file and ignore a worktree-local one. Operator guide (installs, grants, source builds, workspace toggles): the orbit-setup [plugins reference](../crates/orbit-core/assets/skills/orbit-setup/references/plugins.md). Manifest spec: [plugin standard](design/plugins/1_scope.md).

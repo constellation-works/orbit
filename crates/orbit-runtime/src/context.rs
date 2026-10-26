@@ -490,6 +490,8 @@ pub struct OrbitRuntimeSettings {
     /// `lease.*`: whether path leases are accepted and the per-class guards
     /// a request is held to.
     lease_policy: crate::task::locks::LeasePolicy,
+    /// `experiments.*`: the workspace's experiment policy.
+    experiments: orbit_config::ExperimentSettings,
     /// Admitted `machine.labels`: the capability labels this host carries,
     /// beside its OS as an implicit label.
     machine_labels: Vec<String>,
@@ -547,6 +549,7 @@ impl OrbitRuntimeSettings {
         crew_performance_window_days: u32,
         decision_channel_enabled: bool,
         lease_policy: crate::task::locks::LeasePolicy,
+        experiments: orbit_config::ExperimentSettings,
         machine_labels: Vec<String>,
     ) -> Self {
         Self {
@@ -597,6 +600,7 @@ impl OrbitRuntimeSettings {
             crew_performance_window_days,
             decision_channel_enabled,
             lease_policy,
+            experiments,
             machine_labels,
         }
     }
@@ -615,6 +619,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn lease_policy(&self) -> &crate::task::locks::LeasePolicy {
         &self.lease_policy
+    }
+
+    pub(crate) fn experiments(&self) -> &orbit_config::ExperimentSettings {
+        &self.experiments
     }
 
     pub(crate) fn crew_performance_types(&self) -> &[orbit_config::CrewPerformanceType] {

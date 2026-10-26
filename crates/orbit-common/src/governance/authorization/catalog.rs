@@ -587,6 +587,61 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "the decision digest raises approval requests for a human to answer, so only the operator — or the registered channel's own plugin callback, which the handler binds to the registration — may call it; an agent session never raises requests for a human",
     },
+    // Experiments: every write is the operator's; agents may show and list.
+    GovernedOperation {
+        id: "orbit.experiment.create",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "defining an experiment decides which treatments tasks may be randomized into, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.update",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "editing an experiment's definition changes the treatments tasks may be randomized into, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.clone",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "cloning an experiment defines a new set of treatments tasks may be randomized into, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.start",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "starting an experiment begins randomizing tasks into its treatments, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.pause",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "pausing an experiment stops it enrolling tasks, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.resume",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "resuming an experiment restarts randomizing tasks into its treatments, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.reweight",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "reweighting an experiment changes how tasks are randomized and opens a new segment, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.conclude",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "concluding an experiment records the operator's decision on its treatments, so only an operator may do it",
+    },
+    GovernedOperation {
+        id: "orbit.experiment.abandon",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "abandoning an experiment ends it without a decision, so only an operator may do it",
+    },
     GovernedOperation {
         id: "decision answer",
         surface: OperationSurface::CliCommand,

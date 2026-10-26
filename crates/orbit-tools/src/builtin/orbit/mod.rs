@@ -6,6 +6,7 @@ pub mod command;
 mod decision;
 mod domain_control;
 pub mod drain;
+mod experiment;
 pub mod operation;
 mod orchestrator;
 pub mod pipeline;

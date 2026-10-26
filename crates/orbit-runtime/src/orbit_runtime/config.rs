@@ -286,6 +286,12 @@ impl RuntimeKernel {
     pub fn decision_channel_enabled(&self) -> bool {
         self.context.settings().decision_channel_enabled()
     }
+
+    /// `experiments.*` as admitted: whether experiments may start, how many
+    /// may run at once, and the config keys an arm may override.
+    pub fn experiment_settings(&self) -> &orbit_config::ExperimentSettings {
+        self.context.settings().experiments()
+    }
 }
 
 /// The shared wording for pass-listed variables missing from the launching

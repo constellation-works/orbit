@@ -43,6 +43,18 @@ pub struct RegressionRiskSettings {
     pub max_files: u32,
 }
 
+/// Admitted `experiments.*`: the workspace's experiment policy. Experiment
+/// definitions are store records, not configuration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExperimentSettings {
+    /// `experiments.enabled` (default `false`).
+    pub enabled: bool,
+    /// `experiments.max_running` (default 3).
+    pub max_running: u32,
+    /// `experiments.config_keys` (default empty).
+    pub config_keys: Vec<String>,
+}
+
 /// Admitted `workflow.explore.*`: whether implement and review-repair runs
 /// may delegate read-only exploration through `orbit.agent.invoke`, and the
 /// budgets each run's delegation is held to.
@@ -372,6 +384,15 @@ impl ConfigSnapshot {
         MidRunSteeringSettings {
             enabled: self.workflow_mid_run_steering_enabled,
             max_rounds: self.workflow_mid_run_steering_max_rounds,
+        }
+    }
+
+    /// The admitted `experiments.*` settings.
+    pub fn experiments(&self) -> ExperimentSettings {
+        ExperimentSettings {
+            enabled: self.experiments_enabled,
+            max_running: self.experiments_max_running,
+            config_keys: self.experiments_config_keys.clone(),
         }
     }
 

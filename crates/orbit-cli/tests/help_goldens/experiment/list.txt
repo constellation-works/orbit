@@ -1,0 +1,19 @@
+List the workspace's experiments
+
+Usage: orbit experiment list [OPTIONS]
+
+Options:
+      --status <STATUS>
+          Only experiments in this status
+          
+          [possible values: draft, running, paused, concluded, abandoned]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

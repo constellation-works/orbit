@@ -142,10 +142,10 @@ pub use provider_limit::{
 };
 pub use registry::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigKeyDescriptor, ConfigKeyTier,
-    ConfigSection, ConfigSnapshot, ExploreSettings, MachineSettings, MidRunSteeringSettings,
-    RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings, admit_config_key,
-    admit_settable_config_key, config_key_options, describe as describe_config_key,
-    immutable_key_note, is_global_only_key,
+    ConfigSection, ConfigSnapshot, ExperimentSettings, ExploreSettings, MachineSettings,
+    MidRunSteeringSettings, RegressionRiskSettings, ResourceThrottleSettings,
+    WorkerContainmentSettings, admit_config_key, admit_settable_config_key, config_key_options,
+    describe as describe_config_key, immutable_key_note, is_global_only_key,
 };
 pub use resolved::{
     CodexExecutionPolicy, CompatibilityConfigKey, CompatibilityConfigKeyDisposition,

@@ -25,6 +25,7 @@ pub mod contracts;
 pub mod distributed;
 pub(crate) mod executor;
 pub(crate) mod executor_host_os;
+pub mod experiment;
 pub mod gc;
 pub mod health;
 pub(crate) mod host_labels;

@@ -7,6 +7,7 @@ pub mod codebase;
 pub mod config;
 pub mod decision;
 pub mod doctor;
+pub mod experiment;
 pub mod friction;
 pub mod gc;
 pub mod host;
@@ -98,6 +99,7 @@ Knowledge:
 Operate:
   run         Run workflows, drain the backlog, and inspect runs
   job         Define, list, and manage job workflows
+  experiment  Define, run and conclude experiments over agent treatments
   tool        Manage and run Orbit tools, including external MCP plugins
   gc          Inspect and explicitly reap Orbit-managed garbage
 
@@ -163,6 +165,7 @@ pub enum Commands {
     // ── Operate ──
     Run(run::RunCommand),
     Job(job::JobCommand),
+    Experiment(experiment::ExperimentCommand),
     Tool(tool::ToolCommand),
     Gc(gc::GcCommand),
 

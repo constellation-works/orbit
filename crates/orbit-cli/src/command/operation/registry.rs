@@ -446,6 +446,10 @@ impl Commands {
                 CommandOperation::new(RuntimeNeed::Required, None, None, runtime_dispatch!(Audit))
                     .governed_when(prunes, "audit", "prune")
             }
+            // Experiments are registry-driven like friction.
+            Commands::Experiment(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Experiment))
+            }
             // Codebase analytics is registry-driven like friction.
             Commands::Codebase(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Codebase))

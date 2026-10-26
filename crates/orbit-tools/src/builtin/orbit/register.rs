@@ -3,6 +3,7 @@ use orbit_common::governance::auto_task::AUTO_TASK;
 use orbit_common::governance::codebase::CODEBASE;
 use orbit_common::governance::decision::DECISION;
 use orbit_common::governance::drain::DRAIN;
+use orbit_common::governance::experiment::EXPERIMENT;
 use orbit_common::governance::friction::FRICTION;
 use orbit_common::governance::orchestrator::ORCHESTRATOR;
 use orbit_common::governance::task::TASK;
@@ -57,6 +58,9 @@ pub fn register(registry: &mut ToolRegistry) {
     // Decision requests: list/show are read-only tools; answer registers
     // inactive (operator CLI and dashboard only).
     operation::register_noun(registry, &DECISION);
+    // Experiments: show/list are reads; every write is a governed,
+    // operator-only operation.
+    operation::register_noun(registry, &EXPERIMENT);
     // Read-only agent scorecards, the dashboard Agents view's payloads.
     operation::register_noun(registry, &AGENTS);
     // The deprecated orchestrator scorecard aliases of the agents tools.
