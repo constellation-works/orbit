@@ -298,6 +298,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
     let handover_target = Arc::clone(&handover);
     let host_tunnels = Arc::clone(state.host_tunnels());
     let close_host_streams = Arc::clone(&host_tunnels);
+    let config_root = state.global_root().to_path_buf();
     let app = build_app(state)?;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -320,9 +321,19 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
             println!("Dashboard listening on {url}");
         }
 
-        if !no_open {
-            open_browser(&url);
-        }
+        let browser_sessions = crate::browser_session::start_browser_sessions(&config_root, bound)?;
+        let app = if let Some((sessions, session_url)) = browser_sessions {
+            crate::browser_session::print_interactive_session_url(&session_url);
+            if !no_open {
+                crate::browser_session::open_private_browser_url(&session_url)?;
+            }
+            app.layer(axum::Extension(sessions))
+        } else {
+            if !no_open {
+                open_browser(&url);
+            }
+            app
+        };
 
         #[cfg(unix)]
         let intake_task = match intake_socket {

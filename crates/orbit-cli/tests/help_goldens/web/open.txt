@@ -1,0 +1,17 @@
+Open a running dashboard with a fresh browser-session URL
+
+Usage: orbit web open [OPTIONS]
+
+Options:
+      --no-open
+          Print the private URL without opening a browser. Treat it as a credential
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

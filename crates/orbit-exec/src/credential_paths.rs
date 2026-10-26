@@ -29,12 +29,17 @@
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
-/// HOME-relative path of the per-user keychain directory. Shared by the default
-/// deny and the macOS provider re-allow so the two clauses cannot drift.
+/// HOME-relative private browser credential tree, including staged writes.
+pub(crate) const WEB_SESSION_DIRECTORY: &str = ".orbit/run";
+
+/// HOME-relative keychain tree shared by the deny and provider re-allow.
 pub(crate) const USER_KEYCHAINS_SUBPATH: &str = "Library/Keychains";
 
 /// HOME-relative credential trees, each denied as a whole subtree.
 const HOME_CREDENTIAL_SUBPATHS: &[&str] = &[
+    // Mask the directory too: atomic replacements and browser launch files
+    // carry credentials beside web-session.secret.
+    WEB_SESSION_DIRECTORY,
     ".ssh",
     ".aws",
     ".config/gh",

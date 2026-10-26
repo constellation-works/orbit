@@ -36,6 +36,7 @@ pub(crate) mod routines;
 mod runs;
 mod schedule_edits;
 mod search;
+pub(crate) mod session;
 mod task_auto_fix;
 mod task_create;
 mod task_pilot;

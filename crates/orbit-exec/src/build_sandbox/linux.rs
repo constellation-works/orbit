@@ -74,7 +74,10 @@ pub fn compile_linux_build_argv(
         }
     }
     for (path, file) in super::credential_denies(spec) {
-        if !path.exists() {
+        // Unlike existing credential files, future browser keys must also
+        // stay hidden. Bubblewrap creates this empty mount in the build
+        // namespace, or refuses startup if it cannot apply the mask.
+        if !path.exists() && !path.ends_with(crate::credential_paths::WEB_SESSION_DIRECTORY) {
             continue;
         }
         if file {

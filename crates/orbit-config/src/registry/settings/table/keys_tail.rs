@@ -6,6 +6,18 @@ macro_rules! with_tail_keys {
     ($($head:tt)*) => {
         define_config_settings! {
             $($head)*
+    machine_web_terminal_enabled: bool => bool {
+        key: "machine.web_terminal.enabled", value_type: "bool",
+        description: "Enable private browser-session credentials for this dashboard host.",
+        section: ConfigSection::Machine, order: 80,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    machine_web_session_ttl: u32 => u32 {
+        key: "machine.web_session.ttl", value_type: "integer",
+        description: "Browser-session lifetime in seconds, applied when the dashboard starts.",
+        section: ConfigSection::Machine, order: 81,
+        resolve: |raw: Option<u32>| resolve_bounded_range(raw, 43_200, 1, 604_800, "machine.web_session.ttl"),
+    },
     decision_channel_enabled: bool => bool {
         key: "decision_channel.enabled", value_type: "bool",
         description: "Raise decision requests for work held on a human decision.",

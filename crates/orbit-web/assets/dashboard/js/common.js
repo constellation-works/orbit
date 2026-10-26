@@ -1,3 +1,22 @@
+// Strip credentials before any page module starts requests or updates history.
+// Exchange only against the serving origin, never the selected remote host.
+const sessionFragment = window.location.hash || "";
+if (sessionFragment.startsWith("#orbit-session=")) {
+  window.history.replaceState(window.history.state, "", window.location.pathname + window.location.search);
+  try {
+    const response = await fetch("/api/session", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { "Content-Type": "text/plain" },
+      body: sessionFragment.slice("#orbit-session=".length),
+    });
+    if (!response.ok) console.warn("Browser session unavailable; open a fresh dashboard URL.");
+  } catch {
+    console.warn("Browser session unavailable; open a fresh dashboard URL.");
+  }
+}
+
 const params = new URLSearchParams(window.location.search);
 
 // ORB-00030: the dashboard can serve multiple workspaces. `currentWorkspace`
