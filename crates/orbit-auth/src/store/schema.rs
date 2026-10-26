@@ -38,6 +38,27 @@ const MIGRATIONS: &[&str] = &[
          reason     TEXT,
          actor      TEXT
      );",
+    // v2: listener refusals, with the remote address and route of the request.
+    "CREATE TABLE lease_token_audit_v2 (
+         audit_id       INTEGER PRIMARY KEY AUTOINCREMENT,
+         at             TEXT NOT NULL,
+         event          TEXT NOT NULL
+                        CHECK (event IN ('mint', 'revoke', 'verify_refused', 'listener_refused')),
+         token_id       TEXT,
+         principal      TEXT,
+         workspace      TEXT,
+         verb           TEXT,
+         reason         TEXT,
+         actor          TEXT,
+         remote_address TEXT,
+         route          TEXT
+     );
+     INSERT INTO lease_token_audit_v2
+         (audit_id, at, event, token_id, principal, workspace, verb, reason, actor)
+         SELECT audit_id, at, event, token_id, principal, workspace, verb, reason, actor
+         FROM lease_token_audit;
+     DROP TABLE lease_token_audit;
+     ALTER TABLE lease_token_audit_v2 RENAME TO lease_token_audit;",
 ];
 
 /// Bring the store to the newest schema this binary knows.

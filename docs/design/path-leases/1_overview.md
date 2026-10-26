@@ -5,11 +5,11 @@ last_updated: 2026-10-26
 last_validated: 2026-10-26
 status: Draft
 stage: building
-next: "Land the separate lease listener and rate limiting (ORB-18410, ORB-18412)"
+next: "Land native TLS and the listener's full rate limits (ORB-18413, ORB-18421)"
 feature: path-leases
 doc_role: overview
 type: design
-summary: "Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials and the authenticated Unix intake socket. The separate listener and rate limiting remain proposed."
+summary: "Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration, orbit-auth credentials, the authenticated Unix intake socket and the token-authenticated lease listener. Native TLS and the full listener limits remain proposed."
 tags: [path-leases, locks, admission, reservations, notifications]
 paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
@@ -21,7 +21,9 @@ related_artifacts: []
 > **Status: Partially implemented.** Lease storage and request, renew, release, show, list and
 > check operations are shipped through MCP and CLI, with a loopback REST surface and Orbit Web
 > notices/SSE. Lease-token administration, the `orbit-auth` credential crate and the authenticated
-> Unix intake socket are also implemented. The separate listener and rate limiting remain proposed.
+> Unix intake socket are also implemented, as is the lease listener (`orbit lease listen`, run as the
+> listener user) with its failed-authentication limit. Native TLS and the full listener limits
+> remain proposed.
 
 Orbit already keeps parallel drain tasks from editing the same files: an in-progress or review
 task holds a lock on its declared footprint, and admission defers a candidate that overlaps it.
@@ -95,8 +97,8 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 | Hard/advisory modes, lease lifetime and notices | implemented, [2_design.md §2–§6](./2_design.md#2-the-lease-record) | — |
 | Lease queue, expansion and `--no-wait` behavior | proposed, [2_design.md §6](./2_design.md#6-surfaces) | — |
 | MCP, CLI, loopback REST and Orbit Web notices/SSE | request, renew, release, show, list and check implemented; Orbit Web also serves notices/SSE, [2_design.md §6](./2_design.md#6-surfaces) | — |
-| Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`) and the intake socket implemented; listener and rate-limit proposed, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412 |
-| Listener user and intake socket | intake socket implemented ([crates/orbit-web/src/lease_intake.rs](../../../crates/orbit-web/src/lease_intake.rs)); listener user proposed, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
+| Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`), the intake socket and the listener (`orbit lease listen`, [crates/orbit-web/src/lease_listener.rs](../../../crates/orbit-web/src/lease_listener.rs)) implemented; native TLS and the full limits proposed, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412, ORB-18413, ORB-18421 |
+| Listener user and intake socket | intake socket and the listener's startup checks implemented ([crates/orbit-web/src/lease_intake.rs](../../../crates/orbit-web/src/lease_intake.rs)); creating the user is the host's, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
 | Credential code (`orbit-auth`) | implemented, [2_design.md §7.4](./2_design.md#74-the-orbit-auth-crate) | ORB-18410, ORB-18421 |
 
 Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:

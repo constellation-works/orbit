@@ -1,0 +1,16 @@
+Serve the lease routes to token holders (run as the listener user)
+
+Serves /healthz and the lease routes under /api, and nothing else, to holders of lease tokens, and forwards each authenticated operation to Orbit Web over its lease intake socket. Settings come from lease.listener.* in the running user's ~/.orbit/config.toml. Run it as the listener user, normally from its service unit. It refuses to start as root, as the user that owns the intake socket, when the executable or the Orbit home can be changed by another user, or when lease.listener.bind is unset, listens on every interface without a proxy, or sets lease.listener.behind_proxy without lease.listener.trusted_proxy.
+
+Usage: orbit lease listen [OPTIONS]
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
