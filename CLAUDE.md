@@ -52,6 +52,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 - Admitted unit tests live in a sibling `tests/` dir mirroring source filenames ([`test_layout.md`](docs/design-patterns/test_layout.md)); crate-root `tests/` is integration only. Fixtures that mutate Orbit state run in an isolated child process ([DEVELOPMENT.md](docs/DEVELOPMENT.md#safe-mutable-cli-fixtures)).
 - Do manual QA through the real CLI, MCP, API or UI, including failure paths, when it can reveal defects, and record steps, expected and actual results and evidence. Docs-only, mechanical or already covered changes may skip it with a reason.
 - A diff that changes something users see (dashboard, web pages, docs site, desktop UI) attaches screenshots of each changed view with `orbit.task.artifact.put`, at paths like `screenshots/<view>-<theme>-<width>.png`, captured under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`). Cover every supported theme (the dashboard is dark-only), 375px width for responsive layouts, and a base-revision before shot when practical. Stay under the 1 MiB artifact limit (viewport captures, or JPEG/WebP). List the paths at handoff; if the host has no browser kit or the view can't render, say so. Reviewers treat unexplained missing screenshots as missing evidence.
+- Dashboard implementers start from the [dashboard map](docs/agents/dashboard-map.md).
 
 ## Local Rust CodeQL
 
