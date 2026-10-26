@@ -2,7 +2,7 @@
 title: Agent Scorecards — Overview
 owner: claude
 last_updated: 2026-10-19
-last_validated: 2026-10-23
+last_validated: 2026-10-26
 status: Draft
 stage: shipped
 next: "—"
