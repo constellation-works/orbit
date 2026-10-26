@@ -2,9 +2,9 @@ use serde::Serialize;
 use thiserror::Error;
 
 use super::{
-    ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DependencyNotDelivered, FrictionNotLocal,
-    HostRegistryCode, NotFoundKind, PrivateVcsFailure, RecoverableVcsConflict, RemoteToolCode,
-    SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    ArtifactOrigin, CandidateAbsorbed, ClaimRefusalKind, DecisionRefusalCode,
+    DependencyNotDelivered, FrictionNotLocal, HostRegistryCode, NotFoundKind, PrivateVcsFailure,
+    RecoverableVcsConflict, RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -51,6 +51,12 @@ pub enum OrbitError {
     #[error("{code}: {message}")]
     HostRegistry {
         code: HostRegistryCode,
+        message: String,
+    },
+    /// A decision refusal with a stable code, independent of its human explanation.
+    #[error("{code}: {message}")]
+    DecisionRefused {
+        code: DecisionRefusalCode,
         message: String,
     },
     /// The owner's pull request contract differs from this executor's build.

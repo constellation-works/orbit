@@ -1,11 +1,29 @@
 use std::path::Path;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, FrictionNotLocal, HostRegistryCode, NotFoundKind, OrbitError,
-    PrivateVcsFailure, RemoteToolCode, SqliteContention, StorageLayer, WorkspaceClaimHeld,
+    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, FrictionNotLocal, HostRegistryCode,
+    NotFoundKind, OrbitError, PrivateVcsFailure, RemoteToolCode, SqliteContention, StorageLayer,
+    WorkspaceClaimHeld,
 };
 
 impl OrbitError {
+    /// Construct a decision refusal without encoding its classification in prose.
+    pub fn decision_refused(code: DecisionRefusalCode, message: impl Into<String>) -> Self {
+        Self::DecisionRefused {
+            code,
+            message: message.into(),
+        }
+    }
+
+    /// Whether this is a policy denial, including a typed decision-channel refusal.
+    pub fn is_policy_denial(&self) -> bool {
+        match self {
+            Self::PolicyDenied(_) => true,
+            Self::DecisionRefused { code, .. } => code.is_policy_denial(),
+            _ => false,
+        }
+    }
+
     pub fn host_registry(code: HostRegistryCode, message: impl Into<String>) -> Self {
         Self::HostRegistry {
             code,

@@ -95,6 +95,7 @@ fn error_code(error: &OrbitError) -> &str {
         // surfaces the same stable code MCP does [ORB-11012].
         OrbitError::CapabilityRefused(_) => const { RemoteToolCode::CapabilityRefused.as_str() },
         OrbitError::ProtocolSkew(_) => const { RemoteToolCode::ProtocolSkew.as_str() },
+        OrbitError::DecisionRefused { code, .. } => code.as_str(),
         OrbitError::HostRegistry { code, .. } => code.as_str(),
         OrbitError::UnknownSelector(_) => "unknown_selector",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",

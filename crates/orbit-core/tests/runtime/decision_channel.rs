@@ -1690,6 +1690,11 @@ fn core_dkim_verification_applies_a_signed_message_and_refuses_forgeries() {
     let refused = fx
         .submit_dkim(&request, &token, Some(signed.clone()), &FailingResolver)
         .expect_err("a DNS failure is refused");
+    assert!(
+        matches!(&refused, orbit_common::OrbitError::DecisionRefused { code, .. }
+        if code.as_str() == "dkim_verification_unavailable" && code.is_retryable()),
+        "{refused}"
+    );
     let refused = refused.to_string();
     assert!(
         refused.contains("dkim_verification_unavailable"),

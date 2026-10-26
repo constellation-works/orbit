@@ -718,6 +718,11 @@ where
             1,
             Some(redact_sensitive_env_text(msg)),
         ),
+        Err(error @ OrbitError::DecisionRefused { code, .. }) if code.is_policy_denial() => (
+            AuditEventStatus::Denied,
+            1,
+            Some(redact_sensitive_env_text(&error.to_string())),
+        ),
         // A plugin switched off in this workspace is an operator decision,
         // refused before the tool ran, not a failed call.
         Err(err @ OrbitError::PluginDisabledInWorkspace { .. }) => (

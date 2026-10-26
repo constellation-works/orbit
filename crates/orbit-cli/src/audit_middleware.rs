@@ -71,6 +71,9 @@ impl<'a> AuditGuard<'a> {
             Err(OrbitError::PolicyDenied(msg) | OrbitError::CapabilityDenied(msg)) => {
                 self.mark_denied(msg);
             }
+            Err(error @ OrbitError::DecisionRefused { code, .. }) if code.is_policy_denial() => {
+                self.mark_denied(&error.to_string());
+            }
             Err(err) => self.mark_failure(err),
         }
     }

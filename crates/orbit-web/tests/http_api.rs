@@ -34,6 +34,8 @@ mod compression;
 mod crews;
 #[path = "http_api/dashboard_assets.rs"]
 mod dashboard_assets;
+#[path = "http_api/decisions.rs"]
+mod decisions;
 #[path = "http_api/diagnostics_errors.rs"]
 mod diagnostics_errors;
 #[path = "http_api/distributed_contracts.rs"]
