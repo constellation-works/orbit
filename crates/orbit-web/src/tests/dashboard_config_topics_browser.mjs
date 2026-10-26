@@ -13,6 +13,10 @@
 // (e) a number row's CLI preview passes a numeric TOML literal matching the
 //     value Save PUTs and admitted by `orbit config set`, including a whole
 //     number beyond signed 64-bit (a bare integer token there is out of range).
+// (f) a workspace with no config policy file (missing, or holding only plugin
+//     toggles) offers "Seed from global" and "Start empty" in place of Save,
+//     each PUT carrying its init value; Close or a refused write leaves the
+//     file uncreated, and global or existing-file writes keep a plain Save.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -120,6 +124,10 @@ try {
 
   const capturedPuts = [];
   let holdPut = null;
+  // Case (f): the workspace policy file the PUT mock models, like the config
+  // store: 'missing', 'plugin-only' or 'policy'; null leaves the layers out.
+  let workspacePolicy = null;
+  let refuseNextPut = null;
   const rawFiles = {
     workspace: { text: '# workspace marker\n[workflow]\nbase_branch = "workspace"\n' },
     global: { text: '# global marker\n[machine]\nname = "global"\n' },
@@ -196,6 +204,17 @@ try {
     ],
   };
 
+  const setWorkspacePolicy = (state) => {
+    workspacePolicy = state;
+    effectiveConfig.workspace_file_exists = state !== 'missing';
+    effectiveConfig.layers = {
+      built_in: { label: 'built-in' },
+      global: { path: '~/.orbit/config.toml', exists: true },
+      workspace: { path: '/srv/orbit/.orbit/config.toml', exists: state !== 'missing' },
+      execution_not_inherited: state === 'policy',
+    };
+  };
+
   await page.route('**/api/**', async (route) => {
     const url = new URL(route.request().url());
     const method = route.request().method();
@@ -205,6 +224,18 @@ try {
       const body = route.request().postDataJSON();
       capturedPuts.push({ key, body });
       if (holdPut) { const hold = holdPut; holdPut = null; hold.onArrive(); await hold.wait; }
+      if (refuseNextPut) {
+        const error = refuseNextPut; refuseNextPut = null;
+        await route.fulfill({ status: 400, json: { error } });
+        return;
+      }
+      if (workspacePolicy && workspacePolicy !== 'policy' && body.scope === 'workspace') {
+        if (!body.init) {
+          await route.fulfill({ status: 400, json: { error: 'no workspace config exists yet; rerun with --seed-from-global or --fresh' } });
+          return;
+        }
+        setWorkspacePolicy('policy');
+      }
       await route.fulfill({ status: 200, json: { ok: true, key, value: body.value } });
       return;
     }
@@ -462,6 +493,75 @@ try {
   await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
 
   // -------------------------------------------------------------------------
+  // Case (f): a first workspace write asks how to create the policy file
+  // -------------------------------------------------------------------------
+  const initButtons = () => drawer.locator('.drawer-actions button.config-action:not(.ghost)').evaluateAll(
+    (buttons) => buttons.map((b) => ({ text: b.textContent, init: b.dataset.init || null })));
+  const choices = [{ text: 'Seed from global', init: 'seed-from-global' }, { text: 'Start empty', init: 'fresh' }];
+  const reopenIntDrawer = async () => {
+    await page.goto(`http://127.0.0.1:${port}/#config/workflow`);
+    await intRow.waitFor({ state: 'visible' });
+    await intRow.locator('button.config-action:has-text("Edit")').click();
+    await drawer.waitFor({ state: 'visible' });
+  };
+  const savedFrom = async (button) => {
+    const before = capturedPuts.length;
+    await drawer.locator(`button.config-action:has-text("${button}")`).click();
+    await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+    assert.equal(capturedPuts.length, before + 1, `${button} sends one PUT`);
+    return capturedPuts.at(-1);
+  };
+
+  setWorkspacePolicy('missing');
+  await reopenIntDrawer();
+  assert.deepEqual(await initButtons(), choices, 'a missing workspace file offers only the explicit init choices');
+  assert.match(await drawer.locator('.drawer-init-note').textContent(), /no config policy file yet.*--seed-from-global.*--fresh/);
+  await drawer.screenshot({ path: path.join(evidence, 'config-topics-init-choice-dark-1440.png') });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await drawer.screenshot({ path: path.join(evidence, 'config-topics-init-choice-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  let putsBefore = capturedPuts.length;
+  await drawer.locator('button.config-action:has-text("Close")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  assert.equal(capturedPuts.length, putsBefore, 'Close sends no write');
+  assert.equal(workspacePolicy, 'missing', 'Close creates no workspace file');
+
+  // A refused write keeps the drawer, its error and the choices; no file.
+  await reopenIntDrawer();
+  refuseNextPut = 'config writes are refused on this host';
+  await drawer.locator('button.config-action:has-text("Start empty")').click();
+  await drawer.locator('.config-warning').waitFor({ state: 'visible' });
+  assert.equal(await drawer.locator('.config-warning').textContent(), 'config writes are refused on this host');
+  assert.deepEqual(capturedPuts.at(-1).body, { value: 3, scope: 'workspace', init: 'fresh' });
+  assert.deepEqual(await initButtons(), choices, 'a refused write keeps the init choices');
+  assert.equal(workspacePolicy, 'missing', 'a refused write creates no workspace file');
+
+  // The global scope needs no workspace file: a plain Save without init.
+  await drawer.locator('input[name="drawer-scope"][value="global"]').check();
+  assert.deepEqual(await initButtons(), [{ text: 'Save', init: null }]);
+  assert.deepEqual((await savedFrom('Save')).body, { value: 3, scope: 'global' });
+  assert.equal(workspacePolicy, 'missing', 'a global write creates no workspace file');
+
+  await reopenIntDrawer();
+  assert.deepEqual((await savedFrom('Seed from global')).body, { value: 3, scope: 'workspace', init: 'seed-from-global' });
+  assert.equal(workspacePolicy, 'policy', 'Seed from global creates the workspace file');
+
+  // Once the file sets policy, Save writes into it without an init value.
+  await reopenIntDrawer();
+  assert.deepEqual(await initButtons(), [{ text: 'Save', init: null }], 'an existing policy file keeps a plain Save');
+  assert.deepEqual((await savedFrom('Save')).body, { value: 3, scope: 'workspace' });
+
+  // A file holding only plugin toggles is no policy file yet.
+  setWorkspacePolicy('plugin-only');
+  await reopenIntDrawer();
+  assert.deepEqual(await initButtons(), choices, 'a plugin-only workspace file offers the init choices');
+  assert.deepEqual((await savedFrom('Start empty')).body, { value: 3, scope: 'workspace', init: 'fresh' });
+  assert.equal(workspacePolicy, 'policy', 'Start empty creates the workspace policy');
+  setWorkspacePolicy(null);
+  delete effectiveConfig.workspace_file_exists;
+  delete effectiveConfig.layers;
+
+  // -------------------------------------------------------------------------
   // Case (d): Raw TOML block follows the latest Show click and names its file
   // -------------------------------------------------------------------------
   await page.goto(`http://127.0.0.1:${port}/#config/all-keys`);
@@ -615,6 +715,9 @@ try {
       'cleared-or-invalid-number-refused-before-request',
       'cli-admits-whole-number-literal-for-f64-row',
       'cli-applies-beyond-i64-number-as-saved',
+      'missing-or-plugin-only-workspace-file-offers-explicit-init-choices',
+      'init-choice-close-or-refusal-creates-no-workspace-file',
+      'global-and-existing-policy-writes-keep-plain-save',
       'git-init-scrubs-inherited-repository-authority',
     ],
   }, null, 2));

@@ -143,6 +143,11 @@ function claimCeiling(run, input, capacity) {
   return Number.isFinite(reported) && reported >= 1 ? Math.trunc(reported) : null;
 }
 
+// Past this many claim cells the budget draws one proportional segment per
+// kind instead: a recorded ceiling can be any u32, and one element per cell
+// would freeze the page long before it was readable.
+const CLAIM_BUDGET_CELLS_MAX = 24;
+
 // `held − min(reviewing, N) < N`: a reviewing leaf frees its implementing
 // slot, up to N of them. The allocator reading includes every held slot in
 // the workspace, even when it has no live leaf in this drain's table.
@@ -152,13 +157,21 @@ function claimBudget(occupancy, n) {
   const implementing = held - reviewing;
   const counted = held - Math.min(reviewing, n);
   const open = Math.max(0, n - counted);
-  const cells = el("div", { class: "drain-budget-cells", role: "img", "aria-label": `${implementing} held outside review, ${reviewing} reviewing, ${open} open of ${2 * n} claim cells` });
-  const kinds = [];
-  for (let i = 0; i < implementing; i += 1) kinds.push("implementing");
-  for (let i = 0; i < reviewing; i += 1) kinds.push("reviewing");
-  for (let i = 0; i < open; i += 1) kinds.push("open");
-  while (kinds.length < 2 * n) kinds.push("later");
-  for (const kind of kinds.slice(0, Math.max(2 * n, held))) cells.appendChild(el("span", { class: `drain-budget-cell ${kind}`, title: kind === "implementing" ? "held outside review" : kind }));
+  const total = Math.max(2 * n, held);
+  const runs = [
+    ["implementing", implementing], ["reviewing", reviewing], ["open", open],
+    ["later", Math.max(0, total - implementing - reviewing - open)],
+  ].filter(([, count]) => count > 0);
+  const segmented = total > CLAIM_BUDGET_CELLS_MAX;
+  const cells = el("div", { class: `drain-budget-cells${segmented ? " segmented" : ""}`, role: "img", "aria-label": `${implementing} held outside review, ${reviewing} reviewing, ${open} open of ${2 * n} claim cells` });
+  for (const [kind, count] of runs) {
+    const title = kind === "implementing" ? "held outside review" : kind;
+    if (segmented) {
+      cells.appendChild(el("span", { class: `drain-budget-cell ${kind}`, title: `${title}: ${count}`, text: String(count), style: { flexGrow: String(count) } }));
+    } else {
+      for (let i = 0; i < count; i += 1) cells.appendChild(el("span", { class: `drain-budget-cell ${kind}`, title }));
+    }
+  }
   const legend = el("p", { class: "drain-budget-legend" }, ["implementing", "reviewing", "open", "later"].map((kind) => el("span", { class: `drain-budget-key ${kind}`, text: kind === "implementing" ? "held outside review" : kind })));
   const sum = el("p", { class: "drain-budget-sum mono", id: "drain-claim-budget-sum", text: `held − min(reviewing, N) < N: ${held} − min(${reviewing}, ${n}) = ${counted} ${counted < n ? "<" : "≥"} ${n}${counted < n ? ` → claims up to ${open} more` : " → no new claim"}` });
   return el("div", { class: "drain-budget" }, [cells, legend, sum]);

@@ -165,6 +165,17 @@ async function submitDrawerMutation(session, context, request) {
   }
 }
 
+// Whether this workspace has no config policy file yet: none at all, or one
+// holding only plugin toggles. `layers.execution_not_inherited` is set exactly
+// when a workspace file separate from the global one sets policy. The first
+// workspace write then needs an explicit init choice, as `orbit config set`
+// asks for --seed-from-global or --fresh, and is refused without one.
+function workspacePolicyMissing(payload) {
+  if (payload?.workspace_file_exists === false) return true;
+  const layers = payload?.layers;
+  return Boolean(layers?.workspace?.path) && layers.workspace.path !== layers.global?.path && layers.execution_not_inherited === false;
+}
+
 function drawerNode(payload, context) {
   if (!drawer) return null;
   if (!drawer.visit.isCurrent()) { drawer = null; return null; }
@@ -203,15 +214,27 @@ function drawerNode(payload, context) {
   panel.appendChild(el('div', { class: 'drawer-cli mono', text: cliCmd(row, session.scope, session.text) }));
   if (session.error) panel.appendChild(el('div', { class: 'config-warning', text: session.error }));
   const actions = el('div', { class: 'drawer-actions' });
-  const save = el('button', { class: 'config-action', text: session.pending ? 'Saving…' : 'Save' }); save.type = 'button'; save.disabled = session.pending;
-  save.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
-    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope }, visit)));
+  const saveWith = (init) => () => submitDrawerMutation(session, context, (visit) =>
+    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope, ...(init ? { init } : {}) }, visit));
+  // A first workspace write offers only the explicit choices, so no click
+  // creates the policy file implicitly; Close leaves it uncreated.
+  const choosesInit = session.scope === 'workspace' && workspacePolicyMissing(payload);
+  if (choosesInit) panel.appendChild(el('div', { class: 'config-note drawer-init-note', text: 'This workspace has no config policy file yet, and saving creates one. Seed from global copies the global policy (orbit config set --seed-from-global); Start empty uses built-in security defaults (--fresh).' }));
+  const saves = choosesInit
+    ? [['Seed from global', 'seed-from-global'], ['Start empty', 'fresh']]
+    : [['Save', null]];
+  for (const [label, init] of saves) {
+    const save = el('button', { class: 'config-action', text: session.pending ? 'Saving…' : label }); save.type = 'button'; save.disabled = session.pending;
+    if (init) save.dataset.init = init;
+    save.addEventListener('click', saveWith(init));
+    actions.appendChild(save);
+  }
   const remove = el('button', { class: 'config-action ghost', text: 'Remove workspace value' }); remove.type = 'button'; remove.disabled = session.pending;
   remove.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
     requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=workspace`, 'DELETE', undefined, visit)));
   const close = el('button', { class: 'config-action ghost', text: 'Close' }); close.type = 'button';
   close.addEventListener('click', () => { drawer = null; context.rerender?.(); });
-  actions.append(save, remove, close); panel.appendChild(actions);
+  actions.append(remove, close); panel.appendChild(actions);
   return panel;
 }
 function finish(body, payload, context, nodes) {

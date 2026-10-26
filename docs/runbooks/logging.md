@@ -102,8 +102,9 @@ warning.
 
 To validate the dashboard in Chromium, source the host's
 [browser kit](../DEVELOPMENT.md#browser-checks-on-a-prepared-host) and run the
-isolated browser fixture (1440 px, snapshot, live and paused relays, paths,
-filters, and reload persistence). The kit's `env.sh` exports
+isolated browser fixture (1440 px, snapshot, live and paused relays, the
+discarded-history notice after a paused buffer overflows, paths, filters, and
+reload persistence). The kit's `env.sh` exports
 `PLAYWRIGHT_MODULE` and `PLAYWRIGHT_BROWSERS_PATH`, plus `LD_LIBRARY_PATH` and
 `FONTCONFIG_FILE` on Linux:
 

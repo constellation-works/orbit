@@ -18,7 +18,7 @@ let logBuffered = [];
 // so a gap in the history is never silent.
 let logBufferedDropped = 0;
 let logFollowTail = true;
-let logRows = []; // Keep track to enforce max 200 after 250 limit
+let logRows = []; // Keep track to enforce max 200 after 250 limit, plus a flush's gap notice
 const LOG_ROWS_RETAINED = 200;
 const LOG_ROWS_MAX = 250;
 // A flush keeps at most LOG_ROWS_RETAINED rows, so a paused buffer holding
@@ -621,6 +621,10 @@ function bufferPausedLogEvent(ev) {
 function enforceLogBounds() {
   if (logRows.length > LOG_ROWS_MAX) {
     const toRemove = logRows.splice(LOG_ROWS_RETAINED);
+    // A full flush puts its gap notice just past the retained rows. It is a
+    // notice, not a log row: keep it so discarded history stays stated, until
+    // newer rows push it out like any other old line.
+    if (toRemove[0]?.dataset.gap) logRows.push(toRemove.shift());
     for (const row of toRemove) {
       row.remove();
     }

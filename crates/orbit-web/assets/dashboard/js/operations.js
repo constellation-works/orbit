@@ -6,7 +6,7 @@ import { navigateToRun, setActiveTab } from './router.js';
 import { chooseDockMode, dockHome, onDockHomeChange, setDockMode } from './log-tail.js';
 import { renderAutomation } from './automation.js';
 import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
-import { cpuLoadMultiple } from './host-resources.js';
+import { cpuLoadMultiple, cpuMeasuresUtilization, cpuReadingLabel, cpuReadingValue } from './host-resources.js';
 import { DRAIN_LOCK_REASONS, DRAIN_POOLS, drainCrewNote, drainPilotNote, drainReason, drainReadinessView, setDrainReadiness } from './drain-waits.js';
 import { sparkline, svg } from './sparkline.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout, drainStartConcurrencyQuery, initDrainStart, renderDrainStart, resetDrainStart } from './drain-start.js';
@@ -155,9 +155,11 @@ function selectedWorkspaceName() {
   return selectedWorkspace()?.name || null;
 }
 
-function workspaceReadOnlyReason() {
-  const hostRefusal = hostWriteRefusal();
-  if (hostRefusal) return hostRefusal;
+// Why the selection cannot be read as one workspace, or "". Reads need only
+// this: a session without forwarding-write authority still reads the selected
+// host (only unsafe methods are refused), so Jobs and Auto-task definitions
+// render there while workspaceReadOnlyReason keeps their controls refused.
+function workspaceSelectionReason() {
   const selected = getWorkspace();
   if (!selected) return "All-workspace mode is read-only. Select one workspace; auto-task definitions are workspace-scoped.";
   const workspace = selectedWorkspace();
@@ -166,6 +168,12 @@ function workspaceReadOnlyReason() {
     return `Workspace ${workspace.name} is inactive; select an active workspace.`;
   }
   return "";
+}
+
+// Why a write to the selected workspace cannot be sent, or "": the host's
+// forwarding-write refusal first, then the selection.
+function workspaceReadOnlyReason() {
+  return hostWriteRefusal() || workspaceSelectionReason();
 }
 
 function feedback(id, kind, message) {
@@ -1399,10 +1407,10 @@ function renderAutoTasks(payload, { force = false } = {}) {
   // An open schedule editor holds a draft: leave the rows alone until it closes.
   if (!force && editingIn("auto-task") && body.querySelector(".schedule-editor")) return;
   body.textContent = "";
-  const workspaceReason = workspaceReadOnlyReason();
-  const reason = workspaceReason || payload.read_only_reason || "";
   const workspace = selectedWorkspace();
-  const listed = workspace && !workspaceReason ? (payload.definitions || []) : [];
+  const readable = Boolean(workspace) && !workspaceSelectionReason();
+  const reason = workspaceReadOnlyReason() || payload.read_only_reason || "";
+  const listed = readable ? (payload.definitions || []) : [];
   const definitions = listed.filter((definition) => !definition.plugin_inactive);
   const inactive = listed.filter((definition) => definition.plugin_inactive);
   if (reason) {
@@ -1411,7 +1419,7 @@ function renderAutoTasks(payload, { force = false } = {}) {
   if (definitions.length === 0 && inactive.length === 0) {
     body.appendChild(el("div", {
       class: "empty-state",
-      text: workspace && !workspaceReason ? "No auto-task definitions are defined by this workspace." : "Select a workspace to list its auto-task definitions.",
+      text: readable ? "No auto-task definitions are defined by this workspace." : "Select a workspace to list its auto-task definitions.",
     }));
   } else if (definitions.length) {
     const enabled = definitions.filter(autoTaskOn);
@@ -1446,15 +1454,15 @@ function renderAutoTasks(payload, { force = false } = {}) {
   if (inactive.length) {
     body.appendChild(inactivePluginGroup(inactive.map((definition) => ({ name: definition.name, detail: definition.schedule_summary, reason: definition.skipped_reason })), "minted"));
   }
-  if (workspace && !workspaceReason) {
+  if (readable) {
     const toggle = inactivePluginToggle(payload.inactive_plugin_count || 0);
     if (toggle) body.appendChild(toggle);
   }
   syncAutoTaskSchedulerNote();
   const count = $("auto-tasks-count");
   const enabledCount = definitions.filter(autoTaskOn).length;
-  if (count) count.textContent = workspace && !workspaceReason ? `${enabledCount} enabled of ${definitions.length} · ${workspace.name}` : "read-only";
-  setRailSubtabCount("rail-count-ops-auto-tasks", workspace && !workspaceReason && definitions.length ? `${enabledCount}/${definitions.length}` : "");
+  if (count) count.textContent = readable ? `${enabledCount} enabled of ${definitions.length} · ${workspace.name}` : "read-only";
+  setRailSubtabCount("rail-count-ops-auto-tasks", readable && definitions.length ? `${enabledCount}/${definitions.length}` : "");
 }
 
 // ---------------------------------------------------------------------------
@@ -1658,13 +1666,16 @@ function renderJobs(payload) {
   if (!body) return;
   body.textContent = "";
   const workspace = selectedWorkspace();
-  const workspaceReason = workspaceReadOnlyReason();
-  if (workspaceReason || !workspace) {
-    body.appendChild(el("div", { class: "operations-readonly-note", text: workspaceReason || "Select a workspace to list its jobs." }));
+  const selectionReason = workspaceSelectionReason();
+  if (selectionReason || !workspace) {
+    body.appendChild(el("div", { class: "operations-readonly-note", text: selectionReason || "Select a workspace to list its jobs." }));
     body.appendChild(el("div", { class: "empty-state", text: "Select a workspace to list its jobs." }));
     count.textContent = "read-only";
     return;
   }
+  // A host that refuses writes still lists its jobs; Run says why it is off.
+  const hostRefusal = hostWriteRefusal();
+  if (hostRefusal) body.appendChild(el("div", { class: "operations-readonly-note", text: hostRefusal }));
   const runs = Array.isArray(payload.runs?.items) ? payload.runs.items : Array.isArray(payload.runs) ? payload.runs : [];
   const running = runs.filter((run) => run.state === "running" || run.state === "pending");
   if (isLive) {
@@ -1872,7 +1883,7 @@ function autoDrainPhase(payload) {
     : phase === "winding_down" ? "Winding down" : "idle";
   // A replica's pull drain has its own indicator; the owner's phase stays
   // "idle" here, so the header and the announcement below keep their wording.
-  const pulling = phase === "idle" && Boolean(live.pullRunId) && !workspaceReadOnlyReason();
+  const pulling = phase === "idle" && Boolean(live.pullRunId) && !workspaceSelectionReason();
   const pullLabel = live.pullAdmissionsStopped ? "Pull drain · admissions stopped" : "Pull drain";
   return { live, capacity, phase, running, label, pulling, pullLabel };
 }
@@ -2668,30 +2679,34 @@ function autoDrainPlural(n, word) {
   return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-// A throttle reading in the unit the rail block uses: CPU as load per core
-// ("load 1.6× cores"), memory and disk as percentages. A threshold is bare
-// (no leading label) and keeps two decimals so 0.75× does not round to 0.8×.
-function throttleReading(resource, percent, threshold = false) {
-  if (resource === "cpu") {
-    const load = cpuLoadMultiple(Number(percent), threshold);
-    return threshold ? `${load} cores` : `load ${load} cores`;
+// A throttled resource's reading in the unit the rail block uses: CPU per the
+// host's CPU source (load per core, "load 1.6× cores", or utilization, "cpu
+// 92%"), memory and disk as percentages. A threshold is bare (no leading
+// label) and keeps two decimals so 0.75× does not round to 0.8×.
+function throttleReading(item, percent, threshold = false) {
+  if (item.resource === "cpu") {
+    const value = cpuReadingValue(percent, item.cpu_source, threshold);
+    return threshold ? value : `${throttleName(item)} ${value}`;
   }
-  return threshold ? `${percent}%` : `${resource} ${Math.round(Number(percent))}%`;
+  return threshold ? `${percent}%` : `${item.resource} ${Math.round(Number(percent))}%`;
 }
 
-// The resources a throttle holds, or an empty list.
+// The resources a throttle holds, or an empty list. Each carries the host's
+// CPU source, which names and scales a CPU reading.
 function throttledResources(capacity) {
   const resources = capacity?.resource_throttle?.resources;
-  return Array.isArray(resources) ? resources.filter(item => item && item.resource) : [];
+  return Array.isArray(resources)
+    ? resources.filter(item => item && item.resource).map(item => ({ ...item, cpu_source: capacity.resource_cpu_source }))
+    : [];
 }
 
 // A throttled resource by the name the rail block gives it.
-function throttleName(resource) {
-  return resource === "cpu" ? "load" : String(resource);
+function throttleName(item) {
+  return item.resource === "cpu" ? cpuReadingLabel(item.cpu_source) : String(item.resource);
 }
 
 function throttleNames(resources) {
-  const names = [...new Set(resources.map(item => throttleName(item.resource)))];
+  const names = [...new Set(resources.map(throttleName))];
   return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0] || "";
 }
 
@@ -2705,11 +2720,12 @@ function throttleGauge(item) {
   if (![percent, high, resume].every(Number.isFinite)) return null;
   const scale = Math.max(high, percent) * 1.25 || 100;
   const at = value => `${Math.min(100, Math.max(0, (value / scale) * 100))}%`;
-  const tick = value => (item.resource === "cpu" ? cpuLoadMultiple(value, true) : `${Math.round(value)}%`);
-  const now = item.resource === "cpu" ? `${cpuLoadMultiple(percent)} cores` : `${Math.round(percent)}%`;
+  const loadMultiple = item.resource === "cpu" && !cpuMeasuresUtilization(item.cpu_source);
+  const tick = value => (loadMultiple ? cpuLoadMultiple(value, true) : `${Math.round(value)}%`);
+  const now = item.resource === "cpu" ? cpuReadingValue(percent, item.cpu_source) : `${Math.round(percent)}%`;
   return el("div", { class: "drain-gauge" }, [
     el("div", { class: "drain-gauge-head" }, [
-      el("span", { text: `${throttleName(item.resource)} now` }),
+      el("span", { text: `${throttleName(item)} now` }),
       el("span", { class: "drain-gauge-now mono", text: now }),
     ]),
     el("div", { class: "drain-gauge-track" }, [
@@ -2731,7 +2747,7 @@ function throttleGauge(item) {
 // the same in short.
 function throttleSentence(resources) {
   const held = resources
-    .map(item => `${throttleReading(item.resource, item.percent)} (throttled at ≥ ${throttleReading(item.resource, item.high_percent, true)} since ${time(item.since)}; resumes below ${throttleReading(item.resource, item.resume_percent, true)})`)
+    .map(item => `${throttleReading(item, item.percent)} (throttled at ≥ ${throttleReading(item, item.high_percent, true)} since ${time(item.since)}; resumes below ${throttleReading(item, item.resume_percent, true)})`)
     .join("; ");
   return `Admissions throttled: ${held}. Running tasks are not touched.`;
 }
@@ -2741,7 +2757,7 @@ function autoDrainThrottleNote(capacity) {
   if (resources.length === 0) return null;
   const sentence = throttleSentence(resources);
   const resumes = resources
-    .map(item => `${throttleName(item.resource)} falls below ${throttleReading(item.resource, item.resume_percent, true)}`)
+    .map(item => `${throttleName(item)} falls below ${throttleReading(item, item.resume_percent, true)}`)
     .join(" and ");
   const since = resources.map(item => Date.parse(item.since || "")).filter(Number.isFinite).sort((a, b) => a - b)[0];
   const detail = [
@@ -3348,7 +3364,7 @@ function drainWaitDetail(group, capacity) {
   if (badge.reason === "resource_throttled") {
     const resources = throttledResources(capacity);
     if (resources.length) {
-      return `Clears when ${resources.map(item => `${throttleName(item.resource)} falls below ${throttleReading(item.resource, item.resume_percent, true)}`).join(" and ")}`;
+      return `Clears when ${resources.map(item => `${throttleName(item)} falls below ${throttleReading(item, item.resume_percent, true)}`).join(" and ")}`;
     }
   }
   return badge.detail;

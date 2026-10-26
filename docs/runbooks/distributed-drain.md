@@ -2315,8 +2315,8 @@ for example `io full 47% (throttled at ≥ 20% since …; resumes below 10%)`. A
 host without pressure stall information, such as macOS, has no I/O reading and
 admits as before.
 
-On the dashboard, the rail foot's host block shows the serving host's `load`,
-`mem` and `disk` readings, with an `io` row on hosts that report I/O pressure.
+On the dashboard, the rail foot's host block shows the serving host's `load`
+(or `cpu` utilization, by `cpu_source`), `mem` and `disk` readings, with an `io` row on hosts that report I/O pressure.
 A critical or held reading washes the block red, and the detail panel gives
 the verdict, reason and sample age. The top bar shows one warning chip only
 while a reading is elevated or worse. Settings › Machine lists the I/O row too,
