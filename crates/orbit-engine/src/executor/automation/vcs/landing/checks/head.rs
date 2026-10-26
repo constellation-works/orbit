@@ -42,11 +42,13 @@ pub(in crate::executor::automation::vcs) enum HeadCheckEvidence {
 /// any other check no workflow job answers (an external status, a policy
 /// gate) is not. An unreadable job or log proves nothing; a log that shows
 /// the runner or the network failing is not the candidate's. Each stops without a repair.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     pr: &str,
     head: &str,
+    base_branch: Option<&str>,
     failed: &[(Option<String>, String)],
     required: &RequiredChecks,
 ) -> HeadCheckEvidence {
@@ -112,6 +114,10 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 job_label(job)
             ));
         }
+        match super::suspect::watcher_suspicion(host, workspace, head, base_branch, job, &log) {
+            Ok(Some(reason)) | Err(reason) => return HeadCheckEvidence::Stop(reason),
+            Ok(None) => {}
+        }
         details.push(format!(
             "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`; log excerpt:\n{}",
             job_label(job),
@@ -153,7 +159,9 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     job: &Value,
     log: &str,
+    head: &str,
     base: &str,
+    base_branch: &str,
     moved_tip: Option<&str>,
     base_jobs: &mut CommitJobs,
     tip_jobs: &mut CommitJobs,
@@ -192,17 +200,30 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
             found.tip_passes,
             signature.text,
         ),
-        Ok(None) => (
-            CheckFailureClass::Candidate,
-            format!(
-                "base {base} does not fail it that way{}",
-                moved_tip.map_or_else(String::new, |tip| format!(
-                    " and it does not pass on the current base {tip}"
-                ))
+        Ok(None) => match super::suspect::stale_untouched_failure(
+            host,
+            workspace,
+            head,
+            base,
+            moved_tip.unwrap_or(base),
+            base_branch,
+            job,
+            log,
+        ) {
+            Ok(Some(why)) => (CheckFailureClass::BaseSuspect, why, false, signature.text),
+            Err(gap) => (CheckFailureClass::Inconclusive, gap, false, signature.text),
+            Ok(None) => (
+                CheckFailureClass::Candidate,
+                format!(
+                    "base {base} does not fail it that way{}",
+                    moved_tip.map_or_else(String::new, |tip| format!(
+                        " and it does not pass on the current base {tip}"
+                    ))
+                ),
+                false,
+                signature.text,
             ),
-            false,
-            signature.text,
-        ),
+        },
     }
 }
 
@@ -224,12 +245,15 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
 /// this one. `Err` is evidence this read could not establish: a head job
 /// whose identity or log could not be read, or a classification left
 /// inconclusive, such as an unreadable base job or log.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     head: &str,
     base: &str,
     tip: &str,
+    base_branch: &str,
+    tasks: &[String],
     failed: &[(Option<String>, String)],
 ) -> Result<Option<String>, String> {
     let head_jobs = commit_jobs(host, workspace, head).map_err(|error| error.to_string())?;
@@ -238,6 +262,8 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     let mut tip_jobs = None;
     let mut reasons = Vec::new();
     let mut inconclusive = None;
+    let mut suspect = false;
+    let mut candidate_owned = false;
     for check in failed {
         let Some(job) = head_jobs
             .iter()
@@ -251,24 +277,40 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
         let label = job_label(job);
         let log = job_log(host, workspace, run_id, job_id, job)
             .map_err(|error| format!("the log of '{label}' could not be read: {error}"))?;
-        let (class, why, _, _) = classify_logged_job(
+        let (class, why, _, signature) = classify_logged_job(
             host,
             workspace,
             job,
             &log,
+            head,
             base,
+            base_branch,
             moved_tip,
             &mut base_jobs,
             &mut tip_jobs,
         );
         match class {
             CheckFailureClass::Inherited => reasons.push(why),
+            CheckFailureClass::BaseSuspect => {
+                super::suspect::record_base_suspect(host, tasks,
+                    &serde_json::json!({"base":tip,"check":label,"signature":signature,"reason":why}))
+                    .map_err(|error| error.to_string())?;
+                suspect = true;
+                reasons.push(why);
+            }
+            CheckFailureClass::Candidate => candidate_owned = true,
             // A candidate-caused sibling still decides; an unread one does not.
             CheckFailureClass::Inconclusive => {
                 inconclusive.get_or_insert(format!("'{label}' is inconclusive: {why}"));
             }
             _ => return Ok(None),
         }
+    }
+    if suspect {
+        return Ok(Some(reasons.join("; ")));
+    }
+    if candidate_owned {
+        return Ok(None);
     }
     if let Some(gap) = inconclusive {
         return Err(gap);

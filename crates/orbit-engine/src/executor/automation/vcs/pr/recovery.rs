@@ -54,6 +54,10 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
             workspace,
             pr,
             &required.head_sha,
+            input
+                .get("base_branch")
+                .or_else(|| input.get("base"))
+                .and_then(Value::as_str),
             &[failed],
             &required,
         ) {

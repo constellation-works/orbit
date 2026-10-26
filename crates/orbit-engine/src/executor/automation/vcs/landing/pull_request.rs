@@ -336,6 +336,9 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             if let Some(observation) = recovery.required_observation.take() {
                 diagnostic["required_checks"] = observation;
             }
+            if let Some(suspicion) = recovery.base_suspicion.as_ref() {
+                diagnostic["base_suspicion"] = json!(suspicion);
+            }
             match recovered {
                 CheckRecoveryStep::Acted => continue,
                 CheckRecoveryStep::Wait => waiting_on_recovery = true,

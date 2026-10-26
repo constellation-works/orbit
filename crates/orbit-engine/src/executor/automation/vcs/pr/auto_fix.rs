@@ -364,7 +364,15 @@ pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
     failed: &[(Option<String>, String)],
 ) -> Option<String> {
     let head = status.head_sha.as_deref()?;
-    match evaluate_red_base(host, input, workspace_path, pr_number, head, failed) {
+    match evaluate_red_base(
+        host,
+        auto_fix,
+        input,
+        workspace_path,
+        pr_number,
+        head,
+        failed,
+    ) {
         Ok(hold) => hold,
         Err(gap) => recorded_base_red(host, auto_fix, head).then(|| {
             tracing::warn!(pr_number, head, %gap, "auto-fix kept the recorded base_red hold");
@@ -380,6 +388,7 @@ pub(super) fn red_base_wait<H: RuntimeHost + ?Sized>(
 /// `Err` names what could not be read.
 fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     host: &H,
+    auto_fix: &AutoFix,
     input: &Value,
     workspace_path: &str,
     pr_number: &str,
@@ -401,7 +410,16 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     let tip = commit_sha(workspace, &base_ref).map_err(|error| error.to_string())?;
     let base = git_output(workspace, &["merge-base", head, &tip])
         .map_err(|error| format!("the fork point of {head} could not be read: {error}"))?;
-    unmoved_red_base(host, workspace, head, base.trim(), &tip, &failed)
+    unmoved_red_base(
+        host,
+        workspace,
+        head,
+        base.trim(),
+        &tip,
+        &base_name,
+        &auto_fix.task_ids,
+        &failed,
+    )
 }
 
 /// Whether an earlier poll recorded `head`'s failure as inherited from the
@@ -444,6 +462,7 @@ pub(super) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
         Path::new(workspace_path),
         pr_number,
         head_sha,
+        status.base_branch.as_deref(),
         &failed,
         &required,
     ) {

@@ -288,18 +288,11 @@ pub(super) fn unanswered_required<H: RuntimeHost + ?Sized>(
             }
         };
         let changed = changed.get_or_insert_with(|| {
-            git_output(
+            candidate_changed_paths(
                 workspace,
-                &[
-                    "diff",
-                    "--name-only",
-                    "--no-renames",
-                    &context.candidate.base.commit,
-                    &context.candidate.candidate.commit,
-                ],
+                &context.candidate.base.commit,
+                &context.candidate.candidate.commit,
             )
-            .map(|paths| paths.lines().map(str::to_string).collect::<BTreeSet<_>>())
-            .map_err(|error| error.to_string())
         });
         let (class, why) = match changed {
             Err(error) => (
@@ -333,7 +326,7 @@ pub(super) fn unanswered_required<H: RuntimeHost + ?Sized>(
 
 /// A relative repository path that names no workflow configuration and
 /// cannot leave the checkout.
-fn source_path(path: &str) -> bool {
+pub(super) fn source_path(path: &str) -> bool {
     path.len() <= 1024
         && !path.chars().any(char::is_control)
         && orbit_common::fs::selector::claim_new_path_is_safe(path)
@@ -341,6 +334,26 @@ fn source_path(path: &str) -> bool {
             .split('/')
             .next()
             .is_some_and(|first| !first.eq_ignore_ascii_case(".github"))
+}
+
+/// Exact paths changed by the candidate, including both sides of renames.
+pub(super) fn candidate_changed_paths(
+    workspace: &Path,
+    base: &str,
+    head: &str,
+) -> Result<BTreeSet<String>, String> {
+    git_output(
+        workspace,
+        &["diff", "--name-only", "-z", "--no-renames", base, head],
+    )
+    .map(|paths| {
+        paths
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect()
+    })
+    .map_err(|error| error.to_string())
 }
 
 fn bounded(text: &str, max: usize) -> String {

@@ -660,6 +660,8 @@ struct ForgeState {
     merged: bool,
     /// The `CI / clippy` job on each commit.
     jobs: HashMap<String, FakeJob>,
+    /// Provider timestamps for the stale-base regression; absent in other fixtures.
+    job_times: HashMap<u64, (&'static str, &'static str)>,
     /// Commits whose job query fails.
     unreadable: Vec<String>,
     /// What a rerun of a failed job leaves on the head.
@@ -778,6 +780,14 @@ impl FakeForge {
 }
 
 impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
+    fn apply_task_automation_update(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.history.lock().unwrap().extend(update.append_history);
+        Ok(())
+    }
     fn admit_handoff_base_update(
         &self,
         _: &str,
@@ -907,7 +917,14 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 let jobs: Vec<Value> = state
                     .jobs
                     .get(commit)
-                    .map(Self::job_json)
+                    .map(|job| {
+                        let mut value = Self::job_json(job);
+                        if let Some((started, completed)) = state.job_times.get(&job.job_id) {
+                            value["started_at"] = json!(started);
+                            value["completed_at"] = json!(completed);
+                        }
+                        value
+                    })
                     .into_iter()
                     .collect();
                 Ok(json!({"commit": commit, "jobs": jobs}))
@@ -1847,6 +1864,111 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
             &["pr.merge", "pr.update_branch", "ci.rerun_failed"],
             "candidate failure",
         );
+    }
+}
+
+/// An earlier green base run cannot attribute a newly emitted diagnostic in
+/// an untouched file to the candidate. Re-read the base until a later run
+/// proves it green or red, without spending a repair on the stale result.
+#[test]
+fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
+    const UNTOUCHED: &str = "error[dependency]: allocation failed\n --> README.md:365:4\n";
+    const CHANGED: &str = "error[dependency]: allocation failed\n --> work.txt:365:4\n";
+    for case in ["stale", "changed", "fresh_green", "fresh_red"] {
+        let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
+        let forge = std::sync::Arc::new(forge);
+        forge.job(
+            &candidate,
+            failed(
+                1,
+                11,
+                if case == "changed" {
+                    CHANGED
+                } else {
+                    UNTOUCHED
+                },
+            ),
+        );
+        forge.job(&base, passed(2, 21));
+        {
+            let mut state = forge.state.lock().unwrap();
+            state
+                .job_times
+                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+            state
+                .job_times
+                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
+        }
+        let captured = forge.clone();
+        let refreshed_base = base.clone();
+        let outcome = orbit_engine::test_support::with_vcs_retry_wait(
+            move |_| {
+                if case.starts_with("fresh_") {
+                    let mut state = captured.state.lock().unwrap();
+                    state.jobs.insert(
+                        refreshed_base.clone(),
+                        if case == "fresh_green" {
+                            passed(3, 31)
+                        } else {
+                            failed(3, 31, UNTOUCHED)
+                        },
+                    );
+                    state
+                        .job_times
+                        .insert(31, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
+                }
+            },
+            || {
+                land_with(
+                    forge.as_ref(),
+                    json!({"max_wait_seconds":60,"poll_interval_seconds":30}),
+                )
+            },
+        );
+        outcome.expect_err(case);
+        let repairable = matches!(case, "changed" | "fresh_green");
+        assert_steps(
+            &forge.steps(),
+            &[HandoffLandingStep::Stop { repairable }],
+            case,
+        );
+        assert_not_sent(
+            &forge,
+            &["pr.merge", "pr.update_branch", "ci.rerun_failed"],
+            case,
+        );
+        if case == "changed" {
+            assert_reason(&forge, case, &["classified `candidate`"]);
+        } else {
+            let records = forge
+                .history
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|row| row.event == "ci_base_suspect")
+                .count();
+            assert_eq!(records, 1, "{case}: surface base-wide suspicion once");
+            assert!(
+                forge
+                    .sent("ci.commit_jobs")
+                    .iter()
+                    .filter(|input| input["commit"] == base)
+                    .count()
+                    >= 2,
+                "{case}: re-check the base after its stale run"
+            );
+            if case == "fresh_green" {
+                assert_reason(&forge, case, &["classified `candidate`"]);
+            } else if case == "fresh_red" {
+                assert_reason(&forge, case, &["classified `inherited`"]);
+            } else {
+                assert!(
+                    forge.last_evidence().contains("base-suspect"),
+                    "{}",
+                    forge.last_evidence()
+                );
+            }
+        }
     }
 }
 

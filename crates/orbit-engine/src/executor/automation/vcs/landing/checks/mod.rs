@@ -73,6 +73,7 @@ mod head;
 mod jobs;
 mod log;
 mod recovery;
+mod suspect;
 
 pub(in crate::executor::automation::vcs) use base_tip::base_tip_check_evidence;
 pub(in crate::executor::automation::vcs) use base_update::verify_published_base_update;
