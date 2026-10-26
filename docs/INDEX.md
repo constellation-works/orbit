@@ -49,6 +49,7 @@ These records describe evidence at the recorded commit or date; they do not cert
 | [CLI command evidence](./dev/qa/cli-command-evidence.md) | The help inventory contains 173 command nodes: 147 terminal paths and 26 parent groups. |
 | [Orbit desktop control-center validation](./dev/qa/mcp-apps-probe.md) | The candidate provides Tasks, Runs, Review, Auto-drain and Automation views in the existing Orbit plugin. |
 | [MCP behavioral evidence](./dev/qa/mcp-tool-evidence.md) | Behavioral evidence matrix for the advertised MCP tools and their verified limits. |
+| [Path-lease listener sudo on a disposable host](./dev/qa/path-leases-listener-sudo.md) | Disposable-guest recipe: a warmed sudo timestamp lets a noninteractive child become the listener user, and timestamp_timeout=0 denies that child. |
 | [Shipped workflow evidence](./dev/qa/workflow-evidence.md) | Evidence map for shipped Orbit jobs and the coverage boundaries of their named tests. |
 
 ## Runbooks

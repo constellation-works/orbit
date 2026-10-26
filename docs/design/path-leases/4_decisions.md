@@ -7,7 +7,7 @@ status: Draft
 feature: path-leases
 doc_role: decisions
 type: design
-summary: "Proposed standing rules for path leases: outside work shares the drain's lock index, leases are advisory unless policy makes them exclusive, a lease token authorizes leases and nothing else, and authority that must hold against agents lives with an OS user they cannot become."
+summary: "Proposed standing rules for path leases: outside work shares the drain's lock index, leases are advisory unless policy makes them exclusive, a lease token authorizes leases and nothing else, and a listener-user transition requires a provisioned factor agents cannot reuse."
 tags: [path-leases]
 paths: []
 related_features: [conflict-budget, federated-mcp, remote-access]
@@ -103,6 +103,8 @@ and keeps meaning ownership.
 
 ## Authority that must hold against agents lives with an OS user they cannot become
 
+**Superseded by:** [A listener-user transition requires a provisioned factor agents cannot reuse](#a-listener-user-transition-requires-a-provisioned-factor-agents-cannot-reuse). The original rationale below is retained as history. It treats password-gated `sudo` as enough; a cached timestamp defeats that claim.
+
 **Recorded:** 2026-10 · ORB-18410, ORB-18430, ORB-18412
 
 ### Context
@@ -135,6 +137,65 @@ approval or consent that agents must not be able to grant themselves.
 - Cost: minting, revoking and updating the listener's binary need the operator's password, so
   token management can never be delegated to an agent; and an owner gains a second user,
   a root-owned binary copy and a socket to provision and keep in version step.
+
+## A listener-user transition requires a provisioned factor agents cannot reuse
+
+**Recorded:** 2026-10-26 · ORB-18432
+**Supersedes:** [Authority that must hold against agents lives with an OS user they cannot become](#authority-that-must-hold-against-agents-lives-with-an-os-user-they-cannot-become)
+
+### Context
+
+The superseded entry anchored agent-proof authority in a dedicated user the operator reaches
+through password-gated `sudo`. Password-protected `sudo` caches authentication. The timestamp
+is per terminal by default and can be configured as one global record. While it is younger
+than `timestamp_timeout`, a later `sudo`, including `sudo -n`, does not ask again. An agent
+started in that terminal, or in any session when the record is global, reuses it. The agent
+can also omit a documented `sudo -k`. After the transition, the listener uid, the root-owned
+binary, the home mode and the kernel socket-peer check all accept the caller. A passwordless
+rule, `Defaults !authenticate`, a negative timeout, root, `CAP_SETUID`, a subordinate-uid map,
+polkit or `systemd-run --uid` reaches the same uid without that cache. Unsetting
+`ORBIT_AGENT_NAME` and the other variables `agent_context_declared` reads is already in this
+design's threat model, and it does not touch the cache.
+
+### Decision
+
+When a capability must hold against agents, the operator's Unix user must be unable to exercise
+it unattended. For the listener user that means a host-provisioned authorization factor the
+agent cannot reuse and cannot skip. The supported `sudo` form is a root-owned sudoers policy
+the operator cannot write: `timestamp_timeout=0` for every `sudo` that account can run, no
+`NOPASSWD` tag, no `Defaults !authenticate`, no negative timeout, no `exempt_group` covering
+the operator, and no second run-as path to root or to the listener user. A hardware or one-time
+factor counts only when a cached timestamp cannot satisfy the later invocation. The prompt is
+a person at the terminal, not `sudo -k` on a documented command, and not an askpass helper or
+a stored password the agent can read. Checks inside the operator's processes, including
+environment declarations, remain guards. The kernel peer check, binary ownership and home
+permissions stay in place and are not the fresh-authorization factor: they accept a caller who
+has already become the listener user.
+
+The same rule applies to any later credential, approval or consent that agents must not grant
+themselves. An OS identity is the anchor only together with a transition factor the operator's
+user cannot replay.
+
+If the host cannot enforce that factor, the guarantee does not hold. Fail closed: do not enable
+the lease listener and do not set `lease.intake.peer_user`. Ordinary password-protected `sudo`
+is not a sufficient deployment.
+
+### Consequences
+
+- The listener user, token store and configuration stay a dedicated account. Orbit still
+  accepts lease operations from it only over a kernel-checked socket, from a root-owned binary,
+  in a home the operator cannot write.
+- The deployment contract for "agents cannot mint tokens" is the prerequisite above. The
+  disposable-guest recipe
+  [path-leases-listener-sudo.md](../../dev/qa/path-leases-listener-sudo.md) shows a warmed
+  timestamp being reused and the unattended denial under `timestamp_timeout=0`.
+- Rejected alternatives: treating "sudo asks for a password" as the boundary; requiring the
+  documented command to include `sudo -k`; scoping `timestamp_timeout=0` only to the listener
+  runas user while other `sudo` commands can still become root; refusing token commands from a
+  declared agent context; signing tokens with a key in an ssh-agent.
+- Cost: every mint, revoke and binary update prompts, and an owner that cannot install the
+  policy keeps the listener off, so multi-person leases wait on that host. An owner also gains
+  a second user, a root-owned binary and a socket to provision.
 
 ## Task References
 
