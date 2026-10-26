@@ -47,6 +47,9 @@ pub struct LeafSettlement {
     /// before the owner recorded settlements and its release kept no class.
     pub evidence: &'static str,
     pub failure_class: Option<ClaimFailureClass>,
+    /// A before-landing review refusal awaiting a recorded decision. Its
+    /// class remains `candidate` and its claim still blocks the task.
+    pub review_decision_pending: bool,
     pub crew: Option<String>,
     /// The model the leaf's crew resolved to, when its follower reported it.
     pub crew_model: Option<String>,
@@ -71,6 +74,7 @@ impl LeafSettlement {
             kind: None,
             evidence: "unrecorded",
             failure_class: None,
+            review_decision_pending: false,
             crew: None,
             crew_model: None,
             failed_step_id: None,
@@ -81,6 +85,7 @@ impl LeafSettlement {
             settlement.kind = Some(record.kind);
             settlement.evidence = record.evidence.as_str();
             settlement.failure_class = record.failure_class;
+            settlement.review_decision_pending = record.review_decision_pending;
             settlement.crew = record.crew;
             settlement.crew_model = record.crew_model;
             settlement.failed_step_id = record.failed_step_id;

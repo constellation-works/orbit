@@ -703,6 +703,12 @@ owns delivery:
   `failure { class, reason, crew, candidate }`, and the class decides the owner's transition:
   `candidate` (the default: the candidate's implementation, checks or review failed) and
   `task_input` (final recovery decided `reject` or `archive`) settle as `Fail` and block the task.
+  A before-landing review refusal awaiting a recorded decision carries
+  `failure.review_decision_pending: true`, also kept on the settlement record and exposed by
+  `orbit run settlements --json`. It remains `candidate` / `Fail`: the owner still blocks the
+  task for that decision, without spending release budget or automatically retrying it. Failure
+  scans count this designed hold separately. The flag defaults to false for older records, and
+  older readers ignore the additive field; the wire enum vocabulary is unchanged.
   Every other class settles as `Release` and returns it to `backlog`: `operator_cancel` (an
   operator cancelled the launched leaf, with the cancel's reason; a cancel with `--block` settles
   as `Fail` and blocks the task [ORB-14274]), `provider` (the

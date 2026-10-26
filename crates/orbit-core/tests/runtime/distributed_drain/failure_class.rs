@@ -750,8 +750,24 @@ fn a_candidate_failure_still_blocks_the_task() {
     assert_eq!(pair.owner_status(&task), "blocked", "{pass}");
     let failed = &settlement_of(&pair, &leaf)["Fail"];
     assert_eq!(failed["failure"]["class"], "candidate", "{failed}");
+    assert!(failed["failure"]["review_decision_pending"].is_null());
+    let legacy_failure: orbit_store::contracts::ClaimFailure =
+        serde_json::from_value(failed["failure"].clone()).unwrap();
+    assert!(!legacy_failure.review_decision_pending);
     assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
     let owner_record = &pair.wire.owner.leaf_settlements(None, false).unwrap()[0];
+    assert_eq!(
+        serde_json::to_value(owner_record).unwrap()["review_decision_pending"],
+        false,
+        "the settlements JSON must distinguish markerless candidate failures"
+    );
+    let legacy_record: orbit_store::contracts::ClaimSettlementRecord =
+        serde_json::from_value(json!({
+            "kind": "fail", "evidence": "failure", "failure_class": "candidate",
+            "reason": "cargo test: 3 tests failed", "settled_at": owner_record.settled_at,
+        }))
+        .expect("settlements written before the pending-decision flag remain readable");
+    assert!(!legacy_record.review_decision_pending);
     assert_eq!(
         (owner_record.kind, owner_record.evidence),
         (Some(ClaimSettlementKind::Fail), "failure"),

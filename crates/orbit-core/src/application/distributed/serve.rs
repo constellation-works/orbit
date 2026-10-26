@@ -337,6 +337,7 @@ impl crate::OrbitRuntime {
             )),
             failure: Some(ClaimFailure {
                 class: ClaimFailureClass::Transient,
+                review_decision_pending: false,
                 reason: verdict.clone(),
                 crew: None,
                 candidate: None,

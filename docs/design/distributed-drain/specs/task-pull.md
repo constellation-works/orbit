@@ -521,6 +521,13 @@ store schema are implementation choices; their atomic behavior is required:
 | Release | Executor gives back unfinished work it did not fail: never launched, or a launched leaf whose typed failure class does not block (`operator_cancel`, `provider` including a model at capacity, `environment`, `owner_route`, `baseline_red`, `transient`, `base_conflict`). Revoke the claim, return the task to `backlog`, release only this reservation atomically. A blocking class, or any typed failure class after two such releases of the task within 24 hours, blocks the task instead, with one comment listing every counted reason |
 | Deliberate recovery | Reconcile any uncertain landing intent; revoke old claim, invalidate pending handoff, release reservation, and apply an authorized task transition atomically |
 
+A before-landing review refusal whose diagnostic carries the pending-decision marker adds
+`failure.review_decision_pending: true` to its `Fail` evidence. The owner keeps that flag on the
+settlement record; `orbit run settlements --json` exposes it beside `failure_class: "candidate"`.
+The claim still fails and the task stays blocked for a recorded decision, without a release or
+release-budget charge. Scans count it separately from failures. Missing flags read as false,
+and older readers ignore the added field, preserving the existing enum values.
+
 `stale_claim` rejects obsolete attempt mutations even when the task has since returned to
 `in-progress`. Replay of a previously committed mutation may return its recorded outcome without
 performing it again. A settled claim's receipts are pruned 7 days after its last mutation; a later

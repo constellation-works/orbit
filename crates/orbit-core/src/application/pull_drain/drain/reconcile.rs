@@ -331,6 +331,7 @@ impl PullDrain<'_> {
                                 let mut evidence = release_evidence(&record, &why);
                                 evidence.failure = Some(ClaimFailure {
                                     class: ClaimFailureClass::Environment,
+                                    review_decision_pending: false,
                                     reason: why,
                                     crew: record
                                         .receipt

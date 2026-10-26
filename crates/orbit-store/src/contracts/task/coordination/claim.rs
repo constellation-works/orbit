@@ -280,6 +280,12 @@ pub struct ClaimPullRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimFailure {
     pub class: orbit_types::workflow::ClaimFailureClass,
+    /// A before-landing review refused the candidate pending a recorded
+    /// decision. Attribution only: the class remains `candidate`, the claim
+    /// still fails and blocks the task, and no release budget is spent.
+    /// Older readers ignore the field; older failures default to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub review_decision_pending: bool,
     /// What ended the leaf — the cancel, or its failed step's error — bounded.
     pub reason: String,
     /// The crew the leaf ran as.

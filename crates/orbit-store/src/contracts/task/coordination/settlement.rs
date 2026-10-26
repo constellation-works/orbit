@@ -61,6 +61,11 @@ pub struct ClaimSettlementRecord {
     pub evidence: ClaimSettlementEvidence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failure_class: Option<orbit_types::workflow::ClaimFailureClass>,
+    /// A review refusal awaiting a recorded decision, rather than an
+    /// implementation failure. The claim's blocking outcome is unchanged.
+    /// Missing on settlements from older builds; those default to false.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub review_decision_pending: bool,
     /// The typed failure's reason, else the settlement summary; bounded.
     pub reason: String,
     /// The crew the leaf ran as: the settlement's own report, else the crew
@@ -104,6 +109,7 @@ impl ClaimSettlementRecord {
             kind,
             evidence: ClaimSettlementEvidence::of(evidence),
             failure_class: failure.map(|failure| failure.class),
+            review_decision_pending: failure.is_some_and(|failure| failure.review_decision_pending),
             reason: reason[..cut].to_string(),
             crew: named(&evidence.crew)
                 .or_else(|| named(&reported.crew))
