@@ -286,6 +286,114 @@ fn nextest_block_with_invalid_utf8_keeps_source_byte_accounting() {
     }
 }
 
+/// Cuts one credential-bearing log at every byte and line boundary, under two
+/// excerpt caps and both collector shapes. A window that cuts a credential,
+/// through its introducer or its value, may expose no fragment of it. Any other
+/// window may expose a fragment only when the complete log exposes it too. The
+/// fixtures pin one window per spelling; this sweep covers the shapes they miss.
+#[test]
+fn every_selected_window_hides_credential_fragments() {
+    const FRAGMENT_BYTES: usize = 12;
+    let github_token = format!("ghp_{}", "a".repeat(36));
+    let header_value = "q7Lx2Rv9Kp4Nm8Zs3Tw6";
+    let service_value = "Yh5Dc8Bn2Mj6Qe1Ua4Wr9";
+    let split_value = "Gt3Pk7Lz0Xv5Fs8Ob2Hd6";
+    let raw = format!(
+        "Authorization: Bearer {github_token}\n\
+         HTTPAPIKey={header_value}\n\
+         2026-10-26T14:42:00.0000000Z SERVICEAPIKey: {service_value}\n\
+         api_key:\n\
+         {split_value}\n"
+    );
+    // A credential runs from its introducer to the end of its value.
+    let span = |introducer: &str, value: &str| {
+        let start = raw.find(introducer).unwrap();
+        (start, raw.find(value).unwrap() + value.len())
+    };
+    let credentials = [
+        (
+            github_token.as_str(),
+            span("Authorization:", github_token.as_str()),
+        ),
+        (header_value, span("HTTPAPIKey=", header_value)),
+        (service_value, span("SERVICEAPIKey:", service_value)),
+        (split_value, span("api_key:", split_value)),
+    ];
+    let fragments: Vec<Vec<&str>> = credentials
+        .iter()
+        .map(|&(secret, _)| {
+            let mut parts: Vec<&str> = (0..=secret.len() - FRAGMENT_BYTES)
+                .map(|start| &secret[start..start + FRAGMENT_BYTES])
+                .collect();
+            parts.sort_unstable();
+            parts.dedup();
+            parts
+        })
+        .collect();
+    let mut line_starts = vec![0];
+    line_starts.extend(raw.match_indices('\n').map(|(index, _)| index + 1));
+    // Each window carries the source bytes it covers, for the cut test.
+    let mut windows = Vec::new();
+    for start in 0..raw.len() {
+        for end in start + 1..=raw.len() {
+            windows.push((json!({"byte_start": start, "byte_end": end}), (start, end)));
+        }
+    }
+    for first in 1..line_starts.len() {
+        for last in first + 1..=line_starts.len() {
+            windows.push((
+                json!({"line_start": first, "line_end": last}),
+                (line_starts[first - 1], line_starts[last - 1]),
+            ));
+        }
+    }
+    let complete = {
+        let mut collector = gh::StreamedLogCollector::new(16_384, 40);
+        collector.push(raw.as_bytes());
+        collector.finish().text
+    };
+    let mut leaks = Vec::new();
+    for (window, (covered_start, covered_end)) in &windows {
+        let selection = gh::log_selection_from_input(window)
+            .unwrap()
+            .expect("a byte or line window selects log text");
+        // A window that starts or ends inside a credential cuts it.
+        let cut: Vec<bool> = credentials
+            .iter()
+            .map(|&(_, (start, end))| {
+                (start < *covered_start && *covered_start < end)
+                    || (start < *covered_end && *covered_end < end)
+            })
+            .collect();
+        for (cap, tail_weighted) in [(16_384, false), (16_384, true), (40, false), (40, true)] {
+            let mut collector = if tail_weighted {
+                gh::StreamedLogCollector::tail_weighted_scoped(cap, 40, selection.clone())
+            } else {
+                gh::StreamedLogCollector::scoped(cap, 40, selection.clone())
+            };
+            collector.push(raw.as_bytes());
+            let text = collector.finish().text;
+            for (index, parts) in fragments.iter().enumerate() {
+                let exposed = parts.iter().find(|fragment| {
+                    text.contains(**fragment) && (cut[index] || !complete.contains(**fragment))
+                });
+                if let Some(fragment) = exposed {
+                    leaks.push(format!(
+                        "{window} cap={cap} tail_weighted={tail_weighted} cut={} exposes {fragment:?}: {text:?}",
+                        cut[index]
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        leaks.is_empty(),
+        "{} window variants exposed a credential fragment: {:#?}",
+        leaks.len(),
+        &leaks[..leaks.len().min(5)]
+    );
+}
+
 #[test]
 fn request_fixture_goldens() {
     golden("requests", &read("requests.json"), |case| {
