@@ -82,6 +82,14 @@ pub const DASHBOARD_JOB_RUN: GovernedOperation = GovernedOperation {
     rationale: "starting a job manually can execute workspace work outside its schedule",
 };
 
+/// Lease mutations exposed by the dashboard.
+pub const DASHBOARD_LEASE_WRITE: GovernedOperation = GovernedOperation {
+    id: "lease.write",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "changing path leases changes which workspace paths other callers may hold",
+};
+
 /// Native sweep-clock start/stop action exposed by the dashboard.
 pub const DASHBOARD_CLOCK_SERVICE: GovernedOperation = GovernedOperation {
     id: "clock.service",
@@ -643,6 +651,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_ROUTINE_TOGGLE,
     DASHBOARD_ROUTINE_TRIGGER,
     DASHBOARD_JOB_RUN,
+    DASHBOARD_LEASE_WRITE,
     DASHBOARD_CLOCK_SERVICE,
     DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_AUTO_TASK_TOGGLE,

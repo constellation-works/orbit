@@ -382,7 +382,11 @@ async fn answer_locally(
             return failure(host, "invalid_input", format!("invalid path: {error}"));
         }
     }
-    match super::router().with_state(state).oneshot(request).await {
+    match super::router(state.clone())
+        .with_state(state)
+        .oneshot(request)
+        .await
+    {
         Ok(response) => response,
         Err(infallible) => match infallible {},
     }

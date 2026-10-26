@@ -12,8 +12,9 @@ pub(crate) fn request_shutdown() {
     log::request_shutdown();
 }
 
-pub(crate) fn router() -> Router<crate::state::DashboardState> {
+pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state::DashboardState> {
     Router::new()
+        .merge(leases::lease_router(leases::RuntimeLeaseBackend { state }).with_state(()))
         .route("/host/resources", get(host::resources))
         // Settings › Hosts [ORB-14451]: the serving host's host file, through
         // the same operations as `orbit host`.
