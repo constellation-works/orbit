@@ -165,6 +165,14 @@ function hostApi(host, req, rest, url, res) {
   }
   if (rest === 'workflows/auto/readiness') return json({ controls_authorized: true, tasks: [], capacity: { active_leaf_runs: 0, max_active_leaf_runs: 4, free_slots: 4 } });
   if (rest === 'routines') return json({ machine_name: host, capabilities: {}, clock: {}, routines: [] });
+  if (rest === 'job-runs') return json({ items: [{ run_id: `jrun-${host}-confirmed`, job_id: 'fixture_sweep', state: 'running', run_role: 'top-level',
+    created_at: '2026-10-08T00:00:00Z', started_at: '2026-10-08T00:00:01Z', finished_at: null, duration_ms: null }], total: 1, limit: 100, truncated: false });
+  if (rest === 'auto-tasks') {
+    const allowed = { authorized: true, reason: null };
+    return json({ workspace, controls_authorized: true, capabilities: { auto_task_toggle: allowed, auto_task_mint: allowed, auto_task_schedule: allowed },
+      definitions: [{ name: `${host}-confirmed-definition`, enabled: true, template: { title: 'Confirmed chore' }, template_summary: 'Confirmed chore',
+        schedule_summary: 'every 15 minutes', description: 'A definition the read-only host still lists.', next_evaluation: { state: 'waiting' } }] });
+  }
   const run = rest.match(/^runs\/([^/]+)$/);
   if (run) return json({ run_id: decodeURIComponent(run[1]), job_name: 'auto', state: 'running', steps: [], workspace_id: workspace });
   if (rest.startsWith('runs/')) return json([]);
@@ -550,8 +558,27 @@ try {
   assert(await page.locator('#task-detail-body .task-action-row.comment-actions .action.comment:visible').isDisabled(), 'Comment is disabled on a read-only host');
   await page.locator('#task-detail-body').getByRole('tab', { name: 'Delivery' }).click();
   await page.locator('.claim-action-denied', { hasText: 'Read-only on hostb' }).first().waitFor({ state: 'visible' });
-  assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   await capture('host-read-only-1440');
+  // Refused writes do not refuse reads: Jobs Live, the Catalogue and the
+  // Auto-task definitions render hostb's successful GETs for the selected
+  // workspace, with their write controls refused for the same reason.
+  await page.evaluate(() => { window.location.hash = 'jobs/live'; });
+  await page.locator('#jobs-live-body', { hasText: 'jrun-hostb-confirmed' }).waitFor({ state: 'visible' });
+  assert(!(await page.locator('#jobs-live-body').textContent()).includes('Select a workspace'), 'Jobs Live lists the read-only host runs');
+  await capture('host-read-only-jobs-live-dark-1440');
+  await page.evaluate(() => { window.location.hash = 'jobs/catalogue'; });
+  const catalogueJob = page.locator('#jobs-body [data-job="fixture_sweep"]');
+  await catalogueJob.waitFor({ state: 'visible' });
+  assert(await catalogueJob.getByRole('button', { name: 'Run ▸' }).isDisabled(), 'Run stays refused on a read-only host');
+  assert((await page.locator('#jobs-body .operations-readonly-note').textContent()).includes(READ_ONLY_REASON), 'the Catalogue says why Run is off');
+  await capture('host-read-only-jobs-catalogue-dark-1440');
+  await page.evaluate(() => { window.location.hash = 'operations/auto-tasks'; });
+  await page.locator('#auto-tasks-body', { hasText: 'hostb-confirmed-definition' }).waitFor({ state: 'visible' });
+  assert(await page.locator('#auto-tasks-body').getByRole('button', { name: 'Mint now' }).isDisabled(), 'Mint stays refused on a read-only host');
+  assert(await page.locator('#auto-tasks-body [role="switch"]').first().isDisabled(), 'the auto-task switch stays refused on a read-only host');
+  await capture('host-read-only-auto-tasks-dark-1440');
+  assert(logged(/^GET \/api\/on\/hostb\/job-runs\?/) && logged(/^GET \/api\/on\/hostb\/auto-tasks\?/), 'the reads went to hostb');
+  assert(!routeLog.some((entry) => entry.method !== 'GET' && entry.path.startsWith('/api/on/')), 'no write is sent to a read-only host');
   forwardWrites = { authorized: true, reason: null };
   await page.close();
 
@@ -889,6 +916,7 @@ try {
       'browser-host-skew-banner',
       'browser-remote-run-links',
       'browser-remote-writes-disabled-with-reason',
+      'browser-read-only-host-still-lists-jobs-and-auto-tasks',
       'browser-host-picker-keyboard-and-focus',
       'browser-log-tail-retires-the-old-host-at-the-switch',
       'browser-history-restores-the-host-each-entry-names',

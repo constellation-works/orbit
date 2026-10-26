@@ -1,6 +1,6 @@
 // Runs against shipped modules in Chromium via dashboard_operations_browser.mjs,
 // the required dashboard-operations-browser scenario in the QA sweep inventory.
-const { setHost, setWorkspace, setRegisteredHosts, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
+const { setHost, setHostWrites, setWorkspace, setRegisteredHosts, setWindow, setMultiWorkspace, runHref, statusPill } = await import('./js/common.js');
 const { initOperations, fetchAndRenderOperations: fetchAndRenderOperationsPane, fetchAndRenderJobs, fetchAndRenderAutoDrainPane, triggerFeedbackClear, OPERATION_FEEDBACK_CLEAR_MS } = await import('./js/operations.js');
 globalThis.triggerFeedbackClear = triggerFeedbackClear;
 globalThis.OPERATION_FEEDBACK_CLEAR_MS = OPERATION_FEEDBACK_CLEAR_MS;
@@ -727,6 +727,21 @@ assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N)
 const raisedBudgetCells = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => cell.classList[1]).join(' ');
 assert(raisedBudgetCells === 'implementing open open open later later later later', `the raised budget draws eight cells: ${raisedBudgetCells}`);
 
+// ORB-17302 drew one element per claim cell, 2N for any recorded ceiling up
+// to u32::MAX. Past 24 cells the budget is one segment per kind, labelled
+// with its count, while the admission sum stays exact.
+for (const ceiling of [13, 1000, 4294967295]) {
+  runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: ceiling };
+  drainCapacityOverride = { max_active_leaf_runs: ceiling, limit_source: 'pull_run_control' };
+  await fetchAndRenderOperations();
+  const segments = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => `${cell.classList[1]}:${cell.textContent}`).join(' ');
+  assert(segments === `implementing:1 open:${ceiling - 1} later:${ceiling}`, `a ${ceiling} ceiling draws one segment per kind: ${segments.slice(0, 200)}`);
+  assert(get('drain-pull-body').querySelector('.drain-budget-cells').getAttribute('aria-label') === `1 held outside review, 0 reviewing, ${ceiling - 1} open of ${2 * ceiling} claim cells`, 'the segmented budget keeps its accessible counts');
+  assert(get('drain-claim-budget-sum').textContent === `held − min(reviewing, N) < N: 1 − min(0, ${ceiling}) = 1 < ${ceiling} → claims up to ${ceiling - 1} more`, `the admission sum stays exact at ${ceiling}: ${get('drain-claim-budget-sum').textContent}`);
+}
+runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 4 };
+drainCapacityOverride = { max_active_leaf_runs: 4, limit_source: 'pull_run_control' };
+
 typeConcurrency('6');
 runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 1 };
 drainCapacityOverride = { max_active_leaf_runs: 6, limit_source: 'requested' };
@@ -860,6 +875,28 @@ drainTasksOverride = null;
   assert(cpuReadings.length === 3 && cpuReadings[0] === chip.textContent.trim() && cpuReadings[1] === '0.9×' && cpuReadings[2] === '0.75×', `host load ${chip.textContent} vs throttle readings ${cpuReadings.join(', ')}`);
   assert(!/cpu \d|164/.test(note), `the note never states cpu as a bare percentage: ${note}`);
   resourceThrottle = null;
+  await fetchAndRenderAutoDrainPane();
+}
+
+// ORB-16658: a host whose CPU source is utilization reports a busy
+// percentage, so the banner, its gauge, the wait detail and the Start foot
+// name cpu in percent and never as load per core.
+{
+  const savedCapacity = drainCapacityOverride;
+  drainCapacityOverride = { ...savedCapacity, resource_cpu_source: 'utilization' };
+  resourceThrottle = { resources: [{ resource: 'cpu', percent: 92, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
+  drainTasksOverride = [{ task_id: 'ORB-9100', status: 'backlog', eligible: false, reason: 'resource_throttled' }];
+  await fetchAndRenderAutoDrainPane();
+  const note = drainBanner.querySelector('.drain-throttle-note');
+  assert(note.title.includes('Admissions throttled: cpu 92% (throttled at ≥ 90% since 2026-10-04 08:40 UTC; resumes below 75%)') && !/load|×|cores/.test(note.title), `utilization reads as a busy percentage: ${note.title}`);
+  const visible = note.textContent.replace(/\s+/g, ' ');
+  assert(visible.includes('host cpu is throttled') && visible.includes('New tasks start once cpu falls below 75%.') && !/load|×|cores/.test(visible), `the banner names cpu utilization: ${visible}`);
+  const gauge = [...note.querySelectorAll('.drain-gauge span')].map(node => node.textContent).filter(Boolean);
+  assert(['cpu now', '92%', 'resume 75%', 'stop 90%'].every(text => gauge.includes(text)), `the gauge reads utilization in percent: ${gauge.join(' | ')}`);
+  assert(get('drain-waits-body').textContent.includes('Clears when cpu falls below 75%'), `the throttle wait names utilization: ${get('drain-waits-body').textContent}`);
+  drainTasksOverride = null;
+  resourceThrottle = null;
+  drainCapacityOverride = savedCapacity;
   await fetchAndRenderAutoDrainPane();
 }
 
@@ -1023,6 +1060,29 @@ for (const [surface, runId] of [
     assert(intercepted === false, `${surface} preserves the browser default for ${modifier} clicks`);
   }
 }
+// ORB-14680 refuses forwarded writes without the operator session, but GETs
+// still reach the host: with a workspace selected, Jobs Live, the Catalogue
+// and Auto-task definitions render from their successful reads while Run,
+// the auto-task switch and Mint stay refused with the host's reason, and
+// nothing is posted.
+const hostReadOnly = 'Read-only on hostb: host.forward needs the operator session';
+setHostWrites({ authorized: false, reason: 'host.forward needs the operator session' });
+const writesBeforeReadOnly = requests.filter(r => r.method !== 'GET').length;
+await fetchAndRenderOperations();
+assert(get('jobs-live-body').textContent.includes('jrun-fixture-running') && get('jobs-live-count').textContent.includes('in flight · one'), `Jobs Live lists the remote runs in flight: ${get('jobs-live-body').textContent.slice(0, 200)}`);
+const readOnlyJobRun = descendants(get('jobs-body')).find(node => node.dataset?.job === 'fixture');
+assert(readOnlyJobRun?.textContent.includes('jrun-fixture-running'), `the Catalogue lists the remote jobs: ${get('jobs-body').textContent.slice(0, 200)}`);
+const readOnlyRunButton = descendants(readOnlyJobRun).find(node => node.type === 'button' && node.textContent === 'Run ▸');
+assert(readOnlyRunButton?.disabled && descendants(readOnlyJobRun).some(node => String(node.title || '').includes(hostReadOnly)), 'Run stays refused with the host reason');
+assert(get('auto-tasks-body').textContent.includes('Chore one') && !get('auto-tasks-body').textContent.includes('Select a workspace'), `Auto-task definitions render on a read-only host: ${get('auto-tasks-body').textContent.slice(0, 200)}`);
+assert(get('auto-tasks-body').querySelector('.operations-readonly-note')?.textContent === hostReadOnly, 'the auto-task note gives the host refusal');
+const readOnlySwitch = descendants(get('auto-tasks-body')).find(node => node.type === 'button' && node.getAttribute('role') === 'switch' && node.getAttribute('aria-label')?.includes('Chore one'));
+assert(button('auto-tasks-body', 'Mint now').disabled && readOnlySwitch?.disabled, 'auto-task writes stay refused');
+assert(get('auto-drain-start').hidden, 'the Start composer stays hidden on a read-only host');
+button('auto-tasks-body', 'Mint now').click(); await tick();
+assert(requests.filter(r => r.method !== 'GET').length === writesBeforeReadOnly, 'a read-only host is sent no write');
+setHostWrites(null);
+await fetchAndRenderOperations();
 setMultiWorkspace(true);
 setWorkspace(null);
 const aggregateRunUrl = new URL(runHref('jrun-aggregate'), window.location.href);

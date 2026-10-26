@@ -30,6 +30,7 @@ export function hostReading(payload, resource) {
 
 const RESOURCES = ['cpu', 'memory', 'disk'];
 const CPU_MEASURE = 'cpu load: the 1-minute load average divided by online cores. 100% means every core is busy; above 100% means work is queueing.';
+const CPU_UTILIZATION_MEASURE = 'cpu utilization: the share of CPU time across online cores spent busy (not idle or waiting on I/O), at most 100%.';
 const IO_MEASURE = 'io: the share of the last minute in which every runnable task was stalled on disk I/O (Linux pressure stall, full avg60).';
 const LABELS = { cpu: 'load', memory: 'mem', disk: 'disk', io: 'io' };
 
@@ -40,29 +41,55 @@ export function hostResources(payload) {
   return payload?.io ? [...RESOURCES, 'io'] : RESOURCES;
 }
 
-/// CPU load as a multiple of online cores ("1.6×"), the one unit the rail
-/// block and the Drain card's throttle note both state it in. `percent` is the
-/// host API's cpu percent, where 100 means every core is busy. A `threshold`
-/// keeps up to two decimals, so 75% reads 0.75× rather than rounding to 0.8×.
+/// CPU load as a multiple of online cores ("1.6×"), the unit the rail block
+/// and the Drain card's throttle note state a load reading in. `percent` is
+/// the host API's cpu percent, where 100 means every core is busy. A
+/// `threshold` keeps up to two decimals, so 75% reads 0.75× rather than
+/// rounding to 0.8×.
 export function cpuLoadMultiple(percent, threshold = false) {
   return `${threshold ? Number((percent / 100).toFixed(2)) : (percent / 100).toFixed(1)}×`;
 }
 
-/// How one resource reads in the rail block and in its title. CPU is load
-/// relative to cores, so it can pass 100%; it is never labelled as a plain CPU
-/// percentage. Settings › Hosts uses the same reading, so a row and the rail
-/// block cannot disagree about severity or the load unit.
+/// Whether a host's cpu percent is busy utilization rather than load: its
+/// `workflow.resource_throttle.cpu_source`, as the resource payload's
+/// `thresholds` and readiness's `capacity.resource_cpu_source` report it. An
+/// older host that reports no source measures load.
+export function cpuMeasuresUtilization(cpuSource) {
+  return cpuSource === 'utilization';
+}
+
+/// The short name of a CPU reading: `load`, or `cpu` for utilization.
+export function cpuReadingLabel(cpuSource) {
+  return cpuMeasuresUtilization(cpuSource) ? 'cpu' : 'load';
+}
+
+/// A CPU reading or threshold with its unit: load as a multiple of cores
+/// (`1.6× cores`), utilization as a percentage (`90%`).
+export function cpuReadingValue(percent, cpuSource, threshold = false) {
+  const value = Number(percent);
+  if (cpuMeasuresUtilization(cpuSource)) return threshold ? `${value}%` : `${Math.round(value)}%`;
+  return `${cpuLoadMultiple(value, threshold)} cores`;
+}
+
+/// How one resource reads in the rail block and in its title. CPU follows the
+/// host's CPU source: load is relative to cores, so it can pass 100% and is
+/// never labelled as a plain percentage; utilization is a busy percentage and
+/// is never labelled as load. Settings › Hosts uses the same reading, so a row
+/// and the rail block cannot disagree about severity or unit.
 export function describeResource(payload, resource) {
   const { reading, known, severity, held, note } = hostReading(payload, resource);
   const fill = known ? Math.max(0, Math.min(100, reading.percent)) : 0;
   const path = resource === 'disk' && reading?.path ? ` ${reading.path}` : '';
-  const label = LABELS[resource];
-  const value = !known ? '-' : resource === 'cpu' ? cpuLoadMultiple(reading.percent) : `${reading.percent.toFixed(0)}%`;
+  const utilization = resource === 'cpu' && cpuMeasuresUtilization(payload?.thresholds?.cpu_source);
+  const load = resource === 'cpu' && !utilization;
+  const label = resource === 'cpu' ? cpuReadingLabel(payload?.thresholds?.cpu_source) : LABELS[resource];
+  const value = !known ? '-' : load ? cpuLoadMultiple(reading.percent) : `${reading.percent.toFixed(0)}%`;
   const detail = !known ? `${resource}${path} ${note}`
-    : resource === 'cpu' ? `${CPU_MEASURE} Now ${reading.percent.toFixed(1)}% of cores (${note}).`
+    : load ? `${CPU_MEASURE} Now ${reading.percent.toFixed(1)}% of cores (${note}).`
+    : utilization ? `${CPU_UTILIZATION_MEASURE} Now ${reading.percent.toFixed(1)}% busy (${note}).`
     : resource === 'io' ? `${IO_MEASURE} Now ${reading.percent.toFixed(1)}% (${note}).`
     : `${resource}${path} ${reading.percent.toFixed(1)}% (${note})`;
-  return { label, value, suffix: known && resource === 'cpu' ? ' cores' : '', detail, severity, held, fill };
+  return { label, value, suffix: known && load ? ' cores' : '', detail, severity, held, fill, utilization };
 }
 
 // Whether the selected host has reported disk I/O stall. Once it has, its
@@ -104,6 +131,12 @@ function marks(payload, resource) {
   return { resume, high };
 }
 
+// A threshold in its resource's unit: a load mark as a multiple of cores, so
+// it reads like the load value beside it; every other mark as a percentage.
+function markText(payload, resource, value) {
+  return resource === 'cpu' ? cpuReadingValue(value, payload?.thresholds?.cpu_source, true) : `${value}%`;
+}
+
 function alarmRank(row) {
   if (row.held || row.severity === 'critical') return 3;
   if (row.severity === 'elevated') return 2;
@@ -128,7 +161,7 @@ function worstAlarm(rows) {
 }
 
 function sublabel(row) {
-  if (row.resource === 'cpu') return '1-minute load ÷ online cores';
+  if (row.resource === 'cpu') return row.utilization ? 'busy time across cores' : '1-minute load ÷ online cores';
   if (row.resource === 'memory') return 'used';
   if (row.resource === 'disk') return row.path || 'used';
   return 'time waiting on disk';
@@ -239,8 +272,8 @@ function renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm) {
     ? (compact ? `Last sample ${compact} ago. ` : '')
     : verdict.status === 'disabled' ? 'Throttle disabled — pressure is still reported but holds nothing. '
     : tone === 'ok' ? 'Nothing is held back on this host. '
-    : tone === 'critical' ? `New tasks wait until ${alarm.row.label} drops below ${limits.resume}%. `
-    : `Admission is still open; ${alarm.row.label} is between ${limits.resume}% and its limit at ${limits.high}%. `;
+    : tone === 'critical' ? `New tasks wait until ${alarm.row.label} drops below ${markText(payload, resource, limits.resume)}. `
+    : `Admission is still open; ${alarm.row.label} is between ${markText(payload, resource, limits.resume)} and its limit at ${markText(payload, resource, limits.high)}. `;
   const foot = `${plain}Throttle verdict: ${verdict.status}. ${verdict.reason}`;
   const link = el('a', { class: 'host-detail-drain', text: 'Open Drain' });
   link.setAttribute('href', '#drain');
@@ -266,12 +299,12 @@ function detailRow(payload, row) {
   const { resume, high } = marks(payload, row.resource);
   const meter = el('div', { class: 'host-detail-meter' }, [
     withStyle(el('span', { class: 'host-detail-fill' }), `width: ${row.fill}%`),
-    withStyle(el('span', { class: 'host-detail-tick elevated', title: `Elevated at ${resume}%` }), `left: ${Math.max(0, Math.min(100, resume))}%`),
-    withStyle(el('span', { class: 'host-detail-tick critical', title: `Critical at ${high}%` }), `left: ${Math.max(0, Math.min(100, high))}%`),
+    withStyle(el('span', { class: 'host-detail-tick elevated', title: `Elevated at ${markText(payload, row.resource, resume)}` }), `left: ${Math.max(0, Math.min(100, resume))}%`),
+    withStyle(el('span', { class: 'host-detail-tick critical', title: `Critical at ${markText(payload, row.resource, high)}` }), `left: ${Math.max(0, Math.min(100, high))}%`),
   ]);
   const node = el('div', { class: `host-detail-row ${row.severity}` }, [
     el('div', { class: 'host-detail-row-head' }, [
-      el('span', { class: 'host-detail-label', text: NAMES[row.resource] }),
+      el('span', { class: 'host-detail-label', text: row.utilization ? 'CPU utilization' : NAMES[row.resource] }),
       el('span', { class: 'host-detail-sub', text: sublabel(row) }),
       el('span', { class: 'host-detail-value', text: row.shown }),
     ]),

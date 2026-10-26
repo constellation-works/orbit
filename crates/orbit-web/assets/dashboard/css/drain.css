@@ -527,6 +527,9 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .drain-budget-cell.reviewing, .drain-budget-key.reviewing::before { background: var(--status-review); border-color: transparent; }
 .drain-budget-cell.open, .drain-budget-key.open::before { background: transparent; border: 1px dashed var(--accent); }
 .drain-budget-cell.later, .drain-budget-key.later::before { background: var(--bg-well); }
+/* Past 24 cells: one segment per kind, sized by its count and labelled with it. */
+.drain-budget-cells.segmented { flex-wrap: nowrap; }
+.drain-budget-cells.segmented .drain-budget-cell { flex-basis: 0; width: auto; min-width: 26px; padding: 0 6px; box-sizing: border-box; overflow: hidden; color: var(--fg); font: 11px/16px var(--font-mono); text-align: center; text-overflow: ellipsis; white-space: nowrap; }
 .drain-budget-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 0; color: var(--fg-mute); font-size: 12px; }
 .drain-budget-key { display: inline-flex; align-items: center; gap: 6px; }
 .drain-budget-key::before { content: ""; width: 10px; height: 10px; border-radius: 3px; border: 1px solid var(--border); box-sizing: border-box; }

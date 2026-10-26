@@ -242,6 +242,41 @@ assert.equal(chips().length, 4, 'a failed poll keeps the io chip');
 resetHostResources();
 assert.deepEqual(chips().map(node => node.dataset.resource), ['cpu', 'memory', 'disk'], 'a host switch forgets the io chip');
 
+// ORB-16658 made the CPU source selectable. A host measuring utilization
+// reports a busy percentage, so every CPU surface (rail row, warning chip,
+// dialog row and thresholds, Settings › Hosts via describeResource) must name
+// it cpu utilization in percent, never load as a multiple of cores.
+{
+  const { describeResource } = resource.namespace;
+  const busy = { ...payload, cpu: reading(90, 'critical'), pressures: [{ resource: 'cpu' }],
+    thresholds: { enabled: true, cpu_source: 'utilization', cpu_high_percent: 90, cpu_resume_percent: 80 } };
+  const described = describeResource(busy, 'cpu');
+  assert.deepEqual({ label: described.label, value: described.value, suffix: described.suffix }, { label: 'cpu', value: '90%', suffix: '' },
+    'Settings › Hosts reads utilization as a percentage');
+  assert.match(described.detail, /^cpu utilization: .*busy.* Now 90\.0% busy \(critical\)\.$/, `utilization explains its own measure: ${described.detail}`);
+  assert.doesNotMatch(described.detail, /load|×|% of cores/, 'utilization is never explained as load');
+  renderHostResources(busy);
+  assert.deepEqual(readings()[0], { k: 'cpu', v: '90%' }, 'the rail row reads utilization as a percentage');
+  assert.equal(byId('host-warn-label').textContent, 'cpu');
+  assert.equal(byId('host-warn-value').textContent, '90%');
+  const cpuRow = () => descendants(byId('host-detail')).find(node => String(node.className).startsWith('host-detail-row') && node.dataset.resource === 'cpu');
+  const rowText = row => descendants(row).filter(node => typeof node.className === 'string' && node.className.startsWith('host-detail-')).map(node => [node.className, node.textContent || node.title]);
+  const ticks = row => descendants(row).filter(node => String(node.className).startsWith('host-detail-tick')).map(node => node.title);
+  const labelOf = (row, name) => rowText(row).find(([className]) => className === name)?.[1];
+  assert.equal(labelOf(cpuRow(), 'host-detail-label'), 'CPU utilization');
+  assert.equal(labelOf(cpuRow(), 'host-detail-sub'), 'busy time across cores');
+  assert.deepEqual(ticks(cpuRow()), ['Elevated at 80%', 'Critical at 90%'], 'utilization thresholds are percentages');
+  const foot = descendants(byId('host-detail')).find(node => node.className === 'host-detail-foot-text').textContent;
+  assert.match(foot, /^New tasks wait until cpu drops below 80%\. /, `the verdict names utilization in its unit: ${foot}`);
+  // The same thresholds on a load host read in the load unit.
+  renderHostResources({ ...busy, cpu: reading(193.7, 'critical'), thresholds: { ...busy.thresholds, cpu_source: 'load' } });
+  assert.deepEqual(readings()[0], { k: 'load', v: '1.9×' });
+  assert.equal(labelOf(cpuRow(), 'host-detail-label'), 'Load');
+  assert.deepEqual(ticks(cpuRow()), ['Elevated at 0.8× cores', 'Critical at 0.9× cores'], 'load thresholds read as multiples of cores');
+  assert.match(descendants(byId('host-detail')).find(node => node.className === 'host-detail-foot-text').textContent, /^New tasks wait until load drops below 0\.8× cores\. /);
+  renderHostResources(recovered);
+}
+
 // Provider usage rides the same payload: one button per provider with its name,
 // its worst window's value, a meter and the weekly pressure, worst first, behind
 // a summary chip that narrow bars show instead. Each opens a dialog.
