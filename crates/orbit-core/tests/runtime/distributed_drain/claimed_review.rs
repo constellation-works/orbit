@@ -780,6 +780,94 @@ fn a_rejected_claimed_review_blocks_the_task_on_the_owner() {
     );
 }
 
+/// A before-landing refusal awaits a recorded decision. Its settlement must
+/// distinguish that hold while still blocking the owner's task.
+fn a_claimed_landing_review_refusal_records_its_pending_decision() {
+    use orbit_types::workflow::REVIEW_LANDING_DECISION_PENDING;
+
+    for verdict in [ReviewVerdict::Reject, ReviewVerdict::Incomplete] {
+        let mut leaf = ReviewedLeaf::admit_before_landing();
+        leaf.gate_input["before_landing"] = json!(true);
+        let admitted = leaf.admit_review();
+        let attempt = admitted["attempt_id"].as_str().unwrap();
+        leaf.reviewer_reports(attempt, verdict, false);
+        let refused = leaf.settle().expect_err("the review refused landing");
+        assert!(
+            refused.contains(REVIEW_LANDING_DECISION_PENDING),
+            "{refused}"
+        );
+
+        // The marker can trail more than the settlement's 1024-byte reason
+        // limit. Classification must read the original step diagnostic.
+        let refused = format!("{}: {refused}", "review context ".repeat(100));
+        let job = orbit_engine::activity_job::load_job_asset(
+            &std::fs::read_to_string(
+                Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets/jobs/task_claimed_pr_pipeline.yaml"),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+        .spec;
+        let step_index = job
+            .steps
+            .iter()
+            .position(|step| step.id == "landing_review_gate_settle")
+            .unwrap();
+        let now = Utc::now();
+        leaf.pair
+            .follower_jobs
+            .complete_job_run_step(
+                &leaf.leaf,
+                &JobRunStepParams {
+                    lock_wait_ms: None,
+                    step_index,
+                    target_type: JobTargetType::Activity,
+                    target_id: "review_gate_settle".into(),
+                    started_at: now,
+                    finished_at: now,
+                    duration_ms: None,
+                    exit_code: Some(1),
+                    agent_response_json: None,
+                    state: JobRunState::Failed,
+                    error_code: None,
+                    error_message: Some(refused),
+                },
+            )
+            .unwrap();
+        leaf.pair
+            .follower_jobs
+            .finalize_job_run(&leaf.leaf, JobRunState::Held, now, None)
+            .unwrap();
+        leaf.pair
+            .pass_over(&leaf.drain, json!({"window_expired": true}));
+
+        let claim = leaf.pair.owner_claim_for_leaf(&leaf.leaf);
+        assert_eq!(claim["claim"]["phase"], "failed", "{claim}");
+        assert_eq!(leaf.pair.owner_status(&leaf.task), "blocked");
+        assert!(
+            claim["release"].is_null(),
+            "no release budget spent: {claim}"
+        );
+        assert_eq!(
+            claim["settlement"]["review_decision_pending"], true,
+            "{claim}"
+        );
+        let records = leaf.pair.wire.owner.leaf_settlements(None, false).unwrap();
+        let json = serde_json::to_value(&records).unwrap();
+        assert_eq!(json[0]["kind"], "fail", "{json}");
+        assert_eq!(json[0]["failure_class"], "candidate", "{json}");
+        assert_eq!(json[0]["review_decision_pending"], true, "{json}");
+        assert!(
+            !json[0]["reason"]
+                .as_str()
+                .unwrap()
+                .contains(REVIEW_LANDING_DECISION_PENDING),
+            "the typed flag survives truncation: {json}"
+        );
+    }
+}
+
 /// A claimed reviewer that cannot run the Linux CodeQL check holds the review
 /// for it. The leaf publishes the held candidate to its branch on `origin`
 /// and settles by releasing the claim with the hold, so the owner's task
@@ -1203,6 +1291,7 @@ crate::scenario_table!(
     a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence_scenarios,
     a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence,
     a_rejected_claimed_review_blocks_the_task_on_the_owner,
+    a_claimed_landing_review_refusal_records_its_pending_decision,
     a_follower_without_the_review_crew_claims_nothing,
     a_claimed_reviewers_manifest_read_needs_the_owners_active_claim
 );

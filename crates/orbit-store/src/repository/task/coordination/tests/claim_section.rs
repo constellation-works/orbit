@@ -309,6 +309,7 @@ fn a_claim_mutation_section_decodes_its_own_claim_and_syncs_only_its_commit() {
                 comment: Some("released for another attempt".into()),
                 failure: Some(ClaimFailure {
                     class: ClaimFailureClass::Transient,
+                    review_decision_pending: false,
                     reason: "worker died".into(),
                     crew: None,
                     candidate: None,

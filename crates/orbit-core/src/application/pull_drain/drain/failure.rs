@@ -13,10 +13,10 @@ use orbit_types::workflow::{
     BASELINE_RED_MARKER, BaselineRedHold, CandidateCarry, CandidateCarryOutput, ClaimFailureClass,
     FORGE_UNAVAILABLE_MARKER, FinalRecoveryDecision, ForgeUnavailableHold, JobRunState,
     OWNER_BUSY_MARKER, OWNER_ROUTE_UNAVAILABLE_MARKER, PROVIDER_CAPACITY_MARKER,
-    PROVIDER_LIMIT_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState, ReviewEvidenceHold,
-    TRANSIENT_FAILURE_MARKER, UPGRADE_PENDING_MARKER, VALIDATION_ENVIRONMENT_MARKER,
-    is_baseline_red_failure, is_forge_unavailable, is_owner_busy, is_provider_limit,
-    is_provider_refusal,
+    PROVIDER_LIMIT_MARKER, PROVIDER_UNAVAILABLE_MARKER, PipelineState,
+    REVIEW_LANDING_DECISION_PENDING, ReviewEvidenceHold, TRANSIENT_FAILURE_MARKER,
+    UPGRADE_PENDING_MARKER, VALIDATION_ENVIRONMENT_MARKER, is_baseline_red_failure,
+    is_forge_unavailable, is_owner_busy, is_provider_limit, is_provider_refusal,
 };
 
 use super::super::candidate::{
@@ -374,6 +374,15 @@ fn leaf_failure(
         };
         (class, reason)
     });
+    // The pending-decision marker can trail the bounded reason. Read both
+    // the full failed step and the terminalizing caller's diagnostic before
+    // truncating, while retaining the class that blocks the owner's task.
+    let review_decision_pending = class == ClaimFailureClass::Candidate
+        && last_failed
+            .and_then(|step| step.error_message.as_deref())
+            .into_iter()
+            .chain(diagnostic.map(|(_, message)| message))
+            .any(|message| message.contains(REVIEW_LANDING_DECISION_PENDING));
     // [ORB-14617] A forge hold's text leads with its JSON; say it plainly.
     let mut reason = match ForgeUnavailableHold::from_text(&reason) {
         Some(hold) => format!(
@@ -426,6 +435,7 @@ fn leaf_failure(
         });
     ClaimFailure {
         class,
+        review_decision_pending,
         reason: reason[..cut].to_string(),
         crew,
         candidate: state
@@ -703,6 +713,7 @@ pub(crate) fn operator_cancel_release(
 ) -> ClaimMutation {
     let failure = ClaimFailure {
         class: ClaimFailureClass::OperatorCancel,
+        review_decision_pending: false,
         reason: why.to_string(),
         crew: record
             .receipt

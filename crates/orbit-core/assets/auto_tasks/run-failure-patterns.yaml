@@ -65,8 +65,11 @@ template:
     `cancelled` runs that recorded an error), and failure rate, for 7 days and 30 days. Add
     follower leaf failures from `orbit run settlements`: each settlement whose `settled_at`
     falls in the window is one occurrence in its `leaf_run_id` on its host, attributed to the
-    claimed pipeline job. `evidence_hold` releases and `operator_cancel` are designed outcomes,
-    not failures; a leaf that also appears in this host's history counts once.
+    claimed pipeline job. `evidence_hold` releases, `operator_cancel`, and settlements with
+    `review_decision_pending: true` are designed outcomes, not failures. Report pending-decision
+    review refusals separately even though their `kind` stays `fail` and `failure_class` stays
+    `candidate`; a missing flag on an older record reads as false. A leaf that also appears in
+    this host's history counts once.
 
     Fold cascades by recorded cause, never by matching text: read `root_cause` with
     `orbit run show <run-id> --no-reconcile --json` for every failed run. A run whose
