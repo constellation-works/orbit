@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.34.0 — 2026-10-26
+
+### Breaking Changes
+
+- **MCP task list**: `orbit_task_list` returns compact rows by default instead of full records, and `view=bounded` always needs an explicit `workspace`.
+  Full records → pass `fields` for description, plan or acceptance criteria. ([ORB-18445])
+
+### Highlights
+
+- **Experiments**: Run randomized experiments over agent treatments, with sticky assignment at admission, instruction, tool, crew, config and skill overlays, and a per-arm readout with intervals and sample-ratio checks, from the CLI, MCP or Analytics › Experiments. ([ORB-18473])
+- **Path leases**: Interactive sessions can take advisory or hard leases on paths through `orbit lease`, MCP and loopback REST, with a durable notice stream covering overlap, landing and expiry. ([ORB-18406])
+- **Granted tools**: Operators can lift the implementer's deny list for named read-safe tools with `granted_tools`, with classification at grant time, an owner-host placement hold, and mutation proposals applied after approval. ([ORB-18545])
+- **Explore brief**: Task-pilot stores a revision-keyed code map for each task, and runs receive it, with a turns-to-first-edit series and an accuracy report. It runs in shadow mode for now. ([ORB-18539])
+- **Backlog forecast**: Orbit forecasts drain time, cost and tokens from delivery history, records forecasts on a schedule, and shows them on the Tasks drain card. ([ORB-18385])
+- **Host labels and type crew pools**: Tasks can require host capability labels through `requires_labels` and `machine.labels`, and `workflow.type_complexity_crews` routes crew draws by task type. ([ORB-18316])
+
 ## 0.33.0 — 2026-10-25
 
 ### Breaking Changes
