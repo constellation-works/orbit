@@ -69,6 +69,8 @@ pub(super) struct Screen<'a> {
     pub(super) claims: &'a [ExecutionClaim],
     /// Each in-flight task's id and canonical footprint.
     pub(super) in_flight: &'a [(String, Vec<String>)],
+    /// Active task reservations and hard leases; a deferral names either by
+    /// its id. Advisory leases hold nothing, so they never appear here.
     pub(super) reservations: &'a [ActiveTaskReservation],
     /// Each task the owner's local drain admitted whose gate may not have
     /// reserved yet, with its footprint [ORB-15514].

@@ -114,8 +114,9 @@ pub(in crate::application::codebase) struct LockDenial {
     pub(in crate::application::codebase) task_ids: Vec<String>,
     /// The files the request conflicted on.
     pub(in crate::application::codebase) files: Vec<Anchor>,
-    /// Each conflicting file and a task holding it: the task whose context
-    /// lock held it, or each task the holding reservation named.
+    /// Each conflicting file and a holder of it: the task whose context lock
+    /// held it, each task the holding reservation named, or the hard lease
+    /// by its id.
     pub(in crate::application::codebase) holders: Vec<(Anchor, String)>,
 }
 

@@ -447,6 +447,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0060".to_string(),
                 "landed_diff_stats".to_string(),
             ),
+            (
+                "migration.v0061".to_string(),
+                "task_reservation_leases".to_string(),
+            ),
         ]
     );
 }

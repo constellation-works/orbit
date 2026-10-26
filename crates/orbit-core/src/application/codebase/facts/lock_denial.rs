@@ -50,7 +50,9 @@ pub(super) fn lock_denial(
             let file = Anchor::parse(conflict.get("file")?.as_str()?)?;
             let id = conflict.get("held_by_id")?.as_str()?;
             let tasks = match conflict.get("held_by")?.as_str()? {
-                "task" => vec![id.to_string()],
+                // A hard lease is held by a principal, not a task: it is
+                // attributed by its own `lease-<id>`.
+                "task" | "lease" => vec![id.to_string()],
                 "reservation" => reservation_tasks.get(id).cloned().unwrap_or_default(),
                 _ => Vec::new(),
             };

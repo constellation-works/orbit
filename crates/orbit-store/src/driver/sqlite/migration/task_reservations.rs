@@ -91,3 +91,48 @@ fn ensure_task_reservations_schema_v13(conn: &Connection) -> Result<(), OrbitErr
 
     Ok(())
 }
+
+/// v61 `task_reservation_leases` migration: path leases (`docs/design/path-leases`).
+///
+/// A lease is a `task_reservations` row held by a principal rather than a task.
+/// Its rows keep `scope = 'files'`, so a binary without this migration reads
+/// every lease, advisory ones included, as an exclusive file reservation: it
+/// over-blocks rather than letting an overlap through. Every existing row and
+/// every row such a binary writes later reads through the column defaults as a
+/// hard task reservation, which is exactly what it is.
+pub(super) fn apply_task_reservation_leases(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(
+        conn,
+        "task_reservations",
+        "kind",
+        "TEXT NOT NULL DEFAULT 'task_reservation'",
+    )?;
+    add_column_if_missing(
+        conn,
+        "task_reservations",
+        "mode",
+        "TEXT NOT NULL DEFAULT 'hard'",
+    )?;
+    for column in [
+        "principal",
+        "principal_class",
+        "machine_id",
+        "priority",
+        "tags_json",
+        "base_branch",
+        "bound_branch",
+        "heartbeat_at",
+    ] {
+        add_column_if_missing(conn, "task_reservations", column, "TEXT")?;
+    }
+
+    conn.execute_batch(
+        r#"
+            CREATE INDEX IF NOT EXISTS idx_task_reservations_kind_release
+            ON task_reservations(workspace_id, kind, released_at);
+        "#,
+    )
+    .map_err(sqlite_store_error)?;
+
+    Ok(())
+}

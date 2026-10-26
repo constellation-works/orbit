@@ -571,12 +571,23 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_landed_diff_stats,
     },
+    // Path leases: `task_reservations` rows held by a principal, advisory or
+    // hard. Defaulted columns only; lease rows stay `scope = 'files'`, so an
+    // older binary reads each one, advisory or not, as an exclusive file
+    // reservation (fail safe), and the rows it writes read here as hard task
+    // reservations.
+    Migration {
+        version: 61,
+        name: "task_reservation_leases",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_task_reservation_leases,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 60;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 61;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

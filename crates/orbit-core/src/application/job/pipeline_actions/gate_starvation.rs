@@ -295,7 +295,7 @@ fn string_list<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>
 
 /// The tasks behind the last conflicts: a task lock names its task, and a
 /// reservation the tasks it was taken for. A reservation released since the
-/// last poll names nobody.
+/// last poll names nobody, and so does a lease, which no task holds.
 fn blocking_lock_holders(
     runtime: &OrbitRuntime,
     action: &str,
@@ -311,6 +311,7 @@ fn blocking_lock_holders(
             TaskLockHolder::Reservation => {
                 reservations.insert(conflict.held_by_id.clone());
             }
+            TaskLockHolder::Lease => {}
         }
     }
     if reservations.is_empty() {
