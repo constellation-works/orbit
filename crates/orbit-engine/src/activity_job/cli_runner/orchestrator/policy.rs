@@ -204,6 +204,7 @@ pub(super) fn apply_experiment_tool_overlays(
     let claimed = claimed_mode(host, input);
     let mut records = Vec::with_capacity(overlays.len());
     for overlay in overlays {
+        let callable_before = grant.activity_tools.effective_tools.clone();
         let removals = overlay
             .tools_remove
             .iter()
@@ -259,14 +260,25 @@ pub(super) fn apply_experiment_tool_overlays(
                 effective.retain(|entry| entry != NO_CALLABLE_TOOLS_ENTRY);
                 effective.push(tool.clone());
             }
-            added.push(tool.clone());
+            if !tool_allowed(tool, &callable_before) {
+                added.push(tool.clone());
+            }
         }
         let removed = removals
             .iter()
-            .filter(|tool| !tool_allowed(tool, &grant.activity_tools.effective_tools))
+            .filter(|tool| {
+                tool_allowed(tool, &callable_before)
+                    && !tool_allowed(tool, &grant.activity_tools.effective_tools)
+            })
             .map(|tool| (*tool).to_string())
-            .collect();
-        records.push(ExperimentOverlayRecord::received(overlay, added, removed));
+            .collect::<Vec<_>>();
+        let has_effect = !added.is_empty()
+            || !removed.is_empty()
+            || overlay.instruction.is_some()
+            || overlay.suppress_default_instructions;
+        if has_effect {
+            records.push(ExperimentOverlayRecord::received(overlay, added, removed));
+        }
     }
     Ok(records)
 }
