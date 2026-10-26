@@ -384,7 +384,14 @@ td .rel-rate { font-size: 12px; }
 }
 
 /* Errors: one card per failed event on phones (see `.card-table`). */
+.diag-cell-label, .diag-empty-phone { display: none; }
 @media (max-width: 600px) {
+  table.diag-table td .diag-cell-label {
+    display: block; margin-bottom: 2px; color: var(--fg-mute);
+    font: 600 9px/1.3 var(--font-sans); letter-spacing: .06em; text-transform: uppercase;
+  }
+  table.diag-table td .diag-empty-desktop { display: none; }
+  table.diag-table td .diag-empty-phone { display: inline; color: var(--fg-dim); }
   table.diag-table tbody tr {
     grid-template-areas:
       "source ts"
