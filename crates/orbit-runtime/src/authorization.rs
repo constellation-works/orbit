@@ -254,8 +254,10 @@ impl RuntimeKernel {
         match authorize(operation, &caller) {
             Ok(()) => {
                 if caller.is_override() {
-                    // The escape hatch is allowed to be easy, not quiet.
-                    tracing::warn!(
+                    // The CLI already owns the terminal surface and the audit
+                    // row records the override, so stay off stderr at the
+                    // default level; the record remains at debug level.
+                    tracing::debug!(
                         target: "orbit.authorization",
                         operation = operation.id,
                         provenance = %caller.provenance(),
@@ -272,7 +274,10 @@ impl RuntimeKernel {
                 Ok(())
             }
             Err(denial) => {
-                tracing::warn!(
+                // The CLI prints the refusal itself and the audit row below
+                // records the denial, so stay off stderr at the default
+                // level; the record remains at debug level.
+                tracing::debug!(
                     target: "orbit.authorization",
                     operation = operation.id,
                     provenance = %denial.provenance,

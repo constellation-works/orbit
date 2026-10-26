@@ -504,3 +504,77 @@ fn decision_digest_cli_raises_and_refuses_agents() {
         "the second digest returns the same request id: {again}"
     );
 }
+
+/// A refused governed operation reports once: stderr carries only the CLI
+/// error (plain or `--json`), never the raw `orbit.authorization` tracing
+/// record, and an operator-override `--json` run leaves stderr clean while
+/// stdout JSON is unchanged [ORB-18450].
+#[test]
+fn governed_denial_and_override_stay_off_stderr() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::governed_denial_and_override_stay_off_stderr",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+
+    // Refused `--json`: stdout stays empty and stderr is exactly the JSON
+    // error document.
+    let denied = fixture
+        .command(&["decision", "answer", "nope", "approve", "--json"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(
+        denied.stdout.is_empty(),
+        "a refused --json run writes no stdout: {}",
+        String::from_utf8_lossy(&denied.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&denied.stderr);
+    assert!(
+        !stderr.contains("orbit.authorization"),
+        "no raw tracing record on stderr: {stderr}"
+    );
+    let payload: serde_json::Value =
+        serde_json::from_slice(&denied.stderr).expect("stderr is the JSON error");
+    assert_eq!(payload["code"], "capability_denied", "{payload}");
+
+    // Refused plain output: the same single human-readable error.
+    let plain = fixture
+        .command(&["decision", "digest", "--channel", "nope"])
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let plain_stderr = String::from_utf8_lossy(&plain.stderr);
+    assert!(
+        !plain_stderr.contains("orbit.authorization"),
+        "no raw tracing record on stderr: {plain_stderr}"
+    );
+    assert!(
+        plain_stderr.starts_with("error: capability denied:"),
+        "the denial is shown once as the CLI error: {plain_stderr}"
+    );
+
+    // Operator override with `--json`: stdout JSON unchanged, stderr clean.
+    let allowed = fixture
+        .command(&["decision", "digest", "--channel", "nope", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let allowed_stderr = String::from_utf8_lossy(&allowed.stderr);
+    assert!(
+        !allowed_stderr.contains("orbit.authorization"),
+        "no raw tracing record on override stderr: {allowed_stderr}"
+    );
+    assert!(
+        allowed_stderr.trim().is_empty(),
+        "override stderr stays clean at the default level: {allowed_stderr}"
+    );
+    let digest: serde_json::Value = serde_json::from_slice(&allowed.stdout).unwrap();
+    assert_eq!(digest["count"], 0, "{digest}");
+}
