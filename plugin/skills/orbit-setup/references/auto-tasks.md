@@ -469,17 +469,26 @@ plugin being removed.
   attached on every run.
 - **`backlog-hygiene`** (`medium`) — weekly. Writes one read-only report of
   stalled and untriaged tasks. It does not change task status or dispatch work.
-- **`run-failure-patterns`** (`medium`) — weekly. Mines this workspace's run
-  evidence, and on an owner the failure and release settlements its followers'
-  claimed leaves sent (`orbit run settlements --no-reconcile`), for failures
-  that nobody has filed. It folds parent pipelines into their child by the
-  recorded `root_cause` (a parent of a `held` child is no failure), splits
-  review refusals by escalation category, and also files a single blocking
-  failure of a deterministic Orbit action or tool limit. Each untracked
-  pattern, its mechanism verified in code, becomes one `proposed` fix task
-  tagged `run-failure-patterns` and `no-auto-approve`, so it waits for human
+- **`run-failure-patterns`** (`medium`) — weekly. Rate-driven: it always
+  analyses the 7 days before scan start (the prior cursor only splits out
+  new-since-cursor occurrences), computes per-job raw and folded failure rates
+  for 7 and 30 days with deltas, and stores them in `run-failure-report.json`.
+  On an owner it also counts the failure and release settlements its followers'
+  claimed leaves sent (`orbit run settlements --no-reconcile`). It folds
+  parent pipelines into their child by the recorded `root_cause` (a parent of
+  a `held` child is no failure) and splits review refusals by escalation
+  category. It accounts for the Pareto set — the top classes covering at least
+  80% of a qualifying job's folded failures plus every class with at least 3
+  occurrences across 2 runs in 7 days — giving each a category and disposition
+  and dismissing none by kind alone. A done fix is checked for deployment on
+  each failing host before later occurrences count as regressions, and its own
+  done fixes get effectiveness verdicts. Open coverage gets a comment with
+  fresh counts; at most 5 new `proposed` fix tasks are filed per pass, tagged
+  `run-failure-patterns` and `no-auto-approve`, so each waits for human
   approval; a friction replaces the task only when no cause can be
-  established, never both.
+  established, never both. It runs on the owner: preparation records a
+  `required_machine` owner-evidence contract before admission, and a follower
+  that still starts it stops with `wrong_host` without filing.
 - **`architecture-audit`** (`hard`) — every 14 days. Audits the package and
   module dependency graph, built from the ecosystem's own metadata tool or
   an import scan (the method used is named in the run summary): cycles,
