@@ -4629,7 +4629,7 @@ function buildStatusUpdateControl(task, context) {
     title: mutable ? label : aggregateRefusalTitle(label, "change status"),
   });
   select.setAttribute("aria-label", label);
-  const placeholder = el("option", { text: task.status || "status" });
+  const placeholder = el("option", { text: STATUS_LABELS[task.status] || task.status || "status" });
   placeholder.value = "";
   placeholder.disabled = true;
   placeholder.selected = true;
@@ -4637,7 +4637,7 @@ function buildStatusUpdateControl(task, context) {
   select.appendChild(placeholder);
 
   for (const status of targets) {
-    const option = el("option", { text: status });
+    const option = el("option", { text: STATUS_LABELS[status] || status });
     option.value = status;
     select.appendChild(option);
   }
@@ -4648,7 +4648,7 @@ function buildStatusUpdateControl(task, context) {
     });
     group.setAttribute("label", FORCED_STATUS_GROUP_LABEL);
     for (const status of forcedTargets) {
-      const option = el("option", { text: `${status} ⚠` });
+      const option = el("option", { text: `${STATUS_LABELS[status] || status} ⚠` });
       option.value = status;
       group.appendChild(option);
     }
