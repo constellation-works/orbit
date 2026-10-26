@@ -94,7 +94,7 @@ pub struct StateTrigger {
 /// The same resolved value gates observation, admission, promotion and the
 /// material fingerprint, so a changed predicate invalidates stale
 /// assessments instead of silently keeping them fresh.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields, default)]
 pub struct PreparationEligibility {
     /// Statuses whose tasks carry material worth fingerprinting; a non-empty
@@ -194,7 +194,19 @@ impl PreparationEligibility {
 }
 
 /// One task input the material fingerprint can hash [ORB-13638].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum MaterialField {
     Title,
@@ -228,7 +240,9 @@ impl MaterialField {
 }
 
 /// How the observed branch head bears on an accepted assessment.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceSensitivity {
     /// The head is evidence only; moving it invalidates nothing.
@@ -273,7 +287,7 @@ impl FreshnessOverride {
 
 /// The resolved inputs whose change makes an accepted task-pilot assessment
 /// stale. Eligibility still decides whether a task is fingerprinted at all.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct PreparationFreshness {
     pub material_fields: Vec<MaterialField>,
     pub source_sensitivity: SourceSensitivity,

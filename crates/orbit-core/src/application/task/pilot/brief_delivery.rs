@@ -15,6 +15,7 @@ use std::str::FromStr;
 
 use orbit_common::fs::selector::Selector;
 use orbit_common::security::release::sha256_hex;
+use orbit_store::contracts::CapturedExploreBrief;
 use orbit_types::task::EXPLORE_BRIEF_ARTIFACT;
 use orbit_types::workflow::automation::members::{MemberAttempt, PreparationPolicy};
 use orbit_types::workflow::{
@@ -53,27 +54,52 @@ impl OrbitRuntime {
         run_id: &str,
         task_id: &str,
     ) -> ExploreBriefAdmission {
-        let settings = self.explore_brief_settings();
-        let deliver = settings.enabled && settings.deliver;
-        let (record, brief) = self.classify_explore_brief(run_id, task_id);
+        let (record, captured) = self.explore_brief_capture(task_id);
+        let Some(captured) = captured else {
+            return ExploreBriefAdmission {
+                record,
+                brief: None,
+            };
+        };
+        let (record, brief) = self.classify_explore_brief(run_id, task_id, &captured, record);
         ExploreBriefAdmission {
-            brief: brief.filter(|_| deliver && record.deliverable()),
+            brief: brief.filter(|_| captured.deliver && record.deliverable()),
             record,
         }
     }
 
-    fn classify_explore_brief(
+    /// Capture only the selected task's receipt-certified brief, alongside
+    /// its pilot policy and the owner's delivery setting. Material currency
+    /// is deliberately recomputed later, at follower dispatch.
+    pub(crate) fn captured_explore_brief(&self, task_id: &str) -> Option<CapturedExploreBrief> {
+        self.explore_brief_capture(task_id).1
+    }
+
+    fn explore_brief_capture(
         &self,
-        run_id: &str,
         task_id: &str,
-    ) -> (ExploreBriefRecord, Option<Value>) {
-        // A claimed leaf reads the owner's records only through its claim;
-        // it gets no brief until the claim carries one.
+    ) -> (ExploreBriefRecord, Option<CapturedExploreBrief>) {
         if self.worker_invocation().is_some() {
-            return (
-                ExploreBriefRecord::absent("a claimed run does not receive a brief"),
-                None,
-            );
+            return match self.current_claimed_leaf() {
+                Ok(leaf) => match leaf
+                    .admission
+                    .receipt
+                    .and_then(|receipt| receipt.explore_brief)
+                {
+                    Some(captured) if captured.task_id == task_id => {
+                        let (_, record) = stored_brief_document(&captured.document);
+                        (record, Some(captured))
+                    }
+                    _ => (
+                        ExploreBriefRecord::absent("the claim captured no brief for this task"),
+                        None,
+                    ),
+                },
+                Err(error) => (
+                    ExploreBriefRecord::absent(format!("the admission cannot be read: {error}")),
+                    None,
+                ),
+            };
         }
         let artifact = match self.get_task_artifact(task_id, EXPLORE_BRIEF_ARTIFACT) {
             Ok(Some(artifact)) => artifact,
@@ -85,25 +111,50 @@ impl OrbitRuntime {
                 );
             }
         };
-        let sha256 = sha256_hex(&artifact.content);
-        let stored = match serde_json::from_slice::<StoredBrief>(&artifact.content) {
-            Ok(stored) if stored.schema == EXPLORE_BRIEF_SCHEMA => stored,
-            _ => {
+        let document = match String::from_utf8(artifact.content) {
+            Ok(document) => document,
+            Err(error) => {
                 let mut record = ExploreBriefRecord::absent("the stored brief is not readable");
-                record.sha256 = Some(sha256);
+                record.sha256 = Some(sha256_hex(error.as_bytes()));
                 return (record, None);
             }
         };
-        // Absent until the receipt shows the brief is current.
-        let mut record = ExploreBriefRecord {
-            outcome: ExploreBriefOutcome::Absent,
-            reason: None,
-            detail: None,
-            sha256: Some(sha256),
-            inspection_revision: Some(stored.inspection_revision.clone()),
-            base_sha: None,
-            drifted_paths: Vec::new(),
-            delivered: false,
+        let (stored, mut record) = stored_brief_document(&document);
+        let Some(stored) = stored else {
+            return (record, None);
+        };
+        let sealed = match self.sealed_brief_material(task_id, &stored) {
+            Ok(sealed) => sealed,
+            Err(detail) => {
+                record.detail = Some(detail);
+                return (record, None);
+            }
+        };
+        let policy = self.brief_pilot_policy(stored.pilot_run_id.as_deref());
+        let settings = self.explore_brief_settings();
+        (
+            record,
+            Some(CapturedExploreBrief {
+                task_id: task_id.to_string(),
+                document,
+                status_neutral_fingerprint: sealed,
+                eligibility: policy.eligibility,
+                freshness: policy.freshness,
+                deliver: settings.enabled && settings.deliver,
+            }),
+        )
+    }
+
+    fn classify_explore_brief(
+        &self,
+        run_id: &str,
+        task_id: &str,
+        captured: &CapturedExploreBrief,
+        mut record: ExploreBriefRecord,
+    ) -> (ExploreBriefRecord, Option<Value>) {
+        let (stored, _) = stored_brief_document(&captured.document);
+        let Some(stored) = stored else {
+            return (record, None);
         };
         let dropped = |mut record: ExploreBriefRecord, reason, detail: String| {
             record.outcome = ExploreBriefOutcome::Dropped;
@@ -112,14 +163,16 @@ impl OrbitRuntime {
             (record, None)
         };
 
-        let sealed = match self.sealed_brief_material(task_id, &stored) {
-            Ok(sealed) => sealed,
-            Err(detail) => {
-                record.detail = Some(detail);
-                return (record, None);
-            }
+        let policy = PreparationPolicy {
+            eligibility: captured.eligibility.clone(),
+            freshness: captured.freshness.clone(),
         };
-        if let Err(detail) = self.brief_material_current(task_id, &stored, sealed.as_deref()) {
+        if let Err(detail) = self.brief_material_current(
+            task_id,
+            &stored,
+            captured.status_neutral_fingerprint.as_deref(),
+            &policy,
+        ) {
             return dropped(record, ExploreBriefDropReason::MaterialChanged, detail);
         }
 
@@ -240,14 +293,14 @@ impl OrbitRuntime {
         task_id: &str,
         stored: &StoredBrief,
         sealed: Option<&str>,
+        policy: &PreparationPolicy,
     ) -> Result<(), String> {
         let sealed = sealed.ok_or("the pilot receipt sealed no status-neutral material")?;
         let task = self
             .get_task(task_id)
             .map_err(|error| format!("the task cannot be read: {error}"))?;
-        let policy = self.brief_pilot_policy(stored.pilot_run_id.as_deref());
         let current = self
-            .task_pilot_fingerprints(&task, &stored.inspection_revision, &policy)
+            .task_pilot_fingerprints(&task, &stored.inspection_revision, policy)
             .map_err(|error| format!("the task's material cannot be recomputed: {error}"))?;
         if current.status_neutral != sealed {
             return Err("the task's material changed after its pilot".to_string());
@@ -268,6 +321,30 @@ impl OrbitRuntime {
             .or_else(|_| self.claim_preparation_policy(None))
             .unwrap_or_default()
     }
+}
+
+/// Decode the exact captured bytes so owner and follower audit the same hash.
+fn stored_brief_document(document: &str) -> (Option<StoredBrief>, ExploreBriefRecord) {
+    let sha256 = sha256_hex(document.as_bytes());
+    let stored = match serde_json::from_str::<StoredBrief>(document) {
+        Ok(stored) if stored.schema == EXPLORE_BRIEF_SCHEMA => stored,
+        _ => {
+            let mut record = ExploreBriefRecord::absent("the stored brief is not readable");
+            record.sha256 = Some(sha256);
+            return (None, record);
+        }
+    };
+    let record = ExploreBriefRecord {
+        outcome: ExploreBriefOutcome::Absent,
+        reason: None,
+        detail: None,
+        sha256: Some(sha256),
+        inspection_revision: Some(stored.inspection_revision.clone()),
+        base_sha: None,
+        drifted_paths: Vec::new(),
+        delivered: false,
+    };
+    (Some(stored), record)
 }
 
 /// The paths a brief covers: every target's anchor file, and `dir:` targets

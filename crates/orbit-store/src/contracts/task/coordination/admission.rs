@@ -8,6 +8,28 @@ use super::{ClaimCandidateRef, ExecutionClaim};
 
 pub use orbit_types::task::ExecutionLocation;
 
+/// The owner's current explore brief and the policy its pilot evaluated.
+/// Captured only for the admitted task; dispatch needs no owner artifact or
+/// pilot-run read. The follower recomputes material before classifying drift.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct CapturedExploreBrief {
+    pub task_id: String,
+    /// The complete stored document, including its inspection revision.
+    pub document: String,
+    pub status_neutral_fingerprint: Option<String>,
+    pub eligibility: orbit_types::workflow::automation::members::PreparationEligibility,
+    pub freshness: orbit_types::workflow::automation::members::PreparationFreshness,
+    /// The owner's `enabled && deliver`, including shadow-mode captures.
+    pub deliver: bool,
+}
+
+/// Task-specific guidance captured immediately before claim persistence.
+#[derive(Debug, Clone)]
+pub struct AdmissionTaskGuidance {
+    pub experiments: orbit_types::workflow::CapturedExperiments,
+    pub explore_brief: Option<CapturedExploreBrief>,
+}
+
 /// Owner-side facts admission reads, separate from the executor's wire
 /// request: how it orders candidates, and what its receipt captures.
 #[derive(Debug, Default)]
@@ -628,6 +650,11 @@ pub struct AdmissionReceipt {
     /// capture: followers refuse claims without this field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiments: Option<orbit_types::workflow::CapturedExperiments>,
+    /// The admitted task's current brief, sealed material and pilot policy.
+    /// Older owners and tasks without a current brief carry none and run cold.
+    /// Like tag instructions, this is outside the request fingerprint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explore_brief: Option<CapturedExploreBrief>,
     /// [ORB-17304] How the executor census the owner ordered against classes
     /// the admitted task, and the census's machine ids. Absent from an idle
     /// or repair receipt, from an order taken without a census, and from a

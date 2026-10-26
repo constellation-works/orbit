@@ -94,79 +94,7 @@ impl Fixture {
     /// Pilot `task` through the real prepare and apply actions, returning a
     /// brief that maps `src/lib.rs`.
     fn pilot(&self, task: &str) {
-        let path = self.repo.canonicalize().unwrap();
-        let prepared = self
-            .runtime
-            .run_deterministic(
-                "prepare_task_pilot",
-                &json!({}),
-                &json!({
-                    "workspace_path": path,
-                    "task_ids": [task],
-                    "base_branch": "main",
-                }),
-                ToolContext::default(),
-            )
-            .expect("prepare task pilot");
-        let revision = prepared["source"]["source_revision"]
-            .as_str()
-            .expect("prepared source revision")
-            .to_string();
-        let tree = git(&self.repo, &["rev-parse", &format!("{revision}^{{tree}}")])
-            .trim()
-            .to_string();
-        let output = self
-            .runtime
-            .run_deterministic(
-                "apply_task_pilot_results",
-                &json!({}),
-                &json!({
-                    "workspace_path": prepared["workspace_path"],
-                    "prepared": prepared,
-                    "results": [{
-                        "partition_index": 0,
-                        "observed_revision": revision,
-                        "observed_tree": tree,
-                        "task_ids": [task],
-                        "tasks": [{
-                            "task_id": task,
-                            "context_files_after": ["file:src/lib.rs"],
-                            "disposition": "selectors",
-                            "recommended_crew": "opus",
-                            "recommended_complexity": "low",
-                            "assessment_rationale": "src/lib.rs holds greet.",
-                            "validation_approach": "Call greet.",
-                            "confidence": "high",
-                            "evidence_gaps": [],
-                            "reassessment_triggers": [],
-                            "blocked_by": [],
-                            "adr_conflicts": [],
-                            "utility_warnings": [],
-                            "surface_warnings": [],
-                            "duplicate_of": Value::Null,
-                            "already_landed": Value::Null,
-                            "explore_brief": {
-                                "change": [{
-                                    "target": "symbol:src/lib.rs#greet:function",
-                                    "what": "Return a greeting.",
-                                }],
-                                "pattern": [{"target": "file:README.md", "why": "The only doc."}],
-                                "confidence": "high",
-                            },
-                        }],
-                    }],
-                }),
-                ToolContext::default(),
-            )
-            .expect("apply task pilot");
-        assert_eq!(output["applied_count"], 1, "{output}");
-        assert!(
-            self.runtime
-                .get_task_artifact(task, EXPLORE_BRIEF_ARTIFACT)
-                .unwrap()
-                .is_some(),
-            "the pilot stored the brief: {output}"
-        );
+        pilot_brief(&self.runtime, &self.repo, task);
     }
 
     /// Admit `task` as an implementation would: its status moves to
@@ -211,6 +139,81 @@ impl Fixture {
         )
         .expect("a single-task input gets an outcome")
     }
+}
+
+/// Store a brief through the public pilot prepare/apply boundary.
+pub(super) fn pilot_brief(runtime: &OrbitRuntime, repo: &Path, task: &str) {
+    let path = repo.canonicalize().unwrap();
+    let prepared = runtime
+        .run_deterministic(
+            "prepare_task_pilot",
+            &json!({}),
+            &json!({
+                "workspace_path": path,
+                "task_ids": [task],
+                "base_branch": "main",
+            }),
+            ToolContext::default(),
+        )
+        .expect("prepare task pilot");
+    let revision = prepared["source"]["source_revision"]
+        .as_str()
+        .expect("prepared source revision")
+        .to_string();
+    let tree = git(repo, &["rev-parse", &format!("{revision}^{{tree}}")])
+        .trim()
+        .to_string();
+    let output = runtime
+        .run_deterministic(
+            "apply_task_pilot_results",
+            &json!({}),
+            &json!({
+                "workspace_path": prepared["workspace_path"],
+                "prepared": prepared,
+                "results": [{
+                    "partition_index": 0,
+                    "observed_revision": revision,
+                    "observed_tree": tree,
+                    "task_ids": [task],
+                    "tasks": [{
+                        "task_id": task,
+                        "context_files_after": ["file:src/lib.rs"],
+                        "disposition": "selectors",
+                        "recommended_crew": "opus",
+                        "recommended_complexity": "low",
+                        "assessment_rationale": "src/lib.rs holds greet.",
+                        "validation_approach": "Call greet.",
+                        "confidence": "high",
+                        "evidence_gaps": [],
+                        "reassessment_triggers": [],
+                        "blocked_by": [],
+                        "adr_conflicts": [],
+                        "utility_warnings": [],
+                        "surface_warnings": [],
+                        "duplicate_of": Value::Null,
+                        "already_landed": Value::Null,
+                        "explore_brief": {
+                            "change": [{
+                                "target": "symbol:src/lib.rs#greet:function",
+                                "what": "Return a greeting.",
+                            }],
+                            "pattern": [{"target": "file:README.md", "why": "The only doc."}],
+                            "confidence": "high",
+                        },
+                    }],
+                }],
+            }),
+            ToolContext::default(),
+        )
+        .expect("apply task pilot");
+    assert_eq!(output["applied_count"], 1, "{output}");
+    assert!(
+        runtime
+            .get_task_artifact(task, EXPLORE_BRIEF_ARTIFACT)
+            .unwrap()
+            .is_some(),
+        "the pilot stored the brief: {output}"
+    );
 }
 
 fn git(repo: &Path, args: &[&str]) -> String {

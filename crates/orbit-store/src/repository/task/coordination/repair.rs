@@ -66,7 +66,7 @@ impl TaskCommitBoundary {
         orbit_dir: &Path,
         tasks: &[Task],
         receipt: &mut AdmissionReceipt,
-        experiment_capture: &super::admission::ExperimentCapture<'_>,
+        guidance_capture: &super::admission::AdmissionGuidanceCapture<'_>,
     ) -> Result<bool, OrbitError> {
         let candidates = self.repair_candidates(
             screen.identity,
@@ -77,7 +77,9 @@ impl TaskCommitBoundary {
         )?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {
-            receipt.experiments = Some(experiment_capture(candidate.task)?);
+            let guidance = guidance_capture(candidate.task)?;
+            receipt.experiments = Some(guidance.experiments);
+            receipt.explore_brief = guidance.explore_brief;
             if self.commit_repair_claim(screen, receipt_key, orbit_dir, receipt, &candidate)? {
                 return Ok(true);
             }
