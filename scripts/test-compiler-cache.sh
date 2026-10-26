@@ -508,6 +508,14 @@ assert_ns_not_applicable() {
 
 ns_home="$TMP/ns-home"
 ns_path="$ns_bwrap_dir:/usr/bin:/bin"
+# Hermetic no-sccache PATH: only stubs for the tools the live suite needs
+# before its no-sccache exit, so a host /usr/bin/sccache cannot leak in.
+ns_clean_dir="$TMP/ns-clean-bin"
+mkdir -p "$ns_clean_dir"
+for tool in bash mkdir dirname; do
+  ln -s "$(command -v "$tool")" "$ns_clean_dir/$tool"
+done
+ns_no_sccache_path="$ns_bwrap_dir:$ns_clean_dir"
 unset ORBIT_COMPILER_CACHE_BIN
 
 # Disabled by ORBIT_COMPILER_CACHE=0 even though a usable sccache is present.
@@ -518,7 +526,7 @@ assert_ns_not_applicable "cache forced off"
 
 # No sccache binary on HOME or PATH.
 rm -f "$NS_BWRAP_LOG"
-run_live_ns "$ns_home" "$ns_path" "$ns_out" "$ns_err" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
+run_live_ns "$ns_home" "$ns_no_sccache_path" "$ns_out" "$ns_err" ORBIT_COMPILER_CACHE_REQUIRE_NS=1
 assert_ns_not_applicable "no sccache"
 
 # Cache directory not writable. Root ignores directory mode bits, as in case 3.

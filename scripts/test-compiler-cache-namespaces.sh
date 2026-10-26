@@ -97,8 +97,55 @@ if ! command -v cargo >/dev/null 2>&1; then
   skip "cargo not on PATH"
 fi
 
+HOLD_PID=""
+HOLD_RELEASE=""
 alloc_port() {
-  python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'
+  # Hold the socket until release_port so no other process takes the port while
+  # the caller reads it. Callers release it before starting any sccache daemon:
+  # the daemon binds this same address, which the held socket blocks.
+  HOLD_RELEASE="$WORKDIR/port-release.$$.${RANDOM:-0}"
+  # One output file per allocation: a reused file still holds the previous
+  # port until this python child truncates it, so polling it would return a
+  # stale or empty port.
+  local out="$HOLD_RELEASE.port"
+  rm -f "$out"
+  python3 - "$HOLD_RELEASE" >"$out" <<'PY' &
+import os, socket, sys, time
+release = sys.argv[1]
+sock = socket.socket()
+sock.bind(("127.0.0.1", 0))
+print(sock.getsockname()[1], flush=True)
+while not os.path.exists(release):
+    time.sleep(0.02)
+sock.close()
+PY
+  HOLD_PID=$!
+  local attempts=0
+  while [[ ! -s "$out" ]]; do
+    attempts=$((attempts + 1))
+    [[ "$attempts" -lt 200 ]] || fail "timed out allocating a port"
+    sleep 0.05
+  done
+  ALLOC_PORT="$(cat "$out")"
+  # An empty port makes the wrapper fall back to a private UDS daemon, which
+  # silently skips the shared-TCP scenario, so refuse anything but a number.
+  [[ "$ALLOC_PORT" =~ ^[0-9]+$ ]] || fail "allocated an invalid port: '$ALLOC_PORT'"
+}
+
+release_port() {
+  [[ -n "$HOLD_RELEASE" ]] || return 0
+  : >"$HOLD_RELEASE"
+  if [[ -n "$HOLD_PID" ]]; then
+    local attempts=0
+    while kill -0 "$HOLD_PID" 2>/dev/null && [[ "$attempts" -lt 200 ]]; do
+      attempts=$((attempts + 1))
+      sleep 0.05
+    done
+    kill "$HOLD_PID" >/dev/null 2>&1 || true
+    wait "$HOLD_PID" 2>/dev/null || true
+  fi
+  HOLD_PID=""
+  HOLD_RELEASE=""
 }
 
 WORKDIR="$(mktemp -d)"
@@ -140,12 +187,41 @@ report_participants() {
   done
 }
 
+WAIT_TIMEOUT="${ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS:-300}"
+
+pid_running() {
+  kill -0 "$1" 2>/dev/null || return 1
+  if [[ -r "/proc/$1/status" ]] && grep -q '^State:[[:space:]]*Z' "/proc/$1/status"; then
+    return 1
+  fi
+  return 0
+}
+
+# Bounded wait for one child; sets BOUNDED_STATUS (124 on timeout).
+bounded_wait() {
+  local pid="$1" attempts=0 max_attempts
+  max_attempts=$((WAIT_TIMEOUT * 20))
+  BOUNDED_STATUS=0
+  while pid_running "$pid"; do
+    attempts=$((attempts + 1))
+    if [[ "$attempts" -ge "$max_attempts" ]]; then
+      kill "$pid" >/dev/null 2>&1 || true
+      wait "$pid" 2>/dev/null || true
+      BOUNDED_STATUS=124
+      return 0
+    fi
+    sleep 0.05
+  done
+  wait "$pid" || BOUNDED_STATUS=$?
+  return 0
+}
+
 # Reap both peers even when the first fails; never collapse their statuses.
 wait_participants() {
   local i status=0
   for ((i=0; i<${#PIDS[@]}; i++)); do
-    STATUSES[$i]=0
-    wait "${PIDS[$i]}" || STATUSES[$i]=$?
+    bounded_wait "${PIDS[$i]}"
+    STATUSES[$i]="$BOUNDED_STATUS"
     [[ "${STATUSES[$i]}" -eq 0 ]] || status=1
   done
   PIDS=()
@@ -154,6 +230,9 @@ wait_participants() {
 
 cleanup() {
   local exit_status=$? pid i
+  if [[ -n "${HOLD_PID:-}" ]]; then
+    kill "$HOLD_PID" >/dev/null 2>&1 || true
+  fi
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" >/dev/null 2>&1 || true
   done
@@ -296,7 +375,10 @@ run_ns_hold() {
       SCCACHE_DIR="$SCCACHE_DIR" SCCACHE_SERVER_PORT="$SCCACHE_SERVER_PORT" \
         "$ORBIT_COMPILER_CACHE_BIN" --show-stats || true
       : >"$READY_FILE"
+      hold_attempts=0
       while [[ ! -f "$DONE_FILE" ]]; do
+        hold_attempts=$((hold_attempts + 1))
+        [[ "$hold_attempts" -lt 6000 ]] || exit 124
         sleep 0.05
       done
       SCCACHE_DIR="$SCCACHE_DIR" SCCACHE_SERVER_PORT="$SCCACHE_SERVER_PORT" \
@@ -372,7 +454,8 @@ STAGE=client-side-shared-tcp
 PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/cs-c" "$WORKDIR/logs/cs-d")
 STATUSES=(pending pending)
-cs_port="$(alloc_port)"
+alloc_port; cs_port="$ALLOC_PORT"
+release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d"
 run_ns "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/cs-c" \
@@ -393,7 +476,8 @@ STAGE=server-side-shared-tcp
 PARTICIPANTS=(C D)
 LOGFILES=("$WORKDIR/logs/bad-c" "$WORKDIR/logs/bad-d")
 STATUSES=(pending pending)
-bad_port="$(alloc_port)"
+alloc_port; bad_port="$ALLOC_PORT"
+release_port
 rm -rf "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
 mkdir -p "$WORKDIR/tgt-c" "$WORKDIR/tgt-d" "$WORKDIR/cache" "$WORKDIR/sync"
 ready="$WORKDIR/sync/c-ready"
@@ -404,17 +488,20 @@ run_ns_hold "$WORKDIR/src-c" "$WORKDIR/tgt-c" "$WORKDIR/logs/bad-c" "$ready" "$d
 PIDS+=($!)
 pid_c=$!
 wait_for_file "$ready"
+# D's failure only means something if C compiled through the daemon on this
+# port. Otherwise D simply started its own daemon, so fail on the precondition.
+if ! grep -Eq 'Compile requests[[:space:]]+[1-9]' "$WORKDIR/logs/bad-c"; then
+  fail "participant C did not compile through the shared daemon on port $bad_port"
+fi
 run_ns "$WORKDIR/src-d" "$WORKDIR/tgt-d" "$WORKDIR/logs/bad-d" \
   --setenv SCCACHE_CLIENT_SIDE 0 \
   --setenv SCCACHE_SERVER_PORT "$bad_port" &
 PIDS+=($!)
 pid_d=$!
-STATUSES[1]=0
-wait "$pid_d" || STATUSES[1]=$?
+bounded_wait "$pid_d"; STATUSES[1]="$BOUNDED_STATUS"
 d_status="${STATUSES[1]}"
 : >"$donef"
-STATUSES[0]=0
-wait "$pid_c" || STATUSES[0]=$?
+bounded_wait "$pid_c"; STATUSES[0]="$BOUNDED_STATUS"
 PIDS=()
 if [[ "$d_status" -eq 0 ]]; then
   fail "shared TCP daemon should not succeed for a different-source namespace"

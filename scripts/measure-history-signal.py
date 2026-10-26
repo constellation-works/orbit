@@ -28,6 +28,7 @@ Nothing is written and nothing is mutated; it only reads task bundles.
 from __future__ import annotations
 
 import json
+import math
 import re
 from argparse import ArgumentParser
 from pathlib import Path
@@ -44,7 +45,7 @@ def percentile(values: list[int], fraction: float) -> int:
     """Nearest-rank percentile over an already-sorted list."""
     if not values:
         return 0
-    index = min(int(len(values) * fraction), len(values) - 1)
+    index = max(0, min(math.ceil(len(values) * fraction) - 1, len(values) - 1))
     return values[index]
 
 
@@ -102,16 +103,19 @@ def measure_surface(
         for line, parsed in read_rows(source):
             size = len(line.encode("utf-8"))
             sizes.append(size)
-            if parsed is None:
+            if not isinstance(parsed, dict):
                 continue
-            payload = parsed.get(payload_key) or ""
+            payload = parsed.get(payload_key)
+            if not isinstance(payload, str):
+                payload = ""
             if payload:
                 payloads += 1
                 payload_bytes += len(payload.encode("utf-8"))
                 if is_blob_shaped(payload):
                     blobs += 1
             if size > blob_threshold:
-                label = (parsed.get(type_key) if type_key else None) or "-"
+                raw_label = parsed.get(type_key) if type_key else None
+                label = raw_label if isinstance(raw_label, str) and raw_label else "-"
                 entry = oversized.setdefault(label, {"count": 0, "bytes": 0, "examples": []})
                 entry["count"] += 1
                 entry["bytes"] += size

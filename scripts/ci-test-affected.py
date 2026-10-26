@@ -322,6 +322,9 @@ def given_selection(metadata, text):
         if outside:
             raise ValueError(f"{SELECTION_ENV} {FAILING_TESTS} name packages outside the selection: "
                              f"{', '.join(outside)}")
+        if not packages:
+            raise ValueError(f"{SELECTION_ENV} {FAILING_TESTS} names bare failing tests "
+                             "but packages is empty; there is no package to replay them in")
     return sorted(set(packages)), tests
 
 

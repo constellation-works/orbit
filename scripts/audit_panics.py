@@ -37,7 +37,8 @@ PATTERN = re.compile(
     r"|\btodo!\("
 )
 
-CFG_TEST_ATTR = re.compile(r"^\s*#\[\s*cfg\(\s*[^)]*\btest\b[^)]*\)\s*\]")
+CFG_TEST_ATTR = re.compile(
+    r"^\s*#\[\s*cfg\((?:[^()]|\([^()]*\))*?\btest\b(?:[^()]|\([^()]*\))*\)\s*\]")
 
 ALL_CRATES = [
     "orbit-agent",
@@ -88,7 +89,7 @@ def strip_string_and_char_literals(line: str) -> str:
 
 
 TOP_LEVEL_CFG_TEST_MOD = re.compile(
-    r"^#\[cfg\([^)]*\btest\b[^)]*\)\]\s*\n"
+    r"^#\[cfg\((?:[^()]|\([^()]*\))*?\btest\b(?:[^()]|\([^()]*\))*\)\]\s*\n"
     r"(?:#\[[^\]]*\]\s*\n)*"
     r"\s*(?:pub\s+)?mod\s+\w+\s*\{",
     re.MULTILINE,
@@ -115,11 +116,29 @@ def classify_lines(text: str) -> list[bool]:
     flags = [False] * n
 
     # 1. Last top-level `#[cfg(test)] mod ...`: everything from that line to EOF.
-    last_match: re.Match | None = None
-    for m in TOP_LEVEL_CFG_TEST_MOD.finditer(text):
-        last_match = m
-    if last_match is not None:
-        line_idx = text[: last_match.start()].count("\n")
+    # Scan with balanced parentheses: cfg(any(test, feature = "...")) nests.
+    last_start: int | None = None
+    for m in re.finditer(r"^#\[cfg\(", text, re.MULTILINE):
+        depth = 0
+        end = None
+        for pos in range(m.end() - 1, len(text)):
+            if text[pos] == "(":
+                depth += 1
+            elif text[pos] == ")":
+                depth -= 1
+                if depth == 0:
+                    end = pos
+                    break
+        if end is None or not re.search(r"\btest\b", text[m.end():end]):
+            continue
+        rest = text[end + 1:]
+        mod = re.match(
+            r"\]\s*\n(?:#\[[^\]]*\]\s*\n)*\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*\{",
+            rest)
+        if mod:
+            last_start = m.start()
+    if last_start is not None:
+        line_idx = text[:last_start].count("\n")
         for i in range(line_idx, n):
             flags[i] = True
 

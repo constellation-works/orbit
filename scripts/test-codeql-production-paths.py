@@ -12,6 +12,11 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parent.parent
+GIT_ENV_KEYS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+
+
+def clean_env():
+    return {key: value for key, value in os.environ.items() if key not in GIT_ENV_KEYS}
 
 
 class ProductionPathsTests(unittest.TestCase):
@@ -26,7 +31,7 @@ class ProductionPathsTests(unittest.TestCase):
                      self.root / "scripts/check-codeql-production-paths.py")
         self.config('**/*_test.rs', '**/*_tests.rs', '**/test_support.rs',
                     '**/tests/**', 'crates/**/examples/**', '**/benches/**')
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, env=clean_env())
 
     def write(self, name, content):
         path = self.root / name
@@ -41,7 +46,7 @@ class ProductionPathsTests(unittest.TestCase):
 
     def run_guard(self):
         return subprocess.run([sys.executable, str(self.root / "scripts/check-codeql-production-paths.py")],
-                              capture_output=True, text=True, cwd=self.root)
+                              capture_output=True, text=True, cwd=self.root, env=clean_env())
 
     def assert_passes(self):
         result = self.run_guard()
@@ -50,8 +55,9 @@ class ProductionPathsTests(unittest.TestCase):
     def assert_excluded(self, path, pattern):
         result = self.run_guard()
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn(path, result.stderr)
-        self.assertIn(pattern, result.stderr)
+        self.assertTrue(
+            any(path in line and pattern in line for line in result.stderr.splitlines()),
+            f"no single line names both {path!r} and {pattern!r}: {result.stderr}")
 
     def test_tracked_and_new_production_helpers_fail_with_path_and_pattern(self):
         for filename, pattern in (("child_test.rs", "**/*_test.rs"),
@@ -63,7 +69,7 @@ class ProductionPathsTests(unittest.TestCase):
                     self.write(path, "pub fn child() {}\n")
                     self.write("crates/demo/src/test_env/mod.rs", f"mod {Path(filename).stem};\n")
                     if tracked:
-                        subprocess.run(["git", "add", path], cwd=self.root, check=True)
+                        subprocess.run(["git", "add", path], cwd=self.root, check=True, env=clean_env())
                     self.assert_excluded(path, pattern)
 
     def test_non_excluded_production_and_test_target_directories_pass(self):
@@ -125,7 +131,7 @@ class ProductionPathsTests(unittest.TestCase):
         self.write(".gitignore", "/target/\n")
         self.write("target/generated.rs", "fn fixture() {}")
         self.assert_passes()
-        subprocess.run(["git", "add", "-f", "target/generated.rs"], cwd=self.root, check=True)
+        subprocess.run(["git", "add", "-f", "target/generated.rs"], cwd=self.root, check=True, env=clean_env())
         self.assert_excluded("target/generated.rs", "target/**")
 
     def test_malformed_config_fails_closed(self):
@@ -148,7 +154,7 @@ class ProductionPathsTests(unittest.TestCase):
         shutil.copy2(ROOT / "scripts/ci-guardrails.sh", self.root / "scripts/ci-guardrails.sh")
         cargo = self.write("bin/cargo", "#!/bin/sh\nexit 0\n")
         cargo.chmod(0o755)
-        env = dict(os.environ, PATH=f"{cargo.parent}:{os.environ['PATH']}",
+        env = dict(clean_env(), PATH=f"{cargo.parent}:{os.environ['PATH']}",
                    ORBIT_BUILD_BUDGET_DIR=str(self.root / "budget"))
         command = ["bash", str(self.root / "scripts/ci-guardrails.sh"), "--fast"]
         self.write("crates/demo/src/child_test.rs", "pub fn child() {}\n")

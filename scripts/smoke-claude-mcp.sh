@@ -30,8 +30,8 @@ if [[ ! -f "$DB" ]]; then
   exit 2
 fi
 
-before=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE subcommand='run-mcp' AND tool_name LIKE 'orbit.%';")
-echo "baseline run-mcp orbit.* rows: $before"
+before_id=$(sqlite3 "$DB" "SELECT COALESCE(MAX(id), 0) FROM audit_events;")
+echo "baseline audit max id: $before_id (attributing only orbit.task.list rows after it)"
 
 prompt='Use the orbit.task.list orbit tool with input {"limit": 3} to list orbit  (do not use mcp tools!) tasks. After the tool returns, reply with a one-line summary: "tasks_returned=<N>" where N is the count of items in the result and list of skills available to you.'
 
@@ -46,15 +46,14 @@ out=$(claude -p \
 echo "--- claude raw output ---"
 echo "$out"
 
-after=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE subcommand='run-mcp' AND tool_name LIKE 'orbit.%';")
-delta=$((after - before))
-echo "--- audit delta: $delta new run-mcp orbit.* rows ---"
+delta=$(sqlite3 "$DB" "SELECT count(*) FROM audit_events WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list';")
+echo "--- audit delta: $delta new orbit.task.list rows after id $before_id ---"
 
 if [[ "$delta" -gt 0 ]]; then
   echo "--- new rows ---"
   sqlite3 -header -column "$DB" \
     "SELECT timestamp, tool_name, status, exit_code FROM audit_events
-     WHERE subcommand='run-mcp' AND tool_name LIKE 'orbit.%'
+     WHERE id > $before_id AND subcommand='run-mcp' AND tool_name='orbit.task.list'
      ORDER BY id DESC LIMIT $delta;"
   echo "PASS: claude reached orbit MCP server through the new args"
   exit 0

@@ -489,6 +489,8 @@ def dynamic_hook_patterns(assets):
 
 def check(root):
     web = root / "crates/orbit-web"
+    if not web.is_dir():
+        return [f"{root}: missing dashboard web root crates/orbit-web"]
     fixtures = sorted(web.rglob("*_browser.mjs"))
     assets_dir = web / "assets/dashboard"
     asset_files = []

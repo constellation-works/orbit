@@ -91,21 +91,27 @@ resolve_sccache() {
 }
 
 install_isolated_sccache() {
-  local os arch asset url tmp dest
+  local os arch asset url tmp dest checksum actual
   os="$(uname -s)"
   arch="$(uname -m)"
+  # SHA-256 digests from the v0.17.0 release assets; keep in step with
+  # scripts/compiler-cache.sh sccache_asset().
   case "${os}/${arch}" in
     Linux/x86_64 | Linux/amd64)
       asset="sccache-${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+      checksum="67c4a96dd237c1f518f6b36083f270f9976d516f1e57fce891755ea782e50006"
       ;;
     Linux/aarch64 | Linux/arm64)
       asset="sccache-${SCCACHE_VERSION}-aarch64-unknown-linux-musl.tar.gz"
+      checksum="821a86343191aa1cbab74bd42f9e93c9a63bf85e4742945f40d3ae84193c1c77"
       ;;
     Darwin/x86_64 | Darwin/amd64)
       asset="sccache-${SCCACHE_VERSION}-x86_64-apple-darwin.tar.gz"
+      checksum="c2144cafbfe3d22e34ae637f9974ce53613543ac19477fdb287df22ea3668261"
       ;;
     Darwin/arm64 | Darwin/aarch64)
       asset="sccache-${SCCACHE_VERSION}-aarch64-apple-darwin.tar.gz"
+      checksum="0c560bfba31aef5bdfb4fb3d2677f6e61d71c5c00952f2a83344f47aa31f00f1"
       ;;
     *)
       return 1
@@ -117,6 +123,20 @@ install_isolated_sccache() {
   tmp="$(mktemp -d)"
   log "downloading isolated $url"
   if ! curl -fsSL "$url" -o "$tmp/$asset"; then
+    rm -rf "$tmp"
+    return 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$tmp/$asset")"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "$tmp/$asset")"
+  else
+    log "bench-compiler-cache: SHA-256 verification requires sha256sum or shasum"
+    rm -rf "$tmp"
+    return 1
+  fi
+  if [[ "${actual%% *}" != "$checksum" ]]; then
+    log "bench-compiler-cache: SHA-256 mismatch for $asset"
     rm -rf "$tmp"
     return 1
   fi
@@ -134,11 +154,12 @@ time_cmd() {
   timefile="$WORKDIR/time-$label"
   start="$(now)"
   status=0
-  if [[ -x /usr/bin/time ]]; then
+  # GNU time supports -f/-o; BSD time (macOS /usr/bin/time) does not.
+  if [[ -x /usr/bin/time ]] && /usr/bin/time -f '%e' -o /dev/null true 2>/dev/null; then
     /usr/bin/time -f 'wall=%e user=%U sys=%S' -o "$timefile" "$@" || status=$?
   else
     "$@" || status=$?
-    printf 'wall=unknown user=unknown sys=unknown (no /usr/bin/time)\n' >"$timefile"
+    printf 'wall=unknown user=unknown sys=unknown (no GNU /usr/bin/time)\n' >"$timefile"
   fi
   end="$(now)"
   elapsed="$(secs "$start" "$end")"

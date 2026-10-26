@@ -48,6 +48,9 @@ manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 package = json.loads(package_path.read_text(encoding="utf-8"))
 dependencies = package["dependencies"]
 env = os.environ.copy()
+staging = work / "staged"
+staging.mkdir()
+staged = []  # (destination, staged_path)
 
 for asset in manifest["assets"]:
     npm_package = asset["npm_package"]
@@ -99,14 +102,22 @@ for asset in manifest["assets"]:
             raise SystemExit(f"refresh-dashboard-vendor: {spec} is missing {asset['npm_file']}")
         if not member.isfile():
             raise SystemExit(f"refresh-dashboard-vendor: {spec} is missing {asset['npm_file']}")
+        staged_path = staging / asset["path"]
+        staged_path.parent.mkdir(parents=True, exist_ok=True)
         with archive.extractfile(member) as source:
-            destination.write_bytes(source.read())
-    digest = hashlib.sha256(destination.read_bytes()).hexdigest()
+            staged_path.write_bytes(source.read())
+        staged.append((destination, staged_path))
+    digest = hashlib.sha256(staged_path.read_bytes()).hexdigest()
     asset["version"] = version
     asset["sha256"] = digest
     asset["source"] = f"https://registry.npmjs.org/{npm_package}/-/{npm_package}-{version}.tgz"
     print(f"refresh-dashboard-vendor: {asset['path']} <- {spec}:{asset['npm_file']} ({digest})")
 
+# Every asset fetched and validated above; only now move them into place,
+# manifest last, so a failure above leaves the vendor tree untouched.
+for destination, staged_path in staged:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staged_path.replace(destination)
 manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 PY
 
