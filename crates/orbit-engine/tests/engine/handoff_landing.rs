@@ -81,7 +81,10 @@ impl orbit_engine::test_support::NullRuntimeHost for LandingHost {
 fn owner_checkout(repo: &Path) -> LandingHost {
     git(repo, &["init", "-q", "-b", "main"]);
     std::fs::write(repo.join("README.md"), "base\n").unwrap();
+    std::fs::create_dir_all(repo.join(".github/workflows")).unwrap();
+    std::fs::write(repo.join(".github/workflows/ci.yml"), "name: CI\n").unwrap();
     git(repo, &["add", "README.md"]);
+    git(repo, &["add", ".github/workflows/ci.yml"]);
     git(repo, &["commit", "-q", "-m", "base"]);
     git(repo, &["checkout", "-q", "-b", "orbit/T1"]);
     std::fs::write(repo.join("work.txt"), "delivered\n").unwrap();
@@ -177,6 +180,39 @@ fn forge_fixture(owed: bool, spent: bool) -> (tempfile::TempDir, FakeForge, Stri
     let candidate = forge.context.candidate.candidate.commit.clone();
     let base = forge.context.candidate.base.commit.clone();
     (sandbox, forge, candidate, base)
+}
+
+/// Change the workflow file on the candidate branch and refresh the PR
+/// observation so the landing classifies a citation to that changed file.
+fn change_candidate_workflow(forge: &mut FakeForge) -> String {
+    let candidate_branch = forge.context.candidate.source_branch.clone();
+    let base_branch = forge.context.candidate.base_branch.clone();
+    git(&forge.repo, &["checkout", "-q", &candidate_branch]);
+    std::fs::write(
+        forge.repo.join(".github/workflows/ci.yml"),
+        "name: changed CI\n",
+    )
+    .unwrap();
+    git(&forge.repo, &["add", ".github/workflows/ci.yml"]);
+    git(&forge.repo, &["commit", "-q", "-m", "change workflow"]);
+    git(&forge.repo, &["checkout", "-q", &base_branch]);
+
+    let mut candidate = observe_candidate(
+        &forge.repo,
+        Some(&candidate_branch),
+        &base_branch,
+        &base_branch,
+        HandoffDelivery::LocalCandidate,
+        "workspace",
+        orbit_engine::BaseSyncMode::Local,
+    )
+    .unwrap();
+    candidate.delivery = HandoffDelivery::PullRequest { number: 42 };
+    candidate.repository = "owner/repository".into();
+    let commit = candidate.candidate.commit.clone();
+    forge.context.candidate = candidate;
+    forge.state.lock().unwrap().head = commit.clone();
+    commit
 }
 
 /// Script the inherited-failure jobs: candidate and base fail, tip answers `tip`.
@@ -1877,8 +1913,24 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
                              ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
     const CHANGED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
                            ┌─ /home/runner/work/repo/repo/work.txt:365:1\n";
-    for case in ["stale", "changed", "fresh_green", "fresh_red"] {
-        let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
+    const UNCHANGED_GITHUB: &str = "error[workflow]: invalid action pin\n    \
+                                    ┌─ /home/runner/work/repo/repo/.github/workflows/ci.yml:12:1\n";
+    const CHANGED_GITHUB: &str = "error[workflow]: invalid action pin\n    \
+                                  ┌─ /home/runner/work/repo/repo/.github/workflows/ci.yml:12:1\n";
+    for case in [
+        "stale",
+        "changed",
+        "fresh_green",
+        "fresh_red",
+        "github_stale",
+        "github_changed",
+    ] {
+        let (_sandbox, mut forge, original_candidate, base) = forge_fixture(false, false);
+        let candidate = if case == "github_changed" {
+            change_candidate_workflow(&mut forge)
+        } else {
+            original_candidate
+        };
         let forge = std::sync::Arc::new(forge);
         forge.job(
             &candidate,
@@ -1887,6 +1939,10 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
                 11,
                 if case == "changed" {
                     CHANGED
+                } else if case == "github_stale" {
+                    UNCHANGED_GITHUB
+                } else if case == "github_changed" {
+                    CHANGED_GITHUB
                 } else {
                     UNTOUCHED
                 },
@@ -1929,7 +1985,7 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
             },
         );
         outcome.expect_err(case);
-        let repairable = matches!(case, "changed" | "fresh_green");
+        let repairable = matches!(case, "changed" | "fresh_green" | "github_changed");
         assert_steps(
             &forge.steps(),
             &[HandoffLandingStep::Stop { repairable }],
@@ -1940,7 +1996,7 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
             &["pr.merge", "pr.update_branch", "ci.rerun_failed"],
             case,
         );
-        if case == "changed" {
+        if matches!(case, "changed" | "github_changed") {
             assert_reason(&forge, case, &["classified `candidate`"]);
         } else {
             let records = forge
