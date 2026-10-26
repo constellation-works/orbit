@@ -6,8 +6,8 @@
 use std::path::PathBuf;
 
 use orbit_core::application::task::{
-    DecisionSubmitCaller, DecisionSubmitParams, FinalRecoveryCompletion, FinalRecoveryRequest,
-    TaskUpdateParams,
+    DecisionSubmitCaller, DecisionSubmitParams, DkimTxtResolver, FinalRecoveryCompletion,
+    FinalRecoveryRequest, TaskUpdateParams,
 };
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
@@ -238,6 +238,7 @@ impl Fixture {
                 token: token.to_string(),
                 sender: sender.map(str::to_string),
                 auth_results: Some(AUTH_PASS.to_string()),
+                raw_message: None,
                 caller,
             })
     }
@@ -470,6 +471,7 @@ fn every_refusal_applies_nothing() {
                         token: token.clone(),
                         sender: Some("forged@example.net".into()),
                         auth_results: Some(AUTH_PASS.into()),
+                        raw_message: None,
                         caller: Fixture::plugin_caller(),
                     })
             }),
@@ -500,6 +502,7 @@ fn every_refusal_applies_nothing() {
                         auth_results: Some(
                             "mx.example.com; dkim=pass; spf=pass; dmarc=fail".into(),
                         ),
+                        raw_message: None,
                         caller: Fixture::plugin_caller(),
                     })
             }),
@@ -516,6 +519,7 @@ fn every_refusal_applies_nothing() {
                         token: token.clone(),
                         sender: Some(SENDER.into()),
                         auth_results: None,
+                        raw_message: None,
                         caller: Fixture::plugin_caller(),
                     })
             }),
@@ -532,6 +536,7 @@ fn every_refusal_applies_nothing() {
                         token: token.clone(),
                         sender: None,
                         auth_results: Some(AUTH_PASS.into()),
+                        raw_message: None,
                         caller: Fixture::plugin_caller(),
                     })
             }),
@@ -579,6 +584,7 @@ fn every_refusal_applies_nothing() {
             token: token.clone(),
             sender: Some(SENDER.into()),
             auth_results: Some(AUTH_PASS.into()),
+            raw_message: None,
             caller: Fixture::plugin_caller(),
         })
         .expect_err("an unregistered channel is refused");
@@ -598,6 +604,7 @@ fn every_refusal_applies_nothing() {
             token: token.clone(),
             sender: Some(SENDER.into()),
             auth_results: Some(AUTH_PASS.into()),
+            raw_message: None,
             caller: Fixture::plugin_caller(),
         })
         .expect_err("an unknown request is refused");
@@ -1475,4 +1482,206 @@ fn a_digest_approve_is_refused_while_the_pilot_holds_or_no_footprint_is_prepared
         .unwrap();
     assert_eq!(answered.state, DecisionRequestState::Answered);
     assert_eq!(fx.status(&no_diff), TaskStatus::Backlog);
+}
+
+/// A throwaway RSA test key (generated for these tests only; it signs
+/// nothing in production). The matching public key is served by
+/// [`FixtureResolver`] as the `test1` selector for `example.com`.
+const DKIM_TEST_PRIVATE_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\nMIIEugIBADANBgkqhkiG9w0BAQEFAASCBKQwggSgAgEAAoIBAQCm2u0dz1peTq24\nhrMtjjX3pNRgq6HkFYgmXQeCM6v4I0saUprgYl+/nCzhjMYmDCmAMsSd05H/WQF3\n7S1s/zxip4T8n/ZK2F4d/eDbWww5zWbYNJctLvjJqbJtv5WuOzhbvoQ2Y/kVxZQn\nIOMKyjXD9hVj/1JMoPhDYMj0WDe3eBo6A7A2zGmAbDgZ1//AVNQlo42YBvMdlkoJ\nwD6y1d0cQb7gLoVNF8DHpGr39gpRqWEreO80+onas4cPFLy1a8LCq68GXNJWP4kM\nCEnLp69wOjafsToTEVw9CtYVHpLZq0fvG52nwQrlAxtisnMz4mVXuwlELiHBsNUf\n2i1EYab5AgMBAAECggEACpAvlMSMzw2iF92HOGoZZo0r2Nbkz+DBFtSq5gZJa9Mo\nLQlvvqbbsvC7MqhL3xrEAda09dzwED9dRW9hgdYCx6gdVjT2TbS2+KUa+CgidQJY\n8XUa4QRpQbMZlbMcUcR0A/LiweLAYS15/KQrW4KDtt08a3E9j5ZdQT6+WiG/nUDG\nAnMLUHwZcuXD1CV8c7xnp/r1BI1NGDZHkkzhaiKD7O8YF9Dm2aER6/RVjV1FBWbg\njSB0tFYnjWEF6MtlaoJKqeGJuJc8mOXdcjw4IjrJw2dXfY9JFJ5b5jFMNsyJ8Uoi\nVz1nYb2l7xOgxktLTnYmV5Z7N/6Xg9AXd5ESh2mHhQKBgQDerHHohl+BMs7AjQeG\nJZVcu5/7NYghWyfBqqGvdjaeai8m779g3ZASTfIimCERCLMRG984pqcrXYB3aem4\nY5+t/JYLqp643QIoH/LvBOPkfo+eJTJSQA5Oa8Ov2V+vO21ITOXulaoI3DqR2+Pm\nL5sRdUPY1ho8zPb91OMUZOLVfwKBgQC/09gia2rgGNjXQTXgI4yZon6qqe0aGpSN\n45CaCJymU5szADrm0x8QNY/iNw7jRx4NLRfnQFfxHvIST0KyglAM3YTJizGX5FNC\n7dTqVBD7XjFrkNh08Rhe68wnJycOskpcmEqfwn4xcCkcAtKl1flpIE0urEjdV3kJ\nejIELE9vhwKBgBNPGtWSCWgXsswJrrRYP/p5nqbW/oX99JWbqUeg1Z2pEYur0Imi\nzOJ5ddzAGmXyvixmoVW1RdvB0OkJ+yVtJiSdOZmrYvYe3BgEpTlK0EQ5IVUSXqm5\nOkRcnex6ygxU9+YEHRAyVDtOdZm+WqXUTPsXkxmTf1T0ZRqfwk07blwbAoGAN2xG\nmxM8CslDBVZC8aJzwgPP4xE7fvpFB4XDRq3MTMYFJkQfwIcpB27iRnKv63ylsxrf\nOCJABltxh1a9J4Q9CqqJ7g04Y/FFGSZMCPQHAAlj7/cmgwsRhoNMNde7EiTzFTOv\nA9+WxEPqrLwoDl/3MqdxhVWjq8fVIabbgpcm0EsCfwR4UYOfsGFcIJl9CAIiVRka\nu44WfM0XDgDiTU0/jwShujodtpLxSItBlePia5LVhCnUzAOwWNyqQ8N18Q0FP0ZQ\nFjOSep46iySeOWMhVNShL0N8ASafJp8HiCZe+o4C6b4dRRVHTqWC4smRLAfFfMEa\nBCHfmiJz+zMwgBzvMH4=\n-----END PRIVATE KEY-----\n";
+
+struct FixtureResolver;
+
+impl DkimTxtResolver for FixtureResolver {
+    fn lookup_txt(&self, name: &str) -> Result<Vec<String>, String> {
+        if name != "test1._domainkey.example.com" {
+            return Ok(Vec::new());
+        }
+        use base64::Engine as _;
+        use rsa::RsaPrivateKey;
+        use rsa::pkcs8::{DecodePrivateKey, EncodePublicKey};
+        let key = RsaPrivateKey::from_pkcs8_pem(DKIM_TEST_PRIVATE_KEY_PEM)
+            .map_err(|error| error.to_string())?;
+        let der = key
+            .to_public_key()
+            .to_public_key_der()
+            .map_err(|error| error.to_string())?;
+        Ok(vec![format!(
+            "v=DKIM1; k=rsa; p={}",
+            base64::engine::general_purpose::STANDARD.encode(der.as_bytes())
+        )])
+    }
+}
+
+struct FailingResolver;
+
+impl DkimTxtResolver for FailingResolver {
+    fn lookup_txt(&self, name: &str) -> Result<Vec<String>, String> {
+        Err(format!("DNS TXT lookup for `{name}` timed out after 5s"))
+    }
+}
+
+/// Sign a fixed message with the fixture key under relaxed/relaxed
+/// canonicalisation, implemented here directly so the test does not reuse
+/// core's canonicaliser.
+fn dkim_signed_message(body: &str) -> String {
+    use base64::Engine as _;
+    use rsa::RsaPrivateKey;
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::pkcs8::DecodePrivateKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+    use sha2::{Digest, Sha256};
+
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let canonical_body = format!("{}\r\n", body.trim_end_matches(['\r', '\n']));
+    let bh = b64.encode(Sha256::digest(canonical_body.as_bytes()));
+    let dkim_value = format!(
+        "v=1; a=rsa-sha256; c=relaxed/relaxed; d=example.com; s=test1; h=from:to:subject:date; bh={bh}; b="
+    );
+    let mut header_data = String::new();
+    for (name, value) in [
+        ("from", "Operator <operator@example.com>"),
+        ("to", "orbit@example.com"),
+        ("subject", "Re: decision"),
+        ("date", "Mon, 26 Oct 2026 10:00:00 +0000"),
+    ] {
+        header_data.push_str(&format!("{name}:{value}\r\n"));
+    }
+    header_data.push_str(&format!("dkim-signature:{dkim_value}"));
+    let key = RsaPrivateKey::from_pkcs8_pem(DKIM_TEST_PRIVATE_KEY_PEM).unwrap();
+    let signature: rsa::pkcs1v15::Signature =
+        SigningKey::<Sha256>::new(key).sign(header_data.as_bytes());
+    format!(
+        "DKIM-Signature: {dkim_value}{}\r\nFrom: Operator <operator@example.com>\r\nTo: orbit@example.com\r\nSubject: Re: decision\r\nDate: Mon, 26 Oct 2026 10:00:00 +0000\r\n\r\n{canonical_body}",
+        b64.encode(signature.to_bytes())
+    )
+}
+
+impl Fixture {
+    fn submit_dkim(
+        &self,
+        request: &DecisionRequest,
+        token: &str,
+        raw_message: Option<String>,
+        resolver: &dyn DkimTxtResolver,
+    ) -> Result<DecisionRequest, orbit_core::OrbitError> {
+        self.runtime.submit_decision_via_channel_with_resolver(
+            DecisionSubmitParams {
+                channel: CHANNEL.to_string(),
+                request_id: request.id.clone(),
+                answer_id: "1".to_string(),
+                note: None,
+                token: token.to_string(),
+                sender: Some(SENDER.to_string()),
+                auth_results: Some(AUTH_PASS.to_string()),
+                raw_message,
+                caller: Fixture::plugin_caller(),
+            },
+            resolver,
+        )
+    }
+}
+
+#[test]
+fn core_dkim_verification_applies_a_signed_message_and_refuses_forgeries() {
+    let fx = fixture();
+    fx.runtime
+        .register_decision_channel_with_dkim_requirement(
+            CHANNEL,
+            HUMAN,
+            PLUGIN,
+            vec![SENDER.to_string()],
+            false,
+        )
+        .unwrap();
+    let (task, request) = fx.blocked_task_with_request();
+    let token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &request.id)
+        .unwrap();
+    let signed = dkim_signed_message("approve");
+
+    // One body byte changed: the body hash no longer matches.
+    let tampered = signed.replacen("approve\r\n", "approv3\r\n", 1);
+    let refused = fx
+        .submit_dkim(&request, &token, Some(tampered), &FixtureResolver)
+        .expect_err("a tampered body is refused");
+    assert!(
+        refused.to_string().contains("dkim_verification_failed"),
+        "{refused}"
+    );
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+
+    // A forged Authentication-Results claiming pass on an unsigned raw
+    // message: core's own result contradicts the forwarded verdict.
+    let unsigned = "From: Operator <operator@example.com>\r\nTo: orbit@example.com\r\nSubject: Re: decision\r\nDate: Mon, 26 Oct 2026 10:00:00 +0000\r\n\r\napprove\r\n".to_string();
+    let refused = fx
+        .submit_dkim(&request, &token, Some(unsigned), &FixtureResolver)
+        .expect_err("an unsigned raw message is refused");
+    assert!(
+        refused.to_string().contains("dkim_verification_failed"),
+        "{refused}"
+    );
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+
+    // A DNS failure is retryable and consumes nothing.
+    let refused = fx
+        .submit_dkim(&request, &token, Some(signed.clone()), &FailingResolver)
+        .expect_err("a DNS failure is refused");
+    let refused = refused.to_string();
+    assert!(
+        refused.contains("dkim_verification_unavailable"),
+        "{refused}"
+    );
+    assert!(refused.contains("retryable"), "{refused}");
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+
+    // The signed message verifies through the injected resolver and the
+    // answer applies — proving none of the refusals above consumed the
+    // token.
+    let answered = fx
+        .submit_dkim(&request, &token, Some(signed), &FixtureResolver)
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
+}
+
+#[test]
+fn a_channel_requiring_dkim_refuses_a_submission_without_a_raw_message() {
+    let fx = fixture();
+    let info = fx
+        .runtime
+        .register_decision_channel_with_dkim_requirement(
+            CHANNEL,
+            HUMAN,
+            PLUGIN,
+            vec![SENDER.to_string()],
+            true,
+        )
+        .unwrap();
+    assert!(info.require_dkim_verification);
+    let (task, request) = fx.blocked_task_with_request();
+    let token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &request.id)
+        .unwrap();
+
+    let refused = fx
+        .submit_dkim(&request, &token, None, &FixtureResolver)
+        .expect_err("no raw message is refused when DKIM is required");
+    assert!(
+        refused.to_string().contains("dkim_verification_required"),
+        "{refused}"
+    );
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+
+    let answered = fx
+        .submit_dkim(
+            &request,
+            &token,
+            Some(dkim_signed_message("approve")),
+            &FixtureResolver,
+        )
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
 }

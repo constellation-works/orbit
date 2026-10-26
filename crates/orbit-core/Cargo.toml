@@ -40,6 +40,7 @@ orbit-runtime = { path = "../orbit-runtime" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 regex.workspace = true
+rsa.workspace = true
 rusqlite.workspace = true
 serde_json.workspace = true
 serde.workspace = true
@@ -56,4 +57,8 @@ libc.workspace = true
 # Integration tests substitute the detached pipeline worker (`test_support`).
 orbit-core = { path = ".", features = ["test-support"] }
 orbit-policy = { path = "../orbit-policy" }
+# The decision-channel tests sign DKIM fixture messages with a test key.
+rsa.workspace = true
+sha2.workspace = true
+base64.workspace = true
 tracing-subscriber.workspace = true

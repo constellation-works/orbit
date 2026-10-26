@@ -462,12 +462,32 @@ batching, quiet hours and multi-answer parsing stay the plugin's (§6, §8).
   smaller surface than "any mail can move a task", but it is not equivalent to
   sitting at the dashboard, and the design does not pretend otherwise.
 - **Core judges evidence the plugin gathered.** Core re-checks token and verdict
-  strings, but it cannot independently verify DKIM — it trusts the plugin to
-  forward the provider's header faithfully. The containment is structural: the
-  plugin is operator-installed and grant-bound, the answers are closed, and a
-  lying plugin could already do damage within its other grants. A future
-  hardening (core-side DKIM verification of the raw message) is possible without
-  changing the contract and is named in the slices as optional.
+  strings, but without the raw message it cannot independently verify DKIM — it
+  trusts the plugin to forward the provider's header faithfully. The containment
+  is structural: the plugin is operator-installed and grant-bound, the answers
+  are closed, and a lying plugin could already do damage within its other
+  grants. Slice 7 narrows this: a submission may carry `raw_message` (at most
+  262144 bytes, 256 KiB), and when it does core verifies the DKIM signature
+  itself — selector key from DNS, body hash, signed-header signature, and
+  relaxed alignment of the signing domain with the sender's domain — refusing
+  `dkim_verification_failed` when its own result contradicts the forwarded
+  verdicts. A channel registered with `--require-dkim-verification`
+  (`require_dkim_verification`, off by default) refuses a submission without a
+  raw message as `dkim_verification_required`; with the switch off and no raw
+  message, submission is exactly as before. A DNS lookup failure refuses as
+  retryable `dkim_verification_unavailable` and consumes nothing; an oversized
+  raw message refuses as `raw_message_too_large`. The verification runs before
+  the channel store lock is taken, with a 5-second per-nameserver timeout, so
+  it never blocks revoke or rotate. Dependency choice: RSA-SHA256 verification
+  reuses the `rsa` crate already in the workspace for release-signature
+  verification (public-key verification only — see the RUSTSEC-2023-0071 note in
+  `deny.toml`), and TXT lookups use a minimal UDP client over the standard
+  library against the host's `/etc/resolv.conf` nameservers, behind an
+  injectable resolver trait for tests. No new DNS crate was taken: a single TXT
+  query shape needs no general resolver, and keeping the supply chain unchanged
+  (licenses and advisories already reviewed in `deny.toml`) outweighs a
+  dependency's broader resolver machinery. Only `rsa-sha256` signatures are
+  verified; `ed25519-sha256` and ARC remain out of scope.
 - **History-scanned listing is a deliberate simplicity tax.** Listing open
   requests scans task histories until volume proves otherwise; on a workspace
   with very long histories the trigger observation inherits that cost.

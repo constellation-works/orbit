@@ -288,6 +288,10 @@ fn decision_channel_cli_registers_submits_and_revokes() {
     assert_eq!(channels[0]["channel"], "email", "{channels}");
     assert_eq!(channels[0]["human"], "human:operator");
     assert_eq!(channels[0]["epoch"], 1);
+    assert_eq!(
+        channels[0]["require_dkim_verification"], false,
+        "{channels}"
+    );
     assert!(
         channels[0].get("key_hex").is_none(),
         "listings never carry key material: {channels}"
@@ -304,9 +308,14 @@ fn decision_channel_cli_registers_submits_and_revokes() {
         "human:operator",
         "--plugin",
         "decision-mail",
+        "--require-dkim-verification",
         "--json",
     ]);
     assert_eq!(registered["channel"], "pager", "{registered}");
+    assert_eq!(
+        registered["require_dkim_verification"], true,
+        "{registered}"
+    );
     // Registering from an agent envelope is refused: no running code can
     // mint itself a human.
     fixture

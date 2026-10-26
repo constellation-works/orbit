@@ -126,8 +126,17 @@ fn channel_execute(
                         .collect()
                 })
                 .unwrap_or_default();
-            let info =
-                runtime.register_decision_channel(&channel, &human, &plugin, allowed_senders)?;
+            let require_dkim_verification = input
+                .get("require_dkim_verification")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let info = runtime.register_decision_channel_with_dkim_requirement(
+                &channel,
+                &human,
+                &plugin,
+                allowed_senders,
+                require_dkim_verification,
+            )?;
             let blocks = vec![Block::text(format!(
                 "Registered decision channel `{}` for {} via plugin {} (key epoch {}, fingerprint sha256:{}).",
                 info.channel, info.human, info.plugin, info.epoch, info.key_fingerprint
@@ -143,6 +152,7 @@ fn channel_execute(
                 Column::new("PLUGIN").fixed(),
                 Column::new("EPOCH").fixed(),
                 Column::new("STATE").fixed(),
+                Column::new("DKIM").fixed(),
                 Column::new("SENDERS"),
             ])
             .empty_message("no decision channels registered on this host");
@@ -153,6 +163,12 @@ fn channel_execute(
                     channel.plugin.clone(),
                     channel.epoch.to_string(),
                     if channel.revoked { "revoked" } else { "active" }.to_string(),
+                    if channel.require_dkim_verification {
+                        "required"
+                    } else {
+                        "optional"
+                    }
+                    .to_string(),
                     channel.allowed_senders.join(", "),
                 ]);
             }

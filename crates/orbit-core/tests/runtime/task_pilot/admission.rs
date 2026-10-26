@@ -1748,6 +1748,7 @@ fn submit_pilot_answer(
                 "mx.example.com; dkim=pass header.d=example.com; spf=pass smtp.mailfrom=example.com; dmarc=pass"
                     .into(),
             ),
+            raw_message: None,
             caller,
         })
 }

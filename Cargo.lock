@@ -1928,6 +1928,7 @@ dependencies = [
  "orbit-tools",
  "orbit-types",
  "regex",
+ "rsa",
  "rusqlite",
  "serde",
  "serde_json",
