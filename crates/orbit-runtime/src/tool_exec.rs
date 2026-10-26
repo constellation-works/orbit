@@ -84,7 +84,7 @@ impl RuntimeKernel {
             .map_err(redact_all_error)
         {
             Ok(output) => output,
-            Err(OrbitError::PolicyDenied(reason)) => {
+            Err(error) if error.is_policy_denial() => {
                 self.with_mutation(|| {
                     Ok((
                         (),
@@ -93,7 +93,7 @@ impl RuntimeKernel {
                         },
                     ))
                 })?;
-                return Err(OrbitError::PolicyDenied(reason));
+                return Err(error);
             }
             Err(error) => return Err(error),
         };

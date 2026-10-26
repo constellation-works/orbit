@@ -21,7 +21,7 @@
 //! prepared footprint would keep out of the backlog is refused the same
 //! way, before any write.
 
-use orbit_common::OrbitError;
+use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::task::{
     DECISION_ANSWERED_EVENT, DecisionGate, DecisionRequest, DecisionRequestState,
     DecisionResolution, PilotAdmissionVerdict, ReadinessGap, ReadinessStage, TaskHistoryEntry,
@@ -138,17 +138,21 @@ impl OrbitRuntime {
     ) -> Result<DecisionRequest, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let request = self.get_decision_request(request_id)?.ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "request_not_found: no decision request `{request_id}` in this workspace"
-            ))
+            OrbitError::decision_refused(
+                DecisionRefusalCode::RequestNotFound,
+                format!("no decision request `{request_id}` in this workspace"),
+            )
         })?;
         match request.state {
             DecisionRequestState::Open => {}
             DecisionRequestState::Expired => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "request_expired: decision request `{request_id}` expired at {}; nothing was applied",
-                    request.expires_at.to_rfc3339()
-                )));
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::RequestExpired,
+                    format!(
+                        "decision request `{request_id}` expired at {}; nothing was applied",
+                        request.expires_at.to_rfc3339()
+                    ),
+                ));
             }
             DecisionRequestState::Answered => {
                 let by = request
@@ -157,15 +161,21 @@ impl OrbitRuntime {
                     .map_or("another answer", |resolution| {
                         resolution.answered_by.as_str()
                     });
-                return Err(OrbitError::InvalidInput(format!(
-                    "request_superseded: decision request `{request_id}` was already answered by {by}; nothing was applied"
-                )));
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::RequestSuperseded,
+                    format!(
+                        "decision request `{request_id}` was already answered by {by}; nothing was applied"
+                    ),
+                ));
             }
             DecisionRequestState::Superseded => {
-                return Err(OrbitError::InvalidInput(format!(
-                    "request_superseded: decision request `{request_id}` no longer matches the hold on task {}; nothing was applied",
-                    request.task_id
-                )));
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::RequestSuperseded,
+                    format!(
+                        "decision request `{request_id}` no longer matches the hold on task {}; nothing was applied",
+                        request.task_id
+                    ),
+                ));
             }
         }
         if !request.allows(answer_id) {
@@ -175,9 +185,12 @@ impl OrbitRuntime {
                 .map(|answer| answer.id.as_str())
                 .collect::<Vec<_>>()
                 .join(", ");
-            return Err(OrbitError::InvalidInput(format!(
-                "answer_not_allowed: `{answer_id}` is not an allowed answer for decision request `{request_id}` (allowed: {allowed}); nothing was applied"
-            )));
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotAllowed,
+                format!(
+                    "`{answer_id}` is not an allowed answer for decision request `{request_id}` (allowed: {allowed}); nothing was applied"
+                ),
+            ));
         }
         let note = note
             .map(|value| value.trim().to_string())
@@ -299,9 +312,12 @@ impl OrbitRuntime {
                         (PilotAdmissionVerdict::Evaluated, "evaluated")
                     }
                     other => {
-                        return Err(OrbitError::InvalidInput(format!(
-                            "answer_not_allowed: `{other}` is not a pilot-admission verdict; nothing was applied"
-                        )));
+                        return Err(OrbitError::decision_refused(
+                            DecisionRefusalCode::AnswerNotAllowed,
+                            format!(
+                                "`{other}` is not a pilot-admission verdict; nothing was applied"
+                            ),
+                        ));
                     }
                 };
                 // Requests raised before the offer was hold-aware still list
@@ -311,9 +327,12 @@ impl OrbitRuntime {
                 if let Some(hold) = self.pilot_admission_hold(task_id)?
                     && !hold.accepts_decision_answer(verdict)
                 {
-                    return Err(OrbitError::InvalidInput(format!(
-                        "answer_not_applicable: `{answer_id}` does not resolve a duplicate or already-landed pilot hold; nothing was applied and the request stays open"
-                    )));
+                    return Err(OrbitError::decision_refused(
+                        DecisionRefusalCode::AnswerNotApplicable,
+                        format!(
+                            "`{answer_id}` does not resolve a duplicate or already-landed pilot hold; nothing was applied and the request stays open"
+                        ),
+                    ));
                 }
                 // The trusted human path records the typed resolution from
                 // this comment's header; the lines after it are its evidence.
@@ -356,9 +375,10 @@ impl OrbitRuntime {
                         self.reject_task(task_id, reason, Some(comment))?;
                         Ok(())
                     }
-                    other => Err(OrbitError::InvalidInput(format!(
-                        "answer_not_allowed: `{other}` is not an approval answer; nothing was applied"
-                    ))),
+                    other => Err(OrbitError::decision_refused(
+                        DecisionRefusalCode::AnswerNotAllowed,
+                        format!("`{other}` is not an approval answer; nothing was applied"),
+                    )),
                 }
             }
         }
@@ -382,18 +402,21 @@ impl OrbitRuntime {
             return Ok(());
         }
         if let Some(hold) = self.pilot_admission_hold(task_id)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "answer_not_applicable: task-pilot holds this proposal ({}) and an approval does not resolve that hold; nothing was applied, the task stays proposed and the request stays open",
-                pilot_hold_classification(&hold)
-            )));
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotApplicable,
+                format!(
+                    "task-pilot holds this proposal ({}) and an approval does not resolve that hold; nothing was applied, the task stays proposed and the request stays open",
+                    pilot_hold_classification(&hold)
+                ),
+            ));
         }
         if self
             .verified_no_diff(task_id, task.status, &task.tags)?
             .is_some()
         {
-            return Err(OrbitError::InvalidInput(
-                "answer_not_applicable: task-pilot verified this proposal needs no change (pilot_verified_no_diff), so it is held for that disposition instead of promotion; nothing was applied, the task stays proposed and the request stays open"
-                    .to_string(),
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotApplicable,
+                "task-pilot verified this proposal needs no change (pilot_verified_no_diff), so it is held for that disposition instead of promotion; nothing was applied, the task stays proposed and the request stays open",
             ));
         }
         let gaps: Vec<ReadinessGap> = readiness_gaps(
@@ -411,9 +434,12 @@ impl OrbitRuntime {
                 .map(|gap| format!("{} (fix: {})", gap.code.as_str(), gap.fix))
                 .collect::<Vec<_>>()
                 .join("; ");
-            return Err(OrbitError::InvalidInput(format!(
-                "answer_not_applicable: this proposal is not prepared for the backlog ({detail}); nothing was applied, the task stays proposed and the request stays open"
-            )));
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotApplicable,
+                format!(
+                    "this proposal is not prepared for the backlog ({detail}); nothing was applied, the task stays proposed and the request stays open"
+                ),
+            ));
         }
         Ok(())
     }
@@ -427,9 +453,12 @@ impl OrbitRuntime {
     /// its blocker unresolved.
     fn triage_option_edit(&self, task_id: &str, answer_id: &str) -> Result<TriageEdit, OrbitError> {
         let refuse = |reason: &str| {
-            OrbitError::InvalidInput(format!(
-                "answer_not_applicable: option `{answer_id}` cannot be applied ({reason}); nothing was applied and the task stays blocked"
-            ))
+            OrbitError::decision_refused(
+                DecisionRefusalCode::AnswerNotApplicable,
+                format!(
+                    "option `{answer_id}` cannot be applied ({reason}); nothing was applied and the task stays blocked"
+                ),
+            )
         };
         let option = answer_id
             .parse::<usize>()

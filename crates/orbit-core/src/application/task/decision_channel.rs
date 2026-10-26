@@ -29,11 +29,11 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use orbit_common::OrbitError;
 use orbit_common::fs::io::{
     FileLockGuard, FileLockOptions, acquire_exclusive_file_lock, create_private_dir_all,
     write_new_private_text,
 };
+use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
 use orbit_types::plugin::is_valid_namespace;
 use orbit_types::task::{
@@ -306,9 +306,10 @@ impl OrbitRuntime {
         let _lock = self.lock_decision_channel_store()?;
         let mut store = self.decision_channel_store()?;
         let registration = store.channels.get_mut(channel).ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "channel_not_registered: no decision channel `{channel}` on this host"
-            ))
+            OrbitError::decision_refused(
+                DecisionRefusalCode::ChannelNotRegistered,
+                format!("no decision channel `{channel}` on this host"),
+            )
         })?;
         registration.revoked = true;
         registration.previous_epoch = None;
@@ -330,14 +331,16 @@ impl OrbitRuntime {
         let mut store = self.decision_channel_store()?;
         let plugin = {
             let registration = store.channels.get(channel).ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "channel_not_registered: no decision channel `{channel}` on this host"
-                ))
+                OrbitError::decision_refused(
+                    DecisionRefusalCode::ChannelNotRegistered,
+                    format!("no decision channel `{channel}` on this host"),
+                )
             })?;
             if registration.revoked {
-                return Err(OrbitError::InvalidInput(format!(
-                    "channel_revoked: decision channel `{channel}` is revoked; register it again to use it"
-                )));
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::ChannelRevoked,
+                    format!("decision channel `{channel}` is revoked; register it again to use it"),
+                ));
             }
             registration.plugin.clone()
         };
@@ -368,9 +371,10 @@ impl OrbitRuntime {
     ) -> Result<String, OrbitError> {
         let registration = self.active_registration(channel)?;
         let request = self.get_decision_request(request_id)?.ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "request_not_found: no decision request `{request_id}` in this workspace"
-            ))
+            OrbitError::decision_refused(
+                DecisionRefusalCode::RequestNotFound,
+                format!("no decision request `{request_id}` in this workspace"),
+            )
         })?;
         mint_token(&registration.key_hex, registration.epoch, &request)
     }
@@ -413,14 +417,16 @@ impl OrbitRuntime {
         match &params.caller {
             DecisionSubmitCaller::PluginCallback { .. } | DecisionSubmitCaller::Operator => {}
             DecisionSubmitCaller::Agent | DecisionSubmitCaller::Unknown => {
-                return Err(OrbitError::PolicyDenied(
-                    "caller_not_allowed: submitting a decision is a registered channel's or the operator's; an agent session never answers for a human".into(),
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::CallerNotAllowed,
+                    "submitting a decision is a registered channel's or the operator's; an agent session never answers for a human",
                 ));
             }
         }
         if !self.decision_channel_enabled() {
-            return Err(OrbitError::PolicyDenied(
-                "decision_channel_disabled: the decision channel is not enabled in this workspace; nothing was applied".into(),
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::DecisionChannelDisabled,
+                "the decision channel is not enabled in this workspace; nothing was applied",
             ));
         }
         // A forwarded raw message is DKIM-verified by core itself,
@@ -434,11 +440,14 @@ impl OrbitRuntime {
             .filter(|message| !message.is_empty())
         {
             if raw_message.len() > MAX_DECISION_RAW_MESSAGE_BYTES {
-                return Err(OrbitError::InvalidInput(format!(
-                    "raw_message_too_large: the forwarded raw message is {} bytes, over the {}-byte bound for core-side DKIM verification; nothing was applied",
-                    raw_message.len(),
-                    MAX_DECISION_RAW_MESSAGE_BYTES
-                )));
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::RawMessageTooLarge,
+                    format!(
+                        "the forwarded raw message is {} bytes, over the {}-byte bound for core-side DKIM verification; nothing was applied",
+                        raw_message.len(),
+                        MAX_DECISION_RAW_MESSAGE_BYTES
+                    ),
+                ));
             }
             let preliminary = self.active_registration(&params.channel)?;
             check_transport_evidence(&params, &preliminary)?;
@@ -452,15 +461,23 @@ impl OrbitRuntime {
                         .first()
                         .and_then(|sender| sender_domain_of(sender))
                 });
-            verify_dkim(raw_message.as_bytes(), sender_domain.as_deref(), dkim_resolver)
-                .map_err(|error| match error {
-                    DkimVerifyError::Failed(reason) => OrbitError::PolicyDenied(format!(
-                        "dkim_verification_failed: {reason}; nothing was applied"
-                    )),
-                    DkimVerifyError::Unavailable(reason) => OrbitError::Execution(format!(
-                        "dkim_verification_unavailable: retryable: {reason}; the token was not consumed and nothing was applied"
-                    )),
-                })?;
+            verify_dkim(
+                raw_message.as_bytes(),
+                sender_domain.as_deref(),
+                dkim_resolver,
+            )
+            .map_err(|error| match error {
+                DkimVerifyError::Failed(reason) => OrbitError::decision_refused(
+                    DecisionRefusalCode::DkimVerificationFailed,
+                    format!("{reason}; nothing was applied"),
+                ),
+                DkimVerifyError::Unavailable(reason) => OrbitError::decision_refused(
+                    DecisionRefusalCode::DkimVerificationUnavailable,
+                    format!(
+                        "retryable: {reason}; the token was not consumed and nothing was applied"
+                    ),
+                ),
+            })?;
         }
         // Held from the registration read through the apply: a revoke or
         // rotation cannot land between the check and the apply, and two
@@ -475,17 +492,25 @@ impl OrbitRuntime {
                 .as_deref()
                 .is_none_or(|message| message.is_empty())
         {
-            return Err(OrbitError::PolicyDenied(format!(
-                "dkim_verification_required: decision channel `{}` requires core-side DKIM verification, so the transport must forward the raw message; nothing was applied",
-                params.channel
-            )));
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::DkimVerificationRequired,
+                format!(
+                    "decision channel `{}` requires core-side DKIM verification, so the transport must forward the raw message; nothing was applied",
+                    params.channel
+                ),
+            ));
         }
-        let request = self.get_decision_request(&params.request_id)?.ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "request_not_found: no decision request `{}` in this workspace; nothing was applied",
-                params.request_id
-            ))
-        })?;
+        let request = self
+            .get_decision_request(&params.request_id)?
+            .ok_or_else(|| {
+                OrbitError::decision_refused(
+                    DecisionRefusalCode::RequestNotFound,
+                    format!(
+                        "no decision request `{}` in this workspace; nothing was applied",
+                        params.request_id
+                    ),
+                )
+            })?;
         let token = params.token.trim().to_ascii_uppercase();
         let fingerprint = sha256_hex(token.as_bytes());
         if !token_well_formed(&token)
@@ -499,21 +524,30 @@ impl OrbitRuntime {
                 && token_matches(&token, key, epoch, &request)?
             {
                 self.consume_decision_token(&request, &fingerprint, "key_rotated")?;
-                return Err(OrbitError::InvalidInput(format!(
-                    "token_consumed: the token for decision request `{}` was minted under key epoch {epoch}, which rotation invalidated; nothing was applied",
-                    request.id
-                )));
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::TokenConsumed,
+                    format!(
+                        "the token for decision request `{}` was minted under key epoch {epoch}, which rotation invalidated; nothing was applied",
+                        request.id
+                    ),
+                ));
             }
-            return Err(OrbitError::PolicyDenied(format!(
-                "token_invalid: the token does not verify for decision request `{}` under channel `{}`; nothing was applied",
-                request.id, params.channel
-            )));
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::TokenInvalid,
+                format!(
+                    "the token does not verify for decision request `{}` under channel `{}`; nothing was applied",
+                    request.id, params.channel
+                ),
+            ));
         }
         if self.decision_token_consumed(&request, &fingerprint)? {
-            return Err(OrbitError::InvalidInput(format!(
-                "token_consumed: the token for decision request `{}` was already presented and judged; the original outcome stands and nothing was applied again",
-                request.id
-            )));
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::TokenConsumed,
+                format!(
+                    "the token for decision request `{}` was already presented and judged; the original outcome stands and nothing was applied again",
+                    request.id
+                ),
+            ));
         }
         let answer_id = params.answer_id.trim();
         if answer_id.is_empty() {
@@ -543,18 +577,24 @@ impl OrbitRuntime {
             DecisionRequestState::Open => {}
             DecisionRequestState::Expired => {
                 self.consume_decision_token(&request, &fingerprint, "request_expired")?;
-                return Err(OrbitError::InvalidInput(format!(
-                    "request_expired: decision request `{}` expired at {}; nothing was applied",
-                    request.id,
-                    request.expires_at.to_rfc3339()
-                )));
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::RequestExpired,
+                    format!(
+                        "decision request `{}` expired at {}; nothing was applied",
+                        request.id,
+                        request.expires_at.to_rfc3339()
+                    ),
+                ));
             }
             DecisionRequestState::Answered | DecisionRequestState::Superseded => {
                 self.consume_decision_token(&request, &fingerprint, "request_superseded")?;
-                return Err(OrbitError::InvalidInput(format!(
-                    "request_superseded: decision request `{}` no longer matches the hold on task {}; nothing was applied",
-                    request.id, request.task_id
-                )));
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::RequestSuperseded,
+                    format!(
+                        "decision request `{}` no longer matches the hold on task {}; nothing was applied",
+                        request.id, request.task_id
+                    ),
+                ));
             }
         }
         let provenance = format!(
@@ -593,8 +633,9 @@ impl OrbitRuntime {
         match &caller {
             DecisionSubmitCaller::PluginCallback { .. } | DecisionSubmitCaller::Operator => {}
             DecisionSubmitCaller::Agent | DecisionSubmitCaller::Unknown => {
-                return Err(OrbitError::PolicyDenied(
-                    "caller_not_allowed: the decision digest is a registered channel's or the operator's; an agent session never raises requests for a human".into(),
+                return Err(OrbitError::decision_refused(
+                    DecisionRefusalCode::CallerNotAllowed,
+                    "the decision digest is a registered channel's or the operator's; an agent session never raises requests for a human",
                 ));
             }
         }
@@ -609,9 +650,12 @@ impl OrbitRuntime {
         if let DecisionSubmitCaller::PluginCallback { plugin } = &caller
             && plugin != &registration.plugin
         {
-            return Err(OrbitError::PolicyDenied(format!(
-                "channel_not_registered: decision channel `{channel}` is not bound to plugin `{plugin}`; nothing was raised"
-            )));
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::ChannelNotRegistered,
+                format!(
+                    "decision channel `{channel}` is not bound to plugin `{plugin}`; nothing was raised"
+                ),
+            ));
         }
         self.ensure_coordination_task_write_permitted()?;
         let mut raised = Vec::new();
@@ -725,14 +769,18 @@ impl OrbitRuntime {
     fn active_registration(&self, channel: &str) -> Result<ChannelRegistration, OrbitError> {
         let store = self.decision_channel_store()?;
         let registration = store.channels.get(channel).ok_or_else(|| {
-            OrbitError::PolicyDenied(format!(
-                "channel_not_registered: no decision channel `{channel}` is registered on this host; nothing was applied"
-            ))
+            OrbitError::decision_refused(
+                DecisionRefusalCode::ChannelNotRegistered,
+                format!("no decision channel `{channel}` is registered on this host; nothing was applied"),
+            )
         })?;
         if registration.revoked {
-            return Err(OrbitError::PolicyDenied(format!(
-                "channel_revoked: decision channel `{channel}` is revoked on this host; nothing was applied"
-            )));
+            return Err(OrbitError::decision_refused(
+                DecisionRefusalCode::ChannelRevoked,
+                format!(
+                    "decision channel `{channel}` is revoked on this host; nothing was applied"
+                ),
+            ));
         }
         Ok(registration.clone())
     }
@@ -859,10 +907,13 @@ fn answer_not_allowed(request: &DecisionRequest, why: &str) -> OrbitError {
         .map(|answer| answer.id.as_str())
         .collect::<Vec<_>>()
         .join(", ");
-    OrbitError::InvalidInput(format!(
-        "answer_not_allowed: {why} for decision request `{}` (allowed: {allowed}); the token was not consumed and nothing was applied",
-        request.id
-    ))
+    OrbitError::decision_refused(
+        DecisionRefusalCode::AnswerNotAllowed,
+        format!(
+            "{why} for decision request `{}` (allowed: {allowed}); the token was not consumed and nothing was applied",
+            request.id
+        ),
+    )
 }
 
 fn valid_channel_name(channel: &str) -> Result<String, OrbitError> {
@@ -913,10 +964,13 @@ fn check_transport_evidence(
     if let DecisionSubmitCaller::PluginCallback { plugin } = &params.caller
         && plugin != &registration.plugin
     {
-        return Err(OrbitError::PolicyDenied(format!(
-            "channel_not_registered: decision channel `{}` is not bound to plugin `{plugin}`; nothing was applied",
-            params.channel
-        )));
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::ChannelNotRegistered,
+            format!(
+                "decision channel `{}` is not bound to plugin `{plugin}`; nothing was applied",
+                params.channel
+            ),
+        ));
     }
     let transport = matches!(params.caller, DecisionSubmitCaller::PluginCallback { .. });
     let presented = params
@@ -925,10 +979,13 @@ fn check_transport_evidence(
         .map(|sender| sender.trim().to_ascii_lowercase())
         .filter(|sender| !sender.is_empty());
     if transport && presented.is_none() {
-        return Err(OrbitError::PolicyDenied(format!(
-            "sender_not_allowed: the transport presented no sender for decision channel `{}`; nothing was applied",
-            params.channel
-        )));
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::SenderNotAllowed,
+            format!(
+                "the transport presented no sender for decision channel `{}`; nothing was applied",
+                params.channel
+            ),
+        ));
     }
     if let Some(sender) = presented.as_deref()
         && !registration.allowed_senders.is_empty()
@@ -937,18 +994,22 @@ fn check_transport_evidence(
             .iter()
             .any(|allowed| allowed == sender)
     {
-        return Err(OrbitError::PolicyDenied(format!(
-            "sender_not_allowed: the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
-            params.channel
-        )));
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::SenderNotAllowed,
+            format!(
+                "the presented sender is not on decision channel `{}`'s allowlist; nothing was applied",
+                params.channel
+            ),
+        ));
     }
     let evidence_passes = match params.auth_results.as_deref() {
         Some(auth_results) => authentication_results_pass(auth_results),
         None => !transport,
     };
     if !evidence_passes {
-        return Err(OrbitError::PolicyDenied(
-            "authentication_failed: the transport did not forward Authentication-Results showing dkim=pass and spf=pass without dmarc=fail; nothing was applied".into(),
+        return Err(OrbitError::decision_refused(
+            DecisionRefusalCode::AuthenticationFailed,
+            "the transport did not forward Authentication-Results showing dkim=pass and spf=pass without dmarc=fail; nothing was applied",
         ));
     }
     Ok(())

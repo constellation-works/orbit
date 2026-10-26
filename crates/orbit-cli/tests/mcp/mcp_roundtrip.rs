@@ -2847,7 +2847,12 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
 }
 
 fn mcp_serve_error_paths_return_tool_errors_and_keep_serving() {
-    let (_workspace, mut client) = McpWorkspace::served();
+    let workspace = McpWorkspace::init();
+    let config_path = workspace.work.join(".orbit/config.toml");
+    let mut config = std::fs::read_to_string(&config_path).unwrap_or_default();
+    config.push_str("\n[decision_channel]\nenabled = true\n");
+    std::fs::write(config_path, config).unwrap();
+    let mut client = workspace.serve();
 
     // Bad params: missing required field is a structured `invalid_input`
     // tool error, not a JSON-RPC failure or a crash.
@@ -2856,6 +2861,22 @@ fn mcp_serve_error_paths_return_tool_errors_and_keep_serving() {
     assert!(
         message_contains(&bad_params, "title"),
         "error should name the missing field: {bad_params}"
+    );
+
+    let missing = client.call_tool_err("orbit_decision_show", json!({"id": "missing-request"}));
+    assert_eq!(missing["code"], "request_not_found", "{missing}");
+
+    let mut operator = workspace.serve_with_args(&["--operator"]);
+    let unregistered = operator.call_tool_err(
+        "orbit_decision_submit",
+        json!({
+            "channel": "missing-channel", "id": "missing-request",
+            "answer": "approve", "token": "invalid-token",
+        }),
+    );
+    assert_eq!(
+        unregistered["code"], "channel_not_registered",
+        "{unregistered}"
     );
 
     // Inactive tools remain absent from the advertised MCP registry.

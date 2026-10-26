@@ -434,3 +434,78 @@ pub struct PrivateVcsFailure {
     /// The rendered message, without the `execution failed: ` prefix.
     pub message: String,
 }
+
+/// Stable decision-request and channel refusal codes shared by all transports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DecisionRefusalCode {
+    ChannelNotRegistered,
+    ChannelRevoked,
+    CallerNotAllowed,
+    SenderNotAllowed,
+    AuthenticationFailed,
+    DkimVerificationFailed,
+    DkimVerificationUnavailable,
+    DkimVerificationRequired,
+    RawMessageTooLarge,
+    TokenInvalid,
+    TokenConsumed,
+    RequestExpired,
+    RequestSuperseded,
+    AnswerNotAllowed,
+    RequestNotFound,
+    AnswerNotApplicable,
+    DecisionChannelDisabled,
+}
+
+impl DecisionRefusalCode {
+    /// The protocol name exposed as the CLI and MCP structured error code.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ChannelNotRegistered => "channel_not_registered",
+            Self::ChannelRevoked => "channel_revoked",
+            Self::CallerNotAllowed => "caller_not_allowed",
+            Self::SenderNotAllowed => "sender_not_allowed",
+            Self::AuthenticationFailed => "authentication_failed",
+            Self::DkimVerificationFailed => "dkim_verification_failed",
+            Self::DkimVerificationUnavailable => "dkim_verification_unavailable",
+            Self::DkimVerificationRequired => "dkim_verification_required",
+            Self::RawMessageTooLarge => "raw_message_too_large",
+            Self::TokenInvalid => "token_invalid",
+            Self::TokenConsumed => "token_consumed",
+            Self::RequestExpired => "request_expired",
+            Self::RequestSuperseded => "request_superseded",
+            Self::AnswerNotAllowed => "answer_not_allowed",
+            Self::RequestNotFound => "request_not_found",
+            Self::AnswerNotApplicable => "answer_not_applicable",
+            Self::DecisionChannelDisabled => "decision_channel_disabled",
+        }
+    }
+
+    /// Whether the same submission can be retried unchanged after a verifier outage.
+    pub fn is_retryable(self) -> bool {
+        matches!(self, Self::DkimVerificationUnavailable)
+    }
+
+    /// Whether this refusal retains the policy-denial audit classification.
+    pub fn is_policy_denial(self) -> bool {
+        matches!(
+            self,
+            Self::ChannelNotRegistered
+                | Self::ChannelRevoked
+                | Self::CallerNotAllowed
+                | Self::SenderNotAllowed
+                | Self::AuthenticationFailed
+                | Self::DkimVerificationFailed
+                | Self::DkimVerificationRequired
+                | Self::TokenInvalid
+                | Self::DecisionChannelDisabled
+        )
+    }
+}
+
+impl std::fmt::Display for DecisionRefusalCode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}

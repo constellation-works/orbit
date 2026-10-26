@@ -12,6 +12,31 @@ use orbit_types::task::{
 
 use crate::isolated_cli_fixture::Fixture;
 
+/// Missing requests carry the same stable refusal code on both CLI verbs.
+#[test]
+fn decision_cli_missing_request_has_structured_code() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::decision_cli_missing_request_has_structured_code",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    for args in [
+        vec!["decision", "show", "missing-request", "--json"],
+        vec!["decision", "answer", "missing-request", "approve", "--json"],
+    ] {
+        let output = fixture
+            .command(&args)
+            .env("ORBIT_OPERATOR", "1")
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        let payload: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(payload["code"], "request_not_found", "{payload}");
+    }
+}
+
 /// `orbit decision list|show|answer` over a raised block-triage request:
 /// the operator's answer lands as a human write, the task returns to
 /// backlog, the request reads answered, and a second answer is refused.
@@ -344,6 +369,28 @@ fn decision_channel_cli_registers_submits_and_revokes() {
         .assert()
         .failure();
 
+    // A malformed token is a terminal credential refusal, distinguishable
+    // from a missing request or a retryable verifier outage.
+    let invalid = fixture
+        .command(&[
+            "decision",
+            "submit",
+            &request_id,
+            "1",
+            "--channel",
+            "email",
+            "--token",
+            "invalid-token",
+            "--json",
+        ])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let invalid: serde_json::Value = serde_json::from_slice(&invalid.stderr).unwrap();
+    assert_eq!(invalid["code"], "token_invalid", "{invalid}");
+
     // The operator tests the channel through the governed submit; a
     // scripted (non-terminal) operator uses the audited override, like
     // every other governed operation.
@@ -375,6 +422,26 @@ fn decision_channel_cli_registers_submits_and_revokes() {
             .starts_with("decision-channel email (request "),
         "{submitted}"
     );
+
+    let replay = fixture
+        .command(&[
+            "decision",
+            "submit",
+            &request_id,
+            "1",
+            "--channel",
+            "email",
+            "--token",
+            &token,
+            "--json",
+        ])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    let replay: serde_json::Value = serde_json::from_slice(&replay.stderr).unwrap();
+    assert_eq!(replay["code"], "token_consumed", "{replay}");
 
     // Revocation refuses the next submission through the channel.
     fixture.json(&["decision", "channel", "revoke", "email", "--json"]);

@@ -2,9 +2,9 @@ use crate::OrbitRuntime;
 use crate::application::task::decision_request_json;
 use crate::application::task::{DecisionSubmitCaller, DecisionSubmitParams};
 use crate::runtime::authorization::resolved_caller_capabilities;
-use orbit_common::OrbitError;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_common::governance::operation::OperationVerb;
+use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::task::DecisionGate;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use serde_json::{Value, json};
@@ -42,9 +42,10 @@ pub(super) fn dispatch(
         DecisionVerb::Show => {
             let id = input.required_string("id")?;
             let request = runtime.get_decision_request(&id)?.ok_or_else(|| {
-                OrbitError::InvalidInput(format!(
-                    "request_not_found: no decision request `{id}` in this workspace"
-                ))
+                OrbitError::decision_refused(
+                    DecisionRefusalCode::RequestNotFound,
+                    format!("no decision request `{id}` in this workspace"),
+                )
             })?;
             Ok(decision_request_json(&request))
         }

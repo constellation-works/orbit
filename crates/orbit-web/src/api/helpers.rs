@@ -238,6 +238,18 @@ pub(super) fn non_empty_string(raw: &str) -> Option<String> {
 
 pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
     match e {
+        orbit_core::OrbitError::DecisionRefused { code, message } => {
+            let status = if code == orbit_common::DecisionRefusalCode::RequestNotFound {
+                StatusCode::NOT_FOUND
+            } else if code.is_retryable() {
+                StatusCode::SERVICE_UNAVAILABLE
+            } else if code.is_policy_denial() {
+                StatusCode::FORBIDDEN
+            } else {
+                StatusCode::BAD_REQUEST
+            };
+            (status, Json(json!({"error": message, "code": code.as_str()}))).into_response()
+        }
         orbit_core::OrbitError::InvalidInput(msg)
         | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request(msg),
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => bad_request(message),

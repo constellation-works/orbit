@@ -297,6 +297,13 @@ produces a refusal reply mail (rate-limited per §8) so the human learns the ans
 did not land — silence after a decision mail is the failure mode this design most
 avoids. The named refusal cases:
 
+Decision refusals expose their named kind in CLI `--json`'s `code` and MCP
+`structuredContent.code`, including `request_not_found` for a missing request in
+show, answer and submit. Clients match that code rather than parsing the message.
+`dkim_verification_unavailable` means the same submission can be retried after the
+verifier recovers; it consumes no token. Other codes require a corrected answer,
+channel, credential or fresh request as described below.
+
 | Case | Expected behaviour |
 |---|---|
 | **Forged or unknown sender** (not allowlisted, or DKIM/SPF/DMARC not `pass`) | Plugin drops the message, logs sender + verdicts, no core call, no reply mail (never confirm to a forged sender that the mailbox is live). A digest of drops surfaces in the plugin's status panel. |
