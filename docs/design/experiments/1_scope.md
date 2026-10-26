@@ -208,7 +208,11 @@ segment:
   horizon, so repeated looks do not inflate false wins). Then: `winner <arm>` when the primary
   metric's interval excludes zero in the better direction and no guardrail's point estimate is
   past its threshold; `no difference`; or `inconclusive` when a guardrail interval straddles
-  its threshold. Before the horizon the readout says `collecting`.
+  its threshold or the primary comparison lacks an interval (no settled outcomes,
+  fewer than two values per arm in a used complexity cell, or no common measured
+  cell). Missing evidence cannot establish `no difference`; a treatment with a
+  complete winning comparison can still win. Before the horizon the readout says
+  `collecting`.
 - **Lagging metrics.** Escaped regressions settle 14 days after landing; the readout shows how
   many outcomes are still open.
 

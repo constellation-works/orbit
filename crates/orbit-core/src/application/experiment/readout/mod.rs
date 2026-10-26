@@ -866,6 +866,7 @@ fn verdict(
         let (Some(estimate), Some([low, high])) =
             (difference.overall.estimate, difference.overall.interval)
         else {
+            inconclusive = true;
             reasons.push(format!("arm `{arm}` has no interval on {}", primary.metric));
             continue;
         };
