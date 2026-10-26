@@ -145,15 +145,18 @@ export function fetchAndRenderMetrics() {
     fetchDiff(selectedWindow),
   ]), ([durations, completions, outcome, defects, tokens, diff]) => {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
-    // A refresh started before a token-filter change (or a retired visit)
-    // must not replace the newer token result, unavailable replies included.
-    if (!isCurrentTokensPayload(tokens, selectedWindow)) return;
+    // A refresh started before a token-filter change must keep the token
+    // result (or loading/error state) already applied for the current filter,
+    // while still applying its same-scope duration and trend results.
+    const currentTokens = isCurrentTokensPayload(tokens, selectedWindow)
+      ? tokens
+      : (lastPayload ? lastPayload.tokens : null);
     if (!isCurrentDiffPayload(diff, selectedWindow)) return;
-    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (!tokens.unavailable && windowKey(tokens) !== selectedWindow) || (!diff.unavailable && windowKey(diff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
+    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (currentTokens && !currentTokens.unavailable && windowKey(currentTokens) !== selectedWindow) || (!diff.unavailable && windowKey(diff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens, diff, outcome: (outcome && outcome.by_complexity) || [] };
+    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens: currentTokens, diff, outcome: (outcome && outcome.by_complexity) || [] };
     renderMetrics();
   }, "metrics-count");
 }
