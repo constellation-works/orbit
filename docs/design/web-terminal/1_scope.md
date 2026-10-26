@@ -5,7 +5,7 @@ last_updated: 2026-10-25
 last_validated: 2026-10-25
 status: Draft
 stage: building
-next: "Phase 1: ORB-18488 browser-session credential (backlog, not started)"
+next: "Phase 1: ORB-18488 browser-session credential (in review); then the terminal routes"
 feature: web-terminal
 doc_role: scope
 type: design
@@ -82,6 +82,16 @@ check, so it gets one, scoped to the terminal routes:
    A new `orbit web open` prints or opens a fresh one-time URL for an already running dashboard.
 4. Comparison is constant-time. Sessions live in memory, end with the process, and expire after
    `machine.web_session.ttl`.
+
+The phase-1 implementation keeps the startup key on the host and derives each
+single-use URL ticket with keyed BLAKE3 over a CSPRNG nonce and issuance time.
+Tickets expire after five minutes; the exchange records consumption atomically.
+`Orbit home` here resolves to the machine-global `~/.orbit`, independently of
+`--root`, matching the sandbox's fixed host credential boundary. The entire
+`~/.orbit/run` directory is masked so atomic-write siblings and private browser
+redirect files cannot leak a credential. Browser launchers receive only a private
+redirect-file path; `web serve` and `web connect` print tickets only to a TTY.
+Explicit `web open --no-open` output is credential-bearing and must be kept private.
 
 Every terminal route requires the cookie as well as the operator session and the origin guard.
 A request without it gets 401, whatever its headers.

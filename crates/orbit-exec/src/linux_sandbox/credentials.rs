@@ -12,7 +12,8 @@
 //! policy grant or alias bind can expose it again: a directory is replaced by
 //! an empty `--tmpfs`, a file by `--ro-bind /dev/null`. A location that does
 //! not exist is skipped, because Bubblewrap cannot mount over a missing
-//! destination. A location the child could also reach through a second path
+//! destination; the browser-session directory is created first instead, unless
+//! this process sees its tree read-only. A location the child could also reach through a second path
 //! (a bind mount alias), or one that would hide a path the plan grants the
 //! child, refuses the plan rather than starting with an incomplete mask.
 
@@ -65,9 +66,40 @@ pub(super) fn append_credential_masks(
 ) -> Result<(), OrbitError> {
     let mut targets = BTreeSet::new();
     for deny in denies {
+        let browser_credentials = deny
+            .path
+            .ends_with(crate::credential_paths::WEB_SESSION_DIRECTORY);
+        if browser_credentials {
+            // Mask the directory before a dashboard may start or rotate its
+            // key. Skipping an absent directory would expose future secrets
+            // to an already-running child through its read-only root mount.
+            match orbit_common::fs::io::create_private_dir_all(&deny.path) {
+                Ok(()) => {}
+                // This process sees the tree read-only, as inside an outer
+                // sandbox that does not mask it yet. The child's root bind
+                // then shows it no more than this confined process can read.
+                Err(error)
+                    if error.kind() == std::io::ErrorKind::ReadOnlyFilesystem
+                        && !deny.path.exists() =>
+                {
+                    continue;
+                }
+                Err(error) => {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "cannot prepare browser credential mask: {error}; refusing to start"
+                    )));
+                }
+            }
+        }
         // A dangling or absent path resolves to nothing: nothing to hide.
-        let Ok(canonical) = std::fs::canonicalize(&deny.path) else {
-            continue;
+        let canonical = match std::fs::canonicalize(&deny.path) {
+            Ok(path) => path,
+            Err(error) if browser_credentials => {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "cannot resolve browser credential mask: {error}; refusing to start"
+                )));
+            }
+            Err(_) => continue,
         };
         if canonical.is_dir() || (deny.file && canonical.is_file()) {
             targets.insert(canonical);

@@ -46,6 +46,7 @@
 (allow file-write* (regex "^<HOME>/\\.grok/models_cache\\.json\\.tmp(?:\\.[0-9]+)*$"))
 (allow file-write* (regex "^<HOME>/\\.grok/mcp_auth_[^/]+\\.lock$"))
 (allow file-write* (subpath "<HOME>/.orbit/state/plugins/demo"))
+(deny file-read* (subpath "<HOME>/.orbit/run"))
 (deny file-read* (subpath "<HOME>/.ssh"))
 (deny file-read* (subpath "<HOME>/.aws"))
 (deny file-read* (subpath "<HOME>/.config/gh"))

@@ -64,6 +64,7 @@
 (deny file-write* (literal "<ROOT>/repo/.orbit/state"))
 (deny file-write* (literal "<ROOT>/repo/.orbit/state/worktrees"))
 (deny file-write* (literal "<ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden"))
+(deny file-read* (subpath "<HOME>/.orbit/run"))
 (deny file-read* (subpath "<HOME>/.ssh"))
 (deny file-read* (subpath "<HOME>/.aws"))
 (deny file-read* (subpath "<HOME>/.config/gh"))

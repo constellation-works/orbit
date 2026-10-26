@@ -127,8 +127,10 @@ fn bwrap_child_gets_only_the_supplied_environment() {
 }
 
 /// The host filesystem stays readable under Bubblewrap, but the well-known
-/// credential locations are masked: a confined child sees an empty `~/.ssh`
-/// and no cargo token while its worktree stays writable. The fake home lives
+/// credential locations are masked: a confined child sees an empty `~/.ssh`,
+/// no cargo token and no dashboard browser-session key (`~/.orbit/run`, which
+/// a confined worker could otherwise exchange for a dashboard session) while
+/// its worktree stays writable. The fake home lives
 /// under the crate directory because the sandbox replaces `/tmp` with its own
 /// tmpfs, which would hide a home created there and prove nothing.
 #[test]
@@ -153,8 +155,11 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
         .expect("canonical home");
     std::fs::create_dir_all(home.join(".ssh")).expect("ssh dir");
     std::fs::create_dir_all(home.join(".cargo")).expect("cargo dir");
+    std::fs::create_dir_all(home.join(".orbit/run")).expect("browser session dir");
     std::fs::write(home.join(".ssh/id_ed25519"), b"PRIVATE-KEY").expect("key");
     std::fs::write(home.join(".cargo/credentials.toml"), b"PUBLISH-TOKEN").expect("token");
+    std::fs::write(home.join(".orbit/run/web-session.secret"), b"BROWSER-KEY")
+        .expect("browser session key");
     let workspace_dir = tempfile::tempdir().expect("workspace tempdir");
     let workspace = workspace_dir
         .path()
@@ -163,8 +168,10 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     let resolved = profile(vec![format!("{}/**", workspace.display())]);
 
     let script = format!(
-        "cat '{home}/.ssh/id_ed25519' '{home}/.cargo/credentials.toml' 2>/dev/null; \
-         echo \"ssh-listing:$(ls -A '{home}/.ssh')\"; echo written > '{ws}/out.txt'",
+        "cat '{home}/.ssh/id_ed25519' '{home}/.cargo/credentials.toml' \
+         '{home}/.orbit/run/web-session.secret' 2>/dev/null; \
+         echo \"ssh-listing:$(ls -A '{home}/.ssh')\"; \
+         echo \"run-listing:$(ls -A '{home}/.orbit/run')\"; echo written > '{ws}/out.txt'",
         home = home.display(),
         ws = workspace.display()
     );
@@ -190,7 +197,9 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     let stdout = String::from_utf8_lossy(&output.stdout);
 
     assert!(
-        !stdout.contains("PRIVATE-KEY") && !stdout.contains("PUBLISH-TOKEN"),
+        !stdout.contains("PRIVATE-KEY")
+            && !stdout.contains("PUBLISH-TOKEN")
+            && !stdout.contains("BROWSER-KEY"),
         "credential contents must not reach a confined child: {stdout}"
     );
     // `cat` names the path it could not open, so the listing is framed rather
@@ -198,6 +207,10 @@ fn bwrap_child_cannot_read_credential_locations_but_writes_its_worktree() {
     assert!(
         stdout.lines().any(|line| line == "ssh-listing:"),
         "the masked ~/.ssh must list as empty: {stdout}"
+    );
+    assert!(
+        stdout.lines().any(|line| line == "run-listing:"),
+        "the masked ~/.orbit/run must list as empty: {stdout}"
     );
     assert_eq!(
         std::fs::read_to_string(workspace.join("out.txt")).expect("worktree write"),

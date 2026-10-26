@@ -19,19 +19,21 @@ chrono.workspace = true
 clap.workspace = true
 flate2.workspace = true
 futures-core.workspace = true
+getrandom.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 # Lease intake socket: the token scope the lease listener sends.
 orbit-auth = { path = "../orbit-auth" }
 orbit-cmd = { path = "../orbit-cmd" }
 orbit-common = { path = "../orbit-common" }
+orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
 orbit-core = { path = "../orbit-core" }
 orbit-registry = { path = "../orbit-registry" }
 serde.workspace = true
 serde_json.workspace = true
-# The lease intake socket's framed reads and per-frame timeouts.
-tokio = { workspace = true, features = ["io-util", "time"] }
+# Framed lease reads, timeouts and the SSH browser-credential transport.
+tokio = { workspace = true, features = ["io-util", "time", "process"] }
 # Answers `/api/on/<serving host>/…` by dispatching into the local router.
 tower.workspace = true
 tower-http.workspace = true
