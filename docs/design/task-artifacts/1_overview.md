@@ -4,7 +4,7 @@ type: design
 title: "Task Artifacts — Overview"
 owner: codex
 last_updated: 2026-05-17
-last_validated: 2026-10-22
+last_validated: 2026-10-25
 status: Draft
 feature: task-artifacts
 doc_role: overview
@@ -90,7 +90,7 @@ Lifecycle changes, comments, and automation updates are naturally append-heavy. 
 
 ### 2.6 Typed relations
 
-Typed links live in a single directed `relations` array on the envelope. Task-to-task relation types remain source-implied (`child_of`, `blocked_by`, `spawned_from`, `regression_from`, `supersedes`, and `related_to`) and task-only. Cross-artifact provenance uses `produces` and `resolves`, whose targets may be task, friction, or ADR IDs. A `regression_from` edge may also carry a typed `regression` classification (nature and escape; see [the bundle spec](specs/task-bundle-v2.md#regression-classification)). The bundle stores one directed edge per relationship. Consumers reason about relation meaning rather than inferring it from legacy field names.
+Typed links live in a single directed `relations` array on the envelope. Task-only relation types remain source-implied (`child_of`, `blocked_by`, `spawned_from`, `regression_from`, `supersedes`, and `related_to`). `covered_by` may target another task or a GitHub PR reference. Cross-artifact provenance uses `produces` and `resolves`, whose targets may be task, friction, or ADR IDs. A `regression_from` edge may also carry a typed `regression` classification (nature and escape; see [the bundle spec](specs/task-bundle-v2.md#regression-classification)). The bundle stores one directed edge per relationship. Consumers reason about relation meaning rather than inferring it from legacy field names.
 
 ### 2.7 Local task store
 
