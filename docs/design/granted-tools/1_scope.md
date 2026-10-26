@@ -1,8 +1,8 @@
 ---
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 stage: designing
 next: "Daniel approves the scope, then implementation slices are filed"
@@ -155,6 +155,30 @@ Grantable therefore means: denied to `agent_implement`, but passable by an
 `Agent` capability once listed — ungoverned, or governed with `Agent` in
 its allowed set. `orbit.auto_task.update` (ungoverned except for the
 `expected_enabled` input) is the canonical grantable case.
+
+**Classification ownership (phase 2 decision).** The single reviewed list is
+`AGENT_IMPLEMENT_TOOL_GRANT_CLASSIFICATIONS` in
+[`authorization/grants.rs`](../../../crates/orbit-common/src/governance/authorization/grants.rs),
+beside the governed-operation catalog. Authorization reviewers own additions
+and any change to repeat-safety, as they do catalog rows. It classifies all
+seven shipped deny entries: the three auto-task operations are grantable;
+the command, pipeline and workflow operations are always operator-only.
+Every current entry is mutating: definition edits, task minting, arbitrary
+commands and run submission/resumption can all change live state. There are
+no reviewed read/repeat-safe entries yet. `classify_agent_tool_grant` treats
+an unclassified name as mutating and always rechecks the governed row, so
+neither an omitted entry nor a stale grantable classification can bypass a
+row that excludes `Agent`.
+
+Task creation and grant replacement both call `validate_granted_tools` in
+[`task/grants.rs`](../../../crates/orbit-core/src/application/task/grants.rs).
+It refuses an always-operator-only tool, naming its governed row, and reuses
+the activity's exact-canonical, registered, agent-facing and enabled admission
+rule. Disabled grants fail at filing time, including a resubmitted unchanged
+grant; ordinary `required_tools` keep their existing disabled-tool warning.
+These phases still land dark: classification does not lift an activity deny
+or execute a mutation. Direct-call admission and reviewed proposal application
+remain phases 3 and 5 respectively.
 
 The grant reaches the implementer only. Reviewers, recovery, pilot and
 every other activity keep their own deny lists untouched: the existing
@@ -353,10 +377,9 @@ differently), and phase 5 is the only one that can change live state.
    `orbit.routine.control`? This doc recommends the new id for audit
    clarity; the reuse is smaller. Either follows the same
    `tool_exec.rs` pattern.
-2. **Classification ownership.** Does the read/repeat-safe vs mutating
-   classification live beside the governed catalog, or in the tool
-   registry entry? It must be one reviewed list; its home decides who
-   reviews additions.
+2. **Classification ownership — resolved in phase 2.** The single list lives
+   beside the governed catalog in `authorization/grants.rs`, under
+   authorization review; see §2 for the grantability and mutating defaults.
 3. **Grant expiry.** Should a grant lapse if the task sits undispatched
    (e.g. is re-piloted or its text changes materially)? v1 has no expiry
    beyond the dispatch freeze; an operator re-check at dispatch is the

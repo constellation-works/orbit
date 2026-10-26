@@ -40,6 +40,12 @@ pub(in crate::application) trait TaskJobPort {
     /// it reads the checkout's remotes at most once.
     type PrForge: Default;
 
+    /// Why an exact task tool name cannot be made available to an agent:
+    /// canonical spelling, registration, agent surface or enablement.
+    /// `None` means the activity availability rule admits it.
+    fn task_tool_availability_refusal(&self, tool_name: &str)
+    -> Result<Option<String>, OrbitError>;
+
     /// The crew a task is created or re-rated with: `explicit` verbatim,
     /// else the purpose pool its tags name, then its complexity pool, then
     /// the default crew; `None` when the workspace names no crew. `random`

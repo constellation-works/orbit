@@ -74,6 +74,7 @@ mod caller;
 mod catalog;
 mod decision;
 mod env;
+mod grants;
 
 pub use caller::{CallerCapabilities, CallerEnvelope, CallerProvenance, CapabilityResolution};
 pub use catalog::{
@@ -92,3 +93,6 @@ pub use catalog::{
 };
 pub use decision::{AuthorizationDenial, authorize};
 pub use env::{OPERATOR_OVERRIDE_ENV, agent_context_declared, operator_override_active};
+pub use grants::{
+    GrantedToolEffect, ToolGrantClassification, ToolGrantability, classify_agent_tool_grant,
+};

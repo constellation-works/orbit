@@ -20,6 +20,13 @@ use crate::application::contracts::{
 use crate::application::task::TaskJobPort;
 
 impl TaskJobPort for OrbitRuntime {
+    fn task_tool_availability_refusal(
+        &self,
+        tool_name: &str,
+    ) -> Result<Option<String>, OrbitError> {
+        super::granted_tool_refusal(self, tool_name)
+    }
+
     type CrewPools = CapturedCrewPools;
     type PrForge = PrForgeCheck;
 
