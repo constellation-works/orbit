@@ -17,7 +17,7 @@ const ISOLATED_TEST_ENV: &str = "ORBIT_TEST_WEB_FIXTURE_CHILD";
 ///
 /// Returns `true` inside the child, where the caller runs its body, and
 /// `false` in the parent once the child ran exactly that test and passed.
-pub(super) fn enter_isolated_child(module: &str, test: &str) -> bool {
+pub(crate) fn enter_isolated_child(module: &str, test: &str) -> bool {
     run_isolated_child(module, test).is_none()
 }
 

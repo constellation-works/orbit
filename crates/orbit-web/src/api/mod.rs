@@ -78,4 +78,4 @@ fn resume_run_in_flight_conflict(error: orbit_core::OrbitError) -> axum::respons
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

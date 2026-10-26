@@ -546,6 +546,9 @@ pub struct LeaseInsertParams {
     pub bound_branch: Option<String>,
     pub actor: String,
     pub ttl_seconds: u32,
+    /// The lease token a listener request authenticated with; `None` for a
+    /// lease requested over SSH or the dashboard.
+    pub token_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -582,6 +585,10 @@ pub struct LeaseRecord {
     pub released_at: Option<String>,
     /// `ttl_expired` once lazy expiry has ended the lease.
     pub release_reason: Option<TaskReservationReleaseReason>,
+    /// The lease token the request authenticated with, when it came through
+    /// the lease intake socket.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<String>,
 }
 
 /// Move an active lease's `expires_at` to `ttl_seconds` from now.

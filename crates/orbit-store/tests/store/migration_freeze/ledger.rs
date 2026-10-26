@@ -461,6 +461,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "experiment_admissions".to_string(),
             ),
             ("migration.v0065".to_string(), "lease_notices".to_string()),
+            (
+                "migration.v0066".to_string(),
+                "task_reservation_lease_token".to_string(),
+            ),
         ]
     );
 }

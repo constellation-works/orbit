@@ -11,13 +11,13 @@ use std::str::FromStr;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::identity::validate_registry_identifier;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// Longest principal name, `person` or `person/agent`.
 const PRINCIPAL_MAX_BYTES: usize = 128;
 
 /// Who a token's principal is: a person, or an agent acting for one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PrincipalClass {
     /// A person.
@@ -59,7 +59,7 @@ impl FromStr for PrincipalClass {
 }
 
 /// What a token may do on the listener.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeaseTokenVerb {
     /// Show, list, check and read notices.
@@ -101,7 +101,7 @@ impl FromStr for LeaseTokenVerb {
 }
 
 /// The highest lease priority a token may request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeasePriorityCeiling {
     /// Only `low`.
@@ -138,7 +138,7 @@ impl FromStr for LeasePriorityCeiling {
 }
 
 /// Whether a token may hold hard leases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HardLeasePermission {
     /// Hard requests are granted as hard, within workspace policy.
@@ -171,7 +171,7 @@ impl FromStr for HardLeasePermission {
 }
 
 /// Everything a token authorizes.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaseTokenScope {
     /// `person`, or `person/agent` for an agent's token.
     pub principal: String,

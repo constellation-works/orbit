@@ -612,12 +612,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_lease_notices,
     },
+    // Lease intake: the lease token a listener request authenticated with.
+    // One nullable column; an older binary never reads it, and the leases it
+    // writes read here as having no token.
+    Migration {
+        version: 66,
+        name: "task_reservation_lease_token",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_task_reservation_lease_token,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 65;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 66;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]
