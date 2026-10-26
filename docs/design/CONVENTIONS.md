@@ -267,6 +267,7 @@ Retired features are removed from this table along with their folder.
 | Operations as Data | [docs/design/operations-as-data/](./operations-as-data/) | claude |
 | Orbit Core | [docs/design/orbit-core/](./orbit-core/) | codex |
 | Orbit Search | [docs/design/orbit-search/](./orbit-search/) | codex |
+| Path Leases | [docs/design/path-leases/](./path-leases/) | claude |
 | Policy & Sandboxing | [docs/design/policy-sandbox/](./policy-sandbox/) | claude |
 | Process Supervision | [docs/design/process-supervision/](./process-supervision/) | claude |
 | Project Learnings | [docs/design/project-learnings/](./project-learnings/) | claude |
