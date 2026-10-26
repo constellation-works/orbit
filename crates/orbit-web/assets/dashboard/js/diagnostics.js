@@ -172,10 +172,10 @@ function getDiagErrorsColumns(ctx) {
         return link;
       },
     },
-    { key: "provider", label: "provider", num: false, render: (v) => v || "-" },
-    { key: "step", label: "step", num: false, render: (v) => v || "-" },
-    { key: "target", label: "target", num: false, render: (v) => v || "-" },
-    { key: "recovered", label: "recovery", num: false, render: (v) => v ? "recovered — run succeeded" : "-" },
+    { key: "provider", label: "provider", emptyText: "Not recorded", num: false, render: (v) => v || "-" },
+    { key: "step", label: "step", emptyText: "Not recorded", num: false, render: (v) => v || "-" },
+    { key: "target", label: "target", emptyText: "Not recorded", num: false, render: (v) => v || "-" },
+    { key: "recovered", label: "recovery", emptyText: "Not recovered", num: false, render: (v) => v ? "recovered — run succeeded" : "-" },
     {
       key: "message",
       label: "message",
@@ -227,8 +227,13 @@ function renderDiagnosticsTable(rows, columns, ctx, emptyText, { cards = false, 
       const td = el("td", { class: baseClass });
       const v = row[col.key];
       const rendered = col.render ? col.render(v, row, td) : v == null ? "" : String(v);
-      if (rendered && typeof rendered === "object" && rendered.nodeType) td.appendChild(rendered);
-      else td.textContent = rendered;
+      td.appendChild(el("span", { class: "diag-cell-label", text: col.label }));
+      const empty = col.emptyText && (v == null || v === "" || v === false);
+      if (empty) {
+        td.appendChild(el("span", { class: "diag-empty-desktop", text: rendered || "-" }));
+        td.appendChild(el("span", { class: "diag-empty-phone", text: col.emptyText }));
+      } else if (rendered && typeof rendered === "object" && rendered.nodeType) td.appendChild(rendered);
+      else td.appendChild(document.createTextNode(rendered));
       tr.appendChild(td);
     }
     tr.dataset.key = `diag-${row.ts || ''}-${row.job_run || row.affiliation || ''}-${row.step || i}-${row.command || actorIdentityLabel(row.actor_identity) || ''}`;
