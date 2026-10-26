@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web host forward — another registered host's dashboard API through this one"
-last_validated: 2026-10-22
+last_validated: 2026-10-25
 tags: [remote-access, host-registry]
 ---
 
@@ -15,10 +15,13 @@ tags: [remote-access, host-registry]
 
 | Route | Meaning |
 |---|---|
-| `GET POST PUT PATCH DELETE /api/on/:host/*rest` | Forward to `/api/<rest>` on `:host` |
+| `GET HEAD POST PUT PATCH DELETE /api/on/:host/*rest` | Forward to `/api/<rest>` on `:host` |
 | `GET /api/hosts/:host/connection` | The host's connection state, opening its tunnel if needed |
 
-`:host` resolves like CLI `<host>` against the serving host's last valid host file: a registered name (case-insensitive) or a `machine_id`. The serving host's own name or `machine_id` is answered by the local router with no tunnel. Only the listed methods are routed, so `OPTIONS` stays a local 405.
+Axum's `GET` route also serves `HEAD`; only the methods above are routed, so
+`OPTIONS` stays a local 405.
+
+`:host` resolves like CLI `<host>` against the serving host's last valid host file: a registered name (case-insensitive) or a `machine_id`. The serving host's own name or `machine_id` is answered by the local router with no tunnel.
 
 ## Order of checks
 
