@@ -128,15 +128,22 @@ impl OrbitRuntime {
                     .then(|| parse_preserved(e).ok())
                     .flatten()
                     .filter(|record| record.source_run_id == source_id)
+                    .map(|record| (e.at, record))
             });
-        let (Some(record), None) = (records.next(), records.next()) else {
+        let (Some((preserved_at, record)), None) = (records.next(), records.next()) else {
             return Ok(None);
         };
         // The record digests the task as stored; a caller's copy may carry
-        // admission's resolved crew.
+        // admission's resolved crew. Admission's later system crew redraws
+        // leave the preserved identity intact [ORB-18560].
         if record.schema_version != 1
             || record.failure_handoff
-            || record.task_digest != task_digest(&self.get_task(&task.id)?)?
+            || !super::adoption::task_matches_before_crew_redraws(
+                &self.get_task(&task.id)?,
+                &entries,
+                preserved_at,
+                &record.task_digest,
+            )?
             || entries.iter().any(|e| {
                 e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
             })
@@ -355,7 +362,7 @@ impl OrbitRuntime {
                 if e.by != "system" {
                     return Err(refuse("untrusted publication preservation"));
                 }
-                parse_preserved(e)
+                parse_preserved(e).map(|record| (e.at, record))
             })
             .collect::<Result<Vec<_>, _>>()?;
         let predecessor = || -> Result<String, OrbitError> {
@@ -406,7 +413,7 @@ impl OrbitRuntime {
         });
         let matching = records
             .iter()
-            .filter(|r| r.source_run_id == source_id)
+            .filter(|(_, r)| r.source_run_id == source_id)
             .collect::<Vec<_>>();
         // An operator discarded this run's candidate and no requeue kept its
         // publication: the next run implements fresh, which the generic
@@ -465,8 +472,13 @@ impl OrbitRuntime {
             || run_owner_liveness(&source) != RunOwnerLiveness::Stopped
             || self.recorded_final_recovery(task_id, source_id)?
                 != Some(crate::application::task::FinalRecoveryOutcome::Requeued)
-            || matching[0].schema_version != 1
-            || matching[0].task_digest != task_digest(&task)?
+            || matching[0].1.schema_version != 1
+            || !super::adoption::task_matches_before_crew_redraws(
+                &task,
+                &entries,
+                matching[0].0,
+                &matching[0].1.task_digest,
+            )?
             || entries.iter().any(|e| {
                 e.event == orbit_types::task::CANDIDATE_DISCARDED_EVENT && e.at >= source.created_at
             })
@@ -475,7 +487,7 @@ impl OrbitRuntime {
                 "published source is live, discarded, changed, or lacks an applied requeue",
             ));
         }
-        if matching[0].failure_handoff {
+        if matching[0].1.failure_handoff {
             let state = self
                 .read_run_state(source_id)?
                 .ok_or_else(|| refuse("source checkpoints missing"))?;
@@ -542,12 +554,13 @@ impl OrbitRuntime {
             // adopted candidate changed (an auto-fix repair the task did not
             // declare); only those system widenings are set aside.
             || (active
-                && super::adoption::admitted_task_digest(
+                && !super::adoption::admitted_task_matches(
                     &task,
                     &self.get_task_history(&task.id)?,
                     run_id,
                     run.created_at,
-                )? != binding.task_digest)
+                    &binding.task_digest,
+                )?)
             || output["phase"] != "candidate_resume"
             || !matches!(
                 output["outcome"].as_str(),

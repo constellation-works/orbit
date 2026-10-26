@@ -11,6 +11,8 @@ use std::path::PathBuf;
 
 #[path = "source_repair/association.rs"]
 mod association;
+#[path = "source_repair/crew_redraw.rs"]
+mod crew_redraw;
 #[path = "source_repair/escalated_publication.rs"]
 mod escalated_publication;
 #[path = "source_repair/failed_publication.rs"]
@@ -61,6 +63,10 @@ use completion::{
     timing_alias_rewrites_preserve_published_completion_authentication,
     unchanged_publication_retries_only_completion,
     unknown_merge_reply_is_reconciled_without_republication,
+};
+use crew_redraw::{
+    crew_redraws_keep_every_other_adoption_refusal,
+    system_crew_redraws_keep_the_preserved_publication_adoptable,
 };
 use failed_successors::{
     failed_pre_adoption_chain_rebinds_the_original_publication,
@@ -846,6 +852,8 @@ crate::scenario_table!(
     failed_requeued_publisher_is_inspected_and_submitted_without_a_successor,
     failed_requeued_direct_publisher_retains_authority_and_drift_refusals,
     published_completion_requeue_adopts_without_reimplementation,
+    system_crew_redraws_keep_the_preserved_publication_adoptable,
+    crew_redraws_keep_every_other_adoption_refusal,
     published_requeue_is_admitted_past_held_locks_and_reuses_its_pr,
     deferred_resumed_runs_behind_one_holder_take_the_footprint_in_turn,
     auto_fix_advanced_publication_is_adopted_at_its_recorded_head,
