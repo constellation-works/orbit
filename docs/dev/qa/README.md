@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "This directory holds coverage records from QA passes."
-last_validated: 2026-10-24
+last_validated: 2026-10-26
 ---
 
 # QA evidence
@@ -15,5 +15,8 @@ This directory holds coverage records from QA passes. Each record file maps a su
 | [workflow-evidence.md](workflow-evidence.md) | The shipped jobs and the coverage boundaries of their named tests |
 | [mcp-apps-probe.md](mcp-apps-probe.md) | The desktop control-center (MCP Apps) reproduction and native probe; desktop validation is still deferred |
 | [mcp-apps-evidence-template.json](mcp-apps-evidence-template.json) | The evidence template `scripts/probe-mcp-apps.py` fills in |
+| [path-leases-listener-sudo.md](path-leases-listener-sudo.md) | Disposable-guest recipe for the listener-user sudo prerequisite: warmed-timestamp reuse, and the unattended denial under `timestamp_timeout=0` |
+
+`path-leases-listener-sudo.md` is a recipe for a proposed host policy. It is not a coverage record of a shipped command. Run it only in the disposable guest it starts; it does not change a live owner's sudo policy.
 
 Each completed validation record names the commit or date it covers. The MCP Apps probe above is explicitly deferred and does not record a completed desktop validation. By this directory's convention, a record describes that point, not the current tree, and feature PRs do not need to keep these files current. By the same convention, whoever re-checks a surface refreshes its record and its validation date.

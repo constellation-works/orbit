@@ -213,22 +213,73 @@ any rule enforced inside the operator's processes is a guard, and a token store 
 user can write is one any agent can write. A token minted by an agent, perhaps steered by
 injected text, and handed to someone outside would give that person the listener.
 
-So the listener, its token store and its configuration belong to a dedicated OS user
-(`orbit-lease` by convention), and the operator acts as that user through `sudo -u`, which an
-unattended agent cannot do where `sudo` asks for a password (as on dk-server-2)
-([4_decisions.md](./4_decisions.md#authority-that-must-hold-against-agents-lives-with-an-os-user-they-cannot-become)).
+The listener, its token store and its configuration belong to a dedicated OS user (`orbit-lease`
+by convention). Becoming that user — or becoming root, which can rewrite the account, the
+sudoers files and the root-owned binary — is allowed only through a fresh authorization the
+host provisions and an agent cannot reuse
+([4_decisions.md](./4_decisions.md#a-listener-user-transition-requires-a-provisioned-factor-agents-cannot-reuse)).
+
+Password-protected `sudo` does not provide that factor. It records a timestamp and accepts a
+later `sudo`, including `sudo -n`, while the timestamp is younger than `timestamp_timeout`.
+The `sudoers_timestamp(5)` manual for Sudo 1.9.17p2, and the sudo-rs 0.2.13 sudoers manual,
+both document 15 minutes as that default and a separate record per terminal. Both define
+`timestamp_timeout=0` as always prompting. Classic sudo can instead keep one global record
+(`timestamp_type=global`, or `tty_tickets` off), which another session can reuse. An agent
+started in a terminal whose timestamp is still valid can run `sudo -n -u orbit-lease` with
+no password. Putting `sudo -k`
+on the command the operator is shown does not close this: the agent chooses the command and
+can omit the flag. After the transition the uid, the root-owned binary, the home mode and the
+kernel socket-peer check all accept the caller. None of them can tell that no person was
+present for this invocation.
+
+**Prerequisite.** The listener may be enabled only when every item below holds. Otherwise it
+stays off.
+
+- Sudoers is root-owned and not writable by the operator user, including every `#includedir`.
+  For every `sudo` that account can run, the effective `timestamp_timeout` is `0`, which
+  `sudoers(5)` defines as always prompting, so a cached timestamp is never accepted. The
+  policy has no `NOPASSWD` tag, no `Defaults !authenticate`, no negative `timestamp_timeout`,
+  and no `exempt_group` that includes the operator.
+- The account agents run as is not root and holds none of `CAP_SETUID`, `CAP_SETGID`,
+  `CAP_DAC_OVERRIDE` or `CAP_FOWNER`. No `/etc/subuid` or `/etc/subgid` range maps the listener
+  uid or gid to that account. No other mechanism runs a command as the listener user or as
+  root without the same fresh prompt: `su`, `runuser`, `doas`, `pkexec`, `systemd-run --uid`,
+  `machinectl`, or a setuid helper.
+- The listener account has a locked password, no authorized keys and a non-login shell.
+- The prompt is answered by a person at the terminal. The operator password is not stored
+  where the operator's user can read it, and no `SUDO_ASKPASS` helper is available for an
+  agent to satisfy `sudo -A` or `sudo -S`.
+- A hardware or one-time factor may be what that prompt requires. It counts only together
+  with `timestamp_timeout=0`. A timestamp from the first success must not satisfy the next
+  `sudo`.
+
+`Defaults>orbit-lease timestamp_timeout=0` by itself is not this prerequisite. A cached
+authorization to root can rewrite sudoers, replace the binary and start a process as the
+listener user. The timeout has to cover every `sudo` the operator can run.
+
+Where the host cannot enforce the list, the guarantee is the narrow one: this design does not
+claim that agents cannot mint tokens. Fail closed. Leave `lease.listener.bind` and
+`lease.intake.peer_user` unset, and do not add a sudoers rule that lets the operator become
+the listener user. Ordinary password-protected `sudo` is that narrower case, not a sufficient
+deployment. The disposable-guest recipe for a warmed timestamp and for the denial under
+`timestamp_timeout=0` is
+[path-leases-listener-sudo.md](../../dev/qa/path-leases-listener-sudo.md). It does not change
+a live owner's sudoers.
 
 - **The user.** A system user with no login shell and its own Orbit home (for example
   `/var/lib/orbit-lease/.orbit`). That home holds only the listener's configuration
   (`lease.listener.*`, §8) and the token store `lease-tokens.db`, created `0600` in a `0700`
   directory. It has no workspaces and no provider or forge credentials.
-- **Minting.** `sudo -u orbit-lease orbit lease token create --principal <name> --workspace <ws>
-  [--class human|agent] [--verbs read|lease] [--max-priority] [--hard allow|never] [--expires <duration>]`;
-  `list` (never prints secrets) and `revoke <id>` likewise. A person's agent tokens are named
-  under the person (`alice/claude-code`). The commands open only the token store in the running
-  user's Orbit home, and refuse to run as root or as the user that owns the intake socket (§7.2).
-  Run as the operator, they find no store and say how to run them. The `agent_context_declared`
-  refusal stays, as a guard that gives an agent a clear message; it is not the boundary.
+- **Minting.** The operator runs `sudo -u orbit-lease orbit lease token create --principal <name>
+  --workspace <ws> [--class human|agent] [--verbs read|lease] [--max-priority]
+  [--hard allow|never] [--expires <duration>]`. `list` (never prints secrets) and `revoke <id>`
+  run the same way. That command line is not the control and does not include `sudo -k`. Under
+  the prerequisite, sudoers denies a following `sudo -n -u orbit-lease` in the same terminal.
+  A person's agent tokens are named under the person (`alice/claude-code`). The commands open
+  only the token store in the running user's Orbit home, and refuse to run as root or as the
+  user that owns the intake socket (§7.2). Run as the operator, they find no store and say how
+  to run them. The `agent_context_declared` refusal stays, as a guard that gives an agent a
+  clear message; it is not the boundary.
 - **A binary agents cannot replace.** The listener user runs a root-owned copy of `orbit` (for
   example `/usr/local/bin/orbit`), not the operator's `~/.cargo/bin/orbit`. `orbit lease listen`
   and `orbit lease token` refuse to start when their executable, the listener user's Orbit home,
@@ -262,10 +313,12 @@ operations to Orbit over a local socket.
   client address. The listener audits what never reaches Orbit, failed authentication and
   rejected requests, in its own store, aggregated per key and window (§7.3).
 
-What an agent running as the operator can still do: stop Orbit Web, or edit the operator's
-configuration to turn intake off or name another peer user, which denies service but grants
-nothing, since the agent cannot run as any other user. It cannot mint or revoke tokens, read
-their hashes, or run code as the listener user.
+With the §7.1 prerequisite in force, an agent running as the operator can still stop Orbit Web,
+or edit the operator's configuration to turn intake off or name another peer user. That denies
+service and grants nothing. The agent cannot mint or revoke tokens, read their hashes, or run
+code as the listener user, because it cannot complete a fresh transition. Without the
+prerequisite, a cached sudo timestamp or another run-as grant does complete that transition, and
+the peer check, the home mode and the root-owned binary then accept the caller.
 
 ### 7.3 Tokens, routes and limits
 
@@ -335,7 +388,9 @@ no surface reimplements a check.
 | `lease.listener.limits.*` | conservative | Per-address, per-token and whole-listener limits (§7.3). |
 
 `lease.intake.*` lives in the operator's configuration; `lease.listener.*` lives in the listener
-user's Orbit home, which the operator's user cannot write. TTL bounds reuse the reservation limits. Path policy (`unlocked_context_paths`,
+user's Orbit home, which the operator's user cannot write. `lease.listener.bind` and
+`lease.intake.peer_user` stay unset unless the §7.1 prerequisite is in force. Unset is the
+fail-closed deployment: no listener and no intake socket. TTL bounds reuse the reservation limits. Path policy (`unlocked_context_paths`,
 `generated_paths`, and the conflict budget's `exclusive_context_paths`) applies to leases
 unchanged.
 
@@ -368,10 +423,17 @@ feature multi-person.
   authentication back for this one surface, and with it token storage, rotation, TLS and a
   public attack surface to keep reviewed. The lease-only router bounds what a stolen token can
   do; it does not remove the need to operate the listener carefully.
-- **The listener user costs the operator `sudo`.** Every mint, list and revoke, and every update
-  of the listener's root-owned binary, needs the operator's password. That is the point, but it
-  makes token management a manual step that no agent can take on, and an update that skips the
-  root-owned copy leaves the listener refusing on a protocol mismatch until it is installed.
+- **Fresh authorization is a host prerequisite.** Every mint, list, revoke and replacement of the
+  root-owned binary is a `sudo` transition. It stays out of an agent's reach only when sudoers
+  sets `timestamp_timeout=0` for every `sudo` the operator can run and grants no passwordless
+  path. Ordinary password-protected `sudo` records a timestamp and honors it for a later
+  `sudo -n`. A cached root timestamp, `NOPASSWD`, `Defaults !authenticate`, root, or another
+  run-as path is enough to become the listener user. The socket peer check and the root-owned
+  binary do not undo a transition that already succeeded. Where the host cannot enforce the
+  prerequisite, the listener stays off. The prerequisite also fails when the agent already has
+  the operator's password or an askpass helper that prints it. An update that skips the
+  root-owned copy still leaves a running listener refusing on a protocol mismatch until that
+  copy is installed.
 - **The listener user is trusted for identity.** Orbit believes the principal and scope the
   intake socket sends. Code running as the listener user can therefore create leases as any
   principal, within each workspace's class policy, though nothing beyond leases. Root defeats the

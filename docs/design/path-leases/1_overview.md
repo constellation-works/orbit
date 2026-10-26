@@ -70,7 +70,12 @@ overlap early, let exclusive holds exist where a path policy wants them, and kee
   the lease listener. Every principal other than the operator uses one: each person, and each of
   their agents.
 - **Listener user** — the dedicated OS user that runs the lease listener and owns its tokens.
-  Agents run as the operator's user and cannot become it, so they cannot mint tokens.
+  Agents run as the operator. They cannot mint tokens only when every transition to that user,
+  and every `sudo` that can become root, requires a host-provisioned factor they cannot reuse.
+  The supported factor is root-owned sudoers with `timestamp_timeout=0` and no passwordless
+  grant. Ordinary password-protected `sudo` caches a timestamp, so it is not that factor, and
+  a caller-supplied `sudo -k` is not enforcement. The listener stays off when the factor is
+  absent.
 
 Full definitions: [references/glossary.md](./references/glossary.md).
 
