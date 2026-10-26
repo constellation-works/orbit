@@ -2,7 +2,7 @@
 title: Agent Scorecards — Design
 owner: claude
 last_updated: 2026-10-25
-last_validated: 2026-10-23
+last_validated: 2026-10-26
 status: Draft
 feature: agent-scorecards
 doc_role: design
@@ -24,7 +24,7 @@ The core, dashboard and role tracks have landed. Sections marked **Current** des
 
 **Current**.
 
-**Agents** is an Analytics view, listed in the Analytics sub-nav beside Metrics, Reliability, Codebase, Resources and Cost; there is no standalone Agents rail destination. Its secondary tabs are its roles: **Orchestrators** (`#analytics/agents/orchestrators`, the default), **Implementers** (`#analytics/agents/implementers`), **Reviewers** (`#analytics/agents/reviewers`) and **Pilots** (`#analytics/agents/pilots`). Each tab shows its count of ranked rows. Reopening Analytics from the rail returns to the remembered Analytics view, including Agents with its remembered role. Navigation changes:
+**Agents** is an Analytics view, listed in the Analytics sub-nav beside Metrics, Reliability, Codebase, Resources, Forecast, Cost and Experiments; there is no standalone Agents rail destination. Its secondary tabs are its roles: **Orchestrators** (`#analytics/agents/orchestrators`, the default), **Implementers** (`#analytics/agents/implementers`), **Reviewers** (`#analytics/agents/reviewers`) and **Pilots** (`#analytics/agents/pilots`). Each tab shows its count of ranked rows. Reopening Analytics from the rail returns to the remembered Analytics view, including Agents with its remembered role. Navigation changes:
 
 - `#analytics/orchestrators` and old `#agents/<role>` links open `#analytics/agents/<role>` in place, keeping the window, so Back is not trapped.
 - The Task pilot tile and its section leave Analytics › Codebase. The Codebase view keeps its path rankings, change coupling and lock contention.
@@ -544,7 +544,7 @@ Tests follow the repository rules: behavior at public boundaries, no copy-matchi
 | A | This design (`docs/design/agent-scorecards/`) | — | `docs/design/agent-scorecards/**`, `docs/design/CONVENTIONS.md` ownership row |
 | B | Core and API: `application/agents/` (`facts/`, `attribution.rs`, `score.rs`, the role registry with all four roles, three of them `not_computed`), Orchestrators on the new score, `api/agents.rs`, cache. Landed. | A | `crates/orbit-core/src/application/agents/**`, `agents.rs` in the `orbit-web` API module, routes, `runtime_memo` |
 | C | Dashboard shell: Agents destination, `#agents/<role>` routing and redirect, the generic renderer; removes Analytics › Orchestrators and the `/api/orchestrators/*` routes. Landed. | B | `assets/dashboard/js/agents.js`, `js/agents-orchestrators.js`, `css/agents.css`, `index.html`, `app.js`, removal of `js/orchestrators.js` and `api/orchestrators.rs` |
-| D | Implementers role and its panel | C | `application/agents/roles/implementers.rs`, `js/agents-implementers.js` |
+| D | Implementers role. Landed. The cost and tier panel was removed. | C | `application/agents/roles/implementers.rs` |
 | E | Reviewers role, its scan additions (false rejects, incomplete reviews, findings rejected by finding verification), provisional banner and outcomes panel. Landed. | C | `application/agents/roles/reviewers.rs`, `js/agents-reviewers.js` |
 | F | Pilots role, its scan additions (pilot receipts, footprint misses, lock waits) and calibration panel; moves the pilot ranking out of Codebase. Landed. | C | `application/agents/roles/pilots.rs`, `js/agents-pilots.js`, `application/codebase/pilot.rs`, `js/codebase.js` |
 | G | CLI and MCP (`orbit agents`, `orbit.agents.*`, aliases); moves `orbit orchestrator` and `orbit.orchestrator.*` onto the new scorecard and removes `application/orchestrators/`. Landed. | C | `orbit-cli` and `orbit-tools` command and tool files, goldens |
