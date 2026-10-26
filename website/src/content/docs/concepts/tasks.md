@@ -355,6 +355,14 @@ reviews show their time limit, and after-landing shows when its next batch is
 due. After-landing review is independent of the choice between before-PR and
 before-landing review.
 
+For bounded low-risk work, a workspace can map a task tag to skip all three
+agent review layers when every delivered task carries it, every changed path
+is allowed, and its optional guard passes. See
+[Review-skip tags](../../reference/config/#review-skip-tags) for configuration,
+tag authority and the guard contract. These profiles preserve required
+validation and hosted CI; the built-in `skip-review` and `skip-validation`
+tags have separate rules.
+
 ### Adding review to one run
 
 `orbit run ship` and `orbit run auto` accept `--review before-pr` or
