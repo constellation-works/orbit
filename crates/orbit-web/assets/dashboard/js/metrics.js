@@ -1,8 +1,9 @@
 // Orbit dashboard Analytics › Metrics (ORB-15746): implement_one duration,
-// task completion, defect, tokens-per-task and lines-changed trends over the
-// shared dashboard window, with the per-actor tables beneath. The tokens and
-// lines-changed trends keep their filters and models in metrics-tokens.js
-// and metrics-diff.js.
+// task completion, defect, tokens-per-task, lines-changed and
+// delivery-friction trends over the shared dashboard window, with the
+// per-actor tables beneath. The tokens, lines-changed and delivery-friction
+// trends keep their filters and models in metrics-tokens.js, metrics-diff.js
+// and metrics-friction.js.
 // Pure vanilla JS, split into ES modules with no build step.
 //
 // One panel request reads the trend endpoints together; the view state below
@@ -19,6 +20,7 @@ import {
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
 import { fetchTokens, isCurrentTokensPayload, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
 import { diffModel, diffQuery, diffTools, diffView, fetchDiff, isCurrentDiffPayload } from './metrics-diff.js';
+import { fetchFriction, frictionModel, frictionQuery, frictionTools, frictionView, isCurrentFrictionPayload } from './metrics-friction.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -47,7 +49,7 @@ const SERIES = [
 const STACK = ["low", "medium", "hard", "other"];
 const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
-const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["diff", "Lines changed"]];
+const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["diff", "Lines changed"], ["friction", "Delivery friction"]];
 const DEFECT_GROUPS = [["lineage", "Lineage"], ["origin", "Origin"]];
 // Lineage: what a bug's `regression_from` relations name as its cause.
 const LINEAGE_SERIES = [
@@ -91,6 +93,8 @@ const view = {
     // Lines changed: line kinds, or crews (which vary with the window).
     "diff-lines": {},
     "diff-crew": {},
+    // Delivery friction: the families the picker fetched.
+    friction: {},
   },
   hover: null,
   allActors: false,
@@ -143,7 +147,8 @@ export function fetchAndRenderMetrics() {
     })),
     fetchTokens(selectedWindow),
     fetchDiff(selectedWindow),
-  ]), ([durations, completions, outcome, defects, tokens, diff]) => {
+    fetchFriction(selectedWindow),
+  ]), ([durations, completions, outcome, defects, tokens, diff, friction]) => {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
     // A refresh started before a token-filter change must keep the token
     // result (or loading/error state) already applied for the current filter,
@@ -152,11 +157,19 @@ export function fetchAndRenderMetrics() {
       ? tokens
       : (lastPayload ? lastPayload.tokens : null);
     if (!isCurrentDiffPayload(diff, selectedWindow)) return;
+    // Likewise a friction refetch after a family or filter change.
+    const currentFriction = isCurrentFrictionPayload(friction, selectedWindow)
+      ? friction
+      : (lastPayload ? lastPayload.friction : null);
+    if (currentFriction && !currentFriction.unavailable && windowKey(currentFriction) !== selectedWindow) {
+      console.error(`metrics friction payload window rejected under ${selectedWindow} selection`);
+      return;
+    }
     if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (currentTokens && !currentTokens.unavailable && windowKey(currentTokens) !== selectedWindow) || (!diff.unavailable && windowKey(diff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens: currentTokens, diff, outcome: (outcome && outcome.by_complexity) || [] };
+    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens: currentTokens, diff, friction: currentFriction, outcome: (outcome && outcome.by_complexity) || [] };
     renderMetrics();
   }, "metrics-count");
 }
@@ -201,7 +214,7 @@ function sectionHash(index) {
   const { hover, ...state } = view;
   const p = lastPayload;
   const parts = [
-    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.diff, diffQuery(p.windowKey), diffView],
+    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.diff, diffQuery(p.windowKey), diffView, p.friction, frictionQuery(p.windowKey), frictionView],
     [state.allActors, p.durations.actors, p.durations.slowest],
     [state.complexity, p.durations.implement_one_by_complexity, p.outcome],
   ];
@@ -411,16 +424,33 @@ function applyDiff(payload) {
   rerender();
 }
 
+// A delivery-friction refetch after a family or filter change, with the same
+// `null` (clear to loading) and fence rules as `applyTokens`.
+function applyFriction(payload) {
+  if (!lastPayload) return;
+  if (payload === null) {
+    lastPayload.friction = null;
+  } else {
+    if (!isCurrentFrictionPayload(payload, lastPayload.windowKey)) return;
+    if (!payload.unavailable && windowKey(payload) !== lastPayload.windowKey) return;
+    lastPayload.friction = payload;
+  }
+  view.hover = null;
+  rerender();
+}
+
 function trendSection() {
   const isDuration = view.trend === "duration";
   const isDefects = view.trend === "defects";
   const isTokens = view.trend === "tokens";
   const isDiff = view.trend === "diff";
+  const isFriction = view.trend === "friction";
   const model = isDuration ? durationModel()
     : isDefects ? defectsModel()
       : isTokens ? tokensModel(lastPayload.tokens, { windowKey: lastPayload.windowKey, shown: view.shown.tokens, bucketTitle, bucketWidthLabel })
         : isDiff ? diffModel(lastPayload.diff, { windowKey: lastPayload.windowKey, shown: view.shown[shownKey()], bucketTitle, bucketWidthLabel })
-          : completedModel();
+          : isFriction ? frictionModel(lastPayload.friction, { windowKey: lastPayload.windowKey, shown: view.shown.friction, bucketTitle, bucketWidthLabel })
+            : completedModel();
   const tools = el("div", { class: "mx-trend-tools" }, [
     isDuration ? segGroup("Run outcome", OUTCOMES, view.outcome, (key) => {
       if (key === view.outcome) return;
@@ -433,6 +463,7 @@ function trendSection() {
     isDefects ? segGroup("Group by", DEFECT_GROUPS, view.group, (key) => { view.group = key; view.hover = null; rerender(); }) : null,
     ...(isTokens ? tokensTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.tokens, onChange: applyTokens }) : []),
     ...(isDiff ? diffTools({ segGroup, windowKey: lastPayload.windowKey, rerender: () => { view.hover = null; rerender(); }, onChange: applyDiff }) : []),
+    ...(isFriction ? frictionTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.friction, rerender: () => { view.hover = null; rerender(); }, onChange: applyFriction }) : []),
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),
   ]);
   const panel = el("div", { class: "mx-trend-view", id: "metrics-trend-view", role: "tabpanel" }, [

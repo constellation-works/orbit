@@ -457,9 +457,10 @@ is scored on, and `orbit agents scorecard`, are in [Agents](#agents).
 
 Open **Metrics** to see whether implementation is getting slower, whether
 tasks are finishing, how many tokens a task takes, where new bugs were
-filed, or how many lines each delivery changes, for the selected workspace.
+filed, how many lines each delivery changes, or how much delivery friction
+each finished task costs, for the selected workspace.
 
-Five trends share **Chart** and **Table**. Select a series to hide it; one
+Six trends share **Chart** and **Table**. Select a series to hide it; one
 series stays visible. A duration point backed by fewer than three runs is
 drawn hollow. An empty trend offers the next wider window.
 
@@ -469,6 +470,7 @@ drawn hollow. An empty trend offers the next wider window.
 | **Tasks completed** | Tasks that moved to done in each bucket, by the same complexities. |
 | **Tokens per task** | Mean normalized tokens of the tasks that closed in each bucket, one line per complexity. A task's total sums every managed invocation linked to it; **Implement only** keeps implement invocations. **Done**, the default, counts done tasks; **All closed** adds rejected and archived ones. **Implementing model** keeps tasks whose latest implement run used that model. **Compare a tag** splits each complexity into tasks that carry the tag now and a dashed line for the rest. The tooltip gives the task count, mean, and median; a point from fewer than three tasks is hollow. Tasks with a model that has no price, or with no linked invocation, are left out and counted. A task's time is its last write after it closed. |
 | **Lines changed** | Lines added and deleted by the deliveries that landed in each bucket. **Line kind** draws code and test lines, deletions dashed; **Crew** draws one line per implementing crew (the seven busiest, the rest folded into Other) for the chosen measure. **Statistic** switches between **Totals** and the per-task mean or median, and the complexity picker narrows the deliveries, so crews are compared on like work. The tooltip gives the delivery count, the value, totals, and net lines (code and tests added minus deleted); a point from fewer than three deliveries is hollow. Which paths count as tests or other is set by `workflow.test_paths` and `workflow.non_code_paths`. Deliveries that landed before diff stats were recorded appear after `orbit migrate --backfill-diff-stats`. |
+| **Delivery friction** | Step recoveries, final recoveries, PR auto-fixes, merge conflicts, failed CI, cost in USD and normalized tokens in each bucket. Pick families with the family buttons; recoveries, auto-fixes, conflicts and failed CI are on by default. **Count** shows distinct occurrences (USD and tokens summed); **Per done task** divides by the tasks that reached done in the same bucket, so a busy week does not look worse just for being busy. The tooltip gives each family's count, tasks done and rate. A bucket with fewer than three done tasks is sparse: its points are hollow and its table row is starred. Families in different units are each scaled to their own peak. The complexity and crew pickers narrow done tasks, auto-fixes, failed CI, cost and tokens; recoveries and conflicts are not tied to one task, so they stay unfiltered and say so. Failed CI counts each pull-request head with a failed required check that `--auto-fix` saw, plus each CI-failure sweep filing. |
 | **Defects** | Bug tasks filed in each bucket. **Lineage** groups them by what `regression_from` names as the cause. **Fix-for-a-fix** means that cause was itself a bug fix. **Origin** groups them by the review or sweep that filed them. |
 
 The run bars under a duration chart stack low, medium, and hard, then other.

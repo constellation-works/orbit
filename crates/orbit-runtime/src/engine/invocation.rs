@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::RuntimeKernel;
 use crate::cost::{
-    IMPLEMENT_INVOCATION_IDS, NormalizedTokenSummary, OrchestrationModelSummary, TaskTokenSpend,
-    TaskTokenTotals,
+    IMPLEMENT_INVOCATION_IDS, InvocationSpend, NormalizedTokenSummary, OrchestrationModelSummary,
+    TaskTokenSpend, TaskTokenTotals,
 };
 
 pub use crate::cost::{
@@ -391,6 +391,31 @@ impl RuntimeKernel {
             }
         }
         Ok(totals)
+    }
+
+    /// This workspace's managed invocations recorded at or after `since`
+    /// (all of them for `None`), oldest first, each with its provider cost
+    /// and normalized token total.
+    pub fn invocation_spend(
+        &self,
+        since: Option<DateTime<Utc>>,
+    ) -> Result<Vec<InvocationSpend>, OrbitError> {
+        let facts = open_invocation_store(self)?.list_invocation_accounting_facts(
+            &InvocationAccountingQuery {
+                workspace_id: Some(self.stores().jobs().workspace_id().to_string()),
+                since,
+                until: Utc::now(),
+            },
+        )?;
+        Ok(facts
+            .iter()
+            .map(|fact| InvocationSpend {
+                ts: fact.ts,
+                task_ids: fact.task_ids.clone(),
+                provider_cost_usd: fact.provider_cost_usd.filter(|cost| valid_cost(*cost)),
+                normalized_tokens: normalized_token_total(fact),
+            })
+            .collect())
     }
 
     /// Aggregates this workspace's managed invocation telemetry by canonical task orchestrator.

@@ -156,6 +156,20 @@ pub struct TaskTokenTotals {
     pub implement_model: Option<String>,
 }
 
+/// One managed invocation's spend, as a per-bucket cost or token series
+/// reads it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct InvocationSpend {
+    pub ts: DateTime<Utc>,
+    pub task_ids: Vec<String>,
+    /// The provider-reported cost; `None` when the invocation recorded none
+    /// or a negative or non-finite one.
+    pub provider_cost_usd: Option<f64>,
+    /// As [`NormalizedTokenSummary::normalized_token_total`]; `None` when the
+    /// model is missing or not covered by the normalization.
+    pub normalized_tokens: Option<u64>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OrchestrationModelSummary {
     pub model: String,
