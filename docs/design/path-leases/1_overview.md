@@ -92,9 +92,9 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 | SSE streaming pattern (exists, for logs) | [crates/orbit-web/src/api/log.rs](../../../crates/orbit-web/src/api/log.rs) | — |
 | Lease modes, queue, lifetime, notices | proposed, [2_design.md §2–§5](./2_design.md#2-the-lease-record) | — |
 | MCP, CLI, REST and SSE surfaces | proposed, [2_design.md §6](./2_design.md#6-surfaces) | — |
-| Principals, lease tokens and the lease listener | proposed, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412 |
+| Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`) implemented; listener, intake and rate-limit proposed, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412 |
 | Listener user and intake socket | proposed, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
-| Credential code (`orbit-auth`) | proposed, [2_design.md §7.4](./2_design.md#74-the-orbit-auth-crate) | ORB-18410, ORB-18421 |
+| Credential code (`orbit-auth`) | implemented, [2_design.md §7.4](./2_design.md#74-the-orbit-auth-crate) | ORB-18410, ORB-18421 |
 
 Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:
 [3_vision.md](./3_vision.md).

@@ -7,8 +7,10 @@ last_validated: 2026-10-26
 # Path-lease listener sudo on a disposable host
 
 Recipe for the fresh-authorization prerequisite in
-[2_design.md §7.1](../../design/path-leases/2_design.md#71-the-listener-user). The lease listener
-and `orbit lease token` are not shipped. A root-owned stub stands in for the transition. The
+[2_design.md §7.1](../../design/path-leases/2_design.md#71-the-listener-user). The network lease
+listener is not shipped. `orbit lease token create|list|revoke` are implemented for token
+administration, but no network surface accepts tokens yet. A root-owned stub stands in for the
+transition, so the recipe isolates host authorization without product execution. The
 recipe shows two results:
 
 - Under ordinary password-protected `sudo` (`timestamp_timeout=5`), a noninteractive child in
