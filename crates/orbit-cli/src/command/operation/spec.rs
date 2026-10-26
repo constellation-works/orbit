@@ -405,7 +405,7 @@ pub(super) fn dispatch_browser_kit(command: Commands, _context: DispatchContext<
 
 pub(super) fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Migrate(command) if !command.confirm => {
+        Commands::Migrate(command) if !command.applies() => {
             command.execute_without_runtime(context.root_override, context.workspace_selector)
         }
         Commands::Migrate(command) => command.execute(context.runtime()?),

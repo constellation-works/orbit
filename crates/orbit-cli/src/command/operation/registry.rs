@@ -124,7 +124,7 @@ impl Commands {
                 )
             }
             Commands::Migrate(command) => CommandOperation::new(
-                if command.confirm {
+                if command.applies() {
                     RuntimeNeed::Required
                 } else {
                     RuntimeNeed::Forbidden

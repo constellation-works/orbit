@@ -3,6 +3,7 @@ use orbit_cmd::registry_runtime::{
     RegisteredRuntimeFactory, global_root_for, workspace_runtime_binding,
 };
 use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
+use orbit_core::application::codebase::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
@@ -24,8 +25,19 @@ pub struct MigrateCommand {
     #[arg(long, conflicts_with = "dry_run")]
     pub confirm: bool,
     /// Explicitly request the default non-destructive inspection mode
-    #[arg(long, conflicts_with = "confirm")]
+    #[arg(long, conflicts_with_all = ["confirm", "backfill_diff_stats"])]
     pub dry_run: bool,
+    /// Apply pending migrations, then record diff stats for done tasks that landed before they were recorded
+    #[arg(long)]
+    pub backfill_diff_stats: bool,
+    /// Most done tasks one diff-stats backfill records (1-5000)
+    #[arg(
+        long,
+        requires = "backfill_diff_stats",
+        default_value_t = DIFF_STATS_BACKFILL_DEFAULT_LIMIT,
+        value_name = "N"
+    )]
+    pub limit: usize,
 }
 
 impl MigrateCommand {
@@ -94,13 +106,40 @@ impl MigrateCommand {
     }
 }
 
+impl MigrateCommand {
+    /// Whether this invocation opens the runtime, which applies pending
+    /// migrations: `--confirm`, or a backfill that needs the current schema.
+    pub fn applies(&self) -> bool {
+        self.confirm || self.backfill_diff_stats
+    }
+}
+
 impl Execute for MigrateCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        if self.backfill_diff_stats {
+            return backfill_payload(&runtime.backfill_landed_diff_stats(self.limit)?);
+        }
         // Apply path: opening the runtime (before this command ran) already
         // applied everything pending; report the outcome.
         let status = runtime.migrate_status()?;
         status_payload(&status, false)
     }
+}
+
+fn backfill_payload(report: &DiffStatsBackfill) -> CommandOut {
+    let doc = json!({ "diff_stats_backfill": report });
+    let mut text = format!(
+        "diff stats backfill: {} recorded, {} skipped as unresolvable (landed commit not in this \
+         checkout), {} without a landing, {} examined",
+        report.recorded, report.unresolvable, report.no_landing, report.examined
+    );
+    if report.remaining > 0 {
+        text.push_str(&format!(
+            "\n{} done tasks left past --limit {}; run it again to continue",
+            report.remaining, report.limit
+        ));
+    }
+    Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
 }
 
 fn status_payload(status: &MigrateStatus, dry_run: bool) -> CommandOut {

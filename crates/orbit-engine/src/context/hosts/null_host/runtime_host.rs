@@ -61,6 +61,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::record_direct_landing_intent(self, request)
     }
+    fn record_direct_landing(
+        &self,
+        request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_direct_landing(self, request)
+    }
     fn accepted_automation_coverage(
         &self,
         task_id: &str,

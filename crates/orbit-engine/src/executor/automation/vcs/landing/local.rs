@@ -59,6 +59,7 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     // intent retained before the branch moves [ORB-13894]. A candidate that
     // cannot fast-forward lands nothing and stops below.
     let before = git_output(&checkout, &["rev-parse", "HEAD"])?;
+    let run_id = input_string_field(input, "run_id");
     if git_command_success(
         &checkout,
         &[
@@ -68,7 +69,7 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
             &candidate.candidate.commit,
         ],
     )? {
-        let run_id = input_string_field(input, "run_id").ok_or_else(|| {
+        let run_id = run_id.clone().ok_or_else(|| {
             OrbitError::InvalidInput("handoff_land: run_id is required".to_string())
         })?;
         host.record_direct_landing_intent(&DirectLandingRequest {
@@ -126,6 +127,21 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
                 candidate.landing_branch, candidate.candidate.commit
             ),
         )?);
+    }
+    // The branch has moved: a failure to record the landing's diff stats is
+    // logged and never stops the completion.
+    if let Some(run_id) = run_id
+        && before.trim() != candidate.candidate.commit
+        && let Err(error) = host.record_direct_landing(&DirectLandingRequest {
+            run_id,
+            branch: candidate.landing_branch.clone(),
+            before_commit: before.trim().to_string(),
+            after_commit: candidate.candidate.commit.clone(),
+            task_ids: vec![context.task_id.clone()],
+            handoff_id: Some(context.handoff_id.clone()),
+        })
+    {
+        tracing::warn!(%error, task_id = %context.task_id, "recording the landing's diff stats failed");
     }
     complete(host, context, observed, &evidence)
 }

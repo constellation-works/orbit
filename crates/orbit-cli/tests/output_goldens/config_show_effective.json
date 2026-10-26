@@ -673,6 +673,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.non_code_paths": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.provider_limit_budgets": {
       "scope": "built-in",
       "state": "default",
@@ -891,6 +898,13 @@
       "shadowed_by": []
     },
     "workflow.task_pilot_freshness.source_sensitivity": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "workflow.test_paths": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",

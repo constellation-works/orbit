@@ -562,12 +562,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_job_run_task_recency,
     },
+    // ORB-18383: lines added and deleted per landed delivery, split into
+    // code, tests and other. A new table only, which an older binary never
+    // reads or writes.
+    Migration {
+        version: 60,
+        name: "landed_diff_stats",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_landed_diff_stats,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 59;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 60;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

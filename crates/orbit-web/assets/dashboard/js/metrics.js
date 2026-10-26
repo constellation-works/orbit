@@ -1,7 +1,8 @@
 // Orbit dashboard Analytics › Metrics (ORB-15746): implement_one duration,
-// task completion, defect and tokens-per-task trends over the shared
-// dashboard window, with the per-actor tables beneath. The tokens trend's
-// filters and model live in metrics-tokens.js.
+// task completion, defect, tokens-per-task and lines-changed trends over the
+// shared dashboard window, with the per-actor tables beneath. The tokens and
+// lines-changed trends keep their filters and models in metrics-tokens.js
+// and metrics-diff.js.
 // Pure vanilla JS, split into ES modules with no build step.
 //
 // One panel request reads the trend endpoints together; the view state below
@@ -17,6 +18,7 @@ import {
 } from './common.js';
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
 import { fetchTokens, isCurrentTokensPayload, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
+import { diffModel, diffQuery, diffTools, diffView, fetchDiff, isCurrentDiffPayload } from './metrics-diff.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -45,7 +47,7 @@ const SERIES = [
 const STACK = ["low", "medium", "hard", "other"];
 const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
-const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"]];
+const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["diff", "Lines changed"]];
 const DEFECT_GROUPS = [["lineage", "Lineage"], ["origin", "Origin"]];
 // Lineage: what a bug's `regression_from` relations name as its cause.
 const LINEAGE_SERIES = [
@@ -86,6 +88,9 @@ const view = {
     "defects-origin": Object.fromEntries(["all", ...ORIGIN_CHART, "other"].map((key) => [key, true])),
     // Series the API sends vary with the tag filter; absent keys are shown.
     tokens: {},
+    // Lines changed: line kinds, or crews (which vary with the window).
+    "diff-lines": {},
+    "diff-crew": {},
   },
   hover: null,
   allActors: false,
@@ -137,16 +142,18 @@ export function fetchAndRenderMetrics() {
       unavailable: error.status === 404 ? "This host's Orbit does not report defects yet. Upgrade it to see this trend." : error.message,
     })),
     fetchTokens(selectedWindow),
-  ]), ([durations, completions, outcome, defects, tokens]) => {
+    fetchDiff(selectedWindow),
+  ]), ([durations, completions, outcome, defects, tokens, diff]) => {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
     // A refresh started before a token-filter change (or a retired visit)
     // must not replace the newer token result, unavailable replies included.
     if (!isCurrentTokensPayload(tokens, selectedWindow)) return;
-    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (!tokens.unavailable && windowKey(tokens) !== selectedWindow) || durations.outcome !== selectedOutcome) {
+    if (!isCurrentDiffPayload(diff, selectedWindow)) return;
+    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (!tokens.unavailable && windowKey(tokens) !== selectedWindow) || (!diff.unavailable && windowKey(diff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens, outcome: (outcome && outcome.by_complexity) || [] };
+    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens, diff, outcome: (outcome && outcome.by_complexity) || [] };
     renderMetrics();
   }, "metrics-count");
 }
@@ -191,7 +198,7 @@ function sectionHash(index) {
   const { hover, ...state } = view;
   const p = lastPayload;
   const parts = [
-    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey)],
+    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.diff, diffQuery(p.windowKey), diffView],
     [state.allActors, p.durations.actors, p.durations.slowest],
     [state.complexity, p.durations.implement_one_by_complexity, p.outcome],
   ];
@@ -364,6 +371,7 @@ function pickTrend(key) {
 // The series-visibility key for the current trend; each defect grouping keeps
 // its own.
 function shownKey() {
+  if (view.trend === "diff") return `diff-${diffView.group}`;
   return view.trend === "defects" ? `defects-${view.group}` : view.trend;
 }
 
@@ -385,14 +393,31 @@ function applyTokens(payload) {
   rerender();
 }
 
+// A lines-changed refetch after a complexity change, with the same `null`
+// (clear to loading) and fence rules as `applyTokens`.
+function applyDiff(payload) {
+  if (!lastPayload) return;
+  if (payload === null) {
+    lastPayload.diff = null;
+  } else {
+    if (!isCurrentDiffPayload(payload, lastPayload.windowKey)) return;
+    if (!payload.unavailable && windowKey(payload) !== lastPayload.windowKey) return;
+    lastPayload.diff = payload;
+  }
+  view.hover = null;
+  rerender();
+}
+
 function trendSection() {
   const isDuration = view.trend === "duration";
   const isDefects = view.trend === "defects";
   const isTokens = view.trend === "tokens";
+  const isDiff = view.trend === "diff";
   const model = isDuration ? durationModel()
     : isDefects ? defectsModel()
       : isTokens ? tokensModel(lastPayload.tokens, { windowKey: lastPayload.windowKey, shown: view.shown.tokens, bucketTitle, bucketWidthLabel })
-        : completedModel();
+        : isDiff ? diffModel(lastPayload.diff, { windowKey: lastPayload.windowKey, shown: view.shown[shownKey()], bucketTitle, bucketWidthLabel })
+          : completedModel();
   const tools = el("div", { class: "mx-trend-tools" }, [
     isDuration ? segGroup("Run outcome", OUTCOMES, view.outcome, (key) => {
       if (key === view.outcome) return;
@@ -404,6 +429,7 @@ function trendSection() {
     isDuration ? segGroup("Statistic", STATS, view.stat, (key) => { view.stat = key; rerender(); }) : null,
     isDefects ? segGroup("Group by", DEFECT_GROUPS, view.group, (key) => { view.group = key; view.hover = null; rerender(); }) : null,
     ...(isTokens ? tokensTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.tokens, onChange: applyTokens }) : []),
+    ...(isDiff ? diffTools({ segGroup, windowKey: lastPayload.windowKey, rerender: () => { view.hover = null; rerender(); }, onChange: applyDiff }) : []),
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),
   ]);
   const panel = el("div", { class: "mx-trend-view", id: "metrics-trend-view", role: "tabpanel" }, [
@@ -969,7 +995,7 @@ function stackColumn(heights, className, keys = STACK) {
 function fillTip(tip, model) {
   const rows = (model.rows || []).map((row) => el("div", { class: `mx-tip-row${row.strong ? " strong" : ""}` }, [
     el("span", { class: "mx-tip-name" }, [
-      el("span", { class: `mx-swatch mx-s-${row.key}${row.bar ? " bar" : ""}`, "aria-hidden": "true" }),
+      el("span", { class: `mx-swatch mx-s-${row.key}${row.bar ? " bar" : ""}${row.dashed ? " dashed" : ""}`, "aria-hidden": "true" }),
       row.name,
       row.n ? el("span", { class: row.low ? "mx-tip-n low" : "mx-tip-n", text: row.n }) : null,
     ]),

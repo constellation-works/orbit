@@ -5,6 +5,7 @@ pub(crate) mod connection;
 pub(crate) mod crew_performance_store;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
+pub(crate) mod landed_diff_store;
 pub mod migration;
 pub(crate) mod plugin_store;
 pub(crate) mod provider_limit_store;

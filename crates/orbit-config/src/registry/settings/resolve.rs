@@ -78,6 +78,72 @@ pub(super) fn resolve_light_delivery_paths(
     Ok(patterns)
 }
 
+/// `workflow.test_paths` default: test directories and test-file naming
+/// conventions shared across languages, not one toolchain's layout.
+const DEFAULT_TEST_PATHS: &[&str] = &[
+    "**/test/**",
+    "**/tests/**",
+    "**/__tests__/**",
+    "**/spec/**",
+    "**/testdata/**",
+    "**/*_test.*",
+    "**/*.test.*",
+    "**/test_*.*",
+    "**/*_spec.*",
+    "**/*.spec.*",
+];
+
+/// `workflow.non_code_paths` default: prose, configuration, data and media.
+const DEFAULT_NON_CODE_PATHS: &[&str] = &[
+    "docs/**",
+    "**/*.md",
+    "**/*.mdx",
+    "**/*.rst",
+    "**/*.txt",
+    "**/*.json",
+    "**/*.yaml",
+    "**/*.yml",
+    "**/*.toml",
+    "**/*.lock",
+    "**/*.csv",
+    "**/*.golden",
+    "**/*.png",
+    "**/*.jpg",
+    "**/*.jpeg",
+    "**/*.gif",
+    "**/*.webp",
+    "**/*.svg",
+    "**/*.ico",
+    "**/LICENSE*",
+];
+
+fn resolve_path_filter_default(
+    key: &str,
+    raw: Option<Vec<String>>,
+    default: &[&str],
+) -> Result<Vec<String>, OrbitError> {
+    let patterns = raw.unwrap_or_else(|| {
+        default
+            .iter()
+            .map(|pattern| (*pattern).to_string())
+            .collect()
+    });
+    orbit_common::fs::path_filter::PathFilter::new(key, &patterns)?;
+    Ok(patterns)
+}
+
+/// `workflow.test_paths`: unset is [`DEFAULT_TEST_PATHS`]; `[]` counts no
+/// path as a test.
+pub(super) fn resolve_test_paths(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    resolve_path_filter_default("workflow.test_paths", raw, DEFAULT_TEST_PATHS)
+}
+
+/// `workflow.non_code_paths`: unset is [`DEFAULT_NON_CODE_PATHS`]; `[]`
+/// counts every path that is not a test as code.
+pub(super) fn resolve_non_code_paths(raw: Option<Vec<String>>) -> Result<Vec<String>, OrbitError> {
+    resolve_path_filter_default("workflow.non_code_paths", raw, DEFAULT_NON_CODE_PATHS)
+}
+
 /// `workflow.unlocked_path_validation_commands`: blank entries are dropped,
 /// so a list of only blanks keeps full validation like an unset key.
 pub(super) fn resolve_unlocked_path_validation_commands(

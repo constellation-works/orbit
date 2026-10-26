@@ -82,6 +82,12 @@ pub trait NullRuntimeHost: Send + Sync {
     ) -> Result<(), OrbitError> {
         Ok(())
     }
+    fn record_direct_landing(
+        &self,
+        _request: &orbit_types::workflow::automation::DirectLandingRequest,
+    ) -> Result<(), OrbitError> {
+        Ok(())
+    }
     fn accepted_automation_coverage(
         &self,
         _task_id: &str,
