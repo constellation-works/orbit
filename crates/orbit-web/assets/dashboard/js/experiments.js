@@ -527,7 +527,7 @@ function forestCard(readout, color) {
   return card("Difference from control", [
     el("p", { class: "mx-blurb" }, [
       "Arm minus control, post-stratified by complexity, with 95% intervals. Each metric has its own scale around zero. ",
-      infoHint("A bar that crosses the zero line is a difference the sample cannot tell from none. Intervals are bootstrap for means and Wilson for rates."),
+      infoHint("A bar that crosses the zero line is a difference the sample cannot tell from none. The 95% intervals are post-stratified bootstrap intervals of the difference for mean and rate metrics alike. Wilson intervals apply to a single arm's rate estimate."),
     ]),
     el("div", { class: "ex-forest" }, groups),
     unmeasured.length ? el("p", { class: "ex-note", text: `Not measured yet: ${unmeasured.join(", ")}.` }) : null,
