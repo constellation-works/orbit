@@ -1,0 +1,36 @@
+/* Analytics › Forecast: backlog quantiles, coverage and calibration, built
+   from the Metrics card, series-card and table classes in health.css. */
+.panel > .body.forecast-body {
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 16px; background: var(--bg);
+}
+.fc-view { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+/* Quantile tiles are read-outs, not series toggles. */
+.mx-sc.fc-kpi { cursor: default; }
+.mx-sc.fc-kpi:hover { border-color: var(--hair); }
+.fc-kpi-pair { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 18px; }
+.fc-q { display: inline-flex; align-items: baseline; gap: 6px; }
+.fc-q .mx-sc-value.fc-p90 { color: var(--fg-dim); font-size: 20px; }
+.fc-assume {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px;
+  padding: 10px 12px; border: 1px dashed #2e343c; border-radius: 8px;
+  font: 13px var(--font-sans);
+}
+.fc-assume-head { color: var(--fg); font-weight: 500; }
+.fc-assume-rate { color: var(--fg-mute); }
+.fc-approved { margin: 0; color: var(--fg-dim); font: 13px var(--font-sans); }
+.fc-table td.fc-state { white-space: nowrap; }
+.fc-table td.fc-basis { color: var(--fg-mute); font: 12px var(--font-mono); white-space: nowrap; }
+/* Coverage counts: one cell per count, wrapping on narrow screens. */
+.fc-coverage {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; margin: 0;
+  font: 13px var(--font-sans);
+}
+.fc-cov {
+  position: relative; display: flex; flex-direction: column; gap: 4px;
+  padding: 10px 12px; border: 1px solid var(--hair); border-radius: 8px; background: var(--bg-sunk);
+}
+.fc-cov dt { color: var(--fg-dim); }
+/* The count reads first; dt stays first in the markup, as a dl requires. */
+.fc-cov dd { order: -1; margin: 0; color: var(--fg); font: 600 20px var(--font-mono); font-variant-numeric: tabular-nums; }
+.fc-cov dd.fc-warn { color: #f2c46d; }

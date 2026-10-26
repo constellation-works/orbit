@@ -27,8 +27,8 @@ use crate::runtime::host_signal::HOST_SHUTDOWN_SCHEDULED;
 use super::approvals::readiness_approvals;
 use super::classify::{DEFAULT_CANDIDATE_POOL, candidate_pool_limit};
 use super::drains::{
-    DEFAULT_MAX_ACTIVE_LEAF_RUNS, DRAIN_JOB_NAME, LEAF_JOB_NAME, live_pull_drain,
-    read_live_leaf_runs, shared_leaf_occupancy, workspace_drains,
+    DRAIN_JOB_NAME, LEAF_JOB_NAME, drain_ceiling, live_pull_drain, read_live_leaf_runs,
+    shared_leaf_occupancy, workspace_drains,
 };
 
 const MAX_READINESS_LIMIT: usize = 500;
@@ -132,27 +132,10 @@ pub fn explain_workspace_auto_readiness(
     } else {
         "idle"
     };
-    let (max_active_leaf_runs, limit_source) =
-        match (max_active_leaf_runs, &active_drain, &pull_drain) {
-            (Some(requested), _, _) => (u64::from(requested), "requested"),
-            (None, Some(drain), _) => (
-                u64::from(drain.effective_max_active_leaf_runs()),
-                if drain.limit.is_some() {
-                    "run_control"
-                } else {
-                    "run_input"
-                },
-            ),
-            (None, None, Some(drain)) => (
-                u64::from(drain.effective_max_active_leaf_runs()),
-                if drain.limit.is_some() {
-                    "pull_run_control"
-                } else {
-                    "pull_run_input"
-                },
-            ),
-            (None, None, None) => (DEFAULT_MAX_ACTIVE_LEAF_RUNS, "default"),
-        };
+    let (max_active_leaf_runs, limit_source) = match max_active_leaf_runs {
+        Some(requested) => (u64::from(requested), "requested"),
+        None => drain_ceiling(active_drain.as_ref(), pull_drain.as_ref()),
+    };
 
     // Validated here, before any snapshot work, so a typo reads the same way
     // it would on `orbit run auto --allow-crew`.

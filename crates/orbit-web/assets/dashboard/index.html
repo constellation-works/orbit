@@ -82,6 +82,7 @@
               <button class="subtab" data-subtab="reliability" type="button"><span class="rail-label" title="Reliability">Reliability</span></button>
               <button class="subtab" data-subtab="codebase" type="button"><span class="rail-label" title="Codebase">Codebase</span></button>
               <button class="subtab" data-subtab="resources" type="button"><span class="rail-label" title="Resources">Resources</span></button>
+              <button class="subtab" data-subtab="forecast" type="button"><span class="rail-label" title="Forecast">Forecast</span></button>
               <button class="subtab" data-subtab="cost" type="button"><span class="rail-label" title="Cost">Cost</span></button>
               <button class="subtab" data-subtab="agents" type="button"><span class="rail-label" title="Agents">Agents</span></button>
             </nav>
@@ -594,6 +595,17 @@
             <span class="count" id="resources-count">-</span>
           </header>
           <div class="body resources-body" id="resources-body" tabindex="0" role="region" aria-label="Resource profiles"></div>
+        </section>
+      </main>
+      <!-- Analytics › Forecast: backlog time to drain, cost and tokens as p50
+           and p90, with the calibration of earlier stored forecasts. -->
+      <main id="analytics-forecast-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="forecast-panel">
+          <header>
+            <span>Backlog forecast</span>
+            <span class="count" id="forecast-count">-</span>
+          </header>
+          <div class="body forecast-body" id="forecast-body" tabindex="0" role="region" aria-label="Backlog forecast"></div>
         </section>
       </main>
       <!-- Analytics › Cost: managed-execution cost and token usage. -->

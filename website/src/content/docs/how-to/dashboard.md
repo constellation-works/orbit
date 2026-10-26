@@ -150,8 +150,8 @@ on its host.
 - The URL holds the host, workspace, and time window, so a reload or copied
   link opens the same view.
 - **Analytics → Reliability → Pipeline** covers every workspace, whatever is
-  selected. **Metrics**, **Codebase**, **Resources**, **Cost**, and **Agents**
-  show one workspace; **All workspaces** leaves those panels on "Select a
+  selected. **Metrics**, **Codebase**, **Resources**, **Forecast**, **Cost**,
+  and **Agents** show one workspace; **All workspaces** leaves those panels on "Select a
   workspace to view this panel". See [Analytics](#analytics).
 
 Confirm the selected workspace before you act. A count or metric does not
@@ -164,7 +164,7 @@ prove that a particular task or run succeeded.
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the auto-drain card, a simple **Start a window** card, the locks held and a live log; an open task takes its place. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
-| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Cost**, and **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**). See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
+| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, and **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**). See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
@@ -438,11 +438,12 @@ read-only exploration are explained in [Analytics](#analytics).
 
 **Analytics** shows how delivery is trending on the host you are viewing.
 Open it from the rail. The views are **Metrics**, **Reliability**,
-**Codebase**, **Resources**, **Cost**, and **Agents**. Reading them leaves
-tasks, drains, and admission unchanged.
+**Codebase**, **Resources**, **Forecast**, **Cost**, and **Agents**. Reading
+them leaves tasks, drains, and admission unchanged. **Forecast** also keeps
+one snapshot of its forecast an hour, so it can later be checked.
 
-**Metrics**, **Codebase**, **Resources**, **Cost**, and **Agents** show the
-selected workspace. **All workspaces** replaces each of those panels with
+**Metrics**, **Codebase**, **Resources**, **Forecast**, **Cost**, and
+**Agents** show the selected workspace. **All workspaces** replaces each of those panels with
 "Select a workspace to view this panel". **Reliability → Pipeline** covers
 every workspace on this host. While it is open, the workspace picker is
 marked fleet-wide. Resources are learned on the host you are viewing.
@@ -657,6 +658,51 @@ This command reads those records. Column-by-column detail is in the
 [CLI reference](../../reference/cli/#run-inspection). The limits are
 [settable keys](../../reference/config/#settable-keys), global to the
 machine.
+
+### Forecast
+
+Open **Forecast** to see how long the backlog takes to drain and what it
+costs. It reads the selected workspace's **backlog** and **in-progress**
+tasks; review, blocked, and someday tasks are left out. Every figure is a
+range: **p50** (as likely over as under) and **p90** (nine times in ten it
+finishes under). The view changes nothing.
+
+The forecast replays recent history. Each finished task in the lookback is
+one sample: the wall time its agent runs took (short waits between them
+included), and the normalized tokens and dollars they used. Each open task
+draws a sample from finished tasks of the same complexity and crew, falling
+back to its whole complexity when there are fewer than five, and to every
+finished task when it has no complexity yet. The drain is replayed 1000
+times on as many parallel runs as the auto-drain admits: the running
+window's limit, else the default of 5. An in-progress task counts only what
+it has left.
+
+- The tiles give **Time to drain**, **Cost**, and **Tokens** as p50 and p90.
+  A tile reads `—` when too few samples have that measure.
+- **14d**, **30d**, and **90d** choose the lookback. A longer one samples more
+  tasks but older behavior.
+- **No arrivals**, the default, assumes nothing new is filed. The strip
+  beside it shows how many tasks were filed a day over the last week
+  (auto-tasks, sweeps, other filings) and how many were done, so you can see
+  how far that assumption is off. **Recent arrivals** adds new tasks at that
+  rate.
+- With proposed tasks waiting, a line gives the drain, cost, and tokens if
+  they were all approved.
+- **By complexity** gives each complexity's work hours, cost, and tokens, and
+  how many tasks sampled their own crew's history, their complexity's, or
+  every task's.
+- **Coverage** counts the tasks forecast on thin evidence: unassessed, thin
+  crew history, models without token prices, runs without a cost, and no
+  history at all.
+
+**Calibration** checks earlier forecasts. While **Forecast** is open on its
+defaults, one forecast an hour is kept. As its tasks finish, each task's
+actual time, cost, and tokens are compared with its own p50 and p90, and once
+every task is done, so are the whole drain's. A forecast that is well
+calibrated has about half of actuals under p50 and nine in ten under p90.
+Tasks since rejected, archived, removed, or moved to another complexity are
+left out and counted. A new workspace needs a few days of finished work
+before there is anything to score.
 
 ### Cost
 

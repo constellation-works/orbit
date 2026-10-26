@@ -451,6 +451,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0061".to_string(),
                 "task_reservation_leases".to_string(),
             ),
+            (
+                "migration.v0062".to_string(),
+                "backlog_forecasts".to_string(),
+            ),
         ]
     );
 }

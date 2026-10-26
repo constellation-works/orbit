@@ -49,7 +49,7 @@ const TABS = ["tasks", "jobs", "drain", "diagnostics", "analytics", "operations"
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
-const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "cost", "agents"];
+const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "forecast", "cost", "agents"];
 // Analytics › Cost tabs: `#analytics/cost?tab=exploration`; no `tab` is Spend.
 const COST_TABS = ["spend", "exploration"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
@@ -68,6 +68,7 @@ const ANALYTICS_MAINS = {
   tools: "analytics-tools-main",
   codebase: "analytics-codebase-main",
   resources: "analytics-resources-main",
+  forecast: "analytics-forecast-main",
   cost: "analytics-cost-main",
   agents: "agents-main",
 };
@@ -334,10 +335,11 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
     renderPanelPlaceholder("scoreboard-orchestration");
     renderPanelPlaceholder("scoreboard-exploration");
   }
-  // Metrics, Pipeline and Resources read as soon as they open, not on the next tick.
+  // Metrics, Pipeline, Resources and Forecast read as soon as they open, not on the next tick.
   if (shown === "metrics" && ctx.fetchMetrics) ctx.fetchMetrics();
   if (shown === "pipeline" && ctx.fetchReliability) ctx.fetchReliability();
   if (shown === "resources" && ctx.fetchResources) ctx.fetchResources();
+  if (shown === "forecast" && ctx.fetchForecast) ctx.fetchForecast();
 }
 
 // Agents shows one role at a time behind its secondary tabs, and reads it as

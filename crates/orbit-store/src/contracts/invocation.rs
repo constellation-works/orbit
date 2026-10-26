@@ -120,6 +120,9 @@ pub struct InvocationAccountingFact {
     /// The pipeline step (or activity) the invocation ran under.
     #[serde(default)]
     pub activity_id: Option<String>,
+    /// Wall time the invocation ran; `ts` is recorded when it ended.
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 /// One invocation's spend as a provider budget reads it from the host ledger

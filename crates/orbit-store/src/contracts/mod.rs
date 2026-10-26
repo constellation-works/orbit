@@ -1,5 +1,6 @@
 mod admission_load;
 mod audit;
+mod backlog_forecast;
 mod codebase_facts;
 mod compat;
 mod crew_performance;
@@ -20,6 +21,7 @@ mod v2_audit;
 
 pub use admission_load::*;
 pub use audit::*;
+pub use backlog_forecast::*;
 pub use codebase_facts::*;
 pub use compat::*;
 pub use crew_performance::*;
