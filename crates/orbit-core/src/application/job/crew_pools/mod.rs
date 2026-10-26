@@ -21,12 +21,16 @@
 //! and `shadow_comparative` compute and record that factor with
 //! `applied: false` and leave the tickets on the weights the draw would
 //! use with the mode off; pressure still applies.
+//! `workflow.type_complexity_crews` gives a task type its own pool per tier
+//! ([`task_type`]), drawn wherever the complexity pool would be, behind an
+//! explicit crew and a purpose pool, under the same filters and weights.
 
 mod activity;
 mod admission;
 mod candidates;
 mod draw;
 mod purpose;
+mod task_type;
 mod types;
 
 pub(crate) use admission::strip_auto_crew_admission;

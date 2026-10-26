@@ -186,8 +186,9 @@ pub(in crate::application) trait TaskJobPort {
         random: &mut dyn FnMut() -> Result<u64, OrbitError>,
     ) -> Result<CrewPoolDraw, OrbitError>;
 
-    /// The enabled members of the purpose pool `task` was assigned from.
-    fn purpose_candidates(
+    /// The enabled members of the purpose or type pool `task` was assigned
+    /// from (`purpose:<purpose>` or `type:<type>/<tier>`).
+    fn assigned_pool_candidates(
         &self,
         task: &Task,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError>;

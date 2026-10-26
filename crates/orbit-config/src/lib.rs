@@ -115,8 +115,9 @@ pub use crew_performance::{
     classify_task_type, crew_performance_types_hash,
 };
 pub use crew_pools::{
-    ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, canonical_crew_pool,
-    canonical_crew_pool_entries,
+    ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,
+    TypeComplexityCrewPools, canonical_crew_pool, canonical_crew_pool_entries,
+    type_complexity_crews_key,
 };
 pub use layering::{
     ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,

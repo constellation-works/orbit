@@ -431,6 +431,8 @@ pub struct OrbitRuntimeSettings {
     final_recovery_crews: Vec<String>,
     /// Admitted `workflow.purpose_crews.<purpose>` pools; empty is unset.
     purpose_crews: orbit_config::PurposeCrewPools,
+    /// Admitted `workflow.type_complexity_crews.<type>.<tier>` pools.
+    type_complexity_crews: orbit_config::TypeComplexityCrewPools,
     /// Initial `workflow.provider_limit_*` policy for the admission cache's
     /// last-known-good fallback before its first refresh.
     provider_limit: orbit_config::ProviderLimitPolicy,
@@ -525,6 +527,7 @@ impl OrbitRuntimeSettings {
         complexity_crews: orbit_config::ComplexityCrewPools,
         final_recovery_crews: Vec<String>,
         purpose_crews: orbit_config::PurposeCrewPools,
+        type_complexity_crews: orbit_config::TypeComplexityCrewPools,
         provider_limit: orbit_config::ProviderLimitPolicy,
         operation: orbit_config::OperationPolicy,
         worker_containment: orbit_config::WorkerContainmentSettings,
@@ -579,6 +582,7 @@ impl OrbitRuntimeSettings {
             complexity_crews,
             final_recovery_crews,
             purpose_crews,
+            type_complexity_crews,
             provider_limit,
             operation,
             worker_containment,
@@ -804,6 +808,10 @@ impl OrbitRuntimeSettings {
 
     pub fn purpose_crews(&self) -> &orbit_config::PurposeCrewPools {
         &self.purpose_crews
+    }
+
+    pub fn type_complexity_crews(&self) -> &orbit_config::TypeComplexityCrewPools {
+        &self.type_complexity_crews
     }
 
     pub(crate) fn provider_limit(&self) -> &orbit_config::ProviderLimitPolicy {

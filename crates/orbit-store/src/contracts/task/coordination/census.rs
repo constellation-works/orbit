@@ -236,8 +236,9 @@ impl ExecutorCensus {
 
     /// The highest weekly usage pressure the requester reported for a
     /// member of `task`'s crew pool [ORB-17773], in milli-units. The pool
-    /// is the one the task's crew source names — `pool:<tier>` or
-    /// `purpose:<purpose>` — else its complexity tier's. A requester that
+    /// is the one the task's crew source names — `pool:<tier>`,
+    /// `type:<type>/<tier>` or `purpose:<purpose>` — else its complexity
+    /// tier's. A requester that
     /// reported no pressure, a pool the owner did not supply, and a member
     /// it did not name all read neutral, so pressure orders nothing.
     #[must_use]
@@ -258,7 +259,9 @@ impl ExecutorCensus {
             Some(source) if source.starts_with("pool:") => {
                 source.strip_prefix("pool:").map(ToOwned::to_owned)
             }
-            Some(source) if source.starts_with("purpose:") => Some(source.to_string()),
+            Some(source) if source.starts_with("purpose:") || source.starts_with("type:") => {
+                Some(source.to_string())
+            }
             _ => task
                 .complexity
                 .map(|complexity| complexity.as_str().to_string()),

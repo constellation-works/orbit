@@ -1,5 +1,7 @@
 use orbit_common::OrbitError;
-use orbit_config::{canonical_crew_pool, canonical_crew_pool_entries, executor_host_os};
+use orbit_config::{
+    CrewPoolEntry, canonical_crew_pool, canonical_crew_pool_entries, executor_host_os,
+};
 use orbit_types::identity::Crew;
 use orbit_types::task::{
     Task, TaskComplexity, TaskHistoryEntry, TaskOsRequirement, TaskPriority, TaskStatus, TaskType,
@@ -9,7 +11,7 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::application::contracts::{
     CreationCrewAssignment, CrewCandidate, InspectionPool, PURPOSE_SOURCE_PREFIX,
-    automatic_crew_source,
+    TYPE_SOURCE_PREFIX, automatic_crew_source, parse_type_crew_source, type_crew_source,
 };
 use crate::runtime::run_input::non_empty;
 
@@ -56,8 +58,11 @@ impl OrbitRuntime {
     }
 
     /// Redraw a pool assignment from another tier or a default fallback before
-    /// publishing the new complexity. The caller commits crew, source and this
-    /// history together.
+    /// publishing the new complexity, or a pool or default assignment whose
+    /// edited tags or context files route it to another type pool. `task`
+    /// already carries the edited tags and context files; `complexity` is
+    /// the tier the write leaves it at. The caller commits crew, source and
+    /// this history together.
     pub(crate) fn rerate_task_crew(
         &self,
         task: &mut Task,
@@ -66,13 +71,25 @@ impl OrbitRuntime {
         let Some(source) = self.task_crew_source(task)? else {
             return Ok(None);
         };
-        let pool_tier = source.strip_prefix("pool:");
-        if source != "default" && pool_tier.is_none() {
+        let assigned_tier = source
+            .strip_prefix("pool:")
+            .map(ToOwned::to_owned)
+            .or_else(|| parse_type_crew_source(&source).map(|(_, tier)| tier.to_string()));
+        if source != "default" && assigned_tier.is_none() {
             return Ok(None);
         }
-        if (source == "default" && complexity == task.complexity)
-            || complexity.is_some_and(|complexity| Some(complexity.as_str()) == pool_tier)
-        {
+        let complexity_changed = complexity != task.complexity;
+        let route = self.task_type_pool_route(complexity, &task.tags, &task.context_files);
+        let target = route.as_ref().map_or_else(
+            || complexity.map(|complexity| format!("pool:{complexity}")),
+            |route| Some(route.crew_source()),
+        );
+        let unchanged = if source == "default" {
+            !complexity_changed && route.is_none()
+        } else {
+            target.as_deref() == Some(source.as_str())
+        };
+        if unchanged {
             return Ok(None);
         }
         let before = task.crew.clone();
@@ -84,21 +101,41 @@ impl OrbitRuntime {
             &task.context_files,
             &mut random_crew_ticket,
         )?;
+        // A type pool none of whose members can run here leaves the task on
+        // its pool; a tag edit alone does not re-roll that draw.
+        if !complexity_changed
+            && assignment
+                .as_ref()
+                .map(|assignment| assignment.source.as_str())
+                == Some(source.as_str())
+        {
+            return Ok(None);
+        }
         task.crew = assignment
             .as_ref()
             .map(|assignment| assignment.crew.clone());
         task.crew_source = assignment.map(|assignment| assignment.source);
+        let reason = if complexity_changed {
+            format!(
+                "complexity changed to {}",
+                complexity.map_or("unassessed", TaskComplexity::as_str)
+            )
+        } else {
+            match &route {
+                Some(route) => format!("the task was reclassified as type {}", route.task_type),
+                None => "the task no longer classifies to a type pool".to_string(),
+            }
+        };
         Ok(Some(TaskHistoryEntry {
             at: chrono::Utc::now(),
             by: "system".to_string(),
             event: "crew_redrawn".to_string(),
             note: Some(format!(
-                "crew redrawn from {} (`{}`) to {} (`{}`) after complexity changed to {}",
+                "crew redrawn from {} (`{}`) to {} (`{}`) after {reason}",
                 source,
                 before.as_deref().unwrap_or("(none)"),
                 task.crew_source.as_deref().unwrap_or("unassigned"),
                 task.crew.as_deref().unwrap_or("(none)"),
-                complexity.map_or("unassessed", TaskComplexity::as_str),
             )),
             from_status: None,
             to_status: None,
@@ -156,7 +193,8 @@ impl OrbitRuntime {
     }
 
     /// This host's crew pools by ordering key [ORB-17773]: each complexity
-    /// tier and each configured `purpose:<purpose>` pool, naming its
+    /// tier, each configured `type:<type>/<tier>` pool and each configured
+    /// `purpose:<purpose>` pool, naming its
     /// member crews. Admission ordering scores a candidate by the
     /// requester's reported pressure over these members. Best effort: a
     /// pool that cannot be read is omitted, which scores its candidates
@@ -172,6 +210,15 @@ impl OrbitRuntime {
             }
         }
         let settings = self.context.settings();
+        for (task_type, tier, names) in settings.type_complexity_crews().iter() {
+            let key = orbit_config::type_complexity_crews_key(task_type, tier);
+            if let Ok(pool) = canonical_crew_pool(names, settings.crews(), &key) {
+                pools.insert(
+                    type_crew_source(task_type, tier),
+                    pool.entries.into_iter().map(|entry| entry.name).collect(),
+                );
+            }
+        }
         for purpose in orbit_types::workflow::CrewPurpose::ALL {
             let names = settings.purpose_crews().pool(purpose);
             if names.is_empty() {
@@ -323,6 +370,11 @@ impl OrbitRuntime {
         source: &str,
         complexity: Option<TaskComplexity>,
     ) -> Result<Option<String>, OrbitError> {
+        // The claimed snapshot carries no tags or context files to classify
+        // the task by, so a type-pool crew keeps the owner's draw.
+        if source.starts_with(TYPE_SOURCE_PREFIX) {
+            return Ok(None);
+        }
         let pools = if input.get(POOLS_KEY).is_some() {
             pools_from_input(input)?
         } else {
@@ -401,8 +453,8 @@ impl OrbitRuntime {
         Ok(Some(selected.crew.name.clone()))
     }
 
-    /// The task's validated pool assignment or explicit pin, else its complexity
-    /// pool, else the default chain,
+    /// The task's validated pool assignment or explicit pin, else its purpose
+    /// pool, its type pool, its complexity pool, else the default chain,
     /// before any provider failure hold.
     pub(crate) fn unheld_task_crew_candidates(
         &self,
@@ -416,6 +468,13 @@ impl OrbitRuntime {
         let purpose_source = source
             .as_deref()
             .and_then(|source| source.strip_prefix(PURPOSE_SOURCE_PREFIX));
+        let type_source = source
+            .as_deref()
+            .filter(|source| source.starts_with(TYPE_SOURCE_PREFIX));
+        let automatic = pool_tier.is_some()
+            || purpose_source.is_some()
+            || type_source.is_some()
+            || source.as_deref() == Some("default");
         let unassigned = self
             .crew_unless_retired(task.crew.as_deref())
             .and_then(non_empty)
@@ -423,10 +482,7 @@ impl OrbitRuntime {
         // A purpose pool draws for a task whose crew the system chose (a pool,
         // purpose or default assignment) or that has none yet; an explicit
         // crew is kept as it is.
-        if (unassigned
-            || pool_tier.is_some()
-            || purpose_source.is_some()
-            || source.as_deref() == Some("default"))
+        if (unassigned || automatic)
             && let Some(purpose) = task_crew_purpose(&task.tags)
             && let Some((candidates, pool_source)) = self.purpose_pool_candidates(purpose, false)?
         {
@@ -446,8 +502,30 @@ impl OrbitRuntime {
             }
             return Ok((candidates, pool_source));
         }
-        // A purpose assignment whose pool is gone routes like a default one.
-        if pool_tier.is_some() || purpose_source.is_some() || source.as_deref() == Some("default") {
+        // The task's type pool for its tier draws next. A `type:` assignment
+        // keeps its member while the task still classifies to that type and
+        // tier and the member can run; a reclassified task draws its new pool.
+        if (unassigned || automatic)
+            && let Some(route) =
+                self.task_type_pool_route(task.complexity, &task.tags, &task.context_files)
+            && let Some((candidates, pool_source)) = self.type_pool_candidates(&route, None)?
+        {
+            if type_source == Some(route.crew_source().as_str())
+                && let Some(candidate) = candidates.iter().find(|candidate| {
+                    candidate.weight > 0
+                        && Some(candidate.crew.name.as_str()) == task.crew.as_deref()
+                })
+            {
+                return Ok((
+                    vec![sole_candidate(candidate.crew.clone())],
+                    source.unwrap_or_default(),
+                ));
+            }
+            return Ok((candidates, pool_source));
+        }
+        // A purpose or type assignment whose pool is gone routes like a
+        // default one.
+        if automatic {
             if let Some((candidates, pool_source)) =
                 self.complexity_pool_candidates(task.complexity, pools)?
             {
@@ -541,6 +619,19 @@ impl OrbitRuntime {
         };
         let registry = self.context.settings().crews();
         let entries = canonical_crew_pool_entries(&pool.crews, registry, &pool.source)?;
+        self.pool_member_candidates(&entries, &pool.source, task_os)
+    }
+
+    /// The enabled members of one complexity or type pool that this host
+    /// (`task_os` `None`) or any serving host (`task_os` set, the creation
+    /// filter) can run, or `None` when none remain.
+    pub(super) fn pool_member_candidates(
+        &self,
+        entries: &[CrewPoolEntry],
+        source: &str,
+        task_os: Option<&TaskOsRequirement>,
+    ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
+        let registry = self.context.settings().crews();
         let enabled = entries
             .iter()
             .filter(|entry| registry.get(&entry.name).is_some_and(|crew| crew.enabled))
@@ -553,8 +644,8 @@ impl OrbitRuntime {
             .collect::<Result<Vec<_>, OrbitError>>()?;
         if enabled.is_empty() {
             tracing::info!(
-                source = %pool.source,
-                "every crew in the pool is disabled; routing to workflow.default_crew",
+                source = %source,
+                "every crew in the pool is disabled; routing to the next pool or workflow.default_crew",
             );
             return Ok(None);
         }
@@ -589,12 +680,12 @@ impl OrbitRuntime {
             .collect::<Vec<_>>();
         if crews.is_empty() {
             tracing::info!(
-                source = %pool.source,
-                "every crew in the pool is excluded by its executor host_os or task OS tags; routing to workflow.default_crew",
+                source = %source,
+                "every crew in the pool is excluded by its executor host_os or task OS tags; routing to the next pool or workflow.default_crew",
             );
             return Ok(None);
         }
-        Ok(Some((crews, pool.source.clone())))
+        Ok(Some((crews, source.to_string())))
     }
 
     /// The enabled members of `workflow.<tier>_complexity_crews` as the
@@ -667,7 +758,9 @@ impl OrbitRuntime {
     /// Decide the crew a task is created with [ORB-12717].
     ///
     /// An explicit crew wins; then the pool of the purpose the task's tags
-    /// name, when one is configured (source `purpose:<purpose>`).
+    /// name, when one is configured (source `purpose:<purpose>`); then the
+    /// pool `workflow.type_complexity_crews` gives the task's type at its
+    /// complexity (source `type:<type>/<tier>`).
     /// Creation and complexity re-rates draw from the complexity pools;
     /// a status transition alone never revisits the choice, and
     /// `task update --crew ""` re-enters here for the task's current
@@ -708,13 +801,23 @@ impl OrbitRuntime {
                 source,
             }));
         }
+        let task_os = self.label_narrowed_os(TaskOsRequirement::from_tags(tags), requires_labels);
+        if let Some(route) = self.task_type_pool_route(complexity, tags, context_files)
+            && let Some((candidates, _)) = self.type_pool_candidates(&route, Some(&task_os))?
+        {
+            let source = route.crew_source();
+            let candidates = self.creation_weighted(candidates, complexity, tags, context_files);
+            let candidates = permitted_candidates(candidates, &source, None)?;
+            let selected = weighted_draw(&candidates, &source, random)?;
+            return Ok(Some(CreationCrewAssignment {
+                crew: selected.crew.name.clone(),
+                source,
+            }));
+        }
         let pools = self.capture_auto_crew_pools(&Value::Null)?;
         if let Some(complexity) = complexity
-            && let Some((candidates, _)) = self.creation_complexity_pool_candidates(
-                Some(complexity),
-                &pools,
-                &self.label_narrowed_os(TaskOsRequirement::from_tags(tags), requires_labels),
-            )?
+            && let Some((candidates, _)) =
+                self.creation_complexity_pool_candidates(Some(complexity), &pools, &task_os)?
         {
             let source = format!("pool:{complexity}");
             let candidates =

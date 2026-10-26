@@ -43,8 +43,8 @@ use orbit_types::workflow::{ProviderFailureClass, ProviderFailureHold, provider_
 use super::ledger::PARTIAL_NOTE;
 use crate::OrbitRuntime;
 use crate::application::contracts::{
-    CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, auto_task_minted,
-    automatic_crew_source,
+    CrewCandidate, PROVIDER_LIMIT_REASSIGNMENT_PREFIX, PURPOSE_SOURCE_PREFIX, TYPE_SOURCE_PREFIX,
+    auto_task_minted, automatic_crew_source,
 };
 use crate::application::task::{CrewPools, TaskJobPort};
 use crate::runtime::run_input::non_empty;
@@ -346,12 +346,12 @@ impl OrbitRuntime {
                 format!("{source}; provider limit: {}", gate.skipped(&skipped)),
             ));
         }
-        // A collapsed `purpose:` assignment names only the chosen member.
-        // Retry that pool's other enabled members, weights included, before
-        // the complexity pool. A draw that already lists the pool is left
-        // alone. The run allowlist is applied by the caller.
-        if source.starts_with(PURPOSE_SOURCE_PREFIX)
-            && let Some((pool, pool_source)) = self.purpose_candidates(task)?
+        // A collapsed `purpose:` or `type:` assignment names only the chosen
+        // member. Retry that pool's other enabled members, weights included,
+        // before the complexity pool. A draw that already lists the pool is
+        // left alone. The run allowlist is applied by the caller.
+        if (source.starts_with(PURPOSE_SOURCE_PREFIX) || source.starts_with(TYPE_SOURCE_PREFIX))
+            && let Some((pool, pool_source)) = self.assigned_pool_candidates(task)?
         {
             let permitted = pool
                 .into_iter()
