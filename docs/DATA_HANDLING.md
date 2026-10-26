@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Orbit Data Handling — what stays on your machine, what leaves it, and to whom"
-last_validated: 2026-10-24
+last_validated: 2026-10-26
 ---
 
 # Orbit Data Handling
