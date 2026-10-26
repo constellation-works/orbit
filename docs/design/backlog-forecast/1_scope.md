@@ -30,6 +30,8 @@ A read-only forecast for the selected workspace's dispatchable backlog: time to 
 
 One **completed delivery**: a task that reached `done` inside the lookback (default 30 days, 7–180 by `lookback_days`), together with every managed invocation linked to it, at any time. Recoveries, auto-fixes, reviews and reworks are part of the delivery, so their cost is in the sample. A done task with no linked invocation (hand-closed, or delivered before invocations were linked) is not a sample; the response counts it as `history_without_invocations`.
 
+Completion is dated by the last event in the task's durable history whose `to_status` is `done`, including creation in that status. The generated index's `updated_at` only narrows candidate reads; later comments and artifacts cannot move a completion into the lookback. A done task without a recorded done event is omitted from sampling and the seven-day done rate rather than dated by its last metadata write. Each request reads the event log once for each indexed done candidate since the earliest of the lookback, the seven-day rate window and the oldest stored forecast; the maximum lookback is 180 days.
+
 For each delivery:
 
 ```
@@ -74,7 +76,7 @@ The canonical forecast (default lookback, the live ceiling, no arrivals) is pers
 Every request scores the newest 60 stored forecasts against the current task records and invocations:
 
 - **Per task.** A stored task now `done` is scored on what it used after `forecast_at` (the same hours, tokens and USD measures as a delivery, cut at the forecast time) against its stored p50 and p90.
-- **Per forecast.** Once none of its tasks is pending, the forecast is *settled*; actual time to drain is the last task's `done` time minus `forecast_at`, and actual tokens and USD are the sums. It is scored as a whole only when nothing was excluded.
+- **Per forecast.** Once none of its tasks is pending, the forecast is *settled*; actual time to drain is the last task's durable done-event time minus `forecast_at`, and actual tokens and USD are the sums. For an older task without a recorded done event, scoring falls back to its last linked invocation's end, never its mutable `updated_at`. It is scored as a whole only when nothing was excluded.
 - **Exclusions.** Tasks since `rejected` or `archived`, tasks no longer in the store, tasks whose complexity changed (re-scoped), and done tasks with no invocation after the forecast are excluded from scoring and counted per forecast and overall.
 
 The response reports, per measure, the number scored and the fraction of actuals at or under p50 and p90. A calibrated forecast lands near 50% and 90%.
