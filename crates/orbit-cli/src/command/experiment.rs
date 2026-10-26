@@ -29,6 +29,7 @@ impl Execute for ExperimentCommand {
         let Invocation { spec, input } = self.command;
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
         let blocks = match spec.verb {
+            ExperimentVerb::Assign => vec![Block::text(value.to_string())],
             ExperimentVerb::List => vec![Block::table(list_table(&value))],
             ExperimentVerb::Create
             | ExperimentVerb::Update

@@ -791,7 +791,7 @@ impl crate::OrbitRuntime {
             .flatten();
         #[cfg(feature = "test-support")]
         super::admission_checkpoint::notify();
-        boundary.admit_task(
+        boundary.admit_task_with_experiments(
             identity,
             request,
             &AdmissionOrdering {
@@ -825,6 +825,7 @@ impl crate::OrbitRuntime {
                     _ => Ok(None),
                 }
             },
+            &|task| self.capture_task_experiments(task),
         )
     }
 

@@ -764,33 +764,24 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
         .with_transaction(|tx| {
             tx.connection()
                 .execute_batch(
-                    "DELETE FROM schema_meta WHERE key = 'migration.v0063';
-             DELETE FROM schema_meta WHERE key = 'migration.v0062';
-             DELETE FROM schema_meta WHERE key = 'migration.v0061';
+                    "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0054';
              DROP TABLE landed_diff_stats;
-             DELETE FROM schema_meta WHERE key = 'migration.v0060';
              DROP TRIGGER job_run_tasks_insert;
              DROP TRIGGER job_run_tasks_update;
              DROP TRIGGER job_run_tasks_delete;
              DROP TABLE job_run_tasks;
-             DELETE FROM schema_meta WHERE key = 'migration.v0059';
              DROP TABLE IF EXISTS crew_performance_cells;
              DROP TABLE IF EXISTS crew_performance_snapshot;
-             DELETE FROM schema_meta WHERE key = 'migration.v0058';
              DROP TRIGGER handoff_settlement_insert_guard;
              DROP TRIGGER handoff_settlement_update_guard;
-             DELETE FROM schema_meta WHERE key = 'migration.v0057';
              DROP TABLE provider_account_limit_observations;
-             DELETE FROM schema_meta WHERE key = 'migration.v0056';
              DROP TABLE executor_census;
-             DELETE FROM schema_meta WHERE key = 'migration.v0055';
              DROP TRIGGER retain_task_lock_denial;
              DROP TRIGGER retain_run_commit_insert;
              DROP TRIGGER retain_run_commit_update;
              DROP TABLE task_lock_denials;
              ALTER TABLE job_runs DROP COLUMN commit_decision;
-             ALTER TABLE job_runs DROP COLUMN commit_committed;
-             DELETE FROM schema_meta WHERE key = 'migration.v0054';",
+             ALTER TABLE job_runs DROP COLUMN commit_committed;",
                 )
                 .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
             Ok(())

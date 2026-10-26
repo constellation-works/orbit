@@ -625,6 +625,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "resuming an experiment restarts randomizing tasks into its treatments, so only an operator may do it",
     },
     GovernedOperation {
+        id: "orbit.experiment.assign",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "forcing an experiment arm chooses a task's treatment by hand, so only an operator may do it",
+    },
+    GovernedOperation {
         id: "orbit.experiment.reweight",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

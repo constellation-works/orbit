@@ -259,6 +259,22 @@ pub(crate) fn run_show_payload(
                 .unwrap_or_default(),
         ));
     }
+    if let Some(assignments) = run
+        .input
+        .as_ref()
+        .and_then(|input| input.get("experiment_capture"))
+        .and_then(|capture| capture.get("assignments"))
+        .and_then(Value::as_array)
+    {
+        for assignment in assignments {
+            header.push_str(&format!(
+                "\nExperiment: {} / {} segment {} (shadow)",
+                assignment["experiment"].as_str().unwrap_or("?"),
+                assignment["arm"].as_str().unwrap_or("?"),
+                assignment["segment"]
+            ));
+        }
+    }
     for line in tag_instructions.header_lines() {
         header.push('\n');
         header.push_str(&line);

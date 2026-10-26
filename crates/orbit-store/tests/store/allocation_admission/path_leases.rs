@@ -267,9 +267,7 @@ fn pre_lease_reservations_read_back_as_exclusive_task_reservations() {
              ALTER TABLE task_reservations DROP COLUMN base_branch;
              ALTER TABLE task_reservations DROP COLUMN bound_branch;
              ALTER TABLE task_reservations DROP COLUMN heartbeat_at;
-             DELETE FROM schema_meta WHERE key = 'migration.v0061';
-             DELETE FROM schema_meta WHERE key = 'migration.v0062';
-             DELETE FROM schema_meta WHERE key = 'migration.v0063';",
+             DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0061';",
         )
         .expect("restore the pre-lease reservation shape");
     connection

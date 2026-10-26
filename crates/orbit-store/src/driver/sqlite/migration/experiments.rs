@@ -87,3 +87,9 @@ pub(super) fn apply_experiments(conn: &Connection) -> Result<(), OrbitError> {
     )
     .map_err(sqlite_store_error)
 }
+
+/// Remember first admissions even when no experiment matched the task.
+pub(super) fn apply_experiment_admissions(conn: &Connection) -> Result<(), OrbitError> {
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS experiment_admissions (workspace_id TEXT NOT NULL, task_id TEXT NOT NULL, PRIMARY KEY (workspace_id, task_id));")
+        .map_err(sqlite_store_error)
+}

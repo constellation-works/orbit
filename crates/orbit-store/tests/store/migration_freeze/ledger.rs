@@ -456,6 +456,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "backlog_forecasts".to_string(),
             ),
             ("migration.v0063".to_string(), "experiments".to_string()),
+            (
+                "migration.v0064".to_string(),
+                "experiment_admissions".to_string(),
+            ),
         ]
     );
 }
