@@ -83,6 +83,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Report and Triage Friction</h3>
     <p>Record what made work harder than it should have been, then search, triage, resolve, and rehome the record.</p>
   </a>
+  <a class="orbit-card" href="./decision-channels/">
+    <h3>Decision channels</h3>
+    <p>Register a human decision channel, inspect approval digests, and connect an authenticated transport plugin.</p>
+  </a>
   <a class="orbit-card" href="./plugins/">
     <h3>Install and Grant Plugins</h3>
     <p>Add a plugin to this machine, grant only the permissions it requests, enable it per workspace, and upgrade or remove it.</p>
