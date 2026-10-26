@@ -158,11 +158,7 @@ fn persisted_handoffs_upgrade_atomically_without_changing_receipts_or_authority(
     )
     .unwrap();
     conn.execute_batch(
-        "DELETE FROM schema_meta WHERE key='migration.v0057';
-         DELETE FROM schema_meta WHERE key='migration.v0058'; DELETE FROM schema_meta WHERE key='migration.v0059';
-         DELETE FROM schema_meta WHERE key='migration.v0060'; DELETE FROM schema_meta WHERE key='migration.v0061';
-         DELETE FROM schema_meta WHERE key='migration.v0062';
-         DELETE FROM schema_meta WHERE key='migration.v0063';",
+        "DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0057';",
     )
     .unwrap();
     conn.execute(
@@ -322,7 +318,12 @@ fn already_open_inline_writers_are_refused_atomically_at_the_store_boundary() {
     let database = delivery.owner.root().join("state.sqlite");
     let stale_writer = Store::open(&database).unwrap();
     let conn = rusqlite::Connection::open(&database).unwrap();
-    conn.execute_batch("DROP TRIGGER handoff_settlement_insert_guard; DROP TRIGGER handoff_settlement_update_guard; DELETE FROM schema_meta WHERE key='migration.v0057'; DELETE FROM schema_meta WHERE key='migration.v0058'; DELETE FROM schema_meta WHERE key='migration.v0059'; DELETE FROM schema_meta WHERE key='migration.v0060'; DELETE FROM schema_meta WHERE key='migration.v0061'; DELETE FROM schema_meta WHERE key='migration.v0062'; DELETE FROM schema_meta WHERE key='migration.v0063';").unwrap();
+    conn.execute_batch(
+        "DROP TRIGGER handoff_settlement_insert_guard;
+         DROP TRIGGER handoff_settlement_update_guard;
+         DELETE FROM schema_meta WHERE key LIKE 'migration.v%' AND key >= 'migration.v0057';",
+    )
+    .unwrap();
     let migrated = Store::open(&database).unwrap();
     let before = delivery
         .owner

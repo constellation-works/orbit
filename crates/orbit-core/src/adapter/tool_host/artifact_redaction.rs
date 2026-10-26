@@ -360,6 +360,7 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | ExperimentVerb::Start
             | ExperimentVerb::Pause
             | ExperimentVerb::Resume
+            | ExperimentVerb::Assign
             | ExperimentVerb::Reweight
             | ExperimentVerb::Conclude
             | ExperimentVerb::Abandon

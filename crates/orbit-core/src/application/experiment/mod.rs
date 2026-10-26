@@ -2,7 +2,10 @@
 //! treatment arms, defined in draft and changed only through recorded events
 //! once started.
 
+mod assignment;
+mod capture;
 mod definition;
+pub(crate) use capture::validate_experiment_capture;
 mod lifecycle;
 mod view;
 

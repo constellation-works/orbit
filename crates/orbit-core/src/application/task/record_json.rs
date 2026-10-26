@@ -111,6 +111,11 @@ pub fn task_show_json(
     status_by_id: &BTreeMap<String, TaskStatus>,
 ) -> Result<Map<String, Value>, OrbitError> {
     let mut object = task_record_json(runtime, row, status_by_id)?;
+    object.insert(
+        "experiments".into(),
+        serde_json::to_value(runtime.task_experiments(&row.task.id)?)
+            .map_err(serialize_error("experiments"))?,
+    );
     if let Some(block) = super::blocked_recovery::block_json(row) {
         object.insert("block".to_string(), block);
     }
@@ -161,6 +166,8 @@ pub fn task_show_field_json(
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<Value, OrbitError> {
     match field {
+        "experiments" => serde_json::to_value(runtime.task_experiments(&task.id)?)
+            .map_err(serialize_error("experiments")),
         "pilot_warnings" => Ok(serde_json::json!(task_pilot_warnings(
             task.status,
             &runtime.get_task_comments(&task.id)?,

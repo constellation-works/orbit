@@ -70,10 +70,11 @@ impl OrbitRuntime {
         resuming: bool,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<(), OrbitError> {
-        if resuming {
+        if !POLICY_PIPELINES.contains(&job_name) {
             return Ok(());
         }
-        if !POLICY_PIPELINES.contains(&job_name) {
+        self.install_experiment_capture(input)?;
+        if resuming {
             return Ok(());
         }
         if !input.is_object() {

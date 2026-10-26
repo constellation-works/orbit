@@ -17,6 +17,7 @@ impl GuardedModes for ExperimentVerb {
             | Self::Start
             | Self::Pause
             | Self::Resume
+            | Self::Assign
             | Self::Reweight
             | Self::Conclude
             | Self::Abandon
@@ -37,6 +38,7 @@ impl GuardedModes for ExperimentVerb {
             | Self::Start
             | Self::Pause
             | Self::Resume
+            | Self::Assign
             | Self::Reweight
             | Self::Conclude
             | Self::Abandon
@@ -53,6 +55,7 @@ impl GuardedModes for ExperimentVerb {
             | Self::Start
             | Self::Pause
             | Self::Resume
+            | Self::Assign
             | Self::Reweight
             | Self::Conclude
             | Self::Abandon
@@ -69,6 +72,7 @@ impl GuardedModes for ExperimentVerb {
             | Self::Start
             | Self::Pause
             | Self::Resume
+            | Self::Assign
             | Self::Reweight
             | Self::Conclude
             | Self::Abandon

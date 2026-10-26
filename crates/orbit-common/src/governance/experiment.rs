@@ -33,6 +33,8 @@ operation_registry! {
         Resume => RESUME,
         /// Change arm weights or retire arms, opening a new segment.
         Reweight => REWEIGHT,
+        /// Force an unassigned task into a shadow arm.
+        Assign => ASSIGN,
         /// Conclude an experiment with the chosen arm, or none.
         Conclude => CONCLUDE,
         /// Abandon an experiment without a conclusion.
@@ -396,6 +398,38 @@ const LIST: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[LIST_FILTER, MODEL],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const ASSIGN_PARAMS: &[ParamSpec] = &[
+    required(both(
+        "task_id",
+        ParamType::String,
+        "The task to assign.",
+        CliArgKind::flag("task"),
+        "The task to assign",
+    )),
+    required(both(
+        "arm",
+        ParamType::String,
+        "The active arm to assign.",
+        CliArgKind::flag("arm"),
+        "The active arm to assign",
+    )),
+];
+
+const ASSIGN: OperationSpec<ExperimentVerb> = OperationSpec {
+    verb: ExperimentVerb::Assign,
+    cli_path: &["assign"],
+    tool_name: "orbit.experiment.assign",
+    tool_description: "Force an unassigned nonterminal task into an active arm of a running shadow experiment. Records forced=true. Existing assignments and exclusions are immutable; overlapping experiment surfaces are refused. Operator only: an agent session is refused.",
+    cli_about: "Force a task into a shadow experiment arm",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[ID, ASSIGN_PARAMS, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

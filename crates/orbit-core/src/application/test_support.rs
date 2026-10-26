@@ -41,6 +41,7 @@ pub(crate) fn admission_receipt(
         "schema_version": 1,
         "request": request,
         "machine_id": machine_id,
+        "experiments": {"task_id": claim.task_id, "assignments": []},
         "claim": claim,
         "task": task,
         "invalid_candidates": [],
