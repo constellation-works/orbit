@@ -222,10 +222,18 @@ impl OrbitRuntime {
                 .as_ref()
                 .map(|assignment| assignment.source.clone())
         });
-        if params.crew.is_none()
-            && let Some(complexity) = params.complexity
-            && Some(complexity) != task.complexity
-        {
+        // A tag or context-file edit can move the task to another type pool
+        // (`workflow.type_complexity_crews`), which redraws it like a re-rate.
+        let reclassified = params.tags.as_ref().is_some_and(|tags| *tags != task.tags)
+            || params
+                .context_files
+                .as_ref()
+                .is_some_and(|context_files| *context_files != task.context_files);
+        let rerated_complexity = params
+            .complexity
+            .filter(|complexity| Some(*complexity) != task.complexity);
+        if params.crew.is_none() && (rerated_complexity.is_some() || reclassified) {
+            let complexity = rerated_complexity.or(task.complexity);
             let mut rerated = task.clone();
             if let Some(tags) = &params.tags {
                 rerated.tags.clone_from(tags);
@@ -236,7 +244,7 @@ impl OrbitRuntime {
             if let Some(context_files) = &params.context_files {
                 rerated.context_files.clone_from(context_files);
             }
-            crew_redraw_history = self.rerated_crew(&mut rerated, Some(complexity))?;
+            crew_redraw_history = self.rerated_crew(&mut rerated, complexity)?;
             if crew_redraw_history.is_some() {
                 params.crew = Some(rerated.crew);
                 crew_source = Some(rerated.crew_source);

@@ -8,7 +8,7 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::aliases::translate_deprecated_keys;
-use crate::crew_pools::reject_unpoolable_crew_names_in_document;
+use crate::crew_pools::{TYPE_COMPLEXITY_CREWS_KEY, reject_unpoolable_crew_names_in_document};
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
 use crate::persistence::PersistenceConfig;
 use crate::plugin_enablement::{
@@ -209,7 +209,12 @@ fn load_layered_resolved_with_staged(
         // replaces the global table rather than merging its members.
         // Dynamically named crews are intentionally excluded:
         // their fields layer recursively so one crew field can be overridden.
+        // `workflow.type_complexity_crews` also layers recursively: each
+        // `<type>.<tier>` pool is one setting, as each complexity pool is.
         for descriptor in CONFIG_KEY_REGISTRY {
+            if descriptor.key == TYPE_COMPLEXITY_CREWS_KEY {
+                continue;
+            }
             if let Some(value) = value_at_path(&workspace_document.value, descriptor.key) {
                 set_value_at_path(&mut merged, descriptor.key, value.clone());
             }

@@ -108,6 +108,12 @@ macro_rules! with_tail_keys {
         section: ConfigSection::Delivery, order: 90,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    workflow_type_complexity_crews: BTreeMap<String, BTreeMap<String, Vec<String>>> => BTreeMap<String, BTreeMap<String, Vec<String>>> {
+        key: "workflow.type_complexity_crews", value_type: "table<string,table<string,array<string>>>",
+        description: "Per task type and complexity tier, a weighted crew pool that replaces that tier's complexity pool for tasks of the type.",
+        section: ConfigSection::Delivery, order: 101,
+        resolve: |raw: Option<BTreeMap<String, BTreeMap<String, Vec<String>>>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
+    },
     workflow_low_complexity_crews: Vec<String> => Vec<String> {
         key: "workflow.low_complexity_crews", value_type: "array<string>",
         description: "Weighted crew pool for unassigned low-complexity tasks.",

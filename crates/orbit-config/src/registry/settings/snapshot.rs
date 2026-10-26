@@ -93,12 +93,25 @@ impl ExploreBriefSettings {
     }
 }
 
+/// Which document an admission sees: a layered load (both files merged, or
+/// one effective layer), or one file read alone, whose cross-layer
+/// references the layered load checks instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmissionScope {
+    /// The merged or effective document.
+    Layered,
+    /// One file alone: `workflow.type_complexity_crews` may name a type the
+    /// other layer's `workflow.crew_performance_types` defines.
+    File,
+}
+
 impl ConfigSnapshot {
     pub(super) fn finish_admission(
         &mut self,
         crews: &BTreeMap<String, Crew>,
         env_default: Option<&str>,
         require_default_crew: bool,
+        scope: AdmissionScope,
     ) -> Result<(), OrbitError> {
         LogRotationConfig::from_parts(
             Some(self.runtime_log_retention_days),
@@ -124,6 +137,12 @@ impl ConfigSnapshot {
             &mut self.workflow_xhard_complexity_crews,
             crews,
             "workflow.xhard_complexity_crews",
+        )?;
+        crate::crew_pools::admit_type_complexity_crews(
+            &mut self.workflow_type_complexity_crews,
+            (scope == AdmissionScope::Layered)
+                .then_some(self.workflow_crew_performance_types.as_slice()),
+            crews,
         )?;
         for (pool, setting) in [
             (
@@ -269,6 +288,11 @@ impl ConfigSnapshot {
                 self.workflow_purpose_crews_explorer.clone(),
             ),
         ])
+    }
+
+    /// The admitted `workflow.type_complexity_crews.<type>.<tier>` pools.
+    pub fn type_complexity_crews(&self) -> crate::TypeComplexityCrewPools {
+        crate::TypeComplexityCrewPools::from_table(&self.workflow_type_complexity_crews)
     }
 
     /// This machine's identity, as admitted from the same registry rows every

@@ -10,6 +10,24 @@ use orbit_types::workflow::{ActivityCrewDraw, ActivityCrewPoolMember};
 /// purpose's pool, as `purpose:<purpose>`.
 pub(crate) const PURPOSE_SOURCE_PREFIX: &str = "purpose:";
 
+/// Prefix of the provenance a task records when its crew was drawn from its
+/// type's pool, as `type:<type>/<tier>`
+/// (`workflow.type_complexity_crews.<type>.<tier>`).
+pub(crate) const TYPE_SOURCE_PREFIX: &str = "type:";
+
+/// The provenance a draw from `task_type`'s pool at `tier` records.
+pub(crate) fn type_crew_source(task_type: &str, tier: TaskComplexity) -> String {
+    format!("{TYPE_SOURCE_PREFIX}{task_type}/{tier}")
+}
+
+/// The type and tier a `type:<type>/<tier>` source names, or `None` for any
+/// other source.
+pub(crate) fn parse_type_crew_source(source: &str) -> Option<(&str, TaskComplexity)> {
+    let (task_type, tier) = source.strip_prefix(TYPE_SOURCE_PREFIX)?.rsplit_once('/')?;
+    let tier = tier.parse::<TaskComplexity>().ok()?;
+    (!task_type.is_empty() && tier.is_assessed()).then_some((task_type, tier))
+}
+
 /// Prefix of the task comment that records a provider-limit reassignment of
 /// an auto-task's explicit crew [ORB-17638].
 pub(crate) const PROVIDER_LIMIT_REASSIGNMENT_PREFIX: &str = "Provider-limit reassignment:";
@@ -22,15 +40,19 @@ pub(crate) fn auto_task_minted(tags: &[String]) -> bool {
     })
 }
 
-/// Whether `source` is a system assignment — a purpose pool, a complexity
-/// pool, or the default — rather than an explicit pin or a legacy crew with
-/// no assignment evidence.
+/// Whether `source` is a system assignment — a purpose pool, a type pool, a
+/// complexity pool, or the default — rather than an explicit pin or a legacy
+/// crew with no assignment evidence.
 pub(crate) fn automatic_crew_source(source: &str) -> bool {
-    source == "default" || source.starts_with("pool:") || source.starts_with(PURPOSE_SOURCE_PREFIX)
+    source == "default"
+        || source.starts_with("pool:")
+        || source.starts_with(PURPOSE_SOURCE_PREFIX)
+        || source.starts_with(TYPE_SOURCE_PREFIX)
 }
 
 /// Crew chosen for a task at creation, with the provenance its history entry
-/// records: `explicit`, `pool:<complexity>`, or `default` [ORB-12717].
+/// records: `explicit`, `purpose:<purpose>`, `type:<type>/<tier>`,
+/// `pool:<complexity>`, or `default` [ORB-12717].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CreationCrewAssignment {
     pub(crate) crew: String,

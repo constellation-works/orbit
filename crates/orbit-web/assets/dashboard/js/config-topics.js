@@ -22,7 +22,31 @@ export function display(v) {
   if (v == null) return '–';
   if (Array.isArray(v)) return v.length ? v.join(' ') : '—';
   if (typeof v === 'string') return v === '' ? '""' : v;
+  if (typeof v === 'object') {
+    const leaves = tableLeaves(v);
+    return leaves.length ? leaves.map(([path, leaf]) => `${path}: ${display(leaf)}`).join('; ') : '—';
+  }
   return String(v);
+}
+// A table value's leaves as [dotted path, value], so a nested table such as
+// workflow.type_complexity_crews reads `ui.hard: opus` rather than an object.
+function tableLeaves(table, prefix = '') {
+  return Object.entries(table).flatMap(([key, value]) => {
+    const path = prefix ? `${prefix}.${key}` : key;
+    return value && typeof value === 'object' && !Array.isArray(value) ? tableLeaves(value, path) : [[path, value]];
+  });
+}
+function isTable(row) {
+  return (row.value_type || '').startsWith('table<');
+}
+// TOML inline-table text for a JSON table, as `orbit config set` reads it.
+function tomlInline(v) {
+  if (Array.isArray(v)) return `[${v.map(tomlInline).join(', ')}]`;
+  if (v && typeof v === 'object') {
+    const key = (k) => (/^[A-Za-z0-9_-]+$/.test(k) ? k : JSON.stringify(k));
+    return `{${Object.entries(v).map(([k, value]) => `${key(k)} = ${tomlInline(value)}`).join(', ')}}`;
+  }
+  return typeof v === 'string' ? JSON.stringify(v) : String(v);
 }
 function diffText(row) {
   const sh = row.shadowed_by || [];
@@ -51,7 +75,7 @@ const WORKFLOW_SECTIONS = [
 function openDrawer(row, context, lockGlobal) {
   if (!context.canEdit || row.settable === false) return;
   drawer = { row, scope: (lockGlobal || row.global_only) ? 'global' : (row.source?.layer === 'global' ? 'global' : 'workspace'),
-    text: Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
+    text: isTable(row) ? JSON.stringify(row.value ?? {}, null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
     error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only) };
   context.rerender?.();
 }
@@ -76,6 +100,12 @@ export function parseDraft(row, text) {
     if (trimmed === '' || Number.isNaN(n) || !Number.isFinite(n)) throw new Error(`${row.key} takes a number`);
     return n;
   }
+  if (isTable(row)) {
+    let parsed;
+    try { parsed = JSON.parse(text.trim() || '{}'); } catch { throw new Error(`${row.key} takes a JSON object`); }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error(`${row.key} takes a JSON object`);
+    return parsed;
+  }
   if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) return text.split('\n').map((s) => s.trim()).filter(Boolean);
   return text;
 }
@@ -97,6 +127,10 @@ export function cliCmd(row, scope, text) {
     } else {
       v = trimmed === '' ? "''" : shellWord(trimmed);
     }
+  } else if (isTable(row)) {
+    let parsed = null;
+    try { parsed = JSON.parse(text.trim() || '{}'); } catch { parsed = null; }
+    v = shellQuote(parsed && typeof parsed === 'object' ? tomlInline(parsed) : text);
   } else if (Array.isArray(row.value) || t.includes('list') || t.includes('array')) {
     const entries = text.split('\n').map((s) => s.trim()).filter(Boolean);
     v = shellQuote(`[${entries.map((s) => JSON.stringify(s)).join(', ')}]`);

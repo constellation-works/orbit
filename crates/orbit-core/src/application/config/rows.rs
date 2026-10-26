@@ -362,6 +362,26 @@ pub(super) fn crew_rows(runtime: &OrbitRuntime, values: &[EffectiveConfigValue])
                     .or_default()
                     .insert(entry.key.clone());
             }
+        } else if entry.key == orbit_config::TYPE_COMPLEXITY_CREWS_KEY
+            && let Some(types) = entry.value.as_object()
+        {
+            // One table holds every `<type>.<tier>` pool; each is its own
+            // reference so "Used by" names the pool, not the whole table.
+            for (task_type, tiers) in types {
+                for (tier, pool) in tiers.as_object().into_iter().flatten() {
+                    let key = format!("{}.{task_type}.{tier}", entry.key);
+                    for member in pool.as_array().into_iter().flatten() {
+                        let Some(member) = member.as_str() else {
+                            continue;
+                        };
+                        let name = member.split_once(':').map_or(member, |(name, _)| name);
+                        references
+                            .entry(name.trim().to_string())
+                            .or_default()
+                            .insert(key.clone());
+                    }
+                }
+            }
         }
     }
     // Use the scheduler's listing to omit definitions parked by an inactive plugin.

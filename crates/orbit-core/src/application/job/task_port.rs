@@ -182,11 +182,14 @@ impl TaskJobPort for OrbitRuntime {
         self.draw_crew_pool(candidates, source, &mut || random())
     }
 
-    fn purpose_candidates(
+    fn assigned_pool_candidates(
         &self,
         task: &Task,
     ) -> Result<Option<(Vec<CrewCandidate>, String)>, OrbitError> {
-        self.purpose_assignment_candidates(task)
+        match self.purpose_assignment_candidates(task)? {
+            Some(pool) => Ok(Some(pool)),
+            None => self.type_assignment_candidates(task),
+        }
     }
 
     fn delivery_observation(

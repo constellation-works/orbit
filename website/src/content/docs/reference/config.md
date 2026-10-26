@@ -396,6 +396,43 @@ pool and where it comes from (the default view already prints the purpose
 keys; `--json` includes `crew_purposes`), and `orbit run show` names the rule behind each
 activity crew a run drew.
 
+### Type pools
+
+A task type from `workflow.crew_performance_types` can give any complexity tier
+a pool of its own under `[workflow.type_complexity_crews.<type>]`, written like
+the complexity pools:
+
+```toml
+[workflow.type_complexity_crews.ui]
+hard = ["opus"]
+
+[workflow.type_complexity_crews.security]
+hard = ["fable:3", "opus:1"]
+```
+
+A task's type is the first `crew_performance_types` entry its tags or context
+files match (the type the implementer scorecard groups it under); `other`
+never has a pool. A typed task with no crew draws from its type's pool for its
+complexity instead of `workflow.<tier>_complexity_crews`, and records the
+source `type:<type>/<tier>`. A task whose type has no pool for its tier draws
+from the complexity pool as before. The order is an explicit crew, then a
+purpose pool, then the type pool, then the complexity pool, then
+`default_crew`. Executor OS filtering, usage pressure and the performance
+multiplier apply as they do to complexity pools.
+
+Orbit draws at creation, when the crew is cleared, when the complexity changes
+and when a tag or context-file edit moves the task to another type pool, or
+out of one. At dispatch it keeps a type-pool crew while that crew is still an
+enabled member and the task still classifies to that type and tier. A
+provider hold or usage limit redraws from the pool's other members, then
+from the complexity pool, then from `default_crew`.
+
+The load refuses a type `crew_performance_types` does not define, an unknown
+tier, an empty pool, an unknown or disabled crew and a zero weight, and the
+error names the key. Each `<type>.<tier>` pool layers separately, so a
+workspace pool replaces only the same type and tier from global. Settings ›
+Crews lists each pool under the crews it uses.
+
 `[workflow] system_crew` is deprecated: it still loads for one release with a
 warning, but is ignored. Orbit no longer defines a built-in `system` crew, so a
 template or job still naming `crew: system` routes through the pools with a
@@ -414,6 +451,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `workflow.medium_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for medium-complexity tasks with no crew, and for step-failure and PR conflict recovery while their purpose pool is unset. |
 | `workflow.hard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for hard-complexity tasks with no crew. |
 | `workflow.xhard_complexity_crews` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for xhard-complexity tasks with no crew. |
+| `workflow.type_complexity_crews` | table&lt;string,table&lt;string,array&lt;string&gt;&gt;&gt; · **Default:** `{}`<br>Per task type and complexity tier, a weighted crew pool that replaces that tier's complexity pool for tasks of the type. See [type pools](#type-pools). |
 | `workflow.purpose_crews.auto_fix` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for repairs authorized by `orbit run auto --auto-fix`. Unset or `[]`, they draw from `workflow.low_complexity_crews`. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.purpose_crews.baseline_red_repair` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the tasks the red-base re-check files. Unset or `[]`, they draw from their complexity pool. An explicit crew still wins, and `--allow-crew` still applies. See [purpose pools](#purpose-pools). |
 | `workflow.purpose_crews.explorer` | array&lt;string&gt; · **Default:** `[]`<br>Crew pool for the read-only explorers an implement or review-repair agent delegates through `orbit.agent.invoke` while `workflow.explore.enabled` is on. Members disabled here, or whose executor `host_os` excludes this host, are skipped. Unset, `[]` or with no eligible member, delegation is not offered and every call is refused. A named crew must be a member. See [purpose pools](#purpose-pools). |

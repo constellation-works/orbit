@@ -32,6 +32,7 @@ use super::resolve::{
     resolve_unlocked_path_validation_commands, resolve_validation_path_mode,
     resolve_worker_tasks_max,
 };
+use super::snapshot::AdmissionScope;
 use crate::crew_performance::CrewPerformanceType;
 use crate::lock_modes::RawLockModeEntry;
 use crate::memory_limit::MemoryLimit;
@@ -98,6 +99,7 @@ macro_rules! define_config_settings {
                     false,
                     false,
                     None,
+                    AdmissionScope::File,
                 )
             }
 
@@ -116,6 +118,7 @@ macro_rules! define_config_settings {
                     require_default_crew,
                     true,
                     None,
+                    AdmissionScope::Layered,
                 )
             }
 
@@ -136,6 +139,7 @@ macro_rules! define_config_settings {
                     true,
                     true,
                     Some(global_memory_high_percent),
+                    AdmissionScope::Layered,
                 )
             }
 
@@ -156,9 +160,12 @@ macro_rules! define_config_settings {
                     true,
                     false,
                     None,
+                    AdmissionScope::Layered,
                 )
             }
 
+            // Private, with a named wrapper per admission view above.
+            #[allow(clippy::too_many_arguments)]
             fn admit_internal(
                 document: &toml::Value,
                 config_path: &Path,
@@ -167,6 +174,7 @@ macro_rules! define_config_settings {
                 require_default_crew: bool,
                 validate_auto_memory: bool,
                 global_memory_high_percent: Option<u8>,
+                scope: AdmissionScope,
             ) -> Result<Self, OrbitError> {
                 $(let $field: $resolved = {
                     let raw_value: Option<$raw> = read_optional(document, $key, config_path)?;
@@ -176,7 +184,7 @@ macro_rules! define_config_settings {
                     execution_env_inherit: false,
                     $($field,)+
                 };
-                snapshot.finish_admission(crews, env_default, require_default_crew)?;
+                snapshot.finish_admission(crews, env_default, require_default_crew, scope)?;
                 if validate_auto_memory {
                     snapshot.auto_concurrency().validate_memory_high_percent(
                         global_memory_high_percent
@@ -205,7 +213,7 @@ macro_rules! define_config_settings {
                     },)+
                     _ => return Ok(None),
                 }
-                snapshot.finish_admission(crews, None, false)?;
+                snapshot.finish_admission(crews, None, false, AdmissionScope::Layered)?;
                 Ok(snapshot.value_for(key))
             }
 

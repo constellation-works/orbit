@@ -8,7 +8,10 @@
 //! - nested tables merge recursively, so a workspace can override one crew
 //!   field without restating the crew;
 //! - a registry key is one setting, so a workspace value for a registered
-//!   table key replaces the global table rather than merging into it;
+//!   table key replaces the global table rather than merging into it. The
+//!   exception is `workflow.type_complexity_crews`, whose `<type>.<tier>`
+//!   pools are each one setting: they merge recursively, so a workspace pool
+//!   replaces only the same type and tier from global;
 //! - the replace-only keys below never inherit from global once a distinct
 //!   workspace file exists;
 //! - the `[machine]` table is global-only: a workspace file that supplies it
