@@ -684,6 +684,11 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+/* One row per relation type: its ids sit inline, wrapping as needed. */
+.task-delivery-relations {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .task-delivery-card .property-row.relation .label::first-letter { text-transform: uppercase; }
 .task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .task-hand {
