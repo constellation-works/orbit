@@ -3,10 +3,13 @@
 //! and a visible failure when application cannot happen. Every case runs on
 //! a disposable workspace in a temporary directory.
 
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{
+    FinalRecoveryCompletion, FinalRecoveryRequest, TaskAddParams, TaskUpdateParams,
+};
+use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_core::{OrbitRuntime, TaskStatus};
-use orbit_engine::RuntimeHost;
-use orbit_types::task::{MutationProposal, MutationReceipt, MutationReceiptState};
+use orbit_engine::{RuntimeHost, TaskActivityUpdate, TaskAutomationUpdate};
+use orbit_types::task::{ExternalRef, MutationProposal, MutationReceipt, MutationReceiptState};
 use orbit_types::workflow::{REVIEW_MANIFEST_ARTIFACT, ReviewManifest, ReviewTiming};
 use serde_json::{Value, json};
 
@@ -286,11 +289,391 @@ fn unapplied_proposal_blocks_completion_case() {
     assert!(error.to_string().contains(PROPOSAL), "{error}");
 }
 
+/// A plain task in `review` carrying one unapplied proposal.
+fn unapplied_review_task() -> (tempfile::TempDir, OrbitRuntime, String) {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Granted completion".into(),
+            plan: "Propose the definition change.".into(),
+            granted_tools: vec![GRANT.into()],
+            ..Default::default()
+        })
+        .unwrap();
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
+                    PROPOSAL,
+                    describe("revised").to_string(),
+                )],
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    for status in [TaskStatus::InProgress, TaskStatus::Review] {
+        runtime
+            .update_task_with_identity(
+                &task.id,
+                TaskUpdateParams {
+                    status: Some(status),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+    }
+    (root, runtime, task.id)
+}
+
+fn move_to_review(runtime: &OrbitRuntime, task_id: &str) {
+    if runtime.get_task(task_id).unwrap().status == TaskStatus::Review {
+        return;
+    }
+    runtime
+        .update_task_with_identity(
+            task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+}
+
+fn stop_fixture_run(fixture: &Fixture) {
+    let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    let _ = RuntimeHost::mark_job_run_running(
+        &fixture.runtime,
+        &run_id,
+        chrono::Utc::now(),
+        std::process::id(),
+    );
+    let _ = RuntimeHost::finalize_job_run(
+        &fixture.runtime,
+        &run_id,
+        orbit_types::workflow::JobRunState::Success,
+        chrono::Utc::now(),
+        Some(1),
+    );
+    let _ = fixture.runtime.update_task_with_identity(
+        &fixture.task_id,
+        TaskUpdateParams {
+            job_run_id: Some(None),
+            ..Default::default()
+        },
+        None,
+        None,
+    );
+}
+
+/// A granted fixture whose proposal the review gate has applied.
+fn applied_fixture() -> Fixture {
+    let mut fixture = granted_fixture();
+    put(&fixture, PROPOSAL, &describe("revised")).unwrap();
+    fixture.admit();
+    fixture.report("accept");
+    fixture.settle().unwrap();
+    assert_eq!(definition_description(&fixture.runtime), "revised");
+    stop_fixture_run(&fixture);
+    fixture
+}
+
+fn approve_unapplied_proposal_blocks_and_force_completes_case() {
+    let (_root, runtime, task_id) = unapplied_review_task();
+    let error = runtime
+        .approve_task(&task_id, None, None)
+        .expect_err("approve must refuse an unapplied proposal");
+    assert!(error.to_string().contains(PROPOSAL), "{error}");
+    assert_eq!(
+        runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Review
+    );
+    let human = runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    human
+        .force_update_task_with_identity(
+            &task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(human.get_task(&task_id).unwrap().status, TaskStatus::Done);
+}
+
+fn automation_done_unapplied_proposal_blocks_case() {
+    let (_root, runtime, task_id) = unapplied_review_task();
+    let error = RuntimeHost::apply_task_automation_update(
+        &runtime,
+        &task_id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Done),
+            ..Default::default()
+        },
+    )
+    .expect_err("automation done must refuse an unapplied proposal");
+    assert!(error.to_string().contains(PROPOSAL), "{error}");
+    assert_eq!(
+        runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Review
+    );
+}
+
+fn final_recovery_done_unapplied_proposal_blocks_case() {
+    let (root, runtime, task_id) = unapplied_review_task();
+    let repo = root.path().join("repo");
+    let git = |args: &[&str]| {
+        let mut command = crate::git_test_support::command();
+        let output = command.args(args).current_dir(&repo).output().unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "Orbit Test"]);
+    git(&["config", "user.email", "orbit-test@example.com"]);
+    git(&["commit", "--allow-empty", "-q", "-m", "landed"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    let task = runtime.get_task(&task_id).unwrap();
+    let observed = runtime.final_recovery_revision(&task).unwrap();
+    let error = runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: task_id.clone(),
+                run_id: "jrun-fr-unapplied".to_string(),
+                observed,
+                repo_root: repo.clone(),
+                base_ref: "main".to_string(),
+                completion: FinalRecoveryCompletion::Done,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "complete_no_diff",
+                "evidence_commit": commit,
+                "rationale": "already landed"
+            })),
+        )
+        .expect_err("final recovery to done must refuse an unapplied proposal");
+    assert!(error.to_string().contains(PROPOSAL), "{error}");
+    assert_eq!(
+        runtime.get_task(&task_id).unwrap().status,
+        TaskStatus::Review
+    );
+}
+
+#[derive(Clone)]
+struct MergedForge {
+    merged: MergedPullRequest,
+}
+
+impl TaskPrForge for MergedForge {
+    fn open_pull_requests(
+        &self,
+        _repo_root: &std::path::Path,
+    ) -> Result<Vec<ForgePullRequest>, orbit_common::OrbitError> {
+        Ok(Vec::new())
+    }
+    fn merged_pull_requests(
+        &self,
+        _repo_root: &std::path::Path,
+    ) -> Result<Vec<MergedPullRequest>, orbit_common::OrbitError> {
+        Ok(vec![self.merged.clone()])
+    }
+    fn merged_pull_request(
+        &self,
+        _repo_root: &std::path::Path,
+        number: u64,
+    ) -> Result<Option<MergedPullRequest>, orbit_common::OrbitError> {
+        Ok((self.merged.pull.number == number).then(|| self.merged.clone()))
+    }
+    fn authenticated_login(
+        &self,
+        _repo_root: &std::path::Path,
+    ) -> Result<String, orbit_common::OrbitError> {
+        Ok("orbit-bot".to_string())
+    }
+    fn close_pull_request(
+        &self,
+        _repo_root: &std::path::Path,
+        _number: u64,
+        _comment: &str,
+    ) -> Result<(), orbit_common::OrbitError> {
+        Ok(())
+    }
+}
+
+fn external_merge_runtime(fixture: &Fixture) -> OrbitRuntime {
+    stop_fixture_run(fixture);
+    RuntimeHost::apply_task_automation_update(
+        &fixture.runtime,
+        &fixture.task_id,
+        TaskAutomationUpdate {
+            external_refs: vec![ExternalRef::github_pr("7".to_string()).unwrap()],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let base = fixture.runtime.workspace_base_branch().to_string();
+    let merged = MergedPullRequest {
+        pull: ForgePullRequest {
+            number: 7,
+            head_branch: format!("orbit/{}-47642870", fixture.task_id),
+            body: format!("Delivers {}.", fixture.task_id),
+            author: "orbit-bot".to_string(),
+        },
+        base_branch: base,
+        merge_commit: "03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9".to_string(),
+    };
+    fixture
+        .runtime
+        .clone()
+        .with_task_pr_forge(std::sync::Arc::new(MergedForge { merged }))
+}
+
+fn external_merge_unapplied_proposal_blocks_case() {
+    let fixture = granted_fixture();
+    put(&fixture, PROPOSAL, &describe("revised")).unwrap();
+    let runtime = external_merge_runtime(&fixture);
+    let error = runtime
+        .settle_externally_merged_task(&fixture.task_id)
+        .expect_err("external-merge settlement must refuse an unapplied proposal");
+    assert!(error.to_string().contains(PROPOSAL), "{error}");
+    assert_ne!(
+        runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Done
+    );
+}
+
+fn applied_proposals_still_complete_case() {
+    // approve
+    let fixture = applied_fixture();
+    move_to_review(&fixture.runtime, &fixture.task_id);
+    fixture
+        .runtime
+        .approve_task(&fixture.task_id, None, None)
+        .unwrap();
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Done
+    );
+
+    // automation done
+    let fixture = applied_fixture();
+    RuntimeHost::apply_task_automation_update(
+        &fixture.runtime,
+        &fixture.task_id,
+        TaskAutomationUpdate {
+            status: Some(TaskStatus::Done),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Done
+    );
+
+    // task_complete (activity update from review)
+    let fixture = applied_fixture();
+    move_to_review(&fixture.runtime, &fixture.task_id);
+    let run_id = fixture.input["job_run_id"].as_str().unwrap().to_string();
+    RuntimeHost::update_task_from_activity(
+        &fixture.runtime,
+        &fixture.task_id,
+        TaskActivityUpdate {
+            status: TaskStatus::Done,
+            expected_status: TaskStatus::Review,
+            execution_summary: None,
+            comment: None,
+            note: Some("completion authorized".to_string()),
+            agent: None,
+            model: None,
+            calling_run_id: Some(run_id),
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Done
+    );
+
+    // external-merge settlement
+    let fixture = applied_fixture();
+    let runtime = external_merge_runtime(&fixture);
+    runtime
+        .settle_externally_merged_task(&fixture.task_id)
+        .unwrap();
+    assert_eq!(
+        runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Done
+    );
+
+    // final recovery to done
+    let fixture = applied_fixture();
+    let git = |args: &[&str]| {
+        let mut command = crate::git_test_support::command();
+        let output = command
+            .args(args)
+            .current_dir(&fixture.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    let commit = git(&["rev-parse", "main"]);
+    move_to_review(&fixture.runtime, &fixture.task_id);
+    let task = fixture.runtime.get_task(&fixture.task_id).unwrap();
+    let observed = fixture.runtime.final_recovery_revision(&task).unwrap();
+    fixture
+        .runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: fixture.task_id.clone(),
+                run_id: "jrun-fr-applied".to_string(),
+                observed,
+                repo_root: fixture.repo.clone(),
+                base_ref: "main".to_string(),
+                completion: FinalRecoveryCompletion::Done,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "complete_no_diff",
+                "evidence_commit": commit,
+                "rationale": "already landed"
+            })),
+        )
+        .unwrap();
+    assert_eq!(
+        fixture.runtime.get_task(&fixture.task_id).unwrap().status,
+        TaskStatus::Done
+    );
+}
+
 crate::scenario_table!(
     granted_mutation_proposal_scenarios,
     admitted_proposal_changes_nothing_live_case,
     approved_proposal_applies_once_case,
     failed_application_is_visible_case,
     run_without_review_refuses_proposals_case,
-    unapplied_proposal_blocks_completion_case
+    unapplied_proposal_blocks_completion_case,
+    approve_unapplied_proposal_blocks_and_force_completes_case,
+    automation_done_unapplied_proposal_blocks_case,
+    final_recovery_done_unapplied_proposal_blocks_case,
+    external_merge_unapplied_proposal_blocks_case,
+    applied_proposals_still_complete_case
 );

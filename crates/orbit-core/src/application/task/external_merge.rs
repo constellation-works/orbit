@@ -578,6 +578,8 @@ impl OrbitRuntime {
         if let Some(owed) = self.owed_settlement_hold(id) {
             return Err(refused(id, &owed));
         }
+        self.ensure_mutation_proposals_applied(observed)
+            .map_err(|error| refused(id, &error.to_string()))?;
         self.ensure_resolves_are_workspace_local(observed)?;
         let history_actor = actor.unwrap_or(SYSTEM_ACTOR_LABEL).to_string();
         let context = ClaimInvocation::trusted_operator(
@@ -653,6 +655,8 @@ impl OrbitRuntime {
             if let Some(owed) = self.owed_settlement_hold(id) {
                 return Err(refused(id, &owed));
             }
+            self.ensure_mutation_proposals_applied(&task)
+                .map_err(|error| refused(id, &error.to_string()))?;
             self.ensure_resolves_are_workspace_local(&task)?;
             let mut external_refs = task.external_refs.clone();
             push_external_ref_if_missing(

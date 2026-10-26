@@ -180,6 +180,7 @@ impl OrbitRuntime {
             if task.status == TaskStatus::Review {
                 super::lifecycle::ensure_post_deploy_criteria_met(self, &task)?;
                 super::lifecycle::ensure_completion_run_stopped(self, &task, None, None)?;
+                self.ensure_mutation_proposals_applied(&task)?;
                 self.ensure_resolves_are_workspace_local(&task)?;
             }
 
