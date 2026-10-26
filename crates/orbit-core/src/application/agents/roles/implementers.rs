@@ -287,6 +287,13 @@ fn row_input<'a>(
     credits: &BTreeMap<&str, Vec<&Credit>>,
 ) -> RowInput<'a> {
     let tallies = compute_tallies(&row, tasks, charges, credits, since);
+    // Reviewed tasks of this row: the denominator review-derived rates
+    // need to tell a measured zero from no review at all. Display only;
+    // it never enters `denominators`, so scores are unchanged.
+    let reviewed_units = tasks
+        .iter()
+        .filter(|task| first_review(task, &row, since).is_some())
+        .count();
     let landed = tallies.get("weighted_landed").map_or(0.0, Tally::count);
     let mut tiers: BTreeMap<&str, usize> = BTreeMap::new();
     let mut durations = Vec::new();
@@ -333,6 +340,7 @@ fn row_input<'a>(
     };
     RowInput {
         denominators: BTreeMap::new(),
+        reviewed_units: Some(reviewed_units),
         crew: row.0,
         model: row.1,
         units: tasks.len(),

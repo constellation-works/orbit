@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { agents, common, answer, takeAll, response, settle, part, click, selectButton, byId, notComputed, attribution } from './dashboard_agents.mjs';
-import { implementerCard, implementerDetail } from './agents_implementers_fixture.mjs';
+import { implementerCard, implementerDetail, implementerRadarCard, implementerOutlierCard, implementerRadarDetail } from './agents_implementers_fixture.mjs';
 
 common.setWorkspace('ws-a');
 common.setWindow('30d');
@@ -41,4 +41,74 @@ assert.equal(requests[0].url.searchParams.get('model'), 'model-d');
 requests[0].resolve(response(implementerDetail('costly', 'model-d')));
 await settle();
 assert.equal(part('detail').querySelector('h3').textContent, 'costly');
+
+// --- Agent profile radar: percentile scale, reviewed gaps, contributions ---
+const radarVertex = (term) => part('detail').querySelectorAll('g').find(node => node.dataset.term === term);
+const hasClass = (node, name) => String(node.getAttribute('class') || node.className || '').split(/\s+/).includes(name);
+const radarRadius = (term) => {
+  const circle = radarVertex(term).children[0];
+  return Math.hypot(Number(circle.getAttribute('cx')) - 150, Number(circle.getAttribute('cy')) - 130);
+};
+const radarTableRow = (term) => part('detail').querySelectorAll('tr').find(node => node.dataset.term === term);
+const fleetRadii = () => {
+  const polygon = part('detail').querySelectorAll('polygon').find(node => hasClass(node, 'agents-radar-fleet'));
+  assert.ok(polygon, 'the fleet median polygon is drawn');
+  return polygon.getAttribute('points').split(' ').map(pair => {
+    const [x, y] = pair.split(',').map(Number);
+    return Math.hypot(x - 150, y - 130);
+  });
+};
+const loadCard = async (card) => {
+  const load = agents.fetchAndRenderAgents();
+  answer(takeAll(), url => {
+    if (url.pathname.endsWith('/attribution')) return response(attribution);
+    const role = url.pathname.split('/')[3];
+    return response(role === 'implementers' ? card : notComputed(role));
+  });
+  await load;
+  await settle();
+  for (const request of takeAll()) {
+    request.resolve(response(implementerRadarDetail(card, request.url.searchParams.get('crew'), request.url.searchParams.get('model'))));
+  }
+  await settle();
+};
+const selectCrew = async (card, crew) => {
+  click(selectButton(crew));
+  for (const request of takeAll()) {
+    request.resolve(response(implementerRadarDetail(card, request.url.searchParams.get('crew'), request.url.searchParams.get('model'))));
+  }
+  await settle();
+};
+
+// Live-shaped fleet: rank-2 sol, above the median on landed and escaped
+// regressions, with no reviewed deliveries.
+const radarCard = implementerRadarCard();
+await loadCard(radarCard);
+await selectCrew(radarCard, 'sol');
+assert.equal(part('detail').querySelector('h3').textContent, 'sol');
+for (const radius of fleetRadii()) assert.ok(Math.abs(radius - 52) < 0.01, `the fleet median sits on the middle ring, got ${radius}`);
+assert.ok(radarRadius('weighted_landed') > 52, 'a rank-2 row above the landed median plots outside the median ring');
+assert.ok(radarRadius('escaped_regressions') > 52, 'a rank-2 row better than the escaped-regression median plots outside the median ring');
+for (const term of ['first_pass_accepts', 'review_rejects', 'reviewer_repairs']) {
+  assert.ok(hasClass(radarVertex(term), 'is-gap'), `${term} with no reviewed deliveries is a gap`);
+  assert.match(radarVertex(term).getAttribute('aria-label'), /no reviewed deliveries/, `${term} gap names its reason`);
+  assert.match(radarTableRow(term).textContent, /no reviewed deliveries/, `${term} accessible row names the gap reason`);
+}
+assert.match(radarVertex('weighted_landed').getAttribute('aria-label'), /weight \+1; contribution vs fleet median \+20/, 'the landed vertex discloses weight and signed contribution vs the median');
+assert.match(radarVertex('escaped_regressions').getAttribute('aria-label'), /weight −2; contribution vs fleet median \+10/, 'the escaped vertex discloses weight and signed contribution vs the median');
+assert.match(radarTableRow('weighted_landed').textContent, /\+20/, 'the accessible table carries the landed contribution vs the median');
+assert.match(radarTableRow('escaped_regressions').textContent, /\+10/, 'the accessible table carries the escaped contribution vs the median');
+
+// Adding one extreme outlier crew must not move the median ring or squeeze
+// a normal crew toward the rim.
+await selectCrew(radarCard, 'peer-a');
+const peerLandedBefore = radarRadius('weighted_landed');
+const peerEscapedBefore = radarRadius('escaped_regressions');
+const outlierCard = implementerOutlierCard();
+await loadCard(outlierCard);
+await selectCrew(outlierCard, 'peer-a');
+for (const radius of fleetRadii()) assert.ok(Math.abs(radius - 52) < 0.01, `the outlier does not move the fleet median ring, got ${radius}`);
+assert.ok(radarRadius('weighted_landed') < 78 && Math.abs(radarRadius('weighted_landed') - peerLandedBefore) < 26, 'the outlier does not move a normal crew toward the rim on landed');
+assert.ok(radarRadius('escaped_regressions') < 78 && Math.abs(radarRadius('escaped_regressions') - peerEscapedBefore) < 26, 'the outlier does not squeeze a normal crew on escaped regressions');
+assert.ok(!hasClass(radarVertex('first_pass_accepts'), 'is-gap'), 'a reviewed crew keeps its first-pass vertex');
 console.log('dashboard implementers ok');

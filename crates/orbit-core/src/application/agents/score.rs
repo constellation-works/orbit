@@ -119,6 +119,10 @@ pub(super) struct RowInput<'a> {
     /// Terms rated per 100 of their own units; every other term is rated
     /// per 100 of `units`.
     pub(super) denominators: BTreeMap<&'static str, Denominator>,
+    /// Tasks with a settled review behind them (implementers only):
+    /// a display-only denominator for review-derived rates, never a
+    /// scoring denominator, so it never makes a term provisional.
+    pub(super) reviewed_units: Option<usize>,
 }
 
 impl RowInput<'_> {
@@ -286,6 +290,9 @@ impl Scored<'_> {
                     .map(|(key, _)| *key)
                     .collect::<Vec<_>>()
             );
+        }
+        if let Some(reviewed) = self.input.reviewed_units {
+            payload["reviewed_units"] = json!(reviewed);
         }
         if let Some(expected) = &self.input.expected {
             payload["expected"] = json!(

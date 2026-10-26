@@ -652,6 +652,7 @@ fn row_input<'a>(
         provisional: None,
         tallies,
         expected: None,
+        reviewed_units: None,
         denominators,
         stats: [
             stat(
