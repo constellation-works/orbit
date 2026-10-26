@@ -224,6 +224,28 @@ fn hidden_dashboard_polls_lightly_prefixes_failures_and_notifies_only_after_opt_
     );
 }
 
+/// Analytics › Experiments cumulative chart: three 5-minute buckets stay
+/// distinct on the dashboard clock, a finished bucket's hover ends at the
+/// next boundary, and the last open bucket ends at the response cutoff.
+#[test]
+fn experiment_cumulative_chart_names_intraday_buckets_on_the_dashboard_clock() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_experiments_browser.mjs",
+        ])
+        .env("TZ", "America/Los_Angeles")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard experiments fixture");
+    assert!(
+        result.status.success(),
+        "dashboard experiment cumulative labels failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 #[test]
 #[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_CONTEXT_BASENAME_BROWSER_EVIDENCE_DIR"]
 fn context_selector_basenames_keep_contention_colors_and_return_to_normal_on_refresh() {

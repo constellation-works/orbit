@@ -13,7 +13,7 @@
 
 import {
   el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
-  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatDate,
+  onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatDate, formatClock,
   infoHint, scopedHashHref,
 } from './common.js';
 import { setActiveTab } from './router.js';
@@ -536,6 +536,47 @@ function forestCard(readout, color) {
 
 // The primary metric's per-arm cumulative mean at each bucket end of the
 // shared trend ladder, over settled tasks assigned by then.
+
+// Axis text follows the dashboard clock at the bucket's own precision. An
+// hour or 6 hours can fall on the same clock time on a later day, so those
+// ticks keep the date. A day or wider is a calendar date.
+function cumulativeTick(start, seconds) {
+  if (!start) return "—";
+  const width = Number(seconds);
+  if (Number.isFinite(width) && width >= 86400) return formatDate(start);
+  if (Number.isFinite(width) && width >= 3600) {
+    return `${formatDate(start)} ${formatClock(start, { seconds: false, zone: false })}`;
+  }
+  if (Number.isFinite(width) && width > 0) return formatClock(start, { seconds: false, zone: false });
+  return formatDateTime(start);
+}
+
+// Assignments in a finished bucket are those before the next boundary. The
+// last bucket is still open: its cumulative values stop at `window.until`
+// when that cutoff is sooner than the boundary.
+function cumulativeEffectiveEnd(start, seconds, until, last) {
+  const opened = new Date(start).getTime();
+  if (!Number.isFinite(opened)) return null;
+  const width = Number(seconds);
+  const boundary = Number.isFinite(width) && width > 0 ? opened + width * 1000 : null;
+  if (!last) return boundary;
+  const cutoff = until == null || until === "" ? NaN : new Date(until).getTime();
+  if (!Number.isFinite(cutoff)) return boundary;
+  return boundary == null ? cutoff : Math.min(boundary, cutoff);
+}
+
+function cumulativeHover(start, seconds, until, last) {
+  const endMs = cumulativeEffectiveEnd(start, seconds, until, last);
+  if (!start || endMs == null) return formatDateTime(start);
+  const end = new Date(endMs);
+  const withSeconds = end.getUTCSeconds() !== 0 || end.getUTCMilliseconds() !== 0;
+  const startText = formatDateTime(start);
+  const endText = formatDate(start) === formatDate(end)
+    ? formatClock(end, { seconds: withSeconds, zone: false })
+    : formatDateTime(end, { seconds: withSeconds });
+  return `${startText}–${endText}`;
+}
+
 function cumulativeCard(readout, primary, color) {
   const series = readout.cumulative;
   const unit = primary?.unit;
@@ -574,12 +615,14 @@ function cumulativeCard(readout, primary, color) {
   const ticks = [hi, (hi + lo) / 2, lo].map((value) =>
     el("span", { class: "ex-cum-ytick", style: { top: `${yOf(value)}%` }, text: fmtValue(value, unit) }));
   const firstPoints = arms[0].points || [];
+  const bucketSeconds = series.window?.bucket_seconds;
+  const bucketUntil = series.window?.until;
   const xTicks = [0, Math.floor((buckets - 1) / 2), buckets - 1]
     .filter((index, i, all) => all.indexOf(index) === i)
     .map((index) => el("span", {
       class: "ex-cum-xtick",
       style: { left: `${xOf(index)}%` },
-      text: formatDate(firstPoints[index]?.start),
+      text: cumulativeTick(firstPoints[index]?.start, bucketSeconds),
     }));
   const tip = el("div", { class: "mx-tip ex-cum-tip" });
   tip.hidden = true;
@@ -590,7 +633,7 @@ function cumulativeCard(readout, primary, color) {
     const column = el("span", { class: "ex-cum-col" });
     const show = () => {
       tip.replaceChildren(
-        el("div", { class: "mx-tip-title", text: `Through ${formatDate(firstPoints[index]?.start)}` }),
+        el("div", { class: "mx-tip-title", text: cumulativeHover(firstPoints[index]?.start, bucketSeconds, bucketUntil, index === buckets - 1) }),
         ...arms.map((arm) => {
           const point = arm.points?.[index] || {};
           return el("div", { class: "mx-tip-row" }, [
