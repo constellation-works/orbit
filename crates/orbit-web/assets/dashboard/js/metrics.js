@@ -6,10 +6,10 @@
 // and metrics-friction.js.
 // Pure vanilla JS, split into ES modules with no build step.
 //
-// One panel request reads the trend endpoints together; the view state below
-// (trend tab, statistic, chart or table, visible series) is local and
-// re-renders from the cached payload without a fetch. Hover moves the
-// tooltip in place instead of rebuilding the chart.
+// One panel request reads the summary/detail endpoints and the selected
+// filtered trend. Tokens, lines changed and delivery friction load on opening
+// their tab; polling reads only the selected one. Statistic, chart/table and
+// series changes re-render locally. Hover moves the tooltip in place.
 
 import {
   el as makeEl, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors,
@@ -145,9 +145,9 @@ export function fetchAndRenderMetrics() {
     fetchJson(`/api/diagnostics/defects?${since}`).catch((error) => ({
       unavailable: error.status === 404 ? "This host's Orbit does not report defects yet. Upgrade it to see this trend." : error.message,
     })),
-    fetchTokens(selectedWindow),
-    fetchDiff(selectedWindow),
-    fetchFriction(selectedWindow),
+    view.trend === "tokens" ? fetchTokens(selectedWindow) : null,
+    view.trend === "diff" ? fetchDiff(selectedWindow) : null,
+    view.trend === "friction" ? fetchFriction(selectedWindow) : null,
   ]), ([durations, completions, outcome, defects, tokens, diff, friction]) => {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
     // A refresh started before a token-filter change must keep the token
@@ -156,7 +156,9 @@ export function fetchAndRenderMetrics() {
     const currentTokens = isCurrentTokensPayload(tokens, selectedWindow)
       ? tokens
       : (lastPayload ? lastPayload.tokens : null);
-    if (!isCurrentDiffPayload(diff, selectedWindow)) return;
+    const currentDiff = isCurrentDiffPayload(diff, selectedWindow)
+      ? diff
+      : (lastPayload ? lastPayload.diff : null);
     // Likewise a friction refetch after a family or filter change.
     const currentFriction = isCurrentFrictionPayload(friction, selectedWindow)
       ? friction
@@ -165,11 +167,11 @@ export function fetchAndRenderMetrics() {
       console.error(`metrics friction payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (currentTokens && !currentTokens.unavailable && windowKey(currentTokens) !== selectedWindow) || (!diff.unavailable && windowKey(diff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
+    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (currentTokens && !currentTokens.unavailable && windowKey(currentTokens) !== selectedWindow) || (currentDiff && !currentDiff.unavailable && windowKey(currentDiff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens: currentTokens, diff, friction: currentFriction, outcome: (outcome && outcome.by_complexity) || [] };
+    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens: currentTokens, diff: currentDiff, friction: currentFriction, outcome: (outcome && outcome.by_complexity) || [] };
     renderMetrics();
   }, "metrics-count");
 }
@@ -381,6 +383,21 @@ function pickTrend(key) {
   if (view.trend === key) return;
   view.trend = key;
   view.hover = null;
+  // A hidden filtered trend may be from a previous poll. Clear it before
+  // reading the current selection, using the same fences as filter changes.
+  if (lastPayload) {
+    const selectedWindow = lastPayload.windowKey;
+    if (key === "tokens") {
+      applyTokens(null);
+      fetchTokens(selectedWindow).then(applyTokens);
+    } else if (key === "diff") {
+      applyDiff(null);
+      fetchDiff(selectedWindow).then(applyDiff);
+    } else if (key === "friction") {
+      applyFriction(null);
+      fetchFriction(selectedWindow).then(applyFriction);
+    }
+  }
   rerender();
 }
 

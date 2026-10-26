@@ -138,6 +138,29 @@ function tokens(key, url) {
   };
 }
 
+// Distinct values expose stale workspace, window and filter results when a
+// filtered trend is opened after being absent from the preceding panel poll.
+function filteredTrend(url) {
+  const key = url.searchParams.get('since');
+  const { count, window, start } = trendWindow(key);
+  const value = (url.searchParams.get('workspace') === 'ws_b' ? 200 : 100)
+    + (key === '7d' ? 7 : 24)
+    + (url.searchParams.get('complexity') === 'hard' ? 10 : 0);
+  const bucket_starts = Array.from({ length: count }, (_, i) => start(i));
+  if (url.pathname.endsWith('/diff_stats')) {
+    const lines = { code_added: value, code_deleted: 5, tests_added: 10, tests_deleted: 2, net: value + 3 };
+    const cell = { n: 5, sum: lines, mean: lines, median: lines, thin: false };
+    return { window, bucket_starts, min_deliveries: 3,
+      overall: { total: cell, points: bucket_starts.map(() => cell) }, crews: [] };
+  }
+  const cell = { count: value, denominator: 5, rate: value / 5, sparse: false, breakdown: {} };
+  return { window, bucket_starts, min_done: 3,
+    complexity: url.searchParams.get('complexity'), crew: url.searchParams.get('crew'),
+    available_crews: [{ crew: 'sol', tasks: 5 }], done: { total: 5, points: bucket_starts.map(() => 5) },
+    families: url.searchParams.get('families').split(',').map(family => ({ family, unit: 'events',
+      filtered: true, total: cell, points: bucket_starts.map(() => cell) })) };
+}
+
 const requests = [];
 const tokenTagRequests = [];
 // An older host has no defect trend; set to serve its 404.
@@ -185,6 +208,8 @@ function payloadFor(url) {
       requests.push(`task_tokens?since=${url.searchParams.get('since')}&scope=${url.searchParams.get('scope')}&workspace=${url.searchParams.get('workspace')}`);
       tokenTagRequests.push((url.searchParams.get('tags') || '').split(',').filter(Boolean));
       return tokens(url.searchParams.get('since'), url);
+    case '/api/diagnostics/diff_stats':
+    case '/api/diagnostics/delivery_friction': return filteredTrend(url);
     case '/api/crews': return { default_crew: null, crews: [] };
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
     case '/api/diagnostics/implement_one':
@@ -237,6 +262,7 @@ const server = http.createServer((req, res) => {
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
 const origin = `http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&window=24h`;
 const assertions = [];
+const apiRequests = [];
 const pass = (name, detail = {}) => assertions.push({ name, ...detail });
 let browser;
 let page;
@@ -244,6 +270,10 @@ try {
   browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
   page = await browser.newPage({ viewport: { width: 1440, height: 1600 } });
   const errors = [];
+  page.on('request', request => {
+    const url = new URL(request.url());
+    if (url.pathname.startsWith('/api/')) apiRequests.push(url.pathname + url.search);
+  });
   page.on('pageerror', error => errors.push(String(error)));
   // The fixture serves no log stream; the dashboard's reconnect noise is not ours.
   page.on('console', message => {
@@ -614,8 +644,77 @@ try {
   refreshFixture = false;
   pass('non-token metrics update across token-filter race');
 
+  // Both other filtered trends must still load on selection, refresh with
+  // their filters and window, and recover from older/unavailable hosts.
+  for (const [name, endpoint, chart] of [
+    ['Lines changed', 'diff_stats', 'diff'], ['Delivery friction', 'delivery_friction', 'friction'],
+  ]) {
+    await page.locator('#workspace-select').selectOption('ws_fixture');
+    await page.locator('#metrics-window-selector [data-window="24h"]').click();
+    await body.getByRole('tab', { name }).click();
+    await body.locator(`.mx-chart-${chart}`).waitFor();
+    const complexity = body.getByRole('combobox', { name: 'Task complexity' });
+    await complexity.selectOption('hard');
+    await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '134');
+    await page.locator('#metrics-window-selector [data-window="7d"]').click();
+    await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '117');
+    await page.locator('#workspace-select').selectOption('ws_b');
+    await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '217');
+    if (chart === 'friction') {
+      await body.getByRole('combobox', { name: 'Task crew' }).selectOption('sol');
+      await body.locator('.mx-chart-friction').waitFor();
+      await body.getByRole('button', { name: 'Step recoveries', exact: true }).click();
+      await body.locator('.mx-chart-friction').waitFor();
+      assert.equal(await body.locator('.mx-sc').count(), 4, 'family selection remains applied');
+    }
+    const beforePoll = apiRequests.length;
+    await page.locator('#refresh-btn').click();
+    await page.waitForFunction(() => document.getElementById('metrics-body').getAttribute('aria-busy') === 'false');
+    await body.locator(`.mx-chart-${chart}`).waitFor();
+    const selected = apiRequests.slice(beforePoll).filter(value => value.startsWith(`/api/diagnostics/${endpoint}?`));
+    assert.equal(selected.length, 1, `${name} refreshes its selected trend once`);
+    const query = new URL(selected[0], origin).searchParams;
+    assert.equal(query.get('workspace'), 'ws_b');
+    assert.equal(query.get('since'), '7d');
+    assert.equal(query.get('complexity'), 'hard');
+    if (chart === 'friction') {
+      assert.equal(query.get('crew'), 'sol');
+      assert.ok(!query.get('families').split(',').includes('step_recovery'));
+    }
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await body.locator(`.mx-chart-${chart}`).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, `${chart}-dark-${width}.jpg`), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+    }
+    await page.route(`**/api/diagnostics/${endpoint}?*`, route => route.fulfill({
+      status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'not found' }),
+    }));
+    await page.locator('#refresh-btn').click();
+    await body.getByText(`${name} unavailable`, { exact: true }).waitFor();
+    await body.getByRole('tab', { name: 'Tasks completed' }).click();
+    await body.locator('.mx-chart-completed').waitFor();
+    await page.unroute(`**/api/diagnostics/${endpoint}?*`);
+    await body.getByRole('tab', { name }).click();
+    await body.locator(`.mx-chart-${chart}`).waitFor();
+    assert.equal(await body.locator('.mx-sc-value').first().textContent(), '217');
+    pass(`${name}: on-demand loading, selected poll, scope/window/filter and unavailable recovery`, { requests: selected });
+    await page.setViewportSize({ width: 1440, height: 1600 });
+  }
+
+  for (const [name, chart] of [
+    ['implement_one duration', 'duration'], ['Tasks completed', 'completed'], ['Defects', 'defects'],
+    ['Tokens per task', 'tokens'],
+  ]) {
+    await body.getByRole('tab', { name, exact: true }).click();
+    await body.locator(`.mx-chart-${chart}`).waitFor();
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 1000 });
+      await body.locator(`.mx-chart-${chart}`).scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, `${chart}-dark-${width}.jpg`), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+    }
+  }
   assert.deepEqual(errors, [], 'no browser errors');
-  fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions }, null, 2));
+  fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions, apiRequests }, null, 2));
   console.log(`PASS: ${assertions.length} Analytics › Metrics scenarios.`);
 } catch (error) {
   await page?.screenshot({ path: path.join(evidence, 'failure.png'), fullPage: true });

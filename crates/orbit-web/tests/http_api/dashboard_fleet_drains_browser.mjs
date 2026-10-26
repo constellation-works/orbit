@@ -58,6 +58,13 @@ const initializer = `
     if (api === '/api/routines') return json({ routines: [], clock: {} });
     if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
     if (api === '/api/crews') return json({ crews: [] });
+    // Render real Metrics controls so every trend's poll can be measured.
+    const window = { key: url.searchParams.get('since'), bucket_seconds: 3600 };
+    if (api === '/api/diagnostics/implement_one') return json({ window,
+      outcome: url.searchParams.get('outcome'), current: {}, previous: {}, buckets: [] });
+    if (api === '/api/diagnostics/completions') return json({ window, buckets: [],
+      current: { done: { total: 0, low: 0, medium: 0, hard: 0, other: 0 }, rejected: 0, archived: 0 } });
+    if (api === '/api/diagnostics/defects') return json({ error: 'Not supported by fixture host' }, 404);
     if (holdFleet && api === '/api/tasks') return json({ items: [
       { id: 'TASK-FIXTURE', title: 'Local task rendered during fleet warmup', status: 'backlog', priority: 'medium', type: 'bug' },
     ], total: 1 });
@@ -178,6 +185,16 @@ async function assertPollBudget(browser, port) {
     const fleetReads = () => page.evaluate(() => globalThis.fleetRequests.filter(url => url.includes('/fleet/drains')).length);
     assert.equal(await fleetReads(), 2, 'two registered hosts are read once at startup; the first panel poll does not read the fleet');
     const polls = [];
+    const recordPoll = async (label) => {
+      const counted = await measurePoll(page);
+      polls.push({ view: label, count: counted.length, requests: counted });
+      // Keep the exact list even when the budget assertion fails.
+      fs.writeFileSync(path.join(evidence, 'poll-requests.json'), JSON.stringify(polls, null, 2));
+      const fleet = counted.filter(url => url.includes('/fleet/drains'));
+      assert.deepEqual(fleet, [], `${label} poll reads fleet drains: ${counted.join(', ')}`);
+      assert.ok(counted.length > 0 && counted.length <= 10, `${label} poll issued ${counted.length} requests: ${counted.join(', ')}`);
+      return counted.map(value => new URL(value, 'http://fixture').pathname);
+    };
     for (const [label, route] of POLL_VIEWS) {
       const beforeFleet = await fleetReads();
       await page.evaluate(async (next) => {
@@ -195,11 +212,26 @@ async function assertPollBudget(browser, port) {
         throw new Error(`navigation did not settle on ${next}: ${meta?.textContent}`);
       }, route);
       assert.equal(await fleetReads(), beforeFleet, `${label} navigation reads fleet drains`);
-      const counted = await measurePoll(page);
-      const fleet = counted.filter(url => url.includes('/fleet/drains'));
-      assert.deepEqual(fleet, [], `${label} poll reads fleet drains: ${counted.join(', ')}`);
-      assert.ok(counted.length > 0 && counted.length <= 10, `${label} poll issued ${counted.length} requests: ${counted.join(', ')}`);
-      polls.push({ view: label, count: counted.length, requests: counted });
+      await recordPoll(label);
+      if (route === 'analytics/metrics') {
+        for (const [trend, endpoint] of [
+          ['Tasks completed', null], ['Defects', null],
+          ['Tokens per task', 'task_tokens'], ['Lines changed', 'diff_stats'],
+          ['Delivery friction', 'delivery_friction'], ['implement_one duration', null],
+        ]) {
+          // Use the shipped tab handler, then poll with that trend selected.
+          // The basic fixture may report a trend unavailable; the request must
+          // still occur and count, including reads for visible chrome.
+          await page.getByRole('tab', { name: trend, exact: true }).click();
+          const paths = await recordPoll(`${label}/${trend}`);
+          for (const required of ['doctor', 'routines', 'audit/summary', 'job-runs', 'workflows/auto/readiness',
+            'diagnostics/implement_one', 'diagnostics/completions', 'tasks/completion-by-complexity', 'diagnostics/defects']) {
+            assert.ok(paths.includes(`/api/${required}`), `${trend} retains ${required}`);
+          }
+          assert.deepEqual(paths.filter(value => /\/(task_tokens|diff_stats|delivery_friction)$/.test(value)),
+            endpoint ? [`/api/diagnostics/${endpoint}`] : [], `${trend} reads only its filtered trend`);
+        }
+      }
     }
     const beforeCard = await fleetReads();
     await page.locator('#global-drain-state').click();
