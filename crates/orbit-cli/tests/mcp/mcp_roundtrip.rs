@@ -987,10 +987,8 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     assert_eq!(names, sorted, "tools/list must be name-sorted");
     for expected in [
         "orbit_friction_update",
-        "orbit_workflow_ship",
-        "orbit_workflow_run_show",
-        "orbit_workflow_run_list",
-        "orbit_workflow_run_resume",
+        "orbit_task_show",
+        "orbit_agent_invoke",
     ] {
         assert!(names.contains(&expected), "missing {expected}: {names:?}");
     }
@@ -1030,30 +1028,49 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     );
 }
 
-fn mcp_server_advertises_governed_tools_but_denies_an_unprivileged_session() {
+fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials() {
+    use orbit_common::governance::authorization::governed_tool;
+    use orbit_types::tool::{McpCapability, mcp_advertised_tool_name};
+
     let (workspace, mut client) = McpWorkspace::served();
+    let mut operator = workspace.serve_with_args(&["--operator"]);
+    let operator_list = operator.tools_list();
+    let operator_names = tool_names(&operator_list);
     let response = client.tools_list();
-    let names: BTreeSet<_> = tool_names(&response).into_iter().collect();
+    let names = tool_names(&response);
 
-    for expected in [
-        "orbit_workflow_ship",
-        "orbit_workflow_run_show",
-        "orbit_workflow_run_list",
-        "orbit_workflow_run_resume",
-        "orbit_command_exec",
-    ] {
-        assert!(names.contains(expected), "missing {expected}: {names:?}");
+    for definition in orbit_mcp::canonical_mcp_tool_definitions().expect("canonical definitions") {
+        let canonical = definition.schema.name.as_str();
+        let name = mcp_advertised_tool_name(canonical);
+        assert!(
+            operator_names.contains(&name.as_str()),
+            "operator missing {name}"
+        );
+        // agent.invoke has a separate managed-run explorer admission: its
+        // operator-only catalog row does not make it unconditionally denied.
+        let uncallable = canonical != "orbit.agent.invoke"
+            && governed_tool(canonical)
+                .is_some_and(|operation| !operation.allowed.contains(&McpCapability::Agent));
+        assert_eq!(
+            names.contains(&name.as_str()),
+            !uncallable,
+            "agent advertisement for {name} must reflect its capability"
+        );
+        if uncallable {
+            let denied = client.call_tool_err(&name, json!({"workspace": "ws_mcp-roundtrip"}));
+            assert_eq!(denied["code"], "capability_denied", "{name}: {denied}");
+        }
     }
-
-    for (name, arguments) in [
-        ("orbit_workflow_ship", json!({ "task_ids": ["ORB-00001"] })),
-        ("orbit_workflow_run_show", json!({ "id": "jrun-missing" })),
-        ("orbit_workflow_run_list", json!({})),
-        ("orbit_workflow_run_resume", json!({ "id": "jrun-missing" })),
-    ] {
-        let denied = client.call_tool_err(name, arguments);
-        assert_eq!(denied["code"], "capability_denied", "{name}: {denied}");
-    }
+    // Filtering must also hold when the adapter serves its cached list, and
+    // when no workspace has been bound to the session.
+    assert_eq!(client.tools_list()["result"], response["result"]);
+    let mut unbound = serve_mcp_from(
+        &workspace.home,
+        &workspace.home,
+        McpClient::initialize_params("unbound-agent-advertisement", None),
+    );
+    let unbound_list = unbound.tools_list();
+    assert_eq!(tool_names(&unbound_list), names);
 
     let marker = workspace.work.join("command-exec-must-not-run");
     let denied = client.call_tool_err(
@@ -2380,11 +2397,16 @@ fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirem
     let workspace = McpWorkspace::init();
     let scratch = workspace.home.join("scratch");
     std::fs::create_dir_all(&scratch).expect("create non-workspace launch dir");
-    let mut client = serve_mcp_from(
-        &scratch,
-        &workspace.home,
+    // Use the operator surface to keep checking every canonical tool's
+    // selector contract, including tools omitted from agent listings.
+    let child = McpWorkspace::orbit_command(&scratch, &workspace.home)
+        .args(["mcp", "serve", "--operator"])
+        .spawn_piped();
+    let mut client = McpClient::initialized(
+        child,
         McpClient::initialize_params("selector-wording-audit", None),
-    );
+    )
+    .0;
     let listed = client.tools_list();
     let advertised = tools_array(&listed);
 
@@ -5330,7 +5352,7 @@ mod worker_routing;
 #[test]
 fn governed_session_admission() {
     rows!(
-        mcp_server_advertises_governed_tools_but_denies_an_unprivileged_session,
+        mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials,
         a_replica_mcp_session_enforces_checkout_capability_classes,
         an_operator_served_mcp_session_reaches_a_governed_tool
     );

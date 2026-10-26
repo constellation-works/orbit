@@ -26,9 +26,13 @@
 //! registry counterparts (`register_mcp`, `register`, `register_inactive`):
 //! which surfaces *list* a tool. It is an audience decision — what an agent
 //! reading `tools/list` is pointed at — and it authorizes nothing.
-//! `tools/list` does no capability filtering, and the tool registry's
-//! `execute` never consults availability, so a tool registered active but
-//! unadvertised is still reachable through `orbit tool run`.
+//! The MCP list adapter further filters `tools/list` by the session's fixed grants,
+//! omitting governed tools those grants cannot authorize. `orbit.agent.invoke`
+//! remains discoverable because of its separate managed-run explorer admission.
+//! This only changes advertisement:
+//! the tool registry's `execute` never consults availability, so a tool
+//! registered active but unadvertised is still reachable through
+//! `orbit tool run`, subject to the capability chokepoint.
 //!
 //! `register_inactive` is the one placement that also removes reach: CLI
 //! dispatch applies `ensure_tool_agent_facing` too, so an inactive tool needs
@@ -49,7 +53,8 @@
 //! The two therefore need not agree, and deliberately do not. A tool may be
 //! advertised and governed (the operator MCP surface: a session served by
 //! `orbit mcp serve --operator` sees and performs it, an ordinary agent session
-//! sees and is refused), or unadvertised and ungoverned (`orbit friction show`
+//! omits it from its list and is still refused if it calls the name directly),
+//! or unadvertised and ungoverned (`orbit friction show`
 //! — kept off the agent MCP surface because `list` already returns what an
 //! agent needs, but freely readable from any CLI).
 //! What must never happen is for a pairing to change by accident. The
