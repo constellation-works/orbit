@@ -1667,11 +1667,19 @@ one. From then on:
     `ci_base_suspect` history event per task and failure, spends no rerun,
     update or repair, and keeps polling the latest push run of the same job
     on the landing tip. Only a base job that started after the candidate's
-    job completed decides: the same failure there makes it **inherited**,
-    and a pass makes it **candidate** (for example a test in an untouched
-    file that the candidate's change breaks). A base that gets no such run
-    before `max_wait_seconds` stops the landing in `review` without a
-    repair, with the suspicion in the stop evidence. `orbit run auto
+    job completed decides, on an unmoved base and on a moved landing tip
+    alike: the same failure there makes it **inherited**, and a pass makes
+    it **candidate** (for example a test in an untouched file that the
+    candidate's change breaks). A **candidate** outcome on a moved tip
+    stops for the one automatic repair directly, with no branch update. An
+    **inherited** outcome on a moved tip takes the inherited recovery
+    above: one branch update, and a failure that still fails after it
+    while the tip does not pass stops in `review` without a repair. A tip
+    pass or same-signature tip failure that started before the candidate's
+    job completed decides nothing: the failure stays **base-suspect**. A
+    base that gets no such run before `max_wait_seconds` stops the landing
+    in `review` without a repair, with the suspicion in the stop evidence.
+    `orbit run auto
     --auto-fix` holds the same failure as a red base, and its repair
     evidence read refuses a repair for it. A log that cites no repository
     file, or cites a file the candidate changed, is classified as before.
