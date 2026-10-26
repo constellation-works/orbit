@@ -1,0 +1,47 @@
+Mint a token and print its secret once
+
+The token is scoped to the workspaces named by the global --workspace (comma-separate several). The secret is printed once and cannot be shown again; the store keeps only its SHA-256.
+
+Usage: orbit lease token create [OPTIONS] --principal <NAME>
+
+Options:
+      --principal <NAME>
+          Person (alice) or a person's agent (alice/claude-code) the token names
+
+      --class <CLASS>
+          Principal class; an agent is named under its person
+          
+          [default: human]
+          [possible values: human, agent]
+
+      --verbs <VERBS>
+          lease (request, renew and release, and read) or read only
+          
+          [default: lease]
+          [possible values: read, lease]
+
+      --max-priority <PRIORITY>
+          Highest priority the token may request [default: high for human, normal for agent]
+          
+          [possible values: low, normal, high]
+
+      --hard <HARD>
+          Whether the token may hold hard leases (never grants them as advisory)
+          
+          [default: allow]
+          [possible values: allow, never]
+
+      --expires <DURATION>
+          Lifetime from now, e.g. 12h, 30d or 8w (maximum 365d)
+          
+          [default: 30d]
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

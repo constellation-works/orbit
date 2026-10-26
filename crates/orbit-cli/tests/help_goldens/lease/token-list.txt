@@ -1,0 +1,14 @@
+List tokens with their scope and state, never their secrets
+
+Usage: orbit lease token list [OPTIONS]
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

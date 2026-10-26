@@ -4,7 +4,9 @@
 use chrono::NaiveDate;
 use orbit_common::security::child_env::allowlisted_child_env_from;
 use orbit_common::security::operator_env::{parse_env_text, read_env_file};
-use orbit_common::security::redaction::{redact_all, redact_sensitive_env_text};
+use orbit_common::security::redaction::{
+    is_high_confidence_single_token_credential, redact_all, redact_sensitive_env_text,
+};
 use orbit_common::security::release::{TrustedReleaseKey, verify_checksum_signature};
 use orbit_common::test_env::scoped;
 
@@ -237,6 +239,22 @@ fn redact_all_scrubs_provider_scm_cloud_tokens_and_connection_passwords() {
     }
 
     assert!(redacted.contains("postgres://orbit_user:[REDACTED_SECRET]@db.example.test/orbit"));
+}
+
+#[test]
+fn redact_all_masks_lease_listener_tokens_in_captured_output() {
+    // ORB-18410: lease tokens carry the `orbl_` prefix so captured output that
+    // echoes one (a client's error, a shell transcript) cannot leak it.
+    let token = format!("orbl_{}", "0123456789abcdef".repeat(4));
+    let captured = format!(
+        "Authorization: Bearer {token}\ncurl -H 'x: {token}' failed\n{{\"token\":\"{token}\"}}"
+    );
+
+    let redacted = redact_all(&captured);
+
+    assert!(!redacted.contains(&token), "lease token leaked: {redacted}");
+    assert!(!redacted.contains("0123456789abcdef"), "{redacted}");
+    assert!(is_high_confidence_single_token_credential(&token));
 }
 
 #[test]

@@ -253,3 +253,88 @@ a browser page can send HTTP requests there; the listener rejects HTTP framing
 before its body reaches MCP dispatch. Non-loopback exposure is an explicit choice,
 not a remedy for a missing capability. SSH caller-policy configuration does not
 turn a raw TCP socket or dashboard into an authenticated per-user service.
+
+## Lease listener user and lease tokens
+
+Path leases let people who have no SSH login to the owner, and their agents,
+coordinate through a lease-only listener with bearer **lease tokens**. Tokens
+exist now; no network surface accepts them yet. Agents run as your Unix user,
+so anything your user can write, an agent can write too. The tokens, their
+store and the commands that mint them therefore belong to a dedicated system
+user, `orbit-lease` by convention, that you become through `sudo -u`.
+
+That boundary holds only if becoming `orbit-lease` (or root) takes a fresh
+authorization an agent cannot reuse. Password `sudo` caches a timestamp (15
+minutes by default) that a later `sudo -n` in the same terminal accepts, so an
+agent started there can mint tokens. Before relying on it, make sudoers
+root-owned with `timestamp_timeout=0` for every `sudo` your account can run, no
+`NOPASSWD`, no `!authenticate` and no askpass helper, and give your account no
+other run-as path (`su`, `doas`, `pkexec`, `systemd-run --uid`, setuid helpers,
+or a subuid range covering `orbit-lease`). Where the host cannot enforce that,
+tokens are only as safe as your sudo timestamp.
+
+Create the user, its Orbit home and its token store (Linux):
+
+```bash
+sudo useradd --system --create-home --home-dir /var/lib/orbit-lease \
+  --shell /usr/sbin/nologin orbit-lease
+sudo passwd -l orbit-lease
+sudo chmod 0700 /var/lib/orbit-lease
+sudo install -d -m 0700 -o orbit-lease -g orbit-lease /var/lib/orbit-lease/.orbit
+sudo install -m 0600 -o orbit-lease -g orbit-lease /dev/null \
+  /var/lib/orbit-lease/.orbit/lease-tokens.db
+```
+
+The home holds only the listener's configuration and `lease-tokens.db`: no
+workspaces and no provider or forge credentials. Orbit never creates the token
+store; root provisions it, empty, and Orbit adds its schema on first use. Give
+the account no authorized keys.
+
+The listener user runs a root-owned copy of `orbit`, never your
+`~/.cargo/bin/orbit`, which an agent could replace:
+
+```bash
+sudo install -m 0755 -o root -g root "$(command -v orbit)" /usr/local/bin/orbit
+```
+
+Repeat that install after each `orbit update`; the copy is updated separately.
+
+Mint, list and revoke tokens as the listener user. `-H` gives the command that
+user's home; the commands use only the token store in the running user's Orbit
+home.
+
+```bash
+sudo -H -u orbit-lease /usr/local/bin/orbit lease token create \
+  --principal alice --workspace ws_example
+sudo -H -u orbit-lease /usr/local/bin/orbit lease token create \
+  --principal alice/claude-code --class agent --workspace ws_example --expires 7d
+sudo -H -u orbit-lease /usr/local/bin/orbit lease token list
+sudo -H -u orbit-lease /usr/local/bin/orbit lease token revoke <token-id>
+```
+
+- `create` prints the `orbl_…` secret once; hand it to its holder over a
+  private channel. The store keeps only its SHA-256, and `list` never shows a
+  secret. `--workspace` scopes the token (comma-separate several).
+- Give each person one token and each of their agents its own, named under the
+  person (`alice/claude-code`, `--class agent`), so revoking one agent leaves
+  the others working.
+- Defaults: `--class human`, `--verbs lease` (which includes `read`),
+  `--max-priority` `high` for a human and `normal` for an agent, `--hard allow`,
+  `--expires 30d` (at most `365d`). The workspace's own `lease.hard` and
+  `lease.max_priority` still apply; the stricter wins.
+- Revocation and expiry take effect on the token's next use. The store audits
+  every mint, revocation and refused verification, never with a secret.
+
+The commands refuse to run:
+
+- as root, or in an agent context;
+- as any user whose Orbit home has no `lease-tokens.db`, such as your own,
+  with a message to run them as the listener user (they never create a store
+  there);
+- when the store or its directory is group- or world-accessible or owned by
+  another user;
+- when their executable, the Orbit home, or any directory above either can be
+  written by a user other than root or the running user. The message names the
+  path; fix its owner or mode.
+
+On macOS the same checks apply; create the user with your usual tooling.
