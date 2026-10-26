@@ -1556,6 +1556,69 @@ fn dkim_signed_message(body: &str) -> String {
     )
 }
 
+/// Sign a message whose `b=` tag is followed by `bh=`, as mail in the
+/// wild is normally emitted, returning the message and the base64
+/// signature. `signed_b` is the `b` tag as the signer hashed it (empty
+/// value, per RFC 6376 §3.7); `presented_b` is the same tag with `{sig}`
+/// replaced by the signature, so a case can present the value folded or
+/// spaced differently from how it was hashed. Canonicalisation is
+/// implemented here directly so the test does not reuse core's.
+fn dkim_signed_message_with_following_tag(
+    body: &str,
+    canonicalization: &str,
+    signed_b: &str,
+    presented_b: &str,
+) -> (String, String) {
+    use base64::Engine as _;
+    use rsa::RsaPrivateKey;
+    use rsa::pkcs1v15::SigningKey;
+    use rsa::pkcs8::DecodePrivateKey;
+    use rsa::signature::{SignatureEncoding, Signer};
+    use sha2::{Digest, Sha256};
+
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let canonical_body = format!("{}\r\n", body.trim_end_matches(['\r', '\n']));
+    let bh = b64.encode(Sha256::digest(canonical_body.as_bytes()));
+    let signed_value = format!(
+        "v=1; a=rsa-sha256; c={canonicalization}; d=example.com; s=test1; h=from:to:subject:date; {signed_b}; bh={bh}"
+    );
+    let mut header_data = String::new();
+    if canonicalization.starts_with("relaxed/") {
+        for (name, value) in [
+            ("from", "Operator <operator@example.com>"),
+            ("to", "orbit@example.com"),
+            ("subject", "Re: decision"),
+            ("date", "Mon, 26 Oct 2026 10:00:00 +0000"),
+        ] {
+            header_data.push_str(&format!("{name}:{value}\r\n"));
+        }
+        header_data.push_str(&format!("dkim-signature:{signed_value}"));
+    } else {
+        for (name, value) in [
+            ("From", "Operator <operator@example.com>"),
+            ("To", "orbit@example.com"),
+            ("Subject", "Re: decision"),
+            ("Date", "Mon, 26 Oct 2026 10:00:00 +0000"),
+        ] {
+            header_data.push_str(&format!("{name}: {value}\r\n"));
+        }
+        header_data.push_str(&format!("DKIM-Signature: {signed_value}"));
+    }
+    let key = RsaPrivateKey::from_pkcs8_pem(DKIM_TEST_PRIVATE_KEY_PEM).unwrap();
+    let signature: rsa::pkcs1v15::Signature =
+        SigningKey::<Sha256>::new(key).sign(header_data.as_bytes());
+    let signature_b64 = b64.encode(signature.to_bytes());
+    let presented_value = signed_value.replacen(
+        &format!("{signed_b};"),
+        &format!("{};", presented_b.replace("{sig}", &signature_b64)),
+        1,
+    );
+    let message = format!(
+        "DKIM-Signature: {presented_value}\r\nFrom: Operator <operator@example.com>\r\nTo: orbit@example.com\r\nSubject: Re: decision\r\nDate: Mon, 26 Oct 2026 10:00:00 +0000\r\n\r\n{canonical_body}"
+    );
+    (message, signature_b64)
+}
+
 impl Fixture {
     fn submit_dkim(
         &self,
@@ -1643,6 +1706,104 @@ fn core_dkim_verification_applies_a_signed_message_and_refuses_forgeries() {
         .unwrap();
     assert_eq!(answered.state, DecisionRequestState::Answered);
     assert_eq!(fx.status(&task), TaskStatus::Backlog);
+}
+
+#[test]
+fn core_dkim_accepts_legal_folding_around_a_b_value_with_a_following_tag() {
+    // RFC 6376 §3.7: emptying `b=` deletes the value and all surrounding
+    // whitespace. Each case signs the emptied form independently, then
+    // presents the signature folded or spaced, with `bh=` after `b=`.
+    let cases: [(&str, &str, &str, &str); 6] = [
+        ("unfolded relaxed", "relaxed/relaxed", "b=", "b={sig}"),
+        (
+            "folded after b= relaxed",
+            "relaxed/relaxed",
+            "b=",
+            "b=\r\n\t{sig}",
+        ),
+        (
+            "whitespace around tag syntax relaxed",
+            "relaxed/relaxed",
+            "b =",
+            "b = \r\n\t{sig} \r\n\t",
+        ),
+        (
+            "folded after b= simple",
+            "simple/simple",
+            "b=",
+            "b=\r\n\t{sig}",
+        ),
+        (
+            "folded after b= simple/relaxed",
+            "simple/relaxed",
+            "b=",
+            "b=\r\n\t{sig}",
+        ),
+        (
+            "folded after b= relaxed/simple",
+            "relaxed/simple",
+            "b=",
+            "b=\r\n\t{sig}",
+        ),
+    ];
+    for (label, canonicalization, signed_b, presented_b) in cases {
+        let fx = fixture();
+        fx.runtime
+            .register_decision_channel_with_dkim_requirement(
+                CHANNEL,
+                HUMAN,
+                PLUGIN,
+                vec![SENDER.to_string()],
+                true,
+            )
+            .unwrap();
+        let (task, request) = fx.blocked_task_with_request();
+        let token = fx
+            .runtime
+            .mint_decision_token(CHANNEL, &request.id)
+            .unwrap();
+        let (signed, signature) = dkim_signed_message_with_following_tag(
+            "approve",
+            canonicalization,
+            signed_b,
+            presented_b,
+        );
+
+        // A changed body byte is refused and applies nothing.
+        let tampered = signed.replacen("approve\r\n", "approv3\r\n", 1);
+        let refused = fx
+            .submit_dkim(&request, &token, Some(tampered), &FixtureResolver)
+            .expect_err("a tampered body is refused");
+        assert!(
+            refused.to_string().contains("dkim_verification_failed"),
+            "{label}: {refused}"
+        );
+        assert_eq!(fx.status(&task), TaskStatus::Blocked, "{label}");
+
+        // A changed signature byte is refused and applies nothing.
+        let forged_signature = {
+            let mut chars: Vec<char> = signature.chars().collect();
+            chars[0] = if chars[0] == 'A' { 'B' } else { 'A' };
+            chars.into_iter().collect::<String>()
+        };
+        let forged = signed.replacen(&signature, &forged_signature, 1);
+        let refused = fx
+            .submit_dkim(&request, &token, Some(forged), &FixtureResolver)
+            .expect_err("a forged signature is refused");
+        assert!(
+            refused.to_string().contains("dkim_verification_failed"),
+            "{label}: {refused}"
+        );
+        assert_eq!(fx.status(&task), TaskStatus::Blocked, "{label}");
+
+        // The valid message verifies and applies the answer, proving the
+        // refusals above did not consume the token.
+        let answered = fx
+            .submit_dkim(&request, &token, Some(signed), &FixtureResolver)
+            .unwrap_or_else(|error| panic!("{label}: valid message refused: {error}"));
+        assert_eq!(answered.state, DecisionRequestState::Answered, "{label}");
+        assert_eq!(fx.status(&task), TaskStatus::Backlog, "{label}");
+    }
 }
 
 #[test]
