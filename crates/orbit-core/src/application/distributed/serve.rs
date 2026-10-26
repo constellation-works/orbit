@@ -51,6 +51,7 @@ use orbit_types::workflow::{
 use serde::Serialize;
 
 use crate::application::automation::source::Source;
+use crate::application::host_labels;
 use crate::application::task::PilotAdmissionHold;
 use crate::runtime::run_input::recorded_task_ids;
 
@@ -58,6 +59,15 @@ use super::contract::{is_remote, session_machine_id, trusted_identity};
 use super::{
     DistributedAdmissionPort, ensure_distributed_mutation_available, owner_binary_version,
 };
+
+/// A grant pins execution to the owner, intersected with its required labels.
+/// Ungranted tasks keep the claimed implementer's existing restrictions.
+fn claimed_tool_hold(runtime: &crate::OrbitRuntime, task: &Task) -> Option<String> {
+    if let Some(grant) = host_labels::granted_tools_owner_hold(task) {
+        return Some(runtime.task_host_labels_wait(task).unwrap_or(grant));
+    }
+    claimed_required_tool_hold(task)
+}
 
 /// A remote claimed implementer's restrictions, using the same deny set as
 /// the engine and the same coordination classification and closed bridge as
@@ -750,7 +760,7 @@ impl crate::OrbitRuntime {
             // the transaction checks newly added tasks again below.
             // Owner-local activity admission keeps its existing authority.
             if identity.is_remote()
-                && let Some(why) = claimed_required_tool_hold(task)
+                && let Some(why) = claimed_tool_hold(self, task)
             {
                 admission_holds.entry(task.id.clone()).or_insert(why);
             }
@@ -812,7 +822,7 @@ impl crate::OrbitRuntime {
             &self.baseline_held_tasks(&backlog),
             &|task, comments, history| {
                 if identity.is_remote()
-                    && let Some(why) = claimed_required_tool_hold(task)
+                    && let Some(why) = claimed_tool_hold(self, task)
                 {
                     return Ok(Some(why));
                 }
