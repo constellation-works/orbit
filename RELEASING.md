@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Release checklist: versioning, bumps, tagging, CI, promotion and hotfixes"
-last_validated: 2026-10-23
+last_validated: 2026-10-26
 ---
 
 # Releasing Orbit
@@ -285,12 +285,14 @@ Pushing a `v*` tag runs `.github/workflows/release.yml`:
 | Job | What it does |
 |---|---|
 | `build-release` | `cargo build -p orbit-cli --release --locked` for `aarch64-apple-darwin`, `x86_64-apple-darwin`, `x86_64-unknown-linux-gnu`, and `aarch64-unknown-linux-gnu` |
+| `build-bundled-bwrap` | Builds the static bundled Bubblewrap per architecture in a digest-pinned Alpine image and uploads it with its sources and recipe |
 | `publish-release` | Writes `orbit-checksums.txt`, signs it as `orbit-checksums.txt.sig`, and creates the GitHub Release with auto-generated notes |
 | `desktop-preflight` | Checks the six Apple secrets and plans the desktop build. Linux is always in the plan. macOS is added only when every secret is present; otherwise the run shows a warning naming the missing ones. Turns the desktop jobs off when `ORBIT_DESKTOP_RELEASE` is `false` |
 | `build-desktop` | Runs `cargo tauri build` in `desktop/` at the tag to make the `.deb` and `.AppImage` for Linux x86_64 and arm64, and, when the secrets are present, a signed, notarized universal macOS `.dmg` |
 | `publish-desktop` | Once `publish-release` has created the release and every planned desktop leg has succeeded, writes `orbit-desktop-version.txt`, signs `orbit-desktop-checksums.txt` over it and exactly the bundles built, and attaches them. A failed Linux leg stops it; a macOS leg the preflight left out does not. Tag pushes, manual backfills, and reruns for the same tag attach one at a time: the publisher already uploading finishes, and a different tag stays independent |
 | `bump-homebrew-tap` | Updates `Formula/orbit.rb` in `constellation-works/homebrew-tap` (macOS only; Linux uses `install.sh`) |
 | `smoke-install-macos` / `smoke-install-ubuntu` | Installs from the tag's `install.sh` and runs `orbit --version` |
+| `smoke-install-ubuntu-2204-bundled-bwrap` | Removes host Bubblewrap on Ubuntu 22.04 to reach the installer fallback, then checks the bundled binary is installed and passes the capability probe |
 
 A release that shipped without desktop bundles, such as v0.29.0, can get its missing desktop assets afterwards from the workflow's manual run: Actions → `release` → **Run workflow**, with `tag` set to the existing release tag. It runs only the desktop jobs, builds the tag's source with the current workflow, and attaches missing assets under the same rules. It refuses a tag without a GitHub Release, and it ignores `ORBIT_DESKTOP_RELEASE`. See the [runbook](docs/runbooks/release.md#desktop-backfill).
 
