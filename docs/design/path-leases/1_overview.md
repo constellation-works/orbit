@@ -5,11 +5,11 @@ last_updated: 2026-10-26
 last_validated: 2026-10-26
 status: Draft
 stage: building
-next: "Land ORB-18406 (orbit.lease tools and CLI), then listener tasks ORB-18410, 18412, 18430"
+next: "Land the separate lease listener, intake socket and rate limiting (ORB-18410, ORB-18412, ORB-18430)"
 feature: path-leases
 doc_role: overview
 type: design
-summary: "Proposed: let several people and their agents, outside Orbit's drains, lease repository paths on one owner, so their work and drain tasks share one lock index, wait for a green light when needed, and hear when overlapping work lands; push and poll over MCP, CLI, REST and SSE, with lease tokens for everyone but the operator."
+summary: "Implemented lease storage and request, renew, release, show, list and check operations over MCP, CLI and loopback REST, with Orbit Web notices/SSE, lease-token administration and orbit-auth credentials. The separate token-authenticated network listener, intake socket and rate limiting remain proposed."
 tags: [path-leases, locks, admission, reservations, notifications]
 paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
@@ -18,8 +18,11 @@ related_artifacts: []
 
 # Path Leases — Overview
 
-> **Status: Draft design; nothing is implemented.** The proposal builds on task reservations,
-> which exist today ([2_design.md §1](./2_design.md#1-what-exists-today)).
+> **Status: Partially implemented.** Lease storage and request, renew, release, show, list and
+> check operations are shipped through MCP and CLI, with a loopback REST surface and Orbit Web
+> notices/SSE. Lease-token administration and the `orbit-auth` credential crate are also
+> implemented. A separate token-authenticated network listener, its intake socket, and rate
+> limiting remain proposed.
 
 Orbit already keeps parallel drain tasks from editing the same files: an in-progress or review
 task holds a lock on its declared footprint, and admission defers a candidate that overlaps it.
@@ -90,8 +93,9 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 | Reservation rows (exists; gains lease columns) | [crates/orbit-store/src/driver/sqlite/task_reservation_store/](../../../crates/orbit-store/src/driver/sqlite/task_reservation_store/) | — |
 | Landed paths per task (exists; feeds landing notices) | [crates/orbit-core/src/application/codebase/facts/scan.rs](../../../crates/orbit-core/src/application/codebase/facts/scan.rs) | — |
 | SSE streaming pattern (exists, for logs) | [crates/orbit-web/src/api/log.rs](../../../crates/orbit-web/src/api/log.rs) | — |
-| Lease modes, queue, lifetime, notices | proposed, [2_design.md §2–§5](./2_design.md#2-the-lease-record) | — |
-| MCP, CLI, REST and SSE surfaces | proposed, [2_design.md §6](./2_design.md#6-surfaces) | — |
+| Hard/advisory modes, lease lifetime and notices | implemented, [2_design.md §2–§6](./2_design.md#2-the-lease-record) | — |
+| Lease queue, expansion and `--no-wait` behavior | proposed, [2_design.md §6](./2_design.md#6-surfaces) | — |
+| MCP, CLI, loopback REST and Orbit Web notices/SSE | request, renew, release, show, list and check implemented; Orbit Web also serves notices/SSE, [2_design.md §6](./2_design.md#6-surfaces) | — |
 | Principals, lease tokens and the lease listener | token administration (`orbit lease token create\|list\|revoke`) implemented; listener, intake and rate-limit proposed, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412 |
 | Listener user and intake socket | proposed, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
 | Credential code (`orbit-auth`) | implemented, [2_design.md §7.4](./2_design.md#74-the-orbit-auth-crate) | ORB-18410, ORB-18421 |
