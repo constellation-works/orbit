@@ -99,6 +99,9 @@ open requests in `open_decisions`.
 | `orbit decision list` | List open decision requests. `--gate block_triage\|pilot_admission\|proposed_approval\|review_approval` and `--task <id>` filter; `--all` also shows answered, superseded and expired requests. The MCP tool `orbit.decision.list` returns the same. |
 | `orbit decision show <id>` | Show one request with its allowed answers, binding, expiry and resolution. The MCP tool is `orbit.decision.show`. |
 | `orbit decision answer <id> <answer>` | Answer one open request as the operator; `--note` keeps evidence with the answer (a pilot-admission verdict uses it as its evidence). The answer lands as a human write and the request then reads `answered`. A superseded or expired request is refused and nothing changes. There is no answering tool: an agent can list a request but cannot answer it. The dashboard's task detail offers the same answers as buttons. |
+| `orbit decision submit <id> <answer>` | Submit a human's answer through a registered decision channel: `--channel` and that request's `--token` are required; `--note` keeps evidence with it. |
+| `orbit decision digest --channel <channel>` | Raise any missing approval requests for a channel and show its decision digest. |
+| `orbit decision channel register` \| `list` \| `revoke` \| `rotate-key` | Register, list, revoke and rotate this host's decision channels. |
 
 With `task show --fields ... --json`, a single field returns its bare JSON value,
 whether read locally or from another host. The `terminal` field stays keyed as
