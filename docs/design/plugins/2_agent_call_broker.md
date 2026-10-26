@@ -240,6 +240,16 @@ admission agrees with the binding (`claim_unbound`) and is launched but not yet 
 claimed task and not yet decided (`final_recovery_stale`). The owner's claim fence applies as
 for any read.
 
+Any activity of a claimed leaf but its final recovery may read `review-evidence-findings.json`,
+named exactly: the findings an owner evidence run reported on a held candidate ([ORB-18667]).
+The owner's comment keeps only a bounded summary, and the claim's kept candidate carries none, so
+the repair needs the whole artifact. The broker carries the read while the leaf holds its claim
+(the leaf refusals above), only when the leaf's admission receipt offered a kept candidate
+(`no_kept_candidate`), and returns the owner's answer only when it is Orbit's system-written
+findings (`findings_unverified`) on that candidate's held run and commit
+(`findings_candidate_mismatch`). A respelled name is `findings_read_refused`; a write of the
+artifact keeps the reviewer's scope.
+
 The claimed task's delivery view (`orbit.task.show` with `field: "delivery"`) is not forwarded:
 the owner holds no record of the follower's leaf run, so its answer could only be "job run not
 found" or another run's evidence. The broker answers it from the follower's own record of the
@@ -479,7 +489,9 @@ service side regardless.
   `review-*` read and every claimed worker's delivery view go to `dispatch/claimed_recovery.rs`
   instead, which derives the leaf's liveness and its final-recovery window from the follower's
   admission and run state (`live_claimed_leaf` and `claimed_leaf_in_final_recovery` in
-  `application/job/claimed.rs`) and projects the leaf's delivery locally. The nested `orbit`
+  `application/job/claimed.rs`) and projects the leaf's delivery locally. Any other activity's
+  read of `review-evidence-findings.json` goes to `dispatch/claimed_findings.rs`, which binds it
+  to the live leaf's kept candidate from its admission receipt. The nested `orbit`
   sends an artifact as base64 so a full 1 MiB artifact fits the request frame. The broker writes
   the one audit row (brokered, peer PID, the run's task and activity); the owner's row names the
   follower as caller over `ssh-mcp`. On the owner, a claimed worker's `orbit.task.add` is taken
@@ -500,6 +512,10 @@ service side regardless.
   succeed, and a write, another task or workspace, another run, a decided recovery, an ended
   run, a settling claim, an unnamed or respelled `review-*` path and another run's delivery stay
   refused without reaching the owner.
+  `dispatch/tests/claimed_findings.rs` reads findings longer than the owner comment's budget
+  from the same fixture's implementer, and checks that the gate's other artifacts, a write, a
+  respelling, another task, a final recovery, a claim without a kept candidate, another run, a
+  settling claim and findings on another run or commit or not written by Orbit stay refused.
 - `crates/orbit-cli/tests/tool/github_broker_sandbox.rs` compiles the agent sandbox the way a
   launch does (credential and plugin masks, the host's execution-env policy) around a
   stand-in `gh` that needs the host's config. A direct `gh` fails inside it, `orbit tool run
@@ -733,6 +749,7 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-14194] — the claimed-review artifact route (§3).
 - [ORB-14260] — the claimed-owner calls and `owner_route_unavailable` (§3, §6.3).
 - [ORB-14661] — a claimed leaf's final-recovery evidence reads and its leaf delivery view (§3).
+- [ORB-18667] — a claimed leaf's read of the evidence findings on the kept candidate it resumes (§3).
 - [ORB-14792] — a claimed review task's `regression_from` findings and `unfiled-findings.json` (§3).
 
 Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -55,6 +55,9 @@ pub(super) const PUT: &str = "orbit.task.artifact.put";
 #[derive(Default)]
 pub(super) struct Owner {
     artifacts: Mutex<BTreeMap<String, Vec<u8>>>,
+    /// The artifacts Orbit's system writer attached, which a read reports as
+    /// `created_by: system`.
+    system: Mutex<BTreeSet<String>>,
     pub(super) calls: Mutex<Vec<(String, Value, ToolSessionContext)>>,
     lose_next_put: AtomicBool,
 }
@@ -91,11 +94,15 @@ impl OwnerCoordinator for Owner {
                 format!("{TASK}/{path}"),
             ));
         };
-        Ok(json!({
+        let mut read = json!({
             "id": input["id"], "path": input["path"], "media_type": "application/json",
             "size": bytes.len(), "presentation": "text", "encoding": "utf-8",
             "content": String::from_utf8(bytes).unwrap(),
-        }))
+        });
+        if self.system.lock().unwrap().contains(&path) {
+            read["created_by"] = json!("system");
+        }
+        Ok(read)
     }
 }
 
@@ -107,8 +114,15 @@ impl Owner {
             .insert(path.to_string(), bytes.to_vec());
     }
 
+    /// [`Self::hold`] as Orbit's system writer attaches it.
+    pub(super) fn hold_as_system(&self, path: &str, bytes: &[u8]) {
+        self.hold(path, bytes);
+        self.system.lock().unwrap().insert(path.to_string());
+    }
+
     pub(super) fn forget(&self, path: &str) {
         self.artifacts.lock().unwrap().remove(path);
+        self.system.lock().unwrap().remove(path);
     }
 
     pub(super) fn reads(&self) -> Vec<String> {

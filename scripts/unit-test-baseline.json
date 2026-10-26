@@ -134,6 +134,8 @@
         "adapter/command/dispatch/tests/brokered.rs::a_brokered_rotation_is_stored_by_compare_and_swap_and_never_returned",
         "adapter/command/dispatch/tests/brokered.rs::a_request_outside_the_run_is_refused_before_the_backend_runs",
         "adapter/command/dispatch/tests/brokered.rs::the_broker_runs_the_github_reads_and_refuses_every_other_builtin",
+        "adapter/command/dispatch/tests/claimed_findings.rs::a_claimed_implementer_reads_every_finding_on_the_candidate_it_resumes",
+        "adapter/command/dispatch/tests/claimed_findings.rs::the_findings_read_is_bound_to_the_kept_candidate_and_opens_nothing_else",
         "adapter/command/dispatch/tests/claimed_owner.rs::a_local_claimed_task_read_stays_on_the_claimed_task",
         "adapter/command/dispatch/tests/claimed_owner.rs::a_review_artifact_path_in_any_spelling_is_refused_to_a_non_reviewer_without_reaching_the_owner",
         "adapter/command/dispatch/tests/claimed_owner.rs::a_source_the_nested_orbit_may_not_read_is_refused_before_the_broker",

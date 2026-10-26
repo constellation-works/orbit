@@ -6,13 +6,14 @@ paths:
   - "crates/orbit-core/src/adapter/command/dispatch/claimed_owner.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/claimed_review.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/claimed_recovery.rs"
+  - "crates/orbit-core/src/adapter/command/dispatch/claimed_findings.rs"
   - "crates/orbit-core/src/adapter/command/dispatch/brokered.rs"
   - "crates/orbit-core/src/adapter/tool_host/worker_tools.rs"
   - "crates/orbit-cli/src/command/mcp/claimed_owner.rs"
   - "crates/orbit-cli/tests/tool/claimed_review_bridge_sandbox.rs"
 related_features: [review-gate, distributed-drain, plugins, policy-sandbox]
-related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171, ORB-14321, ORB-14792]
-last_validated: 2026-10-18
+related_artifacts: [ORB-14260, ORB-14194, ORB-14221, ORB-14171, ORB-14321, ORB-14792, ORB-18667]
+last_validated: 2026-10-26
 ---
 
 # Verify and Recover Claimed-Review Artifacts
@@ -127,6 +128,19 @@ from its record of the leaf. Its refusals carry `review_write_refused`,
 refused read as a gap in its evidence, so a refusal alone is no reason for its
 escalation; inspect the leaf's admission phase and run state before trusting a
 decision made with the gap.
+
+Any step of a claimed leaf other than its final recovery may also read
+`review-evidence-findings.json`, named exactly: the findings an owner evidence
+run reported on a held candidate. The task's comment keeps only the first
+4 KiB of them, so the leaf that repairs the candidate needs the whole
+artifact. The coordinator carries this one read while the leaf holds its
+claim, and only when the leaf's admission receipt offered a kept candidate and
+the owner's artifact is Orbit's own findings on that candidate's held run and
+commit. Its refusals carry `findings_read_refused` (another spelling),
+`no_kept_candidate` (the claim resumes nothing), `findings_unverified` (not
+written by Orbit), `findings_candidate_mismatch` (findings on another run or
+commit), or the leaf refusals above. A write of the artifact, and every other
+`review-*` path, stays the reviewer's.
 
 ## 3. Smoke procedure
 
