@@ -1,12 +1,13 @@
 //! Live overlays: what a live arm applies to one activity dispatch, and what
 //! an owner resolves into a claim so a follower applies the same arm.
 //!
-//! This module applies instructions and tools at dispatch; `run_policy`
+//! This module resolves instructions, tools and skill bundles at dispatch; `run_policy`
 //! handles crew admission and task-local config. An arm's instruction file joins the tag-instruction
 //! section, read at the run's base revision on the owner and at the claim
 //! base for a claimed leaf; `false` leaves Orbit's shipped default
 //! instructions out. An arm's tool delta is applied after the activity's
-//! tool grant. A shadow experiment applies nothing.
+//! tool grant. Skill files are read at the same base and carried to the
+//! provider's invocation-local discovery root. A shadow experiment applies nothing.
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{AdmissionShipContract, ExperimentStoreBackend as _};
@@ -105,6 +106,14 @@ impl OrbitRuntime {
                     .map_err(TagInstructionFailure::Refused)?,
                 ),
             };
+            let skills = overlay
+                .skills
+                .as_ref()
+                .filter(|skills| skills.roles.contains(&overlay_role(role)))
+                .map(|skills| self.resolve_experiment_skills(skills, &mut revision))
+                .transpose()
+                .map_err(TagInstructionFailure::Store)?
+                .unwrap_or_default();
             overlays.extend(activity_overlay(
                 &assignment.experiment,
                 &arm,
@@ -112,6 +121,7 @@ impl OrbitRuntime {
                 &overlay,
                 role,
                 instruction,
+                skills,
             ));
         }
         Ok(overlays)
@@ -174,6 +184,25 @@ impl OrbitRuntime {
                     })?)
                 }
             };
+            let mut skills = Vec::new();
+            if let Some(selected) = overlay
+                .skills
+                .as_ref()
+                .filter(|skills| skills.roles.contains(&overlay_role(role)))
+            {
+                for (name, path) in &selected.replace {
+                    let bundle = entry
+                        .skills
+                        .iter()
+                        .find(|bundle| &bundle.name == name && &bundle.path == path)
+                        .ok_or_else(|| {
+                            refused(format!(
+                                "skill `{name}` bundle `{path}` is missing from the owner capture"
+                            ))
+                        })?;
+                    skills.push(bundle.clone());
+                }
+            }
             overlays.extend(activity_overlay(
                 &entry.experiment,
                 &entry.arm,
@@ -181,6 +210,7 @@ impl OrbitRuntime {
                 &overlay,
                 role,
                 instruction,
+                skills,
             ));
         }
         Ok(overlays)
@@ -222,6 +252,9 @@ impl OrbitRuntime {
                     instruction: resolved.ok(),
                 });
             }
+            if let Some(skills) = &overlay.skills {
+                entry.skills = self.resolve_experiment_skills(skills, &mut revision)?;
+            }
         }
         validate_experiment_capture(Some(&capture), &task.id)?;
         Ok(capture)
@@ -241,6 +274,12 @@ impl OrbitRuntime {
         };
         let mut revision = LazyRevision::new(|| self.current_base_revision());
         for (arm, overlay) in arms {
+            if let Some(skills) = &overlay.skills {
+                self.resolve_experiment_skills(skills, &mut revision)
+                    .map_err(|error| refuse(format!("arm `{arm}`: {error}")))?;
+                self.validate_experiment_skill_providers(overlay)
+                    .map_err(|error| refuse(format!("arm `{arm}`: {error}")))?;
+            }
             for (role, instruction) in &overlay.instructions {
                 if let InstructionOverlay::File(path) = instruction {
                     self.experiment_instruction(
@@ -337,6 +376,7 @@ fn activity_overlay(
     overlay: &ExperimentOverlay,
     role: TagInstructionRole,
     instruction: ArmInstruction,
+    skills: Vec<orbit_types::workflow::ExperimentSkillBundle>,
 ) -> Option<ExperimentActivityOverlay> {
     let tools = overlay
         .tools
@@ -347,7 +387,11 @@ fn activity_overlay(
         ArmInstruction::Suppress => (None, true),
         ArmInstruction::Text(text) => (Some(text), false),
     };
-    if instruction.is_none() && !suppress_default_instructions && tools.is_none() {
+    if instruction.is_none()
+        && !suppress_default_instructions
+        && tools.is_none()
+        && skills.is_empty()
+    {
         return None;
     }
     Some(ExperimentActivityOverlay {
@@ -359,6 +403,7 @@ fn activity_overlay(
         suppress_default_instructions,
         tools_add: tools.map(|tools| tools.add.clone()).unwrap_or_default(),
         tools_remove: tools.map(|tools| tools.remove.clone()).unwrap_or_default(),
+        skills,
     })
 }
 

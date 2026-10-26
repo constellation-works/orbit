@@ -273,6 +273,7 @@ pub(super) fn apply_experiment_tool_overlays(
             .map(|tool| (*tool).to_string())
             .collect::<Vec<_>>();
         let has_effect = !added.is_empty()
+            || !overlay.skills.is_empty()
             || !removed.is_empty()
             || overlay.instruction.is_some()
             || overlay.suppress_default_instructions;

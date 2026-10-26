@@ -10,6 +10,7 @@ mod grok_usage;
 mod limit;
 mod policy;
 mod prepare;
+mod skills;
 
 #[cfg(test)]
 mod tests;

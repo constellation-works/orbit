@@ -534,16 +534,6 @@ fn validate_startable(
                 arm.name
             )));
         }
-        if record.experiment.mode == super::overlay::LIVE
-            && let Some(surface) = [("skills", overlay.skills.is_some())]
-                .into_iter()
-                .find_map(|(surface, set)| set.then_some(surface))
-        {
-            return Err(refuse(format!(
-                "arm `{}` sets {surface}, which a live experiment cannot apply yet",
-                arm.name
-            )));
-        }
         overlays.push((arm.name.clone(), overlay));
     }
     Ok(overlays)
