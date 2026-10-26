@@ -461,6 +461,16 @@ impl OrbitRuntime {
         task: &Task,
         pools: &CapturedCrewPools,
     ) -> Result<(Vec<CrewCandidate>, String), OrbitError> {
+        if let Some(pool) = self.experiment_crew_pool(&task.id)? {
+            return self
+                .pool_member_candidates(&pool.entries, &pool.source, None)?
+                .ok_or_else(|| {
+                    OrbitError::PolicyDenied(format!(
+                        "crew pool from {} has no enabled member that can run on this host",
+                        pool.source
+                    ))
+                });
+        }
         let source = self.task_crew_source(task)?;
         let pool_tier = source
             .as_deref()

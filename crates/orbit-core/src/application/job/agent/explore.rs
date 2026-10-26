@@ -207,7 +207,7 @@ impl OrbitRuntime {
         request: &AgentInvokeRequest<'_>,
         actor: &str,
     ) -> Result<ExploreSubmission, OrbitError> {
-        let settings = self.explore_settings();
+        let mut settings = self.explore_settings();
         if !settings.enabled {
             return Err(OrbitError::CapabilityDenied(
                 "read-only exploration is off for this workspace \
@@ -245,6 +245,16 @@ impl OrbitRuntime {
                 )
             })?
             .to_string();
+        if let Some(input) = &parent.input
+            && let Some(task_id) = crate::runtime::run_input::singular_task_id_from_input(input)
+        {
+            settings.max_calls_per_run = self.experiment_explore_max_calls(
+                input,
+                task_id,
+                &activity,
+                settings.max_calls_per_run,
+            )?;
+        }
         if request
             .provider_sandbox
             .is_some_and(|mode| !mode.trim().is_empty())

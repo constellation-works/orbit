@@ -2253,18 +2253,30 @@ An experiment compares a control arm against one or more treatment arms, each an
 |---|---|---|
 | `experiments.enabled` | `false` | Allow experiments to start in this workspace. While false, new assignments are disabled and `start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
 | `experiments.max_running` | `3` | **Advanced.** Experiments that may run at once in this workspace (`1`–`20`). `start` and `resume` are refused while that many are running; a paused experiment does not count. |
-| `experiments.config_keys` | `[]` | **Advanced.** Config keys an arm's `config` overlay may set. `start` is refused while any arm sets a key not on this list, so the default allows no config overlay. |
+| `experiments.config_keys` | `[]` | **Advanced.** Config keys an arm's `config` overlay may set. A key must also be on the typed code allowlist below. `start` refuses unknown keys, keys absent from either list, and values of the wrong type or outside their bounds. The default allows no config overlay. |
 
 ```toml
 [experiments]
 enabled = true
 max_running = 2
-config_keys = ["workflow.explore.enabled"]
+config_keys = ["workflow.explore.max_calls_per_run"]
 ```
 
 At a task's first delivery admission, running experiments (shadow or live) match complexity, task type, all included tags, no excluded tags and origin. The draw uses the leading eight bytes (big-endian) of `sha256("<salt>:<experiment_id>:<task_id>")` modulo the total active arm weight, walked in arm declaration order. The recorded arm and segment survive retries, reweights and experiment conclusion. Later admissions do not reconsider an initially ineligible task. Overlapping surfaces are reserved across all arms, including control; later experiments record `surface_conflict` exclusions. A `shadow` experiment records assignments and applies nothing.
 
-A `live` experiment applies its arm's instructions and tools; its arms may not yet set skills, crew or config, and `start` refuses one that does. `start` also refuses, in either mode, an instruction file missing or inadmissible at the workspace's current base (its base branch as last fetched from `origin`, else the local branch), an added tool that is not a registered, agent-facing, enabled tool named exactly, and a removed tool that is unknown or that the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`).
+A `live` experiment applies its arm's instructions, tools, crew pool and allowed config values; skills are not yet live, and `start` refuses a live arm that sets them. `start` also refuses, in either mode, an instruction file missing or inadmissible at the workspace's current base (its base branch as last fetched from `origin`, else the local branch), an added tool that is not a registered, agent-facing, enabled tool named exactly, and a removed tool that is unknown or that the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`).
+
+A crew overlay is `{"crew":{"pool":[{"crew":"sol","weight":1},{"crew":"astra","weight":2}]}}`. It replaces the task's normal admission pool, including a crew assigned at task creation. `start` checks that every member exists and is enabled; crews have no per-complexity restrictions, so each may run every tier in the population. Admission still filters members by executor host support and run allowlists. Weekly usage pressure still weighs the pool, while crew-performance weighting is off because the crew is the treatment. Provider holds and limits still apply, including the existing complexity-pool fallback. `crew_selection` records the pool, weights, overlay digest and `performance_weighting: false`; a changed draw records `deviation` with the intended crew, actual crew and reason. An explicit run crew remains authoritative, recorded with source `explicit`. Claimed leaves freeze the follower's draw and its evidence in pipeline state's `crew_selection` before dispatch. An arm without a crew overlay keeps ordinary routing.
+
+The current typed config allowlist is:
+
+| Key | JSON type and bounds | Per-run effect |
+| --- | --- | --- |
+| `workflow.explore.max_calls_per_run` | Integer, `1`–`100` | Explorer invocations permitted for that task's managed run. It does not enable exploration or change concurrency limits. |
+
+For example, `{"config":{"values":{"workflow.explore.max_calls_per_run":2},"roles":["implement"]}}` limits an implement run to two calls. Config roles default to `implement`; `review` and `recovery` opt in those activity roles. Values and their overlay digest travel in the task-bound `experiment_capture` on owner runs and in claim receipts, so followers use the owner's treatment even when their local allowlist differs. The explorer invocation reports its effective `calls_allowed`. Other tasks and roles inherit their ordinary settings; workspace config is never rewritten.
+
+To opt in another key, add a variant to `orbit-config`'s `ExperimentConfigKey` and its `ALL` list, declare its dotted key, validate its JSON type and bounds, and wire its consumer to the task-bound run capture with role filtering on owner and claimed paths. Update this table with that change. Adding a key to `experiments.config_keys` alone cannot enable it; both code and workspace permission are required at start.
 
 - **Instructions.** An entry per role (`implement`, `review` or `recovery`) names a repository file, read like a tag instruction (UTF-8, at most 8 KiB) at the run's base revision. Its text follows any tag instruction in the prompt's tag-instruction section. `false` leaves Orbit's shipped default tag instructions out of that role. A role the entry does not name receives nothing.
 - **Tools.** `add` and `remove` apply to the roles the entry's `roles` lists (`implement` by default), after the activity's tool grant. An addition never overrides the activity's disallow list or the claimed-mode denial; a removal never takes a task's `required_tools`.

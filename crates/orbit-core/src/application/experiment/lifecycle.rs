@@ -199,6 +199,7 @@ impl OrbitRuntime {
                 }
                 let overlays = validate_startable(&record, &settings.config_keys)?;
                 self.validate_experiment_overlays(&current.name, &overlays)?;
+                self.validate_experiment_crews(&current.name, &overlays)?;
                 running_limit = Some(settings.max_running);
                 experiment.status = RUNNING.into();
                 experiment.segment = 1;
@@ -517,6 +518,13 @@ fn validate_startable(
         })?;
         let overlay = ExperimentOverlay::parse(&arm.name, value)
             .map_err(|error| refuse(error.to_string()))?;
+        if let Some(config) = &overlay.config {
+            for (key, value) in &config.values {
+                orbit_config::ExperimentConfigKey::from_config_key(key)
+                    .and_then(|key| key.validate_experiment_value(value))
+                    .map_err(|error| refuse(format!("arm `{}`: {error}", arm.name)))?;
+            }
+        }
         if let Some(key) = overlay
             .config_keys()
             .find(|key| !config_keys.iter().any(|allowed| allowed == key))
@@ -527,16 +535,12 @@ fn validate_startable(
             )));
         }
         if record.experiment.mode == super::overlay::LIVE
-            && let Some(surface) = [
-                ("skills", overlay.skills.is_some()),
-                ("crew", overlay.crew.is_some()),
-                ("config", overlay.config.is_some()),
-            ]
-            .into_iter()
-            .find_map(|(surface, set)| set.then_some(surface))
+            && let Some(surface) = [("skills", overlay.skills.is_some())]
+                .into_iter()
+                .find_map(|(surface, set)| set.then_some(surface))
         {
             return Err(refuse(format!(
-                "arm `{}` sets {surface}, which a live experiment cannot apply yet; only instructions and tools are live",
+                "arm `{}` sets {surface}, which a live experiment cannot apply yet",
                 arm.name
             )));
         }

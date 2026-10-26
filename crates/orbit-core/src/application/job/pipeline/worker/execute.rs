@@ -146,7 +146,7 @@ impl OrbitRuntime {
         started_at: chrono::DateTime<Utc>,
         announce_start: bool,
     ) -> Result<(), OrbitError> {
-        let input = run
+        let mut input = run
             .input
             .clone()
             .unwrap_or_else(|| Value::Object(Default::default()));
@@ -161,6 +161,25 @@ impl OrbitRuntime {
         // validation, event persistence, and resume-state reads cannot escape
         // with a durable `running` projection.
         let outcome = (|| {
+            if crate::application::job::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str()) {
+                if let Some(selection) = self
+                    .read_run_state(&run.run_id)?
+                    .and_then(|state| state.crew_selection)
+                {
+                    input["crew"] = selection["crew"].clone();
+                    input["crew_selection"] = selection;
+                } else {
+                    self.install_claimed_experiment_crew(&mut input)?;
+                    if let Some(selection) = input.get("crew_selection") {
+                        self.stores()
+                            .jobs()
+                            .update_run_state(&run.run_id, &mut |_, state| {
+                                state.crew_selection = Some(selection.clone());
+                                Ok(())
+                            })?;
+                    }
+                }
+            }
             let bundle = self.run_bundle_crews(run, &input);
             self.record_run_crew_for_job(&run.run_id, &input, yaml_path, bundle)?;
 

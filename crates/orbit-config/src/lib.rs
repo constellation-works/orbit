@@ -69,6 +69,7 @@
 //! - `persistence` — artifact path resolution from the two roots.
 //! - `plugin_enablement` — the workspace `[plugin_enablement]` toggles.
 //! - `tag_instructions` — the `[workflow.tag_instructions.<tag>]` file mapping.
+//! - `experiment_keys` — typed workflow keys admitted for task-local experiments.
 //! - `review_skip_tags` — the `[workflow.review_skip_tags.<tag>]` review-skip mapping.
 //! - `store` — comment-preserving [`ConfigStore`] edits and an atomic save that
 //!   refuses to replace a file changed since the store read it.
@@ -77,6 +78,7 @@
 mod aliases;
 mod crew_performance;
 mod crew_pools;
+mod experiment_keys;
 mod layering;
 mod lock_modes;
 mod memory_limit;
@@ -119,6 +121,7 @@ pub use crew_pools::{
     TypeComplexityCrewPools, canonical_crew_pool, canonical_crew_pool_entries,
     type_complexity_crews_key,
 };
+pub use experiment_keys::ExperimentConfigKey;
 pub use layering::{
     ConfigFallback, ConfigValueSourceKind, ConfigValueState, EffectiveConfigValue, ShadowReason,
     load_effective_config,
