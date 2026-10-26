@@ -275,7 +275,11 @@ fn arg_for(param: &'static ParamSpec, binding: CliBinding) -> Arg {
     match param.param_type {
         // A presence flag takes no value, so it has no value name.
         ParamType::Switch => return arg.action(ArgAction::SetTrue),
-        ParamType::String | ParamType::Path | ParamType::Object | ParamType::Array => {}
+        ParamType::String
+        | ParamType::RawString
+        | ParamType::Path
+        | ParamType::Object
+        | ParamType::Array => {}
         ParamType::StringList => arg = arg.action(ArgAction::Append).value_delimiter(delimiter),
         ParamType::Integer => arg = arg.value_parser(clap::value_parser!(usize)),
         ParamType::UnsignedInteger => arg = arg.value_parser(clap::value_parser!(u64)),
@@ -345,7 +349,7 @@ fn input_from_params<'a>(
             continue;
         }
         match param.param_type {
-            ParamType::Path => {
+            ParamType::RawString | ParamType::Path => {
                 if let Some(value) = matches.get_one::<String>(param.name) {
                     input.insert(param.name.to_string(), Value::String(value.clone()));
                 }

@@ -477,6 +477,9 @@ batching, quiet hours and multi-answer parsing stay the plugin's (§6, §8).
   message, submission is exactly as before. A DNS lookup failure refuses as
   retryable `dkim_verification_unavailable` and consumes nothing; an oversized
   raw message refuses as `raw_message_too_large`. The verification runs before
+  any answer is applied or its token consumed. Both tool ingress and CLI
+  `--raw-message` forwarding preserve the message exactly, including trailing
+  spaces and CRLF significant to DKIM simple body canonicalization. DNS runs before
   the channel store lock is taken, with a 5-second per-nameserver timeout, so
   it never blocks revoke or rotate. Dependency choice: RSA-SHA256 verification
   reuses the `rsa` crate already in the workspace for release-signature

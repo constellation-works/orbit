@@ -1,0 +1,4 @@
+{
+  "description": "RSA-SHA256 fixture signed independently with openssl dgst -sha256 using DKIM_TEST_PRIVATE_KEY_PEM. relaxed/simple canonicalization; the final body space is signed. Escaped CRLF keeps the fixture portable across checkouts.",
+  "raw_message": "DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=example.com; s=test1; h=from:to:subject:date; bh=PwDYg8EEdmQHNd9BzBrOFEvbj6PNH4sp/fHC5MEX9Ek=; b=ff9Yj0caPhnc9fiSqAvsz6MiFQU0S3BrbigAB3P6Cw1ShkNoQ0qPLtkI9y49uMz+rXHArIkXK7+14hfp/Ss7QVNeTtytmxpBp3axKaBRv3tWNxyJWu76jb0kzy2DArIRxMoLxddGJeyVdW432Lf7XOrppNQ5QkwB5fQ8IfMqe83PVe48W1lGznrh8ziX3ZQCjJBx86t3clzT5+hE/Hqh970Y5ok8kPHe73qLCV/GG7o2WHGW1ZaDRTF/+LIqzb8Vhaxteq3hKmK/C3+nKV2MDZ5PTvIBt6OhLsPfr6Hr0CpDa5boLlzhjoUaphTqsIIZjrEGARzz7rORLUVZ4xTyYA==\r\nFrom: Operator <operator@example.com>\r\nTo: orbit@example.com\r\nSubject: Re: decision\r\nDate: Mon, 26 Oct 2026 10:00:00 +0000\r\n\r\napprove \r\n"
+}

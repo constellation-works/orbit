@@ -595,6 +595,10 @@ argument conflicts and required-unless relationships, preserving the lock
 reservation's mutually exclusive `--task` and `--file` forms.
 `ParamType::Path` keeps CLI output paths verbatim while retaining the string
 wire type, so `--out` can name a file with leading or trailing whitespace.
+`ParamType::RawString` likewise retains the string wire type and preserves
+the CLI value exactly, including empty strings. Use it for signed payloads
+such as a decision submission's `raw_message`; the handler reads these with
+`OperationInput::optional_raw_string` so tool ingress preserves the same bytes.
 
 **Implemented:** a parameter bound as `CliArgKind::Actions` becomes one
 subcommand per action instead of an argument. The operation's other

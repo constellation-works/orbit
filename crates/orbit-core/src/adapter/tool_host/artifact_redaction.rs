@@ -120,6 +120,7 @@ pub(super) fn sanitize_tool_input(
                     sanitize_string_array_field(&mut object, field, field, mode, &mut report)?
                 }
                 ParamType::String
+                | ParamType::RawString
                 | ParamType::Path
                 | ParamType::Integer
                 | ParamType::UnsignedInteger

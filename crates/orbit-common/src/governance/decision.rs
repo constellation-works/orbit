@@ -218,7 +218,7 @@ const SUBMIT_PARAMS: &[ParamSpec] = &[
     ),
     both(
         "raw_message",
-        ParamType::String,
+        ParamType::RawString,
         "The raw reply message the transport forwards for core-side DKIM verification, at most 262144 bytes (256 KiB). When present, core verifies the message's DKIM signature itself and refuses when its result contradicts the forwarded verdicts. Required on a channel registered with require_dkim_verification; optional otherwise.",
         CliArgKind::flag("raw-message"),
         "The raw reply message forwarded for core-side DKIM verification",
