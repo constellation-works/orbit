@@ -228,6 +228,15 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
             required_tools.join(", ")
         );
     }
+    let granted_tools = list("granted_tools");
+    if !granted_tools.is_empty() {
+        let _ = writeln!(
+            out,
+            "{} {}",
+            bold("Granted Tools:"),
+            granted_tools.join(", ")
+        );
+    }
     let external_refs = task
         .get("external_refs")
         .and_then(Value::as_array)
@@ -476,6 +485,7 @@ fn write_field(value: &Value, field: &str, text: &mut String) -> Result<(), Orbi
         | "resolved_dependencies"
         | "tags"
         | "required_tools"
+        | "granted_tools"
         | "requires_labels"
         | "context_files" => {
             for item in strings(value) {

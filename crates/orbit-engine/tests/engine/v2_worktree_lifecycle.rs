@@ -3449,6 +3449,7 @@ fn job_run(run_id: &str, state: JobRunState, input: Value) -> JobRun {
 fn task(id: &str, status: TaskStatus) -> Task {
     let now = Utc::now();
     Task {
+        granted_tools: Vec::new(),
         requires_labels: Vec::new(),
         job_run_machine: None,
         id: id.to_string(),

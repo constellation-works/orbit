@@ -2,9 +2,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_common::fs::git::{git_common_dir, run_git};
+use orbit_common::governance::authorization::TASK_GRANT_TOOLS_OPERATION_ID;
 use orbit_common::security::redaction::{redact_all_error, redact_sensitive_env_json};
 use orbit_tools::ToolContext;
 use orbit_types::record::OrbitEvent;
+use orbit_types::task::GRANTED_TOOLS_FIELD;
 use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
@@ -185,6 +187,18 @@ impl RuntimeKernel {
         {
             self.authorize_tool_operation(
                 "orbit.routine.control",
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
+        // [granted-tools §1] A grant lifts an activity's deny list, so writing
+        // one is operator authority, refused (never stripped) for anyone else.
+        // Keyed on presence: an empty list clears a grant, which is a change.
+        if matches!(name, "orbit.task.add" | "orbit.task.update")
+            && input.get(GRANTED_TOOLS_FIELD).is_some()
+        {
+            self.authorize_tool_operation(
+                TASK_GRANT_TOOLS_OPERATION_ID,
                 &tool_context.session_context,
                 capability_enforcement,
             )?;

@@ -4,9 +4,9 @@ use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::identity::Crew;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin, TaskStatus, TaskType,
-    normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
-    normalize_task_tags, validate_os_tags,
+    GRANTED_TOOLS_FIELD, OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin,
+    TaskStatus, TaskType, normalize_host_labels, normalize_required_tools,
+    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
 };
 
 use crate::OrbitRuntime;
@@ -46,16 +46,27 @@ impl OrbitRuntime {
         &self,
         required_tools: &[String],
     ) -> Result<Vec<String>, OrbitError> {
+        self.validate_task_tool_names("required_tools", required_tools)
+    }
+
+    /// Validate the tool names of a task tool field (`required_tools` or
+    /// `granted_tools`) against the current registry, as
+    /// [`Self::validate_required_tools`] describes.
+    pub(crate) fn validate_task_tool_names(
+        &self,
+        field: &str,
+        names: &[String],
+    ) -> Result<Vec<String>, OrbitError> {
         let mut warnings = Vec::new();
-        for name in normalize_required_tools(required_tools.to_vec()) {
+        for name in normalize_required_tools(names.to_vec()) {
             if !self.tool_registry().has(&name) {
                 return Err(self.ungrantable_required_tool(format!(
-                    "required_tools contains unregistered tool '{name}'"
+                    "{field} contains unregistered tool '{name}'"
                 )));
             }
             if !self.tool_registry().is_active(&name) {
                 return Err(self.ungrantable_required_tool(format!(
-                    "required_tools contains tool '{name}', which is an admin/human-only \
+                    "{field} contains tool '{name}', which is an admin/human-only \
                      operation that is never granted to an agent"
                 )));
             }
@@ -67,7 +78,7 @@ impl OrbitRuntime {
                 .is_some_and(|tool| !tool.enabled);
             if stored_disabled {
                 warnings.push(format!(
-                    "required_tools includes registered tool '{name}', which is currently disabled"
+                    "{field} includes registered tool '{name}', which is currently disabled"
                 ));
             }
         }
@@ -133,7 +144,9 @@ impl OrbitRuntime {
         digest: Option<&str>,
     ) -> Result<(Task, Vec<String>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
+        let mut required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
+        required_tool_warnings
+            .extend(self.validate_task_tool_names(GRANTED_TOOLS_FIELD, &params.granted_tools)?);
 
         // [ORB-00417] Redact secrets at the single task-creation choke point
         // (shared by the dashboard POST, CLI `task add`, and the MCP task tool)
@@ -260,6 +273,7 @@ impl OrbitRuntime {
                     relations: params.relations.clone(),
                     tags: normalized_tags.clone(),
                     required_tools: normalize_required_tools(params.required_tools.clone()),
+                    granted_tools: normalize_required_tools(params.granted_tools.clone()),
                     requires_labels: requires_labels.clone(),
                     plan: params.plan.clone(),
                     execution_summary: String::new(),

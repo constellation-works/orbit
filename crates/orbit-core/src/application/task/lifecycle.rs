@@ -42,6 +42,20 @@ pub(crate) fn ensure_status_change_not_run_owned(
     runtime: &OrbitRuntime,
     id: &str,
 ) -> Result<(), OrbitError> {
+    if let Some((run_id, state)) = live_local_run_owning(runtime, id)? {
+        return Err(OrbitError::InvalidInput(format!(
+            "status change refused: local run '{run_id}' still owns this task ({state}); stop the run first or use --force to override"
+        )));
+    }
+    Ok(())
+}
+
+/// The id and state of a non-terminal local run whose submitted selection
+/// names the task, if any.
+pub(crate) fn live_local_run_owning(
+    runtime: &OrbitRuntime,
+    id: &str,
+) -> Result<Option<(String, JobRunState)>, OrbitError> {
     // Observe stored state without orphan reconciliation or step hydration.
     // Do not cap history: a newer terminal (or singular-task) run must not
     // hide an older non-terminal run whose task_ids includes this task.
@@ -53,19 +67,16 @@ pub(crate) fn ensure_status_change_not_run_owned(
             include_steps: false,
             ..Default::default()
         })?;
-    if let Some(run) = runs.into_iter().find(|run| {
-        !run.state.is_terminal()
-            && run
-                .input
-                .as_ref()
-                .is_some_and(|input| recorded_task_ids(input).contains(&id))
-    }) {
-        return Err(OrbitError::InvalidInput(format!(
-            "status change refused: local run '{}' still owns this task ({}); stop the run first or use --force to override",
-            run.run_id, run.state
-        )));
-    }
-    Ok(())
+    Ok(runs
+        .into_iter()
+        .find(|run| {
+            !run.state.is_terminal()
+                && run
+                    .input
+                    .as_ref()
+                    .is_some_and(|input| recorded_task_ids(input).contains(&id))
+        })
+        .map(|run| (run.run_id, run.state)))
 }
 
 /// Whether `from -> to` is a legal lifecycle edge.

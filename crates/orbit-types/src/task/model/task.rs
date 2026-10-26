@@ -17,6 +17,17 @@ pub struct Task {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub required_tools: Vec<String>,
+    /// Exact canonical tool names an operator granted the implementing
+    /// activity despite its deny list. Separate from `required_tools`
+    /// because only operator authority may set it, and only before the task
+    /// has a live attempt. Stored and shown; activity admission does not yet
+    /// read it.
+    #[serde(
+        default,
+        deserialize_with = "deserialize_required_tools",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub granted_tools: Vec<String>,
     /// Capability labels a host must all carry to run the task: its
     /// `machine.labels` plus its OS as an implicit label. Empty places no
     /// label requirement. Normalized (lowercase, sorted, deduplicated).
@@ -153,6 +164,7 @@ impl Task {
             acceptance_criteria,
             tags: normalize_task_tags(envelope.tags),
             required_tools: normalize_required_tools(envelope.required_tools),
+            granted_tools: normalize_required_tools(envelope.granted_tools),
             requires_labels: envelope.requires_labels,
             plan,
             execution_summary,

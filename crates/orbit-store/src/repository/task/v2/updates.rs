@@ -223,6 +223,11 @@ impl TaskV2Store {
                 bundle.envelope.tags = tags;
                 envelope_changed = true;
             }
+            if let Some(value) = &fields.granted_tools {
+                bundle.envelope.granted_tools =
+                    orbit_types::task::normalize_required_tools(value.clone());
+                envelope_changed = true;
+            }
             if let Some(value) = &fields.requires_labels {
                 bundle.envelope.requires_labels = orbit_types::task::normalize_host_labels(
                     value.clone(),

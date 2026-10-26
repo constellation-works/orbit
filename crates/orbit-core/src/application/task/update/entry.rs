@@ -66,6 +66,9 @@ pub(in crate::application::task) struct ValidatedTaskFieldEdits {
     pub(in crate::application::task) crew_assignment: Option<CreationCrewAssignment>,
     pub(in crate::application::task) crew_source: Option<Option<String>>,
     pub(in crate::application::task) crew_redraw_history: Option<TaskHistoryEntry>,
+    /// Set when this write changes `granted_tools`: the stored grant it
+    /// replaces and the run/claim state the change window admitted it in.
+    pub(in crate::application::task) granted_tools_change: Option<(Vec<String>, String)>,
 }
 
 /// Who is editing an existing task's fields [ORB-16872].

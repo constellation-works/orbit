@@ -39,6 +39,7 @@ impl OrbitRuntime {
             acceptance_criteria: Vec::new(),
             tags: Vec::new(),
             required_tools: Vec::new(),
+            granted_tools: Vec::new(),
             requires_labels: Vec::new(),
             plan: String::new(),
             execution_summary: String::new(),

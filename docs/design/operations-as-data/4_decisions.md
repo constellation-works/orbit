@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-14
+last_updated: 2026-10-26
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -508,6 +508,14 @@ validated against, so a deny-mode activity never grants them. The dashboard's
 `auto_task.toggle` and `auto_task.mint` rows are unchanged: the dashboard still
 calls the runtime directly and still refuses a non-operator.
 
+**Field-level rows ([ORB-18545]).** A governed `Tool` row may name an input
+rather than a tool: `orbit.task.grant_tools` is checked at the chokepoint, in
+`authorize_registered_tool`, beside `orbit.task.add`'s or `orbit.task.update`'s
+own row whenever the input carries `granted_tools`, as
+`orbit.routine.control` is for `expected_enabled`. It is not a registered tool,
+so `GOVERNED_TOOL_PLACEMENT` records it unadvertised; denials and operator
+overrides are audited under its id like any other row.
+
 The measured differences against the pre-migration CLI, from an isolated
 fixture run of every verb with and without `ORBIT_OPERATOR=1`:
 
@@ -896,6 +904,8 @@ different contracts; a future equivalent surface can use this shape.
 - [ORB-15941] — migrated the workflow-run tools onto a tool-only noun, kept
   every `orbit run` and `orbit job` subcommand hand-wired, and settled the
   multiplexed-action shape.
+- [ORB-18545] — added the field-level `orbit.task.grant_tools` row that gates
+  a task's operator-granted tools.
 - [ORB-11187] — made completion authority an operator decision the ship tool
   does not accept.
 - [ORB-12263] — made `orbit tool run` and `orbit task artifact get` share the

@@ -4,8 +4,9 @@ use orbit_common::security::redaction::redact_all;
 use orbit_types::identity::normalize_attribution_label;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT, RecordedFinalRecovery,
-    Task, TaskDecision, TaskHistoryEntry, TaskStatus, canonical_artifact_path,
+    ArtifactWriter, CANDIDATE_DISCARDED_EVENT, FINAL_RECOVERY_DECIDED_EVENT,
+    GRANTED_TOOLS_CHANGED_EVENT, RecordedFinalRecovery, Task, TaskDecision, TaskHistoryEntry,
+    TaskStatus, canonical_artifact_path, granted_tools_change_note,
 };
 
 use super::super::TaskRecordUpdateParams;
@@ -209,6 +210,7 @@ impl OrbitRuntime {
         let crew_assignment = validated.crew_assignment;
         let crew_source = validated.crew_source;
         let crew_redraw_history = validated.crew_redraw_history;
+        let granted_tools_change = validated.granted_tools_change;
         params = validated.params;
         // A plain blocked-to-backlog move on an attributed surface applies
         // the same publication authentication as `orbit task requeue`:
@@ -372,6 +374,23 @@ impl OrbitRuntime {
                     describe_optional_field_value(task.crew.as_deref()),
                     describe_optional_field_value(replacement.as_deref()),
                 )),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        }
+        if let (Some((before, state)), Some(after)) =
+            (&granted_tools_change, params.granted_tools.as_deref())
+        {
+            // [granted-tools §1] Who changed the grant (`by`, the attributed
+            // writer the chokepoint admitted as an operator), both tool sets,
+            // and the run/claim state the change window admitted it in.
+            append_history.push(TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: effective_label.clone(),
+                event: GRANTED_TOOLS_CHANGED_EVENT.to_string(),
+                note: Some(granted_tools_change_note(before, after, state)),
                 from_status: None,
                 to_status: None,
                 operation_id: None,

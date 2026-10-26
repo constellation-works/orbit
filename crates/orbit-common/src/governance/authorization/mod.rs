@@ -87,8 +87,8 @@ pub use catalog::{
     DASHBOARD_ROUTINE_TOGGLE, DASHBOARD_ROUTINE_TRIGGER, DASHBOARD_TASK_PILOT_ADMISSION,
     DASHBOARD_TASK_POST_DEPLOY, DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED,
     DESKTOP_TASK_COMPLETE, DESKTOP_TASK_EDIT, GOVERNED_OPERATIONS, GovernedOperation,
-    OperationSurface, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, governed_command,
-    governed_plugin_tool, governed_tool,
+    OperationSurface, PLUGIN_TOOL_MUTATING, PLUGIN_TOOL_READ_ONLY, TASK_GRANT_TOOLS_OPERATION_ID,
+    governed_command, governed_plugin_tool, governed_tool,
 };
 pub use decision::{AuthorizationDenial, authorize};
 pub use env::{OPERATOR_OVERRIDE_ENV, agent_context_declared, operator_override_active};

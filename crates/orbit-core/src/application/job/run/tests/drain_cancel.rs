@@ -247,6 +247,7 @@ fn in_progress_task(runtime: &OrbitRuntime, run: &JobRun) -> String {
         .stores()
         .task_records()
         .create(TaskCreateParams {
+            granted_tools: Vec::new(),
             requires_labels: Vec::new(),
             actor: "test".into(),
             parent_id: None,

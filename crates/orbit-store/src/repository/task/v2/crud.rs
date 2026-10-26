@@ -169,6 +169,28 @@ impl TaskV2Store {
                 decision: None,
             });
         }
+        // A creation grant is a grant change like any later one: history
+        // names who set it, the tool set and that no run or claim existed.
+        let granted_tools = orbit_types::task::normalize_required_tools(params.granted_tools);
+        if !granted_tools.is_empty() {
+            let event_id = next_event_id(&events);
+            events.push(orbit_types::task::TaskEventRowV2 {
+                schema_version: orbit_types::task::TASK_ARTIFACT_SCHEMA_VERSION,
+                event_id,
+                at: now,
+                by: params.actor.clone(),
+                event_type: orbit_types::task::GRANTED_TOOLS_CHANGED_EVENT.to_string(),
+                note: Some(orbit_types::task::granted_tools_change_note(
+                    &[],
+                    &granted_tools,
+                    "set at creation; no run or claim exists",
+                )),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        }
         let bundle = TaskBundleV2 {
             envelope: orbit_types::task::TaskEnvelopeV2 {
                 job_run_machine: None,
@@ -190,6 +212,7 @@ impl TaskV2Store {
                 relations,
                 tags: normalize_task_tags(params.tags),
                 required_tools: orbit_types::task::normalize_required_tools(params.required_tools),
+                granted_tools,
                 requires_labels,
                 context_files: params.context_files,
                 external_refs: params.external_refs,

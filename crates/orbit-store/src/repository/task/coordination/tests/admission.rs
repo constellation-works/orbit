@@ -121,6 +121,7 @@ impl Owner {
     fn create(&self, spec: Spec<'_>) -> Task {
         self.tasks
             .create_task(TaskCreateParams {
+                granted_tools: Vec::new(),
                 requires_labels: Vec::new(),
                 actor: "codex".into(),
                 parent_id: None,
