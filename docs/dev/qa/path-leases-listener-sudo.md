@@ -71,7 +71,8 @@ apt-get install -y sudo
 useradd --system --create-home --home-dir /var/lib/orbit-lease \
   --shell /usr/sbin/nologin orbit-lease
 passwd -l orbit-lease
-useradd --create-home --shell /bin/bash operator
+# Debian already ships an `operator` group, so join it instead of creating one.
+useradd --create-home --shell /bin/bash -g operator operator
 printf '%s\n' 'operator:disposable-only' | chpasswd
 install -d -o root -g root -m 0755 /usr/local/bin
 cat > /usr/local/bin/orbit << 'EOF'
@@ -118,9 +119,10 @@ passes `sudo -n`, and does not pass `sudo -k`. Its stdin is `/dev/null`, so it c
 a prompt.
 
 ```sh
-su - operator -c 'bash -s' << 'EOF'
+su - operator --session-command 'bash -s' << 'EOF'
 set -u
 # Bare `tty` tests stdin, which is this heredoc. Test the controlling terminal instead.
+# `su -c` would start a new session without one; --session-command keeps this terminal.
 if ! (tty </dev/tty) >/dev/null 2>&1; then
   echo "refusing: this session has no controlling terminal, so a tty timestamp cannot be shown" >&2
   exit 2
@@ -170,9 +172,10 @@ between the warm command and the child. The supported policy has to deny the chi
 the caller omits that flag and even when the previous `sudo` just succeeded.
 
 ```sh
-su - operator -c 'bash -s' << 'EOF'
+su - operator --session-command 'bash -s' << 'EOF'
 set -u
 # Bare `tty` tests stdin, which is this heredoc. Test the controlling terminal instead.
+# `su -c` would start a new session without one; --session-command keeps this terminal.
 if ! (tty </dev/tty) >/dev/null 2>&1; then
   echo "refusing: this session has no controlling terminal" >&2
   exit 2

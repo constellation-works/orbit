@@ -2,7 +2,7 @@
 """Run the listener-sudo recipe's tty guard as written, with heredoc-fed stdin.
 
 Each warm-then-child block in docs/dev/qa/path-leases-listener-sudo.md is fed to
-`bash -s` on stdin, as its `su - operator -c 'bash -s' << 'EOF'` heredoc does. The
+`bash -s` on stdin, as its `su - operator --session-command 'bash -s' << 'EOF'` heredoc does. The
 guard must pass when the session has a controlling terminal, and refuse with exit 2
 when it has none. A `sudo` stub on PATH keeps real sudo out, and the recipe's /tmp
 paths are redirected into a scratch directory. This does not exercise `su` or sudo's
@@ -19,7 +19,7 @@ import termios
 import unittest
 
 RECIPE = Path(__file__).resolve().parent.parent / "docs/dev/qa/path-leases-listener-sudo.md"
-OPENER = "su - operator -c 'bash -s' << 'EOF'"
+OPENER = "su - operator --session-command 'bash -s' << 'EOF'"
 
 
 def recipe_blocks():
