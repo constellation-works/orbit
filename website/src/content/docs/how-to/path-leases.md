@@ -1,6 +1,6 @@
 ---
 title: Hold paths with leases
-description: "Announce or reserve workspace paths you are editing outside a drain, using the dashboard HTTP API: request, check, renew and release a path lease before its TTL expires."
+description: "Announce or reserve workspace paths you are editing outside a drain, with the CLI, MCP tools, or dashboard HTTP API: request, check, renew and release a path lease before its TTL expires."
 ---
 
 A path lease records that a person or an agent outside a drain is editing
@@ -14,13 +14,15 @@ That is the difference from a task reservation: a reservation belongs to a
 task's own delivery and ends with it, while a lease is yours, is renewed by
 you, and ends when you release it or its time-to-live (TTL) lapses.
 
-Leases are exposed only as HTTP operations on the dashboard server. There is
-no lease command in the CLI, so drive them with `curl` or any HTTP client
-against a running server, as in the examples below.
+Leases are available from the CLI (`orbit lease request`, `renew`,
+`release`, `show`, `list` and `check`), from the matching `orbit.lease.*`
+MCP tools, and from the dashboard HTTP API. The examples below use the HTTP
+API against a running server — drive them with `curl` or any HTTP client —
+while the same six operations are available through `orbit lease …` and MCP.
 
 ## Before you start
 
-Three prerequisites apply to every lease operation:
+One prerequisite applies to every lease operation; two more apply only to the dashboard HTTP examples below:
 
 1. **Leases are opt-in per workspace.** Set `lease.enabled = true` in the
    workspace's `.orbit/config.toml`:
@@ -35,15 +37,15 @@ Three prerequisites apply to every lease operation:
    `lease.enabled`. See [Configuration](../../reference/config/) for the six
    `lease.*` keys.
 
-2. **Writes need an operator session.** Requesting, renewing, releasing and
-   expanding a lease change which paths other callers may hold, so the
-   dashboard server must be running as an operator session (for example
-   `orbit web serve --operator`, which `orbit web connect` passes by
-   default). Without one, a write is refused with `403` and
-   `"code": "authorization_denied"`. List, show and check are reads and do
-   not need an operator session.
+2. **Writes over HTTP need an operator session.** Requesting, renewing,
+   releasing and expanding a lease over the dashboard HTTP API change which
+   paths other callers may hold, so the dashboard server must be running as
+   an operator session (for example `orbit web serve --operator`, which
+   `orbit web connect` passes by default). Without one, an HTTP write is
+   refused with `403` and `"code": "authorization_denied"`. List, show and
+   check over HTTP are reads and do not need an operator session.
 
-3. **Stay on the loopback origin.** The API accepts only a loopback `Host`
+3. **Stay on the loopback origin.** The dashboard HTTP API accepts only a loopback `Host`
    (`localhost`, `127.0.0.1` or `[::1]`). An unsafe method (`POST`, `DELETE`)
    must also send an `Origin` that matches that host, and a `Sec-Fetch-Site`
    header, when present, must say `same-origin` or `none`. A mismatch is
@@ -51,10 +53,11 @@ Three prerequisites apply to every lease operation:
    `curl` sends no `Origin` by default, so add one to writes, as the examples
    do.
 
-Select the workspace with `?workspace=<id>` on every call, or rely on the
-server's default workspace. With neither, the call is refused with a `400`
-asking you to pass `?workspace=<id>`. The examples use the conventional
-loopback address `http://127.0.0.1:7878`; substitute your server's port.
+For the HTTP calls below, select the workspace with `?workspace=<id>` on
+every call, or rely on the server's default workspace. With neither, the
+call is refused with a `400` asking you to pass `?workspace=<id>`. The
+examples use the conventional loopback address `http://127.0.0.1:7878`;
+substitute your server's port.
 
 ## Advisory and hard leases
 
