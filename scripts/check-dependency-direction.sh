@@ -72,7 +72,8 @@ allowed_internal_deps() {
       echo "orbit-common orbit-mcp orbit-registry orbit-tools orbit-types"
       ;;
     orbit-web)
-      echo "orbit-common orbit-cmd orbit-core orbit-registry orbit-types orbit-engine orbit-store"
+      # Browser-session startup admits machine settings without a workspace runtime.
+      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-registry orbit-types orbit-engine orbit-store"
       ;;
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state

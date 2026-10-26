@@ -3,7 +3,7 @@
   "surface_contracts": {
     "cli_top_level": ["agents","audit","auto-task","browser-kit","clock","codebase","config","decision","doctor","experiment","friction","gc","host","init","job","log","mcp","migrate","orchestrator","plugin","plugin-group","routine","run","search","skill","sweep","task","tool","update","web","workspace"],
     "job_assets": ["agent_explore_pipeline","agent_invoke_pipeline","baseline_hold_refresh_pipeline","blocked_task_recovery_pipeline","ci_failure_sweep_pipeline","crew_performance_refresh_pipeline","dependabot_alert_sweep_pipeline","escalation_triage_pipeline","finding_verification_pipeline","review_evidence_fulfilment_pipeline","store_gc_pipeline","task_auto_pipeline","task_claimed_local_pipeline","task_claimed_pr_pipeline","task_gate_pipeline","task_landing_pipeline","task_local_pipeline","task_pilot_pipeline","task_pr_pipeline","task_publication_pipeline","task_review_reconciliation_pipeline","workspace_auto_pipeline","workspace_pull_pipeline","workspace_ship_pipeline","worktree_gc_pipeline"],
-    "sha256": {"cli":"d50fc5d681dcecea6d6a4c1291c2959e08f1078eaa3c902db4132c6141548e8f","job":"8bac55ac0bee3a9c84f9a222e2c83a79d4c279e69ecfd5a52fe779c5c72a0a2b","activity":"4b6332e10b7d42aa7ec72f2d400d0328c1444b0fef25b7981c78b92f8b4c4398","mcp":"8eed895800cc0b1a99b3b176a58fb51f64c18f2061c8914307cb18bfd5c7e084","api":"63089a3ef7588fec8d60a149526a32135316092e4506be00c9cb2ec7b5766775","dashboard":"e07045576bb770c5ebdb516212e44d7e5624b9f29ae24029fcbb5616c20de35c"}
+    "sha256": {"cli":"d50fc5d681dcecea6d6a4c1291c2959e08f1078eaa3c902db4132c6141548e8f","job":"8bac55ac0bee3a9c84f9a222e2c83a79d4c279e69ecfd5a52fe779c5c72a0a2b","activity":"4b6332e10b7d42aa7ec72f2d400d0328c1444b0fef25b7981c78b92f8b4c4398","mcp":"8eed895800cc0b1a99b3b176a58fb51f64c18f2061c8914307cb18bfd5c7e084","api":"9748fa94c418c26f3f721dc8535b9d113e1ccb4bf82dbae530e71ca808e3b9d1","dashboard":"e07045576bb770c5ebdb516212e44d7e5624b9f29ae24029fcbb5616c20de35c"}
   },
   "feature_families": [
     {"id":"bootstrap-routing","scenarios":["isolated-cli-lifecycle","workspace-boundary","config-transaction","machine-identity-transaction","migration-lifecycle","host-registry-cli"]},
@@ -110,5 +110,5 @@
     {"id":"website-build","required":true,"capability":"website-build","kind":"command","surfaces":[],"command":["npm","--prefix","website","run","build"],"assertions":["website-builds-from-candidate-source","website-build-does-not-deploy"],"behavior":["normal","failure"]},
     {"id":"macos-platform","required":true,"capability":"macos","kind":"command","surfaces":[],"command":["./scripts/check-ci-macos.sh"],"assertions":["macos-required-workflow-is-current","macos-check-ran-on-matching-revision"],"behavior":["normal","failure"]}
   ],
-  "required_capability_gaps": {}
+  "required_capability_gaps": {"api:/session":"Browser-session exchange, replay and expiry need a terminal-enabled isolated host. Verified manually at delivery; no new automated feature tests under the repository test-admission policy."}
 }

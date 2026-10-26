@@ -19,16 +19,18 @@ chrono.workspace = true
 clap.workspace = true
 flate2.workspace = true
 futures-core.workspace = true
+getrandom.workspace = true
 hyper.workspace = true
 hyper-util.workspace = true
 orbit-cmd = { path = "../orbit-cmd" }
 orbit-common = { path = "../orbit-common" }
+orbit-config = { path = "../orbit-config" }
 orbit-types = { path = "../orbit-types" }
 orbit-core = { path = "../orbit-core" }
 orbit-registry = { path = "../orbit-registry" }
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
 # Answers `/api/on/<serving host>/…` by dispatching into the local router.
 tower.workspace = true
 tower-http.workspace = true

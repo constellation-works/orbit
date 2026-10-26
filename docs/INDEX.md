@@ -122,7 +122,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Refuse unknown fields after the warn window; ORB-15934 was archived, no live task | claude |
 | [Path Leases](./design/path-leases/1_overview.md) | Land ORB-18406 (orbit.lease tools and CLI), then listener tasks ORB-18410, 18412, 18430 | claude |
-| [Web Terminal](./design/web-terminal/1_scope.md) | Phase 1: ORB-18488 browser-session credential (backlog, not started) | claude |
+| [Web Terminal](./design/web-terminal/1_scope.md) | Phase 1 browser-session candidate: native sandbox and Linux security validation | claude |
 
 ### Designing (3)
 

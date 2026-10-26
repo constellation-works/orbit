@@ -92,6 +92,42 @@ task_prefix = "ORB"
 | `machine.worker_tasks_max` | `4096` | Yes | **Advanced.** Scope `TasksMax=` (processes plus threads), at least 1. |
 | `machine.worker_cpu_quota` | `0` (unset) | Yes | **Advanced.** Scope `CPUQuota=` as a percentage of one core (`400` = four cores); `0` sets no CPU limit. Linux only. |
 
+| `machine.web_terminal.enabled` | `false` | Yes (`--global`) | Enable private dashboard browser credentials at startup. |
+| `machine.web_session.ttl` | `43200` (12h) | Yes (`--global`) | Session lifetime in seconds (`1..=604800`); restart the dashboard to apply. |
+
+### Browser sessions
+
+`machine.web_terminal.enabled` defaults to `false`. Set it to `true` in the
+global config and restart the dashboard to enable browser credentials. This
+prepares the authentication boundary for terminal routes; it does not grant
+operator capability or change authorization on existing dashboard routes.
+
+`machine.web_session.ttl` is the session lifetime in seconds, from `1` to
+`604800`, default `43200` (12 hours). The server reads both settings at startup.
+Sessions live only in memory and expire on restart, even if a browser retains
+its cookie. Cookies are HttpOnly, SameSite=Strict and scoped to `/api`.
+
+The host's private startup key is replaced atomically in
+`~/.orbit/run/web-session.secret` (0600, directory 0700). In the terminal design,
+“Orbit home” means this machine-global `~/.orbit`, just as it does for SSH
+control sockets; neither `--root` nor a workspace relocates credentials.
+Orbit's sandbox masks the whole `~/.orbit/run` tree, including temporary
+credential writes and private browser-launch documents. Insecure existing
+permissions or symlinks are refused. Only Unix hosts support this feature.
+
+`orbit web open` prints a fresh one-time URL for the running dashboard and
+opens it unless `--no-open` is given. Treat its output as a credential. The
+startup key stays on the host: the URL carries a signed random ticket valid for
+five minutes and one exchange. The page immediately removes the fragment from
+history and exchanges the ticket at `POST /api/session`. There are at most 1024
+live sessions and 4096 recently used tickets; excess exchanges fail closed.
+`web serve` and `web connect` print private URLs only to an interactive terminal,
+so redirected service logs never contain them. Browser launchers receive a
+private local redirect-file path, not the credential. These launch documents
+remain in the masked directory; their tickets expire after five minutes.
+`web connect` obtains the ticket over authenticated SSH and uses the forwarded
+local port. A dashboard without the setting serves `/api/session` as 404.
+
 ### `[machine.auto_concurrency]` — host forecast admission
 
 Global-only host thresholds for forecast-based delivery admission in local

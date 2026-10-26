@@ -65,9 +65,28 @@ pub(super) fn append_credential_masks(
 ) -> Result<(), OrbitError> {
     let mut targets = BTreeSet::new();
     for deny in denies {
+        let browser_credentials = deny
+            .path
+            .ends_with(crate::credential_paths::WEB_SESSION_DIRECTORY);
+        if browser_credentials {
+            // Mask the directory before a dashboard may start or rotate its
+            // key. Skipping an absent directory would expose future secrets
+            // to an already-running child through its read-only root mount.
+            orbit_common::fs::io::create_private_dir_all(&deny.path).map_err(|error| {
+                OrbitError::PolicyDenied(format!(
+                    "cannot prepare browser credential mask: {error}; refusing to start"
+                ))
+            })?;
+        }
         // A dangling or absent path resolves to nothing: nothing to hide.
-        let Ok(canonical) = std::fs::canonicalize(&deny.path) else {
-            continue;
+        let canonical = match std::fs::canonicalize(&deny.path) {
+            Ok(path) => path,
+            Err(error) if browser_credentials => {
+                return Err(OrbitError::PolicyDenied(format!(
+                    "cannot resolve browser credential mask: {error}; refusing to start"
+                )));
+            }
+            Err(_) => continue,
         };
         if canonical.is_dir() || (deny.file && canonical.is_file()) {
             targets.insert(canonical);

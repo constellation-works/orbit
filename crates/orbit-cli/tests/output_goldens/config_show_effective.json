@@ -308,6 +308,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "machine.web_session.ttl": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "machine.web_terminal.enabled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "machine.worker_containment": {
       "scope": "built-in",
       "state": "default",

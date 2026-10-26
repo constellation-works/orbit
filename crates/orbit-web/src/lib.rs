@@ -14,6 +14,7 @@
 
 mod api;
 mod assets;
+mod browser_session;
 mod connect;
 mod doctor_report;
 mod health;
@@ -32,6 +33,8 @@ mod why_stuck;
 mod tests;
 
 pub use api::leases::{LeaseBackend, LeaseBackendResult, LeaseCaller, lease_router};
+pub use api::session::RequireBrowserSession;
+pub use browser_session::{OpenArgs, open_dashboard};
 pub use connect::{ConnectArgs, connect};
 
 pub(crate) use serve::{DEFAULT_DASHBOARD_PORT, default_workspace_selection, open_browser};

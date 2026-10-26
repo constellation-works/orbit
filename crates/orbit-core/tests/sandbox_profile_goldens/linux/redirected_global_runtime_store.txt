@@ -123,6 +123,7 @@ bwrap:
   --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/state/plugin-secrets
   --ro-bind <ROOT>/home/.orbit/state/plugin-broker/masked <ROOT>/home/.orbit/ssh
   --dev-bind /dev/null <ROOT>/home/.orbit/clock.env
+  --tmpfs <ROOT>/home/.orbit/run
   --tmpfs <ROOT>/runtime
   --chdir <ROOT>/repo/.orbit/state/worktrees/orbit-jrun-golden
   --
