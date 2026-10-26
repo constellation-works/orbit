@@ -11,7 +11,8 @@ sidebar:
 |-------|----------------|
 | `orbit-cli` | Clap entry point that composes Core, Cmd, Config, Registry, MCP, and Web. |
 | `orbit-cmd` | CLI-facing command layer split out of `orbit-core`: doctor, migrate, diagnostics, agent rules, host commands, MCP client config, browser kit, and update. Exposes `*Commands` extension traits over `OrbitRuntime`. |
-| `orbit-core` | Runtime bootstrap, default asset seeding, and runtime-integrated command modules. Provides `OrbitRuntime` to `orbit-cmd`, `orbit-cli`, and `orbit-web`. |
+| `orbit-core` | Runtime composition, default asset seeding, application use cases, and adapters. Provides the `OrbitRuntime` wrapper to `orbit-cmd`, `orbit-cli`, and `orbit-web`. |
+| `orbit-runtime` | Runtime kernel: stores, engine handles, policy and tool execution, audit, workspace binding, and host probes. Core wraps its `RuntimeKernel`; kernel callbacks reach application use cases through `ApplicationPort`, with no dependency back on Core. |
 | `orbit-config` | Owns `config.toml`: the fixed-key registry, workspace-over-global layering, source provenance, resolved views, comment-preserving edits, and default-config seeding. Depends only on `orbit-types` and `orbit-common`. |
 | `orbit-automation` | Scheduling for routines and auto-tasks: definition discovery and validation, due evaluation, overlap and retry coordination, and the shared before-PR review coverage rules. Depends only on `orbit-store`, `orbit-common`, and `orbit-types`. |
 | `orbit-registry` | This machine's identity, the logical workspace catalog, task-publication bindings, and the registered remote hosts, with validation and atomic file persistence. |
@@ -44,6 +45,7 @@ flowchart LR
   Cmd --> Registry
   Cmd --> Store
   Core --> Config
+  Core --> Runtime["orbit-runtime"]
   Core --> Engine["orbit-engine"]
   Core --> Exec
   Core --> Automation["orbit-automation"]
@@ -53,7 +55,10 @@ flowchart LR
   Core --> Store["orbit-store"]
   Core --> Tools["orbit-tools"]
   Core --> Search["orbit-search"]
-  Core --> Policy["orbit-policy"]
+  Runtime --> Engine
+  Runtime --> Store
+  Runtime --> Tools
+  Runtime --> Policy["orbit-policy"]
   Engine --> Agent["orbit-agent"]
   Engine --> Store
   Engine --> Exec["orbit-exec"]

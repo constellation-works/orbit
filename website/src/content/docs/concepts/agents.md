@@ -233,7 +233,7 @@ Any other string is an unknown provider and is rejected, not guessed at.
 
 ### Retired providers
 
-The `cursor`, `pi` and `opencode` lanes were retired (ORB-18096). A crew naming one fails to load, naming the crew, the retired provider and the remedy: pick a supported provider (`claude`, `codex`, `gemini`, `grok`, `copilot`, `antigravity`, `muse`). `orbit doctor` reports the same refusal. Persisted records naming them still read and display. The Cursor editor MCP client (`orbit mcp init --cursor`) is a separate surface and is unaffected.
+The `cursor`, `pi` and `opencode` lanes were retired. A crew naming one fails to load, naming the crew, the retired provider and the remedy: pick a supported provider (`claude`, `codex`, `gemini`, `grok`, `copilot`, `antigravity`, `muse`). `orbit doctor` reports the same refusal. Persisted records naming them still read and display. The Cursor editor MCP client (`orbit mcp init --cursor`) is a separate surface and is unaffected.
 
 ## Set up an executor
 
@@ -618,6 +618,14 @@ Automatic admission can redraw pool assignments and reassign an auto-task's
 crew when a provider limit excludes it; a later operator crew change is
 preserved. The run records its selection; see
 [crew pools](../../reference/config/#crews).
+
+With `workflow.crew_selection = "usage_pressure"`, pool draws favour crews
+whose weekly allowance would otherwise go unused. The optional
+`workflow.crew_performance` setting also weights draws by per-task-type
+implementer performance; it is off by default. Inspect the cells with
+`orbit agents scorecard --role implementers --by-type`, or add `--shadow` to
+compare recorded shares with the performance-weighted shares. See
+[Configuration](../../reference/config/#crews) for both settings.
 
 ## Platform support
 
