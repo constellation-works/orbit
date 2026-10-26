@@ -4,9 +4,9 @@ use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::identity::Crew;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
-    GRANTED_TOOLS_FIELD, OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin,
-    TaskStatus, TaskType, normalize_host_labels, normalize_required_tools,
-    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
+    OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin, TaskStatus, TaskType,
+    normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
+    normalize_task_tags, validate_os_tags,
 };
 
 use crate::OrbitRuntime;
@@ -49,9 +49,9 @@ impl OrbitRuntime {
         self.validate_task_tool_names("required_tools", required_tools)
     }
 
-    /// Validate the tool names of a task tool field (`required_tools` or
-    /// `granted_tools`) against the current registry, as
-    /// [`Self::validate_required_tools`] describes.
+    /// Validate durable requirement names against the current registry, as
+    /// [`Self::validate_required_tools`] describes. Grants use the stricter
+    /// [`Self::validate_granted_tools`] rule.
     pub(crate) fn validate_task_tool_names(
         &self,
         field: &str,
@@ -144,9 +144,8 @@ impl OrbitRuntime {
         digest: Option<&str>,
     ) -> Result<(Task, Vec<String>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let mut required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
-        required_tool_warnings
-            .extend(self.validate_task_tool_names(GRANTED_TOOLS_FIELD, &params.granted_tools)?);
+        let required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
+        self.validate_granted_tools(&params.granted_tools)?;
 
         // [ORB-00417] Redact secrets at the single task-creation choke point
         // (shared by the dashboard POST, CLI `task add`, and the MCP task tool)

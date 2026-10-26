@@ -27,6 +27,7 @@ pub(crate) use desktop::HandoffPullRequest;
 mod final_recovery;
 mod finding_verification;
 pub(crate) mod finding_verification_steps;
+mod grants;
 mod helpers;
 mod job_port;
 pub(crate) mod legacy_decisions;
