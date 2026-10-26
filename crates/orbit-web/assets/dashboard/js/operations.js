@@ -3181,7 +3181,7 @@ function paintBacklogForecast() {
   placeBacklogForecast($("auto-drain-body")?.querySelector(".drain-forecast"));
 }
 
-// The default backlog forecast, joined to the drain refresh. A failure or a
+// The default backlog forecast, independent of the drain refresh. A failure or a
 // payload with no time-to-drain estimate becomes the muted line and never
 // rejects the drain card. Aggregate and unselected views do not ask.
 function refreshBacklogForecast() {
@@ -3694,9 +3694,10 @@ function fetchAndRenderAutoDrain() {
     }
     return payload;
   });
-  // Caught inside refreshBacklogForecast, so a forecast miss cannot fail the pane.
-  const forecast = refreshBacklogForecast();
-  return Promise.all([readiness.then(() => visit.isCurrent() && rendered ? fetchDrainPass(rendered) : undefined), fleet, forecast]).then(() => {});
+  // The optional summary paints itself and contains its failures. A slow
+  // forecast must not delay dashboard refresh or release of action controls.
+  void refreshBacklogForecast();
+  return Promise.all([readiness.then(() => visit.isCurrent() && rendered ? fetchDrainPass(rendered) : undefined), fleet]).then(() => {});
 }
 
 // The chrome always names the fleet, including when an idle default workspace
