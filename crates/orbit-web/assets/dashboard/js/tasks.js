@@ -3199,13 +3199,31 @@ function buildWhyStuckCard(task) {
   return el("section", { class: "why-stuck", "aria-labelledby": headingId }, [
     el("h3", { class: "why-stuck-title", id: headingId, text: "Why stuck" }),
     el("dl", { class: "why-stuck-rows" }, [
-      whyStuckRow("Escalation", whyStuckLongNote(task, "escalation", whyStuckNote(stuck.escalation_note))),
+      whyStuckRow("Escalation", whyStuckEscalationValue(task, stuck.escalation_note)),
       whyStuckRow("Landing review", whyStuckLanding(stuck.landing_review)),
       whyStuckRow("Root cause", whyStuckLongNote(task, "root cause", whyStuckNote(stuck.root_cause))),
       whyStuckRow("Mergeable", whyStuckMergeable(stuck.pull_request)),
       whyStuckRow("Required checks", whyStuckChecks(stuck.pull_request)),
     ]),
   ]);
+}
+
+function whyStuckEscalationValue(task, fact) {
+  const note = whyStuckNote(fact);
+  const block = task.block || {};
+  const readableNote = fact && fact.availability === "read" && typeof fact.text === "string" && fact.text.trim();
+  if (task.status === "blocked" && block.cause === "escalation" && readableNote &&
+      typeof block.reason === "string" && block.reason.trim() === fact.text.trim()) {
+    const reference = el("a", { text: "See blocked note above" });
+    const headingId = `block-heading-${task.id}`;
+    reference.href = `#${headingId}`;
+    reference.addEventListener("click", (event) => {
+      event.preventDefault();
+      document.getElementById(headingId)?.scrollIntoView?.({ block: "center" });
+    });
+    return reference;
+  }
+  return whyStuckLongNote(task, "escalation", note);
 }
 
 function whyStuckRow(label, value) {
