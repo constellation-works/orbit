@@ -2096,6 +2096,8 @@ With Orbit's layout, the section follows the task contract, ahead of the executi
 
 `pr.labels`, `pr.reviewers` and `pr.draft` apply when `pr_open` creates a PR (`gh pr create --label/--reviewer/--draft`); an entry starting with `-` is refused. Completion never merges a draft. Section-gap drafts can recover on a resumed `pr_open` as described above; other drafts must be marked ready on the forge to continue.
 
+When a follower hands off a section-gap draft, owner landing returns the claim for an automatic repair instead of leaving it stopped in review. The `landing_stopped` history entry names the missing headings from the live PR body and asks the repair to fill them or attach their evidence, then resume `pr_open`. That step refreshes the body and marks the PR ready under the same recovery rules above. If the automatic repair has already been used, the owner preserves the candidate and returns it to the backlog for another repair round, subject to the existing landing repair budget. Configured drafts (`pr.draft = true`) and drafts without Orbit's gap note keep their refusal, with an operator action to mark the PR ready and retry landing. Screenshot requirements continue to follow `pr.screenshot_section`; a non-UI diff does not automatically override a `ui` tag.
+
 Task-derived labels are opt-in and separate from `pr.labels`. For example:
 
 ```toml

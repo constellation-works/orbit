@@ -8,12 +8,12 @@ use serde_json::{Value, json};
 use crate::context::{HandoffLandingStep, RuntimeHost};
 
 use super::super::operations;
-use super::super::pr::diagnostics;
 use super::super::pr::{
     BlockedCheckWait, OwedHostedChecks, PrMergeState, UnreportedChecks, checked_pr_state,
     classify_pr_state, owed_hosted_checks, read_pr_status, read_pr_status_before,
     resolve_permitted_merge,
 };
+use super::super::pr::{diagnostics, draft_recovery};
 use super::super::remote_probe::fixed_wait as sleep;
 use super::checks::{CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks};
 use super::intent::LandingView;
@@ -159,6 +159,61 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 &diagnostic,
                 false,
                 &error.to_string(),
+            )?);
+        }
+        // A follower can hand off a PR drafted for missing evidence. Send
+        // that candidate through the existing repair flow, whose pr_open
+        // refreshes the body and marks it ready only once every gap is filled.
+        // Configured and unrelated drafts still require the operator.
+        if status.is_draft || status.merge_state_status.as_deref() == Some("DRAFT") {
+            let configured = host.pr_config().conventions.draft;
+            // Only an explicit draft carries a body to repair. A DRAFT merge
+            // state without isDraft is an older answer without body evidence,
+            // so refuse without an extra view.
+            if !configured && status.is_draft {
+                let missing =
+                    draft_recovery::handed_off_section_gaps(host, &workspace, &pr_number)?;
+                if !missing.is_empty() {
+                    let action = if context.automatic_repair_spent {
+                        "return the preserved candidate to the backlog for a repair round"
+                    } else {
+                        "return the claim for one automatic repair round"
+                    };
+                    let reason = format!(
+                        "pull request #{pr_number} is still a section-gap draft; missing required \
+                         sections: {}; next action: {action}. Fill the named sections or attach \
+                         their required evidence, then resume pr_open to refresh the body and \
+                         mark the PR ready before a new validated handoff",
+                        missing.join(", ")
+                    );
+                    return Err(if context.automatic_repair_spent {
+                        refuse_pr(
+                            host,
+                            context,
+                            &diagnostic,
+                            HandoffLandingStep::StopForRequeue,
+                            &reason,
+                        )?
+                    } else {
+                        stop_pr(host, context, &diagnostic, true, &reason)?
+                    });
+                }
+            }
+            let reason = if configured {
+                "pr.draft is configured; next action: explicitly mark the PR ready on the \
+                 forge, then retry landing"
+            } else {
+                "no section-gap recovery evidence; next action: mark the PR ready on the \
+                 forge, then retry landing"
+            };
+            return Err(stop_pr(
+                host,
+                context,
+                &diagnostic,
+                false,
+                &format!(
+                    "pull request #{pr_number} cannot be merged (the pull request is still a draft); {reason}"
+                ),
             )?);
         }
         let checked = checked_pr_state(

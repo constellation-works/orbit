@@ -8,7 +8,7 @@ use orbit_types::{
 use serde_json::json;
 
 use super::super::{handoff::HandoffContext, operations};
-use super::{answers::PullRequestStatus, body::MISSING_SECTION_NOTE};
+use super::{answers::PullRequestStatus, body};
 use crate::context::{PrConfig, RuntimeHost, TaskAutomationUpdate};
 
 pub(super) fn recover_section_gap_draft<H: RuntimeHost + ?Sized>(
@@ -56,7 +56,7 @@ pub(super) fn recover_section_gap_draft<H: RuntimeHost + ?Sized>(
     }
     let outcome = if config.conventions.draft {
         PrDraftRecoveryOutcome::ConfiguredDraft
-    } else if !live_body.contains(MISSING_SECTION_NOTE) && !reserved {
+    } else if !live_body.contains(body::MISSING_SECTION_NOTE) && !reserved {
         PrDraftRecoveryOutcome::UnrelatedDraft
     } else if !missing.is_empty() {
         PrDraftRecoveryOutcome::MissingSections
@@ -83,6 +83,26 @@ pub(super) fn recover_section_gap_draft<H: RuntimeHost + ?Sized>(
     )?;
     record.outcome = PrDraftRecoveryOutcome::Ready;
     record_draft_recovery(host, context, &record)
+}
+
+/// Identify the section repair a handed-off draft needs. The repair leaf's
+/// resumed `pr_open` rebuilds the body and uses `recover_section_gap_draft`;
+/// landing itself never invents missing content or marks a draft ready.
+pub(in crate::executor::automation::vcs) fn handed_off_section_gaps<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace: &std::path::Path,
+    pr_number: &str,
+) -> Result<Vec<String>, OrbitError> {
+    let response = host.run_private_vcs_operation(
+        operations::PR_VIEW,
+        json!({"pr": pr_number, "workspace_path": workspace}),
+    )?;
+    let pr = PullRequestStatus::from_view_response(&response)?;
+    Ok(if pr.is_draft {
+        body::missing_section_names(pr.body.as_deref().unwrap_or_default())
+    } else {
+        Vec::new()
+    })
 }
 
 fn record_draft_recovery<H: RuntimeHost + ?Sized>(

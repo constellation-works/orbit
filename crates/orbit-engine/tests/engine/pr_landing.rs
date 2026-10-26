@@ -59,6 +59,7 @@ pub(super) use absent_context::adopted_policy_cases;
 mod auto_fix;
 mod check_annotations;
 mod conventions;
+mod draft_handoff;
 mod flaky;
 mod infrastructure;
 mod landing_transport;

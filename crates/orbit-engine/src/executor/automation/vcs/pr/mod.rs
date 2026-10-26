@@ -14,7 +14,7 @@ mod body;
 mod complete;
 mod delivery;
 pub(in crate::executor::automation::vcs) mod diagnostics;
-mod draft_recovery;
+pub(in crate::executor::automation::vcs) mod draft_recovery;
 mod head_lag;
 mod infrastructure;
 mod labels;
