@@ -199,6 +199,12 @@ impl RuntimeKernel {
         self.context.settings().unlocked_context_paths()
     }
 
+    /// `lease.*` as admitted: whether path leases are accepted and the
+    /// per-class guards a request is held to.
+    pub(crate) fn lease_policy(&self) -> &crate::task::locks::LeasePolicy {
+        self.context.settings().lease_policy()
+    }
+
     /// `workflow.lock_modes` as admitted: the paths where a footprint
     /// overlap is shared rather than blocking.
     pub fn footprint_lock_modes(&self) -> &orbit_common::fs::lock_mode::FootprintLockModes {

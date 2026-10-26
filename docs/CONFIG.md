@@ -2142,6 +2142,26 @@ min_severity = "high"
 
 Precedence: run/job `min_severity` input, then workspace, then global, then `moderate`; `orbit run job dependabot_alert_sweep_pipeline --input min_severity=critical` overrides one run. Scheduled routines use the configured floor without shadowing the job. An invalid value fails validation naming the key. The file step records `min_severity`, `min_severity_source` (`input`, `workspace`, `global` or `built-in`) and `excluded_below_min_severity`; `orbit run show <RUN_ID>` summarizes the filed count, floor and source, and excluded alert count and numbers, even when the sweep succeeded.
 
+### `[lease]` — path leases
+
+A path lease records that a person or an agent outside the drain is editing some paths, so drains and other holders can see it ([design](design/path-leases/2_design.md)). An `advisory` lease is always granted and blocks nothing. A `hard` lease is granted only when its selectors overlap no `in-progress` or `review` task's context, task reservation or other hard lease, after `workflow.unlocked_context_paths` is dropped from its stored surface (a request whose every selector matches keeps them all, as a task does); an overlapping hard request is refused with the holders named. Leases take `ttl_seconds` with the reservation bounds (default 1,800, at most 14,400), are renewed to move their expiry forward, and end on release or when their TTL lapses.
+
+| Key | Default | What it does |
+|---|---|---|
+| `lease.enabled` | `false` | Accept lease operations in this workspace. While false every lease operation (request, renew, release, show, list, check) is refused with an error naming this key, and admission is unchanged. |
+| `lease.default_mode` | `"advisory"` | **Advanced.** Mode of a request that names none: `advisory` or `hard`. |
+| `lease.hard.human`, `lease.hard.agent` | `"allow"` | **Advanced.** Per principal class, `allow` or `never`. A hard request from a class set to `never` is granted as advisory, and the answer says so. |
+| `lease.max_priority.human`, `lease.max_priority.agent` | `"high"`, `"normal"` | **Advanced.** Per principal class, the highest priority (`low`, `normal` or `high`) a request may ask for; a higher one is refused. A request that names no priority gets `normal`, or the ceiling when that is lower. |
+
+The principal class is `agent` when the calling process declares an agent or a managed run (`ORBIT_AGENT_NAME`, `ORBIT_AGENT_MODEL`, `ORBIT_MANAGED_RUN_CONTEXT` or `ORBIT_TASK_ACTOR_KIND=agent`), otherwise `human`. Over SSH the class and its ceilings are attribution and a guard, not a security boundary: the operator can lift them by editing this configuration. The per-class keys may also be written as tables:
+
+```toml
+[lease]
+enabled = true
+hard = { human = "allow", agent = "never" }
+max_priority = { human = "high", agent = "normal" }
+```
+
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 
 Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`); enable state and grants are host-local. A checkout keeps only its gitignored pin file, and `orbit plugin sync` installs what it names. Linked Git worktrees share the main checkout's `.orbit/plugins.yaml`: runtime loading, `orbit plugin sync` and `orbit plugin doctor` read that file and ignore a worktree-local one. Operator guide (installs, grants, source builds, workspace toggles): the orbit-setup [plugins reference](../crates/orbit-core/assets/skills/orbit-setup/references/plugins.md). Manifest spec: [plugin standard](design/plugins/1_scope.md).

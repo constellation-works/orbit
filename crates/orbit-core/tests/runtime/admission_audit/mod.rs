@@ -117,6 +117,7 @@ mod callback;
 
 mod managed_assets;
 
+mod lease_operations;
 mod lock_overlap;
 
 mod recovery_git;

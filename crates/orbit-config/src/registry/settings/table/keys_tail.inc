@@ -451,6 +451,47 @@ macro_rules! with_tail_keys {
         section: ConfigSection::Delivery, order: 100,
         resolve: |raw: Option<Vec<String>>| Ok::<_, OrbitError>(raw.unwrap_or_default()),
     },
+    lease_enabled: bool => bool {
+        key: "lease.enabled", value_type: "bool",
+        description: "Whether this workspace accepts path-lease requests.",
+        section: ConfigSection::Housekeeping, order: 140,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
+    lease_default_mode: String => String {
+        key: "lease.default_mode", value_type: "string",
+        description: "Mode of a lease request that names none: advisory or hard.",
+        section: ConfigSection::Housekeeping, order: 141,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "advisory", "lease.default_mode", &["advisory", "hard"]),
+    },
+    lease_hard_human: String => String {
+        key: "lease.hard.human", value_type: "string",
+        description: "Whether a human principal may hold hard leases: allow, or never (granted as advisory).",
+        section: ConfigSection::Housekeeping, order: 142,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "allow", "lease.hard.human", &["allow", "never"]),
+    },
+    lease_hard_agent: String => String {
+        key: "lease.hard.agent", value_type: "string",
+        description: "Whether an agent principal may hold hard leases: allow, or never (granted as advisory).",
+        section: ConfigSection::Housekeeping, order: 143,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "allow", "lease.hard.agent", &["allow", "never"]),
+    },
+    lease_max_priority_human: String => String {
+        key: "lease.max_priority.human", value_type: "string",
+        description: "Highest lease priority a human principal may request: low, normal or high.",
+        section: ConfigSection::Housekeeping, order: 144,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "high", "lease.max_priority.human", &["low", "normal", "high"]),
+    },
+    lease_max_priority_agent: String => String {
+        key: "lease.max_priority.agent", value_type: "string",
+        description: "Highest lease priority an agent principal may request: low, normal or high.",
+        section: ConfigSection::Housekeeping, order: 145,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_choice(raw, "normal", "lease.max_priority.agent", &["low", "normal", "high"]),
+    },
         }
     };
 }

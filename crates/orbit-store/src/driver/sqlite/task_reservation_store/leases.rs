@@ -226,6 +226,30 @@ impl Store {
         })
     }
 
+    /// The workspace's active leases, advisory and hard, oldest first,
+    /// without expiring or otherwise mutating rows: a lease past its TTL that
+    /// lazy expiry has not yet ended is left out rather than ended.
+    pub fn inspect_active_leases(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<LeaseRecord>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let now = crate::now_string();
+            let mut stmt = conn
+                .prepare(&active_leases_sql())
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map(params![workspace_id, workspace_orbit_dir, now], lease_row)
+                .map_err(sqlite_store_error)?;
+            let mut leases = Vec::new();
+            for row in rows {
+                leases.push(row.map_err(sqlite_store_error)?.into_record()?);
+            }
+            Ok(leases)
+        })
+    }
+
     /// The workspace's active leases, oldest first, after expiring the ones
     /// whose TTL has passed.
     pub fn list_active_leases(
@@ -236,17 +260,10 @@ impl Store {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let now = crate::now_string();
             let expired_leases = expire_leases(tx, workspace_orbit_dir, workspace_id, &now)?;
-            let sql = format!(
-                "SELECT {LEASE_COLUMNS}
-                 FROM task_reservations
-                 WHERE {}
-                   AND {LEASE_ROWS}
-                   AND released_at IS NULL
-                   AND expires_at > ?3
-                 ORDER BY created_at ASC, reservation_id ASC",
-                reservation_scope_clause(TaskReservationScope::Files),
-            );
-            let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
+            let mut stmt = tx
+                .tx
+                .prepare(&active_leases_sql())
+                .map_err(sqlite_store_error)?;
             let rows = stmt
                 .query_map(params![workspace_id, workspace_orbit_dir, now], lease_row)
                 .map_err(sqlite_store_error)?;
@@ -260,6 +277,21 @@ impl Store {
             })
         })
     }
+}
+
+/// Active leases, oldest first; binds ?1 and ?2 as
+/// [`reservation_scope_clause`] does and ?3 as now.
+fn active_leases_sql() -> String {
+    format!(
+        "SELECT {LEASE_COLUMNS}
+         FROM task_reservations
+         WHERE {}
+           AND {LEASE_ROWS}
+           AND released_at IS NULL
+           AND expires_at > ?3
+         ORDER BY created_at ASC, reservation_id ASC",
+        reservation_scope_clause(TaskReservationScope::Files),
+    )
 }
 
 const LEASE_COLUMNS: &str = "reservation_id, workspace_id, files_json, mode, priority, tags_json,
