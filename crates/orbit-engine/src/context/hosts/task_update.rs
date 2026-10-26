@@ -54,4 +54,8 @@ pub struct ResolvedActivityTools {
     /// disallow list covers them. Empty when nothing was dropped.
     /// [ORB-15162]
     pub omitted_requirement_notes: Vec<String>,
+    /// Operator-granted names whose exact disallow entries the implementing
+    /// activity lifted for this run. Only `agent_implement` lifts any; the
+    /// dispatcher removes them from the deny list the child enforces.
+    pub granted_tools: Vec<String>,
 }
