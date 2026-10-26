@@ -287,6 +287,7 @@ enum Render {
         full: bool,
         fields: Vec<String>,
         bare_field: bool,
+        input_projection: bool,
     },
 }
 
@@ -309,6 +310,8 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                     &args.fields,
                 )?;
                 let bare_field = super::tool::answers_with_bare_field(&args.name, &input)?;
+                let input_projection =
+                    super::tool::tool_input_requests_task_list_projection(&input);
                 Ok(RoutedCall {
                     name: args.name.clone(),
                     input,
@@ -316,6 +319,7 @@ fn routed_call(cli: &Cli, holder: &HostEntry) -> Result<RoutedCall, OrbitError> 
                         full: args.full,
                         fields: args.fields.clone(),
                         bare_field,
+                        input_projection,
                     },
                 })
             }
@@ -540,8 +544,16 @@ fn render(name: &str, render: Render, value: Value, holder: &HostEntry) -> Comma
             full,
             fields,
             bare_field,
+            input_projection,
         } => {
-            let shaped = super::tool::shape_tool_output(name, value, full, &fields, bare_field)?;
+            let shaped = super::tool::shape_tool_output(
+                name,
+                value,
+                full,
+                &fields,
+                bare_field,
+                input_projection,
+            )?;
             Ok(Payload::document(shaped).into())
         }
     }

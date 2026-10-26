@@ -227,7 +227,15 @@ impl Execute for ToolRunArgs {
             output,
         )?;
         let bare_field = answers_with_bare_field(&self.name, &input)?;
-        let output = shape_tool_output(&self.name, output, self.full, &self.fields, bare_field)?;
+        let input_projection = tool_input_requests_task_list_projection(&input);
+        let output = shape_tool_output(
+            &self.name,
+            output,
+            self.full,
+            &self.fields,
+            bare_field,
+            input_projection,
+        )?;
 
         Ok(Payload::document(output).into())
     }
@@ -322,15 +330,29 @@ pub(crate) fn answers_with_bare_field(tool_name: &str, input: &Value) -> Result<
     ))
 }
 
+/// Whether the JSON tool input already asks `orbit.task.list` for a projection.
+/// Mirrors the MCP adapter's compaction gate: `fields`, its `field` alias, or
+/// `view` present and non-null means the handler already shaped each row, so
+/// CLI shaping must not silently discard it with the default compact rows.
+pub(crate) fn tool_input_requests_task_list_projection(input: &Value) -> bool {
+    ["fields", "field", "view"]
+        .iter()
+        .any(|key| !input.get(key).is_none_or(Value::is_null))
+}
+
 /// `bare_field` is [`answers_with_bare_field`] for this request: the tool's own
 /// projection already selected one field, so an object output is that field's
-/// value, not a record to filter.
+/// value, not a record to filter. `input_projection` is
+/// [`tool_input_requests_task_list_projection`] for this request: the handler
+/// already honored an input `fields`/`field` projection, so the default compact
+/// rows must not replace it.
 pub(crate) fn shape_tool_output(
     tool_name: &str,
     output: Value,
     full: bool,
     fields: &[String],
     bare_field: bool,
+    input_projection: bool,
 ) -> Result<Value, OrbitError> {
     if full {
         return Ok(output);
@@ -351,6 +373,9 @@ pub(crate) fn shape_tool_output(
 
     if should_project_minimal_task_output(tool_name) {
         if tool_name == "orbit.task.list" {
+            if input_projection {
+                return Ok(output);
+            }
             return Ok(project_task_list_output(output, MINIMAL_TASK_FIELDS));
         }
         return Ok(filter_top_level_fields(
