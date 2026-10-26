@@ -143,6 +143,7 @@ const document = {
   title: '',
   hidden: false,
   createElement: tag => new Node(tag),
+  createElementNS: (_namespace, tag) => new Node(tag),
   createDocumentFragment: () => new Node('#fragment'),
   createTextNode: text => { const node = new Node('#text'); node.own = String(text); return node; },
   getElementById: id => byId[id] || null,

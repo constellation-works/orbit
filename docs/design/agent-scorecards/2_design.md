@@ -33,13 +33,60 @@ Every role tab has the same layout:
 
 1. **Who each problem counts against.** One bar across the window's problems, split by owning role plus a **Not scored** segment, with the current role highlighted and each legend entry linking to its role. This strip is how a reader sees the one-owner rule at work.
 2. **Ranking.** One row per crew and model: rank, crew and model, support (the role's unit of work), four or five role-specific columns, and the score as a bar and number. A row is a button that selects it. Rows below the minimum support are greyed, tagged `below 10` and listed last.
-3. **Detail** (right column) for the selected row: rank, score, raw score and the fleet average it was pulled toward, a **Score breakdown** (each term's weight, contribution and bar), **Biggest penalty** (the tasks behind the largest negative term, each linking to the task), and **Shown, not scored** (cost, time and other context).
+3. **Detail** (right column) for the selected row: rank, score, raw score and the fleet average it was pulled toward, an **Agent profile** radar comparing its rates with the ranked fleet (§1.1), a **Score breakdown** (each term's weight, contribution and bar), **Biggest penalty** (the tasks behind the largest negative term, each linking to the task), and **Shown, not scored** (cost, time and other context).
 4. **How the score works.** A disclosure listing every term with its weight and definition, plus the smoothing formula.
 5. **One role-specific panel**, for the roles that have one. Orchestrators show where each orchestrator's rework went by cause. Implementers show no panel: the score-against-cost chart and first-reviews tier comparison were removed as a product decision, so the ranking, detail column and disclosure are the whole tab. Reviewers show how each reviewer's verdicts turned out, and flag an accept rate well above peers. Pilots show assessed tier against observed tier.
 
 Reviewers also carry a **provisional** banner under the strip while any review in the window is younger than the 30-day miss lookback (§4.4). It counts those reviews against the window's total. A reviewer whose accept rate is well above its peers' carries an `accepts often` tag under its name in the ranking (§5.3). A role module supplies the banner and the row tags through optional hooks beside its panel.
 
-The view follows the shared dashboard window: 1h, 24h, 7d, 30d or 90d. `all` is accepted and treated as 90d, and labelled `all (90d)` (§8). It is read-only and scoped to the selected workspace; the aggregate view shows the usual placeholder. It builds every node with `el()`. The dashboard is dark-only. The layout keeps its ranking table in an `overflow-x` box and stacks the detail column under the ranking at phone width.
+The view follows the shared dashboard window: 1h, 24h, 7d, 30d or 90d. `all` is accepted and treated as 90d, and labelled `all (90d)` (§8). It is read-only and scoped to the selected workspace; the aggregate view shows the usual placeholder. It builds HTML with `el()` and the radar with inline SVG. The dashboard is dark-only. The layout keeps its ranking table in an `overflow-x` box and stacks the detail column under the ranking at phone width.
+
+### 1.1 Agent profile radar
+
+Every role's detail column places an inline SVG radar between the score header
+and **Score breakdown**. It compares the selected crew/model with the fleet in
+the same role and window. This describes the shape of the evidence; it does not
+reconstruct the weighted, smoothed score or the implementers' tier adjustment.
+
+- Each `scorecard.terms` entry is an axis, using `row.per_100[key]`. The
+  denominator is `row.term_units[key]` when present, otherwise `row.units`,
+  labelled with the term's `unit` or the role's `unit`. Credit axes point out
+  for higher rates; negative-weight axes invert and say **fewer is better**.
+- Each axis scales independently using the minimum and maximum rates among
+  ranked rows with supported evidence for that term. For a credit, radius is
+  `clamp((rate − min) / (max − min), 0, 1)`; for a penalty it is one minus
+  that value. A constant fleet axis uses radius 0.5 for every supported value.
+  Thus outliers clamp to the edge, different rate magnitudes do not dominate,
+  and equal rates do not imply best or worst. These are relative rates, not
+  absolute quality targets.
+- The contrasting dashed polygon is the unweighted median of those same
+  supported ranked rates on each axis, scaled by that axis's rule. With an
+  even population it averages the two middle rates. An agent with more units
+  has no extra weight here. The selected polygon has a solid stroke and fill;
+  medians and scales refresh whenever the scorecard rows change.
+- Roles with fewer than five scored terms add count-valued **Shown, not
+  scored** axes, stopping at five. The fixed preference order is unclassified
+  rework/regressions, dropped initiative, unknown origin, infrastructure
+  rework, no-cause rework, and unclassified regressions. Today's orchestrators
+  add the first two. Their rate is `100 × stat.value / row.units`, with fewer
+  outward; dashed spokes, italic labels and **unscored** identify them. Hours,
+  dollars, percentages, structured stats and already-scored keys are excluded.
+- A row below `min_support` has a muted chart and **Too little evidence to
+  compare** note. Unsupported terms (`provisional_terms`, zero units or an
+  own denominator below `warning_min_support`) are gaps. Reviewers' pending
+  `provisional` reviews make the missed-regressions axis provisional, while
+  their other observed terms remain available. An explicitly unmeasured
+  missed-scope-block source is also a gap. Unsupported rates never enter the
+  fleet reference. If no fleet rate is supported, that axis has no comparison.
+  Missing vertices use hollow markers at the outer guide, with the reason in
+  their disclosure; these markers have no radial value. Lines connect only
+  adjacent available vertices and incomplete polygons have no fill.
+- Numbered spokes map to full axis labels beneath the plot at narrow widths.
+  Hovering a vertex or its numbered endpoint, focusing or clicking it
+  discloses its term, agent rate,
+  fleet median rate, raw count, denominator and evidence state. The SVG has an
+  accessible name and a visually hidden table carries the same numbers.
+  No chart library or backend field is needed.
 
 ## 2. Ranking Unit
 

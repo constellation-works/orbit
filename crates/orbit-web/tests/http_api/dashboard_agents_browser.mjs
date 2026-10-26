@@ -245,7 +245,8 @@ try {
   });
 
   // Space between the disclosure's border box and the body's padding edge.
-  // Desktop keeps one gap for the detail column's trailing stretch row. A
+  // Desktop keeps at least one gap for the detail column's trailing stretch
+  // row; a taller detail column may extend beyond the disclosure. A
   // panel track with no panel adds a second gap: the 16px desktop gap, or
   // the 12px gap used at the phone breakpoint.
   const disclosureTail = () => page.evaluate(() => {
@@ -259,7 +260,8 @@ try {
     const rowHeights = style.gridTemplateRows.split(/\s+/).filter(Boolean).map(value => parseFloat(value));
     const spaceAfterDisclosure = box.bottom - paddingBottom - how.bottom;
     const phone = window.innerWidth <= 900;
-    const expectedSpace = phone ? 0 : rowGap;
+    const detail = node.querySelector('.agents-detail')?.getBoundingClientRect();
+    const expectedSpace = phone ? 0 : Math.max(rowGap, (detail?.bottom ?? how.bottom) - how.bottom);
     return {
       width: window.innerWidth,
       areas,
@@ -269,6 +271,7 @@ try {
       expectedSpace,
       excess: spaceAfterDisclosure - expectedSpace,
       zeroRows: rowHeights.filter(height => height < 1).length,
+      rows: rowHeights.length,
       panelAreas: (areas.match(/panel/g) || []).length,
       phone,
     };
@@ -276,7 +279,7 @@ try {
 
   const assertNoEmptyPanelTrack = tail => {
     assert.equal(tail.panelAreas, 0, `implementers reserve no panel area: ${JSON.stringify(tail)}`);
-    assert.equal(tail.zeroRows, tail.phone ? 0 : 1, `an empty panel row is a trailing 0px track: ${JSON.stringify(tail)}`);
+    assert.equal(tail.rows, 4, `the layout has only strip, ranking, detail/disclosure and the desktop stretch track: ${JSON.stringify(tail)}`);
     assert.ok(Math.abs(tail.excess) <= 1,
       `an empty panel track adds the row gap after the disclosure (16px at desktop, 12px at 375px); measured excess ${tail.excess}px: ${JSON.stringify(tail)}`);
   };

@@ -10,7 +10,7 @@
 // module in ROLE_PANELS (js/agents-<role>.js); a role without one shows none.
 // A panel may also add a banner under the strip and tags beside a row's name.
 // A role whose scorecard is not computed yet shows an empty state with its
-// terms. Pure vanilla JS, no build step; every node is built with `el()`.
+// terms. Pure vanilla JS, no build step; HTML uses `el()`, charts use inline SVG.
 
 import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, bindTaskLink, formatDateTime } from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
@@ -537,6 +537,129 @@ function rawText(row) {
     : `raw ${number(row.raw)}, not above the fleet average ${number(average)}, so not pulled`;
 }
 
+// The radar is a view of rates, independent of score weights and smoothing.
+// Keep its data and SVG beside the shared detail renderer: no role owns it.
+function radarNode(row) {
+  const axes = terms().map((term) => ({ ...term }));
+  // Only count-valued context with a clear better direction may extend a
+  // short role. Never turn hours, currency, percentages or matrices into axes.
+  for (const key of ["unclassified", "dropped_initiative", "unknown_origin", "rework_infrastructure", "rework_no_cause", "regressions_unclassified"]) {
+    if (axes.length >= 5) break;
+    const stat = (row.stats || []).find((entry) => entry.key === key);
+    if (stat && Number.isFinite(stat.value) && !axes.some((axis) => axis.key === key)) {
+      axes.push({ key, label: stat.label.replace(/ \(not scored\)$/, ""), weight: -1, unscored: true });
+    }
+  }
+  const below = (each) => each.below_support || each.units < scorecard.min_support;
+  const count = (axis, each) => axis.unscored
+    ? (each.stats || []).find((stat) => stat.key === axis.key)?.value
+    : each.counts && each.counts[axis.key];
+  const units = (axis, each) => each.term_units?.[axis.key] ?? each.units;
+  const rate = (axis, each) => axis.unscored
+    ? (each.units > 0 && Number.isFinite(count(axis, each)) ? count(axis, each) * 100 / each.units : null)
+    : each.per_100 && each.per_100[axis.key];
+  const gap = (axis, each) => {
+    if (below(each)) return "too little evidence to compare";
+    if (provisionalTerm(axis, each) || (axis.key === "missed_regressions" && each.provisional > 0)) return "provisional";
+    if (axis.key === "missed_scope_blocks" && scorecard.sources?.missed_scope_blocks?.available === false) return "unmeasured";
+    if (!(units(axis, each) > 0)) return "no units";
+    if (axis.unit && units(axis, each) < (scorecard.warning_min_support ?? scorecard.min_support)) return "below term support";
+    return Number.isFinite(rate(axis, each)) ? null : "no rate";
+  };
+  const fleet = rows().filter((each) => each.rank != null && !below(each));
+  const values = axes.map((axis) => {
+    const rates = fleet.filter((each) => !gap(axis, each)).map((each) => rate(axis, each)).sort((a, b) => a - b);
+    const middle = Math.floor(rates.length / 2);
+    const median = rates.length ? (rates[middle] + rates[Math.floor((rates.length - 1) / 2)]) / 2 : null;
+    const scale = (value) => {
+      if (!Number.isFinite(value) || !rates.length) return null;
+      const span = rates[rates.length - 1] - rates[0];
+      const scaled = span ? Math.max(0, Math.min(1, (value - rates[0]) / span)) : 0.5;
+      return axis.weight < 0 ? 1 - scaled : scaled;
+    };
+    const reason = gap(axis, row) || (!rates.length ? "no supported fleet comparison" : null);
+    return { axis, median, reason, own: reason ? null : scale(rate(axis, row)), fleet: scale(median) };
+  });
+  const svg = (tag, attrs = {}, text) => {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+    for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, String(value));
+    if (text != null) node.textContent = text;
+    return node;
+  };
+  const point = (index, value) => {
+    const angle = -Math.PI / 2 + index * 2 * Math.PI / axes.length;
+    return [150 + Math.cos(angle) * 104 * value, 130 + Math.sin(angle) * 104 * value];
+  };
+  const plot = svg("svg", { viewBox: "0 0 300 260", role: "group", "aria-label": `Agent profile for ${row.crew} · ${row.model} versus ranked fleet median; outward is better` });
+  for (const level of [0.25, 0.5, 0.75, 1]) {
+    plot.append(svg("polygon", { points: axes.map((_, i) => point(i, level).join(",")).join(" "), class: "agents-radar-grid" }));
+  }
+  values.forEach(({ axis }, i) => {
+    const [x, y] = point(i, 1);
+    plot.append(svg("line", { x1: 150, y1: 130, x2: x, y2: y, class: `agents-radar-spoke${axis.unscored ? " is-unscored" : ""}` }));
+  });
+  for (const series of ["fleet", "own"]) {
+    const points = values.map((value, i) => value[series] == null ? null : point(i, value[series]));
+    if (points.every(Boolean)) {
+      plot.append(svg("polygon", { points: points.map((p) => p.join(",")).join(" "), class: `agents-radar-${series}` }));
+    } else {
+      // Never close or fill across absent evidence, including the wraparound.
+      points.forEach((p, i) => {
+        const next = points[(i + 1) % points.length];
+        if (p && next) plot.append(svg("line", { x1: p[0], y1: p[1], x2: next[0], y2: next[1], class: `agents-radar-${series}` }));
+      });
+    }
+    points.forEach((p) => {
+      if (p) plot.append(svg("circle", { cx: p[0], cy: p[1], r: 3, class: `agents-radar-${series}` }));
+    });
+  }
+  const tooltip = el("p", { id: "agents-radar-tooltip", class: "agents-radar-tooltip", role: "status", text: "Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values." });
+  const tableBody = el("tbody");
+  const heading = (text, scope) => {
+    const node = el("th", { text });
+    node.setAttribute("scope", scope);
+    return node;
+  };
+  const labels = el("ol", { class: "agents-radar-axes" });
+  values.forEach(({ axis, median, own, reason }, i) => {
+    const label = `${axis.label}${axis.weight < 0 ? " (fewer is better)" : " (more is better)"}${axis.unscored ? " · unscored" : ""}`;
+    const ownText = `${number(rate(axis, row))} per 100 ${termUnit(axis)}`;
+    const fleetText = median == null ? "unavailable" : `${number(median)} per 100 ${termUnit(axis)}`;
+    const evidence = `${number(count(axis, row))} raw; ${number(units(axis, row))} ${termUnit(axis)}`;
+    const info = `${label}: agent ${ownText}; fleet median ${fleetText}; ${evidence}${reason ? `; gap: ${reason}` : ""}.`;
+    const [x, y] = point(i, own ?? 1);
+    const vertex = svg("g", { tabindex: 0, role: "button", "aria-label": info, "aria-describedby": "agents-radar-tooltip", class: `agents-radar-vertex${reason ? " is-gap" : ""}` });
+    vertex.append(svg("circle", { cx: x, cy: y, r: 12, class: "agents-radar-hit" }));
+    vertex.append(svg("circle", { cx: x, cy: y, r: 4, class: "agents-radar-marker" }));
+    // At the centre, several genuine zero-radius values can coincide. The
+    // numbered endpoint is another hover target for each of those vertices.
+    const [lx, ly] = point(i, 1.16);
+    vertex.append(svg("text", { x: lx, y: ly, "text-anchor": "middle", "dominant-baseline": "central", class: "agents-radar-label" }, String(i + 1)));
+    vertex.append(svg("title", {}, info));
+    const disclose = () => { tooltip.textContent = info; };
+    for (const event of ["mouseenter", "focus", "click"]) vertex.addEventListener(event, disclose);
+    plot.append(vertex);
+    labels.append(el("li", { class: axis.unscored ? "is-unscored" : "", text: label }));
+    tableBody.append(el("tr", {}, [
+      heading(label, "row"),
+      ...[ownText, fleetText, evidence, reason || "supported"].map((text) => el("td", { text })),
+    ]));
+  });
+  const table = el("table", { class: "visually-hidden" }, [
+    el("caption", { text: `Agent profile: ${row.crew} · ${row.model}; ranked fleet in ${windowLabel()}` }),
+    el("thead", {}, [el("tr", {}, ["Axis", "Agent rate", "Fleet median rate", "Raw count and units", "Evidence"].map((text) => heading(text, "col")))]),
+    tableBody,
+  ]);
+  return el("section", { class: `agents-radar${below(row) ? " is-muted" : ""}`, "aria-label": "Agent profile" }, [
+    el("h4", { text: "Agent profile" }),
+    el("p", { class: "agents-muted", text: "Outward is better · each axis scaled to the ranked fleet in this window." }),
+    ...(below(row) ? [el("p", { class: "agents-radar-note", text: "Too little evidence to compare: below minimum support." })] : []),
+    plot,
+    el("p", { class: "agents-radar-legend" }, [el("span", { class: "agents-radar-own-key", text: "Selected agent" }), el("span", { class: "agents-radar-fleet-key", text: "Fleet median" })]),
+    labels, tooltip, table,
+  ]);
+}
+
 function detailNode(row) {
   const panel = ROLE_PANELS[role];
   const scoreNote = panel && panel.scoreNote ? panel.scoreNote(row) : null;
@@ -606,6 +729,7 @@ function detailNode(row) {
     ]),
     el("p", { class: "agents-detail-raw", text: rawText(row) }),
     ...(scoreNote ? [el("p", { class: "agents-detail-note", text: scoreNote.detail })] : []),
+    radarNode(row),
     el("h4", { text: "Score breakdown" }),
     breakdown,
     penaltyNode(row, contributions),
@@ -615,7 +739,7 @@ function detailNode(row) {
   const node = el("aside", { class: "agents-detail", "aria-label": `Detail for ${row.crew} · ${row.model}` }, children);
   node.id = "agents-detail";
   node.dataset.key = "detail";
-  node.dataset.hash = JSON.stringify([role, row, scorecard.terms, scorecard.fleet_average, detail && [detail.payload, detail.loading, detail.error]]);
+  node.dataset.hash = JSON.stringify([role, row, scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average, detail && [detail.payload, detail.loading, detail.error]]);
   return node;
 }
 
