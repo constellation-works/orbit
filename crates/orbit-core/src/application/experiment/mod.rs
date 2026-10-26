@@ -8,6 +8,7 @@ mod definition;
 pub(crate) use capture::validate_experiment_capture;
 mod lifecycle;
 mod overlay;
+mod progress;
 mod readout;
 mod view;
 

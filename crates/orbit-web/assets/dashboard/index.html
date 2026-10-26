@@ -85,6 +85,7 @@
               <button class="subtab" data-subtab="forecast" type="button"><span class="rail-label" title="Forecast">Forecast</span></button>
               <button class="subtab" data-subtab="cost" type="button"><span class="rail-label" title="Cost">Cost</span></button>
               <button class="subtab" data-subtab="agents" type="button"><span class="rail-label" title="Agents">Agents</span></button>
+              <button class="subtab" data-subtab="experiments" type="button"><span class="rail-label" title="Experiments">Experiments</span></button>
             </nav>
           </div>
 
@@ -606,6 +607,16 @@
             <span class="count" id="forecast-count">-</span>
           </header>
           <div class="body forecast-body" id="forecast-body" tabindex="0" role="region" aria-label="Backlog forecast"></div>
+        </section>
+      </main>
+      <!-- Analytics › Experiments: the list, or one experiment's readout. -->
+      <main id="analytics-experiments-main" style="grid-template-columns: 1fr; display: none;">
+        <section class="panel" id="experiments-panel">
+          <header>
+            <span>Experiments</span>
+            <span class="count" id="experiments-count">-</span>
+          </header>
+          <div class="body experiments-body" id="experiments-body" tabindex="0" role="region" aria-label="Experiments"></div>
         </section>
       </main>
       <!-- Analytics › Cost: managed-execution cost and token usage. -->

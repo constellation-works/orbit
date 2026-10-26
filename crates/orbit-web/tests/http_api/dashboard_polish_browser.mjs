@@ -186,8 +186,8 @@ try {
     nodes.map(node => node.dataset.tab || `${node.closest('nav').id}:${node.dataset.subtab}`)),
   ['diagnostics', 'diag-subtabs:incidents', 'diag-subtabs:doctor', 'analytics',
     'analytics-subtabs:metrics', 'analytics-subtabs:reliability', 'analytics-subtabs:codebase', 'analytics-subtabs:resources',
-    'analytics-subtabs:forecast', 'analytics-subtabs:cost', 'analytics-subtabs:agents'],
-  'Observe holds Health (Incidents, Doctor) and Analytics (Metrics, Reliability, Codebase, Resources, Forecast, Cost, Agents)');
+    'analytics-subtabs:forecast', 'analytics-subtabs:cost', 'analytics-subtabs:agents', 'analytics-subtabs:experiments'],
+  'Observe holds Health (Incidents, Doctor) and Analytics (Metrics, Reliability, Codebase, Resources, Forecast, Cost, Agents, Experiments)');
   const mains = ['diagnostics-main', 'diagnostics-events-main', 'diagnostics-doctor-main', 'analytics-metrics-main',
     'analytics-reliability-main', 'analytics-tools-main', 'analytics-codebase-main', 'analytics-resources-main', 'analytics-forecast-main', 'analytics-cost-main'];
   const walk = [

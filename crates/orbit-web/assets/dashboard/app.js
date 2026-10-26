@@ -15,6 +15,9 @@ import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
 import { fetchAndRenderForecast, placeholdForecastAggregate } from './js/forecast.js';
+import {
+  fetchAndRenderExperiments, placeholdExperimentsAggregate, setExperimentId, experimentsRoute,
+} from './js/experiments.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
@@ -266,6 +269,10 @@ function routerContext() {
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
     fetchResources: () => fetchAndRenderResources().catch((e) => console.error("Failed to fetch resource profiles", e)),
     fetchForecast: () => fetchAndRenderForecast().catch((e) => console.error("Failed to fetch the backlog forecast", e)),
+    // The experiment on screen is owned by experiments.js, which renders it.
+    fetchExperiments: () => fetchAndRenderExperiments().catch((e) => console.error("Failed to fetch experiments", e)),
+    setExperimentId,
+    experimentsRoute: () => experimentsRoute(),
     fetchAgents: () => fetchAndRenderAgents().catch((e) => console.error("Failed to fetch the agent scorecard", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
@@ -1527,6 +1534,7 @@ function activeRefreshJobs() {
       placeholdMetricsAggregate();
       placeholdResourcesAggregate();
       placeholdForecastAggregate();
+      placeholdExperimentsAggregate();
       return jobs;
     }
     if (activeAnalyticsSubtab === "resources") {
@@ -1537,6 +1545,11 @@ function activeRefreshJobs() {
     if (activeAnalyticsSubtab === "forecast") {
       // Backlog forecast quantiles, arrivals and calibration for the workspace.
       add("Analytics › Forecast", fetchAndRenderForecast());
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "experiments") {
+      // The experiment list with enrollment, or one experiment's readout.
+      add("Analytics › Experiments", fetchAndRenderExperiments());
       return jobs;
     }
     if (activeAnalyticsSubtab === "cost") {
