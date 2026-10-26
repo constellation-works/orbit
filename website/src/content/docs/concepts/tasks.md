@@ -18,6 +18,9 @@ A task can also declare `required_tools`: Orbit tools its agent needs beyond
 the activity's baseline. They are fixed at creation; see
 [Transition rules](#transition-rules).
 
+A task can also name the tasks it waits on and link to related work. See
+[Dependencies and relations](#dependencies-and-relations).
+
 ## Lifecycle
 
 The common path:
@@ -135,6 +138,131 @@ dashboard's status menu, which asks you to confirm first. Both record a
 
 Friction reports are separate records under `orbit friction`, not task
 statuses.
+
+## Dependencies and relations
+
+A task can wait on other tasks and record how it relates to them. Dependencies are
+the only relation that decides when a task starts. The other kinds record lineage and
+cross-references, and never hold a task back.
+
+Use a dependency when one task must reach `done` before another can start. Use a
+relation to record where follow-up or regression work came from, to link related work,
+or to have a task close a friction when it finishes. Dependencies resolve inside the
+workspace: a task ID that names a task in another workspace counts as missing here.
+
+### Set dependencies from the CLI
+
+`--dependencies` takes task IDs. Repeat the flag or comma-separate the IDs. `task add`
+sets them at creation, and `task update` replaces the whole list:
+
+```bash
+orbit task add --title "Publish the API docs" --complexity low \
+  --dependencies "$API_TASK_ID,$SCHEMA_TASK_ID"
+
+orbit task update "$TASK_ID" --dependencies "$API_TASK_ID,$SCHEMA_TASK_ID"
+orbit task show "$TASK_ID" --fields dependencies,resolved_dependencies
+```
+
+The update replaces the list. To add one dependency, read the current list and send
+every ID you want to keep. An empty string clears the list:
+
+```bash
+orbit task update "$TASK_ID" --dependencies ""
+```
+
+Orbit refuses a task that depends on itself and an edge that closes a dependency cycle;
+the error names the cycle. An ID that names no task is accepted, and the dependency is
+then reported as missing at admission (see [Admission](#admission)).
+
+### Typed relations
+
+The `relations` field is an array of `{type, target}` objects. It is available on
+`orbit.task.add` and `orbit.task.update`, and the CLI has no flag for it. A relation
+points from the task that holds it to its target: a `blocked_by` relation from task A
+to task B means A waits for B.
+
+`relations` replaces the whole list, every kind included, so the replacement must carry
+each relation you want to keep, `blocked_by` among them. Don't send `dependencies` and
+`relations` in the same update. Orbit applies `relations` last, so it overwrites the
+dependency edges. To update only dependencies, use `dependencies` alone.
+
+```json
+{
+  "id": "<task-id>",
+  "relations": [
+    { "type": "blocked_by", "target": "<task-id>" },
+    { "type": "spawned_from", "target": "<task-id>" },
+    { "type": "resolves", "target": "<friction-id>" }
+  ]
+}
+```
+
+Orbit refuses a duplicate `type` and `target` pair, a relation to the task itself, and
+a cycle in `blocked_by` or `child_of`. A `regression` object is accepted only on
+`regression_from`.
+
+The current kinds, each pointing from this task to its target:
+
+- `blocked_by` (task): this task waits for the target to reach `done`. It is the only
+  kind that gates a start. Set it with `--dependencies` or `relations`.
+- `child_of` (task): the target is this task's parent. It organizes work and doesn't gate
+  a start. Set it with `add --parent` or `relations`.
+- `spawned_from` (task): this follow-up was filed from the target. Orbit sets it on
+  follow-up tasks it files. Set it with `relations`.
+- `regression_from` (task): the target introduced the defect this task fixes. Set it with
+  `add --source-task`, `source_task_id` on update, or `relations`.
+- `supersedes` (task): this task replaces the target. Orbit sets it when a sweep
+  consolidates tasks. Set it with `relations`.
+- `related_to` (task): a plain cross-reference. Set it with `relations`.
+- `covered_by` (task ID, or `github-pr:<number>` or `github-pr:<pull request URL>`): the
+  target handles this task's failure. Set it with `relations`.
+- `produces` (task or friction ID): this task produced the target. No shipped workflow
+  writes it. Set it with `relations`.
+- `resolves` (friction ID): reaching `done` closes that friction. Set it with `relations`.
+
+`regression_from` takes an optional `regression` classification: `nature` is one of
+`broke_existing`, `defect_in_new`, `incomplete`, `merge_reintroduced`, `contract_drift`
+or `unclassified`, and `escape` is one of `no_test`, `test_not_selected`,
+`platform_only`, `review_missed`, `spec_ambiguous`, `nondeterministic` or
+`unclassified`. Read a task's relations back with
+`orbit task show "$TASK_ID" --fields relations`.
+
+A regression in delivered work gets a new task with a `regression_from` relation to the
+task that introduced it. The original stays closed, as [Transition rules](#transition-rules)
+explains.
+
+### Admission
+
+A task starts only when every `blocked_by` target is `done`. An archived target counts as
+done if it reached `done` before it was archived. A task whose targets are not yet done
+waits in the backlog. `orbit run readiness <task-id>` explains what it is waiting for.
+
+Some targets can't reach `done` by waiting: a task that does not exist in this workspace,
+an archived task that never completed, or a rejected task. Run admission reports these as
+`task.dependencies.unsatisfiable` instead of waiting. Restore the target, reopen it, or
+remove its ID from `--dependencies`.
+
+Only dispatch holds a task back. A manual `orbit task update --status in-progress` isn't
+checked against the task's dependencies, so unmet dependencies don't refuse it.
+
+### Friction resolution
+
+Friction records live under `orbit friction`, outside the task lifecycle. A task closes
+the frictions it names when it reaches `done`:
+
+- A `resolves` relation names a friction, and reaching `done` closes it. Only relations
+  set through the tool can name one. From the CLI, close a friction with
+  `orbit friction resolve <friction-id>`. Friction IDs have the form `FYYYY-MM-NNN`.
+- A task that reaches `done` through a landed pull request also closes the frictions
+  named in its description or acceptance criteria. A manual move to `done` reads only
+  the `resolves` relations, not the text.
+- A friction that is already resolved stays resolved. Updating a task that is already
+  `done` doesn't resolve again.
+- Only frictions in this workspace close. A `resolves` target that lives in another
+  workspace refuses the move to `done`, and the error names the friction and where it
+  lives. Remove that relation, or resolve the friction in its own workspace.
+- A friction ID that matches no record is not refused. Orbit records a dangling-relation
+  event, and the task still reaches `done`.
 
 ## File reservations
 
