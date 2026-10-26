@@ -82,8 +82,9 @@ releases, reads and lists leases, and lazy expiry ends them as it ends reservati
 derived for now: `granted` while active, `released` or `expired` from `release_reason`; `queued`,
 `preempted` and `notice_cursor` arrive with their phases. Every overlap reader (owner pull
 admission, `orbit.task.locks.reserve` and the gate's reservation check) skips advisory rows and
-names a hard lease as `held_by: "lease"`. `orbit task locks list` shows hard leases beside
-reservations and omits advisory ones, which hold nothing, until the lease surfaces land.
+names a hard lease as `held_by: "lease"`. `orbit task locks list` lists every active lease,
+advisory and hard, beside reservations in `by_lease`/`total_leases`, rendering each with its
+mode and principal.
 
 The migration is additive. A binary without it reads every lease row, advisory or hard, as an
 exclusive file reservation and refuses overlapping reserves (checked against 0.33.0, the
