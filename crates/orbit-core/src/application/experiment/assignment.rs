@@ -29,6 +29,7 @@ impl OrbitRuntime {
                 for record in records {
                     let experiment = &record.experiment;
                     if experiment.status != "running"
+                        || experiment.mode != "shadow"
                         || existing.iter().any(|row| row.experiment == experiment.id)
                     {
                         continue;
@@ -39,11 +40,6 @@ impl OrbitRuntime {
                         })?;
                     if !population_matches(&filter, task) {
                         continue;
-                    }
-                    if experiment.mode != "shadow" {
-                        return Err(OrbitError::PolicyDenied(
-                            "live experiment assignment is not supported yet".into(),
-                        ));
                     }
                     let surfaces = experiment_surfaces(record)?;
                     let conflict = !occupied.is_disjoint(&surfaces);

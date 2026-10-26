@@ -62,7 +62,7 @@ const MODES: &[EnumValue] = &[
     EnumValue::helped("shadow", "Assign and record arms but apply no overlay"),
     EnumValue::helped(
         "live",
-        "Apply each arm's overlay to the tasks it is assigned",
+        "Apply overlays; starting or resuming live experiments is not supported yet",
     ),
 ];
 
@@ -150,7 +150,7 @@ const DEFINITION: &[ParamSpec] = &[
     both(
         "mode",
         ParamType::Enum(MODES),
-        "shadow (default) assigns and records arms but applies no overlay; live applies each arm's overlay.",
+        "shadow (default) assigns and records arms but applies no overlay; live overlays are not available yet.",
         CliArgKind::flag("mode"),
         "Whether overlays are applied",
     ),

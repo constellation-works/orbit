@@ -1173,7 +1173,7 @@
       },
       {
         "name": "mode",
-        "description": "shadow (default) assigns and records arms but applies no overlay; live applies each arm's overlay.",
+        "description": "shadow (default) assigns and records arms but applies no overlay; live overlays are not available yet.",
         "param_type": "string",
         "required": false
       },
@@ -1423,7 +1423,7 @@
       },
       {
         "name": "mode",
-        "description": "shadow (default) assigns and records arms but applies no overlay; live applies each arm's overlay.",
+        "description": "shadow (default) assigns and records arms but applies no overlay; live overlays are not available yet.",
         "param_type": "string",
         "required": false
       },
