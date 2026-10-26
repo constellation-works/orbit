@@ -3,6 +3,7 @@
 //! create-or-reuse, `promote` owns the explicit Review handoff, `merge` owns
 //! approved-PR merge, remote cleanup, and Done reconciliation, and `delivery`
 //! owns the candidate identity and merge evidence completion runs behind.
+//! `merge_state` classifies the forge's merge guards and typed parked outcomes.
 //! `answers` parses the provider's PR answers once into the types every
 //! reader takes. `screenshots` publishes a task's screenshots to its evidence
 //! ref and renders the body's table of them.
@@ -19,6 +20,7 @@ mod head_lag;
 mod infrastructure;
 mod labels;
 mod merge;
+mod merge_state;
 mod open;
 mod promote;
 mod recovery;

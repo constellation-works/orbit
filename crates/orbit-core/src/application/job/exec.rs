@@ -38,13 +38,25 @@ use crate::application::job::{
 };
 
 /// The hold an unsuccessful run of `job_id` ends on instead of failing, if
-/// its failure `message` names one. Owner-local runs hold on provider
+/// its typed `error_code` or failure `message` names one. Owner-local runs hold on provider
 /// capacity and usage limits; claimed leaves hold on usage limits.
-fn held_failure(job_id: &str, message: Option<&str>) -> Option<HeldFailure> {
+fn held_failure(
+    job_id: &str,
+    error_code: Option<&str>,
+    message: Option<&str>,
+) -> Option<HeldFailure> {
     if CLAIMED_LEAF_JOBS.contains(&job_id) {
-        HeldFailure::of_claimed_leaf(None, message)
+        HeldFailure::of_claimed_leaf(error_code, message)
     } else {
-        HeldFailure::of_local(None, message)
+        HeldFailure::of_local(error_code, message)
+    }
+}
+
+/// The refusal identity retained across the engine/core error boundary.
+fn delivery_refusal_code(error: &OrbitError) -> Option<&'static str> {
+    match error {
+        OrbitError::DeliveryRefused { refusal, .. } => Some(refusal.error_code()),
+        _ => None,
     }
 }
 
@@ -384,6 +396,9 @@ impl OrbitRuntime {
                     orbit_engine::DispatchError::ProtocolSkew(message) => {
                         OrbitError::ProtocolSkew(message)
                     }
+                    refusal @ orbit_engine::DispatchError::DeliveryRefused { .. } => {
+                        dispatch_error_to_orbit(refusal)
+                    }
                     other => OrbitError::Execution(format!("v2 job dispatch: {other}")),
                 });
 
@@ -392,11 +407,18 @@ impl OrbitRuntime {
             Ok(o) if o.forge_hold.is_some() => ("held", o.message.clone()),
             Ok(o) if o.child_cancelled => ("cancelled", o.message.clone()),
             Ok(o) if o.success => ("success", None),
-            Ok(o) if held_failure(&asset.name, o.message.as_deref()).is_some() => {
+            Ok(o) if held_failure(&asset.name, None, o.message.as_deref()).is_some() => {
                 ("held", o.message.clone())
             }
             Ok(o) => ("failed", o.message.clone()),
-            Err(err) if held_failure(&asset.name, Some(&err.to_string())).is_some() => {
+            Err(err)
+                if held_failure(
+                    &asset.name,
+                    delivery_refusal_code(err),
+                    Some(&err.to_string()),
+                )
+                .is_some() =>
+            {
                 ("held", Some(err.to_string()))
             }
             Err(err) => ("error", Some(err.to_string())),
@@ -606,7 +628,7 @@ impl OrbitRuntime {
             Ok(result) => {
                 let fallback = "job completed with success=false but emitted no failure detail";
                 let message = result.message.as_deref().unwrap_or(fallback);
-                let held = held_failure(&run.job_id, Some(message));
+                let held = held_failure(&run.job_id, None, Some(message));
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
                 let message =
                     held.map_or_else(|| message.to_string(), |held| held.diagnostic(message));
@@ -639,7 +661,11 @@ impl OrbitRuntime {
                 // decision kept its candidate: the run holds, it did not fail.
                 // So do local provider capacity/limit holds and a claimed
                 // leaf its provider's usage limit stopped [ORB-15517].
-                let held = held_failure(&run.job_id, Some(&error.to_string()));
+                let held = held_failure(
+                    &run.job_id,
+                    delivery_refusal_code(error),
+                    Some(&error.to_string()),
+                );
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
                 let message = held.map_or_else(
                     || error.to_string(),

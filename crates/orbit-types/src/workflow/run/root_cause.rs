@@ -8,7 +8,8 @@
 //!
 //! Some unsuccessful leaves are not failures at all: a required check red on
 //! the base kept the candidate, and a before-landing review refusal left the
-//! pull request open for a recorded decision. [`HeldFailure`] names those, so
+//! pull request open for a recorded decision. Typed completion and landing
+//! refusals also deliberately park delivery. [`HeldFailure`] names those, so
 //! the run ends `held` rather than `failed`.
 //!
 //! [ORB-15517] Nor is a claimed leaf its provider's usage limit stopped: the
@@ -17,6 +18,7 @@
 //! Owner-local runs also hold on capacity and usage limits: admission can
 //! choose another crew while the task keeps its provider failure hold.
 
+use super::DeliveryRefusal;
 use super::failure_classification_text;
 use serde::{Deserialize, Serialize};
 
@@ -73,12 +75,17 @@ pub enum HeldFailure {
     /// An owner-local run's selected model had no capacity; the task waits
     /// for another crew or the capacity backoff to end.
     ProviderCapacity,
+    /// A typed fail-closed delivery decision left its candidate parked.
+    DeliveryRefused(DeliveryRefusal),
 }
 
 impl HeldFailure {
     /// The hold an unsuccessful run's diagnostic names, if it is one.
     #[must_use]
     pub fn of(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
+        if let Some(refusal) = error_code.and_then(DeliveryRefusal::from_error_code) {
+            return Some(Self::DeliveryRefused(refusal));
+        }
         if is_baseline_red_failure(error_code, message) {
             return Some(Self::BaselineRed);
         }
@@ -119,6 +126,7 @@ impl HeldFailure {
             Self::DecisionPending => REVIEW_DECISION_PENDING_ERROR_CODE,
             Self::ProviderLimit => PROVIDER_LIMIT_ERROR_CODE,
             Self::ProviderCapacity => PROVIDER_CAPACITY_ERROR_CODE,
+            Self::DeliveryRefused(refusal) => refusal.error_code(),
         }
     }
 

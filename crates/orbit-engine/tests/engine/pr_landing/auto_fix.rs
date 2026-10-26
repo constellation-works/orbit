@@ -2533,8 +2533,11 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
                         assert!(error.contains("timed out"), "{error}");
                     }
 
-                    // Final recovery is a fresh public job-boundary read, rather
-                    // than a copy of the duplicate-admission error, which has no job logs.
+                    // A fresh admission exercises final recovery's independent
+                    // observation of both failures. Reusing the earlier ledger
+                    // is now a typed repair-dispatched hold and cannot recover.
+                    let host = DeliveryHost::new(&fx.repo, TaskStatus::Review);
+                    host.publish_pr(TASK_ID);
                     host.script(
                         "test_checkpoint",
                         json!({"workspace_path":fx.repo,"base_sha":fx.base_sha}),
@@ -2613,6 +2616,80 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
                     assert!(fx.merge_requests().is_empty());
                     assert_eq!(fx.head(), fx.candidate);
                 });
+            }
+        },
+    );
+}
+
+/// A different run already dispatched the conflict repair for this exact head.
+/// The public job must preserve a typed hold and skip every recovery/handoff.
+#[test]
+fn a_dispatched_repair_holds_completion_without_another_recovery() {
+    isolated(
+        "auto_fix::a_dispatched_repair_holds_completion_without_another_recovery",
+        |sandbox| {
+            let (fx, host) = opened_review(sandbox);
+            fx.script_checks(&["dirty"]);
+            seed_attempt(
+                &host,
+                &fx.candidate,
+                PrAutoFixBlocker::Conflict,
+                1,
+                "earlier-run",
+            );
+            for action in [
+                "unexpected_recovery",
+                "unexpected_failure",
+                "unexpected_final_recovery",
+            ] {
+                host.script(action, json!({}));
+            }
+            let input = auto_fix_input(&fx);
+            let mut job = job_asset(json!([{
+                "id": "complete", "target": "activity:pr_complete",
+                "recovery_activity": "unexpected_recovery", "default_input": input,
+            }]));
+            job.failure_activity = Some("unexpected_failure".into());
+            job.final_recovery_activity = Some("unexpected_final_recovery".into());
+            let error = run_job(
+                &host,
+                job,
+                &[
+                    ("pr_complete", "pr_complete"),
+                    ("unexpected_recovery", "unexpected_recovery"),
+                    ("unexpected_failure", "unexpected_failure"),
+                    ("unexpected_final_recovery", "unexpected_final_recovery"),
+                ],
+                RUN_ID,
+                json!({}),
+                None,
+            )
+            .unwrap_err();
+            let refusal = orbit_types::workflow::DeliveryRefusal::RepairDispatched;
+            assert!(
+                matches!(&error, DispatchError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{error}"
+            );
+            assert_eq!(error.failure_code(), refusal.error_code());
+            assert_eq!(
+                orbit_types::workflow::HeldFailure::of(
+                    Some(error.failure_code()),
+                    Some(&error.to_string())
+                ),
+                Some(orbit_types::workflow::HeldFailure::DeliveryRefused(refusal))
+            );
+            assert_eq!(repair_attempts(&host).len(), 1);
+            assert_nothing_landed(&fx, &host, TaskStatus::Review, "dispatched repair");
+            assert!(host.failure_checkpoints().is_empty());
+            for action in [
+                "unexpected_recovery",
+                "unexpected_failure",
+                "unexpected_final_recovery",
+            ] {
+                assert!(
+                    !scripted_ran(&host, action),
+                    "{action} must not run for a held refusal"
+                );
             }
         },
     );

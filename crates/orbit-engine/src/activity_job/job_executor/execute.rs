@@ -277,6 +277,9 @@ pub fn execute_job_with_resume(
                 child_cancelled = true;
                 break;
             }
+            // A parked delivery already recorded its stop. Neither repair nor
+            // failure handoff may change its task or candidate on this run.
+            Err((error @ DispatchError::DeliveryRefused { .. }, _)) => return Err(error),
             Err((error, unsuccessful)) => {
                 let verdict = attempt_final_recovery(job, &ctx, index, &error, &mut final_recovery);
                 if let FinalRecoveryVerdict::Resume(target, context) = verdict {
