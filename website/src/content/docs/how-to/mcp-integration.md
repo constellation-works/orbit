@@ -296,8 +296,10 @@ auto-approve; Orbit still enforces authority on every call.
   default (id, title, status, priority, type, dependencies,
   resolved_dependencies, implemented_by, created_at, updated_at, and workspace).
   Pass `fields` to add long-text fields such as `description` or `plan`.
-  `orbit_task_eligible` task records remain full by default; pass `fields` (for
-  example `["id", "title", "status"]`) to keep a listing small.
+- `orbit_task_eligible` rows are minimal: id, title, type, status, priority and
+  complexity. The tool takes no `fields` projection. To read a full record, use
+  `orbit_task_show`; to add long-text fields to a listing, use `orbit_task_list`
+  with `fields`.
 - `orbit_task_eligible` lists, in dispatch order, the `backlog` and `proposed`
   tasks whose files overlap no running or in-review task. With
   `explain: true`, `conflicting` also lists the held-back tasks, each with the
