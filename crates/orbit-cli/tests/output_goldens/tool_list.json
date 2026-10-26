@@ -1173,7 +1173,7 @@
       },
       {
         "name": "mode",
-        "description": "shadow (default) assigns and records arms but applies no overlay; live overlays are not available yet.",
+        "description": "shadow (default) records assignments without applying overlays; live experiments can start and resume, applying overlays on matching dispatches. Start requires base-admissible instruction files and skill bundles, registered enabled agent-facing added tools, and preservation of handoff tools; skill replacement currently supports Claude on Unix.",
         "param_type": "string",
         "required": false
       },
@@ -1451,7 +1451,7 @@
       },
       {
         "name": "mode",
-        "description": "shadow (default) assigns and records arms but applies no overlay; live overlays are not available yet.",
+        "description": "shadow (default) records assignments without applying overlays; live experiments can start and resume, applying overlays on matching dispatches. Start requires base-admissible instruction files and skill bundles, registered enabled agent-facing added tools, and preservation of handoff tools; skill replacement currently supports Claude on Unix.",
         "param_type": "string",
         "required": false
       },
