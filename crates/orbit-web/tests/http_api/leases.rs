@@ -120,6 +120,39 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
                     .unwrap(),
             );
             assert_eq!(default_renewal["renewed"], true);
+            let empty_json_renewal = json_ok(
+                operator
+                    .request("POST", &format!("/api/leases/{id}/renew"))
+                    .header("origin", &operator.origin)
+                    .header("content-type", "application/json")
+                    .send()
+                    .unwrap(),
+            );
+            assert_eq!(empty_json_renewal["renewed"], true);
+            assert_eq!(empty_json_renewal["lease"]["lease_id"], id);
+            error_code(
+                operator
+                    .request("POST", &format!("/api/leases/{id}/expand"))
+                    .header("origin", &operator.origin)
+                    .header("content-type", "application/json")
+                    .send()
+                    .unwrap(),
+                501,
+                "not_available_in_this_phase",
+            );
+            for path in [
+                format!("/api/leases/{id}/renew"),
+                format!("/api/leases/{id}/expand"),
+            ] {
+                let malformed = operator
+                    .request("POST", &path)
+                    .header("origin", &operator.origin)
+                    .header("content-type", "application/json")
+                    .body("{\"ttl_seconds\":")
+                    .send()
+                    .unwrap();
+                assert_eq!(malformed.status(), 400, "{path}");
+            }
             let released = json_ok(operator.send(
                 "DELETE",
                 &format!("/api/leases/{id}?principal=alice"),
