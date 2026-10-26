@@ -15,6 +15,7 @@ Commands:
   abandon   Abandon an experiment without a conclusion
   show      Show one experiment with its arms and event log
   list      List the workspace's experiments
+  readout   Show an experiment's per-arm outcomes, intervals and verdict
 
 Options:
   -h, --help

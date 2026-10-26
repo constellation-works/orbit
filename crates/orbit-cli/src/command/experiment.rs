@@ -1,9 +1,10 @@
 //! The experiment CLI, derived from the experiment operation registry.
 //!
 //! Every verb calls its `orbit.experiment.*` tool, so `--json` is the tool's
-//! payload. What is left here is the text rendering: a table for `list`, and
-//! for every other verb the experiment's definition, arms and, for `show`,
-//! its event log in order.
+//! payload. What is left here is the text rendering: a table for `list`, the
+//! verdict, health checks and per-arm metric tables for `readout`, and for
+//! every other verb the experiment's definition, arms and, for `show`, its
+//! event log in order.
 
 use std::fmt::Write as _;
 
@@ -31,6 +32,7 @@ impl Execute for ExperimentCommand {
         let blocks = match spec.verb {
             ExperimentVerb::Assign => vec![Block::text(value.to_string())],
             ExperimentVerb::List => vec![Block::table(list_table(&value))],
+            ExperimentVerb::Readout => readout_blocks(&value),
             ExperimentVerb::Create
             | ExperimentVerb::Update
             | ExperimentVerb::Clone
@@ -156,6 +158,241 @@ fn experiment_blocks(value: &Value) -> Vec<Block> {
         blocks.push(Block::table(table));
     }
     blocks
+}
+
+fn readout_blocks(value: &Value) -> Vec<Block> {
+    let experiment = &value["experiment"];
+    let verdict = &value["verdict"];
+    let mut header = format!(
+        "{} {} — readout (schema {}) as of {}\nVerdict: {}{}",
+        text(&experiment["id"]),
+        text(&experiment["name"]),
+        text(&value["schema_version"]),
+        text(&value["as_of"]),
+        text(&verdict["label"]),
+        if verdict["horizon_reached"] == Value::Bool(true) {
+            " (horizon reached)"
+        } else {
+            ""
+        },
+    );
+    for reason in verdict["reasons"].as_array().into_iter().flatten() {
+        let _ = write!(header, "\n  - {}", text(reason));
+    }
+    let enrollment = &value["enrollment"];
+    let ratio = &value["sample_ratio"];
+    let lagging = &value["lagging"];
+    let _ = write!(
+        header,
+        "\nPrimary metric: {}\nEnrollment: {} analysed, {} forced (excluded), {} surface-conflict exclusions\nSample ratio: chi-square {}, df {}, p = {}{}\nLagging: {} task(s) in flight, {} regression window(s) open",
+        text(&experiment["primary_metric"]),
+        text(&enrollment["analysed"]),
+        text(&enrollment["forced_excluded"]),
+        text(&enrollment["surface_conflict_excluded"]),
+        number(&ratio["chi_square"]),
+        text(&ratio["df"]),
+        number(&ratio["p_value"]),
+        if ratio["mismatch"] == Value::Bool(true) {
+            " — MISMATCH"
+        } else {
+            ""
+        },
+        text(&lagging["open_tasks"]),
+        text(&lagging["open_regression_windows"]),
+    );
+    for warning in value["warnings"].as_array().into_iter().flatten() {
+        let _ = write!(
+            header,
+            "\nWarning [{}]: {}",
+            text(&warning["kind"]),
+            text(&warning["message"])
+        );
+    }
+    let mut blocks = vec![Block::text(header)];
+
+    let mut arms = Table::new(vec![
+        Column::new("ARM"),
+        Column::new("CONTROL"),
+        Column::new("WEIGHT").number(),
+        Column::new("N").number(),
+        Column::new("SEGMENTS"),
+        Column::new("CREW MIX"),
+        Column::new("DRIFT"),
+    ])
+    .empty_message("no arms defined");
+    for arm in value["arms"].as_array().into_iter().flatten() {
+        let segments = arm["segments"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|segment| format!("{}:{}", text(&segment["segment"]), text(&segment["n"])))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let crews = arm["crew_mix"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|crew| format!("{}:{}", text(&crew["crew"]), text(&crew["tasks"])))
+            .collect::<Vec<_>>()
+            .join(" ");
+        arms.add_row(vec![
+            text(&arm["name"]),
+            if arm["control"] == Value::Bool(true) {
+                "control".to_string()
+            } else {
+                String::new()
+            },
+            text(&arm["weight"]),
+            text(&arm["n"]),
+            segments,
+            crews,
+            if arm["drifted"] == Value::Bool(true) {
+                "drifted".to_string()
+            } else {
+                String::new()
+            },
+        ]);
+    }
+    blocks.push(Block::text("\nArms:"));
+    blocks.push(Block::table(arms));
+
+    let mut empty = Vec::new();
+    for metric in value["metrics"].as_array().into_iter().flatten() {
+        let has_data = metric["arms"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .any(|arm| arm["n"].as_u64().is_some_and(|n| n > 0));
+        if !has_data {
+            empty.push(text(&metric["metric"]));
+            continue;
+        }
+        let rate = metric["kind"] == "rate";
+        blocks.push(Block::text(format!(
+            "\n{} ({}, {} is better, {}):",
+            text(&metric["metric"]),
+            text(&metric["kind"]),
+            text(&metric["better"]),
+            text(&metric["unit"]),
+        )));
+        let mut table = Table::new(vec![
+            Column::new("ARM"),
+            Column::new("N").number(),
+            Column::new("OPEN").number(),
+            Column::new(if rate {
+                "RATE [95% WILSON]"
+            } else {
+                "MEAN [95%]"
+            }),
+            Column::new(if rate { "SUCCESSES" } else { "MEDIAN [95%]" }),
+            Column::new("DIFF VS CONTROL [95%]"),
+        ]);
+        for arm in metric["arms"].as_array().into_iter().flatten() {
+            let difference = metric["differences"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .find(|difference| difference["arm"] == arm["arm"]);
+            table.add_row(vec![
+                text(&arm["arm"]),
+                text(&arm["n"]),
+                text(&arm["open"]),
+                with_interval(&arm["mean"], &arm["mean_interval"]),
+                if rate {
+                    text(&arm["successes"])
+                } else {
+                    with_interval(&arm["median"], &arm["median_interval"])
+                },
+                difference.map_or_else(String::new, |difference| {
+                    with_interval(
+                        &difference["overall"]["estimate"],
+                        &difference["overall"]["interval"],
+                    )
+                }),
+            ]);
+        }
+        blocks.push(Block::table(table));
+        let mut cells = Table::new(vec![
+            Column::new("ARM"),
+            Column::new("COMPLEXITY"),
+            Column::new("N ARM").number(),
+            Column::new("N CONTROL").number(),
+            Column::new("DIFF [95%]"),
+        ]);
+        for difference in metric["differences"].as_array().into_iter().flatten() {
+            for cell in difference["by_complexity"].as_array().into_iter().flatten() {
+                cells.add_row(vec![
+                    text(&difference["arm"]),
+                    text(&cell["complexity"]),
+                    text(&cell["n_arm"]),
+                    text(&cell["n_control"]),
+                    with_interval(&cell["estimate"], &cell["interval"]),
+                ]);
+            }
+        }
+        blocks.push(Block::table(cells));
+    }
+    if !empty.is_empty() {
+        blocks.push(Block::text(format!(
+            "\nNo outcomes yet: {}",
+            empty.join(", ")
+        )));
+    }
+
+    let guardrails = value["guardrails"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if !guardrails.is_empty() {
+        let mut table = Table::new(vec![
+            Column::new("GUARDRAIL"),
+            Column::new("THRESHOLD"),
+            Column::new("ARM"),
+            Column::new("DIFF [95%]"),
+            Column::new("STATUS"),
+        ]);
+        for guardrail in guardrails {
+            for arm in guardrail["arms"].as_array().into_iter().flatten() {
+                table.add_row(vec![
+                    text(&guardrail["metric"]),
+                    text(&guardrail["threshold"]),
+                    text(&arm["arm"]),
+                    with_interval(&arm["estimate"], &arm["interval"]),
+                    text(&arm["status"]),
+                ]);
+            }
+        }
+        blocks.push(Block::text("\nGuardrails:"));
+        blocks.push(Block::table(table));
+    }
+    blocks
+}
+
+/// A number rounded for reading; empty for null.
+fn number(value: &Value) -> String {
+    let Some(number) = value.as_f64() else {
+        return text(value);
+    };
+    let magnitude = number.abs();
+    if magnitude >= 100.0 {
+        format!("{number:.0}")
+    } else if magnitude >= 1.0 || magnitude == 0.0 {
+        format!("{number:.2}")
+    } else if magnitude >= 0.001 {
+        format!("{number:.3}")
+    } else {
+        format!("{number:.2e}")
+    }
+}
+
+/// `estimate [low, high]`, or the estimate alone without an interval.
+fn with_interval(estimate: &Value, interval: &Value) -> String {
+    let estimate = number(estimate);
+    match interval.as_array().map(Vec::as_slice) {
+        Some([low, high]) => format!("{estimate} [{}, {}]", number(low), number(high)),
+        _ => estimate,
+    }
 }
 
 /// `name:weight` per active arm, the control marked `*`.

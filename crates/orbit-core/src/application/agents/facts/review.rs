@@ -45,6 +45,18 @@ pub(super) fn judge_rejects(reviews: &mut [Review], candidates: &Candidates) {
     }
 }
 
+/// The verdicts of a task's review gate settlements in comment order, a
+/// replayed settlement counted once.
+pub(crate) fn review_gate_verdicts(comments: &[TaskComment]) -> Vec<ReviewVerdict> {
+    let mut seen = BTreeSet::new();
+    comments
+        .iter()
+        .filter_map(settlement)
+        .filter(|review| seen.insert(review.attempt_id.clone()))
+        .map(|review| review.verdict)
+        .collect()
+}
+
 /// A review gate settlement comment: its attempt, verdict, reviewer, the
 /// commits it names, its runtime and its findings.
 pub(super) fn settlement(comment: &TaskComment) -> Option<Review> {

@@ -56,11 +56,37 @@ pub(super) fn load_assignments(
     workspace: &str,
     task: &str,
 ) -> Result<Vec<ExperimentAssignment>, OrbitError> {
-    let mut statement = conn.prepare(
-        "SELECT a.experiment_id, a.task_id, a.arm, a.segment, a.overlay_digest, a.assigned_at, a.forced, a.exclusion_reason FROM experiment_assignments a JOIN experiments e ON e.workspace_id=a.workspace_id AND e.id=a.experiment_id WHERE a.workspace_id=?1 AND a.task_id=?2 ORDER BY e.created_at, e.id"
-    ).map_err(sqlite_store_error)?;
+    query_assignments(
+        conn,
+        "SELECT a.experiment_id, a.task_id, a.arm, a.segment, a.overlay_digest, a.assigned_at, a.forced, a.exclusion_reason FROM experiment_assignments a JOIN experiments e ON e.workspace_id=a.workspace_id AND e.id=a.experiment_id WHERE a.workspace_id=?1 AND a.task_id=?2 ORDER BY e.created_at, e.id",
+        workspace,
+        task,
+    )
+}
+
+/// One experiment's rows, oldest assignment first.
+pub(super) fn load_experiment_assignments(
+    conn: &Connection,
+    workspace: &str,
+    experiment: &str,
+) -> Result<Vec<ExperimentAssignment>, OrbitError> {
+    query_assignments(
+        conn,
+        "SELECT experiment_id, task_id, arm, segment, overlay_digest, assigned_at, forced, exclusion_reason FROM experiment_assignments WHERE workspace_id=?1 AND experiment_id=?2 ORDER BY assigned_at, task_id",
+        workspace,
+        experiment,
+    )
+}
+
+fn query_assignments(
+    conn: &Connection,
+    sql: &str,
+    workspace: &str,
+    key: &str,
+) -> Result<Vec<ExperimentAssignment>, OrbitError> {
+    let mut statement = conn.prepare(sql).map_err(sqlite_store_error)?;
     statement
-        .query_map(params![workspace, task], |row| {
+        .query_map(params![workspace, key], |row| {
             Ok(ExperimentAssignment {
                 experiment: row.get(0)?,
                 task_id: row.get(1)?,

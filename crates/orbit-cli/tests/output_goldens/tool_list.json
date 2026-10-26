@@ -1242,6 +1242,34 @@
     ]
   },
   {
+    "name": "orbit.experiment.readout",
+    "description": "Read an experiment's outcomes per arm, computed now from its assignments and the records Orbit already keeps. Intention-to-treat by task; forced assignments are left out and counted. Per arm and segment: n, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes and crew mix; each arm's difference from control overall (post-stratified by complexity) and per complexity; guardrail status; a sample-ratio chi-square against the weights; overlay-digest drift. The verdict is collecting until every arm reaches min_sample or max_days pass, withheld on a sample-ratio mismatch, then winner <arm>, no difference or inconclusive. The shape carries schema_version. Read-only.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "id",
+        "description": "The experiment's id or name, as `orbit.experiment.list` prints it.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "metric",
+        "description": "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.experiment.resume",
     "description": "Resume a paused experiment. Refused while experiments.max_running other experiments are already running. Operator only: an agent session is refused.",
     "enabled": true,

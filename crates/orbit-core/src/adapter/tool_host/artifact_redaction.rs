@@ -369,7 +369,8 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | ExperimentVerb::Conclude
             | ExperimentVerb::Abandon
             | ExperimentVerb::Show
-            | ExperimentVerb::List => ActionPolicy {
+            | ExperimentVerb::List
+            | ExperimentVerb::Readout => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },

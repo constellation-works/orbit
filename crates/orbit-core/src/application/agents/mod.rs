@@ -32,6 +32,7 @@ mod score;
 mod shadow;
 
 pub use attribution::{Charge, Credit, Owner};
+pub(crate) use facts::review_gate_verdicts;
 pub use facts::{AgentFacts, Problem};
 
 /// The model of a row whose runs, or for orchestrators whose tasks, recorded

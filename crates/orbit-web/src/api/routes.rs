@@ -250,6 +250,12 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/diagnostics/backlog_forecast",
             get(diagnostics::diagnostics_backlog_forecast),
         )
+        // Analytics › Experiments: one experiment's per-arm readout, the same
+        // JSON as `orbit.experiment.readout`.
+        .route(
+            "/diagnostics/experiments/{id}/readout",
+            get(diagnostics::diagnostics_experiment_readout),
+        )
         .route("/diagnostics/denials", get(denials::list_denials))
         // Analytics › Codebase: per-path regression, contention, footprint-miss,
         // coupling, blocked and rejected rates from one cached scan.

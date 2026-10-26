@@ -19,5 +19,6 @@ pub(in crate::application::agents) use model::{
     Attempt, Finding, FindingState, Record, RegressionLink, RejectOutcome, Review, SCAN_DAYS,
     TaskFacts, filing_attempt,
 };
+pub(crate) use review::review_gate_verdicts;
 
 pub(in crate::application::agents) use scan::scan;

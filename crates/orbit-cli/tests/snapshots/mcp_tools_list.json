@@ -666,6 +666,45 @@
     }
   },
   {
+    "name": "orbit_experiment_readout",
+    "description": "Read an experiment's outcomes per arm, computed now from its assignments and the records Orbit already keeps. Intention-to-treat by task; forced assignments are left out and counted. Per arm and segment: n, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes and crew mix; each arm's difference from control overall (post-stratified by complexity) and per complexity; guardrail status; a sample-ratio chi-square against the weights; overlay-digest drift. The verdict is collecting until every arm reaches min_sample or max_days pass, withheld on a sample-ratio mismatch, then winner <arm>, no difference or inconclusive. The shape carries schema_version. Read-only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The experiment's id or name, as `orbit_experiment_list` prints it."
+        },
+        "metric": {
+          "type": "string",
+          "description": "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok",
+            "muse"
+          ],
+          "description": "Preferred provenance field. Pass the canonical agent family (codex, claude, gemini, grok, or muse); full model strings are accepted and auto-normalized."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
     "name": "orbit_experiment_show",
     "description": "Show one experiment: its definition, status and current segment, each arm with its weight, overlay and overlay digest, and every event in order with its actor, time and reason. Read-only.",
     "inputSchema": {

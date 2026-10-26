@@ -53,6 +53,19 @@ impl ExperimentStoreBackend for Store {
         super::experiment_assignments::load_assignments(&conn, workspace_id, task_id)
     }
 
+    fn experiment_assignments(
+        &self,
+        workspace_id: &str,
+        experiment_id: &str,
+    ) -> Result<Vec<crate::contracts::ExperimentAssignment>, OrbitError> {
+        let conn = self.read()?;
+        super::experiment_assignments::load_experiment_assignments(
+            &conn,
+            workspace_id,
+            experiment_id,
+        )
+    }
+
     fn write_experiment(
         &self,
         write: &ExperimentWrite,
