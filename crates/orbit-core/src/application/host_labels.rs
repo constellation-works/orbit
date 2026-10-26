@@ -7,7 +7,8 @@
 //! follower sends on each pull. Placement reads the two the same way at write
 //! time (refuse what no host could run), at admission (skip what this host
 //! cannot run) and on read surfaces (name the wait while no host that could
-//! run it is pulling).
+//! run it is pulling). A non-empty `granted_tools` pins placement to the
+//! owner: a follower's labels cannot satisfy an owner's label gap.
 
 use std::collections::BTreeSet;
 
@@ -26,6 +27,32 @@ const SERVING_LABEL_EVIDENCE_DAYS: i64 = 7;
 
 /// The name of this host when the runtime has no machine identity.
 const LOCAL_HOST: &str = "this host";
+
+/// Why any grant keeps a task off followers, regardless of the tool's kind.
+pub(crate) fn granted_tools_owner_hold(task: &Task) -> Option<String> {
+    (!task.granted_tools.is_empty()).then(|| {
+        format!(
+            "granted tools {} require execution on the owner host",
+            quoted_labels(&task.granted_tools)
+        )
+    })
+}
+
+/// This host's label gap, including the owner pin when the task has grants.
+fn required_labels_host_wait(task: &Task, labels: &BTreeSet<String>) -> Option<String> {
+    let missing = missing_host_labels(&task.requires_labels, labels);
+    (!missing.is_empty()).then(|| {
+        let wait = format!(
+            "{}; this host lacks {}",
+            host_labels_wait(&task.requires_labels),
+            quoted_labels(&missing)
+        );
+        match granted_tools_owner_hold(task) {
+            Some(grant) => format!("{grant}; {wait}"),
+            None => wait,
+        }
+    })
+}
 
 /// One host's effective labels, as placement reads them.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,20 +184,13 @@ impl OrbitRuntime {
     }
 
     /// Why this host may not start `task` for its labels, or `None` when it
-    /// carries every one: `waits for a host labelled `gpu` (requires_labels);
-    /// this host lacks `gpu``.
+    /// carries every one. When a grant pins the task here, the wait names
+    /// both the grant and the missing labels.
     pub fn task_host_labels_wait(&self, task: &Task) -> Option<String> {
         if task.requires_labels.is_empty() {
             return None;
         }
-        let missing = missing_host_labels(&task.requires_labels, &self.host_labels());
-        (!missing.is_empty()).then(|| {
-            format!(
-                "{}; this host lacks {}",
-                host_labels_wait(&task.requires_labels),
-                quoted_labels(&missing)
-            )
-        })
+        required_labels_host_wait(task, &self.host_labels())
     }
 
     /// The named wait for `task` while no live host can run it for its
@@ -204,7 +224,9 @@ impl OrbitRuntime {
 
 /// The named wait for a task no live host can run for its labels, read
 /// against `hosts` (see [`OrbitRuntime::fleet_label_hosts`]), or `None` when
-/// the task requires no label or a live host carries them all.
+/// the task requires no label or a live eligible host carries them all.
+/// Grants restrict eligible hosts to the owner, even if followers carry the
+/// required labels. This also feeds the batched task show/list readout.
 #[must_use]
 pub(crate) fn label_placement_wait(task: &Task, hosts: &[FleetLabelHost]) -> Option<String> {
     if task.requires_labels.is_empty() {
@@ -212,12 +234,27 @@ pub(crate) fn label_placement_wait(task: &Task, hosts: &[FleetLabelHost]) -> Opt
     }
     let carriers = hosts
         .iter()
+        .filter(|host| task.granted_tools.is_empty() || host.local)
         .filter(|host| host.runs(&task.tags, &task.requires_labels))
         .collect::<Vec<_>>();
     if carriers.iter().any(|host| host.live) {
         return None;
     }
     let wait = host_labels_wait(&task.requires_labels);
+    if let Some(grant) = granted_tools_owner_hold(task) {
+        return Some(
+            hosts
+                .iter()
+                .find(|host| host.local)
+                .and_then(|owner| required_labels_host_wait(task, &owner.labels))
+                .unwrap_or_else(|| {
+                    format!(
+                        "{grant}; {wait}: the owner host cannot satisfy them together \
+                         with the task's `os:` tags"
+                    )
+                }),
+        );
+    }
     if carriers.is_empty() {
         return Some(format!("{wait}: no registered serving host carries them"));
     }
