@@ -20,6 +20,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dashboardCsp, dashboardFile } from './dashboard_static.mjs';
+import { checkSettingsMutationOwnership } from './dashboard_settings_mutations.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -118,6 +119,7 @@ try {
   });
 
   const capturedPuts = [];
+  let holdPut = null;
   const rawFiles = {
     workspace: { text: '# workspace marker\n[workflow]\nbase_branch = "workspace"\n' },
     global: { text: '# global marker\n[machine]\nname = "global"\n' },
@@ -202,6 +204,7 @@ try {
       const key = decodeURIComponent(url.pathname.slice('/api/config/keys/'.length));
       const body = route.request().postDataJSON();
       capturedPuts.push({ key, body });
+      if (holdPut) { const hold = holdPut; holdPut = null; hold.onArrive(); await hold.wait; }
       await route.fulfill({ status: 200, json: { ok: true, key, value: body.value } });
       return;
     }
@@ -281,9 +284,21 @@ try {
   const expectedCli = `orbit config set workflow.required_validation_commands '["make ci-guards", "cargo fmt --all -- --check, with commas", "echo a, b, c"]'`;
   assert.equal(cliText, expectedCli);
 
-  // Click Save without modifying textarea
+  // Hold the actual PUT to show that Save and Remove share one operation.
   capturedPuts.length = 0;
+  const pendingSave = {};
+  pendingSave.arrived = new Promise((resolve) => { pendingSave.onArrive = resolve; });
+  pendingSave.wait = new Promise((resolve) => { pendingSave.release = resolve; });
+  holdPut = pendingSave;
   await drawer.locator('button.config-action:has-text("Save")').click();
+  await within(pendingSave.arrived, 'drawer PUT');
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: width === 375 ? 812 : 900 });
+    await drawer.locator('.drawer-actions').scrollIntoViewIfNeeded();
+    await page.screenshot({ path: path.join(evidence, `config-topics-pending-dark-${width}.png`) });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  pendingSave.release();
 
   // Verify that the PUT was executed and carries the exact original array
   await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
@@ -502,6 +517,8 @@ try {
   // -------------------------------------------------------------------------
   // Case (c): array cliCmd line executed in isolated CLI fixture yields PUT value
   // -------------------------------------------------------------------------
+  const mutationAssertions = await checkSettingsMutationOwnership(browser, `http://127.0.0.1:${port}`);
+
   const fixtureBase = path.join(evidence, 'cli-child-fixture');
   fs.rmSync(fixtureBase, { recursive: true, force: true });
   const fixtureHome = path.join(fixtureBase, 'home');
@@ -583,6 +600,7 @@ try {
   fs.writeFileSync(path.join(evidence, 'dashboard-config-topics-result.json'), JSON.stringify({
     passed: true,
     assertions: [
+      ...mutationAssertions,
       'array-commas-preserved-on-save',
       'cleared-integer-not-written-to-zero',
       'non-numeric-integer-refused-before-request',
