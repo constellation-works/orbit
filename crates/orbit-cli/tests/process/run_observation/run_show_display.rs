@@ -1121,6 +1121,87 @@ fn run_show_failed_leaf_uses_root_cause_and_current_task_status() {
     }
 }
 
+/// A stale `workspace_auto_pipeline` read with `--no-reconcile` must not
+/// reconcile via the auto-concurrency policy readback: durable state,
+/// reservations and the reported state stay as stored, in text and JSON.
+/// The default read still reconciles.
+fn stale_workspace_auto_no_reconcile_preserves_state_and_default_reconciles() {
+    const STALE_AUTO: &str = "jrun-stale-auto-pipeline";
+    let fixture = Fixture::terminal();
+    let workspace_id = fixture.workspace_id();
+    let orbit_dir = canonical(&fixture.work).join(".orbit");
+    let db = fixture.db();
+    db.execute(
+        "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
+             input_json, scheduled_at, started_at, created_at, pid)
+         VALUES (?1, ?2, 'workspace_auto_pipeline', 1, 'running',
+             '{\"auto_concurrency\":\"shadow\",\"auto_concurrency_source\":\"explicit\"}',
+             '2026-09-20T01:00:00+00:00', '2026-09-20T01:00:01+00:00',
+             '2026-09-20T01:00:00+00:00', 999999)",
+        params![STALE_AUTO, workspace_id],
+    )
+    .expect("seed stale auto run");
+    db.execute(
+        "INSERT INTO task_reservations (reservation_id, workspace_orbit_dir, workspace_id, task_ids_json, files_json, actor, created_at, expires_at, owner_run_id) VALUES (?1, ?2, ?3, '[]', '[\"src/running.rs\"]', 'fixture', '2026-09-20T01:00:00+00:00', '2099-01-01T00:00:00+00:00', ?4)",
+        params![
+            format!("reservation-{STALE_AUTO}"),
+            orbit_dir.to_string_lossy(),
+            workspace_id,
+            STALE_AUTO
+        ],
+    )
+    .expect("seed auto reservation");
+    drop(db);
+    let before = fixture.snapshot();
+    assert!(
+        before
+            .iter()
+            .any(|row| row.starts_with(&format!("reservation-{STALE_AUTO}"))
+                && row.contains("|held|")),
+        "fixture must start with a held reservation: {before:?}"
+    );
+
+    let text = fixture.text(&["run", "show", STALE_AUTO, "--no-reconcile"]);
+    assert!(text.contains("State: running"), "{text}");
+    assert!(
+        text.contains("Auto-concurrency: shadow (explicit"),
+        "{text}"
+    );
+    assert_eq!(
+        fixture.snapshot(),
+        before,
+        "text --no-reconcile mutated state"
+    );
+    assert_eq!(fixture.run_state(STALE_AUTO), "running");
+
+    let json = fixture.json(&["run", "show", STALE_AUTO, "--no-reconcile", "--json"]);
+    assert_eq!(json["run"]["state"], "running", "{json}");
+    assert_eq!(json["run"]["auto_concurrency"]["mode"], "shadow", "{json}");
+    assert_eq!(
+        json["run"]["auto_concurrency"]["source"], "explicit",
+        "{json}"
+    );
+    assert_eq!(
+        fixture.snapshot(),
+        before,
+        "JSON --no-reconcile mutated state"
+    );
+    assert_eq!(fixture.run_state(STALE_AUTO), "running");
+
+    // The default reconciling read retains its behavior.
+    let reconciled = fixture.json(&["run", "show", STALE_AUTO, "--json"]);
+    assert_eq!(reconciled["run"]["state"], "interrupted", "{reconciled}");
+    assert_eq!(fixture.run_state(STALE_AUTO), "interrupted");
+    let after = fixture.snapshot();
+    assert!(
+        after
+            .iter()
+            .filter(|row| row.starts_with(&format!("reservation-{STALE_AUTO}")))
+            .all(|row| row.ends_with("|stale_run_reconciled")),
+        "default read must release the stale reservation: {after:?}"
+    );
+}
+
 #[test]
 fn run_show_contracts() {
     if !isolated_run_observation("run_observation::run_show_display::run_show_contracts") {
@@ -1154,6 +1235,10 @@ fn run_show_contracts() {
         (
             "run_show_reports_the_failed_step_before_a_later_skip",
             run_show_reports_the_failed_step_before_a_later_skip as fn(),
+        ),
+        (
+            "stale_workspace_auto_no_reconcile_preserves_state_and_default_reconciles",
+            stale_workspace_auto_no_reconcile_preserves_state_and_default_reconciles as fn(),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");
