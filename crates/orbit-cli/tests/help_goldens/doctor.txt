@@ -10,12 +10,6 @@ Commands:
   fs-access  Dry-run a workspace-relative path against a filesystem profile's read and modify rules
 
 Options:
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
-
       --deep
           Scan every database page with SQLite quick_check; default checks only read the header and schema
 
@@ -52,21 +46,12 @@ Options:
       --confirm
           Confirm a destructive repair. Required by --fix-orphan-task-stores, which deletes partition directories and their task bundles
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

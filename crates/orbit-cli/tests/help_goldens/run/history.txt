@@ -6,14 +6,8 @@ Options:
   -j, --job <JOB_ID>
           Filter to one job ID
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --task <TASK_ID>
           Filter to runs whose input.task_ids array contains the task or whose top-level input.task_id matches it
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --state <STATE>
           Filter to any of these comma-separated run states
@@ -35,24 +29,15 @@ Options:
       --failures
           One row per task and root cause: the root-cause run, its step and crew, the cause's first line in full, and `orbit run show` for that run
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
 
 JSON shape: {"runs":[<job-run>]}. --failures uses {"failures":[{"task_id","run_id","step","crew","cause","show"}]} instead.
 ROLE says how a run was submitted: top-level directly, child by a parent run.

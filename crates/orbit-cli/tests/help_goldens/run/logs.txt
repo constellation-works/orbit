@@ -7,39 +7,24 @@ Arguments:
           Run ID to inspect. Defaults to the most recently scheduled run globally
 
 Options:
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
   -s, --step <STEP_ID>
           Show raw logs for a single activity step.id from the v2 job YAML
 
   -f, --follow
           Stream output until the run is terminal. JSON output is JSONL
 
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
-
       --no-reconcile
           Report stored run records as-is: skip stale-run reconciliation, which finalizes an orphaned pending or running run as interrupted, releases its task reservations, and settles with their owner the pull claims an ended drain or leaf left
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
 
 JSON shape: {"run_id":"...","job_id":"...","records":[{"step_id":...,"stdout_blob_ref":...,"stderr_blob_ref":...,"stdout":"...","stderr":"..."}]}
 With --follow, JSON modes emit JSONL records {run_id, provider, stream, text}. Live provider lines come from the retained redacted tracing feed; completed captures supply remaining output. With --step, captures are emitted as each invocation finishes. Stops at any terminal outcome; Ctrl-C stops observing without cancelling.
