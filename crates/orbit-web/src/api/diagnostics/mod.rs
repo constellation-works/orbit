@@ -1,7 +1,8 @@
-//! `/diagnostics/{metrics,errors,friction,implement_one,completions,defects,task_tokens,diff_stats,delivery_friction}`
+//! `/diagnostics/{metrics,errors,friction,implement_one,completions,defects,task_tokens,diff_stats,delivery_friction,backlog_forecast}`
 //! aggregation endpoints.
 
 mod audit;
+mod backlog_forecast;
 mod completions;
 mod defects;
 mod delivery_friction;
@@ -13,6 +14,7 @@ mod metrics;
 mod task_tokens;
 mod trend;
 
+pub(super) use backlog_forecast::diagnostics_backlog_forecast;
 pub(super) use completions::diagnostics_completions;
 pub(super) use defects::diagnostics_defects;
 pub(super) use delivery_friction::diagnostics_delivery_friction;

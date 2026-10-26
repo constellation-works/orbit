@@ -206,5 +206,7 @@ pub use orbit_store::{RoutineFireRecord, RoutineFireState};
 pub use orbit_store::contracts::TaskReservationRecord;
 // Landed-delivery diff stats behind the dashboard's Metrics diff trend.
 pub use orbit_store::contracts::LandedDiffStats;
+// Stored backlog forecasts behind the dashboard's Analytics › Forecast.
+pub use orbit_store::contracts::StoredBacklogForecast;
 pub use runtime::engine::{ResolvedCrewProjection, TaskCrewRead};
 pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};

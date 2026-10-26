@@ -14,6 +14,7 @@ import { initLogTail, fitLogPanelToViewport, placeDock, setDockMode } from './js
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
+import { fetchAndRenderForecast, placeholdForecastAggregate } from './js/forecast.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
@@ -264,6 +265,7 @@ function routerContext() {
     fetchReliability: () => fetchAndRenderReliability().catch((e) => console.error("Failed to fetch reliability metrics", e)),
     fetchMetrics: () => fetchAndRenderMetrics().catch((e) => console.error("Failed to fetch metrics", e)),
     fetchResources: () => fetchAndRenderResources().catch((e) => console.error("Failed to fetch resource profiles", e)),
+    fetchForecast: () => fetchAndRenderForecast().catch((e) => console.error("Failed to fetch the backlog forecast", e)),
     fetchAgents: () => fetchAndRenderAgents().catch((e) => console.error("Failed to fetch the agent scorecard", e)),
     // ORB-14830: Doctor reads its report when the view opens, never per tick.
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
@@ -1524,11 +1526,17 @@ function activeRefreshJobs() {
       placeholdScoreboardAggregate();
       placeholdMetricsAggregate();
       placeholdResourcesAggregate();
+      placeholdForecastAggregate();
       return jobs;
     }
     if (activeAnalyticsSubtab === "resources") {
       // This host's delivery resource profiles for the selected workspace.
       add("Analytics › Resources", fetchAndRenderResources());
+      return jobs;
+    }
+    if (activeAnalyticsSubtab === "forecast") {
+      // Backlog forecast quantiles, arrivals and calibration for the workspace.
+      add("Analytics › Forecast", fetchAndRenderForecast());
       return jobs;
     }
     if (activeAnalyticsSubtab === "cost") {

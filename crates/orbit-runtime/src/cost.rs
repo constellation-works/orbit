@@ -168,6 +168,9 @@ pub struct InvocationSpend {
     /// As [`NormalizedTokenSummary::normalized_token_total`]; `None` when the
     /// model is missing or not covered by the normalization.
     pub normalized_tokens: Option<u64>,
+    /// Wall time the invocation ran; `ts` is recorded when it ended.
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

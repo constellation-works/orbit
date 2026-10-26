@@ -84,6 +84,46 @@ impl ActiveDrain {
     }
 }
 
+/// The leaf-run ceiling the live drain admits under, and where it comes
+/// from: the live local drain's (an operator adjustment, else its submitted
+/// value), then the live pull drain's, else the job default.
+pub(super) fn drain_ceiling(
+    active: Option<&ActiveDrain>,
+    pull: Option<&LivePullDrain>,
+) -> (u64, &'static str) {
+    match (active, pull) {
+        (Some(drain), _) => (
+            u64::from(drain.effective_max_active_leaf_runs()),
+            if drain.limit.is_some() {
+                "run_control"
+            } else {
+                "run_input"
+            },
+        ),
+        (None, Some(drain)) => (
+            u64::from(drain.effective_max_active_leaf_runs()),
+            if drain.limit.is_some() {
+                "pull_run_control"
+            } else {
+                "pull_run_input"
+            },
+        ),
+        (None, None) => (DEFAULT_MAX_ACTIVE_LEAF_RUNS, "default"),
+    }
+}
+
+impl OrbitRuntime {
+    /// The leaf-run ceiling a drain is admitting under right now, and its
+    /// source, as readiness reports it without `--concurrency`: `run_control`
+    /// or `run_input` for the live local drain, `pull_run_control` or
+    /// `pull_run_input` for a live pull drain, else `default`.
+    pub fn drain_concurrency_ceiling(&self) -> Result<(u64, &'static str), OrbitError> {
+        let (active, _) = workspace_drains(self)?;
+        let pull = live_pull_drain(self)?;
+        Ok(drain_ceiling(active.as_ref(), pull.as_ref()))
+    }
+}
+
 /// Report the running coordinator separately from runs waiting for its slot,
 /// oldest first. The job's active-run limit permits one running drain and
 /// pending successors.

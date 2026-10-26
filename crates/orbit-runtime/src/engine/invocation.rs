@@ -414,6 +414,7 @@ impl RuntimeKernel {
                 task_ids: fact.task_ids.clone(),
                 provider_cost_usd: fact.provider_cost_usd.filter(|cost| valid_cost(*cost)),
                 normalized_tokens: normalized_token_total(fact),
+                duration_ms: fact.duration_ms,
             })
             .collect())
     }

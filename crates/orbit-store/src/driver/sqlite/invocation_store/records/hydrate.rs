@@ -167,6 +167,7 @@ pub(super) fn map_invocation_accounting_fact(
         provider_cost_usd,
         derived_cost_usd,
         activity_id: row.get(9)?,
+        duration_ms: u64::try_from(row.get::<_, i64>(10)?).unwrap_or(0),
     })
 }
 
