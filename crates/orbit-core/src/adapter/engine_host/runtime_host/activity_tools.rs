@@ -171,16 +171,16 @@ fn resolve_granted_deny_lifts(
                     "the tool is always operator-only, so a grant cannot lift its denial".into(),
                 ));
             }
-            if classification.effect == GrantedToolEffect::Mutating {
-                grants.held_mutating.insert(tool_name.clone());
-                continue;
-            }
             if let Some(entry) = disallow_list.iter().find(|entry| {
                 *entry != tool_name && tool_allowed(tool_name, std::slice::from_ref(*entry))
             }) {
                 return Err(refuse(format!(
                     "a grant lifts only an exact disallow entry, and `{entry}` still covers it for {activity}"
                 )));
+            }
+            if classification.effect == GrantedToolEffect::Mutating {
+                grants.held_mutating.insert(tool_name.clone());
+                continue;
             }
             grants.lifted.insert(tool_name.clone());
         }
