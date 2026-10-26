@@ -547,9 +547,11 @@ shipped default for that tag and role. Tags match ignoring case.
 Orbit ships defaults for three tags. `no-diff-expected` gives
 implementers the read-only handoff rule. `skip-validation` gives
 implementers the light-delivery rule: run no local validation while the
-change stays inside `workflow.light_delivery_paths`. `ui` gives implementers
-the screenshot rule and gives reviewers the check that screenshots are
-attached. A mapped file replaces the default for that tag and role.
+change stays inside `workflow.light_delivery_paths`. `ui` routes implementers
+to a host with a verified browser kit and selects the optional PR screenshots
+section; an empty section never blocks opening. Visual task artifact evidence
+follows the workspace guide and actual diff, not the tag. A mapped file
+replaces the default for that tag and role.
 
 The global file layers under the workspace file: a workspace entry
 replaces the global one for the same tag and role and leaves the other

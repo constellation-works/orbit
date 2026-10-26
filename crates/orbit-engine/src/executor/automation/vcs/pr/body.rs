@@ -59,16 +59,13 @@ pub(super) fn build_batch_pr_body(
             pr_config,
             freshness: Some(freshness),
         };
-        let (body, mut missing) = match inputs.template {
+        let (body, missing) = match inputs.template {
             Some(template) => render_template_body(template, &values, inputs)?,
             None => {
                 let body = build_single_task_pr_body(task, freshness, pr_config, inputs);
                 append_agent_sections(body, pr_config, inputs)
             }
         };
-        if matches!(inputs.screenshots, Screenshots::Missing) {
-            missing.push(SCREENSHOTS_SECTION.to_string());
-        }
         (body, missing)
     } else {
         (
@@ -300,11 +297,11 @@ fn render_template_body(
 }
 
 /// The Markdown under the screenshots heading, or `None` when the section is
-/// off. With no publishable screenshot it is [`MISSING_SECTION_NOTE`].
+/// off. An empty section is optional and carries a neutral note.
 fn screenshot_content(screenshots: &Screenshots) -> Option<&str> {
     match screenshots {
         Screenshots::Off => None,
-        Screenshots::Missing => Some(MISSING_SECTION_NOTE),
+        Screenshots::Missing => Some("No screenshots attached."),
         Screenshots::Table(table) => Some(table),
     }
 }

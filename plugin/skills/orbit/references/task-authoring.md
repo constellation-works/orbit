@@ -167,10 +167,10 @@ The next admission honours it. A task already running or claimed is not moved.
 Tag every task whose change a user will see (a dashboard, web pages, a docs
 site, a desktop app UI) `ui`. Topical tags such as `dashboard` or `website`
 may stay alongside it, but `ui` is the one tooling reads; don't invent
-variants (`web-ui`, `frontend`). Its delivery owes screenshots of each changed
-view as task artifacts ([task-execution.md](task-execution.md#screenshots-of-a-ui-change)),
-and its reviewer checks them. The tag carries those two rules into the
-implementer's and reviewer's prompts as tag instructions (below).
+variants (`web-ui`, `frontend`). The tag routes work to a verified browser kit
+and selects the optional PR screenshots section. It does not make screenshots
+a PR-opening prerequisite. Task artifact evidence follows the workspace guide
+and actual diff, not the tag.
 
 The tag also routes the task to a host with a verified headless browser kit
 (the orbit-setup browser-checks reference). Admission reads the kit every
@@ -187,17 +187,17 @@ ignoring case.
 
 When task-pilot finds a task's criteria or context files are user-facing UI
 and the task has no `ui` tag, it adds one; QA sweeps add it to the UI
-findings they file. Neither ever removes a `ui` tag someone set. The
-screenshot rule follows the diff, not the tag: an untagged UI change still
-owes screenshots.
+findings they file. Neither ever removes a `ui` tag someone set. The workspace
+guide's task-artifact evidence rule follows the diff, not the tag. The PR
+screenshots section remains optional, including for `ui` tasks.
 
 ## Tags that carry instructions
 
 Some tags add trusted instructions to the prompts of the activities that work
 on the task. Orbit ships them for `no-diff-expected` (the read-only handoff
 rule, for implementers), `skip-validation` (no local validation while the
-change stays light, for implementers) and `ui` (the screenshot rule, for
-implementers and reviewers). A workspace can map any tag to a repository file per role
+change stays light, for implementers) and `ui` (browser-kit routing and the
+optional PR screenshots section). A workspace can map any tag to a repository file per role
 (implement, review, recovery) under `[workflow.tag_instructions.<tag>]`,
 replace a shipped default, or switch one off ([tag instructions in the published
 configuration reference](https://github.com/constellation-works/orbit/blob/main/docs/CONFIG.md#workflowtag_instructionstag--extra-instructions-for-tagged-tasks)).

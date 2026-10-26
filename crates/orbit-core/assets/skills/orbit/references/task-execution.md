@@ -230,8 +230,11 @@ defect, not a defect in the code under test.
 ### Screenshots of a UI change
 
 A diff that changes something a user sees (dashboard, web pages, docs site,
-desktop app UI) owes screenshots of each changed view as task artifacts. The
-diff decides this, not the tag: an untagged UI change still owes them.
+desktop app UI) follows the workspace guide's screenshot evidence rule for
+task artifacts. This review evidence follows the diff, not the `ui` tag.
+Publishing screenshots in the PR body is optional: if
+`pr.screenshot_section` applies and none are attached, Orbit writes `No
+screenshots attached.` and does not draft or refuse the PR for that reason.
 `.orbit/tmp/` is cleared with the worktree, so a screenshot left only there is
 lost evidence.
 
@@ -253,10 +256,11 @@ lost evidence.
 - Keep each under the 1 MiB per-artifact limit: prefer a viewport capture to a
   full-page one, or JPEG or WebP when a PNG is too large.
 - List the artifact paths in the execution summary.
-- Orbit publishes these artifacts into the PR's `## Screenshots` table by
-  itself. When `pr.screenshot_section` applies, `pr_open` commits the shots to
-  the task's permanent evidence ref `refs/orbit/evidence/<task-id>` and renders
-  the Before/After table in the PR body. Do not push your own evidence branch:
+- Orbit publishes these artifacts into the PR's `## Screenshots` table when
+  `pr.screenshot_section` applies. `pr_open` commits attached shots to the
+  task's permanent evidence ref `refs/orbit/evidence/<task-id>` and renders
+  the Before/After table in the PR body; an empty section is optional. Do not
+  push your own evidence branch:
   Orbit replaces the hand-pushed evidence branch used for
   constellation-works/orbit#6155.
 
