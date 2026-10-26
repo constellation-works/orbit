@@ -343,12 +343,18 @@ The trial runs three arms in parallel over the same period, next to the explore-
    partition's pilot invocation is shared by up to five tasks; the readout states how the
    series attributes it (see Concerns).
 2. **Turns to first edit.** The number of tool calls before the first file-mutating tool call
-   in a task's first `agent_implement` invocation. Alongside it, the `result_bytes` summed
-   over those calls, which measures the dump directly. Both come from the ordered
-   `ToolCallTrace` (`seq`, `tool_name`, `result_bytes`) on `InvocationRecord.tool_calls`.
-   Orbit records no such metric today, so slice S5 adds the series. A provider whose edits go
-   through a generic shell tool has no detectable first edit. Those invocations are excluded
-   and counted, never scored as zero.
+   in a task's first implement invocation: the earlier of `implement_one` and
+   `agent_implement` by `(ts, id)`. Alongside it, the `result_bytes` summed over those calls,
+   which measures the dump directly. Both come from the ordered `ToolCallTrace` (`seq`,
+   `tool_name`, `result_bytes`) on `InvocationRecord.tool_calls`. Slice S5 ships the series:
+   `GET /api/diagnostics/turns_to_edit`, charted as Analytics › Metrics › Turns to first edit
+   [ORB-18542], per complexity and tag cohort. A later implement invocation never stands in
+   for the first. If the first has no detectable edit, the task is excluded and counted, never
+   scored as zero and never rescored from a later invocation. A provider whose edits go through
+   a generic shell tool has no detectable first edit, so its invocations are excluded and
+   counted the same way. `crates/orbit-web/tests/http_api/metrics_trends.rs` pins this rule over
+   HTTP. Done tasks are the endpoint's default population; `outcome=all` adds the other terminal
+   tasks.
 3. **Delivery pass rate.** The share of the arm's tasks that reach `done` with no review
    repair round and no step or final recovery run on the implement path. Also the share that
    reach `done` at all.
