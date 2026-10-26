@@ -40,6 +40,7 @@ Loaded as both `AGENTS.md` and `CLAUDE.md`. For any Orbit lifecycle work, invoke
 - Default to `pub(crate)`, `.workspace = true` deps, bounded channels and typed `thiserror` variants.
 - Prefer the fewest moving parts: delete dead code and stale docs together; keep compatibility only for an external contract or persisted format.
 - Past ~800 lines, check whether a file holds more than one responsibility and split along those; don't scatter closely related code.
+- Names must be greppable. A `pub`/`pub(crate)` item used outside its module gets a name that says what it does and is near-unique in the repo (`role_styled_text`, not `text`; avoid bare `run`, `handle`, `process`, `new_state`). Never encode the file path in a name (`text_oc`); it lies after a move. Call such functions through their module (`use crate::output::color;` then `color::text(…)`), not `use …::{text}`, so `grep 'color::text('` finds every call site. Rename generic names when you touch them, not in bulk.
 - Never expose internal task/friction IDs in user-facing output, CLI help (Clap renders `///`) or MCP text.
 - User-facing CLI help and errors, MCP descriptions and UI text must stand alone: no Orbit source-tree paths or repo docs, only verified published docs or installed resources. Contributor docs may cite source paths; user-workspace paths like `.orbit/tmp/` are fine.
 
