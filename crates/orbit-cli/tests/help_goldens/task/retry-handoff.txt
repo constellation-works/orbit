@@ -10,14 +10,8 @@ Options:
       --owner-workspace <WORKSPACE>
           Explicit owner logical workspace ID or absolute checkout path
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --candidate <COMMIT>
           Expected accepted candidate commit
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --base <COMMIT>
           Expected accepted base commit
@@ -36,21 +30,12 @@ Options:
       --request <KEY>
           Durable replay key; reuse after a lost reply
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

@@ -8,9 +8,6 @@ Options:
           
           [default: 127.0.0.1]
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --port <PORT>
           Port to bind to
           
@@ -28,21 +25,11 @@ Options:
       --operator
           Grant operator capability for the dashboard's governed controls — Operations, and the owner's handoff approve/revoke/recover actions — without a TTY or ORBIT_OPERATOR. `orbit web connect` passes this by default
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --format <MODE>
+  --json
+  --header

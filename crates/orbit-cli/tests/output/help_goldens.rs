@@ -132,6 +132,82 @@ fn golden_path(relative: &str) -> PathBuf {
         .join(relative)
 }
 
+fn read_help(args: &[&str], home: &Path, work: &Path) -> String {
+    let mut command = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let output = command
+        .current_dir(work)
+        .env("HOME", home)
+        .env("USERPROFILE", home)
+        .env_remove("ORBIT_FORMAT")
+        .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
+        .args(args)
+        .arg("--help")
+        .output()
+        .expect("run orbit --help");
+    assert!(
+        output.status.success(),
+        "`orbit {} --help` failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("help is UTF-8")
+}
+
+#[test]
+fn subcommand_globals_are_single_line_references() {
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&home).expect("fixture home");
+    fs::create_dir_all(&work).expect("fixture work");
+
+    for args in [
+        &["task", "show"][..],
+        &["task", "artifact"],
+        &["gc"],
+        &["run", "auto"],
+        &["workspace", "show"],
+        &["audit", "export"],
+        &["mcp", "serve"],
+    ] {
+        let help = read_help(args, &home, &work);
+        let (_, globals) = help.split_once("\nGlobal options").unwrap_or_else(|| {
+            panic!(
+                "{}: inherited options need their own section",
+                args.join(" ")
+            )
+        });
+        let entries: Vec<_> = globals
+            .lines()
+            .skip(1)
+            .take_while(|line| !line.is_empty())
+            .collect();
+        let mut expected = vec![
+            "--root <ROOT>",
+            "--workspace <SELECTOR>",
+            "--format <MODE>",
+            "--json",
+            "--header",
+        ];
+        // These commands own a flag with the same name; its help stays local.
+        if args == ["audit", "export"] {
+            expected.retain(|entry| !entry.starts_with("--format"));
+        }
+        if args == ["mcp", "serve"] {
+            expected.retain(|entry| !entry.starts_with("--workspace"));
+        }
+        assert_eq!(
+            entries.iter().map(|line| line.trim()).collect::<Vec<_>>(),
+            expected,
+            "{}: globals must occupy one line each, with descriptions available through orbit --help",
+            args.join(" ")
+        );
+    }
+}
+
 #[test]
 fn help_matches_the_shipped_surface() {
     // An empty HOME and cwd: no workspace and no installed plugin groups, so
@@ -144,29 +220,7 @@ fn help_matches_the_shipped_surface() {
     let update = std::env::var(UPDATE_HELP_GOLDENS_ENV).as_deref() == Ok("1");
 
     for (args, relative) in CASES {
-        let mut command = cargo_bin_cmd!("orbit");
-        test_env::clear_inherited_authority(|name| {
-            command.env_remove(name);
-        });
-        let output = command
-            .current_dir(&work)
-            .env("HOME", &home)
-            .env("USERPROFILE", &home)
-            .env_remove("ORBIT_FORMAT")
-            .env_remove("ORBIT_SKIP_HOST_PREREQUISITES")
-            .args(*args)
-            .arg("--help")
-            .output()
-            .expect("run orbit --help");
-        assert!(
-            output.status.success(),
-            "`orbit {} --help` failed: {}",
-            args.join(" "),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let actual = String::from_utf8(output.stdout)
-            .expect("help is UTF-8")
-            .replace(env!("CARGO_PKG_VERSION"), "<VERSION>");
+        let actual = read_help(args, &home, &work).replace(env!("CARGO_PKG_VERSION"), "<VERSION>");
         let path = golden_path(relative);
         if update {
             fs::write(&path, &actual)

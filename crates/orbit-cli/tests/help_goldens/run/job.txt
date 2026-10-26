@@ -10,36 +10,21 @@ Options:
       --input <INPUT>
           Input key=value pairs passed to all job steps (repeatable). Example: --input task_id=T123 --input base=main
 
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --wait
           Wait for a terminal run state for up to 3600 seconds by default. Exit nonzero on wait expiry or an unsuccessful run; expiry reports wait_timeout=true with the actual run state and leaves the run active
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --timeout-seconds <TIMEOUT_SECONDS>
           Wait deadline in seconds (0..=21600); requires --wait
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
 
 Examples:
   orbit run job task_auto_pipeline

@@ -7,17 +7,11 @@ Arguments:
           Friction record ID, e.g. FYYYY-MM-NNN
 
 Options:
-      --root <ROOT>
-          Orbit data directory to use (overrides every other source)
-
       --status <STATUS>
           Optional status: open, triaged, or resolved
 
       --tag <TAGS>
           Optional replacement taxonomy tag; repeat or comma-separate for multiple tags
-
-      --workspace <SELECTOR>
-          Active workspace to use: registered name, `ws_*` ID or checkout path
 
       --body <BODY>
           Optional replacement markdown body
@@ -33,21 +27,12 @@ Options:
       --title <TITLE>
           Optional replacement title, max 120 chars; empty restores derivation
 
-      --format <MODE>
-          Output format (default: auto — a table on a terminal, plain text when piped)
-
-          Possible values:
-          - auto:   Decide from the sink: a table on a terminal, plain text otherwise
-          - table:  Aligned columns with a header
-          - plain:  Untruncated text with tab-separated fields; a header row only with --header
-          - json:   A single JSON document
-          - ndjson: One complete JSON document per line
-
-      --json
-          Output as JSON (shorthand for --format json; always pretty-printed)
-
-      --header
-          Start plain output with a tab-separated header row (table output always has one)
-
   -h, --help
           Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

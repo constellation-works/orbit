@@ -29,6 +29,7 @@
 
 mod audit_middleware;
 mod command;
+mod help;
 mod output;
 mod parse;
 mod plugin_cli;
@@ -107,31 +108,59 @@ fn declares_format(command: &Command) -> bool {
 /// `FormatArg` under the subcommand's — each one a downcast panic in the other
 /// reader. Declaring the argument per level keeps every value at the level it
 /// was parsed at, where its type is the one that level expects.
-fn install_output_args(command: Command) -> Command {
+fn install_output_args(command: Command, is_root: bool) -> Command {
     let subcommands: Vec<String> = command
         .get_subcommands()
         .map(|sub| sub.get_name().to_string())
         .collect();
 
+    let mut global_ids: Vec<_> = command
+        .get_arguments()
+        .filter(|arg| arg.is_global_set() && matches!(arg.get_id().as_str(), "root" | "workspace"))
+        .map(|arg| arg.get_id().clone())
+        .collect();
     let mut command = if declares_format(&command) {
         command
     } else {
+        global_ids.push(FORMAT_ARG_ID.into());
         command.arg(format_arg())
     };
     if !command
         .get_arguments()
         .any(|arg| arg.get_long() == Some(JSON_ARG_ID))
     {
+        global_ids.push(JSON_ARG_ID.into());
         command = command.arg(json_arg());
     }
     if !command
         .get_arguments()
         .any(|arg| arg.get_long() == Some(HEADER_ARG_ID))
     {
+        global_ids.push(HEADER_ARG_ID.into());
         command = command.arg(header_arg());
     }
+    if !is_root {
+        command = help::compact_globals(command, &global_ids);
+    }
+    // Install inherited arguments before clap propagates them, so their help
+    // can differ from the root's. Keep a command's own same-id argument intact.
+    let inherited: Vec<_> = command
+        .get_arguments()
+        .filter(|arg| arg.is_global_set() && global_ids.contains(arg.get_id()))
+        .cloned()
+        .collect();
     for name in subcommands {
-        command = command.mut_subcommand(name, install_output_args);
+        command = command.mut_subcommand(name, |mut sub| {
+            for arg in &inherited {
+                if !sub
+                    .get_arguments()
+                    .any(|local| local.get_id() == arg.get_id())
+                {
+                    sub = sub.arg(arg.clone());
+                }
+            }
+            install_output_args(sub, false)
+        });
     }
     command
 }
@@ -436,7 +465,7 @@ fn cli_command(groups: &[orbit_core::adapter::command::PluginCliGroup]) -> Comma
             &format!("{}\nOptions:", plugin_cli::help_section(groups)),
         ))
     };
-    install_output_args(root)
+    install_output_args(root, true)
 }
 
 /// Parse argv into the derived CLI, the two inputs to mode resolution, and
