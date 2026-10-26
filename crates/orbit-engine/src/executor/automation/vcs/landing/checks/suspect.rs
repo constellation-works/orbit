@@ -84,7 +84,7 @@ fn repository_citations(
     .map_err(|error| format!("the files of head {head} could not be listed: {error}"))?
     .into_iter()
     .collect::<BTreeSet<_>>();
-    let in_repository = |path: &str| annotations::source_path(path) && blobs.contains(path);
+    let in_repository = |path: &str| blobs.contains(path);
     Ok(cited
         .iter()
         .filter_map(|path| match path.strip_prefix('/') {
