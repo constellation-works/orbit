@@ -1,6 +1,7 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
 import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, infoHint, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, reviewLayerText, runHref, statusPill, submissionNoticeLines, fmtDuration, bindTaskLink } from './common.js';
+import { backlogForecastSummary, drainBacklogForecastLink, fetchBacklogForecast } from './forecast.js';
 import { navigateToRun, setActiveTab } from './router.js';
 import { chooseDockMode, dockHome, onDockHomeChange, setDockMode } from './log-tail.js';
 import { renderAutomation } from './automation.js';
@@ -25,6 +26,11 @@ let lastOperations = null;
 let routineFailureRequest = 0;
 let lastAutoTasks = null;
 let lastAutoDrain = null;
+// The backlog forecast summary under the admission block. Keyed by workspace
+// revision so a late response cannot paint another workspace. Pending omits
+// the node; a settled miss is one muted line.
+let backlogForecastCache = { revision: null, status: "pending", summary: null };
+let backlogForecastFlight = null;
 let announcedDrainState = null;
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
@@ -119,6 +125,7 @@ export function initOperations(nextContext) {
     if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
   });
   unsubscribeWorkspace = onWorkspaceChange(() => {
+    clearBacklogForecastCache();
     lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
     closeEditors("routine");
     closeEditors("auto-task");
@@ -3154,10 +3161,53 @@ function forecastBlock(forecast, { retained }) {
   return block;
 }
 
+function clearBacklogForecastCache() {
+  backlogForecastCache = { revision: null, status: "pending", summary: null };
+  backlogForecastFlight = null;
+}
+
+// Paint the settled summary into the admission section. Pending, and a
+// revision that is not the one on screen, leave the slot empty so the card
+// does not shift while the read is in flight.
+function placeBacklogForecast(section) {
+  if (!section) return;
+  section.querySelector(":scope > .drain-backlog-forecast")?.remove();
+  if (backlogForecastCache.revision !== getWorkspaceRevision() || backlogForecastCache.status === "pending") return;
+  const summary = backlogForecastCache.status === "ready" ? backlogForecastCache.summary : null;
+  section.append(drainBacklogForecastLink(summary));
+}
+
+function paintBacklogForecast() {
+  placeBacklogForecast($("auto-drain-body")?.querySelector(".drain-forecast"));
+}
+
+// The default backlog forecast, joined to the drain refresh. A failure or a
+// payload with no time-to-drain estimate becomes the muted line and never
+// rejects the drain card. Aggregate and unselected views do not ask.
+function refreshBacklogForecast() {
+  if (!selectedWorkspace() || isAggregateView()) return Promise.resolve();
+  const revision = getWorkspaceRevision();
+  if (backlogForecastFlight && backlogForecastFlight.revision === revision) return backlogForecastFlight.promise;
+  const promise = fetchBacklogForecast().then((payload) => {
+    if (getWorkspaceRevision() !== revision || !selectedWorkspace()) return;
+    const summary = backlogForecastSummary(payload);
+    backlogForecastCache = { revision, status: summary ? "ready" : "unavailable", summary };
+  }).catch(() => {
+    if (getWorkspaceRevision() !== revision || !selectedWorkspace()) return;
+    backlogForecastCache = { revision, status: "unavailable", summary: null };
+  }).finally(() => {
+    if (backlogForecastFlight?.promise === promise) backlogForecastFlight = null;
+    if (getWorkspaceRevision() === revision) paintBacklogForecast();
+  });
+  backlogForecastFlight = { revision, promise };
+  return promise;
+}
+
 // The last local pass's gap-fit forecast. Readiness puts the pass on
 // `capacity.admission_forecast` and the last forecast that was actually built
 // on `capacity.last_admission_forecast`. A pass that built none says so, unless
 // a retained forecast stands in and this pass decided nothing of its own.
+// The backlog summary, when settled, is the last child of this section.
 function autoDrainForecast(payload) {
   const capacity = payload?.capacity || {};
   const current = asForecast(capacity.admission_forecast);
@@ -3166,6 +3216,7 @@ function autoDrainForecast(payload) {
   if (forecastBuiltAt(current)) {
     section.dataset.forecastState = "built";
     section.append(forecastBlock(current, { retained: false }));
+    placeBacklogForecast(section);
     return section;
   }
   const retained = forecastBuiltAt(last);
@@ -3176,12 +3227,14 @@ function autoDrainForecast(payload) {
     if (decisions) section.append(decisions);
   }
   if (retained) section.append(forecastBlock(last, { retained: true }));
+  placeBacklogForecast(section);
   return section;
 }
 
 // The status card reads top to bottom: the live window's figures (if any),
 // the slots it competes for and why nothing more starts, any provider or crew
-// hold, the last admission forecast, then the run and Stop. Its deadline sits
+// hold, the last admission forecast, the backlog forecast summary under it,
+// then the run and Stop. Its deadline sits
 // in the header. A host throttle leads the page as a banner above the summary
 // tiles (the Tasks dock, which hides the banner, shows the card's own note),
 // and starting a window is its own card beside, hidden in a read-only view.
@@ -3641,7 +3694,9 @@ function fetchAndRenderAutoDrain() {
     }
     return payload;
   });
-  return Promise.all([readiness.then(() => visit.isCurrent() && rendered ? fetchDrainPass(rendered) : undefined), fleet]).then(() => {});
+  // Caught inside refreshBacklogForecast, so a forecast miss cannot fail the pane.
+  const forecast = refreshBacklogForecast();
+  return Promise.all([readiness.then(() => visit.isCurrent() && rendered ? fetchDrainPass(rendered) : undefined), fleet, forecast]).then(() => {});
 }
 
 // The chrome always names the fleet, including when an idle default workspace
