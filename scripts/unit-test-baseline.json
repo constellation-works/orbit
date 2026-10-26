@@ -132,6 +132,7 @@
         "adapter/command/dispatch/tests/claimed_owner.rs::the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner",
         "adapter/command/dispatch/tests/claimed_owner.rs::the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox",
         "adapter/command/dispatch/tests/claimed_owner.rs::the_reviewer_scope_decides_on_and_forwards_the_canonical_path",
+        "adapter/command/dispatch/tests/claimed_owner/pagination.rs::claimed_task_detail_pages_preserve_broker_scope_and_owner_validation",
         "adapter/command/dispatch/tests/claimed_recovery.rs::a_claimed_leafs_final_recovery_reads_its_review_evidence_and_delivery_through_the_broker",
         "adapter/command/dispatch/tests/claimed_recovery.rs::a_claimed_worker_reads_the_delivery_of_its_own_leaf_only",
         "adapter/command/dispatch/tests/claimed_recovery.rs::final_recovery_attaches_no_review_artifact",

@@ -237,6 +237,13 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-core`'s `dispatch/tests/claimed_owner/pagination.rs::claimed_task_detail_pages_preserve_broker_scope_and_owner_validation`
+  reproduces F2026-10-599 through the public broker socket and real owner task-tool
+  dispatch, in an isolated child. It verifies bounded pages and owner validation
+  while keeping cross-task, internal-field, delivery and artifact-call refusals.
+  It lives with the existing claimed-worker broker fixture so it can provide a
+  disposable owner transport without SSH or a native confined worker.
+
 - `orbit-core`'s `pilot/tests/drain_promotion.rs::prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay`
   and `completed_prerequisite_lost_before_approval_still_holds` are criterion 2
   regressions for ORB-17762. They drive the public runtime's pilot apply action
