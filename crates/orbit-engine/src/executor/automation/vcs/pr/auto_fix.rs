@@ -59,8 +59,8 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    PR_AUTO_FIX_CHECK_REPAIR_MARKER, PrAutoFixAttempt, PrAutoFixBlocker, PrAutoFixDecision,
-    pr_auto_fix_attempts, pr_auto_fix_pushes,
+    DeliveryRefusal, PR_AUTO_FIX_CHECK_REPAIR_MARKER, PrAutoFixAttempt, PrAutoFixBlocker,
+    PrAutoFixDecision, pr_auto_fix_attempts, pr_auto_fix_pushes,
 };
 use serde_json::{Value, json};
 
@@ -76,7 +76,8 @@ use super::super::landing::checks::{HeadCheckEvidence, head_check_evidence, unmo
 use super::super::push::{push_batch_changes, record_published_pr_head};
 use super::super::retry_lineage::{LineageStep, LineageStop, RetryLineage};
 use super::answers::{CheckState, PullRequestStatus, RequiredChecks, read_required_checks};
-use super::delivery::{BlockedCheckRefusal, DeliveryPin, blocked_checks};
+use super::delivery::DeliveryPin;
+use super::merge_state::{BlockedCheckRefusal, blocked_checks};
 
 /// Polls a `BLOCKED` head with no failed and no running check is waited on
 /// before it counts as blocked: a freshly published head can report no
@@ -232,6 +233,14 @@ pub(super) fn stopped(pr_number: &str, reason: &str) -> OrbitError {
     ))
 }
 
+/// Give a deliberate stop its typed hold while preserving its diagnostic.
+pub(super) fn hold_auto_fix_stop(error: OrbitError, refusal: DeliveryRefusal) -> OrbitError {
+    match error {
+        OrbitError::Execution(message) => OrbitError::DeliveryRefused { refusal, message },
+        other => other,
+    }
+}
+
 /// [`stopped`] on a provider read that failed with `cause`, keeping the class
 /// of the private VCS failure it reports.
 pub(super) fn stopped_by(pr_number: &str, reason: &str, cause: &OrbitError) -> OrbitError {
@@ -273,16 +282,19 @@ pub(super) fn admit<H: RuntimeHost + ?Sized>(
             );
             Ok(attempt)
         }
-        PrAutoFixDecision::Duplicate(previous) => Err(stopped(
-            pr_number,
-            &format!(
-                "a {} repair was already dispatched for head {head_sha} as attempt {} of {} by \
+        PrAutoFixDecision::Duplicate(previous) => Err(hold_auto_fix_stop(
+            stopped(
+                pr_number,
+                &format!(
+                    "a {} repair was already dispatched for head {head_sha} as attempt {} of {} by \
                  run {}, and that head is still the one blocked",
-                blocker.as_str(),
-                previous.attempt,
-                previous.budget,
-                previous.run_id
+                    blocker.as_str(),
+                    previous.attempt,
+                    previous.budget,
+                    previous.run_id
+                ),
             ),
+            DeliveryRefusal::RepairDispatched,
         )),
         PrAutoFixDecision::Exhausted(attempts) => {
             let spent = attempts

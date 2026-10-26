@@ -53,6 +53,8 @@ mod crew_accounts;
 mod decision_channel;
 mod decision_requested;
 mod default_catalog;
+#[cfg(unix)]
+mod delivery_holds;
 mod dispatch_admission;
 mod distributed_drain;
 mod drain_approval;

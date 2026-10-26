@@ -431,6 +431,7 @@ struct OpenPullRequestHost {
     steps: Mutex<Vec<HandoffLandingStep>>,
     merge_state: &'static str,
     rollup: Value,
+    review_decision: &'static str,
     sent: Mutex<Vec<String>>,
 }
 
@@ -449,6 +450,7 @@ impl OpenPullRequestHost {
             steps: Mutex::default(),
             merge_state,
             rollup,
+            review_decision: "",
             sent: Mutex::default(),
         }
     }
@@ -483,7 +485,7 @@ impl orbit_engine::test_support::NullRuntimeHost for OpenPullRequestHost {
         }
         let candidate = &self.context.candidate;
         Ok(
-            json!({"pull_request": { "state": "OPEN", "headRefName": candidate.source_branch, "baseRefName": candidate.base_branch, "headRefOid": candidate.candidate.commit, "mergeStateStatus": self.merge_state, "reviewDecision": "", "statusCheckRollup": self.rollup, }}),
+            json!({"pull_request": { "state": "OPEN", "headRefName": candidate.source_branch, "baseRefName": candidate.base_branch, "headRefOid": candidate.candidate.commit, "mergeStateStatus": self.merge_state, "reviewDecision": self.review_decision, "statusCheckRollup": self.rollup, }}),
         )
     }
 }
@@ -2283,6 +2285,10 @@ fn handoff_landing_contracts_2() {
     crate::git_fixture::isolated(module_path!(), "handoff_landing_contracts_2", || {
         crate::git_fixture::run_scenarios(&[
             (
+                "landing_refusals_keep_typed_holds_and_candidate_red_stays_failed",
+                landing_refusals_keep_typed_holds_and_candidate_red_stays_failed,
+            ),
+            (
                 "only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair",
                 only_a_conflicting_or_stale_base_stops_a_pull_request_for_repair,
             ),
@@ -2438,4 +2444,76 @@ fn adopted_provider_head_refuses_unavailable_or_unsatisfied_policy() {
         "shadow-pending",
         "app-bound",
     ]);
+}
+
+/// Refusals cross the public job dispatcher as typed codes; unreadable and
+/// candidate-red observations retain the ordinary failure path.
+fn landing_refusals_keep_typed_holds_and_candidate_red_stays_failed() {
+    use orbit_types::workflow::{DeliveryRefusal, HeldFailure};
+    for (case, state, review, rollup, refusal) in [
+        (
+            "conflict",
+            "DIRTY",
+            "",
+            json!([]),
+            Some(DeliveryRefusal::LandingConflict),
+        ),
+        (
+            "draft",
+            "DRAFT",
+            "",
+            json!([]),
+            Some(DeliveryRefusal::PullRequestDraft),
+        ),
+        (
+            "review",
+            "BLOCKED",
+            "REVIEW_REQUIRED",
+            json!([]),
+            Some(DeliveryRefusal::RequirementsUnsatisfied),
+        ),
+        (
+            "candidate_red",
+            "BLOCKED",
+            "APPROVED",
+            json!([{"name":"test", "status":"COMPLETED", "conclusion":"FAILURE"}]),
+            None,
+        ),
+        ("unreadable_review", "BLOCKED", "unknown", json!([]), None),
+    ] {
+        let sandbox = tempdir().unwrap();
+        let mut host = OpenPullRequestHost::new(pr_context(sandbox.path()), state, rollup);
+        host.review_decision = review;
+        let job = super::v2_runtime::job_asset(json!([{
+            "id": "land", "spec": {"type":"deterministic", "action":"handoff_land", "config":{}},
+            "default_input": {"handoff_id":"handoff-1", "task_id":TASK_ID, "max_wait_seconds":0},
+        }]));
+        let audit = tempdir().unwrap();
+        let (writer, _, _) = super::v2_runtime::build_writer_and_sinks(audit.path(), RUN_ID);
+        let error =
+            orbit_engine::execute_job_with_resume(&job, json!({}), RUN_ID, writer, &host, None)
+                .unwrap_err();
+        assert_eq!(
+            HeldFailure::of(Some(error.failure_code()), Some(&error.to_string())),
+            refusal.map(HeldFailure::DeliveryRefused),
+            "{case}: {error}"
+        );
+        if let Some(refusal) = refusal {
+            assert!(
+                matches!(&error, orbit_engine::DispatchError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{case}: {error}"
+            );
+            assert_eq!(error.failure_code(), refusal.error_code());
+            assert!(
+                matches!(orbit_engine::dispatch_error_to_orbit(error), OrbitError::DeliveryRefused { refusal: actual, .. } if actual == refusal)
+            );
+        }
+        assert!(
+            host.steps()
+                .iter()
+                .any(|step| matches!(step, HandoffLandingStep::Stop { .. })),
+            "{case}"
+        );
+        assert!(!host.sent_ops().iter().any(|op| op == "pr.merge"), "{case}");
+    }
 }

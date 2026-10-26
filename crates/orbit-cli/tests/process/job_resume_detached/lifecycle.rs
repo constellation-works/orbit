@@ -13,7 +13,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_types::workflow::{DeliveryRefusal, JobRunState, PipelineState};
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 
@@ -282,7 +282,10 @@ fn isolated(name: &str) -> bool {
 }
 
 /// A shell forge substitute returns exactly the pinned PR. There is no network
-/// or merge mutation; switching its response models checks finishing elsewhere.
+/// or merge mutation; switching its response models delivery finishing elsewhere.
+/// A red candidate check keeps these generic-resume scenarios on the failure
+/// path. A required-review refusal is held and deliberately cannot be resumed
+/// through generic checkpoint recovery.
 fn forge(root: &std::path::Path, merged: bool) {
     let bin = root.join("bin");
     let install = !bin.exists();
@@ -290,11 +293,11 @@ fn forge(root: &std::path::Path, merged: bool) {
     let response = root.join("pr.json");
     fs::write(&response, json!({
         "state": if merged {"MERGED"} else {"OPEN"},
-        "mergeStateStatus": "BLOCKED", "reviewDecision": "CHANGES_REQUESTED",
+        "mergeStateStatus": "BLOCKED", "reviewDecision": "APPROVED",
         "headRefName": "orbit/candidate", "headRefOid": "candidate-sha", "baseRefName": "agent-main",
         "mergeCommit": if merged {json!({"oid":"landed-sha"})} else {Value::Null},
         "mergedAt": if merged {json!("2026-10-05T00:00:00Z")} else {Value::Null},
-        "statusCheckRollup": []
+        "statusCheckRollup": [{"name":"test", "status":"COMPLETED", "conclusion":"FAILURE"}]
     }).to_string()).unwrap();
     let gh = bin.join("gh");
     fs::write(&gh, format!("#!/bin/sh\ncase \"$1 $2\" in\n 'pr view') cat '{}' ;;\n 'pr list') echo '[]' ;;\n *) echo \"Unexpected forge mutation: $*\" >&2; exit 1 ;;\nesac\n", response.display())).unwrap();
@@ -729,7 +732,24 @@ fn completion_resume_cannot_invent_review_or_reverse_withdrawal() {
             );
             continue;
         }
-        fx.resume(&fx.run, "failed");
+        // An operator block or withdrawal now holds completion at its typed
+        // promotion guard. Other cases still reach a genuine delivery failure.
+        let not_promotable = matches!(case, "manual_block" | "proposed" | "archived" | "someday");
+        let retry = fx.resume(&fx.run, if not_promotable { "held" } else { "failed" });
+        if not_promotable {
+            assert_eq!(
+                fx.runtime
+                    .show_job_run(&retry)
+                    .unwrap()
+                    .steps
+                    .last()
+                    .unwrap()
+                    .error_code
+                    .as_deref(),
+                Some(DeliveryRefusal::TaskNotPromotable.error_code()),
+                "{case}: the refusal preserves the operator's decision"
+            );
+        }
         let after = fx.runtime.get_task(&fx.task).unwrap();
         if case == "early" {
             assert_eq!(after.status, TaskStatus::Blocked);

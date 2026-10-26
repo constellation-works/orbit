@@ -41,7 +41,10 @@ pub(super) fn run_step(step: &JobV2Step, ctx: &ExecCtx<'_>) -> Result<StepOutcom
         Ok(StepOutcome { success: true, .. }) => ("success", None),
         Ok(StepOutcome { message, .. }) => ("failed", message.clone()),
         Err(DispatchError::ReviewEvidenceHold(_)) => ("held", None),
-        Err(error @ DispatchError::ForgeUnavailableHold(_)) => ("held", Some(error.to_string())),
+        Err(
+            error
+            @ (DispatchError::ForgeUnavailableHold(_) | DispatchError::DeliveryRefused { .. }),
+        ) => ("held", Some(error.to_string())),
         Err(error @ DispatchError::ChildRunCancelled { .. }) => {
             ("cancelled", Some(error.to_string()))
         }

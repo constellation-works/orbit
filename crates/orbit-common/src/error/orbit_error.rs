@@ -156,6 +156,13 @@ pub enum OrbitError {
     },
     #[error("execution failed: {0}")]
     Execution(String),
+    /// A typed fail-closed completion or landing decision. Its message remains
+    /// diagnostic; the refusal value alone authorizes a held run outcome.
+    #[error("execution failed: {message}")]
+    DeliveryRefused {
+        refusal: orbit_types::workflow::DeliveryRefusal,
+        message: String,
+    },
     /// Conflict recovery certified that the base already carries the candidate.
     /// Keeps the execution error's display and serialized string for compatibility.
     #[error("execution failed: {0}")]

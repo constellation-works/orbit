@@ -111,8 +111,8 @@ pub struct InfraBlockedTask {
 ///
 /// `Held` is included for a run held on a failure it did not cause
 /// [ORB-15202] (see [`HeldFailure`]): its tasks get the disposition the
-/// failure always had. A run held for review evidence or the forge is left to
-/// its own resumption.
+/// failure always had. A run held for review evidence, the forge, or a typed
+/// delivery refusal leaves the refusing action's task state alone.
 pub(crate) fn run_state_blocks_coupled_tasks(state: JobRunState) -> bool {
     matches!(
         state,
@@ -297,13 +297,15 @@ impl RuntimeKernel {
         // capacity or usage-limit hold. Any other hold names its own
         // resumption and leaves its tasks alone.
         let state = match state {
-            JobRunState::Held
-                if HeldFailure::of_local(error_code.as_deref(), error_message.as_deref())
-                    .is_some() =>
-            {
-                JobRunState::Failed
+            JobRunState::Held => {
+                match HeldFailure::of_local(error_code.as_deref(), error_message.as_deref()) {
+                    // The refusing action already recorded its task/repair
+                    // state. Finalization must not turn that parked decision
+                    // into a task failure.
+                    Some(HeldFailure::DeliveryRefused(_)) | None => return Ok(()),
+                    Some(_) => JobRunState::Failed,
+                }
             }
-            JobRunState::Held => return Ok(()),
             state => state,
         };
         let blocked_update = if state == JobRunState::Interrupted {

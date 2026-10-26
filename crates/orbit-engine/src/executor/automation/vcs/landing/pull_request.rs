@@ -3,6 +3,7 @@
 use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::{Value, json};
 
 use crate::context::{HandoffLandingStep, RuntimeHost};
@@ -18,7 +19,7 @@ use super::super::remote_probe::fixed_wait as sleep;
 use super::checks::{CheckRecovery, CheckRecoveryStep, failed_checks, recover_failed_checks};
 use super::intent::LandingView;
 use super::observe::{adopt_base_update, landing_tip, observe_candidate, pin_for};
-use super::record::{behind_base, complete, describe, record, refuse_pr, stop_pr};
+use super::record::{behind_base, complete, describe, hold_pr, record, refuse_pr, stop_pr};
 use super::run::{LandingBudget, LandingPass, transport_failure};
 
 pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
@@ -206,11 +207,12 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 "no section-gap recovery evidence; next action: mark the PR ready on the \
                  forge, then retry landing"
             };
-            return Err(stop_pr(
+            return Err(hold_pr(
                 host,
                 context,
                 &diagnostic,
                 false,
+                DeliveryRefusal::PullRequestDraft,
                 &format!(
                     "pull request #{pr_number} cannot be merged (the pull request is still a draft); {reason}"
                 ),
@@ -239,7 +241,12 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                     return Err(error);
                 }
                 diagnostic["classification"] = diagnostics::text("required_check_refusal");
-                return Err(stop_pr(host, context, &diagnostic, false, &message)?);
+                return Err(match error {
+                    OrbitError::DeliveryRefused { refusal, .. } => {
+                        hold_pr(host, context, &diagnostic, false, refusal, &message)?
+                    }
+                    _ => stop_pr(host, context, &diagnostic, false, &message)?,
+                });
             }
         };
         diagnostic["classification"] = diagnostics::text(&describe(&state));
@@ -353,11 +360,12 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             _ if waiting_on_recovery => {}
             PrMergeState::Merged => unreachable!("merged is handled above"),
             PrMergeState::Closed => {
-                return Err(stop_pr(
+                return Err(hold_pr(
                     host,
                     context,
                     &diagnostic,
                     false,
+                    DeliveryRefusal::PullRequestClosed,
                     &format!(
                         "pull request #{pr_number} was closed without merging; the candidate \
                          stays in review"
@@ -377,6 +385,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 )?);
             }
             PrMergeState::Blocked(reason) => {
+                let refusal = reason.refusal;
                 let reason = format!(
                     "pull request #{pr_number} cannot be merged ({reason}); branch \
                      protection and required checks are not bypassed"
@@ -385,16 +394,19 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 // the repair brings it up to date and revalidates it.
                 return Err(if behind_base(&status) {
                     stop_pr(host, context, &diagnostic, true, &reason)?
+                } else if let Some(refusal) = refusal {
+                    hold_pr(host, context, &diagnostic, false, refusal, &reason)?
                 } else {
                     stop_pr(host, context, &diagnostic, false, &reason)?
                 });
             }
             PrMergeState::Conflict => {
-                return Err(stop_pr(
+                return Err(hold_pr(
                     host,
                     context,
                     &diagnostic,
                     true,
+                    DeliveryRefusal::LandingConflict,
                     &format!(
                         "pull request #{pr_number} conflicts with its base; the owner does not \
                          rebase unvalidated code, so a repair needs fresh validation and a new \
