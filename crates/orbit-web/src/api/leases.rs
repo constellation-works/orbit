@@ -15,10 +15,10 @@ use orbit_common::protocol::tool_input::optional_string_alias;
 use orbit_core::runtime::task::locks::lease;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::routines::{authorization_denied, authorized_caller};
-use super::{bad_request, map_runtime_error, server_error};
+use super::{OptionalJson, bad_request, map_runtime_error, server_error};
 use crate::state::DashboardState;
 
 /// Caller attribution and workspace selection for a lease operation.
@@ -211,32 +211,32 @@ async fn request_lease(
     lease_backend_call(backend, caller, input, |b, c, i| b.request(c, i)).await
 }
 
+// `OptionalJson` rather than `Option<Json<_>>`: a zero-length body with a JSON
+// Content-Type must default, not fail as malformed JSON.
 async fn renew_lease(
     State(backend): State<Arc<dyn LeaseBackend>>,
     Query(caller): Query<LeaseCaller>,
     Path(id): Path<String>,
-    body: Option<Json<Value>>,
+    OptionalJson(mut input): OptionalJson<Map<String, Value>>,
 ) -> Response {
-    let mut input = body.map_or_else(|| json!({}), |Json(input)| input);
-    if !input.is_object() {
-        return bad_request("lease input must be a JSON object".to_string());
-    }
-    input["lease_id"] = json!(id);
-    lease_backend_call(backend, caller, input, |b, c, i| b.renew(c, i)).await
+    input.insert("lease_id".to_string(), json!(id));
+    lease_backend_call(backend, caller, Value::Object(input), |b, c, i| {
+        b.renew(c, i)
+    })
+    .await
 }
 
 async fn expand_lease(
     State(backend): State<Arc<dyn LeaseBackend>>,
     Query(caller): Query<LeaseCaller>,
     Path(id): Path<String>,
-    body: Option<Json<Value>>,
+    OptionalJson(mut input): OptionalJson<Map<String, Value>>,
 ) -> Response {
-    let mut input = body.map_or_else(|| json!({}), |Json(input)| input);
-    if !input.is_object() {
-        return bad_request("lease input must be a JSON object".to_string());
-    }
-    input["lease_id"] = json!(id);
-    lease_backend_call(backend, caller, input, |b, c, i| b.expand(c, i)).await
+    input.insert("lease_id".to_string(), json!(id));
+    lease_backend_call(backend, caller, Value::Object(input), |b, c, i| {
+        b.expand(c, i)
+    })
+    .await
 }
 
 async fn release_lease(
