@@ -20,6 +20,7 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) dependencies: Option<Vec<String>>,
     pub(crate) relations: Option<Vec<TaskRelation>>,
     pub(crate) tags: Option<Vec<String>>,
+    pub(crate) granted_tools: Option<Vec<String>>,
     pub(crate) requires_labels: Option<Vec<String>>,
     pub(crate) plan: Option<String>,
     pub(crate) execution_summary: Option<String>,
@@ -64,6 +65,7 @@ impl TaskRecordUpdateParams {
             || self.dependencies.is_some()
             || self.relations.is_some()
             || self.tags.is_some()
+            || self.granted_tools.is_some()
             || self.requires_labels.is_some()
             || self.plan.is_some()
             || self.execution_summary.is_some()
@@ -108,6 +110,9 @@ pub struct TaskAddParams {
     pub tags: Vec<String>,
     /// Exact canonical tools to add to the selected activity baseline.
     pub required_tools: Vec<String>,
+    /// Operator-granted tools. Only the tool chokepoint's operator gate
+    /// admits a caller-supplied grant; in-process filers leave it empty.
+    pub granted_tools: Vec<String>,
     /// Capability labels a host must all carry to run the task.
     pub requires_labels: Vec<String>,
     pub plan: String,
@@ -158,6 +163,7 @@ impl Default for TaskAddParams {
             relations: Vec::new(),
             tags: Vec::new(),
             required_tools: Vec::new(),
+            granted_tools: Vec::new(),
             requires_labels: Vec::new(),
             plan: String::new(),
             comment: None,
@@ -190,6 +196,9 @@ pub struct TaskUpdateParams {
     pub dependencies: Option<Vec<OrbitId>>,
     pub relations: Option<Vec<TaskRelation>>,
     pub tags: Option<Vec<String>>,
+    /// Replacement operator-granted tools; an empty list clears the grant.
+    /// Admitted only before the task has a live attempt.
+    pub granted_tools: Option<Vec<String>>,
     /// Replacement capability labels; an empty list clears the requirement.
     pub requires_labels: Option<Vec<String>>,
     pub plan: Option<String>,
@@ -243,6 +252,7 @@ impl TaskUpdateParams {
             dependencies,
             relations,
             tags,
+            granted_tools,
             requires_labels,
             plan,
             execution_summary,
@@ -270,6 +280,7 @@ impl TaskUpdateParams {
             && dependencies.is_none()
             && relations.is_none()
             && tags.is_none()
+            && granted_tools.is_none()
             && requires_labels.is_none()
             && plan.is_none()
             && execution_summary.is_none()
@@ -301,6 +312,7 @@ impl From<TaskUpdateParams> for TaskRecordUpdateParams {
             dependencies: p.dependencies,
             relations: p.relations,
             tags: p.tags,
+            granted_tools: p.granted_tools,
             requires_labels: p.requires_labels,
             plan: p.plan,
             execution_summary: p.execution_summary,

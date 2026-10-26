@@ -137,6 +137,13 @@ pub struct TaskEnvelopeV2 {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub required_tools: Vec<String>,
+    /// Operator-granted tools; see [`crate::task::Task::granted_tools`].
+    #[serde(
+        default,
+        deserialize_with = "crate::task::deserialize_required_tools",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub granted_tools: Vec<String>,
     /// Capability labels a host must all carry to run the task (normalized).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_labels: Vec<String>,

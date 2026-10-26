@@ -7,6 +7,7 @@ mod decision;
 mod epic;
 mod error;
 mod fields_updated;
+mod granted_tools;
 mod host_labels;
 mod light_delivery;
 mod model;
@@ -44,6 +45,9 @@ pub use epic::{EPIC_TAG, EpicHierarchyNode, has_epic_tag, inherited_only_epic_ro
 pub use fields_updated::{
     ACCEPTANCE_CRITERIA_DOCUMENT, DESCRIPTION_DOCUMENT, EXECUTION_SUMMARY_DOCUMENT, PLAN_DOCUMENT,
     TASK_FIELDS_UPDATED_EVENT, task_fields_updated_documents, task_fields_updated_note,
+};
+pub use granted_tools::{
+    GRANTED_TOOLS_CHANGED_EVENT, GRANTED_TOOLS_FIELD, granted_tools_change_note,
 };
 pub use host_labels::{
     MAX_HOST_LABEL_BYTES, REQUIRES_LABELS_FIELD, effective_host_labels, host_labels_unavailable,

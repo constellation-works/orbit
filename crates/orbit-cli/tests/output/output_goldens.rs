@@ -638,6 +638,8 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.pipeline.invoke", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
     ("orbit.task.delete", Placement::Unadvertised),
+    // Field-level: `orbit.task.add`/`update` with `granted_tools` check it.
+    ("orbit.task.grant_tools", Placement::Unadvertised),
     ("orbit.task.locks.release", Placement::Unadvertised),
     ("orbit.task.locks.reserve", Placement::Unadvertised),
     ("orbit.task.pull", Placement::Unadvertised),

@@ -83,6 +83,19 @@ The connected tool schema is authoritative for supported fields.
   `github.auth.status` can still yield a structured `available: false` or
   `authenticated: false` capability-unavailable result when the lane has no
   GitHub client or credentials; that is not a clean CI pass.
+- `granted_tools: ["<exact.canonical.tool>", ...]` — tools an **operator**
+  grants the implementing activity despite its deny list. Separate from
+  `required_tools`: only an operator session may set or change it, on
+  `orbit.task.add` or `orbit.task.update`, and any other caller that supplies
+  the field (even `[]`) is refused naming the missing operator authority,
+  never silently stripped. Names are checked like `required_tools`. An update
+  replaces the list (`[]`, or CLI `--granted-tools ""`, clears it) and is
+  accepted only while the task is `proposed`, `backlog` or `someday` with no
+  live run or execution claim; once an attempt is dispatched the grant is
+  frozen, and a change waits for a new attempt (requeue first). Every change
+  records a `granted_tools_changed` history entry naming the writer, both
+  tool sets and the run/claim state. Grants are stored and shown only for now:
+  activity admission still refuses a granted tool the deny list covers.
 - `requires_labels: ["<label>", ...]` — capability labels a host must carry,
   **all of them**, to run the task. A host carries its `machine.labels` setting
   plus its OS as an implicit label (`linux`, `macos`, `windows`); `orbit doctor`

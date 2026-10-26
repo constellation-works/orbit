@@ -58,6 +58,11 @@ impl GovernedOperation {
     }
 }
 
+/// The governed operation an `orbit.task.add` or `orbit.task.update` whose
+/// input carries `granted_tools` additionally requires. It names no tool; the
+/// tool chokepoint checks it beside the write's own row.
+pub const TASK_GRANT_TOOLS_OPERATION_ID: &str = "orbit.task.grant_tools";
+
 /// Versioned routine-definition toggle exposed by the dashboard.
 pub const DASHBOARD_ROUTINE_TOGGLE: GovernedOperation = GovernedOperation {
     id: "routine.toggle",
@@ -457,6 +462,14 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "requeuing a blocked task overrides a recorded escalation and preserves its published candidate",
+    },
+    // Field-level, not a tool: `orbit.task.add` and `orbit.task.update`
+    // additionally require it when their input carries `granted_tools`.
+    GovernedOperation {
+        id: TASK_GRANT_TOOLS_OPERATION_ID,
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "granting a task tools its implementing activity denies widens what that agent may do, so only an operator may set or change `granted_tools`",
     },
     GovernedOperation {
         id: "orbit.task.review_reset",

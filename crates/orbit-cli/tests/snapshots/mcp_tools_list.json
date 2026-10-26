@@ -1419,6 +1419,20 @@
           ],
           "description": "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings"
         },
+        "granted_tools": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown only; activity admission does not yet honor a grant"
+        },
         "requires_labels": {
           "anyOf": [
             {
@@ -1510,7 +1524,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, requires_labels, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts."
+          "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts."
         },
         "field": {
           "type": "string",
@@ -1992,7 +2006,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, requires_labels, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `delivery` alone returns what a delivery run committed and landed for this task instead of task fields."
+          "description": "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `delivery` alone returns what a delivery run committed and landed for this task instead of task fields."
         },
         "field": {
           "type": "string",
@@ -2100,6 +2114,20 @@
             }
           ],
           "description": "Replacement task tags as a string or array of strings. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected"
+        },
+        "granted_tools": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown only; activity admission does not yet honor a grant"
         },
         "requires_labels": {
           "anyOf": [
@@ -2239,7 +2267,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, requires_labels, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts."
+          "description": "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts."
         },
         "field": {
           "type": "string",

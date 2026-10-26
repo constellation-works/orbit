@@ -5087,6 +5087,7 @@ fn action_err(host: &DeliveryHost, name: &str, input: &Value) -> OrbitError {
 fn task(status: TaskStatus) -> Task {
     let now = Utc::now();
     Task {
+        granted_tools: Vec::new(),
         requires_labels: Vec::new(),
         job_run_machine: None,
         id: TASK_ID.to_string(),

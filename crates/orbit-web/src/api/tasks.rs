@@ -618,6 +618,9 @@ pub(super) async fn create_task_action(
         relations: body.relations,
         tags: body.tags,
         required_tools: body.required_tools,
+        // The dashboard has no operator grant path; `orbit.task.add` and
+        // `orbit.task.update` under operator authority are the only writers.
+        granted_tools: Vec::new(),
         requires_labels: Vec::new(),
         plan: body.plan,
         comment: None,
@@ -705,6 +708,8 @@ pub(super) async fn update_task_action(
         dependencies: body.dependencies,
         relations: body.relations,
         tags: body.tags,
+        // No dashboard grant path; see the create handler.
+        granted_tools: None,
         requires_labels: None,
         plan: body.plan,
         execution_summary: body.execution_summary,

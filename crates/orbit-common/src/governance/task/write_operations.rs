@@ -159,6 +159,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             "dependencies",
             "tags",
             "required_tools",
+            "granted_tools",
             "requires_labels",
             "plan",
             "external_refs",
@@ -223,6 +224,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 "Optional exact canonical tool names the task adds to its agent activity baseline, as a string or array of strings",
                 flag_with_delimiter("required-tools", &["required-tool"], None),
                 "Exact canonical tool names the task adds to its agent activity baseline",
+            ),
+            both(
+                "granted_tools",
+                ParamType::StringList,
+                "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown only; activity admission does not yet honor a grant",
+                flag_with_delimiter("granted-tools", &["granted-tool"], None),
+                "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only; stored and shown, not yet honored by admission)",
             ),
             both(
                 "requires_labels",
@@ -394,6 +402,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             "acceptance_criteria",
             "dependencies",
             "tags",
+            "granted_tools",
             "requires_labels",
             "plan",
             "execution_summary",
@@ -470,6 +479,13 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 flag_with_delimiter("tag", &[], None),
                 "Replacement task tags. Repeat or comma-separate for multiple tags. `os:linux`, `os:macos` or `os:windows` limits which host OS may run the task from its next admission; any other `os:` value is rejected",
             ),
+            preserve_empty(both(
+                "granted_tools",
+                ParamType::StringList,
+                "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown only; activity admission does not yet honor a grant",
+                flag_with_delimiter("granted-tools", &["granted-tool"], None),
+                "Replacement operator-granted tool names (operator only; empty string clears). Accepted only before the task's next attempt is dispatched",
+            )),
             preserve_empty(both(
                 "requires_labels",
                 ParamType::StringList,

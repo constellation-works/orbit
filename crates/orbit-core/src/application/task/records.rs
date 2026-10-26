@@ -124,6 +124,7 @@ impl TaskRecordService<'_> {
                     dependencies: params.dependencies.clone(),
                     relations: params.relations.clone(),
                     tags: params.tags.clone(),
+                    granted_tools: params.granted_tools.clone(),
                     requires_labels: params.requires_labels.clone(),
                     plan: params.plan.clone(),
                     execution_summary: params.execution_summary.clone(),

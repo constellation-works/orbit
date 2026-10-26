@@ -23,6 +23,11 @@ pub struct TaskCreateParams {
     pub relations: Vec<TaskRelation>,
     pub tags: Vec<String>,
     pub required_tools: Vec<String>,
+    /// Operator-granted tools. A non-empty grant is recorded as a
+    /// `granted_tools_changed` history event in the creating bundle commit;
+    /// the caller has already authorized it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub granted_tools: Vec<String>,
     /// Capability labels a host must all carry to run the task.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_labels: Vec<String>,
@@ -82,6 +87,9 @@ pub struct TaskDocumentUpdateParams {
     pub dependencies: Option<Vec<OrbitId>>,
     pub relations: Option<Vec<TaskRelation>>,
     pub tags: Option<Vec<String>>,
+    /// Replacement operator-granted tools; an empty list clears the grant.
+    /// The caller authorizes the change and records its history entry.
+    pub granted_tools: Option<Vec<String>>,
     /// Replacement capability labels; an empty list clears the requirement.
     pub requires_labels: Option<Vec<String>>,
     pub plan: Option<String>,
