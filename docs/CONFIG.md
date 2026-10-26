@@ -2308,13 +2308,24 @@ The lease listener runs as its own OS user and cannot open the operator's Orbit 
 
 | Key | Default | What it does |
 |---|---|---|
-| `lease.listener.bind` | unset | Address and port to listen on, such as `100.64.0.5:7480` (a tailnet address) or `127.0.0.1:7480` behind a local proxy. Unset, the listener refuses to start. `0.0.0.0` or `::` is refused unless `behind_proxy` is true. |
+| `lease.listener.bind` | unset | Address and port to listen on, such as `100.64.0.5:7480` (a tailnet address) or `127.0.0.1:7480` behind a local proxy. Unset, the listener refuses to start. `0.0.0.0` or `::` requires native `tls` or `behind_proxy = true`. |
 | `lease.listener.behind_proxy` | `false` | A TLS-terminating proxy is in front. Permits an unspecified bind address and turns on `X-Forwarded-For` from `trusted_proxy`. Refused when `trusted_proxy` is empty. |
 | `lease.listener.trusted_proxy` | `[]` | Proxy addresses or CIDR ranges (`10.0.0.5`, `10.0.0.0/24`, `fd00::/8`) whose `X-Forwarded-For` is read. An entry that is neither is refused at startup. |
 | `lease.listener.intake_socket` | unset | Absolute path of the operator's [lease intake socket](#lease-intake-socket), such as `/home/<operator>/.orbit/run/lease-intake.sock`. Required. |
 | `lease.listener.limits.failed_auth` | `10` | Failed authentications from one client address before every request from it gets 429 until the window ends (`1`–`1000`). |
 | `lease.listener.limits.failed_auth_window_seconds` | `300` | The window those failures are counted over, starting at an address's first failure (`1`–`86400`). |
-| `lease.listener.tls` | unset | Reserved for native TLS, which is not available yet. Setting it, in any form, stops the listener at startup; terminate TLS at a proxy instead. |
+| `lease.listener.tls` | unset | Native TLS: `{ cert = "/path/fullchain.pem", key = "/path/key.pem" }`. PEM certificate chain (leaf first) and matching unencrypted PEM private key, readable by the listener user. On Unix the key must have no group or other permissions (use `0600`). Missing, unreadable, invalid or mismatched material refuses startup with an error naming this setting. Supports TLS 1.2 and 1.3; the configured port accepts HTTPS only. |
+
+Use TLS whenever the listener is reachable outside loopback or a tailnet, either natively or at a trusted terminating proxy. For native TLS, put the paths in the listener user's own configuration:
+
+```toml
+[lease.listener]
+bind = "0.0.0.0:7480"
+intake_socket = "/home/<operator>/.orbit/run/lease-intake.sock"
+tls = { cert = "/var/lib/orbit-lease/tls/fullchain.pem", key = "/var/lib/orbit-lease/tls/key.pem" }
+```
+
+Certificates and keys are loaded and checked once, before binding. **Restart `orbit lease listen` after certificate rotation** (for example, `sudo systemctl restart orbit-lease-listener`); SIGHUP does not reload them. TLS uses rustls with its ring provider. Token authentication, routes and auditing are the same over HTTPS.
 
 - **Startup refusals.** The listener refuses to start as root; as the user that owns the intake socket (or, before Orbit Web has created it, the socket's directory), which is the operator; when its executable, the Orbit home or any directory above either is writable by a user other than root or the running user; without a provisioned `lease-tokens.db`; and for each settings combination above. Each message names the setting or path.
 - **Routes.** `/healthz` (unauthenticated, `{"status":"ok"}` only) and the lease routes under `/api/leases` that Orbit Web serves on loopback: request, renew, expand, release, show, list and check. Every other path is 404. There are no cookies, browser sessions or CORS headers.

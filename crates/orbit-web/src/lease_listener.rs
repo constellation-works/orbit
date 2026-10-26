@@ -50,6 +50,8 @@ use crate::lease_intake::{
     LeaseIntakeRequest, LeaseIntakeResponse,
 };
 
+mod tls;
+
 /// How long the listener waits for each intake frame.
 const INTAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -64,6 +66,8 @@ const AUDIT_ROUTE_MAX_BYTES: usize = 256;
 pub struct LeaseListenerConfig {
     /// Address to listen on.
     pub bind: SocketAddr,
+    /// Native TLS, validated and loaded before binding; `None` serves HTTP.
+    pub tls: Option<Arc<rustls::ServerConfig>>,
     /// How the client address is found.
     pub client_address: LeaseClientAddressPolicy,
     /// The operator's lease intake socket.
@@ -78,14 +82,11 @@ impl LeaseListenerConfig {
     /// Validate `lease.listener.*`, refusing an unsafe or incomplete
     /// combination with a message naming the setting.
     pub fn from_settings(settings: &LeaseListenerSettings) -> Result<Self, OrbitError> {
-        if settings.tls_configured {
-            return Err(refused(
-                "lease.listener.tls is set, but native TLS on the lease listener arrives in a \
-                 later phase. Unset it, and terminate TLS at a proxy with \
-                 lease.listener.behind_proxy = true and lease.listener.trusted_proxy, or bind a \
-                 loopback or private address",
-            ));
-        }
+        let tls = settings
+            .tls
+            .as_ref()
+            .map(tls::load_listener_tls)
+            .transpose()?;
         let Some(raw_bind) = settings.bind.as_deref() else {
             return Err(refused(
                 "lease.listener.bind is unset, so there is no listener. Set it in the listener \
@@ -109,10 +110,10 @@ impl LeaseListenerConfig {
         } else {
             LeaseClientAddressPolicy::Direct
         };
-        if bind.ip().is_unspecified() && !settings.behind_proxy {
+        if bind.ip().is_unspecified() && tls.is_none() && !settings.behind_proxy {
             return Err(refused(&format!(
                 "lease.listener.bind = \"{raw_bind}\" listens on every interface without TLS. \
-                 Bind a specific address, or put a terminating proxy in front and set \
+                 Set lease.listener.tls, bind a specific address, or put a terminating proxy in front and set \
                  lease.listener.behind_proxy = true"
             )));
         }
@@ -131,6 +132,7 @@ impl LeaseListenerConfig {
         }
         Ok(Self {
             bind,
+            tls,
             client_address,
             intake_socket,
             failed_auth_limit: settings.failed_auth_limit,
@@ -219,17 +221,33 @@ pub fn serve_lease_listener(
         tracing::info!(address = %local, intake = %config.intake_socket.display(), "serving the lease listener");
         #[allow(clippy::print_stdout)]
         {
-            println!("Lease listener on http://{local} (lease routes and /healthz only)");
+            let scheme = if config.tls.is_some() { "https" } else { "http" };
+            println!("Lease listener on {scheme}://{local} (lease routes and /healthz only)");
         }
-        let app = lease_listener_router(&config, store);
+        serve_lease_listener_on(listener, config, store, crate::serve::shutdown_signal()).await
+    })
+}
+
+/// Serve an already bound socket with the same transport, router and peer
+/// addresses as [`serve_lease_listener`], until `shutdown` completes.
+pub async fn serve_lease_listener_on(
+    listener: tokio::net::TcpListener,
+    config: LeaseListenerConfig,
+    store: LeaseTokenStore,
+    shutdown: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), OrbitError> {
+    let app = lease_listener_router(&config, store);
+    let result = if let Some(tls) = config.tls {
+        tls::serve_tls_listener(listener, tls, app, shutdown).await
+    } else {
         axum::serve(
             listener,
             app.into_make_service_with_connect_info::<SocketAddr>(),
         )
-        .with_graceful_shutdown(crate::serve::shutdown_signal())
+        .with_graceful_shutdown(shutdown)
         .await
-        .map_err(|error| OrbitError::Io(format!("lease listener: {error}")))
-    })
+    };
+    result.map_err(|error| OrbitError::Io(format!("lease listener: {error}")))
 }
 
 /// The listener's whole router: `/healthz`, and the lease routes under

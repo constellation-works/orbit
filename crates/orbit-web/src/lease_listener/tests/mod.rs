@@ -75,6 +75,7 @@ fn mint(
 fn config(intake_socket: PathBuf, client_address: LeaseClientAddressPolicy) -> LeaseListenerConfig {
     LeaseListenerConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
+        tls: None,
         client_address,
         intake_socket,
         failed_auth_limit: 1000,
@@ -213,6 +214,18 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
             .unwrap()
     };
     tokio.spawn(accept);
+    let pair = rcgen::generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+    let cert_path = home.join("cert.pem");
+    let key_path = home.join("key.pem");
+    std::fs::write(&cert_path, pair.cert.pem()).unwrap();
+    std::fs::write(&key_path, pair.signing_key.serialize_pem()).unwrap();
+    std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    std::fs::write(home.join("config.toml"), format!(
+        "[lease.listener]\nbind = '0.0.0.0:0'\nintake_socket = {socket_path:?}\ntls = {{ cert = {cert_path:?}, key = {key_path:?} }}\n"
+    )).unwrap();
+    let settings = orbit_config::load_lease_listener_settings(&home).unwrap();
+    let tls_config = LeaseListenerConfig::from_settings(&settings).unwrap();
+    let tls_store = LeaseTokenStore::open_in_orbit_home(&home).unwrap();
     let router = lease_listener_router(
         &config(socket_path, LeaseClientAddressPolicy::Direct),
         store,
@@ -261,6 +274,66 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
         assert_eq!(status, StatusCode::OK, "{downgraded}");
         assert_eq!(downgraded["lease"]["principal"], "alice/claude-code");
         assert_eq!(downgraded["lease"]["mode"], "advisory", "{downgraded}");
+
+        // The same public listener path as the CLI: real TLS and a real
+        // intake socket, so HTTPS must carry the authenticated lease to Orbit.
+        let listener = tokio::net::TcpListener::bind(tls_config.bind)
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (shutdown, stop) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(super::serve_lease_listener_on(
+            listener,
+            tls_config,
+            tls_store,
+            async {
+                let _ = stop.await;
+            },
+        ));
+        // A peer that never sends ClientHello must not block other clients
+        // or graceful shutdown. No timing race or synthetic load is needed.
+        let stalled = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        let client = reqwest::Client::builder()
+            .no_proxy()
+            .timeout(Duration::from_secs(5))
+            .add_root_certificate(
+                reqwest::Certificate::from_pem(pair.cert.pem().as_bytes()).unwrap(),
+            )
+            .min_tls_version(reqwest::tls::Version::TLS_1_2)
+            .max_tls_version(reqwest::tls::Version::TLS_1_2)
+            .build()
+            .unwrap();
+        let base = format!("https://localhost:{port}");
+        let health = client.get(format!("{base}/healthz")).send().await.unwrap();
+        assert_eq!(health.status(), StatusCode::OK);
+        assert_eq!(
+            health.json::<Value>().await.unwrap(),
+            json!({"status":"ok"})
+        );
+        let leases = client
+            .get(format!("{base}/api/leases"))
+            .bearer_auth(&alice)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(leases.status(), StatusCode::OK);
+        assert!(
+            client
+                .get(format!("http://localhost:{port}/healthz"))
+                .send()
+                .await
+                .is_err(),
+            "a TLS-configured listener must never serve plaintext HTTP"
+        );
+        shutdown.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("pending TLS handshakes must not delay shutdown")
+            .unwrap()
+            .unwrap();
+        drop(stalled);
     });
     assert!(
         audit_rows(&home).is_empty(),

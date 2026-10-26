@@ -88,6 +88,11 @@ jsonschema = { version = "0.18", default-features = false }
 libc = "0.2"
 rusqlite = { version = "0.41", features = ["bundled", "chrono", "fallible_uint", "trace"] }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
+# Native lease-listener TLS; select ring explicitly rather than a process default.
+rustls = { version = "0.23.46", default-features = false, features = ["std", "ring", "tls12"] }
+tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring", "tls12"] }
+# Throwaway TLS certificates in boundary regression fixtures only.
+rcgen = "0.14"
 rsa = { version = "0.10.0-rc.18", features = ["sha2"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

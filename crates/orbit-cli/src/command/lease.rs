@@ -286,8 +286,9 @@ const LEASE_LISTEN_LONG_ABOUT: &str = "Serve the lease routes to token holders (
     Settings come from lease.listener.* in the running user's ~/.orbit/config.toml. Run it as \
     the listener user, normally from its service unit. It refuses to start as root, as the user \
     that owns the intake socket, when the executable or the Orbit home can be changed by \
-    another user, or when lease.listener.bind is unset, listens on every interface without a \
-    proxy, or sets lease.listener.behind_proxy without lease.listener.trusted_proxy.";
+    another user, or when lease.listener.bind is unset, listens on every interface without TLS \
+    or a proxy, or sets lease.listener.behind_proxy without lease.listener.trusted_proxy. Native \
+    TLS uses lease.listener.tls = { cert = \"<path>\", key = \"<path>\" }; restart after certificate rotation.";
 
 #[cfg(unix)]
 fn lease_listen(root_override: Option<&Path>) -> CommandOut {

@@ -543,12 +543,12 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_optional_non_empty(raw, "lease.listener.bind"),
     },
-    lease_listener_tls: Option<String> => String {
-        key: "lease.listener.tls", value_type: "string",
-        description: "Native TLS for the lease listener; not available yet, so setting it stops the listener.",
+    lease_listener_tls: Option<LeaseListenerTlsSettings> => LeaseListenerTlsSettings {
+        key: "lease.listener.tls", value_type: "table",
+        description: "Native lease-listener TLS: PEM cert and key paths; private key permissions must be 0600. Restart after certificate rotation.",
         section: ConfigSection::Housekeeping, order: 148,
         tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<String>| resolve_optional_non_empty(raw, "lease.listener.tls"),
+        resolve: |raw: Option<LeaseListenerTlsSettings>| resolve_lease_listener_tls(raw),
     },
     lease_listener_behind_proxy: bool => bool {
         key: "lease.listener.behind_proxy", value_type: "bool",

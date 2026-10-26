@@ -186,13 +186,13 @@ pub use keys::{
     GLOBAL_ONLY_KEY_PREFIX, admit_config_key, admit_settable_config_key, config_key_options,
     describe, immutable_key_note, is_global_only_key,
 };
-pub use settings::LeaseListenerSettings;
 pub(crate) use settings::resolve_percent;
 pub use settings::{
     AutoConcurrencySettings, CONFIG_KEY_REGISTRY, ConfigSnapshot, ExperimentSettings,
     ExploreBriefSettings, ExploreSettings, MachineSettings, MidRunSteeringSettings,
     RegressionRiskSettings, ResourceThrottleSettings, WorkerContainmentSettings,
 };
+pub use settings::{LeaseListenerSettings, LeaseListenerTlsSettings};
 pub(crate) use settings::{
     admit_lease_intake_peer_user, admit_lease_listener_settings, read_optional,
 };

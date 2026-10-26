@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use serde::{Deserialize, Serialize};
 
 use super::resolve::{
     read_optional, resolve_at, resolve_bounded_count, resolve_optional_non_empty,
@@ -23,6 +24,29 @@ const DEFAULT_FAILED_AUTH_LIMIT: u32 = 10;
 /// The failed-authentication window, in seconds.
 const DEFAULT_FAILED_AUTH_WINDOW_SECONDS: u32 = 300;
 
+/// PEM certificate chain and private key for native lease-listener TLS.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LeaseListenerTlsSettings {
+    /// Certificate chain path, with the leaf certificate first.
+    pub cert: String,
+    /// Matching unencrypted private key path.
+    pub key: String,
+}
+
+pub(super) fn resolve_lease_listener_tls(
+    raw: Option<LeaseListenerTlsSettings>,
+) -> Result<Option<LeaseListenerTlsSettings>, OrbitError> {
+    if let Some(tls) = &raw
+        && (tls.cert.trim().is_empty() || tls.key.trim().is_empty())
+    {
+        return Err(OrbitError::InvalidInput(format!(
+            "{LEASE_LISTENER_TLS_KEY} requires non-empty cert and key paths"
+        )));
+    }
+    Ok(raw)
+}
+
 /// `lease.listener.*` as written; `orbit lease listen` checks addresses,
 /// ranges and the combination at startup.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,8 +54,8 @@ pub struct LeaseListenerSettings {
     /// `lease.listener.bind`: the address to listen on, or `None` for no
     /// listener.
     pub bind: Option<String>,
-    /// Whether `lease.listener.tls` is set at all, in any form.
-    pub tls_configured: bool,
+    /// Native TLS material, loaded and checked by the listener at startup.
+    pub tls: Option<LeaseListenerTlsSettings>,
     /// `lease.listener.behind_proxy`.
     pub behind_proxy: bool,
     /// `lease.listener.trusted_proxy`: addresses or CIDR ranges.
@@ -94,12 +118,11 @@ pub(crate) fn admit_lease_listener_settings(
                 read_optional(document, LEASE_LISTENER_BIND_KEY, config_path)?,
                 LEASE_LISTENER_BIND_KEY,
             )?,
-            tls_configured: read_optional::<toml::Value>(
+            tls: resolve_lease_listener_tls(read_optional(
                 document,
                 LEASE_LISTENER_TLS_KEY,
                 config_path,
-            )?
-            .is_some(),
+            )?)?,
             behind_proxy: read_optional(document, LEASE_LISTENER_BEHIND_PROXY_KEY, config_path)?
                 .unwrap_or(false),
             trusted_proxy: resolve_lease_listener_trusted_proxy(read_optional(

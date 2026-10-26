@@ -370,6 +370,9 @@ unset unless the sudo prerequisite above holds on this host.
    # bind = "127.0.0.1:7480"
    # behind_proxy = true
    # trusted_proxy = ["127.0.0.1"]
+   # Native TLS instead (required outside loopback/tailnet without a proxy):
+   # bind = "0.0.0.0:7480"
+   # tls = { cert = "/var/lib/orbit-lease/tls/fullchain.pem", key = "/var/lib/orbit-lease/tls/key.pem" }
    EOF
    ```
 
@@ -377,6 +380,22 @@ unset unless the sudo prerequisite above holds on this host.
    `lease.listener.limits.failed_auth` (default 10) and
    `lease.listener.limits.failed_auth_window_seconds` (default 300) set when
    an address that keeps failing authentication gets 429.
+
+   For native TLS, provision a PEM certificate chain (leaf first) and its
+   matching unencrypted PEM key at those paths, readable by `orbit-lease`.
+   Keep the key private: `sudo chmod 0600 /var/lib/orbit-lease/tls/key.pem`
+   and `sudo chown orbit-lease:orbit-lease /var/lib/orbit-lease/tls/key.pem`.
+   The listener uses rustls with ring, supports TLS 1.2 and 1.3, and accepts
+   HTTPS only on a TLS-configured port. Missing, unreadable, invalid or
+   mismatched material, or any group/other key permissions, refuses startup
+   with a message naming `lease.listener.tls`.
+
+   Certificates and keys load once at startup. After renewal, restart the
+   listener with `sudo systemctl restart orbit-lease-listener`; SIGHUP does
+   not reload certificates. Use `https://<certificate-hostname>:7480/healthz`
+   and `https://<certificate-hostname>:7480/api/leases?workspace=ws_example`
+   in the checks below for native TLS, with your CA trusted by the client
+   (`curl --cacert /path/ca.pem` for a private CA).
 
 3. Run it from a systemd unit, `/etc/systemd/system/orbit-lease-listener.service`:
 
@@ -421,9 +440,9 @@ unset unless the sudo prerequisite above holds on this host.
   executable, the listener's Orbit home or a directory above either is
   writable by another user;
 - when `lease.listener.bind` is unset, when it is `0.0.0.0` or `::` without
-  `behind_proxy = true`, when `behind_proxy` is set without `trusted_proxy`,
-  or when `lease.listener.tls` is set (native TLS is not available yet;
-  terminate TLS at a proxy).
+  native `tls` or `behind_proxy = true`, when `behind_proxy` is set without
+  `trusted_proxy`, or when `lease.listener.tls` names unusable material or
+  a key with group/other permissions.
 
 **Behind a proxy.** The listener believes `X-Forwarded-For` only from a peer
 in `trusted_proxy`, and takes the rightmost entry that is not a trusted proxy
