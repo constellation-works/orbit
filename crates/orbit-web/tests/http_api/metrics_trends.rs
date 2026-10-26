@@ -1063,6 +1063,20 @@ fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
             let p = add_closed(&fixture, TaskComplexity::XHard, TaskStatus::Done, &[]);
             let q = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Rejected, &[]);
 
+            // Pin every closed task to the middle of one hourly bucket. The
+            // index dates terminal tasks by wall-clock close time, so tasks
+            // created across an hour boundary would split into two points
+            // and flake the single-point assertion below.
+            let closed_at = {
+                let base = (now - Duration::hours(2)).timestamp();
+                DateTime::from_timestamp(base - base.rem_euclid(3600) + 1800, 0)
+                    .expect("pinned close time is representable")
+            };
+            for task in [&a, &b, &c, &d, &e, &h, &i, &j, &k, &n, &_l, &p] {
+                close_at(&fixture, task, TaskStatus::Done, closed_at);
+            }
+            close_at(&fixture, &q, TaskStatus::Rejected, closed_at);
+
             // Inserted out of seq order: Read, Grep, then Edit. Turns are 2.
             record_implement(
                 &fixture,
