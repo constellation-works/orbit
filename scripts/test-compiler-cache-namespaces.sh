@@ -104,7 +104,12 @@ alloc_port() {
   # the caller reads it. Callers release it before starting any sccache daemon:
   # the daemon binds this same address, which the held socket blocks.
   HOLD_RELEASE="$WORKDIR/port-release.$$.${RANDOM:-0}"
-  python3 - "$HOLD_RELEASE" >"$WORKDIR/alloc-port.out" <<'PY' &
+  # One output file per allocation: a reused file still holds the previous
+  # port until this python child truncates it, so polling it would return a
+  # stale or empty port.
+  local out="$HOLD_RELEASE.port"
+  rm -f "$out"
+  python3 - "$HOLD_RELEASE" >"$out" <<'PY' &
 import os, socket, sys, time
 release = sys.argv[1]
 sock = socket.socket()
@@ -115,13 +120,16 @@ while not os.path.exists(release):
 sock.close()
 PY
   HOLD_PID=$!
-  local attempts=0 port=""
-  while [[ ! -s "$WORKDIR/alloc-port.out" ]]; do
+  local attempts=0
+  while [[ ! -s "$out" ]]; do
     attempts=$((attempts + 1))
     [[ "$attempts" -lt 200 ]] || fail "timed out allocating a port"
     sleep 0.05
   done
-  ALLOC_PORT="$(cat "$WORKDIR/alloc-port.out")"
+  ALLOC_PORT="$(cat "$out")"
+  # An empty port makes the wrapper fall back to a private UDS daemon, which
+  # silently skips the shared-TCP scenario, so refuse anything but a number.
+  [[ "$ALLOC_PORT" =~ ^[0-9]+$ ]] || fail "allocated an invalid port: '$ALLOC_PORT'"
 }
 
 release_port() {
