@@ -384,8 +384,18 @@ impl OrbitRuntime {
         agent_override: Option<String>,
         model_override: Option<String>,
         entry_point: ToolEntryPoint,
-        session_context: ToolSessionContext,
+        mut session_context: ToolSessionContext,
     ) -> Result<ToolDispatchOutcome, OrbitError> {
+        // The authorization decision and entry-point row describe one call.
+        // CLI invocations have no transport-minted trace, so create it here
+        // before either path receives the session (and preserve MCP's trace).
+        if session_context
+            .trace_id
+            .as_deref()
+            .is_none_or(str::is_empty)
+        {
+            session_context.trace_id = Some(audit_execution_id("tool-call"));
+        }
         // The broker audits dispatched plugin calls and host-credentialed
         // reads. Listener refusals and unusable responses belong to this
         // caller's audit boundary; never execute them locally as a fallback.

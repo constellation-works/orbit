@@ -152,6 +152,55 @@ The connected tool schema is authoritative for supported fields.
   relations and append it in the same update that archives/rejects the finding;
   see [CI recovery](../../orbit-orchestrate/references/recovery.md).
 
+## Operator runbook: granting tools
+
+Use an operator session on the task's owner host. Inspect the task and the
+exact tool schema first (`orbit task show <id>`, `orbit tool show <tool>`).
+Decide whether the work needs a reviewed mutation or a prerequisite operator
+action: all currently denied implementer tools are mutating, so a grant does
+not enable their live execution. Do not also put a denied mutation in
+`required_tools`; that still refuses implementer admission.
+
+1. Before dispatch, set the complete grant list with
+   `orbit task update <id> --granted-tools orbit.auto_task.update`.
+   Creation also accepts `orbit task add --title "<title>" --complexity low --granted-tools
+   orbit.auto_task.update`. These are operator commands; an agent must not
+   claim operator authority to run them. A replacement is the whole list,
+   not an append; `--granted-tools ""` revokes it before the next attempt.
+2. Confirm `Granted Tools` beside `Required Tools` in task show/list and
+   inspect `orbit task show <id> --fields history`. The
+   `granted_tools_changed` entry records the operator identity, timestamp,
+   before/after lists and dispatch state. A grant pins execution to the owner
+   host. If required labels exclude the owner, resolve that intersection;
+   a follower carrying the labels cannot take over the grant.
+3. Have the implementer attach the proposal described above, then inspect it
+   with `orbit task show <id> --fields artifacts` and
+   `orbit tool run orbit.task.artifact.get --input
+   '{"id":"<id>","path":"mutation-proposals/<name>.json"}'`.
+   Review the exact input with the diff. A proposal-only delivery without a
+   reviewed diff is refused. Approval applies the reviewed proposal before
+   push/landing; verify its system-written receipt afterward.
+4. Diagnose refusals by their named gate. An exact disallow or wildcard
+   refusal is a deny-policy gate; `orbit.routine.control` or another missing
+   capability is a capability gate; an owner-host/label wait is placement.
+   None is resolved by adding `required_tools`. To change a frozen grant,
+   stop/requeue the attempt and remove its preserved worktree first.
+
+`orbit audit list --kind operation --json` exposes authorization decisions;
+the `command = "authorization"` rows include grant authorizations (operation
+`orbit.task.grant_tools`) and activity-policy/capability denials. Match them
+with task history to distinguish an authorized attempt from a committed grant
+change. `orbit audit stats --tool orbit.auto_task.update --json` gives the
+existing denial-by-operation breakdown; it counts a decision once even when
+an entry-point audit row repeats it.
+
+A `failed` receipt is evidence of a failed application. A `pending` receipt
+means the result is unknown: do not retry it or edit/forge a receipt. Inspect
+the receipt and the actual owner state, retain evidence, and resolve the
+outcome as separate operator work. There is no automatic pending-receipt
+reconciliation command. A changed proposal creates a new key and requires a
+new review; it must not be used to repeat an unknown outcome.
+
 ## Validation your lane can actually run
 
 A criterion that names a tool is a promise about the lane that will run it, and

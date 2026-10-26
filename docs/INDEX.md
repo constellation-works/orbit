@@ -124,15 +124,14 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Path Leases](./design/path-leases/1_overview.md) | Land native TLS and the listener's full rate limits (ORB-18413, ORB-18421) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 1: ORB-18488 browser-session credential (in review); then the terminal routes | claude |
 
-### Designing (3)
+### Designing (2)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
-| [Granted Tools](./design/granted-tools/1_scope.md) | Daniel approves the scope, then implementation slices are filed | claude |
 
-### Shipped (33)
+### Shipped (34)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -150,6 +149,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
 | [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
+| [Granted Tools](./design/granted-tools/1_scope.md) | Operate the shipped grants and reviewed mutation proposal path | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | — | codex |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
 | [MCP Session Context](./design/mcp-session-context/1_overview.md) | — | codex |
@@ -204,7 +204,7 @@ a conservative title/status fallback.
 | [Explore Brief](./design/explore-brief/1_scope.md) | Scope: task-pilot leaves a bounded, revision-keyed code map (explore brief) as a task artifact, and the implementer starts from it instead of exploring cold; includes the three-arm trial and the slice breakdown | Draft | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | Mux that presents one MCP namespace over the accepting machine plus operator-configured SSH remotes, keyed by machine_id, without becoming a fleet registry. | Draft | grok |
 | [Finding Verification](./design/finding-verification/1_overview.md) | Review-filed bug findings are verified against the code by a pooled verifier crew before promotion; CONFIRMED unlocks backlog and drain admission, REJECTED closes the task with its evidence. | Accepted | claude |
-| [Granted Tools](./design/granted-tools/1_scope.md) | Scope: an operator-only `granted_tools` task field that lifts the implementing activity's deny list for named tools, without granting capability, placement or live side effects | Draft | claude |
+| [Granted Tools](./design/granted-tools/1_scope.md) | Scope: an operator-only `granted_tools` task field that lifts the implementing activity's deny list for named tools, without granting capability, placement or live side effects | Accepted | claude |
 | [Host Registry](./design/host-registry/1_overview.md) | The live host-registry feature is a machine-local identity and workspace catalog. | Implemented | codex |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Scope: a core decision-request record and delegated-human channel, with email as a plugin transport, so held Orbit work can be decided by replying to an email | Draft | claude |
 | [Orbit MCP](./design/mcp-bridge/1_overview.md) | One authoritative Orbit MCP server, reached by local stdio, a byte-transparent direct SSH stdio proxy, or a loopback-default TCP listener. | Draft | codex |

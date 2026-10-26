@@ -49,7 +49,15 @@ impl RuntimeKernel {
 
         self.authorize_registered_tool(name, &input, &tool_context, capability_enforcement)?;
         check_activity_tool_policy(name, &tool_context).map_err(|error| match error {
-            OrbitError::PolicyDenied(reason) => self.deny_activity_tool(name, reason),
+            OrbitError::PolicyDenied(reason) => {
+                self.record_activity_tool_policy_denial(
+                    name,
+                    &reason,
+                    &tool_context.session_context,
+                    capability_enforcement,
+                );
+                self.deny_activity_tool(name, reason)
+            }
             error => error,
         })?;
 

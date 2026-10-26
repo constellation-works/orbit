@@ -22,11 +22,12 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::{
     CallerCapabilities, CallerEnvelope, CallerProvenance, GovernedOperation, OperationSurface,
-    authorize, governed_command, governed_plugin_tool, governed_tool,
+    TASK_GRANT_TOOLS_OPERATION_ID, authorize, governed_command, governed_plugin_tool,
+    governed_tool,
 };
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::security::child_env::ACTIVITY_NAME_ENV;
-use orbit_store::contracts::AuditEventInsertParams;
+use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 
@@ -269,6 +270,19 @@ impl RuntimeKernel {
                         &caller,
                         AuditEventStatus::Success,
                         Some("authorized through the operator override".to_string()),
+                        None,
+                    );
+                } else if operation.id == TASK_GRANT_TOOLS_OPERATION_ID {
+                    // Grant writes need an authorization trail for ordinary
+                    // operator sessions too, not only explicit CLI overrides.
+                    // Committed before/after sets remain in task history.
+                    self.record_authorization_event(
+                        operation.id,
+                        operation.surface,
+                        &caller,
+                        AuditEventStatus::Success,
+                        None,
+                        None,
                     );
                 }
                 Ok(())
@@ -292,10 +306,36 @@ impl RuntimeKernel {
                     &caller,
                     AuditEventStatus::Denied,
                     Some(message.clone()),
+                    None,
                 );
                 Err(OrbitError::CapabilityDenied(message))
             }
         }
+    }
+
+    /// Keep activity-policy refusals queryable through the same authorization
+    /// predicate as capability refusals, including tools with no governed row.
+    pub(crate) fn record_activity_tool_policy_denial(
+        &self,
+        name: &str,
+        reason: &str,
+        session: &ToolSessionContext,
+        enforcement: CapabilityEnforcement,
+    ) {
+        let envelope = match enforcement {
+            CapabilityEnforcement::Enforce if session.worker_invocation.is_none() => {
+                CallerEnvelope::from_process_env(session)
+            }
+            _ => CallerEnvelope::mcp_session(session),
+        };
+        self.record_authorization_event(
+            name,
+            OperationSurface::Tool,
+            &CallerCapabilities::resolve(&envelope),
+            AuditEventStatus::Denied,
+            Some(reason.to_string()),
+            session.trace_id.as_deref(),
+        );
     }
 
     /// Persist the authorization decision.
@@ -315,6 +355,7 @@ impl RuntimeKernel {
         caller: &CallerCapabilities,
         status: AuditEventStatus,
         error_message: Option<String>,
+        trace_id: Option<&str>,
     ) {
         // A `Tool`-surface operation is authorized from inside
         // `execute_registered_tool`, itself running inside
@@ -383,7 +424,13 @@ impl RuntimeKernel {
             step_index: None,
         };
 
-        if let Err(error) = self.record_audit_event(&params) {
+        if let Err(error) = self.record_audit_event_with_invocation(
+            &params,
+            AuditInvocationFields {
+                trace_id,
+                ..Default::default()
+            },
+        ) {
             tracing::error!(
                 target: "orbit.authorization",
                 operation = operation_id,

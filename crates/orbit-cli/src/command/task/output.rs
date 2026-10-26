@@ -131,6 +131,13 @@ pub(super) fn task_table(
 ) -> crate::output::table::Table {
     use crate::output::table::Column;
     use comfy_table::Cell;
+    let show_tools = tasks.iter().any(|task| {
+        ["required_tools", "granted_tools"].iter().any(|key| {
+            task.get(*key)
+                .and_then(Value::as_array)
+                .is_some_and(|tools| !tools.is_empty())
+        })
+    });
     // `orbit task show <id>` prints the untruncated title and body of any row.
     let mut columns = vec![
         Column::new("ID").fixed(),
@@ -145,6 +152,12 @@ pub(super) fn task_table(
                 }),
         ),
     ];
+    if show_tools {
+        columns.extend([
+            Column::new("REQUIRED TOOLS").filtered(true),
+            Column::new("GRANTED TOOLS").filtered(true),
+        ]);
+    }
     if full {
         columns.extend([
             Column::new("IMPLEMENTED_BY").fixed(),
@@ -164,6 +177,12 @@ pub(super) fn task_table(
             crate::output::color::cell(field("type"), Domain::TaskType),
             Cell::new(runs_on_cell(task, field("crew").is_empty())),
         ];
+        if show_tools {
+            row.extend([
+                Cell::new(json_str_list(&task["required_tools"])),
+                Cell::new(json_str_list(&task["granted_tools"])),
+            ]);
+        }
         if full {
             row.extend([
                 Cell::new(
