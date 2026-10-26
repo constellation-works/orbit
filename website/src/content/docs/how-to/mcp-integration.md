@@ -136,6 +136,7 @@ Use the existing guides for the other public families:
 | `orbit.workflow.ship`, `orbit.workflow.auto`, `orbit.workflow.run.*` | [Delivery workflows](../../getting-started/workflows/) and [delivery windows](../continuous-delivery/). |
 | `orbit.pipeline.invoke` | [Activities and jobs](../../concepts/activities-jobs/), [write an activity](../write-activity/), and [Activity and Job YAML](../../reference/activity-job-yaml/). |
 | `orbit.routine.control`, `orbit.auto_task.*` | [Routines and Auto-Tasks](../../concepts/scheduling/) and [schedule recurring work](../recurring-work/). |
+| `orbit.decision.list`, `orbit.decision.show`, `orbit.decision.digest`, `orbit.decision.submit` | [Decision channels](../decision-channels/) covers read-only inspection, operator registration and authenticated plugin callbacks. Agents cannot answer requests. |
 | `orbit.codebase.*` | [Dashboard views](../dashboard/). |
 | `orbit.ui.open`, `orbit.ui.inspect` | [Open the MCP Apps control center](../mcp-apps/). |
 

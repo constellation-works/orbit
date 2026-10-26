@@ -103,6 +103,9 @@ open requests in `open_decisions`.
 | `orbit decision digest --channel <channel>` | Raise any missing approval requests for a channel and show its decision digest. |
 | `orbit decision channel register` \| `list` \| `revoke` \| `rotate-key` | Register, list, revoke and rotate this host's decision channels. |
 
+For channel setup, plugin authentication and token recovery, see
+[Decision channels](../../how-to/decision-channels/).
+
 With `task show --fields ... --json`, a single field returns its bare JSON value,
 whether read locally or from another host. The `terminal` field stays keyed as
 `{"terminal": true}` or `{"terminal": false}`. Multiple fields return an object
