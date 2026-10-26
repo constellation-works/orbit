@@ -1,6 +1,9 @@
-This task changes something a user sees, so its delivery owes screenshots of
-each changed view as task artifacts (the orbit skill's task-execution
-reference, "Screenshots of a UI change"):
+When the actual diff changes something a user sees, follow the workspace
+guide's screenshot evidence rule and attach screenshots of each changed view
+as task artifacts. This evidence follows the diff, not the `ui` tag itself.
+Screenshots in the PR body are optional: if `pr.screenshot_section` applies
+and none are attached, Orbit writes `No screenshots attached.` and does not
+draft or refuse the PR for that reason:
 
 - every theme the view supports, a 375px phone width when the layout is
   responsive, and a before shot from the base revision when it is practical

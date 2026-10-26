@@ -458,34 +458,45 @@ fn pr_open_publishes_ui_screenshots_to_the_evidence_ref_and_renders_the_table() 
     );
 }
 
-/// With the section on and no screenshot, the required-section gap drafts the
-/// pull request. A template's heading is filled in place, and a template
-/// without one gets the section appended ahead of the identity footer.
+/// With `auto` enabled for a `ui` task, no screenshots are an optional section
+/// under either missing-section policy. The body stays ready and no gap is
+/// recorded.
 #[test]
-fn pr_open_fills_a_template_screenshots_heading_or_drafts_for_missing_screenshots() {
+fn pr_open_does_not_block_when_a_ui_task_has_no_screenshots() {
     isolated(
-        "conventions::pr_open_fills_a_template_screenshots_heading_or_drafts_for_missing_screenshots",
+        "conventions::pr_open_does_not_block_when_a_ui_task_has_no_screenshots",
         |sandbox| {
-            let (fx, host) = fx_host(sandbox);
-            host.set_conventions(DeliveryConventions {
-                screenshot_section: ScreenshotSection::Always,
-                ..DeliveryConventions::default()
-            });
-            let opened = open_ok(&fx, &host);
-            assert_eq!(opened["draft"], true, "{opened}");
-            assert_eq!(opened["missing_required_sections"], json!(["Screenshots"]));
-            let body = fx.forge_state("pr-body").unwrap();
-            assert!(
-                body.contains("## Screenshots\n\n> **Missing required section.**"),
-                "{body}"
-            );
-            let notes = gap_notes(&host);
-            assert!(
-                notes.len() == 1 && notes[0].contains("`screenshots/`"),
-                "{notes:?}"
-            );
-            assert_eq!(fx.remote_git(&["for-each-ref", "refs/orbit/evidence"]), "");
+            for policy in [MissingSectionPolicy::Draft, MissingSectionPolicy::Refuse] {
+                let (fx, host) = fx_host(sandbox);
+                host.set_conventions(DeliveryConventions {
+                    screenshot_section: ScreenshotSection::Auto,
+                    missing_section: policy,
+                    ..DeliveryConventions::default()
+                });
+                tag_ui(&host);
+                let opened = open_ok(&fx, &host);
+                assert_eq!(opened["pr_created"], true, "{opened}");
+                assert_eq!(opened["draft"], false, "{policy:?}: {opened}");
+                assert_eq!(opened["missing_required_sections"], json!([]));
+                let body = fx.forge_state("pr-body").unwrap();
+                assert!(
+                    body.contains("## Screenshots\n\nNo screenshots attached."),
+                    "{body}"
+                );
+                assert!(gap_notes(&host).is_empty());
+                assert_eq!(fx.remote_git(&["for-each-ref", "refs/orbit/evidence"]), "");
+            }
+        },
+    );
+}
 
+/// Attached screenshots still fill a template heading or append after a
+/// template that has no screenshots heading.
+#[test]
+fn pr_open_fills_a_template_screenshots_heading_with_attached_shots() {
+    isolated(
+        "conventions::pr_open_fills_a_template_screenshots_heading_with_attached_shots",
+        |sandbox| {
             let identity = format!("<!-- orbit-delivery-task: {TASK_ID} -->");
             for (template, expected) in [
                 (
@@ -525,7 +536,7 @@ fn pr_open_fills_a_template_screenshots_heading_or_drafts_for_missing_screenshot
     );
 }
 
-/// Reproduce a resumed screenshot-gap delivery through the provider boundary.
+/// Reproduce a resumed required-section gap through the provider boundary.
 #[test]
 fn pr_open_recovers_only_section_gap_drafts_on_resume() {
     isolated(
@@ -542,14 +553,25 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
             ] {
                 let (fx, host) = fx_host(sandbox);
                 host.set_conventions(DeliveryConventions {
+                    agent_sections: vec!["Rollback".into()],
+                    required_sections: vec!["Rollback".into()],
                     screenshot_section: if case == "other_reason" {
                         ScreenshotSection::Off
                     } else {
-                        ScreenshotSection::Always
+                        ScreenshotSection::Auto
                     },
                     draft: case == "configured",
                     ..DeliveryConventions::default()
                 });
+                if case != "other_reason" {
+                    tag_ui(&host);
+                } else {
+                    host.put_artifact(
+                        TASK_ID,
+                        PR_SECTIONS_ARTIFACT,
+                        r#"{"sections":{"Rollback":"The change can be reverted."}}"#,
+                    );
+                }
                 assert_eq!(open_ok(&fx, &host)["draft"], case != "other_reason");
                 if case == "other_reason" {
                     fx.write_forge("pr-draft", "");
@@ -558,7 +580,12 @@ fn pr_open_recovers_only_section_gap_drafts_on_resume() {
                 if case == "manual" {
                     fx.write_forge("pr-body", "Human draft body");
                 }
-                if case != "missing" {
+                if case != "missing" && case != "other_reason" {
+                    host.put_artifact(
+                        TASK_ID,
+                        PR_SECTIONS_ARTIFACT,
+                        r#"{"sections":{"Rollback":"The change can be reverted."}}"#,
+                    );
                     host.put_artifact_bytes(TASK_ID, SCREENSHOTS[2], &png(SCREENSHOTS[2]));
                 }
                 if matches!(case, "ready_failure" | "human_after_failure") {

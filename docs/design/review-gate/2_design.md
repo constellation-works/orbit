@@ -1,8 +1,8 @@
 ---
 title: Review Gate — Design
 owner: codex
-last_updated: 2026-10-25
-last_validated: 2026-10-19
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Accepted
 feature: review-gate
 doc_role: design
@@ -1281,11 +1281,16 @@ durable evidence.
 
 ### 8.1 Screenshot evidence in the pull request body [ORB-18351]
 
-A UI change's reviewer on the forge sees its screenshots in the body that
-`pr_open` writes. `pr.screenshot_section` (`auto` for `ui`-tagged tasks,
-`always`, `off`) turns on a `## Screenshots` table built from the task's
-`screenshots/<view>-<theme>-<width>[-before|-after].<ext>` artifacts
+A UI change's reviewer on the forge sees attached screenshots in the body
+that `pr_open` writes. `pr.screenshot_section` (`auto` for `ui`-tagged tasks,
+`always`, `off`) turns on an optional `## Screenshots` section built from the
+task's `screenshots/<view>-<theme>-<width>[-before|-after].<ext>` artifacts
 ([CONFIG.md](../../CONFIG.md#delivery-templates-pr-commit-and-branch)).
+When no screenshots are publishable, the section contains
+`No screenshots attached.` and is never a missing required section; the
+configured missing section policy does not draft or refuse the PR for it.
+Task-artifact evidence for actual UI changes remains governed by the workspace
+guide.
 Task artifacts are not reachable from the forge, so before rendering,
 `pr_open` writes exactly those images as one tree and publishes it through
 the private `push.evidence_ref` operation to the task's permanent ref
