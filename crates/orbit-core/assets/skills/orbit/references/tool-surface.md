@@ -352,7 +352,8 @@ A refusal applies nothing. The refusal codes are `channel_not_registered`,
 `authentication_failed`, `dkim_verification_failed`,
 `dkim_verification_unavailable`, `dkim_verification_required`,
 `raw_message_too_large`, `token_invalid`, `token_consumed`, `request_expired`,
-`request_superseded`, `answer_not_allowed` and `request_not_found`. A parse-level
+`request_superseded`, `answer_not_allowed`, `answer_not_applicable`,
+`request_not_found` and `decision_channel_disabled`. A parse-level
 refusal does not consume the token. `dkim_verification_unavailable` is the only
 retryable refusal: retry the same submission unchanged; it consumes nothing.
 
