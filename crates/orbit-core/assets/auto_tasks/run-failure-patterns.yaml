@@ -34,8 +34,9 @@ template:
       --no-reconcile`, and `orbit run settlements --since <d> --no-reconcile --json`. Never drop
       `--no-reconcile`: without it the reads finalize orphaned runs as `interrupted` and release
       their reservations. Do not read the Orbit database or state files directly.
-    - Records go through the registered tools (`orbit tool run <tool> --input '<json>'`;
-      `orbit tool show <tool>` prints a schema): `orbit.task.list`, `orbit.task.show`,
+    - Records go through registered tools: `orbit tool run orbit.task.list --input '{"limit":50}'`
+      invokes a tool by name, and `orbit tool show orbit.task.list` prints its schema.
+      Available tools include `orbit.task.list`, `orbit.task.show`,
       `orbit.search` (one distinctive token per query: an error code, step or tool name; a
       0-hit multi-word query proves nothing), `orbit.task.add`, `orbit.task.update` (comments
       only), `orbit.task.artifact.get/put`, `orbit.friction.add`. Read the installed `orbit`
@@ -67,8 +68,9 @@ template:
     claimed pipeline job. `evidence_hold` releases and `operator_cancel` are designed outcomes,
     not failures; a leaf that also appears in this host's history counts once.
 
-    Fold cascades by recorded cause, never by matching text: read `root_cause` from `orbit run
-    show` for every failed run. A run whose `root_cause.run_id` names another run is an echo of
+    Fold cascades by recorded cause, never by matching text: read `root_cause` with
+    `orbit run show <run-id> --no-reconcile --json` for every failed run. A run whose
+    `root_cause.run_id` names another run is an echo of
     it; count the occurrence once, at the root. A `pipeline_success_guard` root whose child
     dispatch is `held` is a designed hold: neither it nor the parents folded into it count.
     Report raw and folded counts per job, so the dashboard's raw rate can be reconciled with
