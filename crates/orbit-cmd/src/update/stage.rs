@@ -75,6 +75,21 @@ impl StagedExecutable {
                 backup.display()
             ))
         })?;
+        // Sync the backup copy before the rename, matching the forward
+        // staging path: a crash must not leave an empty or truncated backup
+        // as the only copy of the previous executable.
+        let backup_file = std::fs::File::open(backup).map_err(|error| {
+            OrbitError::Io(format!(
+                "failed to open the backup '{}' to sync it: {error}",
+                backup.display()
+            ))
+        })?;
+        orbit_common::fs::io::sync_file(&backup_file).map_err(|error| {
+            OrbitError::Io(format!(
+                "failed to sync the backup '{}': {error}",
+                backup.display()
+            ))
+        })?;
         std::fs::rename(&self.path, destination).map_err(|error| {
             OrbitError::Io(format!(
                 "failed to install the staged release over '{}': {error}",
@@ -151,6 +166,20 @@ pub(super) fn restore_backup_with_rename(
 ) -> Result<(), OrbitError> {
     let staging = sibling_staging_path(destination, ".orbit-update-restore")?;
     if let Err(error) = std::fs::copy(backup, &staging) {
+        return Err(restore_failure(
+            destination,
+            backup,
+            &staging,
+            "stage the previous executable",
+            error,
+        ));
+    }
+    // Sync the staged copy before the rename, matching the forward staging
+    // path: a crash after the rename must not leave an empty or truncated
+    // binary as the installed `orbit`.
+    let sync_result =
+        std::fs::File::open(&staging).and_then(|file| orbit_common::fs::io::sync_file(&file));
+    if let Err(error) = sync_result {
         return Err(restore_failure(
             destination,
             backup,

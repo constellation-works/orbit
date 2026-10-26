@@ -41,20 +41,27 @@
     },
     "orbit-cmd": {
       "test_function_paths": [
+        "browser_kit/tests/libraries.rs::fonts_only_no_install_path_names_the_font_gap_and_a_fix",
+        "browser_kit/tests/libraries.rs::resolved_libraries_without_a_font_gap_stay_resolved",
         "doctor/tests/permissions.rs::disappearing_entries_are_skipped_at_metadata_and_read_dir_boundaries",
         "doctor/tests/permissions.rs::repair_refuses_final_and_parent_symlink_swaps_after_scanning",
         "doctor/tests/task.rs::stale_lock_cleanup_preserves_mutual_exclusion_for_queued_openers",
         "doctor/tests/worker_token.rs::absent_empty_refused_and_mismatched_clock_files_stay_distinct",
         "doctor/tests/worker_token.rs::clock_file_is_ready_only_when_it_holds_a_credential_the_workspace_admits",
+        "doctor/tests/worker_token.rs::config_load_failure_is_reported_instead_of_no_routed_claude_crew",
         "doctor/tests/worker_token.rs::warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is",
+        "tests/diagnostics.rs::list_months_skips_names_the_reader_rejects",
         "tests/diagnostics.rs::read_month_rejects_jsonl_symlink_outside_month",
         "tests/diagnostics.rs::read_month_rejects_path_traversal",
+        "tests/diagnostics.rs::read_month_skips_non_utf8_line_and_returns_remaining_entries",
         "update/tests/converge.rs::probe_timeouts_tear_down_descendants_before_and_after_parent_exit",
         "update/tests/flow.rs::http_rejects_declared_and_streamed_oversized_bodies",
         "update/tests/flow.rs::installed_verification_failures_preserve_both_causes_when_restore_fails",
         "update/tests/flow.rs::release_requests_never_leave_https",
         "update/tests/stage.rs::a_failed_atomic_restore_keeps_both_complete_files_and_cleans_staging",
         "update/tests/stage.rs::a_failed_executable_mode_change_removes_the_complete_staging_file",
+        "update/tests/stage.rs::commit_syncs_the_backup_copy_before_installing",
+        "update/tests/stage.rs::restore_syncs_the_staged_copy_before_the_rename",
         "update/tests/stage.rs::rollback_replaces_a_running_executable_atomically",
         "update/tests/stage.rs::running_replacement_process_fixture"
       ]

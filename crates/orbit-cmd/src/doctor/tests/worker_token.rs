@@ -15,6 +15,7 @@ fn names(list: &[&str]) -> Vec<String> {
 fn facts(pass: &[&str], clock: ClockCredentials) -> WorkerTokenFacts {
     WorkerTokenFacts {
         macos: true,
+        config_load_error: None,
         claude_routed: true,
         crew_credentialed: false,
         crew_sources_missing_from_clock: Vec::new(),
@@ -70,6 +71,23 @@ fn warns_for_each_place_the_worker_token_can_be_lost_and_is_ok_when_none_is() {
         let row = worker_token_row(&skipped);
         assert_eq!(row.status, WorkspaceDoctorStatus::Skipped, "{row:?}");
     }
+}
+
+#[test]
+fn config_load_failure_is_reported_instead_of_no_routed_claude_crew() {
+    let mut failed = facts(&[], ClockCredentials::Missing);
+    failed.claude_routed = false;
+    failed.config_load_error = Some("invalid TOML".to_string());
+
+    let row = worker_token_row(&failed);
+
+    assert_eq!(row.status, WorkspaceDoctorStatus::Warning, "{row:?}");
+    assert!(row.message.contains("config could not be read"), "{row:?}");
+    assert!(
+        !row.message
+            .contains("no routed crew uses the claude provider"),
+        "{row:?}"
+    );
 }
 
 #[test]

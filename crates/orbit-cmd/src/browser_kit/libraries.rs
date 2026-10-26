@@ -155,13 +155,62 @@ pub(super) fn resolve(
         ("unresolved", Vec::new())
     };
     let remaining = unresolved(layout, executable)?;
-    let fix_needed = !remaining.is_empty();
-    Ok(LibraryOutcome {
+    // Only the no-install-path branch leaves a needed font unprovided: the
+    // sudo path installs system fonts and the unpack path writes a fonts
+    // config into the kit.
+    let fonts_unresolved = fonts_needed && method == "unresolved";
+    Ok(library_outcome(
+        method,
+        unpacked_packages,
+        remaining,
+        fonts_unresolved,
+    ))
+}
+
+/// What a missing font is named as in [`LibraryOutcome::unresolved`].
+pub(super) const FONT_UNRESOLVED: &str = "fonts: no usable font found";
+
+/// The fix for a font gap left by the no-install-path branch.
+fn font_fix() -> String {
+    "Install a font package so Chromium has a font to render with (for example \
+     fonts-dejavu-core on Debian/Ubuntu, or the distribution package that provides \
+     DejaVu Sans), then rerun `orbit browser-kit install`"
+        .to_string()
+}
+
+/// Build the outcome, naming a still-missing font as unresolved with its own
+/// fix instead of reporting `unresolved` with nothing unresolved.
+pub(super) fn library_outcome(
+    method: &'static str,
+    unpacked_packages: Vec<String>,
+    mut unresolved: Vec<String>,
+    fonts_unresolved: bool,
+) -> LibraryOutcome {
+    if fonts_unresolved {
+        unresolved.push(FONT_UNRESOLVED.to_string());
+    }
+    let fix_needed = !unresolved.is_empty();
+    let fix = fix_needed.then(|| {
+        let libraries: Vec<String> = unresolved
+            .iter()
+            .filter(|entry| entry.as_str() != FONT_UNRESOLVED)
+            .cloned()
+            .collect();
+        let mut parts = Vec::new();
+        if !libraries.is_empty() {
+            parts.push(fix(&libraries));
+        }
+        if fonts_unresolved {
+            parts.push(font_fix());
+        }
+        parts.join(" ")
+    });
+    LibraryOutcome {
         method: if fix_needed { "unresolved" } else { method },
         unpacked_packages,
-        fix: fix_needed.then(|| fix(&remaining)),
-        unresolved: remaining,
-    })
+        fix,
+        unresolved,
+    }
 }
 
 /// Download the packages that provide what is missing, plus those they
