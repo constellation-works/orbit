@@ -103,7 +103,7 @@ thiserror = "2"
 toml = "1.1"
 toml_edit = "0.25"
 tar = "0.4"
-zstd = "0.13"
+zstd = "0.14.3"
 tracing = "0.1"
 tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
