@@ -24,6 +24,36 @@ pub const PR_SECTIONS_ARTIFACT: &str = "pr-sections.json";
 /// published without filled content.
 pub const PR_SECTION_GAP_EVENT: &str = "pr_section_gap";
 
+/// History event explaining a reused pull request's draft recovery decision.
+pub const PR_DRAFT_RECOVERY_EVENT: &str = "pr_draft_recovery";
+
+/// Why a reused draft was kept, or which recovery mutation was reached.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PrDraftRecoveryOutcome {
+    /// The workspace deliberately creates drafts.
+    ConfiguredDraft,
+    /// No section-gap provenance authorizes changing this draft.
+    UnrelatedDraft,
+    /// Required content is still unavailable.
+    MissingSections,
+    /// The body mutation is reserved durably before updating the forge.
+    RefreshingBody,
+    /// The forge accepted the ready-for-review mutation.
+    Ready,
+}
+
+/// Durable evidence for a draft recovery, bound to the PR and rendered body.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PrDraftRecovery {
+    /// Exact forge URL, preventing PR-number collisions across repositories.
+    pub pr_url: String,
+    /// Recovery decision or mutation phase.
+    pub outcome: PrDraftRecoveryOutcome,
+    /// Digest of the body authorized by the recovery reservation.
+    pub body_sha256: Option<String>,
+}
+
 /// `pr.body_template` value that selects the repository's own GitHub pull
 /// request template.
 pub const REPO_PR_BODY_TEMPLATE: &str = "repo";

@@ -524,3 +524,121 @@ fn pr_open_fills_a_template_screenshots_heading_or_drafts_for_missing_screenshot
         },
     );
 }
+
+/// Reproduce a resumed screenshot-gap delivery through the provider boundary.
+#[test]
+fn pr_open_recovers_only_section_gap_drafts_on_resume() {
+    isolated(
+        "conventions::pr_open_recovers_only_section_gap_drafts_on_resume",
+        |sandbox| {
+            for case in [
+                "recovered",
+                "configured",
+                "manual",
+                "missing",
+                "ready_failure",
+                "human_after_failure",
+                "other_reason",
+            ] {
+                let (fx, host) = fx_host(sandbox);
+                host.set_conventions(DeliveryConventions {
+                    screenshot_section: if case == "other_reason" {
+                        ScreenshotSection::Off
+                    } else {
+                        ScreenshotSection::Always
+                    },
+                    draft: case == "configured",
+                    ..DeliveryConventions::default()
+                });
+                assert_eq!(open_ok(&fx, &host)["draft"], case != "other_reason");
+                if case == "other_reason" {
+                    fx.write_forge("pr-draft", "");
+                }
+                let original_body = fx.forge_state("pr-body").unwrap();
+                if case == "manual" {
+                    fx.write_forge("pr-body", "Human draft body");
+                }
+                if case != "missing" {
+                    host.put_artifact_bytes(TASK_ID, SCREENSHOTS[2], &png(SCREENSHOTS[2]));
+                }
+                if matches!(case, "ready_failure" | "human_after_failure") {
+                    fx.write_forge("ready-failure", "");
+                    let error = action_err(
+                        &host,
+                        "pr_open",
+                        &fx.open_input(&fx.candidate, &fx.base_sha),
+                    );
+                    assert!(error.to_string().contains("forbidden"), "{error}");
+                    assert!(fx.forge_state("pr-draft").is_some());
+                    fs::remove_file(fx.forge.join("ready-failure")).unwrap();
+                    if case == "human_after_failure" {
+                        fx.write_forge("pr-body", "Human edit after failed ready");
+                    }
+                }
+                let reused = open_ok(&fx, &host);
+                assert_eq!(reused["pr_reused"], true);
+                let ready = fx.forge_calls().iter().any(|call| call == "pr ready");
+                assert_eq!(
+                    ready,
+                    matches!(case, "recovered" | "ready_failure" | "human_after_failure"),
+                    "{case}: {:?}",
+                    fx.forge_calls()
+                );
+                let decision = host
+                    .history(TASK_ID)
+                    .into_iter()
+                    .rev()
+                    .find(|entry| entry.event == orbit_types::workflow::PR_DRAFT_RECOVERY_EVENT)
+                    .and_then(|entry| entry.decision)
+                    .unwrap();
+                let orbit_types::task::TaskDecision::PrDraftRecovery(record) = decision else {
+                    panic!("{decision:?}")
+                };
+                use orbit_types::workflow::PrDraftRecoveryOutcome;
+                assert_eq!(
+                    record.outcome,
+                    match case {
+                        "configured" => PrDraftRecoveryOutcome::ConfiguredDraft,
+                        "manual" | "other_reason" | "human_after_failure" =>
+                            PrDraftRecoveryOutcome::UnrelatedDraft,
+                        "missing" => PrDraftRecoveryOutcome::MissingSections,
+                        _ => PrDraftRecoveryOutcome::Ready,
+                    },
+                    "{case}"
+                );
+                let body = fx.forge_state("pr-body").unwrap();
+                if matches!(case, "recovered" | "ready_failure") {
+                    assert!(
+                        body.contains("## Screenshots\n\n| | Before | After |"),
+                        "{body}"
+                    );
+                    assert!(!body.contains("Missing required section"), "{body}");
+                    assert!(fx.forge_state("pr-draft").is_none());
+                    host.set_status(TASK_ID, TaskStatus::Review);
+                    let completed = action_ok(&host, "pr_complete", &fx.complete_input());
+                    assert_eq!(completed["merge"]["merged"], true, "{completed}");
+                } else {
+                    assert!(fx.forge_state("pr-draft").is_some(), "{case}");
+                    assert_eq!(
+                        body,
+                        if case == "manual" {
+                            "Human draft body"
+                        } else if case == "human_after_failure" {
+                            "Human edit after failed ready"
+                        } else {
+                            &original_body
+                        }
+                    );
+                    assert_eq!(
+                        fx.forge_calls()
+                            .iter()
+                            .filter(|call| call.as_str() == "pr edit")
+                            .count(),
+                        usize::from(case == "human_after_failure"),
+                        "{case}"
+                    );
+                }
+            }
+        },
+    );
+}

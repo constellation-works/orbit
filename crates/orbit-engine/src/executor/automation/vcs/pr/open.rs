@@ -113,25 +113,12 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
         .filter(|line| !line.is_empty())
         .collect::<Vec<_>>();
 
-    if let Some(admission) =
+    let publication =
         super::super::candidate_resume::source_repair::publication_admission(host, input)
-            .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?
-    {
-        let binding = &admission;
+            .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?;
+    if let Some(binding) = &publication {
         super::source_identity::verify_publication(host, context, binding, head, base)
             .map_err(|e| Box::new((FailedHandoffPhase::PrLookup, e)))?;
-        return Ok(pr_output(PrOutput {
-            decision: "reused",
-            pr_created: false,
-            pr_reused: true,
-            pr_number: binding.pull_request.clone(),
-            pr_url: Some(binding.pull_request_url.clone()),
-            base,
-            head,
-            base_ref,
-            base_sha,
-            freshness: &freshness,
-        }));
     }
 
     let pr_config = host.pr_config();
@@ -226,12 +213,47 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     );
     let body = append_section(body, super::body::render_flaky_section(&flaky));
     let body = bound_pr_body(with_review_fixes(body, input), &context.tasks);
+    if let Some(binding) = &publication {
+        let (_, _, pr) = view_pr(host, &context.workspace_path, &binding.pull_request)
+            .map_err(|e| Box::new((FailedHandoffPhase::PrView, e)))?;
+        super::draft_recovery::recover_section_gap_draft(
+            host,
+            context,
+            &pr,
+            &body,
+            &missing_required,
+            &pr_config,
+        )
+        .map_err(|e| Box::new((FailedHandoffPhase::PrBody, e)))?;
+        return Ok(pr_output(PrOutput {
+            decision: "reused",
+            pr_created: false,
+            pr_reused: true,
+            pr_number: binding.pull_request.clone(),
+            pr_url: Some(binding.pull_request_url.clone()),
+            base,
+            head,
+            base_ref,
+            base_sha,
+            freshness: &freshness,
+        }));
+    }
+
     // A failed create may already have taken effect. Reconcile by head before
     // every retry; the private create operation must remain single-shot.
     let mut attempt = 1;
     loop {
         match find_pr_by_head(host, &context.workspace_path, head) {
-            Ok(Some((pr_number, pr_url))) => {
+            Ok(Some((pr_number, pr_url, pr))) => {
+                super::draft_recovery::recover_section_gap_draft(
+                    host,
+                    context,
+                    &pr,
+                    &body,
+                    &missing_required,
+                    &pr_config,
+                )
+                .map_err(|e| Box::new((FailedHandoffPhase::PrBody, e)))?;
                 return Ok(pr_output(PrOutput {
                     decision: "reused",
                     pr_created: false,
@@ -297,7 +319,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
                             ),
                         ))
                     })?;
-                let (pr_number, viewed_url) = view_pr(host, &context.workspace_path, &pr_url)
+                let (pr_number, viewed_url, _) = view_pr(host, &context.workspace_path, &pr_url)
                     .map_err(|error| Box::new((FailedHandoffPhase::PrView, error)))?;
                 let mut output = pr_output(PrOutput {
                     decision: "performed",
@@ -747,7 +769,7 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
     body: &str,
 ) -> Result<(String, Option<String>, bool), OrbitError> {
     let body = bound_pr_body(body.to_string(), &[]);
-    if let Some((number, url)) = find_pr_by_head(host, workspace_path, head)? {
+    if let Some((number, url, _)) = find_pr_by_head(host, workspace_path, head)? {
         return Ok((number, url, false));
     }
     tracing::info!(
@@ -775,7 +797,7 @@ pub(in crate::executor::automation::vcs) fn open_or_reuse_unchecked<H: RuntimeHo
                 "private automation VCS PR create did not return a PR url".to_string(),
             )
         })?;
-    let (number, viewed_url) = view_pr(host, workspace_path, url)?;
+    let (number, viewed_url, _) = view_pr(host, workspace_path, url)?;
     Ok((number, viewed_url.or_else(|| Some(url.to_string())), true))
 }
 
@@ -918,25 +940,25 @@ fn view_pr<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &std::path::Path,
     selector: &str,
-) -> Result<(String, Option<String>), OrbitError> {
+) -> Result<(String, Option<String>, PullRequestStatus), OrbitError> {
     let response = host.run_private_vcs_operation(
         operations::PR_VIEW,
         json!({ "pr": selector, "workspace_path": workspace_path }),
     )?;
     let pull_request = PullRequestStatus::from_view_response(&response)?;
-    let pr_number = pull_request.number_selector.ok_or_else(|| {
+    let pr_number = pull_request.number_selector.clone().ok_or_else(|| {
         OrbitError::Execution(
             "private automation VCS PR view did not return a PR number".to_string(),
         )
     })?;
-    Ok((pr_number, pull_request.url))
+    Ok((pr_number, pull_request.url.clone(), pull_request))
 }
 
 fn find_pr_by_head<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &std::path::Path,
     head: &str,
-) -> Result<Option<(String, Option<String>)>, OrbitError> {
+) -> Result<Option<(String, Option<String>, PullRequestStatus)>, OrbitError> {
     let response = host.run_private_vcs_operation(
         operations::PR_LIST,
         json!({ "head": head, "state": "open", "workspace_path": workspace_path }),

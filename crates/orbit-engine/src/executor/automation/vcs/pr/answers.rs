@@ -29,6 +29,8 @@ pub struct PullRequestStatus {
     pub(in crate::executor::automation::vcs) number_selector: Option<String>,
     /// The pull request's web URL.
     pub url: Option<String>,
+    /// Exact live body from the view operation, used to authorize draft recovery.
+    pub(crate) body: Option<String>,
     /// The provider's state: `OPEN`, `CLOSED` or `MERGED`.
     pub state: Option<String>,
     /// Explicit automatic merge intent; absent metadata stays uncertain.
@@ -108,6 +110,7 @@ impl PullRequestStatus {
             number: pull_request.get("number").and_then(Value::as_u64),
             number_selector: pull_request.get("number").and_then(number_selector),
             url: text("url"),
+            body: exact("body"),
             state: exact("state"),
             head_branch: text("headRefName"),
             head_sha: text("headRefOid"),

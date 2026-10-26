@@ -76,6 +76,8 @@ pub enum TaskDecision {
     RegressionRiskMarked(RegressionRiskMarks),
     /// A verified source-repair publication read and its durable wait reservation.
     SourceRepairPublication(PublicationSettlingObservation),
+    /// The reason a reused PR stayed draft or became ready for review.
+    PrDraftRecovery(crate::workflow::PrDraftRecovery),
     /// Code scanning alert evidence a per-alert sweep task was filed from,
     /// recorded on its `created` event.
     CodeScanningAlert(CodeScanningAlertEvidence),

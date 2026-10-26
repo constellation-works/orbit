@@ -159,7 +159,7 @@ pub(super) fn pr_view(input: &Value) -> Result<Value, OrbitError> {
         "view".to_string(),
         selector.to_string(),
         "--json".to_string(),
-        "number,title,body,headRefName,files,commits,url".to_string(),
+        "number,title,body,isDraft,headRefName,files,commits,url".to_string(),
     ];
     let result = execute_with_transient_retry(
         "gh",

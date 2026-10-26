@@ -5900,6 +5900,7 @@ status() {
     # [ORB-16342] An explicit draft whose merge state is not DRAFT. The file
     # names that merge state. Ready pull requests omit it and report false.
     is_draft=false
+    if [ -f "$forge/pr-draft" ]; then is_draft=true; fi
     if [ -f "$forge/draft-merge-state" ]; then
         if [ "$draft_field" != 1 ]; then
             echo "fake gh: isDraft was not requested" >&2
@@ -6235,6 +6236,14 @@ case "$1 ${2:-}" in
             echo '[]'
         fi ;;
     "pr create") create "$@" ;;
+    "pr edit")
+        [ "$4" = "--body" ] || exit 2
+        printf '%s' "$5" > "$forge/pr-body"
+        echo Edited ;;
+    "pr ready")
+        if [ -f "$forge/ready-failure" ]; then echo 'HTTP 403: forbidden' >&2; exit 1; fi
+        rm "$forge/pr-draft"
+        echo Ready ;;
     "pr close")
         if [ -f "$forge/pr-close-failure" ]; then
             cat "$forge/pr-close-failure" >&2
@@ -6258,7 +6267,16 @@ case "$1 ${2:-}" in
                 draft_field=0
                 case "$*" in *isDraft*) draft_field=1 ;; esac
                 status "$draft_field" ;;
-            *) printf '{"number":%s,"title":"Landing","body":"","headRefName":"%s","files":[],"commits":[],"url":"%s"}\n' "$number_json" "$(cat "$forge/pr-head")" "$url" ;;
+            *)
+                python3 - "$forge" "$number_json" "$url" <<'PYVIEW'
+import json, pathlib, sys
+forge = pathlib.Path(sys.argv[1])
+print(json.dumps({"number": json.loads(sys.argv[2]), "title": "Landing",
+    "body": (forge / "pr-body").read_text() if (forge / "pr-body").exists() else "",
+    "isDraft": (forge / "pr-draft").exists() or (forge / "draft-merge-state").exists(),
+    "headRefName": (forge / "pr-head").read_text().strip(), "files": [], "commits": [], "url": sys.argv[3]}))
+PYVIEW
+                ;;
         esac ;;
     "repo view") echo '{"nameWithOwner":"orbit/test","url":"https://github.com/orbit/test"}' ;;
     "api graphql")
