@@ -2995,6 +2995,118 @@ fn mcp_task_list_fields_projects_each_task_to_an_object_of_just_those_fields() {
     );
 }
 
+fn cli_tool_run_task_list_honors_json_input_fields() {
+    let (workspace, mut client) = McpWorkspace::served();
+    let created: Value = stdout_json(
+        &workspace.run_ok(&[
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            &json!({
+                "title": "CLI projection probe",
+                "description": "Keep this description",
+                "acceptance_criteria": ["First criterion", "Second criterion"],
+                "complexity": "low",
+                "model": "codex",
+            })
+            .to_string(),
+        ]),
+    );
+    let task_id = id_of(&created);
+
+    // A JSON-input `fields` projection must survive CLI shaping without
+    // `--full`, matching the MCP surface [ORB-18485].
+    let input = json!({ "fields": ["id", "description", "acceptance_criteria"] }).to_string();
+    let listed: Value =
+        stdout_json(&workspace.run_ok(&["tool", "run", "orbit.task.list", "--input", &input]));
+    let row = array_of(&listed, "tasks")
+        .iter()
+        .find(|task| task["id"] == json!(task_id))
+        .unwrap_or_else(|| panic!("JSON-input projection must keep the probe task: {listed}"))
+        .clone();
+    assert_eq!(row["description"], json!("Keep this description"), "{row}");
+    assert_eq!(
+        row["acceptance_criteria"],
+        json!(["First criterion", "Second criterion"]),
+        "{row}"
+    );
+
+    let requested = client.call_tool_ok(
+        "orbit_task_list",
+        json!({ "fields": ["id", "description", "acceptance_criteria"] }),
+    );
+    let expected = requested["tasks"]
+        .as_array()
+        .expect("MCP tasks array")
+        .iter()
+        .find(|task| task["id"] == json!(task_id))
+        .expect("MCP projection keeps the probe task")
+        .clone();
+    assert_eq!(
+        row, expected,
+        "CLI and MCP projections must match: {row} vs {expected}"
+    );
+
+    // The comma-separated string form is the same projection intent.
+    let aliased: Value = stdout_json(&workspace.run_ok(&[
+        "tool",
+        "run",
+        "orbit.task.list",
+        "--input",
+        &json!({ "fields": "id, description" }).to_string(),
+    ]));
+    assert!(
+        array_of(&aliased, "tasks")
+            .iter()
+            .all(|task| task.get("description").is_some()),
+        "a string `fields` form must also survive CLI shaping: {aliased}"
+    );
+
+    // The default stays compact: no long-text fields without a projection.
+    let compact: Value =
+        stdout_json(&workspace.run_ok(&["tool", "run", "orbit.task.list", "--input", "{}"]));
+    assert!(
+        array_of(&compact, "tasks")
+            .iter()
+            .all(|task| task.get("description").is_none()
+                && task.get("acceptance_criteria").is_none()),
+        "the default CLI row stays compact: {compact}"
+    );
+
+    // Explicit CLI controls keep their semantics.
+    let filtered: Value = stdout_json(&workspace.run_ok(&[
+        "tool",
+        "run",
+        "orbit.task.list",
+        "--input",
+        "{}",
+        "--fields",
+        "id,description",
+    ]));
+    assert!(
+        array_of(&filtered, "tasks")
+            .iter()
+            .all(|task| task.get("id").is_some() && task.get("acceptance_criteria").is_none()),
+        "CLI --fields still projects the envelope rows: {filtered}"
+    );
+    let full: Value = stdout_json(&workspace.run_ok(&[
+        "tool",
+        "run",
+        "orbit.task.list",
+        "--input",
+        "{}",
+        "--full",
+    ]));
+    assert!(
+        array_of(&full, "tasks")
+            .iter()
+            .any(|task| task["id"] == json!(task_id)
+                && task["description"] == json!("Keep this description")),
+        "--full still returns the unfiltered rows: {full}"
+    );
+}
+
 fn task_mutations_are_immediately_searchable_from_the_cli_and_mcp() {
     let (workspace, mut client) = McpWorkspace::served();
     let task = client.call_tool_ok(
@@ -5560,6 +5672,7 @@ fn mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio() {
 fn task_projection_search_and_audit() {
     rows!(
         mcp_task_list_fields_projects_each_task_to_an_object_of_just_those_fields,
+        cli_tool_run_task_list_honors_json_input_fields,
         task_mutations_are_immediately_searchable_from_the_cli_and_mcp,
         mcp_calls_are_audited_once_including_unknown_raw_names,
         mcp_task_eligible_is_advertised_read_only_and_answers_over_stdio
