@@ -1,8 +1,9 @@
-//! `/diagnostics/{metrics,errors,friction,implement_one,completions,defects,task_tokens,turns_to_edit,diff_stats,delivery_friction,backlog_forecast}`
+//! `/diagnostics/{metrics,errors,friction,implement_one,completions,defects,task_tokens,turns_to_edit,diff_stats,brief_accuracy,delivery_friction,backlog_forecast}`
 //! aggregation endpoints, and `/diagnostics/experiments/{id}/readout`.
 
 mod audit;
 mod backlog_forecast;
+mod brief_accuracy;
 mod completions;
 mod defects;
 mod delivery_friction;
@@ -17,6 +18,7 @@ mod trend;
 mod turns_to_edit;
 
 pub(super) use backlog_forecast::diagnostics_backlog_forecast;
+pub(super) use brief_accuracy::diagnostics_brief_accuracy;
 pub(super) use completions::diagnostics_completions;
 pub(super) use defects::diagnostics_defects;
 pub(super) use delivery_friction::diagnostics_delivery_friction;
