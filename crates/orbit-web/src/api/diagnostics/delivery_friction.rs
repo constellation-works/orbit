@@ -368,15 +368,19 @@ fn delivery_friction_trend(
         .collect();
     let needs_tasks =
         filters.active() || filters.families.iter().any(|family| family.reads_history());
-    let tasks: HashMap<String, Task> = if needs_tasks {
-        runtime
-            .list_task_metadata()?
-            .into_iter()
-            .map(|task| (task.id.to_string(), task))
-            .collect()
+    // The crew picker reads the done tasks' crews in every request, so the
+    // listing is narrowed to those ids unless a filter or history scan needs
+    // the whole listing.
+    let metadata = if needs_tasks {
+        runtime.list_task_metadata()?
     } else {
-        HashMap::new()
+        let ids: BTreeSet<String> = done.iter().map(|row| row.task_id.clone()).collect();
+        runtime.list_task_metadata_for_ids(&ids)?
     };
+    let tasks: HashMap<String, Task> = metadata
+        .into_iter()
+        .map(|task| (task.id.to_string(), task))
+        .collect();
 
     let mut occurrences = Vec::new();
     if filters.families.iter().any(|family| family.reads_audit()) {

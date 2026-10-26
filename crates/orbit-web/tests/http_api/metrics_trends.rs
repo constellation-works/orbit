@@ -842,3 +842,69 @@ fn trend_endpoints_refuse_oversized_windows_and_bound_all_history() {
         },
     );
 }
+
+fn add_crewed_task(fixture: &Fixture, crew: &str) -> String {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: format!("{crew} delivery friction fixture"),
+            description: "delivery friction fixture".into(),
+            complexity: TaskComplexity::Low,
+            status: Some(TaskStatus::Done),
+            crew: Some(crew.into()),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string()
+}
+
+/// The crew picker lists the window's done-task crews whichever families
+/// the request names, and a crew filter still narrows the denominator
+/// [ORB-18424].
+#[test]
+fn delivery_friction_lists_done_crews_for_non_history_families() {
+    isolated(
+        "metrics_trends::delivery_friction_lists_done_crews_for_non_history_families",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            for (crew, at) in [
+                ("haiku", now - Duration::hours(1)),
+                ("haiku", now - Duration::hours(2)),
+                ("sol", now - Duration::hours(3)),
+                ("sol", now - Duration::days(40)),
+            ] {
+                let task = add_crewed_task(&fixture, crew);
+                close_at(&fixture, &task, TaskStatus::Done, at);
+            }
+
+            let server = fixture.server(false);
+            let expected = json!([
+                { "crew": "haiku", "tasks": 2 },
+                { "crew": "sol", "tasks": 1 },
+            ]);
+            for families in [
+                "cost",
+                "tokens",
+                "step_recovery,cost",
+                "final_recovery,merge_conflict",
+            ] {
+                let response = json_ok(server.get(&format!(
+                    "/api/diagnostics/delivery_friction?since=24h&families={families}&{WS}"
+                )));
+                assert_eq!(
+                    response["available_crews"], expected,
+                    "families={families} still offers the window's crews"
+                );
+            }
+
+            let filtered = json_ok(server.get(&format!(
+                "/api/diagnostics/delivery_friction?since=24h&families=cost&crew=sol&{WS}"
+            )));
+            assert_eq!(filtered["available_crews"], expected);
+            assert_eq!(filtered["done"]["total"], 1, "the crew filter narrows done");
+            assert_eq!(filtered["done"]["unfiltered_total"], 3);
+        },
+    );
+}
