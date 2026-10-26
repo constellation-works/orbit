@@ -1,15 +1,17 @@
 // Orbit dashboard Analytics › Metrics (ORB-15746): implement_one duration,
-// task completion, defect, tokens-per-task, lines-changed and
-// delivery-friction trends over the shared dashboard window, with the
-// per-actor tables beneath. The tokens, lines-changed and delivery-friction
-// trends keep their filters and models in metrics-tokens.js, metrics-diff.js
-// and metrics-friction.js.
+// task completion, defect, tokens-per-task, turns-to-first-edit,
+// lines-changed and delivery-friction trends over the shared dashboard
+// window, with the per-actor tables beneath. The tokens,
+// turns-to-first-edit, lines-changed and delivery-friction trends keep
+// their filters and models in metrics-tokens.js, metrics-turns.js,
+// metrics-diff.js and metrics-friction.js.
 // Pure vanilla JS, split into ES modules with no build step.
 //
 // One panel request reads the summary/detail endpoints and the selected
-// filtered trend. Tokens, lines changed and delivery friction load on opening
-// their tab; polling reads only the selected one. Statistic, chart/table and
-// series changes re-render locally. Hover moves the tooltip in place.
+// filtered trend. Tokens, turns to first edit, lines changed and delivery
+// friction load on opening their tab; polling reads only the selected one.
+// Statistic, chart/table and series changes re-render locally. Hover moves
+// the tooltip in place.
 
 import {
   el as makeEl, syncNodes, fetchJson, getWindow, setWindow, persistScopeToUrl, syncWindowSelectors,
@@ -19,6 +21,7 @@ import {
 } from './common.js';
 import { linePath, sparkline as lineSparkline, svg } from './sparkline.js';
 import { fetchTokens, isCurrentTokensPayload, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
+import { fetchTurns, isCurrentTurnsPayload, turnsModel, turnsQuery, turnsTools, turnsView } from './metrics-turns.js';
 import { diffModel, diffQuery, diffTools, diffView, fetchDiff, isCurrentDiffPayload } from './metrics-diff.js';
 import { fetchFriction, frictionModel, frictionQuery, frictionTools, frictionView, isCurrentFrictionPayload } from './metrics-friction.js';
 
@@ -49,7 +52,7 @@ const SERIES = [
 const STACK = ["low", "medium", "hard", "other"];
 const COMPLEXITY_TABS = ["low", "medium", "hard", "xhard", "unset"];
 const STATS = [["avg", "Avg"], ["p50", "p50"], ["p95", "p95"]];
-const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["diff", "Lines changed"], ["friction", "Delivery friction"]];
+const TRENDS = [["duration", "implement_one duration"], ["completed", "Tasks completed"], ["defects", "Defects"], ["tokens", "Tokens per task"], ["turns", "Turns to first edit"], ["diff", "Lines changed"], ["friction", "Delivery friction"]];
 const DEFECT_GROUPS = [["lineage", "Lineage"], ["origin", "Origin"]];
 // Lineage: what a bug's `regression_from` relations name as its cause.
 const LINEAGE_SERIES = [
@@ -90,6 +93,7 @@ const view = {
     "defects-origin": Object.fromEntries(["all", ...ORIGIN_CHART, "other"].map((key) => [key, true])),
     // Series the API sends vary with the tag filter; absent keys are shown.
     tokens: {},
+    turns: {},
     // Lines changed: line kinds, or crews (which vary with the window).
     "diff-lines": {},
     "diff-crew": {},
@@ -148,7 +152,8 @@ export function fetchAndRenderMetrics() {
     view.trend === "tokens" ? fetchTokens(selectedWindow) : null,
     view.trend === "diff" ? fetchDiff(selectedWindow) : null,
     view.trend === "friction" ? fetchFriction(selectedWindow) : null,
-  ]), ([durations, completions, outcome, defects, tokens, diff, friction]) => {
+    view.trend === "turns" ? fetchTurns(selectedWindow) : null,
+  ]), ([durations, completions, outcome, defects, tokens, diff, friction, turns]) => {
     if (getWorkspaceRevision() !== revision || getWindow() !== selectedWindow || view.outcome !== selectedOutcome) return;
     // A refresh started before a token-filter change must keep the token
     // result (or loading/error state) already applied for the current filter,
@@ -163,15 +168,18 @@ export function fetchAndRenderMetrics() {
     const currentFriction = isCurrentFrictionPayload(friction, selectedWindow)
       ? friction
       : (lastPayload ? lastPayload.friction : null);
+    const currentTurns = isCurrentTurnsPayload(turns, selectedWindow)
+      ? turns
+      : (lastPayload ? lastPayload.turns : null);
     if (currentFriction && !currentFriction.unavailable && windowKey(currentFriction) !== selectedWindow) {
       console.error(`metrics friction payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (currentTokens && !currentTokens.unavailable && windowKey(currentTokens) !== selectedWindow) || (currentDiff && !currentDiff.unavailable && windowKey(currentDiff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
+    if (windowKey(durations) !== selectedWindow || windowKey(completions) !== selectedWindow || (!defects.unavailable && windowKey(defects) !== selectedWindow) || (currentTokens && !currentTokens.unavailable && windowKey(currentTokens) !== selectedWindow) || (currentTurns && !currentTurns.unavailable && windowKey(currentTurns) !== selectedWindow) || (currentDiff && !currentDiff.unavailable && windowKey(currentDiff) !== selectedWindow) || durations.outcome !== selectedOutcome) {
       console.error(`metrics payload window rejected under ${selectedWindow} selection`);
       return;
     }
-    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens: currentTokens, diff: currentDiff, friction: currentFriction, outcome: (outcome && outcome.by_complexity) || [] };
+    lastPayload = { windowKey: selectedWindow, durations, completions, defects, tokens: currentTokens, turns: currentTurns, diff: currentDiff, friction: currentFriction, outcome: (outcome && outcome.by_complexity) || [] };
     renderMetrics();
   }, "metrics-count");
 }
@@ -216,7 +224,7 @@ function sectionHash(index) {
   const { hover, ...state } = view;
   const p = lastPayload;
   const parts = [
-    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.diff, diffQuery(p.windowKey), diffView, p.friction, frictionQuery(p.windowKey), frictionView],
+    [state.outcome, state.trend, state.group, state.stat, state.mode, state.shown, p.windowKey, p.durations.buckets, p.durations.current, p.durations.previous, p.completions, p.defects, p.tokens, tokensQuery(p.windowKey), p.turns, turnsQuery(p.windowKey), turnsView, p.diff, diffQuery(p.windowKey), diffView, p.friction, frictionQuery(p.windowKey), frictionView],
     [state.allActors, p.durations.actors, p.durations.slowest],
     [state.complexity, p.durations.implement_one_by_complexity, p.outcome],
   ];
@@ -390,6 +398,9 @@ function pickTrend(key) {
     if (key === "tokens") {
       applyTokens(null);
       fetchTokens(selectedWindow).then(applyTokens);
+    } else if (key === "turns") {
+      applyTurns(null);
+      fetchTurns(selectedWindow).then(applyTurns);
     } else if (key === "diff") {
       applyDiff(null);
       fetchDiff(selectedWindow).then(applyDiff);
@@ -421,6 +432,23 @@ function applyTokens(payload) {
     if (!isCurrentTokensPayload(payload, lastPayload.windowKey)) return;
     if (!payload.unavailable && windowKey(payload) !== lastPayload.windowKey) return;
     lastPayload.tokens = payload;
+    view.hover = null;
+  }
+  rerender();
+}
+
+// A turns refetch after a filter change, with the same `null` (clear to
+// loading) and fence rules as `applyTokens`. The measure toggle does not
+// come through here; it redraws from `turnsView`.
+function applyTurns(payload) {
+  if (!lastPayload) return;
+  if (payload === null) {
+    lastPayload.turns = null;
+    view.hover = null;
+  } else if (payload !== undefined) {
+    if (!isCurrentTurnsPayload(payload, lastPayload.windowKey)) return;
+    if (!payload.unavailable && windowKey(payload) !== lastPayload.windowKey) return;
+    lastPayload.turns = payload;
     view.hover = null;
   }
   rerender();
@@ -460,14 +488,16 @@ function trendSection() {
   const isDuration = view.trend === "duration";
   const isDefects = view.trend === "defects";
   const isTokens = view.trend === "tokens";
+  const isTurns = view.trend === "turns";
   const isDiff = view.trend === "diff";
   const isFriction = view.trend === "friction";
   const model = isDuration ? durationModel()
     : isDefects ? defectsModel()
       : isTokens ? tokensModel(lastPayload.tokens, { windowKey: lastPayload.windowKey, shown: view.shown.tokens, bucketTitle, bucketWidthLabel })
-        : isDiff ? diffModel(lastPayload.diff, { windowKey: lastPayload.windowKey, shown: view.shown[shownKey()], bucketTitle, bucketWidthLabel })
-          : isFriction ? frictionModel(lastPayload.friction, { windowKey: lastPayload.windowKey, shown: view.shown.friction, bucketTitle, bucketWidthLabel })
-            : completedModel();
+        : isTurns ? turnsModel(lastPayload.turns, { windowKey: lastPayload.windowKey, shown: view.shown.turns, bucketTitle, bucketWidthLabel })
+          : isDiff ? diffModel(lastPayload.diff, { windowKey: lastPayload.windowKey, shown: view.shown[shownKey()], bucketTitle, bucketWidthLabel })
+            : isFriction ? frictionModel(lastPayload.friction, { windowKey: lastPayload.windowKey, shown: view.shown.friction, bucketTitle, bucketWidthLabel })
+              : completedModel();
   const tools = el("div", { class: "mx-trend-tools" }, [
     isDuration ? segGroup("Run outcome", OUTCOMES, view.outcome, (key) => {
       if (key === view.outcome) return;
@@ -479,6 +509,7 @@ function trendSection() {
     isDuration ? segGroup("Statistic", STATS, view.stat, (key) => { view.stat = key; rerender(); }) : null,
     isDefects ? segGroup("Group by", DEFECT_GROUPS, view.group, (key) => { view.group = key; view.hover = null; rerender(); }) : null,
     ...(isTokens ? tokensTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.tokens, onChange: applyTokens }) : []),
+    ...(isTurns ? turnsTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.turns, rerender: () => { view.hover = null; rerender(); }, onChange: applyTurns }) : []),
     ...(isDiff ? diffTools({ segGroup, windowKey: lastPayload.windowKey, rerender: () => { view.hover = null; rerender(); }, onChange: applyDiff }) : []),
     ...(isFriction ? frictionTools({ segGroup, windowKey: lastPayload.windowKey, payload: lastPayload.friction, rerender: () => { view.hover = null; rerender(); }, onChange: applyFriction }) : []),
     segGroup("View", MODES, view.mode, (key) => { view.mode = key; view.hover = null; rerender(); }),
