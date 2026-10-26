@@ -403,7 +403,7 @@ length and a JSON body of at most 64 KiB; each must arrive within 10 seconds, an
 are served at once. Both sides send `{"protocol_version": 1}` first and refuse a mismatch. A
 request's token scope must name its workspace (a registered id or name) and the operation's
 verb. The runtime grants the lower of the token's and the class's priority ceilings, and hard
-only when both allow it. The lease row stores the token id (store migration 65), and every
+only when both allow it. The lease row stores the token id (store migration 66), and every
 operation writes one `lease.intake.<operation>` audit row with principal, token id, client
 address and outcome. Renew, release and show act on any lease in a token's workspace, as the
 loopback REST routes do.

@@ -98,6 +98,9 @@ pub(crate) struct LeaseIntakeSocket {
     pub(super) listener: Option<UnixListener>,
     pub(super) path: PathBuf,
     pub(super) peer: PeerUser,
+    /// Device and inode of the file this process bound, so [`Drop`] never
+    /// removes a socket another server bound at the same path.
+    identity: Option<(u64, u64)>,
 }
 
 impl LeaseIntakeSocket {
@@ -120,12 +123,17 @@ impl LeaseIntakeSocket {
                 path.display()
             ))
         })?;
-        let socket = Self {
+        let mut socket = Self {
             listener: Some(listener),
             path,
             peer,
+            identity: None,
         };
         restrict(&socket.path, &socket.peer, SOCKET_MODE)?;
+        let metadata = std::fs::symlink_metadata(&socket.path).map_err(|error| {
+            OrbitError::Io(format!("inspect {}: {error}", socket.path.display()))
+        })?;
+        socket.identity = Some((metadata.dev(), metadata.ino()));
         Ok(socket)
     }
 
@@ -138,10 +146,15 @@ impl LeaseIntakeSocket {
 impl Drop for LeaseIntakeSocket {
     fn drop(&mut self) {
         self.listener = None;
-        // Only our own socket: a replacement may already have bound the path.
+        // Only the socket this process bound: once it stops listening, another
+        // server may bind the path, and that socket is not ours to remove.
+        let Some(identity) = self.identity else {
+            return;
+        };
         if let Ok(metadata) = std::fs::symlink_metadata(&self.path)
             && metadata.file_type().is_socket()
             && metadata.uid() == operator_uid()
+            && (metadata.dev(), metadata.ino()) == identity
         {
             let _ = std::fs::remove_file(&self.path);
         }
