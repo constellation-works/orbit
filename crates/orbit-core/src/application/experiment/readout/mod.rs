@@ -509,7 +509,7 @@ fn sample_ratio(record: &ExperimentRecord, tasks: &[TaskOutcome]) -> SampleRatio
         if in_segment.is_empty() {
             continue;
         }
-        let total_weight: u32 = weights.values().sum();
+        let total_weight: u64 = weights.values().map(|weight| u64::from(*weight)).sum();
         let n = in_segment.len() as f64;
         let mut observed = BTreeMap::new();
         let mut expected = BTreeMap::new();
@@ -519,7 +519,7 @@ fn sample_ratio(record: &ExperimentRecord, tasks: &[TaskOutcome]) -> SampleRatio
             let share = if total_weight == 0 {
                 0.0
             } else {
-                n * f64::from(*weight) / f64::from(total_weight)
+                n * f64::from(*weight) / total_weight as f64
             };
             observed.insert(arm.clone(), count);
             expected.insert(arm.clone(), share);
