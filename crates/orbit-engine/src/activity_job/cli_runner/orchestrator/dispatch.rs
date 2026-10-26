@@ -13,7 +13,9 @@ use orbit_common::security::child_env::{MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAG
 use orbit_common::security::redaction::argv_redactor;
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::workflow::activity_job::{AgentLoopSpec, EXPLORE_ACTIVITY, V2AuditEventKind};
-use orbit_types::workflow::{ActivityToolDenyPolicy, ExecutorSandboxKind, render_tag_instructions};
+use orbit_types::workflow::{
+    ActivityToolDenyPolicy, ExecutorSandboxKind, ExploreBriefAdmission, render_tag_instructions,
+};
 use serde_json::Value;
 
 use crate::context::{PluginBrokerRun, ProvenanceEnv, provenance_env};
@@ -86,6 +88,44 @@ fn attach_regression_risk<'a>(
     let marks = host.regression_risk_for_agent_input(run_id, activity_name, input)?;
     context.insert("regression_risk".to_string(), marks);
     Some(instruction)
+}
+
+/// Ask the host for the task's explore brief when `spec` declares an
+/// `explore_brief_instruction`, record the outcome whatever it is, and put a
+/// delivered brief into the task context. Returns the instruction to append
+/// only when the prompt carries the brief.
+#[allow(clippy::too_many_arguments)]
+fn attach_explore_brief<'a>(
+    host: &dyn RuntimeHost,
+    spec: &'a AgentLoopSpec,
+    run_id: &str,
+    step_id: &str,
+    activity_name: &str,
+    input: &Value,
+    task_ctx: Option<&mut Value>,
+    audit: &V2AuditWriter,
+) -> Option<&'a str> {
+    let instruction = spec
+        .explore_brief_instruction
+        .as_deref()
+        .filter(|instruction| !instruction.trim().is_empty())?;
+    let ExploreBriefAdmission { mut record, brief } =
+        host.explore_brief_for_activity(run_id, activity_name, input)?;
+    let delivered = match (brief, task_ctx.and_then(Value::as_object_mut)) {
+        (Some(brief), Some(context)) if record.deliverable() => {
+            context.insert("explore_brief".to_string(), brief);
+            true
+        }
+        _ => false,
+    };
+    record.delivered = delivered;
+    audit.emit_lossy(V2AuditEventKind::ExploreBriefApplied {
+        step_id: step_id.to_string(),
+        activity_name: activity_name.to_string(),
+        task_id: task_id_from_input(input).unwrap_or_default().to_string(),
+        brief: record,
+    });
+    delivered.then_some(instruction)
 }
 
 /// Run a catalog activity on behalf of a pipeline step whose id differs from
@@ -171,6 +211,16 @@ pub(crate) fn run_cli_backend_for_step(
     let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
     let regression_risk_instruction =
         attach_regression_risk(host, spec, run_id, activity_name, input, task_ctx.as_mut());
+    let explore_brief_instruction = attach_explore_brief(
+        host,
+        spec,
+        run_id,
+        step_id,
+        activity_name,
+        input,
+        task_ctx.as_mut(),
+        &audit,
+    );
     let tool_ctx = activity_tool_context(host, spec, run_id, fs_profile, &provider);
     // A shipment pipeline renders the assigned checkout twice: once as the
     // child cwd and once inside the agent contract. Validate that pair against
@@ -224,6 +274,10 @@ pub(crate) fn run_cli_backend_for_step(
         .filter(|instruction| !instruction.trim().is_empty())
         .filter(|_| host.explore_delegation_available())
     {
+        envelope_spec.instruction.push_str("\n\n");
+        envelope_spec.instruction.push_str(instruction);
+    }
+    if let Some(instruction) = explore_brief_instruction {
         envelope_spec.instruction.push_str("\n\n");
         envelope_spec.instruction.push_str(instruction);
     }

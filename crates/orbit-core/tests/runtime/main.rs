@@ -58,6 +58,7 @@ mod distributed_drain;
 mod drain_approval;
 mod drain_cancel;
 mod drain_extend;
+mod explore_brief;
 mod final_recovery;
 mod finding_verification;
 mod fixture_template;

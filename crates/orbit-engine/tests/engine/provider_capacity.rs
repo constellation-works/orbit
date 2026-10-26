@@ -131,6 +131,7 @@ pub(super) fn agent_spec(provider: Provider) -> AgentLoopSpec {
         steering_instruction: None,
         regression_risk_instruction: None,
         explore_instruction: None,
+        explore_brief_instruction: None,
         tools: vec![],
         on_denial: OnDenial::Terminate,
         model: None,

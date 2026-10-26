@@ -38,6 +38,10 @@
 //! `explore-brief.json` artifact before the receipt; an invalid brief is
 //! dropped with its reason in the audit and never fails the assessment.
 //!
+//! An implement dispatch then receives that brief only while it is current:
+//! the task's material is still what the receipt sealed, and the code it
+//! covers has not drifted too far from the run's base (`brief_delivery`).
+//!
 //! An applied assessment also holds or gates the task: backlog holds from
 //! applied findings (`admission`), prerequisite resolution (`blockers`) and
 //! verified-no-diff holds (`no_diff`).
@@ -47,6 +51,7 @@ mod apply;
 mod assessment;
 mod attachment_budget;
 mod blockers;
+mod brief_delivery;
 mod cfg_gate;
 mod drain_promotion;
 mod explore_brief;

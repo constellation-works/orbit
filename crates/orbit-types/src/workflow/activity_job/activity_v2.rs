@@ -38,6 +38,10 @@ pub struct ActivityV2 {
 /// v2 activity type discriminator. Serialized as
 /// `type: agent_loop|deterministic`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+// Boxing the agent spec would churn every reader that matches it for a size
+// heuristic; the additive optional `explore_brief_instruction` makes this
+// enum cross that threshold.
+#[allow(clippy::large_enum_variant)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ActivityV2Spec {
     AgentLoop(AgentLoopSpec),
@@ -67,6 +71,13 @@ pub struct AgentLoopSpec {
     /// Absent or unavailable, the rendered instruction offers no delegation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub explore_instruction: Option<String>,
+    /// How the agent uses the task context's `explore_brief`, the task
+    /// pilot's map of the change, appended to the instruction only when the
+    /// host delivers a brief for this prompt. Declaring it is what asks the
+    /// host for a brief and records the outcome; only `agent_implement`
+    /// declares it, so review and recovery never receive one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explore_brief_instruction: Option<String>,
     /// Tool allowlist (§6). Custom activities keep this exact allowlist
     /// contract. An empty list with no `tool_disallow_list` is deprecated:
     /// asset load warns and enforcement keeps its legacy behaviour until the
