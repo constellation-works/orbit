@@ -5762,17 +5762,18 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   }
   const current = wrap.querySelector(".readiness-list");
   const drain = taskDrainState(task, context);
-  if (drain) refreshBlockedByRow(wrap, readinessTask, drain, context);
   if (!current) return;
   if (!drain) return;
   const signature = taskDrainSignature(drain);
-  if (current.dataset.drainSignature === signature) return;
-  const replacement = buildReadinessBlock(readinessOf(readinessTask), drain, readinessTask.workspace_id);
-  replacement.dataset.drainSignature = signature;
-  const parent = current.parentNode;
-  if (!parent) return;
-  parent.insertBefore(replacement, current);
-  parent.removeChild(current);
+  if (current.dataset.drainSignature !== signature) {
+    const replacement = buildReadinessBlock(readinessOf(readinessTask), drain, readinessTask.workspace_id);
+    replacement.dataset.drainSignature = signature;
+    const parent = current.parentNode;
+    if (!parent) return;
+    parent.insertBefore(replacement, current);
+    parent.removeChild(current);
+  }
+  refreshBlockedByRow(wrap, readinessTask, drain, context);
 }
 
 // The drain read lands after the detail is shown, so the Blocked by row is
@@ -5783,7 +5784,11 @@ function refreshBlockedByRow(wrap, task, drain, context) {
   if (!card) return;
   const relations = relationTargets(Array.isArray(task.relations) ? task.relations : []);
   const blocked = relations.find(({ key }) => key === "blocked_by");
-  const covered = drainDependencyIds(drain);
+  // Only ids the rendered Readiness block actually displays are covered; a
+  // retained detail without one keeps every Blocked by link.
+  const displayed = new Set(Array.from(wrap.querySelectorAll(".readiness-list .readiness-dependency a"))
+    .map((link) => link.textContent));
+  const covered = new Set([...drainDependencyIds(drain)].filter((id) => displayed.has(id)));
   const visible = blocked ? blocked.targets.filter((target) => !covered.has(target)) : [];
   const existing = Array.from(card.children).filter((child) =>
     child.classList && child.classList.contains("relation") && child.dataset.relation === "blocked_by");

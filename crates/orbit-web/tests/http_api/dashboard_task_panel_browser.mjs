@@ -27,6 +27,7 @@ const tasks = statuses.map((status, index) => ({
   status_transitions: [{ status: status === 'backlog' ? 'in-progress' : 'backlog' }],
   comment_count: index === 1 ? 0 : 2, artifact_count: 1,
   ...(index === 2 ? {
+    relations: [{ type: 'blocked_by', target: 'PANEL-1' }],
     external_refs: [{ system: 'github-pr', id: '42', url: 'https://github.com/o/r/pull/42' }],
     delivery_attention: { run_id: 'jrun-delivery-failed', run_state: 'failed', failed_step_id: 'complete_pr', blocker: 'failed_checks', head_sha: 'abc123', attempt: 1, budget: 3, repairing: false, pr_number: '42', as_of: '2026-10-18T12:00:00Z', observed_at: '2026-10-18T12:00:00Z' },
   } : {}),
@@ -134,6 +135,7 @@ globalThis.fetch = async (input, options = {}) => {
       const body = JSON.parse(options.body);
       globalThis.panelFixture.patches.push({ id: task.id, body });
       if (Object.hasOwn(body, 'crew')) task.crew = body.crew;
+      if (body.status) task.status = body.status;
       if (body.acceptance_criteria) task.acceptance_criteria = body.acceptance_criteria;
       if (body.context_files) task.context_files = body.context_files;
     }
@@ -210,7 +212,7 @@ try {
       const panel = detail.locator(`#detail-PANEL-1-panel-${name}`);
       if (name === 'overview') {
         const actions = detail.locator('.task-action-footer .lifecycle-actions:visible');
-        assert.deepEqual(await actions.locator('.action').allTextContents(), ['approve', 'reject', 'archive'], 'A proposed task keeps its gated lifecycle actions in Overview');
+        assert.deepEqual(await actions.locator('.action').allTextContents(), ['approve', 'reject', 'run pilot', 'archive'], 'A proposed task keeps its gated lifecycle actions in Overview');
         assert.equal(await panel.locator('.action.comment:visible').count(), 0, 'Comment is absent from Overview');
       } else if (name === 'comments') {
         const footer = detail.locator('.task-action-footer[data-footer-tab="comments"]');
@@ -273,7 +275,7 @@ try {
   {
     const { page, errors, context } = await openPage();
     for (const [id, expected] of [
-      ['PANEL-3', ['approve', 'reject', 'archive']],
+      ['PANEL-3', ['approve', 'reject', 'fix PR', 'archive']],
       ['PANEL-6', ['ship', 'reject', 'archive']],
     ]) {
       await row(page, id).locator('.title').click();
@@ -994,6 +996,56 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
     results.phoneSheet = true;
+  }
+
+  // A draft-preserved full-page status change to backlog must not hide a
+  // blocked_by target when the retained detail has no Readiness row: the
+  // drain entry is only deduplicated once its dependency is actually shown.
+  {
+    const { page, errors, context } = await openPage();
+    await row(page, 'PANEL-3').locator('.title').click();
+    await waitShown(page, 'PANEL-3');
+    await page.getByRole('button', { name: 'Open full page' }).click();
+    await page.waitForFunction(() => location.hash === '#tasks/PANEL-3');
+    await page.locator('#task-detail-body #detail-PANEL-3').waitFor({ state: 'visible' });
+    const detail = page.locator('#task-detail-body #detail-PANEL-3');
+    assert.equal(await detail.locator('.readiness-list').count(), 0, 'The review detail starts without a Readiness row');
+    assert.deepEqual(await detail.locator('.task-delivery-relation').allTextContents(), ['PANEL-1'], 'The review detail shows PANEL-1 as its Blocked by link');
+    await detail.locator('[role="tab"][data-tab="comments"]').click();
+    const commentFooter = detail.locator('.task-action-footer[data-footer-tab="comments"]');
+    await commentFooter.getByRole('button', { name: 'comment', exact: true }).click();
+    const form = commentFooter.locator('.comment-form');
+    const draft = 'Unsent draft through the backlog transition.';
+    await form.locator('textarea').fill(draft);
+    await detail.locator('[role="tab"][data-tab="overview"]').click();
+    await page.evaluate(() => {
+      globalThis.panelFixture.readiness = [{
+        task_id: 'PANEL-3', status: 'backlog', eligible: false, reason: 'unmet_dependency',
+        dependencies: [{ task_id: 'PANEL-1', status: 'backlog' }],
+      }];
+    });
+    await detail.locator('.task-status-select').first().selectOption('backlog');
+    await page.waitForFunction(() => globalThis.panelFixture.patches.some(patch => patch.id === 'PANEL-3' && patch.body.status === 'backlog'));
+    await page.waitForFunction(() => globalThis.panelFixture.reads.some(read => read.includes('/api/workflows/auto/readiness?task=PANEL-3')));
+    await page.waitForTimeout(500);
+    const visible = await detail.evaluate(node => ({
+      relations: Array.from(node.querySelectorAll('.task-delivery-relation')).map(button => button.textContent),
+      dependencies: Array.from(node.querySelectorAll('.readiness-dependency a')).map(link => link.textContent),
+      readinessLists: node.querySelectorAll('.readiness-list').length,
+    }));
+    assert.equal(
+      [...visible.relations, ...visible.dependencies].filter(id => id === 'PANEL-1').length, 1,
+      `PANEL-1 stays visible exactly once after the backlog transition: ${JSON.stringify(visible)}`,
+    );
+    await capture(page, 'task-detail-blocked-by-draft-after-dark-1440.png');
+    await page.setViewportSize({ width: 375, height: 812 });
+    await capture(page, 'task-detail-blocked-by-draft-after-dark-375.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await detail.locator('[role="tab"][data-tab="comments"]').click();
+    assert.equal(await form.locator('textarea').inputValue(), draft, 'The backlog transition and readiness response preserve the comment draft');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.draftPreservedBacklogDependency = true;
   }
 
   fs.writeFileSync(path.join(evidence, 'task-panel-result.json'), JSON.stringify({ passed: true, ...results }, null, 2));
