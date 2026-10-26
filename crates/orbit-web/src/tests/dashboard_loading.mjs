@@ -276,6 +276,13 @@ const refresh = () => {
 const click = target => target.listeners ? target.listeners.click() : target.click();
 const release = (request, payload = request.payload) => request.resolve(response(payload));
 const text = id => node(id).textContent;
+// diagnostics.js prefixes every cell value with a responsive `diag-cell-label` span,
+// so a cell's value is read without that label.
+const diagCellValue = cell => {
+  const value = cell.cloneNode(true);
+  value.querySelectorAll('.diag-cell-label').forEach(label => label.remove());
+  return value.textContent;
+};
 const busy = id => node(id).getAttribute ? node(id).getAttribute('aria-busy') : node(id)['aria-busy'];
 const auditHeadPage = await fetchJsonPage('/api/audit?limit=50');
 check(auditHeadPage.header('x-audit-next-before') === 'fixture-audit-cursor', 'continuing audit fixture response exposes its paging cursor');
@@ -643,8 +650,10 @@ for (const selectedWindow of ['24h', '7d']) {
   const coverageLabel = `covers since ${formatDateTime(errorsRetentionStart)}`;
   check(text('diag-count').includes(coverageLabel) === (selectedWindow === '7d'),
     `errors header names its coverage start only when retention starts after the ${selectedWindow} window: ${text('diag-count')}`);
-  check(node('diag-body').querySelector('.c-target').textContent === 'orbit.job.step_finished', 'process target is displayed');
-  check(node('diag-body').querySelector('.c-recovered').textContent === 'recovered — run succeeded', 'historical step failure shows the later run recovery');
+  check(diagCellValue(node('diag-body').querySelector('.c-target')) === 'orbit.job.step_finished', 'process target is displayed');
+  // The recovery cell must hold a value, not its empty-state placeholder; its wording is presentation.
+  const recovery = node('diag-body').querySelector('.c-recovered');
+  check(diagCellValue(recovery) !== '' && !recovery.querySelector('.diag-empty-desktop, .diag-empty-phone'), 'historical step failure shows the later run recovery');
   check(!node('diag-body').querySelector('.c-provider'), 'all-empty provider column is removed from the Errors table');
   const messageDisclosure = node('diag-body').querySelector('.diagnostics-errors-main .c-message details.error-message');
   check(messageDisclosure && !messageDisclosure.open && messageDisclosure.querySelector('summary'), 'error message starts as a two-line expandable disclosure');
