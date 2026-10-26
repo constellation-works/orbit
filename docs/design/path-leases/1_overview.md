@@ -1,8 +1,8 @@
 ---
 title: Path Leases — Overview
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 feature: path-leases
 doc_role: overview
@@ -69,6 +69,8 @@ overlap early, let exclusive holds exist where a path policy wants them, and kee
 - **Lease token** — a bearer credential that authorizes lease operations, and nothing else, on
   the lease listener. Every principal other than the operator uses one: each person, and each of
   their agents.
+- **Listener user** — the dedicated OS user that runs the lease listener and owns its tokens.
+  Agents run as the operator's user and cannot become it, so they cannot mint tokens.
 
 Full definitions: [references/glossary.md](./references/glossary.md).
 
@@ -83,13 +85,16 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 | SSE streaming pattern (exists, for logs) | [crates/orbit-web/src/api/log.rs](../../../crates/orbit-web/src/api/log.rs) | — |
 | Lease modes, queue, lifetime, notices | proposed, [2_design.md §2–§5](./2_design.md#2-the-lease-record) | — |
 | MCP, CLI, REST and SSE surfaces | proposed, [2_design.md §6](./2_design.md#6-surfaces) | — |
-| Principals, lease tokens and the lease listener | proposed, [2_design.md §7](./2_design.md#7-authority-and-authentication) | — |
+| Principals, lease tokens and the lease listener | proposed, [2_design.md §7](./2_design.md#7-authority-and-authentication) | ORB-18410, ORB-18412 |
+| Listener user and intake socket | proposed, [2_design.md §7.1–§7.2](./2_design.md#71-the-listener-user) | ORB-18410, ORB-18430 |
+| Credential code (`orbit-auth`) | proposed, [2_design.md §7.4](./2_design.md#74-the-orbit-auth-crate) | ORB-18410, ORB-18421 |
 
 Decisions: [4_decisions.md](./4_decisions.md). Open questions and prior work:
 [3_vision.md](./3_vision.md).
 
 ## Task References
 
-None yet; the design is unfiled.
+- ORB-18404, ORB-18405, ORB-18406 — phase 1: lease rows, operations and SSH surfaces.
+- ORB-18410, ORB-18411, ORB-18430, ORB-18412, ORB-18413, ORB-18421, ORB-18414 — phase 2: the lease listener.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,13 +1,13 @@
 ---
 title: Path Leases — Decisions
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 feature: path-leases
 doc_role: decisions
 type: design
-summary: "Proposed standing rules for path leases: outside work shares the drain's lock index, leases are advisory unless policy makes them exclusive, and a lease token authorizes leases and nothing else."
+summary: "Proposed standing rules for path leases: outside work shares the drain's lock index, leases are advisory unless policy makes them exclusive, a lease token authorizes leases and nothing else, and authority that must hold against agents lives with an OS user they cannot become."
 tags: [path-leases]
 paths: []
 related_features: [conflict-budget, federated-mcp, remote-access]
@@ -101,8 +101,45 @@ and keeps meaning ownership.
 - Cost: Orbit carries two authentication stories, SSH ownership and lease tokens, and a second
   listener to configure, monitor and review.
 
+## Authority that must hold against agents lives with an OS user they cannot become
+
+**Recorded:** 2026-10 · ORB-18410, ORB-18430, ORB-18412
+
+### Context
+
+Agents on an owner run as the operator's Unix user. Orbit tells them apart only by environment
+(`orbit_common::governance::authorization::agent_context_declared` reads `ORBIT_AGENT_NAME`,
+`ORBIT_MANAGED_RUN_CONTEXT` and similar), which any agent can unset; the function's own
+documentation says it does not defend against a determined caller. The first draft of the lease
+listener made token minting "operator-only: refused from a declared agent context", so an agent,
+perhaps steered by injected text, could mint a lease token and hand an outsider the listener.
+
+### Decision
+
+When a capability must hold against agents, not merely discourage them, Orbit anchors it in an
+OS identity, or a factor, that the operator's Unix user cannot exercise unattended: a dedicated
+user the operator reaches through a password-gated `sudo`, a kernel-checked socket peer, a
+root-owned file. Checks inside the operator's processes, environment declarations among them,
+are guards that give a clear refusal, never the boundary. Applies to any future credential,
+approval or consent that agents must not be able to grant themselves.
+
+### Consequences
+
+- The lease listener, its token store and its configuration belong to a listener user; Orbit
+  accepts lease operations from it only over a socket whose peer the kernel identifies; the
+  listener runs a root-owned binary and refuses to start where another user could replace it.
+- Rejected alternatives: refusing token commands from a declared agent context, which an agent
+  defeats by unsetting variables; and signing tokens with an operator key, which holds only for
+  a hardware key that needs a touch, since a key in an ssh-agent is usable by every session that
+  reaches the agent.
+- Cost: minting, revoking and updating the listener's binary need the operator's password, so
+  token management can never be delegated to an agent; and an owner gains a second user,
+  a root-owned binary copy and a socket to provision and keep in version step.
+
 ## Task References
 
-None yet; the design is unfiled.
+- ORB-18410 — `orbit-auth` and lease tokens for the listener user.
+- ORB-18430 — the intake socket.
+- ORB-18412 — the listener as its own OS user.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

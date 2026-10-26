@@ -7,9 +7,9 @@ status: Draft
 feature: path-leases
 doc_role: design
 type: design
-summary: "Proposed mechanics for path leases: lease rows on the owner's reservation store and lock index, advisory and hard modes, a priority queue, TTL plus heartbeat and release on landing, durable notices read by poll or SSE, MCP/CLI/REST surfaces, and a lease-only token listener so several people and their agents coordinate on one owner."
+summary: "Proposed mechanics for path leases: lease rows on the owner's reservation store and lock index, advisory and hard modes, a priority queue, TTL plus heartbeat and release on landing, durable notices read by poll or SSE, MCP/CLI/REST surfaces, and a lease-only token listener, run as its own OS user with credential code in an orbit-auth crate, so several people and their agents coordinate on one owner."
 tags: [path-leases, locks, admission, reservations, notifications, authentication]
-paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**", "crates/orbit-mcp/**"]
+paths: ["crates/orbit-runtime/src/task/locks/**", "crates/orbit-store/src/driver/sqlite/task_reservation_store/**", "crates/orbit-web/src/api/**", "crates/orbit-mcp/**", "crates/orbit-auth/**"]
 related_features: [conflict-budget, distributed-drain, remote-access, federated-mcp]
 related_artifacts: []
 ---
@@ -199,31 +199,122 @@ owner, because that login is ownership of it. So the owner runs a separate liste
 only the lease routes of §6, for every principal that is not the operator: teammates, their
 agents, cloud agents and CI.
 
-- **Bearer lease tokens**, minted by the operator on the owner
-  (`orbit lease token create --principal <name> --workspace <ws> [--max-priority] [--hard allow|never] [--expires]`),
-  shown once, and stored only as a salted hash. Each token names one principal, its workspaces,
-  its verbs (`read` or `lease`), its priority ceiling and an expiry. `orbit lease token revoke`
-  takes effect on the next request.
+The listener is the first Orbit surface with application authentication. It ships with an
+STD-05 security review in the same phase, and it does not reintroduce caller authorization on
+any SSH path: the operator keeps reaching the owner over SSH as today.
+
+### 7.1 The listener user
+
+Orbit tells an agent from the operator by environment: `agent_context_declared`
+([env.rs](../../../crates/orbit-common/src/governance/authorization/env.rs)) reads variables such
+as `ORBIT_AGENT_NAME` and `ORBIT_MANAGED_RUN_CONTEXT`, and its own documentation says it is "not
+defending against a determined caller". Agents on an owner run as the operator's Unix user, so
+any rule enforced inside the operator's processes is a guard, and a token store the operator's
+user can write is one any agent can write. A token minted by an agent, perhaps steered by
+injected text, and handed to someone outside would give that person the listener.
+
+So the listener, its token store and its configuration belong to a dedicated OS user
+(`orbit-lease` by convention), and the operator acts as that user through `sudo -u`, which an
+unattended agent cannot do where `sudo` asks for a password (as on dk-server-2)
+([4_decisions.md](./4_decisions.md#authority-that-must-hold-against-agents-lives-with-an-os-user-they-cannot-become)).
+
+- **The user.** A system user with no login shell and its own Orbit home (for example
+  `/var/lib/orbit-lease/.orbit`). That home holds only the listener's configuration
+  (`lease.listener.*`, §8) and the token store `lease-tokens.db`, created `0600` in a `0700`
+  directory. It has no workspaces and no provider or forge credentials.
+- **Minting.** `sudo -u orbit-lease orbit lease token create --principal <name> --workspace <ws>
+  [--class human|agent] [--verbs read|lease] [--max-priority] [--hard allow|never] [--expires <duration>]`;
+  `list` (never prints secrets) and `revoke <id>` likewise. A person's agent tokens are named
+  under the person (`alice/claude-code`). The commands open only the token store in the running
+  user's Orbit home, and refuse to run as root or as the user that owns the intake socket (§7.2).
+  Run as the operator, they find no store and say how to run them. The `agent_context_declared`
+  refusal stays, as a guard that gives an agent a clear message; it is not the boundary.
+- **A binary agents cannot replace.** The listener user runs a root-owned copy of `orbit` (for
+  example `/usr/local/bin/orbit`), not the operator's `~/.cargo/bin/orbit`. `orbit lease listen`
+  and `orbit lease token` refuse to start when their executable, the listener user's Orbit home,
+  or any directory above either is writable by a user other than root or the listener user.
+  Without that check an agent could replace the binary and run code as the listener user.
+- **Linux first.** The user, its systemd unit and the root-owned binary are documented for
+  Linux owners. On macOS the same checks apply; creating the user is the operator's.
+
+### 7.2 The intake socket
+
+The listener user cannot open the operator's Orbit store, so it hands authenticated lease
+operations to Orbit over a local socket.
+
+- **Serving.** When `lease.intake.peer_user` names the listener user, Orbit Web, the owner's
+  long-running service, also serves a Unix socket at `$ORBIT_HOME/run/lease-intake.sock`. The
+  socket's directory is group-accessible to the listener user only.
+- **Peer check.** Every connection's peer user is read from the kernel (`SO_PEERCRED` on Linux,
+  `getpeereid` on macOS) and must be `lease.intake.peer_user`. Orbit refuses a configuration
+  naming root or its own user, so the operator's user, and every agent running as it, is
+  refused.
+- **Operations only.** The socket accepts the §6 lease operations and nothing else. Each carries
+  the authenticated principal, its class, the token id, the token's scope (workspaces, verbs,
+  priority ceiling, `hard`) and the client address. Orbit applies the token's scope and the
+  workspace's class policy (`lease.hard`, `lease.max_priority`) together, taking the stricter,
+  so a token cannot exceed what its workspace allows its class.
+- **Versioned.** The protocol carries a version. A listener and an Orbit of different protocol
+  versions refuse each other with a message naming both, because the root-owned copy is updated
+  separately from the operator's binary (an owner's update procedure gains a `sudo install`
+  step for it).
+- **Audit in two places.** Orbit audits every intake operation with the principal, token id and
+  client address. The listener audits what never reaches Orbit, failed authentication and
+  rejected requests, in its own store, aggregated per key and window (§7.3).
+
+What an agent running as the operator can still do: stop Orbit Web, or edit the operator's
+configuration to turn intake off or name another peer user, which denies service but grants
+nothing, since the agent cannot run as any other user. It cannot mint or revoke tokens, read
+their hashes, or run code as the listener user.
+
+### 7.3 Tokens, routes and limits
+
+- **Bearer lease tokens.** 256 bits from the OS random source with an `orbl_` prefix (so
+  redaction can recognize one), shown once at creation and stored only as a SHA-256 hash,
+  compared in constant time. Each names one principal and class, its workspaces, its verbs
+  (`read` or `lease`), its priority ceiling, its `hard` permission and an expiry. Revocation and
+  expiry take effect on the next request.
 - **Lease-only routes.** The listener's router contains the §6 routes and `/healthz`, nothing
   else, so a token cannot reach a task, run, config or operator route by construction
-  ([4_decisions.md](./4_decisions.md#a-lease-token-authorizes-leases-and-nothing-else)).
+  ([4_decisions.md](./4_decisions.md#a-lease-token-authorizes-leases-and-nothing-else)). The
+  routes and their request and response types are the ones Orbit Web serves on loopback, behind
+  a backend that calls the runtime there and the intake socket here.
 - **Binding.** The listener binds an address the operator names (a tailnet address in practice)
-  and refuses `0.0.0.0` unless TLS is configured on it or `lease.listener.behind_proxy` says a
-  terminating proxy is in front. Orbit Web itself stays loopback-only.
+  and refuses `0.0.0.0` or `::` unless TLS is configured on it or `lease.listener.behind_proxy`
+  says a terminating proxy is in front. Orbit Web itself stays loopback-only.
+- **Client address.** Without a proxy it is the TCP peer, and forwarding headers are ignored.
+  Behind a proxy, `X-Forwarded-For` is read only when the peer is in
+  `lease.listener.trusted_proxy`, and the client is the rightmost entry that is not a trusted
+  proxy, since entries further left are whatever the client sent. A malformed entry is refused
+  rather than replaced by the proxy's address; `Forwarded` is not read.
 - **Ceilings are boundaries here.** Unlike the SSH path, a token holder cannot edit the owner's
   configuration, so its priority ceiling, `hard` permission and workspace scope are enforced.
-- **Audit.** Every listener call writes an audit row naming the token's principal and the
-  remote address. Failed authentication is rate-limited per address.
+- **Limits.** Per client address before any token lookup (IPv6 counted per /64 by default), with
+  a stricter limit on failed authentication; per token for reads and, lower, for writes; and
+  for the whole listener, connections, requests in flight, body size, and header and handler
+  timeouts. A rejection answers 429 (with `Retry-After`), 413 or 503, and is audited once per key
+  and window so a flood cannot fill the audit store. Limiter state is in memory and bounded.
 - **No browser sessions.** The listener has no cookie or Origin-based session, so it has no
   CSRF surface; the dashboard's Leases view reads through Orbit Web as today.
-
 - **One token per person, one per agent.** A person's agents get their own tokens under the
   person's name (`alice/claude-code`), with the `agent` class ceiling, so notices and audit rows
   say which of Alice's sessions holds a path and revoking one agent leaves the others working.
 
-The listener is the first Orbit surface with application authentication. It ships with an
-STD-05 security review in the same phase, and it does not reintroduce caller authorization on
-any SSH path: the operator keeps reaching the owner over SSH as today.
+### 7.4 The `orbit-auth` crate
+
+Credential code lives in one crate, `orbit-auth`, so one place carries the security review and
+no surface reimplements a check.
+
+- **What it owns.** The token format, generation, hashing and constant-time verification; the
+  token store (its own SQLite file and schema in the listener user's home, opened through
+  `orbit-common`'s SQLite support, not Orbit's main store); principals, classes, verbs, scopes
+  and the allow-or-deny decision; client-address resolution; and a keyed, bounded rate limiter.
+- **What it does not.** No HTTP framework, no runtime handle and no Orbit store: `orbit-web`
+  wraps it as middleware for the listener, `orbit-cli` exposes the token commands, and the
+  intake socket's server and client sit beside the listener and Orbit Web. It depends only on
+  `orbit-common` and `orbit-types`.
+- **Reach.** SSH paths do not use it. A later credential-bearing surface reuses it instead of
+  growing its own token or limiter code.
 
 ## 8. Configuration
 
@@ -235,11 +326,16 @@ any SSH path: the operator keeps reaching the owner over SSH as today.
 | `lease.max_priority` | `{ human = "high", agent = "normal" }` | Priority ceiling per principal class; tokens carry their own. |
 | `lease.aging_minutes` | `30` | Queue age after which a request moves up one priority level. |
 | `lease.preemption` | `false` | Allow a higher-priority hard request to downgrade a lower-priority hard lease. |
+| `lease.intake.peer_user` | unset | The listener user allowed on the intake socket; unset means no socket (§7.2). |
 | `lease.listener.bind` | unset | Address for the lease listener; unset means no listener. |
 | `lease.listener.tls` | unset | Certificate and key paths, required for a non-loopback bind unless `behind_proxy`. |
 | `lease.listener.behind_proxy` | `false` | A terminating proxy supplies TLS in front of the listener. |
+| `lease.listener.trusted_proxy` | unset | Proxy addresses or ranges whose `X-Forwarded-For` is read; required with `behind_proxy`. |
+| `lease.listener.intake_socket` | unset | Path of the operator's intake socket. |
+| `lease.listener.limits.*` | conservative | Per-address, per-token and whole-listener limits (§7.3). |
 
-TTL bounds reuse the reservation limits. Path policy (`unlocked_context_paths`,
+`lease.intake.*` lives in the operator's configuration; `lease.listener.*` lives in the listener
+user's Orbit home, which the operator's user cannot write. TTL bounds reuse the reservation limits. Path policy (`unlocked_context_paths`,
 `generated_paths`, and the conflict budget's `exclusive_context_paths`) applies to leases
 unchanged.
 
@@ -248,9 +344,9 @@ unchanged.
 1. **Lease rows and SSH surfaces.** Advisory and hard leases, TTL and renew, explicit release,
    `check`, MCP tools and CLI, drain admission honoring hard leases, leases in
    `orbit task locks list` and the denial log.
-2. **Lease listener.** Lease tokens and their CLI, the lease-only router, TLS or proxy binding,
-   audit and rate limiting, with its STD-05 review. From here several people can coordinate on
-   one owner.
+2. **Lease listener.** The `orbit-auth` crate and lease tokens, the listener user, the intake
+   socket, the lease-only router, TLS or proxy binding, audit and limits, with its STD-05 review.
+   From here several people can coordinate on one owner.
 3. **Notices.** The notice stream, `overlap` and `overlap_landed`, poll by cursor, SSE on both
    Orbit Web and the lease listener, and the Claude Code hook recipe in the skill docs.
 4. **Queue and lifetime.** Waiting instead of refusal, aging, expansion, release on landing for
@@ -272,6 +368,16 @@ feature multi-person.
   authentication back for this one surface, and with it token storage, rotation, TLS and a
   public attack surface to keep reviewed. The lease-only router bounds what a stolen token can
   do; it does not remove the need to operate the listener carefully.
+- **The listener user costs the operator `sudo`.** Every mint, list and revoke, and every update
+  of the listener's root-owned binary, needs the operator's password. That is the point, but it
+  makes token management a manual step that no agent can take on, and an update that skips the
+  root-owned copy leaves the listener refusing on a protocol mismatch until it is installed.
+- **The listener user is trusted for identity.** Orbit believes the principal and scope the
+  intake socket sends. Code running as the listener user can therefore create leases as any
+  principal, within each workspace's class policy, though nothing beyond leases. Root defeats the
+  whole arrangement, as it would any OS-user boundary.
+- **Limits are per process.** Limiter state lives in memory, so it resets on restart and is not
+  shared between two listeners.
 - **Advisory leases make honesty a social contract.** With several people, a teammate who never
   leases, or leases a whole directory, degrades everyone's notices. Orbit can show
   declared-versus-landed accuracy per principal; it cannot make anyone use leases well.
@@ -294,5 +400,14 @@ feature multi-person.
 ## Task References
 
 - ORB-18404 — lease rows in the reservation store; advisory leases lock-free (§2, §3).
+- ORB-18405 — lease operations, principals and lease configuration.
+- ORB-18406 — `orbit.lease` tools and the `orbit lease` CLI.
+- ORB-18410 — the `orbit-auth` crate and lease tokens for the listener user (§7.1, §7.3, §7.4).
+- ORB-18411 — lease REST routes over a backend trait (§6, §7.3).
+- ORB-18430 — the intake socket (§7.2).
+- ORB-18412 — the lease listener as its own OS user (§7.1–§7.3).
+- ORB-18413 — native TLS on the listener.
+- ORB-18421 — listener rate limits and request bounds (§7.3).
+- ORB-18414 — STD-05 security review of phase 2.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
