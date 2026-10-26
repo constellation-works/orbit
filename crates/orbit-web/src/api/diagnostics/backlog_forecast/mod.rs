@@ -278,16 +278,32 @@ fn backlog_forecast(
         .into_iter()
         .flatten()
         .min();
-    let done: Vec<_> = runtime
+    let mut done_at: HashMap<String, DateTime<Utc>> = HashMap::new();
+    let mut history_rows = Vec::new();
+    // The index dates terminal rows by updated_at, which later comments or
+    // artifacts can advance. Use it only to narrow candidates: an actual
+    // completion cannot be newer than its last update. Read each candidate's
+    // event log once, using the latest entry into done (including creation
+    // in done) for both history membership and calibration. Never substitute
+    // mutable metadata when an older task has no recorded done event.
+    for row in runtime
         .task_terminal_transitions(transitions_since)?
         .into_iter()
         .filter(|row| row.status == TaskStatus::Done)
-        .collect();
-    let done_at: HashMap<String, DateTime<Utc>> = done
-        .iter()
-        .map(|row| (row.task_id.clone(), row.at))
-        .collect();
-    let history_rows: Vec<_> = done.iter().filter(|row| row.at >= lookback_start).collect();
+    {
+        let completed_at = runtime
+            .get_task_history(&row.task_id)?
+            .into_iter()
+            .rev()
+            .find(|entry| entry.to_status == Some(TaskStatus::Done))
+            .map(|entry| entry.at);
+        if let Some(at) = completed_at {
+            done_at.insert(row.task_id.clone(), at);
+            if at >= lookback_start {
+                history_rows.push(row);
+            }
+        }
+    }
 
     // The invocation read starts at the earliest of the lookback, the oldest
     // task it must cover and the oldest stored forecast. Creation times
@@ -419,7 +435,7 @@ fn backlog_forecast(
     let arrived: u64 = arrivals_by_source.values().sum();
     let source_count = |source: &str| arrivals_by_source.get(source).copied().unwrap_or(0);
     let per_day = |count: u64| (count as f64 / ARRIVAL_DAYS as f64 * 100.0).round() / 100.0;
-    let done_recently = done.iter().filter(|row| row.at >= arrival_start).count() as u64;
+    let done_recently = done_at.values().filter(|at| **at >= arrival_start).count() as u64;
     let arrival_rate = arrived as f64 / ARRIVAL_DAYS as f64;
     let arrivals = options.arrivals.then_some(Arrivals {
         per_day: arrival_rate,
