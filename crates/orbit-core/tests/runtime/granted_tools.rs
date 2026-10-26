@@ -2,6 +2,7 @@
 
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_engine::RuntimeHost;
 use orbit_types::tool::StoredTool;
 
 fn granted_tool_writes_reject_unusable_tools_atomically() {
@@ -156,7 +157,40 @@ fn granted_tool_writes_reject_unusable_tools_atomically() {
         .expect("an unusable grant can still be revoked before dispatch");
 }
 
+fn wildcard_covered_grant_refuses_admission_case() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Wildcard-covered grant".into(),
+            granted_tools: vec!["orbit.auto_task.update".into()],
+            ..Default::default()
+        })
+        .unwrap();
+
+    let error = runtime
+        .resolve_activity_tool_denials(
+            std::slice::from_ref(&task.id),
+            "agent_implement",
+            &["orbit.auto_task.*".into()],
+        )
+        .expect_err("a grant cannot lift a wildcard denial");
+    let message = error.to_string();
+    assert!(message.contains("orbit.auto_task.update"), "{message}");
+    assert!(message.contains("exact disallow entry"), "{message}");
+    assert!(message.contains("orbit.auto_task.*"), "{message}");
+}
+
 crate::scenario_table!(
     granted_tool_write_scenarios,
     granted_tool_writes_reject_unusable_tools_atomically
+);
+
+crate::scenario_table!(
+    a_grant_still_covered_by_a_wildcard_denial_refuses_admission,
+    wildcard_covered_grant_refuses_admission_case
 );

@@ -76,6 +76,7 @@ impl crate::test_support::NullRuntimeHost for TestHost {
                 TEST_REGISTERED_TOOLS.iter().copied(),
             ),
             omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
         })
     }
 

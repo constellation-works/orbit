@@ -95,9 +95,15 @@ The connected tool schema is authoritative for supported fields.
   worktree keeps the grant frozen after its run stops or claim is released;
   requeue and remove any preserved worktree before changing the grant for a
   new attempt. Every change records a `granted_tools_changed` history entry
-  naming the writer, both tool sets and the run/claim/worktree state. Grants
-  are stored and shown only for now: activity admission still refuses a
-  granted tool the deny list covers.
+  naming the writer, both tool sets and the run/claim/worktree state. Only
+  `agent_implement` reads a grant;
+  review, recovery, pilot and every other activity ignore it. A grant lifts
+  the deny list only for a tool classified read/repeat-safe. Every tool
+  `agent_implement` denies today is classified mutating, so such a grant
+  stays denied and is never called live, and also listing it in
+  `required_tools` still fails implementer admission. A lifted tool still
+  passes every other check: capability and field-level operator gates,
+  filesystem and process policy, and claimed-mode denials.
 - `requires_labels: ["<label>", ...]` — capability labels a host must carry,
   **all of them**, to run the task. A host carries its `machine.labels` setting
   plus its OS as an implicit label (`linux`, `macos`, `windows`); `orbit doctor`

@@ -88,6 +88,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
                 self.registered_tools.iter().map(String::as_str),
             ),
             omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
         })
     }
 
@@ -100,6 +101,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
             requested_tools: self.required_tools.clone(),
             effective_tools: baseline_tools.to_vec(),
             omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
         })
     }
 
