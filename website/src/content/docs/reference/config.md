@@ -601,6 +601,109 @@ Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep wo
 across audit, run and journal pruning. Upgrade backfills retained denial and commit
 facts once before pruning; history deleted before upgrade cannot be recovered.
 
+## Review-skip tags
+
+Use `workflow.review_skip_tags` to let a workspace tag skip agent review for
+a bounded class of low-risk changes, including paths outside
+`workflow.light_delivery_paths`. For example, a comment-only maintenance task
+can touch source files when a repository-specific guard verifies that the
+non-comment content is unchanged.
+
+Add a profile to `.orbit/config.toml`, or to `~/.orbit/config.toml` for a
+global policy:
+
+```toml
+[workflow.review_skip_tags.comment-hygiene]
+paths = ["src/**", "!src/generated/**"]
+guard = "scripts/check-comment-only-diff.sh"
+```
+
+The script in this example is one you supply in your repository. Commit it
+before relying on the profile: Orbit reads the guard from the delivery's
+base revision. File a maintenance task carrying `comment-hygiene`, with
+acceptance criteria that limit it to comment changes. The profile permits
+the review skip only if the candidate meets all of these conditions:
+
+- Every task delivered by the candidate carries the mapped tag.
+- Every changed path since the candidate's synchronized base matches the
+  profile's `paths`. Deletions count; a rename checks both paths. An empty
+  diff does not qualify.
+- The optional `guard` exits 0. A missing guard at the base revision, a
+  nonzero exit or a timeout retains normal review.
+
+When a profile applies, it skips before-PR review, before-landing review
+(including host-specific review), and after-landing delivery-code-review
+sampling. **A mapped tag skips review only:** required validation, workspace
+gates and hosted CI still run.
+
+### Paths and guards
+
+`paths` is a required, non-empty array of globs. `*` stays within one path
+component; `**` spans components; a leading `!` excludes a match. A path
+qualifies when a positive pattern matches and no exclusion matches.
+`["**"]` allows every path; without a guard, matching paths and tags alone
+permit the skip.
+
+`guard` is an optional repository-relative executable path, not a shell
+command. It cannot be absolute or contain `..`. Orbit supplies the
+candidate's base and head commits as its first two arguments and as
+`ORBIT_REVIEW_SKIP_BASE` and `ORBIT_REVIEW_SKIP_HEAD`; the tag is available
+as `ORBIT_REVIEW_SKIP_TAG`.
+
+Orbit runs the base revision's copy of the guard in a throwaway detached
+checkout of the candidate's head commit, using the same environment and
+sandbox rules as required validation. The guard sees the candidate's `HEAD`
+and files without changing the owner's branch or edits. A candidate cannot
+weaken its own guard by editing that executable. The guard runs only after
+all tasks and paths qualify.
+
+### Authority, layering and defaults
+
+Only task filing (including an auto-task definition) or an operator update
+can add a mapped tag. An agent update that adds one is refused; removal is
+always allowed. Tag names match case-insensitively. Config validation
+refuses blank or duplicate normalized tags, unknown profile fields, empty
+or malformed `paths`, invalid guard paths, and more than 32 mappings. Errors
+name the offending key.
+
+Profiles layer per tag: workspace values override global values for the
+same tag; omitted fields and other global profiles remain inherited. A
+workspace `paths` array replaces the global array whole. With no mappings
+in either file, none apply. The seeded global config includes profiles for the shipped
+default auto-tasks' `auto-task:<name>` provenance tags, restricted to
+documentation and CI paths. Existing config files are not migrated; add
+tables explicitly to opt in. Keep finding tags such as `code-review` and
+`security-review` unmapped so fixes filed by those reviews retain review.
+
+The built-in `skip-review` and `skip-validation` tags cannot be remapped.
+They use `workflow.light_delivery_paths` and require every delivered task
+to carry the relevant tag and every changed path to qualify. `skip-review`
+skips agent review; `skip-validation` skips local validation. Neither skips
+hosted CI. A custom profile does not grant `skip-validation` behavior.
+
+### Inspecting decisions and distributed claims
+
+Run `orbit config show` to inspect the effective profiles under **Review
+skip tags**; `orbit config show --json` exposes them as `review_skip_tags`.
+Use `orbit task show "$TASK_ID" --fields history` to inspect the candidate's
+`light_delivery_applied` or `light_delivery_ignored` event. Each decision is
+recorded once per candidate, naming the tag, profile key and any failed
+condition: an untagged task, an outside path, a failing guard or a guard
+missing at the base.
+
+Delivery automation dry runs defer mapped-profile decisions, including
+profiles with no guard. They run no guard and record no history. Unless a
+before-PR certificate or built-in `skip-review` rule already covers a
+landing, its preview counts it as requiring review. Real evaluation may
+therefore find less review work than the preview reports.
+
+For a distributed claim, the owner captures its profiles alongside
+`workflow.light_delivery_paths` in the claim's validation gates. The follower
+uses that captured copy, including the guard, rather than its own profiles.
+The owner evaluates the handoff again, guard included, when accepting it
+and records the decision in task history. An older owner that captures no
+profiles leaves the follower with none, so no mapped tag applies.
+
 ## Delivery templates
 
 The `[pr]`, `[commit]` and `[branch]` templates shape what a single-task
