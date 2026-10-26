@@ -181,20 +181,58 @@ impl OrbitRuntime {
         task_id: &str,
         random: &mut impl FnMut() -> Result<u64, OrbitError>,
     ) -> Result<(), OrbitError> {
-        let pools = pools_from_input(input)?;
         let task = self.get_task(task_id)?;
+        self.capture_task_crew_selection(input, &task, random)
+    }
+
+    pub(crate) fn capture_task_crew_selection(
+        &self,
+        input: &mut Value,
+        task: &Task,
+        random: &mut impl FnMut() -> Result<u64, OrbitError>,
+    ) -> Result<(), OrbitError> {
+        let pools = pools_from_input(input)?;
+        let task_id = &task.id;
+        let experiment_pool = self.experiment_crew_pool(task_id)?;
+        let allowlist = self.crew_allowlist_from_input(input)?;
         let explicit = input
             .get("crew")
             .and_then(Value::as_str)
             .and_then(non_empty);
-        // [ORB-17638] Only a task-level explicit crew qualifies; an explicit
-        // run crew is the operator's call for this run alone.
-        let reassignment = if explicit.is_none() {
-            self.provider_limit_reassignment_plan(&task)
+        // Draw the treatment before provider holds and limits, so a changed crew
+        // has an exact intended/actual deviation rather than an inferred one.
+        let planned = if explicit.is_none()
+            && let Some(pool) = &experiment_pool
+        {
+            let (mut members, _) = self
+                .pool_member_candidates(&pool.entries, &pool.source, None)?
+                .ok_or_else(|| {
+                    OrbitError::PolicyDenied(format!("{} has no runnable crew", pool.source))
+                })?;
+            weighted_candidates(
+                &mut members,
+                &self.provider_limit_policy().usage_pressure,
+                || self.usage_pressure_read(chrono::Utc::now()),
+                || None,
+            );
+            let members = permitted_candidates(members, &pool.source, allowlist.as_ref())?;
+            Some(
+                weighted_draw(&members, &pool.source, random)?
+                    .crew
+                    .name
+                    .clone(),
+            )
         } else {
             None
         };
-        let (mut crews, mut source) = self.auto_task_crew_candidates(&task, &pools, explicit)?;
+        // [ORB-17638] Only a task-level explicit crew qualifies; an explicit
+        // run crew is the operator's call for this run alone.
+        let reassignment = if explicit.is_none() && experiment_pool.is_none() {
+            self.provider_limit_reassignment_plan(task)
+        } else {
+            None
+        };
+        let (mut crews, mut source) = self.auto_task_crew_candidates(task, &pools, explicit)?;
         // [ORB-17770] Weigh the narrowed pool by usage pressure and crew
         // performance; an explicit run crew is the operator's call and has
         // no draw to weigh. Performance never widens the pool: only the
@@ -204,7 +242,18 @@ impl OrbitRuntime {
                 &mut crews,
                 &self.provider_limit_policy().usage_pressure,
                 || self.usage_pressure_read(chrono::Utc::now()),
-                || self.crew_performance_read(task.complexity, &task.tags, &task.context_files),
+                || {
+                    experiment_pool
+                        .is_none()
+                        .then(|| {
+                            self.crew_performance_read(
+                                task.complexity,
+                                &task.tags,
+                                &task.context_files,
+                            )
+                        })
+                        .flatten()
+                },
             )
         } else {
             None
@@ -212,13 +261,20 @@ impl OrbitRuntime {
         if weighting.as_ref().is_some_and(DrawWeighting::pressured) {
             source = format!("{source}; usage pressure");
         }
-        let allowlist = self.crew_allowlist_from_input(input)?;
         let candidates = permitted_candidates(crews, &source, allowlist.as_ref())?;
-        let selected = weighted_draw(&candidates, &source, random)?;
-        if let Some(weighting) = weighting.as_ref().filter(|weighting| weighting.pressured())
+        let selected = match planned.as_deref().and_then(|planned| {
+            candidates
+                .iter()
+                .find(|candidate| candidate.crew.name == planned)
+        }) {
+            Some(selected) => selected,
+            None => weighted_draw(&candidates, &source, random)?,
+        };
+        if experiment_pool.is_none()
+            && let Some(weighting) = weighting.as_ref().filter(|weighting| weighting.pressured())
             && let Some(original) = task.crew.as_deref()
             && original != selected.crew.name
-            && let Some(redraw) = self.usage_pressure_redraw_view(&task)?
+            && let Some(redraw) = self.usage_pressure_redraw_view(task)?
             && let Some(automatic) = redraw.crew_source.as_deref()
             && let Err(error) = self.persist_usage_pressure_redraw(
                 &task.id,
@@ -271,6 +327,15 @@ impl OrbitRuntime {
         });
         if let Some(limit) = provider_limit {
             input[SELECTION_KEY]["provider_limit"] = json!(limit);
+        }
+        if let Some(pool) = experiment_pool {
+            input[SELECTION_KEY]["experiment_overlay_digest"] = json!(pool.digest);
+            input[SELECTION_KEY]["performance_weighting"] = json!(false);
+            if let Some(planned) = planned.filter(|planned| planned != &selected.crew.name) {
+                input[SELECTION_KEY]["deviation"] = json!({
+                    "intended_crew": planned, "actual_crew": selected.crew.name, "reason": source,
+                });
+            }
         }
         input["crew"] = json!(selected.crew.name);
         Ok(())

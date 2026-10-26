@@ -1,7 +1,8 @@
 //! Live overlays: what a live arm applies to one activity dispatch, and what
 //! an owner resolves into a claim so a follower applies the same arm.
 //!
-//! Two surfaces are live. An arm's instruction file joins the tag-instruction
+//! This module applies instructions and tools at dispatch; `run_policy`
+//! handles crew admission and task-local config. An arm's instruction file joins the tag-instruction
 //! section, read at the run's base revision on the owner and at the claim
 //! base for a claimed leaf; `false` leaves Orbit's shipped default
 //! instructions out. An arm's tool delta is applied after the activity's

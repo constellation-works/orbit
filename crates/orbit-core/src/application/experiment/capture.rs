@@ -19,6 +19,32 @@ impl OrbitRuntime {
         task: &Task,
     ) -> Result<CapturedExperiments, OrbitError> {
         let rows = self.admit_task_experiments(task)?;
+        self.capture_experiment_assignments(&task.id, rows)
+    }
+
+    /// Read existing assignments without enrolling during eligibility checks.
+    pub(crate) fn existing_task_experiment_capture(
+        &self,
+        task_id: &str,
+    ) -> Result<CapturedExperiments, OrbitError> {
+        if self.worker_invocation().is_some() {
+            let capture = self
+                .current_claimed_leaf()?
+                .admission
+                .receipt
+                .and_then(|receipt| receipt.experiments);
+            validate_experiment_capture(capture.as_ref(), task_id)?;
+            return capture
+                .ok_or_else(|| OrbitError::PolicyDenied("missing experiment capture".into()));
+        }
+        self.capture_experiment_assignments(task_id, self.task_experiments(task_id)?)
+    }
+
+    fn capture_experiment_assignments(
+        &self,
+        task_id: &str,
+        rows: Vec<orbit_store::contracts::ExperimentAssignment>,
+    ) -> Result<CapturedExperiments, OrbitError> {
         let mut assignments = Vec::new();
         for row in rows {
             let Some(arm_name) = row.arm else {
@@ -49,10 +75,10 @@ impl OrbitRuntime {
             });
         }
         let capture = CapturedExperiments {
-            task_id: task.id.clone(),
+            task_id: task_id.to_string(),
             assignments,
         };
-        validate_experiment_capture(Some(&capture), &task.id)?;
+        validate_experiment_capture(Some(&capture), task_id)?;
         Ok(capture)
     }
 
@@ -116,6 +142,17 @@ pub(crate) fn validate_experiment_capture(
             serde_json::from_str(&entry.overlay_json).map_err(|_| refused("unreadable overlay"))?,
         )
         .map_err(|_| refused("invalid overlay"))?;
+        // Older shadow experiments could observe keys that were not live
+        // surfaces. They still apply nothing; enforce typed values only when
+        // the captured arm can actually change a run.
+        if entry.live
+            && let Some(config) = &overlay.config
+        {
+            for (key, value) in &config.values {
+                orbit_config::ExperimentConfigKey::from_config_key(key)?
+                    .validate_experiment_value(value)?;
+            }
+        }
         if overlay.canonical_json()? != entry.overlay_json
             || overlay_digest(&entry.overlay_json) != entry.digest
         {

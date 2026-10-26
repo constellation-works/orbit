@@ -64,6 +64,11 @@ pub struct PipelineState {
     pub job_id: String,
     /// Merged job defaults + run input. Immutable after creation.
     pub initial_input: Value,
+    /// A claimed leaf's crew admission, frozen by its executing host before
+    /// dispatch, including experiment digest and any treatment deviation.
+    /// Owner runs retain their admission in the job run's input instead.
+    #[serde(default)]
+    pub crew_selection: Option<Value>,
     /// Accumulated pipeline state — each step's output is merged here.
     /// This replaces the in-memory `current_input` blob.
     pub pipeline: Value,
@@ -209,6 +214,7 @@ impl PipelineState {
             job_id,
             pipeline: initial_input.clone(),
             initial_input,
+            crew_selection: None,
             step_outputs: BTreeMap::new(),
             compound_outputs: BTreeMap::new(),
             pipeline_patches: BTreeMap::new(),
