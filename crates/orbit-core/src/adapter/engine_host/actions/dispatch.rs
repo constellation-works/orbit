@@ -169,6 +169,10 @@ pub(crate) fn run_deterministic(
         CoreDeterministicAction::CrewPerformanceRefresh => runtime
             .refresh_crew_performance_snapshot()
             .map_err(|error| DispatchError::action_failed(action, error.to_string())),
+        // Publish only this workspace, with an explicit successful skip when unbound.
+        CoreDeterministicAction::TaskPublication => runtime
+            .run_task_publication()
+            .map_err(|error| DispatchError::action_failed(action, error.to_string())),
         // The opt-in daily retention sweep: audit rows and blobs, then old
         // terminal runs' pipeline state, under the configured windows.
         CoreDeterministicAction::StoreGc => {

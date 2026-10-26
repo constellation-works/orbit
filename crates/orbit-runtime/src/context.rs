@@ -390,6 +390,8 @@ pub struct OrbitRuntimeSettings {
     /// Minutes a deferred delivery-automation reason may persist before the
     /// evaluator escalates it (`[automation] stall_window_minutes`).
     automation_stall_window_minutes: u32,
+    publication_routine_attachments: String,
+    publication_routine_allow_unscanned_attachments: bool,
     pr_config: PrConfig,
     /// Config-owned `[pr]` settings; the PR closure on a task's terminal
     /// decision reads `close_on_terminal` and `delivery_authors` from here.
@@ -496,6 +498,8 @@ impl OrbitRuntimeSettings {
         persistence: PersistenceConfig,
         actor: ActorIdentity,
         automation_stall_window_minutes: u32,
+        publication_routine_attachments: String,
+        publication_routine_allow_unscanned_attachments: bool,
         pr_config: PrConfig,
         pr_settings: orbit_config::PrSettings,
         workflow_base_branch: String,
@@ -545,6 +549,8 @@ impl OrbitRuntimeSettings {
             persistence,
             actor,
             automation_stall_window_minutes,
+            publication_routine_attachments,
+            publication_routine_allow_unscanned_attachments,
             pr_config,
             pr_settings,
             workflow_base_branch,
@@ -608,6 +614,16 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn crew_performance(&self) -> orbit_config::CrewPerformanceMode {
         self.crew_performance
+    }
+
+    /// Admitted attachment policy for scheduled task publication.
+    pub fn publication_routine_attachments(&self) -> &str {
+        &self.publication_routine_attachments
+    }
+
+    /// Whether the operator explicitly accepts unscanned routine attachments.
+    pub fn publication_routine_allow_unscanned_attachments(&self) -> bool {
+        self.publication_routine_allow_unscanned_attachments
     }
 
     pub(crate) fn crew_performance_window_days(&self) -> u32 {

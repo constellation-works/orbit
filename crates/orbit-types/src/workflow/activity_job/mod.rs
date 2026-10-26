@@ -74,6 +74,7 @@ macro_rules! deterministic_action_catalog {
                 SelectProposedApprovals => "select_proposed_approvals",
                 Sleep => "sleep",
                 StoreGc => "store_gc",
+                TaskPublication => "task_publication",
                 ValidateBundles => "validate_bundles",
             }
             engine {

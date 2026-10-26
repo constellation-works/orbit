@@ -374,36 +374,49 @@ fn signed_header_data(
 }
 
 /// The DKIM-Signature value (or raw header) with the `b=` tag's value
-/// removed, as it stood when the signer hashed it.
+/// removed, as it stood when the signer hashed it. RFC 6376 §3.7: the
+/// value and all surrounding whitespace are deleted, so whitespace after
+/// `=` (including folding CRLF + WSP) and before the following `;` or the
+/// end of the value must not remain — under relaxed canonicalisation it
+/// would otherwise compress to a space the signer never hashed, and
+/// under simple canonicalisation it changes the signed bytes outright.
+/// Legal whitespace around the tag syntax itself (before the tag name,
+/// between the name and `=`, after the separating `;`) is not adjacent
+/// to the value and is preserved. The tag is located on a tag boundary
+/// (start, or a `;`/`:` once intervening whitespace is skipped) with
+/// optional whitespace between `b` and `=`, so `bh=` and `b=` sequences
+/// inside other tag values are not mistaken for the signature tag.
 fn empty_b_tag(value: &str) -> String {
-    let lower = value.to_ascii_lowercase();
     let mut search_from = 0usize;
-    let tag_start = loop {
-        let Some(found) = lower[search_from..].find("b=") else {
+    while search_from < value.len() {
+        let Some(found) = value[search_from..].find(['b', 'B']) else {
             return value.to_string();
         };
-        let start = search_from + found;
-        let boundary = start == 0
-            || value[..start]
-                .chars()
-                .next_back()
-                .is_some_and(|ch| ch == ';' || ch == ':' || ch.is_whitespace());
+        let tag_start = search_from + found;
+        let boundary = value[..tag_start]
+            .chars()
+            .rev()
+            .find(|ch| !ch.is_whitespace())
+            .is_none_or(|ch| ch == ';' || ch == ':');
         if boundary {
-            break start;
+            let after_name = tag_start + 1;
+            let equals = value[after_name..]
+                .char_indices()
+                .find(|(_, ch)| !ch.is_whitespace())
+                .filter(|(_, ch)| *ch == '=')
+                .map(|(index, _)| after_name + index);
+            if let Some(equals) = equals {
+                let value_start = equals + 1;
+                let value_end = value[value_start..]
+                    .find(';')
+                    .map(|index| value_start + index)
+                    .unwrap_or(value.len());
+                return format!("{}{}", &value[..=equals], &value[value_end..]);
+            }
         }
-        search_from = start + 2;
-    };
-    let value_start = tag_start + 2;
-    let value_end = value[value_start..]
-        .find(';')
-        .map(|index| value_start + index)
-        .unwrap_or(value.len());
-    // Keep WSP that precedes the signature value; drop the value itself.
-    let keep_until = value[value_start..value_end]
-        .find(|ch: char| !ch.is_whitespace())
-        .map(|index| value_start + index)
-        .unwrap_or(value_end);
-    format!("{}{}", &value[..keep_until], &value[value_end..])
+        search_from = tag_start + 1;
+    }
+    value.to_string()
 }
 
 fn canonicalize_body(body: &[u8], canon: Canon) -> Vec<u8> {

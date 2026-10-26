@@ -7,7 +7,7 @@ sidebar:
 
 Task publication pushes a snapshot of one workspace's task records to a Git
 repository you control, so the backlog survives losing the machine. You choose
-when to publish; nothing publishes on its own.
+when to publish; the weekly routine stays disabled until you enable it.
 
 It covers task records only. Audit events, run history, and configuration
 need a full state backup: see [Back up and move Orbit state](../state-and-backup/).
@@ -32,6 +32,39 @@ checks that it landed. Ask the same way to publish again or to restore.
 Orbit refuses the source repository itself and any URL with credentials in it.
 Keeping the repository private is up to you: task text and attachments can
 hold sensitive detail.
+
+## Scheduled publication
+
+`orbit workspace init` seeds `task-publication-<workspace>` disabled because
+publishing task prose to a remote is an operator decision. `orbit workspace
+sync` adds the routine to existing workspaces disabled and preserves locally
+modified routines.
+
+After reviewing your publication binding and unattended credentials, set
+`enabled: true` in `.orbit/routines/task_publication.yaml`. Check it with
+`orbit routine list`. It runs Sunday at 04:47 host-local time (`47 4 * * 0`),
+skips missed runs and forbids overlaps. Replicas report it as owner-only and
+never fire it.
+
+The target `job:task_publication_pipeline` runs the deterministic
+`task_publication` activity for its own workspace. You can run it immediately:
+
+```bash
+orbit run job task_publication_pipeline --wait
+```
+
+An unbound workspace succeeds with `skipped: publication_unbound`; unchanged
+content records `status: unchanged` without a new commit. Authority conflicts
+and authentication failures fail the run with the publisher's error and a
+redacted remote URL. Configure credentials in the clock service environment
+using the unattended authentication instructions below.
+
+`publication.routine_attachments` defaults to `omit`, equivalent to manual
+`--attachments omit`. `fail` refuses snapshots with attachments. `include`
+keeps the 10 MiB per-file and 100 MiB total limits and sensitive path deny
+patterns. It fails closed without a scanner unless you explicitly set
+`publication.routine_allow_unscanned_attachments = true` to accept unchecked
+content. Manual publication keeps its separate flags and default `fail` policy.
 
 ## Publish
 

@@ -61,9 +61,14 @@ elif sys.argv[1] != 'install':
 """)
         # The old signature rejects filter before entering the function. With
         # no filter it reproduces older Python's unsafe extraction behavior.
-        self.write_program("python3", """import os, sys, tarfile
+        self.write_program("python3", """import errno, os, sys, tarfile
 if sys.argv[1] != '-':
     os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+from pathlib import Path as _PatchedPath
+if os.environ.get('VENDOR_TEST_INJECT_EXDEV') == '1':
+    def _exdev_replace(self, target):
+        raise OSError(errno.EXDEV, 'Invalid cross-device link')
+    _PatchedPath.replace = _exdev_replace
 original = tarfile.TarFile.extractall
 tarfile.TarFile.extraction_filter = staticmethod(lambda member, destination: member)
 def legacy_extractall(self, path='.', members=None, *, numeric_owner=False):
@@ -96,10 +101,12 @@ exec(compile(sys.stdin.read(), '<refresh-dashboard-vendor>', 'exec'))
                     member.size = len(data.getvalue())
                 archive.addfile(member, data)
 
-    def refresh(self):
+    def refresh(self, extra_env=None):
         env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}", TMPDIR=str(self.tmp),
                    VENDOR_TEST_TARBALL=str(self.tarball), VENDOR_TEST_NPM_LOG=str(self.npm_log),
                    VENDOR_TEST_EXTRACTION_LOG=str(self.extraction_log))
+        if extra_env:
+            env.update(extra_env)
         return self_test_hang.run(
             ["bash", str(self.scripts / "refresh-dashboard-vendor.sh")],
             step="refresh-dashboard-vendor",
@@ -145,6 +152,24 @@ exec(compile(sys.stdin.read(), '<refresh-dashboard-vendor>', 'exec'))
             self.assertEqual((self.vendor / asset["path"]).read_bytes(), PAYLOAD)
             self.assertEqual(asset["sha256"], hashlib.sha256(PAYLOAD).hexdigest())
         self.assertEqual(self.npm_log.read_text().splitlines(), ["pack", "pack", "install"])
+
+    def test_cross_device_install_succeeds(self):
+        # Simulate TMPDIR on another filesystem by forcing every staged
+        # Path.replace to raise EXDEV; the refresh must still install the
+        # validated bytes (copy fallback) instead of failing like the
+        # pre-fix bare replace did.
+        self.write_tarball()
+        result = self.refresh(extra_env={"VENDOR_TEST_INJECT_EXDEV": "1"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertFalse(self.extraction_log.exists())
+        manifest = json.loads(self.manifest.read_text())
+        for asset in manifest["assets"]:
+            self.assertEqual((self.vendor / asset["path"]).read_bytes(), PAYLOAD)
+            self.assertEqual(asset["sha256"], hashlib.sha256(PAYLOAD).hexdigest())
+        self.assertEqual(self.npm_log.read_text().splitlines(), ["pack", "pack", "install"])
+        leftovers = [path for path in self.vendor.iterdir()
+                     if path.name.startswith(".vendor-refresh-")]
+        self.assertEqual(leftovers, [])
 
 
 if __name__ == "__main__":

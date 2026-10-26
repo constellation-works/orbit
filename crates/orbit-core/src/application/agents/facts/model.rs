@@ -51,6 +51,9 @@ pub enum Problem {
     CriteriaBlock,
     /// A final-recovery escalation whose diagnosis cites the criteria.
     CriteriaEscalation,
+    /// A confirmed task-pilot hold on an unattainable specification, counted
+    /// once per task unless its confirming event already has a spec charge.
+    PilotWarning,
     /// An implementation run after the task's first.
     RepeatRun,
     /// A `[BLOCKED]` PR a failure handoff published.
@@ -92,6 +95,7 @@ impl Problem {
             Problem::SpecEdit => "spec_edit",
             Problem::CriteriaBlock => "criteria_block",
             Problem::CriteriaEscalation => "criteria_escalation",
+            Problem::PilotWarning => "pilot_warning",
             Problem::RepeatRun => "repeat_run",
             Problem::BlockedPr => "blocked_pr",
             Problem::UnmergedPr => "unmerged_pr",
