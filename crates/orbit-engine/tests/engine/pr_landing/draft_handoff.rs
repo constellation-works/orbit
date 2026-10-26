@@ -2,7 +2,7 @@
 //! permanently stopped owner landing (ORB-18534).
 use super::*;
 use orbit_engine::{HandoffLandingContext, HandoffLandingStep, HandoffLandingUpdate, PrConfig};
-use orbit_types::workflow::{DeliveryConventions, ScreenshotSection};
+use orbit_types::workflow::{DeliveryConventions, PR_SECTIONS_ARTIFACT, ScreenshotSection};
 
 struct DraftLanding<'a> {
     follower: &'a DeliveryHost,
@@ -84,15 +84,18 @@ fn follower_section_gap_draft_returns_for_repair_then_lands() {
                 let remote = fx.forge.join("orbit/test.git");
                 std::os::unix::fs::symlink(fx.forge.join("remote.git"), &remote).unwrap();
                 fx.git(&["remote", "set-url", "origin", path_str(&remote)]);
-                locked(&follower.tasks).get_mut(TASK_ID).unwrap().tags = vec!["ui".into()];
+                // A required agent section the implementer left empty is the
+                // section gap. Screenshots never count as missing (ORB-18535).
                 follower.set_conventions(DeliveryConventions {
-                    screenshot_section: ScreenshotSection::Auto,
+                    agent_sections: vec!["Rollback".into()],
+                    required_sections: vec!["Rollback".into()],
+                    screenshot_section: ScreenshotSection::Off,
                     draft: case == "configured",
                     ..DeliveryConventions::default()
                 });
                 let opened = open_ok(&fx, &follower);
                 assert_eq!(opened["draft"], true);
-                assert_eq!(opened["missing_required_sections"], json!(["Screenshots"]));
+                assert_eq!(opened["missing_required_sections"], json!(["Rollback"]));
                 assert!(
                     fx.forge_state("pr-body")
                         .unwrap()
@@ -138,10 +141,10 @@ fn follower_section_gap_draft_returns_for_repair_then_lands() {
                     continue;
                 }
                 assert!(
-                    error.contains("Screenshots") && error.contains("repair"),
+                    error.contains("Rollback") && error.contains("repair"),
                     "{error}"
                 );
-                assert!(updates[0].evidence.contains("Screenshots"));
+                assert!(updates[0].evidence.contains("Rollback"));
                 drop(updates);
 
                 // A repair that still omits the section must keep its candidate
@@ -154,12 +157,12 @@ fn follower_section_gap_draft_returns_for_repair_then_lands() {
                     "{error}"
                 );
 
-                // The repair leaf supplies the artifact and reuses pr_open's
+                // The repair leaf supplies the section and reuses pr_open's
                 // existing guarded body refresh / ready transition.
-                follower.put_artifact_bytes(
+                follower.put_artifact(
                     TASK_ID,
-                    "screenshots/view-dark-375.png",
-                    b"\x89PNG\r\n\x1a\nfixture",
+                    PR_SECTIONS_ARTIFACT,
+                    r#"{"sections":{"Rollback":"The change can be reverted."}}"#,
                 );
                 assert_eq!(open_ok(&fx, &follower)["pr_reused"], true);
                 assert!(fx.forge_state("pr-draft").is_none());
