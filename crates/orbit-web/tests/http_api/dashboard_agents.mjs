@@ -202,7 +202,7 @@ const answer = (requests, route) => {
 // Contract-shaped payloads (docs/design/agent-scorecards/2_design.md §6).
 const TERMS = [
   { key: 'landed', label: 'Landed', weight: 1, definition: 'Landed tasks, one each whatever their complexity.', group: 'credit' },
-  { key: 'spec_defects', label: 'Spec defects', weight: -1, definition: 'Edits after the first run, criteria blocks and escalations.', group: 'problem' },
+  { key: 'spec_defects', label: 'Spec defects', weight: -1, definition: 'Description or criteria edited after the first run started (once per task), agent blocks naming the criteria, final-recovery escalations citing them, regressions with escape spec_ambiguous, and confirmed task-pilot holds on validation-tool, ADR-conflict, surface or utility findings. Pilot holds count at most once per task and add no charge when their confirming event already counts as a spec edit, criteria block or criteria escalation; prerequisite-only holds and unconfirmed warnings add none.', group: 'problem' },
   { key: 'spec_rework', label: 'Spec-caused rework', weight: -1, definition: 'Rework whose cause is spec.', group: 'problem' },
 ];
 const stats = (rework) => [

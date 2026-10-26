@@ -26,7 +26,7 @@ const UNITS = { orchestrators: 'owned tasks', implementers: 'implemented tasks',
 const TERMS = {
   orchestrators: [
     ['landed', 'Landed', 1, 'credit', 'Landed tasks, one each whatever their complexity, so per 100 owned tasks the percent that landed.'],
-    ['spec_defects', 'Spec defects', -1, 'problem', 'Description or criteria edited after the first run started, agent blocks naming the criteria, final-recovery escalations citing them, and regressions with escape spec_ambiguous.'],
+    ['spec_defects', 'Spec defects', -1, 'problem', 'Description or criteria edited after the first run started (once per task), agent blocks naming the criteria, final-recovery escalations citing them, regressions with escape spec_ambiguous, and confirmed task-pilot holds on validation-tool, ADR-conflict, surface or utility findings. Pilot holds count at most once per task and add no charge when their confirming event already counts as a spec edit, criteria block or criteria escalation; prerequisite-only holds and unconfirmed warnings add none.'],
     ['spec_rework', 'Spec-caused rework', -1, 'problem', 'Repeat runs, [BLOCKED] or unmerged PRs, and operator requeues whose cause is spec.'],
   ],
   implementers: [

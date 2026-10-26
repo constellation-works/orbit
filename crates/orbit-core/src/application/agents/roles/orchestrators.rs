@@ -42,7 +42,7 @@ const TERMS: &[Term] = &[
         key: "spec_defects",
         label: "Spec defects",
         weight: -1.0,
-        definition: "Description or criteria edited after the first run started (once per task), agent blocks naming the criteria, final-recovery escalations citing them, and regressions with escape spec_ambiguous.",
+        definition: "Description or criteria edited after the first run started (once per task), agent blocks naming the criteria, final-recovery escalations citing them, regressions with escape spec_ambiguous, and confirmed task-pilot holds on validation-tool, ADR-conflict, surface or utility findings. Pilot holds count at most once per task and add no charge when their confirming event already counts as a spec edit, criteria block or criteria escalation; prerequisite-only holds and unconfirmed warnings add none.",
         group: "problem",
     },
     Term {

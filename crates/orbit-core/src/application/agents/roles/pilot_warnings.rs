@@ -34,6 +34,7 @@ use orbit_types::task::{
     TASK_FIELDS_UPDATED_EVENT, Task, TaskComment, TaskHistoryEntry, TaskStatus,
     task_fields_updated_documents,
 };
+use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Map, Value, json};
 
 use crate::application::agents::AgentFacts;
@@ -82,8 +83,8 @@ pub(in crate::application::agents) struct Assessment {
     pub(in crate::application::agents) operation_id: String,
     /// The pilot run the receipt names, when it names one.
     pub(in crate::application::agents) run_id: Option<String>,
-    /// The kind of each finding that held promotion; empty when clean.
-    pub(in crate::application::agents) held: Vec<String>,
+    /// Each finding that held promotion, with its kind and full text; empty when clean.
+    pub(in crate::application::agents) held: Vec<DrainHoldFinding>,
     pub(in crate::application::agents) outcome: Outcome,
     /// When the outcome settled and the record that settled it.
     pub(in crate::application::agents) settled: Option<(DateTime<Utc>, String)>,
@@ -100,7 +101,7 @@ impl Assessment {
         )
     }
 
-    fn run_id(&self) -> Option<String> {
+    pub(in crate::application::agents) fn run_id(&self) -> Option<String> {
         self.run
             .as_ref()
             .map(|run| run.run_id.clone())
@@ -143,11 +144,7 @@ pub(in crate::application::agents) fn settle(
         .iter()
         .enumerate()
         .map(|(index, (at, operation_id, body))| {
-            let held: Vec<String> =
-                warning_hold_findings(&body["assessment"], &dependencies, &|_| false)
-                    .into_iter()
-                    .map(|finding| finding.kind)
-                    .collect();
+            let held = warning_hold_findings(&body["assessment"], &dependencies, &|_| false);
             let next = receipts.get(index + 1).map(|(at, _, _)| *at);
             let (outcome, settled) = outcome(history, *at, next, !held.is_empty());
             Assessment {
@@ -426,7 +423,12 @@ pub(super) fn rows(
             let detail = if assessment.held.is_empty() {
                 detail.clone()
             } else {
-                format!("held on {}; {detail}", assessment.held.join(", "))
+                let kinds: Vec<&str> = assessment
+                    .held
+                    .iter()
+                    .map(|finding| finding.kind.as_str())
+                    .collect();
+                format!("held on {}; {detail}", kinds.join(", "))
             };
             row.tallies.entry(key).or_default().add(
                 task,
