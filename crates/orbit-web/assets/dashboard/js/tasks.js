@@ -1699,18 +1699,51 @@ function buildExternalRefs(refs) {
   return wrap;
 }
 
-// The typed relations in RELATION_GROUPS order, one entry per related task,
-// each carrying the label that says how it relates.
+// The typed relations in RELATION_GROUPS order, one entry per relation type,
+// carrying the label that says how its targets relate.
 function relationTargets(relations) {
   const byType = new Map(RELATION_GROUPS.map(([key]) => [key, []]));
   for (const relation of relations) {
     const key = relationTypeKey(relation.relation_type || relation.type);
     const target = relation.target == null ? "" : String(relation.target);
     if (!RELATION_GROUP_LABELS.has(key) || !target) continue;
-    byType.get(key).push(target);
+    if (!byType.get(key).includes(target)) byType.get(key).push(target);
   }
   return RELATION_GROUPS.flatMap(([key, label]) =>
-    byType.get(key).map((target) => ({ key, label, target })));
+    byType.get(key).length ? [{ key, label, targets: byType.get(key) }] : []);
+}
+
+// The blocked_by ids the Readiness card already lists under "Depends on".
+// They come from the same drain entry the card renders, so the two agree;
+// without an entry (another status, a pending or failed read) nothing is
+// covered and every blocked_by target keeps its row.
+function drainDependencyIds(drain) {
+  const entry = drain && drain.entry;
+  if (!entry) return new Set();
+  const badge = drainReadinessView(entry).badge;
+  if (!badge) return new Set();
+  return new Set(badge.dependencies.map(({ taskId }) => taskId));
+}
+
+// One delivery-card relation row: the type's ids sit inline, wrapping as
+// needed, and each id opens its task. The row keeps the `data-relation` key.
+function buildRelationRow(key, label, targets, context) {
+  const value = el("span", { class: "value task-delivery-relations" });
+  targets.forEach((target, index) => {
+    if (index > 0) value.append(", ");
+    const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, title: `Open ${target}` });
+    open.addEventListener("click", (e) => {
+      e.stopPropagation();
+      openVisibleTask(target, context);
+    });
+    value.appendChild(open);
+  });
+  const relationRow = el("div", { class: "property-row fact task-delivery-row relation" }, [
+    el("span", { class: "label", text: label }),
+    value,
+  ]);
+  relationRow.dataset.relation = key;
+  return relationRow;
 }
 
 // ORB-11333: the settled before-PR review gate. Every value comes from the
@@ -3784,17 +3817,15 @@ function buildDeliveryCard(task, drain, context) {
   if (task.job_run_id != null && task.job_run_id !== "") rows.push(row("run", "Run", buildRunValue(task)));
   const hands = buildHandsChain(task);
   if (hands) rows.push(row("hands", "Handled by", hands));
-  // One row per typed relation; its id opens the related task on click.
+  // One row per relation type; its ids sit inline and each opens its task.
+  // A blocked_by target the Readiness card already lists under "Depends on"
+  // stays there only, so the same id is never shown twice.
+  const covered = drainDependencyIds(drain);
   const relations = relationTargets(Array.isArray(task.relations) ? task.relations : []);
-  for (const { key, label, target } of relations) {
-    const open = el("button", { class: "mono task-delivery-relation", type: "button", text: target, title: `Open ${target}` });
-    open.addEventListener("click", (e) => {
-      e.stopPropagation();
-      openVisibleTask(target, context);
-    });
-    const relationRow = row("relation", label, el("span", { class: "value" }, [open]));
-    relationRow.dataset.relation = key;
-    rows.push(relationRow);
+  for (const { key, label, targets } of relations) {
+    const visible = key === "blocked_by" ? targets.filter((target) => !covered.has(target)) : targets;
+    if (!visible.length) continue;
+    rows.push(buildRelationRow(key, label, visible, context));
   }
   const readiness = readinessOf(task);
   if (readiness || drain) rows.push(row("readiness", "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id)));
@@ -5730,8 +5761,9 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
     }
   }
   const current = wrap.querySelector(".readiness-list");
-  if (!current) return;
   const drain = taskDrainState(task, context);
+  if (drain) refreshBlockedByRow(wrap, readinessTask, drain, context);
+  if (!current) return;
   if (!drain) return;
   const signature = taskDrainSignature(drain);
   if (current.dataset.drainSignature === signature) return;
@@ -5741,6 +5773,33 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   if (!parent) return;
   parent.insertBefore(replacement, current);
   parent.removeChild(current);
+}
+
+// The drain read lands after the detail is shown, so the Blocked by row is
+// derived from that same entry: covered ids stay hidden, uncovered ones keep
+// their row, and the row returns when the entry stops covering them.
+function refreshBlockedByRow(wrap, task, drain, context) {
+  const card = wrap.querySelector ? wrap.querySelector(".task-delivery-card") : null;
+  if (!card) return;
+  const relations = relationTargets(Array.isArray(task.relations) ? task.relations : []);
+  const blocked = relations.find(({ key }) => key === "blocked_by");
+  const covered = drainDependencyIds(drain);
+  const visible = blocked ? blocked.targets.filter((target) => !covered.has(target)) : [];
+  const existing = Array.from(card.children).filter((child) =>
+    child.classList && child.classList.contains("relation") && child.dataset.relation === "blocked_by");
+  const shown = existing.flatMap((child) =>
+    Array.from(child.querySelectorAll(".task-delivery-relation")).map((button) => button.textContent));
+  if (shown.length === visible.length && shown.every((target, index) => target === visible[index])) return;
+  for (const child of existing) child.remove();
+  if (!visible.length) return;
+  const row = buildRelationRow("blocked_by", blocked.label, visible, context);
+  // Blocked by leads the relation rows: before any other relation row, else
+  // before Readiness, else before Location, else at the card's end.
+  const anchor = Array.from(card.children).find((child) =>
+    (child.classList && child.classList.contains("relation")) ||
+    (child.classList && (child.classList.contains("readiness") || child.classList.contains("location"))));
+  if (anchor) card.insertBefore(row, anchor);
+  else card.appendChild(row);
 }
 
 function refreshDraftCrewControl(wrap, task, context) {
