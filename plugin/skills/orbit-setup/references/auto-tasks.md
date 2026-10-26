@@ -342,9 +342,9 @@ it. Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
 
-## The twenty-two seeded definitions
+## The twenty-three seeded definitions
 
-`orbit workspace init` seeds all twenty-two, disabled, except any you deleted (see
+`orbit workspace init` seeds all twenty-three, disabled, except any you deleted (see
 [Deleting a definition](#deleting-a-definition)):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
@@ -424,6 +424,18 @@ plugin being removed.
   batch owed. Hands-on QA of recent changes is
   `qa-sweep`; hands-on QA of the whole product at one commit is
   `qa-full-sweep`.
+- **`design-sync`** (`medium`) — every 720 minutes. Reconciles at most three
+  feature folders against `docs/design/CONVENTIONS.md`, task status history
+  and code, changed since the prior ledger first, then oldest checked first.
+  Corrects stage, status, next, phase/slice citations, stale implementation
+  claims and Task References; acceptance needs recorded owner approval and
+  shipping needs integration-branch delivery. It preserves design intent and
+  historical decisions, finding or filing at most three proposed tasks for
+  unexplained divergences or archival follow-ups. Frontmatter changes
+  regenerate the repository's doc index. Every run attaches its cumulative
+  `design-sync-ledger.json`, including clean no-diff runs and a successful
+  no-edit, no-filing no-op when conventions are absent. It locks `dir:docs`;
+  `doc-duties` keeps its mechanical scope and low complexity.
 - **`doc-duties`** (`low`) — daily. Validates a small batch of the
   least-recently-attempted workspace documentation against current behavior,
   and corrects factual drift and broken links. Each run attaches a
