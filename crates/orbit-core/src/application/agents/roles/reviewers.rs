@@ -345,6 +345,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
                 provisional: Some(row.provisional),
                 tallies: row.tallies,
                 expected: None,
+                reviewed_units: None,
                 stats,
             }
         })

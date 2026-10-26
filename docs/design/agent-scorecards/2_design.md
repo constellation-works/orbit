@@ -45,25 +45,33 @@ The view follows the shared dashboard window: 1h, 24h, 7d, 30d or 90d. `all` is 
 
 Every role's detail column places an inline SVG radar between the score header
 and **Score breakdown**. It compares the selected crew/model with the fleet in
-the same role and window. This describes the shape of the evidence; it does not
-reconstruct the weighted, smoothed score or the implementers' tier adjustment.
+the same role and window. Each axis is the row's percentile in the ranked
+fleet, so the chart and the ranking tell the same story; the per-axis weight
+and signed contribution versus the fleet median (below) explain why a row
+with some inward axes still ranks where it does. It does not reconstruct
+the smoothed final score or the implementers' tier-adjusted expected counts:
+the **Score breakdown** beside it carries those exact contributions.
 
 - Each `scorecard.terms` entry is an axis, using `row.per_100[key]`. The
   denominator is `row.term_units[key]` when present, otherwise `row.units`,
   labelled with the term's `unit` or the role's `unit`. Credit axes point out
   for higher rates; negative-weight axes invert and say **fewer is better**.
-- Each axis scales independently using the minimum and maximum rates among
-  ranked rows with supported evidence for that term. For a credit, radius is
-  `clamp((rate − min) / (max − min), 0, 1)`; for a penalty it is one minus
-  that value. A constant fleet axis uses radius 0.5 for every supported value.
-  Thus outliers clamp to the edge, different rate magnitudes do not dominate,
-  and equal rates do not imply best or worst. These are relative rates, not
-  absolute quality targets.
+- Each axis scales independently by the row's percentile among ranked rows
+  with supported evidence for that term: the share of supported rates below
+  the row's rate, plus half the share equal to it, inverted for a penalty.
+  A rate equal to the fleet median uses radius 0.5. One extreme outlier
+  occupies only the outer percentile steps, so it cannot stretch a span and
+  squeeze every normal crew toward the good or bad end, and different rate
+  magnitudes do not dominate. A constant fleet axis sits at 0.5 for every
+  supported value. These are relative positions, not absolute quality
+  targets.
 - The contrasting dashed polygon is the unweighted median of those same
-  supported ranked rates on each axis, scaled by that axis's rule. With an
-  even population it averages the two middle rates. An agent with more units
-  has no extra weight here. The selected polygon has a solid stroke and fill;
-  medians and scales refresh whenever the scorecard rows change.
+  supported ranked rates on each axis. With an even population it averages
+  the two middle rates. Scaled by the percentile rule it always plots on
+  the middle ring (radius 0.5) on every axis, regardless of outliers. An
+  agent with more units has no extra weight here. The selected polygon has
+  a solid stroke and fill; medians and scales refresh whenever the
+  scorecard rows change.
 - Roles with fewer than five scored terms add count-valued **Shown, not
   scored** axes, stopping at five. The fixed preference order is unclassified
   rework/regressions, dropped initiative, unknown origin, infrastructure
@@ -73,7 +81,14 @@ reconstruct the weighted, smoothed score or the implementers' tier adjustment.
   dollars, percentages, structured stats and already-scored keys are excluded.
 - A row below `min_support` has a muted chart and **Too little evidence to
   compare** note. Unsupported terms (`provisional_terms`, zero units or an
-  own denominator below `warning_min_support`) are gaps. Reviewers' pending
+  own denominator below `warning_min_support`) are gaps. An implementer
+  row whose `reviewed_units` is 0 has no reviewed denominator, so its
+  review-derived axes (`first_pass_accepts`, `review_rejects` and
+  `reviewer_repairs`) are gaps with the reason **no reviewed deliveries**,
+  never a centre (worst) or rim (best) zero. `reviewed_units` is a
+  display-only count of the row's tasks with a settled first review; it
+  never enters `denominators`, so it makes no term provisional and changes
+  no score. Reviewers' pending
   `provisional` reviews make the missed-regressions axis provisional, while
   their other observed terms remain available. An explicitly unmeasured
   missed-scope-block source is also a gap. Unsupported rates never enter the
@@ -84,9 +99,13 @@ reconstruct the weighted, smoothed score or the implementers' tier adjustment.
 - Numbered spokes map to full axis labels beneath the plot at narrow widths.
   Hovering a vertex or its numbered endpoint, focusing or clicking it
   discloses its term, agent rate,
-  fleet median rate, raw count, denominator and evidence state. The SVG has an
-  accessible name and a visually hidden table carries the same numbers.
-  No chart library or backend field is needed.
+  fleet median rate, its weight, its signed contribution versus the fleet
+  median (`weight × (agent rate − fleet median rate)`; unscored axes and
+  gaps carry no contribution), raw count, denominator and evidence state.
+  The SVG has an accessible name and a visually hidden table carries the
+  same numbers, with weight and contribution versus the fleet median as
+  columns. No chart library is needed; the one backend addition is the
+  implementers' `reviewed_units` field.
 
 ## 2. Ranking Unit
 
@@ -294,7 +313,7 @@ model attribution are unchanged.
 
 The historical payload keys `weighted_landed` and `cost_per_weighted_landed`
 remain for compatibility; both now use **unit landings**, with labels **Landed**
-and **Cost per landed task (USD)**. Each implementer row adds `expected`, a map
+and **Cost per landed task (USD)**. Each implementer row adds `reviewed_units`, the count of its tasks with a settled first review (display only, §1.1), `expected`, a map
 of term keys to expected counts, and `score_base: 100`. Actual `counts` and
 `per_100` remain actuals; detail term `contribution` is weight times the
 actual-minus-expected rate, so `score_base + Σ contribution` equals raw before
@@ -455,7 +474,7 @@ GET /api/agents/attribution?window=
 - `rows`, best first;
 - pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`.
 
-Each row carries `crew`, `model`, `units`, `below_support`, `rank` (null below support), `counts` and `per_100` (term key to number), `raw`, `score`, `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support).
+Each row carries `crew`, `model`, `units`, `below_support`, `rank` (null below support), `counts` and `per_100` (term key to number), `raw`, `score`, `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: a display-only denominator for the radar's review-derived axes (§1.1), never a scoring denominator. A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support).
 
 **Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first, plus `units` and `provisional` when it has its own denominator. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
 

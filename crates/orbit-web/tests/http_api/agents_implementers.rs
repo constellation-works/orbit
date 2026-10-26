@@ -597,3 +597,72 @@ fn implementers_leave_no_diff_expected_work_out_but_count_untagged_no_diff_outco
         },
     );
 }
+
+#[test]
+fn implementers_report_zero_reviewed_units_without_making_review_terms_provisional() {
+    isolated(
+        "agents_implementers::implementers_report_zero_reviewed_units_without_making_review_terms_provisional",
+        || {
+            let fixture = Fixture::new();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            for crew in ["reviewed", "unreviewed"] {
+                for index in 0..4 {
+                    let id = landed_with_tags(
+                        &fixture,
+                        &format!("jrun-{crew}-{index}"),
+                        crew,
+                        Vec::new(),
+                    );
+                    if crew == "reviewed" {
+                        comment(
+                            &fixture,
+                            &id,
+                            &format!(
+                                "before-PR review settled attempt `rv-{crew}-{index}`: verdict **accept**\n- Reviewer: crew `reviewer` (codex / review-model)"
+                            ),
+                        );
+                    }
+                }
+            }
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let card = agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            assert_eq!(row(&card, "reviewed")["reviewed_units"], 4, "{card}");
+            let unreviewed = row(&card, "unreviewed");
+            assert_eq!(unreviewed["reviewed_units"], 0, "{card}");
+            assert_eq!(unreviewed["counts"]["first_pass_accepts"], 0, "{card}");
+            assert!(
+                unreviewed.get("term_units").is_none()
+                    && unreviewed.get("provisional_terms").is_none(),
+                "reviewed_units is display-only and never a scoring denominator: {unreviewed}"
+            );
+            // The unreviewed row's first-pass term still contributes its
+            // actual-minus-expected amount: making it provisional would
+            // zero the contribution and change the score.
+            let detail = agent_detail(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                "unreviewed",
+                Some("model"),
+                std::time::Duration::ZERO,
+            )
+            .unwrap();
+            let first_pass = detail["terms"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|term| term["key"] == "first_pass_accepts")
+                .unwrap();
+            assert!(
+                as_f64(&first_pass["contribution"]) < 0.0,
+                "an unreviewed row keeps its scored first-pass contribution: {first_pass}"
+            );
+            assert_eq!(detail["row"], *unreviewed, "{detail}");
+        },
+    );
+}

@@ -184,6 +184,7 @@ fn row<'a>(
         provisional: None,
         tallies,
         expected: None,
+        reviewed_units: None,
         stats,
     }
 }
