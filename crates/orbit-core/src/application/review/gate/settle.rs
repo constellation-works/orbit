@@ -424,10 +424,13 @@ fn settle(
             certificate.owed_evidence.clone(),
             certificate.owner_owed_evidence.clone(),
         ),
-        None => split_owner_owed(
-            owed_evidence(runtime, context, reviewed.commits.iter().chain(&repair))?,
-            defers,
-        ),
+        None => {
+            let mut owed = owed_evidence(runtime, context, reviewed.commits.iter().chain(&repair))?;
+            if defers {
+                judgement.add_named_linux_sandbox_evidence(&mut owed);
+            }
+            split_owner_owed(owed, defers)
+        }
     };
     judgement.require_owed_evidence(&owed);
     if held.is_none() {

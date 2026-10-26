@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
-last_validated: 2026-10-18
+last_validated: 2026-10-26
 ---
 
 # Operate the Review Gate
@@ -565,6 +565,11 @@ sandbox-gated test on a host of the rule's OS owes a run outside the agent
 sandbox. Orbit adds each owed requirement whatever the reviewer reported:
 `owed_external_evidence` in the manifest and `owed_evidence` in the certificate
 list them. A verdict whose only gaps are owed checks holds rather than blocking.
+A claimed before-landing reviewer on a known non-Linux host may also name
+Linux `host_sandbox_test` requirements without a workspace rule. Settlement
+records these in `owed_evidence`, adding their required `not_run` records
+when omitted, so Linux-only gaps hold for the owner. Failed required checks
+and open findings still block.
 A reviewer's claimed pass of an owed check also holds, with an `owed_evidence`
 escalation. Once the evidence arrives, the owner's next run resumes the held
 candidate and its admission decides `evidence_received`. Settlement then
@@ -584,7 +589,10 @@ host can create Bubblewrap namespaces. The owner's clock sweep dispatches
 down on a follower, a worker, another platform or a host without namespaces.
 The run admits only an exact owner-required validation command or
 `cargo test -p <crate> --test <target> [<filter>]`, written in
-`[A-Za-z0-9._/:@+=-]` and spaces with no other option. A command outside
+`[A-Za-z0-9._/:@+=-]` and spaces. A single `--` immediately before the
+one filter is also admitted and normalized to the same host command;
+a bare `--`, further arguments and test-harness options remain refused.
+A command outside
 that allowlist refuses the whole hold before anything runs. An admitted
 command runs without a shell at the held commit, in a detached worktree with
 the validation environment and a run-local build target, outside any sandbox

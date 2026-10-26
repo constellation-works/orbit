@@ -585,7 +585,7 @@ fn fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_time
     );
 }
 
-const HOST_TEST: &str = "cargo test -p orbit-exec --test probe";
+const HOST_TEST: &str = "cargo test -p orbit-exec --test probe -- probe";
 const HOST_EVIDENCE: &str = "evidence/host-sandbox-probe.json";
 const HOST_EVIDENCE_LOG: &str = "evidence/host-sandbox-probe.log.json";
 /// What a sandbox-gated test prints inside an agent lane.
@@ -674,6 +674,30 @@ fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_revi
             .unwrap();
         assert!(deferred.dispatched.is_empty(), "{deferred:?}");
         assert!(deferred.skipped.is_some(), "{deferred:?}");
+        // Command admission precedes the host gate. Exercise the actual
+        // owner pipeline even here: `-- probe` must reach that gate rather
+        // than being refused as an argument, without running a host test.
+        let run = fixture
+            .runtime
+            .submit_pipeline_run(
+                REVIEW_EVIDENCE_FULFILMENT_JOB,
+                json!({
+                    "task_id": fixture.task_id,
+                    "hold_key": format!("{}:{}", hold.attempt_id, hold.candidate.commit),
+                }),
+                None,
+                Some("system"),
+            )
+            .unwrap();
+        execute(&fixture, &run.run_id);
+        let output = fixture
+            .runtime
+            .read_run_state(&run.run_id)
+            .unwrap()
+            .unwrap()
+            .pipeline["fulfil"]
+            .clone();
+        assert_eq!(output["reason"], "sandbox_unavailable", "{output}");
         assert_held_without(&fixture, HOST_EVIDENCE, "sandbox unavailable");
         return;
     }
@@ -692,7 +716,10 @@ fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_revi
     assert_eq!(evidence.outcome, ValidationOutcome::Passed);
     assert_eq!(evidence.log_artifact, HOST_EVIDENCE_LOG);
     let log = artifact(&fixture, HOST_EVIDENCE_LOG).expect("log attached");
-    assert_eq!(log["host_command"], format!("{HOST_TEST} -- --nocapture"));
+    assert_eq!(
+        log["host_command"],
+        "cargo test -p orbit-exec --test probe probe -- --nocapture"
+    );
     assert_eq!(log["tests_passed"], 1);
     assert!(
         log["output"]

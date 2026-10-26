@@ -95,6 +95,38 @@ fn only_the_cargo_test_shape_and_owner_required_commands_are_admitted() {
 }
 
 #[test]
+fn a_cargo_filter_after_the_separator_has_the_same_admitted_host_command() {
+    let plain = HostSandboxCommand::admit(
+        "cargo test -p orbit-engine --test engine v2_cli_sandbox::dispatch_registration_failure_ends_the_provider_group",
+        &[],
+    )
+    .unwrap();
+    let separated = HostSandboxCommand::admit(
+        "cargo test -p orbit-engine --test engine -- v2_cli_sandbox::dispatch_registration_failure_ends_the_provider_group",
+        &[],
+    )
+    .expect("a reviewer-named filter after -- must reach owner fulfilment");
+    assert_eq!(separated, plain);
+    assert_eq!(separated.host_command(), plain.host_command());
+    for command in [
+        "cargo test -p orbit-engine --test engine --",
+        "cargo test -p orbit-engine --test engine -- --ignored",
+        "cargo test -p orbit-engine --test engine -- probe --nocapture",
+        "cargo test -p orbit-engine --test engine -- one two",
+        "cargo test -p orbit-engine --test engine one -- two",
+        "cargo test -p orbit-engine -- probe --test engine",
+    ] {
+        assert_eq!(
+            HostSandboxCommand::admit(command, &[])
+                .expect_err(command)
+                .reason,
+            HostEvidenceReason::ArgumentNotAllowed,
+            "{command}"
+        );
+    }
+}
+
+#[test]
 fn a_skipped_deferred_or_empty_run_is_missing_evidence_never_a_pass() {
     let cargo = HostSandboxCommand::admit("cargo test -p a --test b", &[]).unwrap();
     let required = HostSandboxCommand::RequiredValidation("make ci-test-affected".into());
