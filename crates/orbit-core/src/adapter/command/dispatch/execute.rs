@@ -35,6 +35,25 @@ use super::callback::{
     take_callback_plugin_provenance,
 };
 
+/// Resolve the activity grants relevant to recovery hints using the same
+/// trusted-envelope rule as dispatch. Unmanaged MCP sessions ignore process policy.
+pub fn tool_suggestion_context(
+    entry_point: ToolEntryPoint,
+    session_context: ToolSessionContext,
+) -> ToolContext {
+    let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context() {
+        read_activity_tool_policy_from_env()
+    } else {
+        Default::default()
+    };
+    ToolContext {
+        session_context,
+        allowed_tools: policy.allowed_tools,
+        tool_deny_policy: policy.deny_policy,
+        ..Default::default()
+    }
+}
+
 /// Where a tool invocation arrived from. Captured in the audit row so a single
 /// audit table can attribute tool calls back to their origin (CLI vs MCP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -471,7 +490,10 @@ impl OrbitRuntime {
                         name,
                     )?;
                 }
-                self.ensure_tool_agent_facing(name)?;
+                self.ensure_tool_agent_facing_with_context(
+                    name,
+                    &tool_suggestion_context(entry_point, session_context.clone()),
+                )?;
                 #[cfg(unix)]
                 if let Some(error) = claimed_owner_refusal {
                     return Err(error);

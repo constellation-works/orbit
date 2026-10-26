@@ -27,7 +27,7 @@ pub use dry_run::DryRunResult;
 pub(super) use execute::execute_global_plugin_dispatch;
 pub use execute::{
     ToolDispatchOutcome, ToolEntryPoint, execute_global_in_process_tool_dispatch,
-    mark_tool_audit_recorded, take_tool_audit_recorded,
+    mark_tool_audit_recorded, take_tool_audit_recorded, tool_suggestion_context,
 };
 
 #[cfg(test)]

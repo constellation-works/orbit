@@ -2,7 +2,7 @@
 title: Orbit MCP — Design
 owner: codex
 last_updated: 2026-10-20
-last_validated: 2026-10-25
+last_validated: 2026-10-26
 status: Draft
 feature: mcp-bridge
 doc_role: design
@@ -224,7 +224,17 @@ The concrete server classifies known tools before opening a runtime. Known globa
 tools use Core's global in-process seam; known workspace tools use the resolved
 runtime seam. Unknown and unadvertised raw names use the global seam and return
 `tool_not_found`. Known tools and the unknown-name path cross Core exactly once,
-so audit coverage does not depend on recognition or outcome. The adapter-owned UI
+so audit coverage does not depend on recognition or outcome. Unknown builtin
+read names can carry a conservative recovery hint shared with CLI tool dispatch:
+`get` or `list` may suggest `show` in the same namespace, and artifact listing
+suggests task show's `field: "artifacts"` projection. Candidates must be active,
+advertised builtins allowed on the agent surface and by the activity's tool
+policy; runtime dispatch also filters disabled tools. Operator-only, inactive,
+hidden and ungranted candidates never supply hints. Ambiguous or unmatched names
+keep the original message. These hints register no aliases and preserve the
+not-found code, original requested name and audit failure classification.
+
+The adapter-owned UI
 presentation entrypoints are a separate wrapper: opening the control center or
 returning its no-selection state is handled locally, while a selected task or run
 is read through the same Core-backed tool path.

@@ -589,3 +589,65 @@ fn folded_tools_are_gone_and_their_siblings_take_the_inputs() {
 
 #[path = "../github_log_goldens/mod.rs"]
 mod github_log_goldens;
+
+#[test]
+fn unknown_task_tools_only_suggest_active_visible_and_granted_replacements() {
+    use orbit_common::{NotFoundKind, OrbitError};
+    use orbit_types::workflow::ActivityToolDenyPolicy;
+
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    for (name, hint) in [
+        ("orbit.task.get", Some("orbit.task.show")),
+        (
+            "orbit.task.artifact.list",
+            Some("orbit.task.show with field: \"artifacts\""),
+        ),
+        ("orbit.workflow.run.get", None),
+        ("orbit.auto_task.get", None),
+        ("orbit.definitely.missing", None),
+    ] {
+        assert!(
+            !registry.has(name),
+            "the invented name must not be registered"
+        );
+        let error = registry
+            .execute(name, &ToolContext::default(), serde_json::json!({}))
+            .expect_err("unknown tools remain refused");
+        assert!(
+            matches!(&error, OrbitError::NotFound { kind: NotFoundKind::Tool, id, .. } if id == name)
+        );
+        let expected = match hint {
+            Some(hint) => format!("tool not found: {name} (did you mean {hint}?)"),
+            None => format!("tool not found: {name}"),
+        };
+        assert_eq!(error.to_string(), expected);
+    }
+    for context in [
+        ToolContext {
+            allowed_tools: vec!["orbit.task.get".into()],
+            ..Default::default()
+        },
+        ToolContext {
+            tool_deny_policy: Some(ActivityToolDenyPolicy {
+                activity: "fixture".into(),
+                disallow_list: vec!["orbit.task.show".into()],
+            }),
+            ..Default::default()
+        },
+    ] {
+        let error = registry
+            .execute("orbit.task.get", &context, serde_json::json!({}))
+            .unwrap_err();
+        assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+    }
+    registry.unregister("orbit.task.show");
+    let error = registry
+        .execute(
+            "orbit.task.get",
+            &ToolContext::default(),
+            serde_json::json!({}),
+        )
+        .unwrap_err();
+    assert_eq!(error.to_string(), "tool not found: orbit.task.get");
+}

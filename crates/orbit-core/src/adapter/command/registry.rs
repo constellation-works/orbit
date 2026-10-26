@@ -4,8 +4,8 @@
 use std::path::Path;
 
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_tools::Tool;
 use orbit_tools::external::ExternalTool;
+use orbit_tools::{Tool, ToolContext, tool_suggestions};
 use orbit_types::record::OrbitEvent;
 use orbit_types::tool::{McpToolDefinition, StoredTool, ToolParam};
 
@@ -250,6 +250,14 @@ impl OrbitRuntime {
     }
 
     pub fn ensure_tool_agent_facing(&self, name: &str) -> Result<(), OrbitError> {
+        self.ensure_tool_agent_facing_with_context(name, &ToolContext::default())
+    }
+
+    pub(crate) fn ensure_tool_agent_facing_with_context(
+        &self,
+        name: &str,
+        context: &ToolContext,
+    ) -> Result<(), OrbitError> {
         if self.tool_registry().is_active(name) {
             return Ok(());
         }
@@ -268,7 +276,16 @@ impl OrbitRuntime {
         if let Some(owner) = self.plugin_load().workspace_disabled_owner(name) {
             return Err(self.plugin_disabled_in_workspace(&owner.name));
         }
-        Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()))
+        // Catalog/read failures suppress guidance rather than changing the refusal.
+        let definitions = self.list_mcp_tool_definitions().unwrap_or_default();
+        Err(tool_suggestions::unknown_tool_error(
+            name,
+            definitions
+                .iter()
+                .filter(|definition| definition.schema.builtin)
+                .map(|definition| definition.schema.name.as_str()),
+            context,
+        ))
     }
 
     /// Refuse an `orbit <ns>` verb, before dispatch, when this workspace has

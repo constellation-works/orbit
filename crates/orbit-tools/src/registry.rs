@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::OrbitError;
 use orbit_types::tool::{
     McpToolDefinition, McpToolDefinitionError, McpToolScope, ToolSchema, mcp_advertised_tool_name,
     validate_mcp_tool_definitions,
@@ -176,10 +176,21 @@ impl ToolRegistry {
         ctx: &ToolContext,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        let tool = self
-            .tools
-            .get(name)
-            .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
+        let tool = self.tools.get(name).ok_or_else(|| {
+            crate::tool_suggestions::unknown_tool_error(
+                name,
+                self.tools
+                    .iter()
+                    .filter(|(_, entry)| {
+                        entry.availability.is_active()
+                            && entry.mcp_scope.is_some()
+                            && entry.plugin.is_none()
+                            && entry.tool.schema().builtin
+                    })
+                    .map(|(name, _)| name.as_str()),
+                ctx,
+            )
+        })?;
         if name.starts_with("orbit.task.")
             // Pull owns typed protocol negotiation in the host adapter, which
             // checks the fingerprint before validating the derived request
