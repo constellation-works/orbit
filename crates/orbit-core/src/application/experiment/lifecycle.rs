@@ -595,7 +595,13 @@ fn reweight_arms(
     }
     let before = weights(&record.arms);
     let after = weights(&arms);
-    let weights_changed = before != after;
+    let mut before_without_retired = before.clone();
+    for arm in retire {
+        before_without_retired.remove(arm);
+    }
+    // Removing retired arms changes the active set, not the weights of the
+    // arms that remain active. Keep event classification about weight edits.
+    let weights_changed = before_without_retired != after;
     if !weights_changed && retire.is_empty() {
         return Err(OrbitError::InvalidInput(format!(
             "the reweight changes nothing on experiment `{name}`"
