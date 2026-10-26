@@ -176,9 +176,27 @@ It refuses an always-operator-only tool, naming its governed row, and reuses
 the activity's exact-canonical, registered, agent-facing and enabled admission
 rule. Disabled grants fail at filing time, including a resubmitted unchanged
 grant; ordinary `required_tools` keep their existing disabled-tool warning.
-These phases still land dark: classification does not lift an activity deny
-or execute a mutation. Direct-call admission and reviewed proposal application
-remain phases 3 and 5 respectively.
+Phases 1 and 2 land dark: classification alone does not lift an activity deny
+or execute a mutation. Reviewed proposal application remains phase 5.
+
+**Implementer admission (phase 3 decision).** `resolve_activity_tool_denials`
+in
+[`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs)
+reads grants for `agent_implement` only. A covered read/repeat-safe grant
+lifts its exact disallow entry before required-tool admission and the
+callable set are computed, so the effective set is baseline ∪ required ∪
+granted. A covered mutating grant stays denied and is never called live; a
+task that also requires it still fails admission, with the refusal naming
+the mutating classification. A grant that is unavailable, now always
+operator-only, or still covered by a wildcard entry refuses admission. The
+lifted names travel in `ResolvedActivityTools::granted_tools`, and the
+dispatcher
+([`policy.rs`](../../../crates/orbit-engine/src/activity_job/cli_runner/orchestrator/policy.rs))
+removes them from the deny list the child enforces, except a claimed-mode
+denial, which stays. `activity_tool_requirements.rs` stays grant-blind, so
+every other activity, including reviewers, recovery and pilot, receives no
+grant. Because every current classification is mutating, no shipped grant
+lifts a deny yet.
 
 The grant reaches the implementer only. Reviewers, recovery, pilot and
 every other activity keep their own deny lists untouched: the existing

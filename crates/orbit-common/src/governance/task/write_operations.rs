@@ -228,7 +228,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             both(
                 "granted_tools",
                 ParamType::StringList,
-                "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown only; activity admission does not yet honor a grant",
+                "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
                 "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only; stored and shown, not yet honored by admission)",
             ),
@@ -482,7 +482,7 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             preserve_empty(both(
                 "granted_tools",
                 ParamType::StringList,
-                "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown only; activity admission does not yet honor a grant",
+                "Replacement operator-granted tool names, as a string or array of strings; an empty array clears the grant. Requires operator authority: any other caller supplying it is refused, never stripped. Accepted only while the task is proposed, backlog or someday with no live run or claim; a grant is frozen once an attempt is dispatched and changes only for a new attempt. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
                 "Replacement operator-granted tool names (operator only; empty string clears). Accepted only before the task's next attempt is dispatched",
             )),

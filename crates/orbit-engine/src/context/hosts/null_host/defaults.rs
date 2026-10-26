@@ -751,6 +751,7 @@ pub trait NullRuntimeHost: Send + Sync {
             requested_tools: Vec::new(),
             effective_tools: baseline_tools.to_vec(),
             omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
         })
     }
 
