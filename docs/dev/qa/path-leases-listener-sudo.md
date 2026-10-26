@@ -120,7 +120,8 @@ a prompt.
 ```sh
 su - operator -c 'bash -s' << 'EOF'
 set -u
-if ! tty >/dev/null 2>&1; then
+# Bare `tty` tests stdin, which is this heredoc. Test the controlling terminal instead.
+if ! (tty </dev/tty) >/dev/null 2>&1; then
   echo "refusing: this session has no controlling terminal, so a tty timestamp cannot be shown" >&2
   exit 2
 fi
@@ -139,10 +140,10 @@ EOF
 `orbit-lease` with no password. That is the reuse a cached timestamp allows. It is the
 unsupported result, not a deployment to copy.
 
-If `child_exit` is non-zero here, the timestamp was not warmed for this terminal (the `tty`
-check failed, the warm `sudo -S` failed, or a drop-in did not override a guest default of
-`timestamp_timeout=0`). Fix the guest and repeat case A. Do not treat that failure as the
-supported denial, and do not change sudoers on the host to chase it.
+If `child_exit` is non-zero here, the timestamp was not warmed for this terminal (the
+controlling-terminal check failed, the warm `sudo -S` failed, or a drop-in did not override a
+guest default of `timestamp_timeout=0`). Fix the guest and repeat case A. Do not treat that
+failure as the supported denial, and do not change sudoers on the host to chase it.
 
 ## Case B — supported policy, unattended denial
 
@@ -171,7 +172,8 @@ the caller omits that flag and even when the previous `sudo` just succeeded.
 ```sh
 su - operator -c 'bash -s' << 'EOF'
 set -u
-if ! tty >/dev/null 2>&1; then
+# Bare `tty` tests stdin, which is this heredoc. Test the controlling terminal instead.
+if ! (tty </dev/tty) >/dev/null 2>&1; then
   echo "refusing: this session has no controlling terminal" >&2
   exit 2
 fi
