@@ -57,12 +57,12 @@ const BASE_POOLS: &[(bool, bool, [&[&str]; 4])] = &[
         true,
         [
             &["haiku", "luna"],
-            &["sol", "sonnet"],
-            &["opus"],
+            &["terra", "sonnet"],
+            &["sol", "opus"],
             &["opus", "astra"],
         ],
     ),
-    (true, false, [&["luna"], &["sol"], &["sol"], &["astra"]]),
+    (true, false, [&["luna"], &["terra"], &["sol"], &["astra"]]),
     (false, true, [&["haiku"], &["sonnet"], &["opus"], &["opus"]]),
 ];
 

@@ -40,6 +40,9 @@ pub const CLAUDE_FABLE_MODEL: &str = "fable";
 /// Codex model used by the standard Sol crew.
 pub const CODEX_SOL_MODEL: &str = "gpt-6.1-sol";
 
+/// Codex model used by the standard Terra crew.
+pub const CODEX_TERRA_MODEL: &str = "gpt-6.1-terra";
+
 /// Codex model used by the standard Luna crew.
 pub const CODEX_LUNA_MODEL: &str = "gpt-6-luna";
 

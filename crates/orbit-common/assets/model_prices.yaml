@@ -185,7 +185,7 @@ prices:
     cache_create_1h_per_million_usd: 20.0
     output_per_million_usd: 50.0
 
-  # ── OpenAI / Codex (crews: astra, sol, luna) ────────────────────────────
+  # ── OpenAI / Codex (crews: astra, sol, terra, luna) ─────────────────────
   # Standard short-context API-equivalent rates. OpenAI input totals are gross:
   # cached reads and writes are included and are subtracted before the full
   # input rate is applied. OpenAI reports no 1h tier; the nonzero 5m fallback
@@ -216,6 +216,21 @@ prices:
     cache_create_per_million_usd: 2.5
     cache_create_1h_per_million_usd: 2.5
     output_per_million_usd: 10.0
+
+  # GPT-6.1 Terra standard short-context rates first verified at
+  # https://developers.openai.com/api/docs/pricing on 2026-10-26.
+  # The observation boundary below is not a claimed launch/effective date.
+  # OpenAI's 30m write rate supplies the existing nonzero 1h fallback;
+  # the separate 12h tier is not an Anthropic 1h cache bucket.
+  - model: "gpt-6.1-terra"
+    effective_from: "2026-10-26T22:43:39Z"
+    effective_until: null
+    input_token_basis: gross_includes_cache
+    input_per_million_usd: 1.0
+    cache_read_per_million_usd: 0.05
+    cache_create_per_million_usd: 1.25
+    cache_create_1h_per_million_usd: 1.25
+    output_per_million_usd: 5.0
 
   # GPT-6 Sol and Luna standard short-context rates, published at
   # developers.openai.com/api/docs/pricing on 2026-09-22. OpenAI does not

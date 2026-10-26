@@ -7,8 +7,8 @@ use orbit_common::OrbitError;
 use orbit_common::model_defaults::{
     ANTIGRAVITY_ARGON_MODEL, ANTIGRAVITY_DEFAULT_MODEL, CLAUDE_DEFAULT_STRONG, CLAUDE_DEFAULT_WEAK,
     CLAUDE_FABLE_MODEL, CLAUDE_HAIKU_MODEL, CODEX_ASTRA_MODEL, CODEX_LUNA_MODEL, CODEX_SOL_MODEL,
-    COPILOT_DEFAULT_MODEL, GROK_DEFAULT_MODEL, MUSE_DEFAULT_MODEL, MUSE_WONDER_FULL_MODEL,
-    MUSE_WONDER_MODEL,
+    CODEX_TERRA_MODEL, COPILOT_DEFAULT_MODEL, GROK_DEFAULT_MODEL, MUSE_DEFAULT_MODEL,
+    MUSE_WONDER_FULL_MODEL, MUSE_WONDER_MODEL,
 };
 use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::identity::{
@@ -160,6 +160,7 @@ pub(crate) fn default_crews() -> BTreeMap<String, Crew> {
         ("haiku", CLAUDE_HAIKU_MODEL, "claude"),
         ("fable", CLAUDE_FABLE_MODEL, "claude"),
         ("sol", CODEX_SOL_MODEL, "codex"),
+        ("terra", CODEX_TERRA_MODEL, "codex"),
         ("luna", CODEX_LUNA_MODEL, "codex"),
         ("astra", CODEX_ASTRA_MODEL, "codex"),
         ("gemini-flash", ANTIGRAVITY_DEFAULT_MODEL, "antigravity"),
