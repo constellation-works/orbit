@@ -226,14 +226,14 @@ pub(super) const IDENTITY_PARAMS: &[ParamSpec] = &[
 const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+    "bounded: bounded metadata, pagination and display truncation. It always needs an explicit `workspace` selector copied from `orbit_workspace_list`, even in a workspace-bound session; without one the call is refused. Omit for the default response.",
 );
 
 const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    tool_description: "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
@@ -373,7 +373,7 @@ const LIST: TaskOperation = TaskOperation {
             mcp_only(
                 "fields",
                 ParamType::StringList,
-                "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields; omit it for full records. Full records include descriptions, plans and summaries, so a long list can be very large: project the few fields a scan needs and fetch details with `orbit.task.show`.",
+                "Optional per-task field projection as a string or array, using the field names `orbit.task.show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit.task.show`.",
             ),
             BOUNDED_VIEW_PARAM,
             mcp_only("offset", ParamType::Integer, "Bounded view list offset"),

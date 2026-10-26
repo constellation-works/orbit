@@ -2893,11 +2893,47 @@ fn mcp_task_list_fields_projects_each_task_to_an_object_of_just_those_fields() {
     let (workspace, mut client) = McpWorkspace::served();
     let task_id = author_task(&workspace, "projection probe");
 
-    // Full records are the default and carry the bulky fields.
-    let full = client.call_tool_ok("orbit_task_list", json!({}));
+    // The default is the compact row `orbit tool run orbit.task.list` returns:
+    // no long-text fields, and the same keys on both surfaces.
+    let compact = client.call_tool_ok("orbit_task_list", json!({}));
+    for field in [
+        "description",
+        "plan",
+        "execution_summary",
+        "acceptance_criteria",
+    ] {
+        assert!(
+            compact["tasks"][0].get(field).is_none(),
+            "an unprojected list must omit `{field}`: {compact}"
+        );
+    }
+    let cli = stdout_json(&workspace.run_ok(&["tool", "run", "orbit.task.list", "--input", "{}"]));
+    assert_eq!(
+        compact["tasks"][0]
+            .as_object()
+            .map(|row| row.keys().collect::<Vec<_>>()),
+        cli["tasks"][0]
+            .as_object()
+            .map(|row| row.keys().collect::<Vec<_>>()),
+        "MCP and CLI default rows must match: {compact} vs {cli}"
+    );
+    // Long-text fields stay available on request.
+    let requested = client.call_tool_ok(
+        "orbit_task_list",
+        json!({ "fields": ["id", "description", "acceptance_criteria"] }),
+    );
     assert!(
-        full["tasks"][0]["description"].is_string(),
-        "an unprojected list keeps full records: {full}"
+        requested["tasks"][0]["description"].is_string(),
+        "an explicit `fields` request returns long text: {requested}"
+    );
+
+    // `view: bounded` needs an explicit selector even in a bound session, and
+    // the refusal says which input to add and where to get it.
+    let bounded = client.call_tool_err("orbit_task_list", json!({ "view": "bounded", "limit": 1 }));
+    assert!(
+        message_contains(&bounded, "`workspace`")
+            && message_contains(&bounded, "orbit_workspace_list"),
+        "the bounded refusal must name the missing input: {bounded}"
     );
 
     // A single field must still be an object per task; `orbit_task_show`'s
