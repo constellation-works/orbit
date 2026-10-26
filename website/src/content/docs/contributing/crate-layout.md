@@ -41,19 +41,19 @@ flowchart LR
   Cmd --> Core
   Cmd --> Config
   Cmd --> MCP
-  Cmd --> Tools
+  Cmd --> Tools["orbit-tools"]
   Cmd --> Registry
-  Cmd --> Store
+  Cmd --> Store["orbit-store"]
   Core --> Config
   Core --> Runtime["orbit-runtime"]
   Core --> Engine["orbit-engine"]
-  Core --> Exec
+  Core --> Exec["orbit-exec"]
   Core --> Automation["orbit-automation"]
   Automation --> Store
-  Automation --> Common
-  Automation --> Types
-  Core --> Store["orbit-store"]
-  Core --> Tools["orbit-tools"]
+  Automation --> Common["orbit-common"]
+  Automation --> Types["orbit-types"]
+  Core --> Store
+  Core --> Tools
   Core --> Search["orbit-search"]
   Runtime --> Engine
   Runtime --> Store
@@ -61,11 +61,11 @@ flowchart LR
   Runtime --> Policy["orbit-policy"]
   Engine --> Agent["orbit-agent"]
   Engine --> Store
-  Engine --> Exec["orbit-exec"]
+  Engine --> Exec
   Engine --> Tools
   Tools --> Exec
   Tools --> Policy
-  Exec --> Common["orbit-common"]
+  Exec --> Common
   Policy --> Common
   Store --> Common
   Agent --> Common
@@ -83,7 +83,7 @@ flowchart LR
   Core --> Common
   Config --> Common
   Config --> Types
-  Common --> Types["orbit-types"]
+  Common --> Types
   Exec --> Types
   Policy --> Types
   Store --> Types
