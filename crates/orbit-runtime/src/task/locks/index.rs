@@ -430,17 +430,22 @@ pub fn merge_task_lock_conflicts(
     merged.sort_by(|a, b| {
         a.file
             .cmp(&b.file)
-            .then_with(|| match (a.held_by, b.held_by) {
-                (TaskLockHolder::Task, TaskLockHolder::Reservation) => std::cmp::Ordering::Less,
-                (TaskLockHolder::Reservation, TaskLockHolder::Task) => std::cmp::Ordering::Greater,
-                _ => std::cmp::Ordering::Equal,
-            })
+            .then_with(|| holder_rank(a.held_by).cmp(&holder_rank(b.held_by)))
             .then(a.held_by_id.cmp(&b.held_by_id))
     });
     merged.dedup_by(|a, b| {
         a.file == b.file && a.held_by == b.held_by && a.held_by_id == b.held_by_id
     });
     merged
+}
+
+/// Task locks first, then reservations, then hard leases.
+fn holder_rank(holder: TaskLockHolder) -> u8 {
+    match holder {
+        TaskLockHolder::Task => 0,
+        TaskLockHolder::Reservation => 1,
+        TaskLockHolder::Lease => 2,
+    }
 }
 
 /// A task-scope reservation whose bundle declares no `context_files` at all

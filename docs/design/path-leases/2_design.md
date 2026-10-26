@@ -1,8 +1,8 @@
 ---
 title: Path Leases — Design
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 feature: path-leases
 doc_role: design
@@ -16,8 +16,9 @@ related_artifacts: []
 
 # Path Leases — Design
 
-This document proposes how path leases work. Nothing in §2–§9 is implemented; §1 is what
-exists today and what the proposal reuses. It leaves the pricing of shared paths to
+This document proposes how path leases work. Only the lease row of §2 and the advisory/hard
+overlap rule of §3 are implemented (store only, with no surface yet; see "Stored so far" in §2);
+the rest of §2–§9 is not. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
 [conflict-budget](../conflict-budget/1_scope.md), and open directions to
 [3_vision.md](./3_vision.md).
 
@@ -69,6 +70,23 @@ lock index sees it without a second index ([4_decisions.md](./4_decisions.md#out
 
 A task never holds a lease, and a lease never becomes a task. Work that should run through a
 drain is filed as a task.
+
+**Stored so far.** Schema v61 (`task_reservation_leases`) adds `kind` (`task_reservation` by
+default, or `lease`) and `mode` (`hard` by default, or `advisory`) to `task_reservations`, plus
+`principal`, `principal_class`, `machine_id`, `priority`, `tags_json`, `base_branch`,
+`bound_branch` and `heartbeat_at`. A lease row keeps `scope = 'files'`, its selectors in
+`files_json`, no task ids and no owner run, so stale-reservation cleanup never touches it. The
+store inserts (refusing a hard lease that overlaps a task reservation or hard lease), renews,
+releases, reads and lists leases, and lazy expiry ends them as it ends reservations. `state` is
+derived for now: `granted` while active, `released` or `expired` from `release_reason`; `queued`,
+`preempted` and `notice_cursor` arrive with their phases. Every overlap reader (owner pull
+admission, `orbit.task.locks.reserve` and the gate's reservation check) skips advisory rows and
+names a hard lease as `held_by: "lease"`. `orbit task locks list` shows hard leases beside
+reservations and omits advisory ones, which hold nothing, until the lease surfaces land.
+
+The migration is additive. A binary without it reads every lease row, advisory or hard, as an
+exclusive file reservation and refuses overlapping reserves (checked against 0.33.0, the
+previous release), and the rows it writes read here as hard task reservations.
 
 ## 3. Granting, queueing and the drain
 
@@ -275,6 +293,6 @@ feature multi-person.
 
 ## Task References
 
-None yet; the design is unfiled.
+- ORB-18404 — lease rows in the reservation store; advisory leases lock-free (§2, §3).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

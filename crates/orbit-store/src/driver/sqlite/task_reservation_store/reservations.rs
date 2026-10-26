@@ -2,9 +2,9 @@
 //! owned-conflict queries.
 
 use super::rows::{
-    find_owned_reservation_conflicts, find_reservation_conflicts,
-    load_active_reservations_by_owner, load_reservation_row, parse_string_list, reservation_row,
-    reserve_files_in_tx, select_reservation_columns,
+    HOLDS_PATHS, TASK_RESERVATION_ROWS, find_owned_reservation_conflicts,
+    find_reservation_conflicts, load_active_reservations_by_owner, load_reservation_row,
+    parse_string_list, reservation_row, reserve_files_in_tx, select_reservation_columns,
 };
 use super::{expire_reservations_in_scope, reservation_scope_clause};
 use crate::{
@@ -20,9 +20,10 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
 impl Store {
-    /// Inspect active reservations through a pooled read connection. Unlike
-    /// the operational list/check paths, this does not opportunistically mark
-    /// expired rows released, which keeps `orbit doctor` strictly read-only.
+    /// Inspect active path holders, task reservations and hard leases, through
+    /// a pooled read connection. Unlike the operational list/check paths, this
+    /// does not opportunistically mark expired rows released, which keeps
+    /// `orbit doctor` strictly read-only.
     pub fn inspect_active_task_reservations(
         &self,
         workspace_orbit_dir: &str,
@@ -34,6 +35,7 @@ impl Store {
                 "SELECT {}
                  FROM task_reservations
                  WHERE {}
+                   AND {HOLDS_PATHS}
                    AND released_at IS NULL
                    AND expires_at > ?3
                  ORDER BY created_at ASC, reservation_id ASC",
@@ -56,8 +58,8 @@ impl Store {
         })
     }
 
-    /// Every file reservation, active or released, oldest first, through a
-    /// pooled read connection.
+    /// Every task reservation, active or released, oldest first, through a
+    /// pooled read connection. Leases are not task reservations.
     /// Like [`Self::inspect_active_task_reservations`] it never expires or
     /// releases rows, so history aggregates stay strictly read-only.
     pub fn list_task_reservation_history(
@@ -71,6 +73,7 @@ impl Store {
                         owner_run_id
                  FROM task_reservations
                  WHERE {}
+                   AND {TASK_RESERVATION_ROWS}
                  ORDER BY created_at ASC, reservation_id ASC",
                 reservation_scope_clause(TaskReservationScope::Files),
             );
@@ -121,6 +124,7 @@ impl Store {
                 "SELECT {}
                  FROM task_reservations
                  WHERE {}
+                   AND {HOLDS_PATHS}
                    AND reservation_id = ?4
                    AND released_at IS NULL
                    AND expires_at > ?3",
@@ -157,6 +161,7 @@ impl Store {
                 "SELECT {}
                  FROM task_reservations
                  WHERE {}
+                   AND {HOLDS_PATHS}
                    AND released_at IS NULL
                    AND expires_at > ?3
                  ORDER BY created_at ASC, reservation_id ASC",
@@ -264,6 +269,7 @@ impl Store {
                      release_reason = ?5,
                      release_metadata_json = ?6
                  WHERE {}
+                   AND {TASK_RESERVATION_ROWS}
                    AND reservation_id = ?3
                    AND released_at IS NULL",
                 reservation_scope_clause(TaskReservationScope::Files),

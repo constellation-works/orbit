@@ -204,6 +204,8 @@ pub struct TaskArtifactUpdateParams {
 pub enum TaskLockHolder {
     Task,
     Reservation,
+    /// A hard path lease, named by its `lease-<id>`.
+    Lease,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,6 +301,10 @@ pub struct TaskReservationReleaseResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActiveTaskReservation {
     pub reservation_id: String,
+    /// A task reservation, or a hard path lease. Advisory leases hold no
+    /// paths, so no reader of active holders sees one.
+    #[serde(default)]
+    pub kind: TaskReservationKind,
     pub workspace_id: Option<String>,
     pub task_ids: Vec<String>,
     pub files: Vec<String>,
@@ -400,6 +406,216 @@ impl TaskReservationScope {
             Self::WorkspaceClaim => "workspace_claim",
         }
     }
+}
+
+/// What holds a `files`-scope `task_reservations` row: a task reservation, or
+/// a path lease held by a principal (`docs/design/path-leases`). A lease
+/// never becomes a task and a task never holds a lease.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskReservationKind {
+    /// Taken by `orbit.task.locks.reserve` or an admission grant. Every row
+    /// written before leases existed reads as one.
+    #[default]
+    TaskReservation,
+    /// Held by a principal rather than a task.
+    Lease,
+}
+
+impl TaskReservationKind {
+    /// The persisted discriminator, a closed set of `'static` literals safe
+    /// to inline into SQL.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::TaskReservation => "task_reservation",
+            Self::Lease => "lease",
+        }
+    }
+
+    pub(crate) fn parse(raw: &str) -> Self {
+        match raw {
+            "lease" => Self::Lease,
+            _ => Self::TaskReservation,
+        }
+    }
+}
+
+/// Whether a path lease blocks overlapping work. A task reservation is
+/// always `hard`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseMode {
+    /// Recorded and visible, but blocks nothing.
+    Advisory,
+    /// Blocks overlapping admission and reservations like a task reservation.
+    Hard,
+}
+
+impl LeaseMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Advisory => "advisory",
+            Self::Hard => "hard",
+        }
+    }
+
+    /// An unknown stored mode reads as `hard`, so a value this binary does
+    /// not know over-blocks rather than letting an overlap through.
+    pub(crate) fn parse(raw: &str) -> Self {
+        match raw {
+            "advisory" => Self::Advisory,
+            _ => Self::Hard,
+        }
+    }
+}
+
+/// Who a lease's principal is: a person or an agent acting for one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeasePrincipalClass {
+    Human,
+    Agent,
+}
+
+impl LeasePrincipalClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Agent => "agent",
+        }
+    }
+
+    pub(crate) fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "human" => Ok(Self::Human),
+            "agent" => Ok(Self::Agent),
+            other => Err(format!("unknown lease principal class '{other}'")),
+        }
+    }
+}
+
+/// A lease's priority in the lease queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeasePriority {
+    Low,
+    Normal,
+    High,
+}
+
+impl LeasePriority {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Normal => "normal",
+            Self::High => "high",
+        }
+    }
+
+    pub(crate) fn parse(raw: &str) -> Result<Self, String> {
+        match raw {
+            "low" => Ok(Self::Low),
+            "normal" => Ok(Self::Normal),
+            "high" => Ok(Self::High),
+            other => Err(format!("unknown lease priority '{other}'")),
+        }
+    }
+}
+
+/// Record a path lease. A hard lease is refused when its selectors overlap
+/// an active task reservation or hard lease; an advisory one always inserts.
+/// Task context locks and path policy are the runtime's to apply first.
+#[derive(Debug, Clone)]
+pub struct LeaseInsertParams {
+    pub workspace_orbit_dir: String,
+    pub workspace_id: Option<String>,
+    /// Canonical `file:` and `dir:` selectors.
+    pub selectors: Vec<String>,
+    pub mode: LeaseMode,
+    pub priority: LeasePriority,
+    pub tags: Vec<String>,
+    pub principal: String,
+    pub principal_class: LeasePrincipalClass,
+    /// The calling machine, for attribution.
+    pub machine_id: Option<String>,
+    /// The base branch the leased work is against.
+    pub base_branch: Option<String>,
+    /// The branch or pull request whose landing releases the lease.
+    pub bound_branch: Option<String>,
+    pub actor: String,
+    pub ttl_seconds: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseInsertResult {
+    /// The recorded lease; `None` when a hard lease was refused.
+    pub lease: Option<LeaseRecord>,
+    /// The holders that refused a hard lease.
+    pub conflicts: Vec<TaskLockConflict>,
+    pub expired_leases: Vec<ExpiredTaskReservation>,
+}
+
+/// One path lease as recorded, active or ended.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseRecord {
+    pub lease_id: String,
+    pub workspace_id: Option<String>,
+    pub selectors: Vec<String>,
+    pub mode: LeaseMode,
+    pub priority: LeasePriority,
+    pub tags: Vec<String>,
+    pub principal: String,
+    pub principal_class: LeasePrincipalClass,
+    pub machine_id: Option<String>,
+    pub base_branch: Option<String>,
+    pub bound_branch: Option<String>,
+    pub actor: String,
+    pub created_at: String,
+    pub expires_at: String,
+    /// The last grant or renewal.
+    pub heartbeat_at: String,
+    pub released_at: Option<String>,
+    /// `ttl_expired` once lazy expiry has ended the lease.
+    pub release_reason: Option<TaskReservationReleaseReason>,
+}
+
+/// Move an active lease's `expires_at` to `ttl_seconds` from now.
+#[derive(Debug, Clone)]
+pub struct LeaseRenewParams {
+    pub workspace_orbit_dir: String,
+    pub workspace_id: Option<String>,
+    pub lease_id: String,
+    pub ttl_seconds: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseRenewResult {
+    /// The renewed lease; `None` when it is unknown, released or expired.
+    pub lease: Option<LeaseRecord>,
+    pub expired_leases: Vec<ExpiredTaskReservation>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LeaseReleaseParams {
+    pub workspace_orbit_dir: String,
+    pub workspace_id: Option<String>,
+    pub lease_id: String,
+    pub release_reason: TaskReservationReleaseReason,
+    pub release_metadata_json: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseReleaseResult {
+    /// The released lease; `None` when it is unknown or already ended.
+    pub lease: Option<LeaseRecord>,
+    pub expired_leases: Vec<ExpiredTaskReservation>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseListResult {
+    /// Active leases, oldest first.
+    pub leases: Vec<LeaseRecord>,
+    pub expired_leases: Vec<ExpiredTaskReservation>,
 }
 
 /// The current holder of a workspace claim, as reported to a contender.

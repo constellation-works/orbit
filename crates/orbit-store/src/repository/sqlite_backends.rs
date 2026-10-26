@@ -6,8 +6,10 @@ use orbit_types::tool::StoredTool;
 
 use crate::contracts::{AuditEventFilter, AuditEventInsertParams};
 use crate::contracts::{
-    AuditEventStoreBackend, PluginStoreBackend, TaskReservationCheckParams,
-    TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
+    AuditEventStoreBackend, LeaseInsertParams, LeaseInsertResult, LeaseListResult, LeaseMode,
+    LeaseRecord, LeaseReleaseParams, LeaseReleaseResult, LeaseRenewParams, LeaseRenewResult,
+    PluginStoreBackend, TaskReservationCheckParams, TaskReservationCheckResult,
+    TaskReservationListResult, TaskReservationOwnedConflictsParams,
     TaskReservationOwnedConflictsResult, TaskReservationReleaseByOwnerParams,
     TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
     TaskReservationReleaseResult, TaskReservationReserveParams, TaskReservationReserveResult,
@@ -322,6 +324,56 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
         params: TaskReservationOwnedConflictsParams,
     ) -> Result<TaskReservationOwnedConflictsResult, OrbitError> {
         self.in_boundary(|| self.store.list_owned_task_reservation_conflicts(&params))
+    }
+
+    fn insert_lease(&self, params: LeaseInsertParams) -> Result<LeaseInsertResult, OrbitError> {
+        // A hard lease must not land between an admission's readiness read
+        // and its commit, and must not overlap a frozen claim footprint.
+        self.in_boundary(|| {
+            if params.mode == LeaseMode::Hard {
+                let conflicts = self
+                    .coordination
+                    .frozen_claim_conflicts(&params.selectors)?;
+                if !conflicts.is_empty() {
+                    return Ok(LeaseInsertResult {
+                        lease: None,
+                        conflicts,
+                        expired_leases: Vec::new(),
+                    });
+                }
+            }
+            self.store.insert_lease(&params)
+        })
+    }
+
+    fn renew_lease(&self, params: LeaseRenewParams) -> Result<LeaseRenewResult, OrbitError> {
+        self.in_boundary(|| self.store.renew_lease(&params))
+    }
+
+    fn release_lease(&self, params: LeaseReleaseParams) -> Result<LeaseReleaseResult, OrbitError> {
+        self.in_boundary(|| self.store.release_lease(&params))
+    }
+
+    fn get_lease(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        lease_id: &str,
+    ) -> Result<Option<LeaseRecord>, OrbitError> {
+        self.store
+            .get_lease(workspace_orbit_dir, workspace_id, lease_id)
+    }
+
+    fn list_active_leases(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<LeaseListResult, OrbitError> {
+        // Listing marks expired leases released, so it is a mutation.
+        self.in_boundary(|| {
+            self.store
+                .list_active_leases(workspace_orbit_dir, workspace_id)
+        })
     }
 
     fn acquire_workspace_claim(

@@ -1,6 +1,7 @@
 //! Reservation SQL: row ids, scoped expiry, conflict detection, the insert
 //! transaction and row mapping.
 
+use crate::contracts::TaskReservationKind;
 use crate::{
     ActiveTaskReservation, ExpiredTaskReservation, ReleasedTaskReservation, TaskLockConflict,
     TaskLockHolder, TaskReservationReleaseReason, TaskReservationReserveParams,
@@ -14,6 +15,17 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static ROW_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// `files`-scope rows that hold their paths: every task reservation and every
+/// hard lease. An advisory lease blocks nothing, so no overlap reader sees it.
+/// Written as "not advisory" so a mode this binary does not know still blocks.
+pub(super) const HOLDS_PATHS: &str = "mode != 'advisory'";
+
+/// `files`-scope rows taken for tasks, as opposed to path leases.
+pub(super) const TASK_RESERVATION_ROWS: &str = "kind = 'task_reservation'";
+
+/// `files`-scope rows held by a lease principal.
+pub(super) const LEASE_ROWS: &str = "kind = 'lease'";
 
 /// Mint a reservation or claim row id that cannot collide with another
 /// caller's. The wall clock alone is not enough: two agents reserving in the
@@ -122,7 +134,8 @@ pub(crate) fn reserve_files_in_tx(
 /// [ORB-10709] Expiry is per-dimension so a file-reservation call never reports
 /// an expired workspace claim as one of *its* expirations: the two dimensions
 /// have separate audit vocabularies, and a caller emits events for whatever
-/// this returns.
+/// this returns. For the same reason a `files` call expires task reservations
+/// only; leases expire through [`expire_leases`].
 pub(super) fn expire_reservations_in_scope(
     tx: &mut crate::StoreTx<'_>,
     workspace_orbit_dir: &str,
@@ -130,14 +143,45 @@ pub(super) fn expire_reservations_in_scope(
     now: &str,
     scope: TaskReservationScope,
 ) -> Result<Vec<ExpiredTaskReservation>, OrbitError> {
+    let filter = match scope {
+        TaskReservationScope::Files => format!(
+            "{} AND {TASK_RESERVATION_ROWS}",
+            reservation_scope_clause(scope)
+        ),
+        TaskReservationScope::WorkspaceClaim => reservation_scope_clause(scope),
+    };
+    expire_rows(tx, workspace_orbit_dir, workspace_id, now, &filter)
+}
+
+/// Mark every TTL-expired lease released, returning what was expired.
+pub(super) fn expire_leases(
+    tx: &mut crate::StoreTx<'_>,
+    workspace_orbit_dir: &str,
+    workspace_id: Option<&str>,
+    now: &str,
+) -> Result<Vec<ExpiredTaskReservation>, OrbitError> {
+    let filter = format!(
+        "{} AND {LEASE_ROWS}",
+        reservation_scope_clause(TaskReservationScope::Files)
+    );
+    expire_rows(tx, workspace_orbit_dir, workspace_id, now, &filter)
+}
+
+/// `filter` binds ?1 and ?2 as [`reservation_scope_clause`] does.
+fn expire_rows(
+    tx: &mut crate::StoreTx<'_>,
+    workspace_orbit_dir: &str,
+    workspace_id: Option<&str>,
+    now: &str,
+    filter: &str,
+) -> Result<Vec<ExpiredTaskReservation>, OrbitError> {
     let sql = format!(
         "SELECT reservation_id, expires_at
          FROM task_reservations
-         WHERE {}
+         WHERE {filter}
            AND released_at IS NULL
            AND expires_at <= ?3
-         ORDER BY expires_at ASC, reservation_id ASC",
-        reservation_scope_clause(scope),
+         ORDER BY expires_at ASC, reservation_id ASC"
     );
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
@@ -157,10 +201,9 @@ pub(super) fn expire_reservations_in_scope(
             "UPDATE task_reservations
              SET released_at = ?3,
                  release_reason = ?4
-             WHERE {}
+             WHERE {filter}
                AND released_at IS NULL
-               AND expires_at <= ?3",
-            reservation_scope_clause(scope),
+               AND expires_at <= ?3"
         );
         tx.tx
             .execute(
@@ -178,6 +221,8 @@ pub(super) fn expire_reservations_in_scope(
     Ok(expired_reservations)
 }
 
+/// The task reservations and hard leases whose paths block `requested_files`.
+/// Advisory leases never conflict.
 pub(super) fn find_reservation_conflicts(
     tx: &mut crate::StoreTx<'_>,
     workspace_orbit_dir: &str,
@@ -191,9 +236,10 @@ pub(super) fn find_reservation_conflicts(
     }
 
     let sql = format!(
-        "SELECT reservation_id, files_json
+        "SELECT reservation_id, files_json, kind
          FROM task_reservations
          WHERE {}
+           AND {HOLDS_PATHS}
            AND released_at IS NULL
            AND expires_at > ?3
          ORDER BY created_at ASC, reservation_id ASC",
@@ -203,13 +249,21 @@ pub(super) fn find_reservation_conflicts(
     let mut stmt = tx.tx.prepare(&sql).map_err(sqlite_store_error)?;
     let rows = stmt
         .query_map(params![workspace_id, workspace_orbit_dir, now], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })
         .map_err(sqlite_store_error)?;
 
     let mut conflicts = Vec::new();
     for row in rows {
-        let (reservation_id, files_json) = row.map_err(sqlite_store_error)?;
+        let (reservation_id, files_json, kind) = row.map_err(sqlite_store_error)?;
+        let held_by = match TaskReservationKind::parse(&kind) {
+            TaskReservationKind::TaskReservation => TaskLockHolder::Reservation,
+            TaskReservationKind::Lease => TaskLockHolder::Lease,
+        };
         let reserved_files = parse_string_list(&files_json)?;
         for requested_file in &requested_files {
             if reserved_files
@@ -218,7 +272,7 @@ pub(super) fn find_reservation_conflicts(
             {
                 conflicts.push(TaskLockConflict {
                     file: requested_file.clone(),
-                    held_by: TaskLockHolder::Reservation,
+                    held_by,
                     held_by_id: reservation_id.clone(),
                 });
             }
@@ -268,12 +322,14 @@ pub(super) struct ReservationRow {
     pub(super) released_at: Option<String>,
     owner_run_id: Option<String>,
     owner_metadata_json: Option<String>,
+    kind: String,
 }
 
 impl ReservationRow {
     pub(super) fn into_active(self) -> Result<ActiveTaskReservation, OrbitError> {
         Ok(ActiveTaskReservation {
             reservation_id: self.reservation_id,
+            kind: TaskReservationKind::parse(&self.kind),
             workspace_id: self.workspace_id,
             task_ids: parse_string_list(&self.task_ids_json)?,
             files: parse_string_list(&self.files_json)?,
@@ -310,7 +366,7 @@ impl ReservationRow {
 
 pub(super) fn select_reservation_columns() -> &'static str {
     "reservation_id, workspace_id, task_ids_json, files_json, actor, created_at, expires_at,
-     released_at, owner_run_id, owner_metadata_json"
+     released_at, owner_run_id, owner_metadata_json, kind"
 }
 
 pub(super) fn reservation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReservationRow> {
@@ -325,6 +381,7 @@ pub(super) fn reservation_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reser
         released_at: row.get(7)?,
         owner_run_id: row.get(8)?,
         owner_metadata_json: row.get(9)?,
+        kind: row.get(10)?,
     })
 }
 
@@ -338,6 +395,7 @@ pub(super) fn load_reservation_row(
         "SELECT {}
          FROM task_reservations
          WHERE {}
+           AND {TASK_RESERVATION_ROWS}
            AND reservation_id = ?3",
         select_reservation_columns(),
         reservation_scope_clause(TaskReservationScope::Files),
@@ -436,7 +494,7 @@ pub(super) fn parse_string_list(raw: &str) -> Result<Vec<String>, OrbitError> {
         .map_err(|error| OrbitError::Store(format!("deserialize reservation string list: {error}")))
 }
 
-fn serialize_string_list(values: &[String]) -> Result<String, OrbitError> {
+pub(super) fn serialize_string_list(values: &[String]) -> Result<String, OrbitError> {
     let unique = values.iter().cloned().collect::<BTreeSet<_>>();
     serde_json::to_string(&unique.into_iter().collect::<Vec<_>>())
         .map_err(|error| OrbitError::Store(format!("serialize reservation string list: {error}")))

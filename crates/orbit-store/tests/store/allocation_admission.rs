@@ -22,6 +22,8 @@
 //  - Within a band, a pull takes work only its executor can run among the
 //    live executor census first; each pull's census row lands with its
 //    receipt and stays live while its machine holds a claim.
+//  - A hard path lease defers an overlapping pull and names the lease; an
+//    advisory one holds nothing.
 //
 //  Every test re-runs itself in a child of this binary with inherited Orbit
 //  authority cleared, a disposable `HOME`, and a bounded wait.
@@ -40,6 +42,8 @@ mod known_red;
 mod mutation_receipts;
 #[path = "allocation_admission/ordering.rs"]
 mod ordering;
+#[path = "allocation_admission/path_leases.rs"]
+mod path_leases;
 #[path = "allocation_admission/reservation_grants.rs"]
 mod reservation_grants;
 #[path = "allocation_admission/task_index.rs"]
