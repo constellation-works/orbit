@@ -42,7 +42,9 @@ pub(in crate::api) async fn list_diagnostics_metrics(
         entries.sort_by_key(|entry| std::cmp::Reverse(entry.ts));
         entries.truncate(limit);
         if entries.is_empty() {
-            let records = runtime.invocation_records(InvocationQuery {
+            // The SQL limit runs before projection. A host-wide read would
+            // let a newer row from another workspace consume this limit.
+            let records = runtime.workspace_invocation_records(InvocationQuery {
                 since: range.since,
                 until: Some(range.until),
                 limit,

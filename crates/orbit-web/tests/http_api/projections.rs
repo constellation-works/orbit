@@ -5,12 +5,14 @@ use std::path::Path;
 use chrono::{DateTime, Duration, Timelike, Utc};
 use orbit_common::storage::blob_store::BlobStore;
 use orbit_core::AutoTaskAddParams;
+use orbit_core::InvocationInsertParams;
 use orbit_core::V2AuditEventInsertParams;
 use orbit_core::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
 };
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, blocked_workflow_failure_update};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
@@ -283,6 +285,157 @@ fn cost_and_metrics_windows_scope_rows_and_timestamp_arithmetic() {
             let alias = json_ok(alias);
             assert_eq!(alias["window"], "24h");
             assert!(alias["orchestration"].is_object());
+        },
+    );
+}
+
+/// One invocation row, then moved to `at` (and, for `partition`, to another
+/// workspace) the way only the store can. Legacy metrics JSONL stays absent.
+fn seed_metrics_invocation(
+    fixture: &Fixture,
+    run: &str,
+    task_id: &str,
+    input_tokens: u64,
+    output_tokens: u64,
+    at: DateTime<Utc>,
+    partition: Option<&str>,
+) {
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: run.into(),
+            activity_id: "implement".into(),
+            agent: "codex".into(),
+            provider: None,
+            account: None,
+            model: Some("fixture-a".into()),
+            task_ids: vec![task_id.into()],
+            trace: InvocationTrace {
+                usage: TokenUsage {
+                    input: input_tokens,
+                    output: output_tokens,
+                    ..TokenUsage::default()
+                },
+                tool_calls: vec![ToolCallTrace {
+                    seq: 1,
+                    tool_name: "read".into(),
+                    result_bytes: 8,
+                    result_payload: None,
+                }],
+                duration_ms: 1_000,
+                ..InvocationTrace::default()
+            },
+        })
+        .unwrap();
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET ts = ?1, workspace_id = COALESCE(?2, workspace_id)
+                     WHERE job_run_id = ?3",
+                    (at.to_rfc3339(), partition, run),
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn diagnostics_metrics_fallback_keeps_foreign_rows_out_of_the_limit() {
+    isolated(
+        "projections::diagnostics_metrics_fallback_keeps_foreign_rows_out_of_the_limit",
+        || {
+            let fixture = Fixture::new();
+            assert_eq!(fixture.runtime.workspace_id().unwrap(), "ws_http_fixture");
+            assert!(
+                !fixture
+                    .runtime
+                    .data_root()
+                    .join("state/diagnostics/metrics")
+                    .exists(),
+                "legacy metrics must be absent so the invocation fallback runs"
+            );
+            let now = Utc::now();
+            let older = now - Duration::hours(2);
+            let newer = now - Duration::hours(1);
+            let foreign_at = now - Duration::minutes(1);
+            seed_metrics_invocation(&fixture, "a-old", "ORB-A-OLD", 1, 1, older, None);
+            seed_metrics_invocation(&fixture, "a-new", "ORB-A", 4, 6, newer, None);
+            // Newest row on the shared host store, recorded under another workspace.
+            seed_metrics_invocation(
+                &fixture,
+                "b-foreign",
+                "ORB-B",
+                100,
+                100,
+                foreign_at,
+                Some("ws_other"),
+            );
+            let server = fixture.server(false);
+            let path = |limit: u32| {
+                format!(
+                    "/api/diagnostics/metrics?since=all&limit={limit}&workspace=ws_http_fixture"
+                )
+            };
+            let limited = json_ok(server.get(&path(1)));
+            let rows = limited.as_array().unwrap();
+            assert_eq!(rows.len(), 1, "limit applies after the workspace predicate");
+            assert_eq!(rows[0]["job_run"], "a-new");
+            assert_eq!(rows[0]["task_id"], "ORB-A");
+            assert_eq!(rows[0]["step"], "implement");
+            assert_eq!(rows[0]["actor_identity"], "codex / fixture-a");
+            assert_eq!(rows[0]["token_usage"], 10);
+            assert_eq!(rows[0]["tool_invocations"], 1);
+            assert_eq!(rows[0]["step_duration_ms"], 1_000);
+            assert_eq!(rows[0]["retry_count"], 0);
+            assert_eq!(rows[0]["ts"], newer.to_rfc3339());
+            let both = json_ok(server.get(&path(2)));
+            let runs: Vec<_> = both
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["job_run"].as_str().unwrap())
+                .collect();
+            assert_eq!(
+                runs,
+                ["a-new", "a-old"],
+                "a newer foreign row must not displace either workspace row"
+            );
+            let foreign_left = fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute(
+                            "DELETE FROM invocations WHERE workspace_id = ?1",
+                            ["ws_http_fixture"],
+                        )
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    let count: i64 = tx
+                        .connection()
+                        .query_row(
+                            "SELECT COUNT(*) FROM invocations WHERE workspace_id = 'ws_other'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(count)
+                })
+                .unwrap();
+            assert_eq!(
+                foreign_left, 1,
+                "the other workspace still has history in the shared store"
+            );
+            let empty = json_ok(server.get(&path(1)));
+            assert!(
+                empty.as_array().unwrap().is_empty(),
+                "an invocation-empty workspace returns [] while another workspace still has history"
+            );
         },
     );
 }
