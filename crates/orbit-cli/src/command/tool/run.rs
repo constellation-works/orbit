@@ -3,6 +3,9 @@ use std::sync::OnceLock;
 use clap::Args;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_cmd::task_owner::bound_workspace_identity;
+use orbit_common::governance::task::{
+    MINIMAL_TASK_FIELDS, project_task_list_output, select_fields,
+};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
 use orbit_core::{OrbitError, OrbitRuntime};
@@ -261,20 +264,6 @@ fn local_machine_identity(
     }
 }
 
-const MINIMAL_TASK_FIELDS: &[&str] = &[
-    "id",
-    "title",
-    "status",
-    "priority",
-    "type",
-    "dependencies",
-    "resolved_dependencies",
-    "implemented_by",
-    "created_at",
-    "updated_at",
-    "workspace",
-];
-
 const TASK_WRITE_TOOLS: &[&str] = &["orbit.task.add", "orbit.task.update", "orbit.task.reject"];
 
 const WRITE_SIDECAR_FIELDS: &[&str] = &["comments", "history"];
@@ -409,30 +398,6 @@ fn should_project_minimal_task_output(tool_name: &str) -> bool {
     matches!(tool_name, "orbit.task.list" | "orbit.task.artifact.put")
 }
 
-/// Projects `--fields` (or the default minimal set) inside the `tasks` array
-/// of an `orbit.task.list` envelope, leaving `total`/`truncated` intact.
-fn project_task_list_output<S: AsRef<str>>(value: Value, fields: &[S]) -> Value {
-    let Value::Object(mut object) = value else {
-        return value;
-    };
-    let Some(Value::Array(tasks)) = object.get_mut("tasks") else {
-        return Value::Object(object);
-    };
-    let fields = fields
-        .iter()
-        .map(|field| field.as_ref().to_string())
-        .collect::<Vec<_>>();
-    let projected = std::mem::take(tasks)
-        .into_iter()
-        .map(|task| match task {
-            Value::Object(map) => Value::Object(select_fields(map, &fields)),
-            other => other,
-        })
-        .collect();
-    *tasks = projected;
-    Value::Object(object)
-}
-
 fn wrap_single_field_value(output: Value, fields: &[String], bare_field: bool) -> Value {
     match fields {
         [field] if bare_field || !matches!(output, Value::Object(_)) => {
@@ -462,14 +427,4 @@ fn filter_top_level_fields(value: Value, fields: &[String]) -> Value {
         ),
         other => other,
     }
-}
-
-fn select_fields(map: Map<String, Value>, fields: &[String]) -> Map<String, Value> {
-    let mut selected = Map::new();
-    for field in fields {
-        if let Some(value) = map.get(field) {
-            selected.insert(field.clone(), value.clone());
-        }
-    }
-    selected
 }

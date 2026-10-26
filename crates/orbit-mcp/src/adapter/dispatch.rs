@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use crate::presentation_definition::presentation_definition;
 use orbit_common::OrbitError;
+use orbit_common::governance::task::{MINIMAL_TASK_FIELDS, project_task_list_output};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::normalize_self_reported_actor;
 use orbit_types::tool::{
@@ -297,9 +298,13 @@ impl OrbitToolServer {
                 .is_none_or(|selector| selector.trim().is_empty())
         {
             return Ok(tool_error_result(&OrbitError::InvalidInput(format!(
-                "tool '{canonical}' requires an explicit workspace selector from discovery"
+                "tool '{canonical}' requires an explicit workspace selector from discovery: \
+                 `view` reads never use the session's bound workspace. Pass `workspace` with a \
+                 selector copied from `orbit_workspace_list`, or omit `view` to use the bound \
+                 workspace"
             ))));
         }
+        let compact_task_list = compacts_task_list(&canonical, &input);
         let host = Arc::clone(&self.host);
         let execution_name = canonical.clone();
         let result = tokio::task::spawn_blocking(move || {
@@ -309,6 +314,9 @@ impl OrbitToolServer {
 
         match result {
             Ok(Ok(mut value)) => {
+                if compact_task_list {
+                    value = project_task_list_output(value, MINIMAL_TASK_FIELDS);
+                }
                 if let (Some(selector), Some(object)) = (desktop_selector, value.as_object_mut()) {
                     object.insert("workspace".into(), Value::String(selector.clone()));
                     for key in ["catalog", "runs"] {
@@ -646,6 +654,16 @@ impl ServerHandler for OrbitToolServer {
     ) -> Result<CallToolResult, McpError> {
         self.dispatch_tool_call(request).await
     }
+}
+
+/// A default `orbit.task.list` call (no `fields`/`field` projection, no bounded
+/// `view`) returns the same compact rows as `orbit tool run orbit.task.list`.
+/// Asking for `fields` is how a caller gets long-text fields back.
+fn compacts_task_list(tool: &str, input: &Value) -> bool {
+    tool == "orbit.task.list"
+        && ["fields", "field", "view"]
+            .iter()
+            .all(|key| input.get(key).is_none_or(Value::is_null))
 }
 
 fn invalid_definitions_mcp_error(error: OrbitError) -> McpError {
