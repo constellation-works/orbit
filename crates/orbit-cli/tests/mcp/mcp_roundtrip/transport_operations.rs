@@ -1271,6 +1271,45 @@ fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
     );
 }
 
+fn stdio_task_relations_report_missing_tasks_with_a_next_step() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let source = client.add_task("Missing relation target", "Disposable boundary proof.");
+    let prefix = source.split_once('-').expect("task ID prefix").0;
+    let missing_id = format!("{prefix}-99999");
+
+    for refusal in [
+        client.call_tool_err(
+            "orbit_task_add",
+            json!({
+                "title":"Missing relation target",
+                "description":"This task must not be stored.",
+                "complexity":"low",
+                "model":"codex",
+                "relations":[{"type":"blocked_by","target":missing_id}]
+            }),
+        ),
+        client.call_tool_err(
+            "orbit_task_update",
+            json!({
+                "id":source,
+                "model":"codex",
+                "relations":[{"type":"blocked_by","target":missing_id}]
+            }),
+        ),
+    ] {
+        assert_eq!(refusal["code"], "not_found", "{refusal}");
+        let message = refusal["message"].as_str().expect("MCP error message");
+        assert!(message.contains(&missing_id), "{message}");
+        assert!(message.contains("not found"), "{message}");
+        assert!(message.contains("Check the ID"), "{message}");
+        assert!(message.contains("create the task first"), "{message}");
+        assert!(message.contains("remove the relation"), "{message}");
+        assert!(!message.contains("relation target"), "{message}");
+        assert!(!message.contains("coordination registry"), "{message}");
+    }
+}
+
 #[test]
 fn artifact_and_auto_task_stdio_contracts() {
     for (name, check) in [
@@ -1289,6 +1328,10 @@ fn artifact_and_auto_task_stdio_contracts() {
         (
             "stdio_task_writes_refuse_unknown_retired_and_cli_only_fields",
             stdio_task_writes_refuse_unknown_retired_and_cli_only_fields as fn(),
+        ),
+        (
+            "stdio_task_relations_report_missing_tasks_with_a_next_step",
+            stdio_task_relations_report_missing_tasks_with_a_next_step as fn(),
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");

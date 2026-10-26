@@ -853,9 +853,10 @@ fn recovery_refusal(error: orbit_core::OrbitError, code: &'static str) -> Respon
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Task,
             id,
+            guidance,
         } => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("task not found: {id}"), "code": "task_not_found" })),
+            Json(json!({ "error": format!("task not found: {id}{}", guidance.as_deref().unwrap_or_default()), "code": "task_not_found" })),
         )
             .into_response(),
         orbit_core::OrbitError::InvalidInput(message) => (
@@ -970,9 +971,10 @@ fn operator_record_refusal(error: orbit_core::OrbitError, code: &'static str) ->
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Task,
             id,
+            guidance,
         } => (
             StatusCode::NOT_FOUND,
-            Json(json!({ "error": format!("task not found: {id}"), "code": "task_not_found" })),
+            Json(json!({ "error": format!("task not found: {id}{}", guidance.as_deref().unwrap_or_default()), "code": "task_not_found" })),
         )
             .into_response(),
         orbit_core::OrbitError::InvalidInput(message) => (

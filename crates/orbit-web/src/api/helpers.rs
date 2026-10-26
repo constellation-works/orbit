@@ -254,18 +254,25 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Task,
             id,
-        } => not_found(format!("task not found: {id}")),
+            guidance,
+        } => not_found(format!(
+            "task not found: {id}{}",
+            guidance.as_deref().unwrap_or_default()
+        )),
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Friction,
             id,
+            ..
         } => not_found(format!("friction record not found: {id}")),
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::Job,
             id,
+            ..
         } => not_found(format!("job not found: {id}")),
         orbit_core::OrbitError::NotFound {
             kind: orbit_core::NotFoundKind::JobRun,
             id,
+            ..
         } => not_found(format!("run not found: {id}")),
         error @ orbit_core::OrbitError::RemoteArtifactUnavailable { .. } => {
             artifact_conflict(error, "remote_artifact_unavailable")
