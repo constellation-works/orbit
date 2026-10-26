@@ -32,6 +32,7 @@ use super::review_continuation::run_review_pipeline;
 use super::review_gate_audit::Fixture;
 
 mod attempts;
+mod stale_findings;
 
 const CODEQL: &str = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls";
 const EVIDENCE: &str = "evidence/codeql-rust-linux.json";
@@ -46,10 +47,13 @@ const UNREACHABLE_MIB: u64 = 1 << 40;
 /// These cases model legacy/corrupt stored bytes; operator and agent task
 /// updates must no longer be able to rewrite the gate's authority records.
 fn seed_persisted_hold(fixture: &Fixture, hold: &ReviewEvidenceHold) {
-    let registry =
-        TaskRegistryStore::open(&task_registry_path(&fixture.runtime.global_root())).unwrap();
+    seed_runtime_hold(&fixture.runtime, &fixture.task_id, hold);
+}
+
+fn seed_runtime_hold(runtime: &orbit_core::OrbitRuntime, task_id: &str, hold: &ReviewEvidenceHold) {
+    let registry = TaskRegistryStore::open(&task_registry_path(&runtime.global_root())).unwrap();
     let bundle = registry
-        .canonical_task_bundle_path(&fixture.runtime.workspace_id().unwrap(), &fixture.task_id)
+        .canonical_task_bundle_path(&runtime.workspace_id().unwrap(), task_id)
         .unwrap();
     let manifest_path = bundle
         .join("artifacts")

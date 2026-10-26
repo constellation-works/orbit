@@ -154,6 +154,10 @@ impl OrbitRuntime {
                 })
                 .collect());
         }
+        #[cfg(feature = "test-support")]
+        if let Some(runs) = super::test_support::completed_findings(hold) {
+            return Ok(runs);
+        }
         if let Some((refusal, reason)) = self.fulfilment_host_refusal() {
             return Err((refusal, reason));
         }

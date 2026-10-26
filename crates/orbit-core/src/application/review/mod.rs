@@ -30,6 +30,8 @@ mod distributed_port;
 pub(crate) mod evidence;
 pub(crate) mod flaky;
 mod fulfilment;
+#[cfg(feature = "test-support")]
+pub(crate) use fulfilment::test_support as fulfilment_test_support;
 mod gate;
 mod handoff;
 mod landing;
