@@ -238,12 +238,17 @@ pub(crate) fn is_machine_identity_key(key: &str) -> bool {
     matches!(key, "machine.id" | "machine.name" | "machine.task_prefix")
 }
 
+/// The OS user Orbit Web's lease intake socket accepts. Read only from the
+/// global `config.toml`: a checkout must not choose who may create leases.
+pub const LEASE_INTAKE_PEER_USER_KEY: &str = "lease.intake.peer_user";
+
 /// Whether `key` names a setting a workspace `config.toml` may not supply:
-/// the `[machine]` table, and each crew's `env` list, which routes host
-/// variables into that crew's agents.
+/// the `[machine]` table, each crew's `env` list, which routes host
+/// variables into that crew's agents, and the lease intake peer user.
 pub fn is_global_only_key(key: &str) -> bool {
     key == GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.')
         || key.starts_with(GLOBAL_ONLY_KEY_PREFIX)
+        || key == LEASE_INTAKE_PEER_USER_KEY
         || matches!(
             parse_crew_field_key(key),
             Ok(Some(CrewFieldKey { field: "env", .. }))

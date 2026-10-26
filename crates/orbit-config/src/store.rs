@@ -27,8 +27,9 @@ use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
 use crate::layering::{
-    reject_workspace_crew_env, reject_workspace_machine_table, resolve_workspace_file_document,
-    validate_staged_global_document, validate_staged_workspace_document,
+    reject_workspace_crew_env, reject_workspace_lease_intake, reject_workspace_machine_table,
+    resolve_workspace_file_document, validate_staged_global_document,
+    validate_staged_workspace_document,
 };
 use crate::operation::OperationLayerSource;
 use crate::persistence::PersistenceConfig;
@@ -649,7 +650,8 @@ impl ConfigStore {
         match self.scope {
             ConfigScope::Workspace => {
                 reject_workspace_machine_table(&document, &self.path)?;
-                reject_workspace_crew_env(&document, &self.path)
+                reject_workspace_crew_env(&document, &self.path)?;
+                reject_workspace_lease_intake(&document, &self.path)
             }
             ConfigScope::Global => reject_global_plugin_enablement(&document, &self.path),
         }

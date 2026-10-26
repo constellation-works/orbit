@@ -85,6 +85,7 @@ fn task_scope_reserve_is_refused_by_a_hard_lease_and_granted_past_an_advisory_on
                 bound_branch: None,
                 actor: "alice".into(),
                 ttl_seconds: 600,
+                token_id: None,
             })
             .expect("insert lease")
             .lease

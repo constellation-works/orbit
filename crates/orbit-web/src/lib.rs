@@ -10,6 +10,9 @@
 //! the entry point for `orbit web serve`, which always serves every registered
 //! workspace (global mode; see ORB-10029). [`lease_router`] exposes just the
 //! lease API over a [`LeaseBackend`] for servers with their own authentication.
+//! [`lease_intake`] is the Unix socket Orbit Web serves to the lease listener
+//! user when `lease.intake.peer_user` is set, and the client the listener
+//! calls it with.
 //! All routes, content types, defaults, and graceful shutdown are preserved.
 
 mod api;
@@ -19,6 +22,8 @@ mod doctor_report;
 mod health;
 mod heap;
 mod host_tunnels;
+#[cfg(unix)]
+pub mod lease_intake;
 mod log_format;
 mod parse;
 mod projections;

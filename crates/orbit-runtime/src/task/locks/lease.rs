@@ -23,10 +23,11 @@ use orbit_common::protocol::tool_input::{
     optional_string_alias, optional_string_list_alias, required_string,
 };
 use orbit_store::contracts::{
-    LeaseInsertParams, LeaseMode, LeasePrincipalClass, LeasePriority, LeaseRecord,
-    LeaseReleaseParams, LeaseRenewParams, TaskLockConflict, TaskReservationCheckParams,
-    TaskReservationKind, TaskReservationReleaseReason,
+    LeaseInsertParams, LeaseMode, LeaseRecord, LeaseReleaseParams, LeaseRenewParams,
+    TaskLockConflict, TaskReservationCheckParams, TaskReservationKind,
+    TaskReservationReleaseReason,
 };
+pub use orbit_store::contracts::{LeasePrincipalClass, LeasePriority};
 use orbit_types::telemetry::AuditEventStatus;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -134,14 +135,120 @@ pub fn request(
     agent: Option<String>,
     model: Option<String>,
 ) -> Result<Value, OrbitError> {
+    runtime.lease_policy().ensure_enabled()?;
+    let principal = required_non_empty(&input, "principal")?;
+    let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
+    request_as(
+        runtime,
+        input,
+        LeaseRequester {
+            principal,
+            principal_class: lease_principal_class(),
+            actor,
+            token: None,
+        },
+    )
+}
+
+/// What an authenticated lease token allows, as the lease intake socket
+/// delivers it: the principal and class the token names, its id, its
+/// priority ceiling and `hard` permission, and the client address the
+/// listener saw. The listener user is trusted for this identity.
+#[derive(Clone, Debug)]
+pub struct LeaseTokenGrant {
+    /// The token's principal; it replaces any principal in the input.
+    pub principal: String,
+    /// The token's principal class, which selects the workspace's
+    /// `lease.hard.<class>` and `lease.max_priority.<class>`.
+    pub principal_class: LeasePrincipalClass,
+    /// The token's public id, recorded on the lease and in audit rows.
+    pub token_id: String,
+    /// The token's priority ceiling.
+    pub max_priority: LeasePriority,
+    /// Whether the token may hold hard leases.
+    pub hard_allowed: bool,
+    /// The client address the listener resolved.
+    pub client_address: String,
+}
+
+/// Request a lease for an authenticated lease token.
+///
+/// The same operation as [`request`], with the token's principal and class
+/// instead of the caller's declared principal and process class, and with the
+/// stricter of the token's scope and the workspace's class policy: the lower
+/// of the two priority ceilings, and hard only when both allow it. The lease
+/// records the token id, and its audit rows name the token and client.
+pub fn request_with_token(
+    runtime: &RuntimeKernel,
+    input: Value,
+    grant: &LeaseTokenGrant,
+) -> Result<Value, OrbitError> {
+    request_as(
+        runtime,
+        input,
+        LeaseRequester {
+            principal: grant.principal.clone(),
+            principal_class: grant.principal_class,
+            actor: LEASE_INTAKE_ACTOR.to_string(),
+            token: Some(grant),
+        },
+    )
+}
+
+/// The actor recorded on leases granted through the lease intake socket, and
+/// the tool name of its audit rows.
+const LEASE_INTAKE_ACTOR: &str = "lease-intake";
+
+/// Record one lease intake operation as `lease.intake.<operation>`.
+///
+/// The intake socket writes one row per operation it serves, granted,
+/// refused or failed, with the principal, token id, client address and
+/// outcome in `payload`; the operation's own rows are written as usual.
+pub fn record_lease_intake_audit(
+    runtime: &RuntimeKernel,
+    operation: &str,
+    lease_id: Option<&str>,
+    status: AuditEventStatus,
+    payload: Value,
+) -> Result<(), OrbitError> {
+    record_lease_audit_event(
+        runtime,
+        &format!("lease.intake.{operation}"),
+        LEASE_INTAKE_ACTOR,
+        lease_id,
+        status,
+        payload,
+    )
+}
+
+struct LeaseRequester<'a> {
+    principal: String,
+    principal_class: LeasePrincipalClass,
+    actor: String,
+    token: Option<&'a LeaseTokenGrant>,
+}
+
+fn request_as(
+    runtime: &RuntimeKernel,
+    input: Value,
+    requester: LeaseRequester<'_>,
+) -> Result<Value, OrbitError> {
     let policy = runtime.lease_policy();
     policy.ensure_enabled()?;
-    let principal = required_non_empty(&input, "principal")?;
+    let LeaseRequester {
+        principal,
+        principal_class,
+        actor,
+        token,
+    } = requester;
     let repo_root = runtime.paths().repo_root.as_path();
     let selectors = parse_selectors(&input, &["selectors", "files"], "selectors", repo_root)?;
     let ttl_seconds = parse_ttl_seconds(&input)?;
-    let principal_class = lease_principal_class();
-    let ceiling = policy.max_priority(principal_class);
+    let class_ceiling = policy.max_priority(principal_class);
+    let ceiling = match token {
+        Some(grant) => lower_priority(class_ceiling, grant.max_priority),
+        None => class_ceiling,
+    };
     let priority = match optional_string_alias(&input, &["priority"])? {
         Some(raw) => parse_priority(&raw, "priority")?,
         None => lower_priority(LeasePriority::Normal, ceiling),
@@ -150,8 +257,7 @@ pub fn request(
         Some(raw) => parse_mode(&raw, "mode")?,
         None => policy.default_mode,
     };
-    let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
-    let audit_request = json!({
+    let mut audit_request = json!({
         "actor": actor,
         "principal": principal,
         "principal_class": principal_class,
@@ -160,6 +266,10 @@ pub fn request(
         "priority": priority,
         "ttl_seconds": ttl_seconds,
     });
+    if let Some(grant) = token {
+        audit_request["token_id"] = json!(grant.token_id);
+        audit_request["client_address"] = json!(grant.client_address);
+    }
 
     if priority_rank(priority) > priority_rank(ceiling) {
         let mut payload = audit_request;
@@ -173,17 +283,22 @@ pub fn request(
             AuditEventStatus::Denied,
             payload,
         )?;
+        let limit = if priority_rank(class_ceiling) > priority_rank(ceiling) {
+            "the lease token's priority ceiling".to_string()
+        } else {
+            format!("`lease.max_priority.{}`", principal_class.as_str())
+        };
         return Err(OrbitError::InvalidInput(format!(
-            "lease priority `{}` is above the `{}` principal ceiling `{}` \
-             (`lease.max_priority.{}`)",
+            "lease priority `{}` is above the `{}` principal ceiling `{}` ({limit})",
             priority.as_str(),
             principal_class.as_str(),
             ceiling.as_str(),
-            principal_class.as_str(),
         )));
     }
 
-    let downgraded = requested_mode == LeaseMode::Hard && !policy.hard_allowed(principal_class);
+    let class_allows_hard = policy.hard_allowed(principal_class);
+    let token_allows_hard = token.is_none_or(|grant| grant.hard_allowed);
+    let downgraded = requested_mode == LeaseMode::Hard && !(class_allows_hard && token_allows_hard);
     let mode = if downgraded {
         LeaseMode::Advisory
     } else {
@@ -248,6 +363,7 @@ pub fn request(
             bound_branch: optional_string_alias(&input, &["branch", "bound_branch"])?,
             actor: actor.clone(),
             ttl_seconds,
+            token_id: token.map(|grant| grant.token_id.clone()),
         })?;
     emit_expired_lease_events(runtime, REQUEST_TOOL, &result.expired_leases)?;
     let Some(lease) = result.lease else {
@@ -261,18 +377,16 @@ pub fn request(
         Vec::new()
     };
     let notice = downgraded.then(|| {
-        format!(
-            "granted as advisory: `lease.hard.{}` is `never` for this principal class",
-            principal_class.as_str()
-        )
+        if class_allows_hard {
+            "granted as advisory: the lease token does not allow hard leases".to_string()
+        } else {
+            format!(
+                "granted as advisory: `lease.hard.{}` is `never` for this principal class",
+                principal_class.as_str()
+            )
+        }
     });
-    record_lease_audit_event(
-        runtime,
-        "lease.request.granted",
-        REQUEST_TOOL,
-        Some(lease.lease_id.as_str()),
-        AuditEventStatus::Success,
-        json!({
+    let mut granted_payload = json!({
             "lease_id": lease.lease_id,
             "actor": actor,
             "principal": lease.principal,
@@ -284,7 +398,18 @@ pub fn request(
             "downgraded": downgraded,
             "priority": lease.priority,
             "expires_at": lease.expires_at,
-        }),
+    });
+    if let Some(grant) = token {
+        granted_payload["token_id"] = json!(grant.token_id);
+        granted_payload["client_address"] = json!(grant.client_address);
+    }
+    record_lease_audit_event(
+        runtime,
+        "lease.request.granted",
+        REQUEST_TOOL,
+        Some(lease.lease_id.as_str()),
+        AuditEventStatus::Success,
+        granted_payload,
     )?;
     let mut output = json!({
         "granted": true,

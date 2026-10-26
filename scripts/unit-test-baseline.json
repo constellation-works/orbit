@@ -3,6 +3,9 @@
     "orbit-agent": {
       "test_function_paths": []
     },
+    "orbit-auth": {
+      "test_function_paths": []
+    },
     "orbit-automation": {
       "test_function_paths": [
         "auto_tasks/tests/scheduler.rs::checkpoint_write_failure_records_mint_evidence_and_retry_reconciles",
@@ -582,6 +585,7 @@
         "api/tests/handlers.rs::successful_clock_change_with_failed_follow_up_read_is_audited_and_unknown",
         "api/tests/log.rs::over_limit_unterminated_record_is_bounded_then_skipped_through_its_newline",
         "api/tests/workspaces.rs::stale_build_during_rebind_never_republishes_as_current",
+        "lease_intake/tests/server.rs::token_renews_and_releases_only_its_own_principals_leases",
         "log_format/tests/render.rs::format_message_html_escapes_dynamic_field_values",
         "log_format/tests/render.rs::rendered_log_redacts_secret_tokens_in_lines_and_fields",
         "log_format/tests/scan.rs::a_segment_straddling_the_window_is_read_only_back_to_its_start",
