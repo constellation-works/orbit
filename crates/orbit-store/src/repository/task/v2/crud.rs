@@ -210,11 +210,14 @@ impl TaskV2Store {
 
         if key.is_some() {
             let (bundle, replayed) = self.bundle_store.create_or_recover_action_bundle(&bundle)?;
-            self.replace_index_best_effort(&bundle.envelope, "idempotent task creation");
+            self.publish_task_index_and_lease_notices(
+                &bundle.envelope,
+                "idempotent task creation",
+            )?;
             return self.task_from_bundle(bundle).map(|task| (task, replayed));
         }
         self.bundle_store.create_bundle(&bundle)?;
-        self.replace_index_best_effort(&bundle.envelope, "task creation");
+        self.publish_task_index_and_lease_notices(&bundle.envelope, "task creation")?;
         self.task_from_bundle(bundle).map(|task| (task, false))
     }
 

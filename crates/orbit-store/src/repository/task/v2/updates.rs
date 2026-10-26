@@ -172,7 +172,7 @@ impl TaskV2Store {
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
             pending.finish();
-            self.replace_index_best_effort(&bundle.envelope, &fields.event_note);
+            self.publish_task_index_and_lease_notices(&bundle.envelope, &fields.event_note)?;
             Ok(AtomicTaskMutationOutcome::Applied)
         })
     }
@@ -519,7 +519,10 @@ impl TaskV2Store {
                 bundle.envelope.updated_at = updated_at;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
-                self.replace_index_best_effort(&bundle.envelope, "task document update");
+                self.publish_task_index_and_lease_notices(
+                    &bundle.envelope,
+                    "task document update",
+                )?;
             } else {
                 pending.finish();
             }
@@ -664,7 +667,7 @@ impl TaskV2Store {
                 bundle.envelope.updated_at = now;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
                 pending.finish();
-                self.replace_index_best_effort(&bundle.envelope, "task history update");
+                self.publish_task_index_and_lease_notices(&bundle.envelope, "task history update")?;
             } else {
                 pending.finish();
             }

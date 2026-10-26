@@ -25,5 +25,6 @@ pub(super) fn dispatch(
         LeaseVerb::Show => lease::show(runtime, input),
         LeaseVerb::List => lease::list(runtime),
         LeaseVerb::Check => lease::check(runtime, input),
+        LeaseVerb::Notices => lease::notices(runtime, input),
     }
 }

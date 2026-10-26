@@ -559,6 +559,9 @@ pub struct LeaseInsertResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaseRecord {
     pub lease_id: String,
+    /// Newest notice acknowledged by this holder; reads never advance it.
+    #[serde(default)]
+    pub notice_cursor: u64,
     pub workspace_id: Option<String>,
     pub selectors: Vec<String>,
     pub mode: LeaseMode,

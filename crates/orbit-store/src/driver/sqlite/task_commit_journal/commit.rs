@@ -8,6 +8,7 @@ use super::JournalCommitOutcome;
 use crate::contracts::{
     TaskCoordinationRow, TaskReservationReserveParams, TaskReservationReserveResult,
 };
+use crate::driver::sqlite::task_reservation_store::notices::{self, LeaseOverlapNotice};
 use crate::driver::sqlite::task_reservation_store::reserve_files_in_tx;
 use crate::{Store, StoreTx};
 
@@ -27,6 +28,7 @@ impl Store {
             Option<&TaskReservationReserveResult>,
         ) -> Result<Vec<TaskCoordinationRow>, OrbitError>,
         effects: &crate::contracts::ClaimCommitEffects,
+        lease_notice: Option<&LeaseOverlapNotice<'_>>,
     ) -> Result<JournalCommitOutcome, OrbitError> {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             let workspace_id: String = tx
@@ -131,6 +133,9 @@ impl Store {
             let reservation_id = reserved
                 .as_ref()
                 .and_then(|result| result.reservation_id.clone());
+            if let Some(notice) = lease_notice {
+                notices::append_lease_overlaps(tx, notice)?;
+            }
             let affected = tx
                 .tx
                 .execute(

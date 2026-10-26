@@ -763,15 +763,19 @@ make that choice deliberately and record it.
 
 ### Transports
 
-The installed release has no `orbit lease` command and no `orbit.lease.*` MCP
-tool. The `orbit.lease.*` names appear only as audit tool labels. Before relying
-on a lease command or MCP tool, check `orbit --help` and the installed tool
-catalog for one.
+CLI and MCP expose request, renew, release, show, list, check and notices through
+the same owner operations. Check `orbit lease --help` and the installed tool catalog
+when coordinating with an older binary. `orbit lease notices --after <seq>` and
+`orbit.lease.notices` return `{notices, cursor}`; add `--lease-id <id>` to filter.
+`--follow` polls continuously and emits JSONL in JSON modes. Save the last returned
+cursor to resume after a disconnect; reads never acknowledge notices or expire leases.
 
 - **Config:** the `orbit config` commands above.
 - **REST:** `orbit web serve` (default `127.0.0.1:7878`) serves `/api/leases`:
   `GET` and `POST /api/leases`, `GET` and `DELETE /api/leases/{id}`,
-  `POST /api/leases/check` and `POST /api/leases/{id}/renew`. Select a workspace
+  `POST /api/leases/check` and `POST /api/leases/{id}/renew`, plus
+  `GET /api/leases/notices?after=<seq>` and `GET /api/leases/events` (SSE).
+  SSE accepts `Last-Event-ID` as the resume cursor; each ID is the notice sequence. Select a workspace
   with `?workspace=<name-or-id>`. Reads need no operator session. Request, renew
   and release need the server started with `--operator`; otherwise they are denied.
   The routes accept only localhost origins.
@@ -779,6 +783,70 @@ catalog for one.
   `--kind lease` for every lease event. Granted requests record
   `lease.request.granted`, refusals record `lease.request.refused` with status
   `denied`, and expiries record `lease.expired`.
+
+### Claude Code edit hook
+
+After requesting a session lease, export its ID as `ORBIT_LEASE_ID`. Put this
+command hook in the project's `.claude/settings.json` (merge with existing hooks):
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [{
+      "matcher": "Edit|Write",
+      "hooks": [{"type": "command", "command": "python3 .claude/lease-check.py"}]
+    }]
+  }
+}
+```
+
+Save the following as `.claude/lease-check.py`. The hook reads the target path
+from Claude Code's stdin JSON and invokes the public check command with an argv
+list, so spaces and shell punctuation in paths stay literal:
+
+```python
+import json
+import os
+import pathlib
+import subprocess
+import sys
+
+request = json.load(sys.stdin)
+path = request.get("tool_input", {}).get("file_path")
+lease_id = os.environ.get("ORBIT_LEASE_ID")
+warning = None
+if not lease_id:
+    warning = "No session lease. Request one before editing shared paths."
+elif path:
+    try:
+        target = pathlib.Path(path).resolve()
+        root = subprocess.run(["git", "rev-parse", "--show-toplevel"],
+                              capture_output=True, text=True, check=True).stdout.strip()
+        selector = "file:" + target.relative_to(pathlib.Path(root).resolve()).as_posix()
+        result = subprocess.run(
+            ["orbit", "lease", "check", selector, "--lease-id", lease_id, "--json"],
+            capture_output=True, text=True, cwd=root)
+        if result.returncode:
+            warning = "Lease check failed: " + result.stderr.strip()
+        else:
+            check = json.loads(result.stdout)
+            if not check["lease_active"] or any(not p["covered"] for p in check["paths"]):
+                warning = "Outside the session lease. Ask to expand it, or coordinate before editing."
+            elif any(p["holders"] for p in check["paths"]):
+                warning = "Other holders overlap this path. Coordinate before editing."
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError) as error:
+        warning = "Lease check could not cover this target: " + str(error)
+if warning:
+    print(warning, file=sys.stderr)
+    if os.environ.get("ORBIT_LEASE_HOOK_DENY") == "1":
+        sys.exit(2)
+```
+
+The default is advisory: a warning exits zero and permits the edit. Set
+`ORBIT_LEASE_HOOK_DENY=1` explicitly to deny on warnings (Claude Code command hooks
+use exit 2 to block). Expansion is not implemented yet; coordinate and request a
+replacement lease covering the added paths. This hook does not expand or release
+leases automatically. Test both an inside and outside path before enabling denial.
 
 ### Verify the policy
 

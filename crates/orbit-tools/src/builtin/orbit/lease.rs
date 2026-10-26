@@ -18,7 +18,8 @@ impl GuardedModes for LeaseVerb {
             | LeaseVerb::Release
             | LeaseVerb::Show
             | LeaseVerb::List
-            | LeaseVerb::Check => None,
+            | LeaseVerb::Check
+            | LeaseVerb::Notices => None,
         }
     }
 
@@ -33,7 +34,8 @@ impl GuardedModes for LeaseVerb {
             | LeaseVerb::Release
             | LeaseVerb::Show
             | LeaseVerb::List
-            | LeaseVerb::Check => None,
+            | LeaseVerb::Check
+            | LeaseVerb::Notices => None,
         }
     }
 
@@ -44,7 +46,8 @@ impl GuardedModes for LeaseVerb {
             | LeaseVerb::Release
             | LeaseVerb::Show
             | LeaseVerb::List
-            | LeaseVerb::Check => Ok(()),
+            | LeaseVerb::Check
+            | LeaseVerb::Notices => Ok(()),
         }
     }
 
@@ -55,7 +58,8 @@ impl GuardedModes for LeaseVerb {
             | LeaseVerb::Release
             | LeaseVerb::Show
             | LeaseVerb::List
-            | LeaseVerb::Check => None,
+            | LeaseVerb::Check
+            | LeaseVerb::Notices => None,
         }
     }
 }

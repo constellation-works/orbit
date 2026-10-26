@@ -81,7 +81,9 @@ use resource_minutes::{
 use retention_analytics::apply_retention_analytics;
 use routine::apply_routine_scheduler_schema;
 use task_commit_journal::apply_task_commit_journal;
-use task_reservations::{apply_task_reservation_leases, apply_workspace_claim_scope};
+use task_reservations::{
+    apply_lease_notices, apply_task_reservation_leases, apply_workspace_claim_scope,
+};
 
 // The ledger tests reach schema introspection through `super::super::*`.
 #[cfg(test)]

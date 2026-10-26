@@ -1593,6 +1593,34 @@
     "parameters": []
   },
   {
+    "name": "orbit.lease.notices",
+    "description": "Read durable lease notices strictly after a workspace sequence cursor, optionally for one lease. Returns notices ordered by seq and a cursor for the next page. Reads never acknowledge or expire leases. Requires lease.enabled.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "after",
+        "description": "Exclusive sequence cursor; defaults to zero.",
+        "param_type": "u64",
+        "required": false
+      },
+      {
+        "name": "lease_id",
+        "description": "Optional lease to filter.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "limit",
+        "description": "Page size from 1 to 500; defaults to 100.",
+        "param_type": "u64",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.lease.release",
     "description": "Release a path lease early. Returns released=false if the lease is unknown or already ended.",
     "enabled": true,

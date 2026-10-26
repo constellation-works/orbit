@@ -4,6 +4,7 @@
 //! and row mapping it shares with `workspace_claim` and `leases`.
 
 mod leases;
+pub(crate) mod notices;
 mod reservations;
 mod rows;
 mod workspace_claim;

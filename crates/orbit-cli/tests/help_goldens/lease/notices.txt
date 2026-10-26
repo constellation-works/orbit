@@ -1,0 +1,26 @@
+Read durable lease notices after a cursor
+
+Usage: orbit lease notices [OPTIONS]
+
+Options:
+      --after <AFTER>
+          Read after this sequence (default: 0)
+
+      --lease-id <LEASE_ID>
+          Read notices for this lease
+
+      --limit <LIMIT>
+          Page size (default: 100, maximum: 500)
+
+      --follow
+          Follow new notices; JSON output is JSONL
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

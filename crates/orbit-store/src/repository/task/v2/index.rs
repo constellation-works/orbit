@@ -494,7 +494,14 @@ impl TaskV2Store {
         Ok(bundles)
     }
 
-    pub(super) fn replace_index_best_effort(&self, envelope: &TaskEnvelopeV2, operation: &str) {
+    pub(super) fn publish_task_index_and_lease_notices(
+        &self,
+        envelope: &TaskEnvelopeV2,
+        operation: &str,
+    ) -> Result<(), OrbitError> {
+        if let Some(boundary) = &self.coordination {
+            boundary.record_task_lease_overlaps(envelope)?;
+        }
         if let Err(err) = self
             .registry
             .replace_task_index(&self.workspace_id, envelope)
@@ -508,6 +515,7 @@ impl TaskV2Store {
                 "task bundle was updated but generated task index update failed",
             );
         }
+        Ok(())
     }
 
     pub(crate) fn task_from_bundle(&self, bundle: TaskBundleV2) -> Result<Task, OrbitError> {

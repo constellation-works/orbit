@@ -10,11 +10,14 @@ use super::*;
 /// (ORB-11246).
 pub(crate) fn request_shutdown() {
     log::request_shutdown();
+    lease_notices::request_shutdown();
 }
 
 pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state::DashboardState> {
     Router::new()
         .merge(leases::lease_router(leases::RuntimeLeaseBackend { state }).with_state(()))
+        .route("/leases/notices", get(lease_notices::get_lease_notices))
+        .route("/leases/events", get(lease_notices::stream_lease_notices))
         .route("/host/resources", get(host::resources))
         // Settings › Hosts [ORB-14451]: the serving host's host file, through
         // the same operations as `orbit host`.

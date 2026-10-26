@@ -270,6 +270,7 @@ impl TaskCommitBoundary {
             }
         })?;
 
+        let lease_notice = self.task_lease_notice(&intent.envelope)?;
         let decided = match hold_step(DECIDE_STEP, || {
             self.store.commit_task_commit_journal_effects(
                 &journal_id,
@@ -277,6 +278,10 @@ impl TaskCommitBoundary {
                 &params.rows,
                 make_rows,
                 effects,
+                lease_notice
+                    .as_ref()
+                    .map(|notice| notice.lease_overlap_event())
+                    .as_ref(),
             )
         }) {
             Ok(decided) => decided,
@@ -461,6 +466,7 @@ impl TaskCommitBoundary {
             )));
         }
         self.apply_events(intent)?;
+        self.record_task_lease_overlaps(&intent.envelope)?;
         self.apply_claim_evidence(intent)?;
         self.bundle_store
             .rewrite_envelope(&intent.task_id, &intent.envelope)?;

@@ -12,6 +12,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
+use super::notices::{self, LeaseOverlapNotice};
 use super::rows::{
     LEASE_ROWS, expire_leases, find_reservation_conflicts, parse_string_list, serialize_string_list,
 };
@@ -22,6 +23,7 @@ use crate::contracts::{
     LeasePriority, LeaseRecord, LeaseReleaseParams, LeaseReleaseResult, LeaseRenewParams,
     LeaseRenewResult, TaskReservationReleaseReason, TaskReservationScope,
 };
+use serde_json::json;
 
 const LEASE_ID_PREFIX: &str = "lease-";
 
@@ -86,6 +88,15 @@ impl Store {
                     ],
                 )
                 .map_err(sqlite_store_error)?;
+            notices::append_lease_notice(tx, &lease_id, "granted", &json!({
+                "mode": params.mode, "principal": params.principal, "selectors": params.selectors,
+            }), "granted")?;
+            notices::append_lease_overlaps(tx, &LeaseOverlapNotice {
+                orbit_dir: &params.workspace_orbit_dir, workspace_id,
+                holder: &lease_id, paths: &params.selectors, kind: "overlap",
+                payload: json!({"lease_id": lease_id, "mode": params.mode, "principal": params.principal}),
+                event_key: &format!("lease:{lease_id}"), landing: None,
+            })?;
             let lease = load_lease(tx, &params.workspace_orbit_dir, workspace_id, &lease_id)?;
             Ok(LeaseInsertResult {
                 lease,
@@ -179,6 +190,15 @@ impl Store {
                     ],
                 )
                 .map_err(sqlite_store_error)?;
+            if released != 0 {
+                notices::append_lease_notice(
+                    tx,
+                    &params.lease_id,
+                    "released",
+                    &json!({"reason": params.release_reason}),
+                    "released",
+                )?;
+            }
             let lease = if released == 0 {
                 None
             } else {
@@ -296,7 +316,7 @@ fn active_leases_sql() -> String {
 
 const LEASE_COLUMNS: &str = "reservation_id, workspace_id, files_json, mode, priority, tags_json,
      principal, principal_class, machine_id, base_branch, bound_branch, actor, created_at,
-     expires_at, heartbeat_at, released_at, release_reason";
+     expires_at, heartbeat_at, released_at, release_reason, notice_cursor";
 
 struct LeaseRow {
     lease_id: String,
@@ -316,6 +336,7 @@ struct LeaseRow {
     heartbeat_at: Option<String>,
     released_at: Option<String>,
     release_reason: Option<String>,
+    notice_cursor: u64,
 }
 
 fn lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
@@ -337,6 +358,7 @@ fn lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
         heartbeat_at: row.get(14)?,
         released_at: row.get(15)?,
         release_reason: row.get(16)?,
+        notice_cursor: row.get(17)?,
     })
 }
 
@@ -369,6 +391,7 @@ impl LeaseRow {
             None => None,
         };
         Ok(LeaseRecord {
+            notice_cursor: self.notice_cursor,
             selectors: parse_string_list(&self.files_json)?,
             mode: LeaseMode::parse(&self.mode),
             priority,

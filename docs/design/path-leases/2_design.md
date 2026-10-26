@@ -18,8 +18,9 @@ related_artifacts: []
 
 This document proposes how path leases work. The lease row of §2, the advisory/hard grant rules
 of §3 without the queue, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
-runtime operations, with a loopback REST surface (see §6) and no MCP or CLI surface yet
-(see "Stored so far" and "Runtime operations" in §2); the rest of §2–§9 is not. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
+runtime operations, CLI, MCP and loopback REST surfaces (see §6). Phase 3 durable notices,
+including Web poll and SSE replay, are implemented; queueing, advanced lifetime handling,
+preemption and listener streaming remain later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
 [conflict-budget](../conflict-budget/1_scope.md), and open directions to
 [3_vision.md](./3_vision.md).
 
@@ -80,7 +81,11 @@ default, or `lease`) and `mode` (`hard` by default, or `advisory`) to `task_rese
 store inserts (refusing a hard lease that overlaps a task reservation or hard lease), renews,
 releases, reads and lists leases, and lazy expiry ends them as it ends reservations. `state` is
 derived for now: `granted` while active, `released` or `expired` from `release_reason`; `queued`,
-`preempted` and `notice_cursor` arrive with their phases. Every overlap reader (owner pull
+`preempted` arrive with their phases. Schema v65 (`lease_notices`) adds `notice_cursor`
+(default 0, reserved for explicit holder acknowledgement; polling and SSE never advance it)
+and an append-only owner notice table. Sequence numbers increase across the owner database,
+so they increase within each workspace and may have gaps. Existing leases start with no
+backfilled grant; new grants, release and lazy expiry write their notices transactionally. Every overlap reader (owner pull
 admission, `orbit.task.locks.reserve` and the gate's reservation check) skips advisory rows and
 names a hard lease as `held_by: "lease"`. `orbit task locks list` lists every active lease,
 advisory and hard, beside reservations in `by_lease`/`total_leases`, rendering each with its
@@ -91,7 +96,7 @@ exclusive file reservation and refuses overlapping reserves (checked against 0.3
 previous release), and the rows it writes read here as hard task reservations.
 
 **Runtime operations.** `crates/orbit-runtime/src/task/locks/lease.rs` holds one function per
-verb: `request`, `renew`, `release`, `show`, `list` and `check`, each refused naming
+verb: `request`, `renew`, `release`, `show`, `list`, `check` and `notices`, each refused naming
 `lease.enabled` while it is false. `request` applies §3 without waiting: advisory is granted and
 names the holders it overlaps; hard drops `unlocked_context_paths` from the stored surface and is
 refused with the holders named when what is left overlaps a task context lock, task reservation
@@ -102,7 +107,7 @@ refusal, renewal, release and lazy expiry each write a `lease` audit event.
 ## 3. Granting, queueing and the drain
 
 **Advisory** requests are always granted at once. The lease is recorded as a holder of its paths,
-every overlapping holder (lease or task) gets an `overlap` notice, and nothing is refused. Under
+every overlapping lease holder gets an `overlap` notice (drain tasks never receive notices), and nothing is refused. Under
 the conflict budget an advisory lease counts toward `holders(path)`, so a busy path costs drain
 candidates more, but it never makes one wait by itself.
 
@@ -170,6 +175,21 @@ already handles a moved base.
 dropped connection resumes without loss and poll and stream never disagree. Webhooks are not
 part of v1 (§9).
 
+**Implemented notices.** `granted` includes the effective mode, principal and selectors;
+`overlap` identifies the new lease, reservation or task and the overlapping paths.
+`released` and `expired` are emitted exactly once at their state transition. Landed facts
+scans emit `overlap_landed` once per lease and commit, only for a local base ref containing
+that commit and a lease created before the landing. Payloads name the commit, changed
+paths and delivering task. Both sides of renames count. Tasks receive no notices.
+
+`notices` accepts `after` (exclusive, default 0), optional `lease_id` and `limit`
+(default 100, range 1–500). It returns `{notices, cursor}` with the last returned sequence,
+or the input cursor on an empty page. Repeated reads acknowledge nothing and do not expire
+leases. `orbit lease notices --follow` drains pages then polls, with JSONL in JSON modes.
+Web events emit each notice as JSON with its `seq` as the SSE ID, using `Last-Event-ID`
+in preference to `after`. Invalid cursors are refused. Streams are bounded to eight
+concurrent clients and close on disconnect or server shutdown.
+
 ## 6. Surfaces
 
 All surfaces call one runtime operation per verb, so they cannot drift.
@@ -189,8 +209,7 @@ Request uses `<selector>... --principal <name> [--mode advisory|hard | --hard]
 Renew takes `<lease-id> [--ttl 30m]`; check takes `<path>... [--lease-id <id>]`.
 All six accept `--json`; refusal of a hard request exits 3. TTL is 1–14400 seconds,
 default 1800. Branch bindings are recorded only. The table below also includes
-later-phase surfaces; `expand`, `notices`, queueing and `--no-wait` are not part
-of the phase 1 CLI or MCP contract.
+later-phase surfaces; `notices` is added in phase 3; `expand`, queueing and `--no-wait` remain future work.
 
 | Verb | MCP tool | CLI | REST |
 |---|---|---|---|
@@ -203,10 +222,9 @@ of the phase 1 CLI or MCP contract.
 | check | `orbit.lease.check` | `orbit lease check <path>…` | `POST /api/leases/check` |
 
 **Implemented loopback REST surface.** Orbit Web serves request, renew, release, show, list
-and check through the same runtime operations and returns their JSON unchanged. An overlapping
+and check, plus notices polling and SSE replay, through the same runtime operations and returns their JSON unchanged. An overlapping
 hard request returns `granted: false` with the runtime's typed `conflicts`, naming each holder
-by kind and ID. Expansion returns HTTP 501 with `code: "not_available_in_this_phase"`; notices
-and events are not implemented. Select a workspace with `?workspace=<id>` or use the server's
+by kind and ID. Expansion returns HTTP 501 with `code: "not_available_in_this_phase"`; notices and events are implemented on Orbit Web (listener streaming is separate). Select a workspace with `?workspace=<id>` or use the server's
 default. Request and check bodies are the corresponding operation's JSON input; renew accepts
 its TTL fields and permits an omitted body to use the default TTL. Expansion also permits an
 omitted body. For show, renew and release the URL supplies `lease_id`, overriding a body ID.

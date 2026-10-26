@@ -943,6 +943,35 @@
     }
   },
   {
+    "name": "orbit_lease_notices",
+    "description": "Read durable lease notices strictly after a workspace sequence cursor, optionally for one lease. Returns notices ordered by seq and a cursor for the next page. Reads never acknowledge or expire leases. Requires lease.enabled.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": "integer",
+          "description": "Exclusive sequence cursor; defaults to zero."
+        },
+        "lease_id": {
+          "type": "string",
+          "description": "Optional lease to filter."
+        },
+        "limit": {
+          "type": "integer",
+          "description": "Page size from 1 to 500; defaults to 100."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
     "name": "orbit_lease_release",
     "description": "Release a path lease early. Returns released=false if the lease is unknown or already ended.",
     "inputSchema": {

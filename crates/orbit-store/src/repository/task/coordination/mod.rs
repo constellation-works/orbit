@@ -154,6 +154,7 @@ mod branch_observation;
 mod commit;
 mod handoff;
 mod landing;
+mod lease_notices;
 mod lifecycle;
 mod owner_wave;
 mod repair;
