@@ -177,7 +177,7 @@ the activity's exact-canonical, registered, agent-facing and enabled admission
 rule. Disabled grants fail at filing time, including a resubmitted unchanged
 grant; ordinary `required_tools` keep their existing disabled-tool warning.
 Phases 1 and 2 land dark: classification alone does not lift an activity deny
-or execute a mutation. Reviewed proposal application remains phase 5.
+or execute a mutation. Reviewed proposal application is phase 5 (§4).
 
 **Implementer admission (phase 3 decision).** `resolve_activity_tool_denials`
 in
@@ -270,6 +270,53 @@ grantable tool is classified at grant time as *read/repeat-safe* or
   run in order to proceed cannot be served by this mechanism — the
   proposal applies only after review. That need is an operator action or
   a separate prerequisite task, not a grant.
+
+**Proposals and application (phase 5 decision).** The shapes live in
+[`task/mutation_proposal.rs`](../../../crates/orbit-types/src/task/mutation_proposal.rs);
+admission and application in
+[`task/mutation_proposals.rs`](../../../crates/orbit-core/src/application/task/mutation_proposals.rs).
+
+- *Proposal.* The writer attaches `mutation-proposals/<name>.json` holding
+  `{tool, input, rationale}`. `admit_task_artifact` in
+  [`update/artifacts.rs`](../../../crates/orbit-core/src/application/task/update/artifacts.rs)
+  admits it only on an owner task update or start, when the task grants
+  the tool, the tool is a grantable mutation, and an agent-only session
+  passes `authorize_registered_tool` for that exact input. So a granted
+  `orbit.auto_task.update` carrying `expected_enabled` is refused for want
+  of `orbit.routine.control`, whoever writes it. The stored artifact adds
+  the task id and an idempotency key: SHA-256 over the task id, tool and
+  canonical input. The rationale is left out, so rewording it never applies
+  the same change twice. Claimed-worker evidence cannot carry a proposal.
+- *Receipt.* `mutation-receipts/<key>.json` is reserved for the system
+  writer, like the `review-` names, and counts only when the artifact
+  manifest records a system write. It holds the applied input, the
+  proposal path and digest, the authorizing review attempt, the run, the
+  state (`pending`, `applied` or `failed`) with result or error, and a
+  timestamp.
+- *Review.* `review_gate_admit` lists every proposal without an applied
+  receipt in the manifest's `mutation_proposals`, each with its path,
+  stored-bytes digest and content. The reviewer judges proposals beside the
+  diff and cannot repair one. A run that reviews nothing (timing off,
+  no-diff exemption, `skip-review`, no captured admission) refuses its
+  tasks' proposals by name. The certificate is unchanged; the system-written
+  manifest of the same attempt carries the binding.
+- *Application.* When `review_gate_settle` passes an attempt, including a
+  replayed settlement, it applies the manifest's proposals before anything
+  is pushed or landed. A task proposal applies only when that manifest holds
+  it with the same path, digest and content, and the reviewed input is what
+  runs. The host makes the call, but its capability check is the agent's, so
+  approval never mints operator authority. The rules are rechecked first; a
+  `pending` receipt is written, then `applied` or `failed`. An applied key is
+  skipped. A pending one means the outcome is unknown, and it stays
+  unapplied until an operator reconciles it; the reconciliation surface
+  belongs to phase 6. An unreviewed, changed or failed proposal fails the
+  step after the others run, with a task comment naming each.
+- *Completion.* A task is never `done`, except by a human force, while any
+  proposal lacks an applied receipt. That also covers the local route,
+  which has no review gate.
+- *Limitation.* Proposals ride with a reviewed diff. A task whose only
+  product is a mutation has no candidate for the gate to admit, so such a
+  delivery is refused rather than applied unreviewed.
 
 ### 5. Relation to `required_tools` — keep both
 

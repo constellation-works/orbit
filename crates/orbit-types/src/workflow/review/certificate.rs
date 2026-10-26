@@ -40,6 +40,12 @@ pub struct ReviewManifest {
     /// them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_validation: Vec<HostGateResult>,
+    /// [granted-tools §4] The tasks' unapplied mutation proposals, each bound
+    /// to the artifact bytes the gate read. The reviewer judges them beside
+    /// the diff; once this attempt passes, the pipeline applies exactly these
+    /// inputs, and only while the artifacts still hold these digests.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mutation_proposals: Vec<crate::task::ReviewedMutationProposal>,
     /// Earlier report on this task, retained as advisory continuation context.
     /// A new attempt still needs a report naming its own attempt identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]

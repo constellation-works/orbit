@@ -25,7 +25,10 @@ spec:
     task in the backlog until the base passes. A claim the host contradicts
     settles `incomplete`. Other `reject` and `incomplete` verdicts fail the
     step so the failure handoff preserves the candidate without publishing a
-    PR.
+    PR. A passed verdict then applies, once each, the mutation proposals the
+    attempt's manifest named, recording a `mutation-receipts/` artifact per
+    proposal; a proposal changed after review, or one whose application fails,
+    fails the step before anything is published.
   input_schema_json:
     type: object
     required: [job_run_id, completed_task_ids, workspace_path, admission]

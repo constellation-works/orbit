@@ -11,6 +11,7 @@ mod granted_tools;
 mod host_labels;
 mod light_delivery;
 mod model;
+mod mutation_proposal;
 mod os_requirement;
 mod plan;
 mod readiness;
@@ -95,6 +96,12 @@ pub use model::{
     task_dependencies_ready_with_index, task_matches_tags, unmet_task_dependencies,
     unmet_task_dependencies_with_index, unsatisfiable_task_dependencies,
     unsatisfiable_task_dependencies_with_index, validate_task_dependencies_with,
+};
+pub use mutation_proposal::{
+    MUTATION_PROPOSAL_ARTIFACT_DIR, MUTATION_PROPOSAL_SCHEMA_VERSION,
+    MUTATION_RECEIPT_ARTIFACT_DIR, MutationProposal, MutationProposalDraft, MutationReceipt,
+    MutationReceiptState, ReviewedMutationProposal, is_mutation_proposal_artifact,
+    is_mutation_receipt_artifact, mutation_receipt_artifact_path,
 };
 pub use os_requirement::{
     ExecutorOsLimit, HostOs, OS_TAG_PREFIX, TaskOsRequirement, validate_os_tags,

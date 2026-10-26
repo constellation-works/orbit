@@ -104,6 +104,23 @@ The connected tool schema is authoritative for supported fields.
   `required_tools` still fails implementer admission. A lifted tool still
   passes every other check: capability and field-level operator gates,
   filesystem and process policy, and claimed-mode denials.
+- **Mutation proposals** carry a mutating grant's call instead. Attach
+  `mutation-proposals/<name>.json` with `orbit.task.artifact.put`, content
+  `{"tool": "<granted tool>", "input": {…exact tool input…}, "rationale":
+  "<why>"}`. It is refused unless the task grants the tool, the tool is a
+  grantable mutation, and an agent session could make that exact call (a
+  grant never satisfies a field-level gate such as `expected_enabled`).
+  Orbit stores it with the task id and an `idempotency_key` derived from the
+  task, tool and input; nothing changes live. The review gate's manifest
+  lists every unapplied proposal for the reviewer, and when that review
+  passes the pipeline applies each one once, with the reviewed input, and
+  records a `mutation-receipts/<key>.json` receipt (`applied` or `failed`).
+  Receipts are Orbit's alone. A re-emitted identical proposal never applies
+  twice; a changed one is a new key that waits for the next review. A failed
+  or unreviewed proposal fails the review step with a task comment, a run
+  that reviews nothing refuses the task, and a task cannot become `done`
+  while a proposal is unapplied. A change the agent needs during its run
+  cannot be proposed: it is an operator action or a prerequisite task.
 - `requires_labels: ["<label>", ...]` — capability labels a host must carry,
   **all of them**, to run the task. A host carries its `machine.labels` setting
   plus its OS as an implicit label (`linux`, `macos`, `windows`); `orbit doctor`

@@ -17,7 +17,8 @@ use orbit_types::workflow::{
     CommitIdentity, REVIEW_ABANDONED_MARKER, REVIEW_CONTRACT_VERSION, REVIEW_GATE_ARTIFACT,
     REVIEW_LANDING_DECISION_PENDING, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
     ReviewAttemptState, ReviewCertificate, ReviewGateAdmissionOutput, ReviewGateAdmitted,
-    ReviewGateDecision, ReviewGateHistoryNote, ReviewGateRefusal, ReviewTiming, ReviewerIdentity,
+    ReviewGateDecision, ReviewGateHistoryNote, ReviewGateRefusal, ReviewManifest, ReviewTiming,
+    ReviewerIdentity,
 };
 use serde_json::{Value, json};
 
@@ -875,6 +876,7 @@ fn settled_outcome(
         }
         return Ok(Settled::Blocked(Box::new(certificate)));
     }
+    apply_mutation_proposals(runtime, context, &certificate)?;
     let mut output = passed_output(&certificate);
     if context.claimed {
         output["handoff_evidence"] =
@@ -883,6 +885,37 @@ fn settled_outcome(
             )?;
     }
     Ok(Settled::Passed(output))
+}
+
+/// [granted-tools §4] Apply the mutation proposals this passed attempt's
+/// manifest put in front of its reviewer, once each, before anything is
+/// published or landed. A replayed settlement retries only what no applied
+/// receipt covers. A claimed leaf applies nothing: its review read none, and
+/// a live change is never made from a follower.
+fn apply_mutation_proposals(
+    runtime: &OrbitRuntime,
+    context: &GateContext,
+    certificate: &ReviewCertificate,
+) -> Result<(), OrbitError> {
+    if context.claimed {
+        return Ok(());
+    }
+    let Some(task_id) = context.task_ids.first() else {
+        return Ok(());
+    };
+    let reviewed = runtime
+        .get_task_artifact(task_id, REVIEW_MANIFEST_ARTIFACT)?
+        .and_then(|artifact| serde_json::from_slice::<ReviewManifest>(&artifact.content).ok())
+        .filter(|manifest| manifest.attempt_id == certificate.attempt_id)
+        .map(|manifest| manifest.mutation_proposals)
+        .unwrap_or_default();
+    runtime.apply_reviewed_mutation_proposals(
+        &context.run_id,
+        &certificate.attempt_id,
+        &context.task_ids,
+        &reviewed,
+    )?;
+    Ok(())
 }
 
 /// The before-PR evidence a claimed leaf hands off [ORB-13908]: the passed

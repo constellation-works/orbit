@@ -49,8 +49,71 @@ pub(crate) fn review_gate_admit(
     input: &Value,
 ) -> Result<Value, DispatchError> {
     let output = admission_output(runtime, action, input)?;
+    if let ReviewGateAdmissionOutput::NotApplicable(not_applicable) = &output
+        && run_never_reviews(&not_applicable.reason)
+    {
+        refuse_unreviewed_mutation_proposals(runtime, action, input, &not_applicable.reason)?;
+    }
     serde_json::to_value(&output).map_err(|error| {
         DispatchError::action_failed(action, format!("serialize review admission: {error}"))
+    })
+}
+
+/// Whether a gate that does not apply for `reason` leaves the run with no
+/// review at all. The others mean another layer of this run reviews.
+fn run_never_reviews(reason: &str) -> bool {
+    matches!(
+        reason,
+        "review_admission_missing"
+            | "review_before_pr_off"
+            | "review_before_landing_off"
+            | "review_policy_after_landing"
+            | "no_diff_exemption"
+            | SKIP_REVIEW_REASON
+    )
+}
+
+/// [granted-tools §4] A mutation proposal applies only after the review
+/// that approves the diff, so a run that reviews nothing cannot deliver a
+/// task carrying one: refuse, naming the proposals, rather than land a diff
+/// whose proposed change silently never happens.
+fn refuse_unreviewed_mutation_proposals(
+    runtime: &OrbitRuntime,
+    action: &str,
+    input: &Value,
+    reason: &str,
+) -> Result<(), DispatchError> {
+    if runtime.worker_invocation().is_some() {
+        return Ok(());
+    }
+    let task_ids = input
+        .get("completed_task_ids")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str);
+    let mut unapplied = Vec::new();
+    for task_id in task_ids {
+        let proposals = runtime
+            .unapplied_mutation_proposals(task_id)
+            .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+        unapplied.extend(
+            proposals
+                .into_iter()
+                .map(|proposal| format!("{task_id}:{}", proposal.artifact)),
+        );
+    }
+    if unapplied.is_empty() {
+        return Ok(());
+    }
+    Err(DispatchError::DeterministicActionRefused {
+        action: action.to_string(),
+        message: format!(
+            "mutation_proposals_unreviewed: this run reviews nothing ({reason}), but unapplied \
+             mutation proposals apply only after a review approves them: {}; deliver the task \
+             through a run whose review gate applies",
+            unapplied.join(", ")
+        ),
     })
 }
 
@@ -484,7 +547,16 @@ fn admit(
         &context.task_ids[0],
         &candidate.head,
     )?);
+    // [granted-tools §4] Every unapplied proposal goes in front of this
+    // reviewer, bound to the bytes read here; settlement applies only these.
+    // A claimed leaf reads none: a granted task runs only on its owner, and
+    // claimed-worker evidence cannot carry a proposal.
+    let mut mutation_proposals = Vec::new();
+    for task_id in context.task_ids.iter().filter(|_| !context.claimed) {
+        mutation_proposals.extend(runtime.unapplied_mutation_proposals(task_id)?);
+    }
     let manifest = ReviewManifest {
+        mutation_proposals,
         satisfied_external_evidence,
         evidence_carried: carry.carried().cloned(),
         owed_external_evidence,
