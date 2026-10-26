@@ -2401,7 +2401,7 @@ def main():
                 "assertions":["all-source-surfaces-explicitly-covered-or-gapped"],
                 "candidate_id":candidate_id}]
 
-    builtin_halt = None
+    builtin_halt = "candidate binary has no passing source-build attestation"
     binary = None if args.build_candidate else (Path(args.orbit_bin).resolve() if args.orbit_bin else None)
     browser_inputs_valid = bool(args.playwright_module and args.playwright_module.is_file()
                                 and args.playwright_browsers_path and args.playwright_browsers_path.is_dir()
@@ -2411,8 +2411,7 @@ def main():
                     "website-build": args.website_build,
                     "macos": platform.system() == "Darwin",
                     "linux": platform.system() == "Linux"}
-    binary_record = {"path":str(binary) if binary else None, "version":None,
-                     "sha256":hashlib.sha256(binary.read_bytes()).hexdigest() if binary else None}
+    binary_record = {"path":str(binary) if binary else None, "version":None, "sha256":None}
     browser_record = {
         "playwright_module": str(args.playwright_module) if args.playwright_module else None,
         "playwright_module_sha256": (hashlib.sha256(args.playwright_module.read_bytes()).hexdigest()
@@ -2448,8 +2447,17 @@ def main():
             build = run(["cargo", "build", "--locked", "-p", "orbit-cli", "--bin", "orbit",
                          "--target-dir", str(temp / "candidate-target")], cwd=repo, env=env, timeout=1800)
             binary = temp / "candidate-target/debug/orbit"
+            binary_record["path"] = "<disposable-candidate-build>"
             unchanged = candidate_source(repo, excluded_paths)["candidate_id"] == candidate_id
-            failure = None if build["exit_code"] == 0 and binary.is_file() and unchanged else "candidate build failed or source changed during build"
+            failure = None
+            if not (build["exit_code"] == 0 and binary.is_file()
+                    and os.access(binary, os.X_OK) and unchanged):
+                failure = "candidate build failed, executable unavailable, or source changed during build"
+            if failure is None:
+                try:
+                    binary_record["sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+                except OSError as error:
+                    failure = f"candidate executable could not be hashed: {error}"
             provenance = finalize_result(build,
                 ["binary-built-from-current-source", "source-stable-through-build", "binary-hash-recorded"],
                 candidate_id, failure)
@@ -2457,13 +2465,17 @@ def main():
             results.append(provenance)
         elif binary:
             evidence = run([str(binary), "--version"], cwd=repo, env=env)
+            binary_record["version"] = evidence["stdout"].strip() if evidence["exit_code"] == 0 else None
+            failure = "external binary has no build attestation; use --build-candidate"
+            try:
+                if binary.is_file():
+                    binary_record["sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
+            except OSError as error:
+                failure += f"; executable could not be hashed: {error}"
             results.append({"scenario":"source-binary-provenance",
-                **finalize_result(evidence, [], candidate_id,
-                    "external binary has no build attestation; use --build-candidate")})
-        if binary and not errors:
-            binary_record = {"path":"<disposable-candidate-build>",
-                             "version":run([str(binary), "--version"], cwd=repo, env=env)["stdout"].strip(),
-                             "sha256":hashlib.sha256(binary.read_bytes()).hexdigest()}
+                **finalize_result(evidence, [], candidate_id, failure)})
+        if provenance and provenance["outcome"] == "PASS" and not errors:
+            binary_record["version"] = run([str(binary), "--version"], cwd=repo, env=env)["stdout"].strip()
             builtin_results, builtin_halt = run_builtins(repo, str(binary), temp, env, candidate_id)
             results.extend(builtin_results)
         browser_run_dir = None

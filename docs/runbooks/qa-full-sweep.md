@@ -85,6 +85,9 @@ scenario, and binds every result to the resulting candidate ID. Supplying an
 installed binary without that build attestation intentionally makes provenance
 FAIL, even when `--version` exits zero. The harness constructs a clean child
 environment and disposable Orbit root and Git repositories for mutations.
+Built-in scenarios run only after source-build provenance passes. A failed
+build or unavailable executable still produces the requested report, retains
+the failed command evidence, and leaves built-in scenarios `NOT_RUN`.
 Its disposable `orbit init` calls pass `--skip-host-prerequisites`, so they
 never install packages or change security policy and need no supported Linux
 distribution; the built-in scenarios do not exercise native sandbox dispatch,
