@@ -5,7 +5,7 @@ last_updated: 2026-10-26
 last_validated: 2026-10-25
 status: Draft
 stage: building
-next: "Slice 4: skills, crew and config surfaces (phase 3)"
+next: "Slices 6-8 of 8: the rest of the experiments series, including the conclude action"
 feature: experiments
 doc_role: scope
 type: design
