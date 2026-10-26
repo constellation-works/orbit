@@ -235,6 +235,10 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             get(diagnostics::diagnostics_task_tokens),
         )
         .route(
+            "/diagnostics/turns_to_edit",
+            get(diagnostics::diagnostics_turns_to_edit),
+        )
+        .route(
             "/diagnostics/diff_stats",
             get(diagnostics::diagnostics_diff_stats),
         )

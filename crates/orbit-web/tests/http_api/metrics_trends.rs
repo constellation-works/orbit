@@ -7,7 +7,7 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRunState, JobRunStep, JobTargetType};
 use orbit_store::contracts::InvocationInsertParams;
 use orbit_types::task::{TaskComplexity, TaskRelation, TaskRelationType, TaskStatus, TaskType};
-use orbit_types::telemetry::InvocationTrace;
+use orbit_types::telemetry::{InvocationTrace, ToolCallTrace};
 use orbit_types::workflow::PipelineState;
 use serde_json::{Value, json};
 
@@ -905,6 +905,433 @@ fn delivery_friction_lists_done_crews_for_non_history_families() {
             assert_eq!(filtered["available_crews"], expected);
             assert_eq!(filtered["done"]["total"], 1, "the crew filter narrows done");
             assert_eq!(filtered["done"]["unfiltered_total"], 3);
+        },
+    );
+}
+
+fn tool_call(seq: u32, name: &str, bytes: u64) -> ToolCallTrace {
+    ToolCallTrace {
+        seq,
+        tool_name: name.to_string(),
+        result_bytes: bytes,
+        ..Default::default()
+    }
+}
+
+/// One implement invocation linked to `task`, stamped at `at`. No job run is
+/// required: the turns read does not filter on a successful candidate.
+fn record_implement(
+    fixture: &Fixture,
+    run: &str,
+    task: &str,
+    activity: &str,
+    agent: &str,
+    at: DateTime<Utc>,
+    calls: Vec<ToolCallTrace>,
+) {
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: run.into(),
+            account: None,
+            activity_id: activity.into(),
+            agent: agent.into(),
+            provider: None,
+            model: None,
+            task_ids: vec![task.to_string()],
+            trace: InvocationTrace {
+                tool_calls: calls,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET ts = ?1
+                     WHERE id = (SELECT MAX(id) FROM invocations WHERE job_run_id = ?2)",
+                    (at.to_rfc3339(), run),
+                )
+                .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+fn add_closed(
+    fixture: &Fixture,
+    complexity: TaskComplexity,
+    status: TaskStatus,
+    tags: &[&str],
+) -> String {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: format!("{complexity:?} {status:?} turns fixture"),
+            description: "turns to first edit fixture".into(),
+            complexity,
+            status: Some(status),
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string()
+}
+
+fn assert_f64(value: &Value, expected: f64) {
+    let got = value
+        .as_f64()
+        .unwrap_or_else(|| panic!("expected {expected}, got {value}"));
+    assert_eq!(got.to_bits(), expected.to_bits(), "{got} != {expected}");
+}
+
+fn assert_scored(cell: &Value, n: u64, turns: (f64, f64), bytes: (f64, f64), thin: bool) {
+    assert_eq!(cell["n"].as_u64(), Some(n), "{cell}");
+    assert_eq!(cell["thin"].as_bool(), Some(thin), "{cell}");
+    if n == 0 {
+        assert!(cell["mean_turns"].is_null(), "{cell}");
+        assert!(cell["median_turns"].is_null(), "{cell}");
+        assert!(cell["mean_result_bytes"].is_null(), "{cell}");
+        assert!(cell["median_result_bytes"].is_null(), "{cell}");
+    } else {
+        assert_f64(&cell["mean_turns"], turns.0);
+        assert_f64(&cell["median_turns"], turns.1);
+        assert_f64(&cell["mean_result_bytes"], bytes.0);
+        assert_f64(&cell["median_result_bytes"], bytes.1);
+    }
+}
+
+fn assert_excluded(cell: &Value, no_edit: u64, no_invocation: u64) {
+    assert_eq!(cell["excluded_no_edit"].as_u64(), Some(no_edit), "{cell}");
+    assert_eq!(
+        cell["excluded_no_invocation"].as_u64(),
+        Some(no_invocation),
+        "{cell}"
+    );
+}
+
+fn series<'a>(body: &'a Value, complexity: &str, cohort: &str) -> &'a Value {
+    body["series"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["complexity"] == complexity && entry["cohort"] == cohort)
+        .unwrap_or_else(|| panic!("missing {complexity}/{cohort} in {body}"))
+}
+
+fn turns_body(server: &super::support::Server, query: &str) -> Value {
+    json_ok(server.get(&format!("/api/diagnostics/turns_to_edit?{query}&{WS}")))
+}
+
+/// The public turns-to-first-edit readout: seq order, a real zero, shell and
+/// empty traces excluded, the earlier implement activity winning, an
+/// `agent_implement`-only task, tag cohorts, a provider filter, thin buckets,
+/// rejected tasks, and rejected query parameters.
+#[test]
+fn turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells() {
+    isolated(
+        "metrics_trends::turns_to_edit_scores_the_first_implement_invocation_and_excludes_shells",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let a = add_closed(
+                &fixture,
+                TaskComplexity::Medium,
+                TaskStatus::Done,
+                &["explore-brief"],
+            );
+            let b = add_closed(
+                &fixture,
+                TaskComplexity::Medium,
+                TaskStatus::Done,
+                &["explore-brief"],
+            );
+            let c = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let d = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let e = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let h = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let i = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let j = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let k = add_closed(&fixture, TaskComplexity::Low, TaskStatus::Done, &[]);
+            let n = add_closed(&fixture, TaskComplexity::Low, TaskStatus::Done, &[]);
+            let _l = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+            let p = add_closed(&fixture, TaskComplexity::XHard, TaskStatus::Done, &[]);
+            let q = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Rejected, &[]);
+
+            // Inserted out of seq order: Read, Grep, then Edit. Turns are 2.
+            record_implement(
+                &fixture,
+                "run-a",
+                &a,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![
+                    tool_call(3, "Edit", 20),
+                    tool_call(1, "Read", 100),
+                    tool_call(2, "Grep", 50),
+                ],
+            );
+            record_implement(
+                &fixture,
+                "run-b",
+                &b,
+                "implement_one",
+                "codex",
+                now - Duration::hours(2),
+                vec![tool_call(1, "command_execution", 80)],
+            );
+            record_implement(
+                &fixture,
+                "run-c",
+                &c,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![],
+            );
+            record_implement(
+                &fixture,
+                "run-d",
+                &d,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Write", 40)],
+            );
+            // The earlier shell invocation wins over a later edit.
+            record_implement(
+                &fixture,
+                "run-e-early",
+                &e,
+                "implement_one",
+                "codex",
+                now - Duration::hours(5),
+                vec![tool_call(1, "command_execution", 12)],
+            );
+            record_implement(
+                &fixture,
+                "run-e-late",
+                &e,
+                "agent_implement",
+                "claude",
+                now - Duration::hours(1),
+                vec![tool_call(1, "Edit", 9)],
+            );
+            for (run, task) in [("run-h", &h), ("run-i", &i)] {
+                record_implement(
+                    &fixture,
+                    run,
+                    task,
+                    "implement_one",
+                    "claude",
+                    now - Duration::hours(2),
+                    vec![
+                        tool_call(1, "Read", 100),
+                        tool_call(2, "Read", 100),
+                        tool_call(3, "Read", 100),
+                        tool_call(4, "Edit", 1),
+                    ],
+                );
+            }
+            record_implement(
+                &fixture,
+                "run-j",
+                &j,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Bash", 30)],
+            );
+            record_implement(
+                &fixture,
+                "run-k",
+                &k,
+                "implement_one",
+                "codex",
+                now - Duration::hours(2),
+                vec![
+                    tool_call(1, "command_execution", 10),
+                    tool_call(2, "apply_patch", 4),
+                ],
+            );
+            record_implement(
+                &fixture,
+                "run-n",
+                &n,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![
+                    tool_call(1, "Read", 4),
+                    tool_call(2, "Read", 6),
+                    tool_call(3, "mcp__filesystem__write_file", 2),
+                ],
+            );
+            record_implement(
+                &fixture,
+                "run-p",
+                &p,
+                "agent_implement",
+                "claude",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Read", 8), tool_call(2, "Edit", 1)],
+            );
+            record_implement(
+                &fixture,
+                "run-q",
+                &q,
+                "implement_one",
+                "claude",
+                now - Duration::hours(2),
+                vec![tool_call(1, "Edit", 3)],
+            );
+
+            let server = fixture.server(false);
+            let body = turns_body(&server, "since=24h");
+            assert_eq!(body["window"]["key"], "24h");
+            assert_eq!(body["window"]["bucket_seconds"], 3600);
+            assert_eq!(body["outcome"], "done");
+            assert!(body["provider"].is_null());
+            assert_eq!(body["min_tasks"], 3);
+            assert_eq!(body["truncated"], false);
+            assert_eq!(body["excluded_other_provider"], 0);
+            let names: Vec<_> = body["series"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|entry| {
+                    format!(
+                        "{}:{}",
+                        entry["complexity"].as_str().unwrap(),
+                        entry["cohort"].as_str().unwrap()
+                    )
+                })
+                .collect();
+            assert_eq!(
+                names,
+                vec!["low:all", "medium:all", "hard:all", "xhard:all"]
+            );
+
+            let medium = series(&body, "medium", "all");
+            // A 2/150, D 0/0, H 3/300, I 3/300. B, C, E and J have no edit. L has no invocation.
+            assert_scored(&medium["total"], 4, (2.0, 2.5), (187.5, 225.0), false);
+            assert_excluded(&medium["total"], 4, 1);
+            let scored: Vec<_> = medium["points"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|point| point["n"].as_u64() != Some(0))
+                .collect();
+            assert_eq!(scored.len(), 1, "closed tasks share the current hour");
+            assert_scored(scored[0], 4, (2.0, 2.5), (187.5, 225.0), false);
+
+            let low = series(&body, "low", "all");
+            assert_scored(&low["total"], 2, (1.5, 1.5), (10.0, 10.0), true);
+            assert_excluded(&low["total"], 0, 0);
+            let xhard = series(&body, "xhard", "all");
+            assert_scored(&xhard["total"], 1, (1.0, 1.0), (8.0, 8.0), true);
+            assert_scored(
+                &series(&body, "hard", "all")["total"],
+                0,
+                (0.0, 0.0),
+                (0.0, 0.0),
+                false,
+            );
+            assert_eq!(
+                body["available_tags"],
+                json!([{ "tag": "explore-brief", "tasks": 2 }])
+            );
+            assert_eq!(
+                body["available_providers"],
+                json!([
+                    { "provider": "claude", "tasks": 8 },
+                    { "provider": "codex", "tasks": 3 },
+                ])
+            );
+
+            let tagged = turns_body(&server, "since=24h&tags=explore-brief");
+            let with = series(&tagged, "medium", "with");
+            assert_scored(&with["total"], 1, (2.0, 2.0), (150.0, 150.0), true);
+            assert_excluded(&with["total"], 1, 0);
+            let without = series(&tagged, "medium", "without");
+            assert_scored(&without["total"], 3, (2.0, 3.0), (200.0, 300.0), false);
+            assert_excluded(&without["total"], 3, 1);
+            assert!(
+                tagged["series"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|entry| entry["complexity"] == "medium" && entry["cohort"] == "with")
+            );
+            let order: Vec<_> = tagged["series"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|entry| entry["complexity"] == "medium")
+                .map(|entry| entry["cohort"].as_str().unwrap().to_string())
+                .collect();
+            assert_eq!(order, vec!["with", "without"]);
+
+            let claude = turns_body(&server, "since=24h&provider=claude");
+            assert_eq!(claude["excluded_other_provider"], 3);
+            assert_scored(
+                &series(&claude, "medium", "all")["total"],
+                4,
+                (2.0, 2.5),
+                (187.5, 225.0),
+                false,
+            );
+            assert_excluded(&series(&claude, "medium", "all")["total"], 2, 1);
+            assert_scored(
+                &series(&claude, "low", "all")["total"],
+                1,
+                (2.0, 2.0),
+                (10.0, 10.0),
+                true,
+            );
+            assert_eq!(claude["available_providers"], body["available_providers"]);
+
+            let closed = turns_body(&server, "since=24h&outcome=all");
+            assert_scored(
+                &series(&closed, "medium", "all")["total"],
+                5,
+                (8.0 / 5.0, 2.0),
+                (150.0, 150.0),
+                false,
+            );
+
+            let nobody = turns_body(&server, "since=24h&provider=nobody");
+            assert_eq!(nobody["excluded_other_provider"], 11);
+            assert_scored(
+                &series(&nobody, "medium", "all")["total"],
+                0,
+                (0.0, 0.0),
+                (0.0, 0.0),
+                false,
+            );
+            assert_excluded(&series(&nobody, "medium", "all")["total"], 0, 1);
+
+            for query in [
+                "since=24h&outcome=later",
+                "since=24h&complexity=nope",
+                "since=24h&tags=a,b,c,d,e,f,g,h,i",
+            ] {
+                let response = server.get(&format!("/api/diagnostics/turns_to_edit?{query}&{WS}"));
+                assert_eq!(response.status().as_u16(), 400, "{query}");
+                let message = response.text().unwrap();
+                assert!(
+                    message.contains("later")
+                        || message.contains("nope")
+                        || message.contains("too many tags"),
+                    "{query}: {message}"
+                );
+            }
         },
     );
 }

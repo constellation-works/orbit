@@ -679,8 +679,8 @@ td .rel-rate { font-size: 12px; }
   position: absolute; transform: translateX(-50%);
   color: var(--fg-mute); font: 11px var(--font-mono); white-space: nowrap;
 }
-/* Tokens rows carry a mean and a median. */
-.mx-chart-tokens .mx-tip, .mx-chart-diff .mx-tip, .mx-chart-friction .mx-tip { width: 340px; }
+/* Tokens, turns, lines and friction rows carry more than one figure. */
+.mx-chart-tokens .mx-tip, .mx-chart-turns .mx-tip, .mx-chart-diff .mx-tip, .mx-chart-friction .mx-tip { width: 340px; }
 .mx-hover { position: absolute; left: 0; right: 0; top: 0; bottom: 24px; display: flex; z-index: 3; }
 .mx-hover-col { flex: 1 1 0; height: 100%; }
 .mx-tip {
@@ -785,7 +785,7 @@ td .rel-rate { font-size: 12px; }
   .mx-chart-body { gap: 6px; }
   .mx-y-wrap { flex-basis: 32px; }
   .mx-notes { padding-left: 0; }
-  .mx-tip, .mx-chart-tokens .mx-tip, .mx-chart-diff .mx-tip, .mx-chart-friction .mx-tip { width: 200px; }
+  .mx-tip, .mx-chart-tokens .mx-tip, .mx-chart-turns .mx-tip, .mx-chart-diff .mx-tip, .mx-chart-friction .mx-tip { width: 200px; }
 }
 
 /* Analytics › Resources: this host's delivery resource profiles. CPU, memory
