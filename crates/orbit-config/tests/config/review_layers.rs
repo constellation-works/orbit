@@ -251,16 +251,19 @@ fn global_edit_that_removes_a_crew_a_workspace_names_is_refused_before_saving() 
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     let roots = ConfigRoots::new(global.path(), workspace.path());
     let global_path = global.path().join("config.toml");
-    let original = "[crews.terra]\nmodel = \"m\"\nprovider = \"codex\"\n";
+    let original = "[crews.layered-custom]\nmodel = \"m\"\nprovider = \"codex\"\n";
     review_layers_write_config(global.path(), original);
-    review_layers_write_config(workspace.path(), "[workflow]\ndefault_crew = \"terra\"\n");
+    review_layers_write_config(
+        workspace.path(),
+        "[workflow]\ndefault_crew = \"layered-custom\"\n",
+    );
     ResolvedConfig::load(&roots).expect("the workspace names a global crew");
 
     let mut store =
         ConfigStore::open(ConfigScope::Global, global_path.clone()).expect("open global store");
     assert!(
         store
-            .remove_crew_table("terra")
+            .remove_crew_table("layered-custom")
             .expect("stage crew removal")
     );
     store
@@ -423,13 +426,26 @@ fn pre_landing_review_pool_resolves_on_its_own_and_falls_back_to_review() {
     );
     let emptied = load().expect("an empty pre-landing pool loads");
     let pool = emptied.operation.pre_landing_review_pool();
-    assert_eq!(pool.entries, ["sol"], "an emptied pool falls back to review");
+    assert_eq!(
+        pool.entries,
+        ["sol"],
+        "an emptied pool falls back to review"
+    );
     assert_eq!(pool.key, REVIEW_CREW_KEY);
 
     for (value, refusal) in [
-        ("[\"sol:3\", \"grok\"]", "bare and weighted entries do not mix"),
-        ("[\"sol\", \"no-such-crew\"]", "an unknown member fails the load"),
-        ("[\"sol:0\"]", "a pool with no positive weight fails the load"),
+        (
+            "[\"sol:3\", \"grok\"]",
+            "bare and weighted entries do not mix",
+        ),
+        (
+            "[\"sol\", \"no-such-crew\"]",
+            "an unknown member fails the load",
+        ),
+        (
+            "[\"sol:0\"]",
+            "a pool with no positive weight fails the load",
+        ),
         ("\"  \"", "an empty name fails the load"),
     ] {
         review_layers_write_config(
@@ -437,7 +453,10 @@ fn pre_landing_review_pool_resolves_on_its_own_and_falls_back_to_review() {
             &format!("[workflow.purpose_crews]\npre_landing_review = {value}\n"),
         );
         let error = load().expect_err(refusal).to_string();
-        assert!(error.contains(PRE_LANDING_REVIEW_CREW_KEY), "{refusal}: {error}");
+        assert!(
+            error.contains(PRE_LANDING_REVIEW_CREW_KEY),
+            "{refusal}: {error}"
+        );
     }
 }
 

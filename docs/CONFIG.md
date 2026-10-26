@@ -609,12 +609,14 @@ Only the global file, and only when it is absent (or under `--force`):
 
   | Detected | `low` | `medium` | `hard` | `xhard` |
   |---|---|---|---|---|
-  | codex + claude | `["haiku", "luna"]` | `["sol", "sonnet"]` | `["opus"]` | `["opus", "astra"]` |
-  | codex only | `["luna"]` | `["sol"]` | `["sol"]` | `["astra"]` |
+  | codex + claude | `["haiku", "luna"]` | `["terra", "sonnet"]` | `["sol", "opus"]` | `["opus", "astra"]` |
+  | codex only | `["luna"]` | `["terra"]` | `["sol"]` | `["astra"]` |
   | claude only | `["haiku"]` | `["sonnet"]` | `["opus"]` | `["opus"]` |
 
-  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full` to `low`, `medium` and `hard`. With codex, claude, grok, `agy` and `muse` all detected that gives `low = ["haiku", "luna", "gemini-flash", "muse-spark"]`, `medium = ["sol", "sonnet", "grok", "muse-wonder"]`, `hard = ["opus", "argon", "muse-wonder-full"]` and `xhard = ["opus", "astra"]`. Copilot leaves the pools as they are, and an empty pool routes to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
+  On any row, and alone when neither codex nor claude is detected, a detected `grok` is appended to `medium`; a detected `agy` appends `gemini-flash` to `low` and `argon` to `hard`; a detected `muse` appends `muse-spark`, `muse-wonder` and `muse-wonder-full` to `low`, `medium` and `hard`. With codex, claude, grok, `agy` and `muse` all detected that gives `low = ["haiku", "luna", "gemini-flash", "muse-spark"]`, `medium = ["terra", "sonnet", "grok", "muse-wonder"]`, `hard = ["sol", "opus", "argon", "muse-wonder-full"]` and `xhard = ["opus", "astra"]`. Copilot leaves the pools as they are, and an empty pool routes to `default_crew`. Init fails rather than write a pool entry it does not seed enabled.
 - every [purpose pool](#purpose-crew-pools), so no route is an invisible default: `task_pilot` and `auto_fix` copy `low`, `failure_recovery` and `review` copy `medium`, and `final_recovery` names whichever of `sol`, `grok` and `muse-wonder` are enabled (else `opus`). `pre_landing_review`, `baseline_red_repair`, `sweep_tasks` and `explorer` are written as `[]`, each with a comment naming the route it keeps: `pre_landing_review` uses the review pool, `baseline_red_repair` and `sweep_tasks` use the task's complexity pool, and `explorer` offers no read-only explorers.
+
+These choices apply to newly seeded global configurations. Existing crew tables and complexity or purpose pools keep their explicit values; workspace overrides keep their normal precedence. To use the new defaults in an existing configuration, edit those choices explicitly.
 
 Interactive init asks for the default crew by name, offering only enabled crews. It no longer writes or asks for `workflow.system_crew`: system work draws from the pools. With no supported CLI, every crew is written disabled and `default_crew` stays unset, so it resolves to the disabled `opus` and agent dispatch refuses until you run `orbit config set crews.<name>.enabled true`; deterministic jobs such as store retention still run. Init never writes `[crews.system]`, `[crews.custom]` or `[crews.qa]`.
 
@@ -1115,7 +1117,7 @@ provider = "antigravity"
 | Family | Binary | Crews (model) | Default crew |
 |---|---|---|---|
 | `claude` | `claude` | `opus` (`opus`), `sonnet` (`sonnet`), `haiku` (`haiku`), `fable` (`fable`) | `opus` |
-| `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `luna` (`gpt-6-luna`) | `astra` |
+| `codex` | `codex` | `astra` (`gpt-6-astra`), `sol` (`gpt-6.1-sol`), `terra` (`gpt-6.1-terra`), `luna` (`gpt-6-luna`) | `astra` |
 | `antigravity` | `agy` | `gemini-flash` (`gemini-3.8-flash-high`), `argon` (`gemini-4-argon-high`) | `gemini-flash` |
 | `grok` | `grok` | `grok` (`grok-4.7`) | `grok` |
 | `copilot` | `copilot` | `copilot` (`claude-sonnet-5`) | `copilot` |
