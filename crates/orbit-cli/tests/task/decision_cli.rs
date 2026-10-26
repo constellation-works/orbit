@@ -12,6 +12,97 @@ use orbit_types::task::{
 
 use crate::isolated_cli_fixture::Fixture;
 
+#[test]
+fn decision_cli_warns_and_completes_when_a_task_artifact_is_missing() {
+    if crate::isolated_test::run_in_child(
+        "decision_cli::decision_cli_warns_and_completes_when_a_task_artifact_is_missing",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let id = {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(
+            &fixture.root,
+            Path::new(shown["orbit_root"].as_str().unwrap()),
+        )
+        .unwrap();
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "Task with dangling evidence".into(),
+                ..Default::default()
+            })
+            .unwrap();
+        runtime
+            .update_task_with_identity(
+                &task.id,
+                orbit_core::application::task::TaskUpdateParams {
+                    upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
+                        "checks/owner-gates-after.log",
+                        "passed",
+                    )],
+                    ..Default::default()
+                },
+                None,
+                Some("codex".into()),
+            )
+            .unwrap();
+        let file = runtime
+            .get_task_artifact_manifest(&task.id)
+            .unwrap()
+            .remove(0);
+        let bundle = fixture
+            .root
+            .join("tasks/workspaces")
+            .join(runtime.workspace_id().unwrap())
+            .join(&task.id);
+        std::fs::remove_file(bundle.join("artifacts").join(file.blob)).unwrap();
+        task.id
+    };
+    let listed = fixture.json(&["decision", "list", "--json"]);
+    assert_eq!(listed["count"], 0);
+    assert!(
+        listed["warnings"][0].as_str().unwrap().contains(&id),
+        "{listed}"
+    );
+    let output = fixture
+        .command(&["decision", "list", "--format", "text"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("warning:") && text.contains(&id), "{text}");
+    let output = fixture
+        .command(&["task", "list", "--fields", "id,open_decisions", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let damaged = rows
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
+    assert!(damaged["open_decisions"].is_null());
+    let warnings = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        warnings.contains("warning:") && warnings.contains(&id),
+        "{warnings}"
+    );
+    fixture
+        .command(&["task", "show", &id, "--json"])
+        .assert()
+        .failure();
+}
+
 /// Missing requests carry the same stable refusal code on both CLI verbs.
 #[test]
 fn decision_cli_missing_request_has_structured_code() {

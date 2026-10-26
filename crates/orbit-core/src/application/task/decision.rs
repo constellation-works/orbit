@@ -34,6 +34,16 @@ use super::params::TaskUpdateParams;
 use crate::OrbitRuntime;
 use crate::application::task::{PilotAdmissionHold, TaskRecords, TriageTarget};
 
+/// Decision requests readable in a workspace scan, with corrupt bundles
+/// identified separately so a partial result never looks complete.
+#[derive(Debug, Default)]
+pub struct DecisionRequestListing {
+    /// Matching requests, oldest first.
+    pub requests: Vec<DecisionRequest>,
+    /// Per-task bundle corruption encountered during the scan.
+    pub warnings: Vec<String>,
+}
+
 /// JSON for one request as the decision surfaces serve it: the stored
 /// record with its effective (derived) state.
 pub(crate) fn decision_request_json(request: &DecisionRequest) -> Value {
@@ -65,12 +75,37 @@ pub(crate) fn open_decision_json(request: &DecisionRequest) -> Value {
 impl OrbitRuntime {
     /// Decision requests across the workspace, oldest first. Open requests
     /// only unless `include_closed`; `gate` and `task_id` narrow the list.
+    /// Strict: any unreadable bundle fails the call. Listing surfaces use
+    /// [`Self::list_decision_requests_with_warnings`] for partial results.
     pub fn list_decision_requests(
         &self,
         gate: Option<DecisionGate>,
         task_id: Option<&str>,
         include_closed: bool,
     ) -> Result<Vec<DecisionRequest>, OrbitError> {
+        Ok(self
+            .scan_decision_requests(gate, task_id, include_closed, false)?
+            .requests)
+    }
+
+    /// List readable requests and warn for corrupt bundles in a workspace
+    /// scan. An explicit `task_id` stays strict, as do non-corruption errors.
+    pub fn list_decision_requests_with_warnings(
+        &self,
+        gate: Option<DecisionGate>,
+        task_id: Option<&str>,
+        include_closed: bool,
+    ) -> Result<DecisionRequestListing, OrbitError> {
+        self.scan_decision_requests(gate, task_id, include_closed, task_id.is_none())
+    }
+
+    fn scan_decision_requests(
+        &self,
+        gate: Option<DecisionGate>,
+        task_id: Option<&str>,
+        include_closed: bool,
+        tolerate_corrupt: bool,
+    ) -> Result<DecisionRequestListing, OrbitError> {
         let ids: Vec<String> = match task_id {
             Some(task_id) => vec![task_id.to_string()],
             None => self
@@ -79,20 +114,33 @@ impl OrbitRuntime {
                 .map(|task| task.id)
                 .collect(),
         };
-        let mut requests = Vec::new();
+        let mut listing = DecisionRequestListing::default();
         for id in &ids {
-            for request in self.get_task_decision_requests(id)? {
+            let read = self.get_task_decision_requests(id);
+            let requests = if tolerate_corrupt {
+                let Some(requests) =
+                    super::listing::task_bundle_scan_result(read, &mut listing.warnings)?
+                else {
+                    continue;
+                };
+                requests
+            } else {
+                read?
+            };
+            for request in requests {
                 if gate.is_some_and(|gate| gate != request.gate) {
                     continue;
                 }
                 if !include_closed && request.state != DecisionRequestState::Open {
                     continue;
                 }
-                requests.push(request);
+                listing.requests.push(request);
             }
         }
-        requests.sort_by(|a, b| (a.raised_at, &a.id).cmp(&(b.raised_at, &b.id)));
-        Ok(requests)
+        listing
+            .requests
+            .sort_by(|a, b| (a.raised_at, &a.id).cmp(&(b.raised_at, &b.id)));
+        Ok(listing)
     }
 
     /// One decision request by id, with its effective state, or `None`

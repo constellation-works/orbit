@@ -16,7 +16,8 @@ use serde_json::{Map, Value, json};
 use crate::OrbitRuntime;
 use crate::application::task::{
     TaskEligibilityQuery, TaskListFilter, TaskListQuery, TaskOsReadout, TaskWriteMetadata,
-    TaskWriteResponsePolicy, task_pilot_warnings, task_write_response_json,
+    TaskWriteResponsePolicy, task_listing_field_json, task_pilot_warnings,
+    task_write_response_json,
 };
 
 use super::super::dispatch::ToolCaller;
@@ -452,6 +453,7 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     })?;
     let status_by_id = page.status_by_id;
     let os_readout = TaskOsReadout::new(runtime)?;
+    let mut warnings = Vec::new();
     let tasks = page
         .items
         .into_iter()
@@ -473,7 +475,9 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                 );
                 Ok(Value::Object(object))
             }
-            Some(fields) => project_listed_task(runtime, &row.task, fields, &os_readout),
+            Some(fields) => {
+                project_listed_task(runtime, &row.task, fields, &os_readout, &mut warnings)
+            }
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;
     let total = page.total;
@@ -484,6 +488,9 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         "total": total,
         "truncated": truncated,
     });
+    if !warnings.is_empty() {
+        payload["warnings"] = json!(warnings);
+    }
     if empty {
         let unindexed = runtime.unindexed_task_bundle_count()?;
         if unindexed > 0 {
@@ -501,6 +508,7 @@ fn project_listed_task(
     task: &Task,
     fields: &[String],
     os_readout: &TaskOsReadout,
+    warnings: &mut Vec<String>,
 ) -> Result<Value, OrbitError> {
     let mut projected = Map::new();
     for field in fields {
@@ -513,7 +521,7 @@ fn project_listed_task(
                     .placement_wait(task)
                     .map_or(Value::Null, Value::String)
             } else {
-                task_fields_to_json(runtime, task, std::slice::from_ref(field))?
+                task_listing_field_json(runtime, task, field, warnings)?
             },
         );
     }

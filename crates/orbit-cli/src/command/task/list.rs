@@ -19,6 +19,14 @@ const SIGNAL_FIELDS: [&str; 7] = [
 ];
 
 pub(super) fn render(input: &Map<String, Value>, value: Value, view: ListView) -> CommandOut {
+    for warning in value["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        eprintln!("warning: {warning}");
+    }
     if let Some(count) = value.get("unindexed_bundle_count").and_then(Value::as_u64) {
         return Err(OrbitError::Store(format!(
             "task index is missing {count} on-disk bundle(s); run `orbit task reindex` to recover them"
