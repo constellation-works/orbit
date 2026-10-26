@@ -1,7 +1,7 @@
 //! Provider configuration and activity instructions at the engine boundary.
 
 use orbit_engine::DispatchError;
-use orbit_types::workflow::TagInstruction;
+use orbit_types::workflow::{ExperimentActivityOverlay, TagInstruction};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
@@ -49,6 +49,25 @@ pub(super) fn tag_instructions_for_activity(
             )),
             // The same mapping and files refuse identically on every
             // attempt, so a refusal is not retried.
+            TagInstructionFailure::Refused(error) => {
+                DispatchError::CliInvocationPermanent(error.to_string())
+            }
+        },
+    )
+}
+
+pub(super) fn experiment_overlays_for_activity(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    activity_name: &str,
+    input: &Value,
+) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
+    OrbitRuntime::experiment_overlays_for_activity(runtime, run_id, activity_name, input).map_err(
+        |failure| match failure {
+            TagInstructionFailure::Store(error) => DispatchError::CliInvocationFailed(format!(
+                "load experiment overlays for `{activity_name}` (run {run_id}): {error}"
+            )),
+            // The same capture or files refuse identically on every attempt.
             TagInstructionFailure::Refused(error) => {
                 DispatchError::CliInvocationPermanent(error.to_string())
             }

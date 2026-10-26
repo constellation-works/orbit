@@ -13,8 +13,8 @@ use orbit_types::task::{
 };
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
-    DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
-    TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, JobRun, JobRunStartOutcome, JobRunState,
+    NamespaceProbe, PipelineState, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};

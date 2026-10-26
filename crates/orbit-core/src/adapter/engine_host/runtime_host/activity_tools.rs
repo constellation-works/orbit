@@ -3,12 +3,12 @@ use std::sync::Arc;
 use orbit_engine::{DispatchError, ResolvedActivityTools};
 use orbit_tools::{ActivityBinding, FsAuditLogger, ReservationOwnerContext, ToolContext};
 use orbit_types::policy::UNRESTRICTED_FS_PROFILE;
-use orbit_types::tool::{ToolSessionContext, is_exact_canonical_tool_name};
+use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{ActivityToolDenyPolicy, tools_allowed_by_disallow_list};
 
 use crate::OrbitRuntime;
 use crate::adapter::tool_host::build_orbit_tool_host;
-use crate::application::job::drops_disallowed_requirements;
+use crate::application::job::{drops_disallowed_requirements, granted_tool_refusal};
 
 pub(super) fn resolve_activity_tools(
     runtime: &OrbitRuntime,
@@ -93,27 +93,11 @@ fn admit_required_tools(
             ))
         })?;
         for tool_name in task.required_tools {
-            let reason = if tool_name.contains('*') {
-                Some("wildcard and prefix requirements are not allowed".to_string())
-            } else if !is_exact_canonical_tool_name(&tool_name) {
-                Some("malformed canonical tool name".to_string())
-            } else if !runtime.tool_registry().has(&tool_name) {
-                Some("unknown registered tool".to_string())
-            } else if !runtime.tool_registry().is_active(&tool_name) {
-                Some("tool is not agent-facing".to_string())
-            } else {
-                runtime
-                    .stores()
-                    .tools()
-                    .get_tool(&tool_name)
-                    .map_err(|error| {
-                        DispatchError::CliInvocationFailed(format!(
-                            "read tool `{tool_name}` admission state for task `{task_id}`: {error}"
-                        ))
-                    })?
-                    .filter(|tool| !tool.enabled)
-                    .map(|_| "tool is inactive".to_string())
-            };
+            let reason = granted_tool_refusal(runtime, &tool_name).map_err(|error| {
+                DispatchError::CliInvocationFailed(format!(
+                    "read tool `{tool_name}` admission state for task `{task_id}`: {error}"
+                ))
+            })?;
             if let Some(reason) = reason {
                 return Err(DispatchError::RequiredToolAdmission {
                     task_id: task_id.clone(),

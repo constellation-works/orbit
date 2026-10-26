@@ -6,7 +6,8 @@ mod invocation;
 mod mcp_rules;
 pub use error::WorkerBindingError;
 pub use invocation::{
-    CLAIMED_MODE_DENIED_TOOLS, CLAIMED_OWNER_TOOLS, WorkerInvocation, is_claimed_owner_tool,
+    AGENT_CONTRACT_TOOLS, CLAIMED_MODE_DENIED_TOOLS, CLAIMED_OWNER_TOOLS, WorkerInvocation,
+    is_claimed_owner_tool,
 };
 pub use mcp_rules::{
     McpIdRoute, McpInputCondition, McpInputDecoration, McpPresentationRead, McpToolRules,

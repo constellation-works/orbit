@@ -109,6 +109,15 @@ impl WorkerInvocation {
 /// than relying on the prompt alone.
 pub const CLAIMED_MODE_DENIED_TOOLS: &[&str] = &["orbit.task.update"];
 
+/// The tools an agent activity's handoff contract works through: reading its
+/// task, recording its execution summary and attaching its artifacts. An
+/// experiment arm may add tools or remove optional ones, never these.
+pub const AGENT_CONTRACT_TOOLS: &[&str] = &[
+    "orbit.task.show",
+    "orbit.task.update",
+    "orbit.task.artifact.put",
+];
+
 /// The coordination tools a claimed worker on another machine than its owner
 /// reaches that owner with through its run's coordinator, the step runner's
 /// broker [ORB-14260]. The agent sandbox masks the SSH credentials the owner

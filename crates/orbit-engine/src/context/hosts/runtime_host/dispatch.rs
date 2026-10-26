@@ -159,6 +159,20 @@ macro_rules! dispatch_methods {
             input: &Value,
         ) -> Result<Vec<TagInstruction>, DispatchError>;
 
+        /// The live experiment arms `activity_name` of `run_id` applies for the
+        /// task its `input` names: each arm's instruction for the activity's
+        /// role (already part of [`Self::tag_instructions_for_activity`]) and
+        /// its tool delta, which the dispatch applies after the activity's
+        /// tool grant. A shadow experiment, an activity no role addresses, or
+        /// input naming no single task applies none. A claimed leaf's host
+        /// answers from the owner's claim capture and refuses without one.
+        fn experiment_overlays_for_activity(
+            &self,
+            run_id: &str,
+            activity_name: &str,
+            input: &Value,
+        ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError>;
+
         /// Whether this host offers read-only exploration delegation: the
         /// workspace enables `workflow.explore` and an explorer crew can run on
         /// this host [ORB-16814]. When false, an activity's

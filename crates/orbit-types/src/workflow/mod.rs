@@ -9,7 +9,10 @@ mod crew_purpose;
 mod delivery_conventions;
 mod error;
 mod experiments;
-pub use experiments::{CapturedExperiment, CapturedExperiments};
+pub use experiments::{
+    CapturedExperiment, CapturedExperimentInstruction, CapturedExperiments,
+    ExperimentActivityOverlay, ExperimentOverlayRecord,
+};
 mod executor_def;
 mod final_recovery;
 pub mod handoff;

@@ -268,10 +268,16 @@ pub(crate) fn run_show_payload(
     {
         for assignment in assignments {
             header.push_str(&format!(
-                "\nExperiment: {} / {} segment {} (shadow)",
+                "\nExperiment: {} / {} segment {} ({}, overlay {})",
                 assignment["experiment"].as_str().unwrap_or("?"),
                 assignment["arm"].as_str().unwrap_or("?"),
-                assignment["segment"]
+                assignment["segment"],
+                if assignment["live"].as_bool() == Some(true) {
+                    "live"
+                } else {
+                    "shadow"
+                },
+                assignment["digest"].as_str().unwrap_or("?"),
             ));
         }
     }

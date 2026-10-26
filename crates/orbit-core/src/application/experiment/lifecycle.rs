@@ -197,8 +197,8 @@ impl OrbitRuntime {
                         current.name
                     )));
                 }
-                ensure_shadow_mode(current)?;
-                validate_startable(&record, &settings.config_keys)?;
+                let overlays = validate_startable(&record, &settings.config_keys)?;
+                self.validate_experiment_overlays(&current.name, &overlays)?;
                 running_limit = Some(settings.max_running);
                 experiment.status = RUNNING.into();
                 experiment.segment = 1;
@@ -214,7 +214,6 @@ impl OrbitRuntime {
             }
             ExperimentChange::Resume => {
                 require_status(current, &[PAUSED], "resume")?;
-                ensure_shadow_mode(current)?;
                 running_limit = Some(self.experiment_settings().max_running);
                 experiment.status = RUNNING.into();
                 ("resumed", json!({}))
@@ -411,17 +410,6 @@ fn input_fields(input: &ExperimentDefinitionInput) -> Vec<&'static str> {
     .collect()
 }
 
-/// Live overlays are unavailable in this assignment slice, which records
-/// shadow treatments without applying any part of them.
-fn ensure_shadow_mode(experiment: &ExperimentRow) -> Result<(), OrbitError> {
-    if experiment.mode == "shadow" {
-        return Ok(());
-    }
-    Err(OrbitError::PolicyDenied(
-        "live experiment overlays are not supported yet; only shadow experiments may start or resume".into(),
-    ))
-}
-
 fn apply_definition(
     experiment: &mut ExperimentRow,
     arms: &mut Vec<ExperimentArmRow>,
@@ -490,9 +478,12 @@ fn position_u32(position: usize) -> u32 {
     u32::try_from(position).unwrap_or(u32::MAX)
 }
 
-/// Whether a draft is complete enough to start: the overlay checks this
-/// slice can make without reading the repository.
-fn validate_startable(record: &ExperimentRecord, config_keys: &[String]) -> Result<(), OrbitError> {
+/// Whether a draft is complete enough to start, short of the checks that
+/// read the repository or the tool registry. Returns each arm's overlay.
+fn validate_startable(
+    record: &ExperimentRecord,
+    config_keys: &[String],
+) -> Result<Vec<(String, ExperimentOverlay)>, OrbitError> {
     let name = &record.experiment.name;
     let refuse = |detail: String| {
         OrbitError::InvalidInput(format!("experiment `{name}` cannot start: {detail}"))
@@ -515,6 +506,7 @@ fn validate_startable(record: &ExperimentRecord, config_keys: &[String]) -> Resu
     if record.experiment.primary_metric.is_none() {
         return Err(refuse("it has no primary metric".into()));
     }
+    let mut overlays = Vec::with_capacity(record.arms.len());
     for arm in &record.arms {
         validate_handle("arm name", &arm.name).map_err(|error| refuse(error.to_string()))?;
         let value = serde_json::from_str(&arm.overlay_json).map_err(|error| {
@@ -534,8 +526,23 @@ fn validate_startable(record: &ExperimentRecord, config_keys: &[String]) -> Resu
                 arm.name
             )));
         }
+        if record.experiment.mode == super::overlay::LIVE
+            && let Some(surface) = [
+                ("skills", overlay.skills.is_some()),
+                ("crew", overlay.crew.is_some()),
+                ("config", overlay.config.is_some()),
+            ]
+            .into_iter()
+            .find_map(|(surface, set)| set.then_some(surface))
+        {
+            return Err(refuse(format!(
+                "arm `{}` sets {surface}, which a live experiment cannot apply yet; only instructions and tools are live",
+                arm.name
+            )));
+        }
+        overlays.push((arm.name.clone(), overlay));
     }
-    Ok(())
+    Ok(overlays)
 }
 
 fn reweight_arms(

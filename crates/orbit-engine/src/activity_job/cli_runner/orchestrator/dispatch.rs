@@ -40,7 +40,8 @@ use super::super::supervisor::{
 };
 use super::completion::{ProviderExit, project_completion};
 use super::policy::{
-    ActivityToolGrant, activity_policy_env, drop_inherited_policy_env, resolve_activity_tool_grant,
+    ActivityToolGrant, activity_policy_env, apply_experiment_tool_overlays,
+    drop_inherited_policy_env, resolve_activity_tool_grant,
 };
 use super::prepare::{
     SourceCheckout, activity_tool_context, invocation_timeout_seconds, prepare_dispatch_sandbox,
@@ -126,11 +127,24 @@ pub(crate) fn run_cli_backend_for_step(
     let task_ids = task_ids_from_input(input);
     let task_id = task_id_from_input(input);
     require_conflict_recovery_target(activity_name, &task_ids, input, run_id)?;
+    let mut grant = resolve_activity_tool_grant(host, spec, activity_name, input, &task_ids)?;
+    // A live experiment arm's tool delta applies after the grant, so the
+    // audit row below and the child's policy envelope carry the treatment.
+    let experiment_overlays =
+        host.experiment_overlays_for_activity(run_id, activity_name, input)?;
+    let experiment_records = apply_experiment_tool_overlays(
+        host,
+        &mut grant,
+        &experiment_overlays,
+        activity_name,
+        input,
+        &task_ids,
+    )?;
     let ActivityToolGrant {
         tool_policy,
         tool_disallow_list,
         activity_tools,
-    } = resolve_activity_tool_grant(host, spec, activity_name, input, &task_ids)?;
+    } = grant;
 
     // §6 allowlist-advisory event — emitted once per invocation before the
     // subprocess starts so a reviewer can see the enforcement gap at a glance.
@@ -145,6 +159,14 @@ pub(crate) fn run_cli_backend_for_step(
         tool_disallow_list: tool_disallow_list.clone(),
         omitted_requirement_notes: activity_tools.omitted_requirement_notes.clone(),
     });
+    if !experiment_records.is_empty() {
+        audit.emit_lossy(V2AuditEventKind::ExperimentOverlayApplied {
+            step_id: step_id.to_string(),
+            activity_name: activity_name.to_string(),
+            task_id: task_id.unwrap_or_default().to_string(),
+            overlays: experiment_records,
+        });
+    }
 
     let mut task_ctx = host.task_context_for_agent_input(run_id, step_id, input)?;
     let regression_risk_instruction =

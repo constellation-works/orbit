@@ -1,4 +1,4 @@
-//! Sticky shadow enrollment. Decisions execute under the store transaction,
+//! Sticky enrollment. Decisions execute under the store transaction,
 //! so concurrent admissions and reweights cannot mix segments or surfaces.
 use super::definition::{ExperimentOverlay, PopulationFilter};
 use crate::OrbitRuntime;
@@ -29,7 +29,7 @@ impl OrbitRuntime {
                 for record in records {
                     let experiment = &record.experiment;
                     if experiment.status != "running"
-                        || experiment.mode != "shadow"
+                        || !matches!(experiment.mode.as_str(), "shadow" | "live")
                         || existing.iter().any(|row| row.experiment == experiment.id)
                     {
                         continue;
@@ -97,7 +97,7 @@ impl OrbitRuntime {
     }
 
     /// Operator-only tool entrypoint: force an unassigned task into a running
-    /// shadow arm. Existing assignments and exclusions are never overwritten.
+    /// arm. Existing assignments and exclusions are never overwritten.
     pub fn force_experiment_assignment(
         &self,
         id: &str,
@@ -127,9 +127,9 @@ impl OrbitRuntime {
                     .ok_or_else(|| {
                         OrbitError::InvalidInput(format!("no experiment `{id}` in this workspace"))
                     })?;
-                if record.experiment.status != "running" || record.experiment.mode != "shadow" {
+                if record.experiment.status != "running" {
                     return Err(OrbitError::InvalidInput(
-                        "forced assignment requires a running shadow experiment".into(),
+                        "forced assignment requires a running experiment".into(),
                     ));
                 }
                 if existing
