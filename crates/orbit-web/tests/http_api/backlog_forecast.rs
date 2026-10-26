@@ -130,8 +130,13 @@ fn completed_delivery(
         .unwrap();
     let index = rusqlite::Connection::open(fixture.global.join("tasks/index.sqlite")).unwrap();
     assert_eq!(index.execute(
-        "UPDATE task_bundle_index SET updated_at = ?1, terminal_month = ?2 WHERE task_id = ?3",
-        (at.to_rfc3339(), at.format("%Y-%m").to_string(), &id),
+        "UPDATE task_bundle_index SET created_at = ?1, updated_at = ?2, terminal_month = ?3 WHERE task_id = ?4",
+        (
+            (at - Duration::hours(1)).to_rfc3339(),
+            at.to_rfc3339(),
+            at.format("%Y-%m").to_string(),
+            &id,
+        ),
     ).unwrap(), 1);
     id
 }
@@ -152,6 +157,21 @@ fn comment(fixture: &Fixture, id: &str) {
             },
         )
         .unwrap();
+}
+
+fn remove_history(fixture: &Fixture, id: &str) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &fixture.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    let bundle = registry
+        .find_task_binding(id)
+        .unwrap()
+        .unwrap()
+        .canonical_path;
+    std::fs::remove_file(bundle.join("events.jsonl")).unwrap();
 }
 
 #[test]
@@ -229,6 +249,31 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
             let wide: Value = json_ok(server.get(&format!("{ENDPOINT}&lookback_days=180")));
             assert_eq!(wide["inputs"]["history_deliveries"], 2);
             assert_eq!(wide["arrivals"]["done_per_day"], 0.14);
+        },
+    );
+}
+
+#[test]
+fn unreadable_done_history_does_not_fail_the_forecast_or_count_as_done() {
+    isolated(
+        "backlog_forecast::unreadable_done_history_does_not_fail_the_forecast_or_count_as_done",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let done_at = now - Duration::days(2);
+            let unreadable = completed(&fixture, done_at);
+            completed(&fixture, done_at);
+            remove_history(&fixture, &unreadable);
+
+            let server = fixture.server(false);
+            let response = server.get(ENDPOINT);
+            let status = response.status();
+            let body = response.text().unwrap();
+            assert_eq!(status, reqwest::StatusCode::OK, "{body}");
+            let forecast: Value = serde_json::from_str(&body).unwrap();
+            assert_eq!(forecast["inputs"]["history_deliveries"], 1);
+            assert_eq!(forecast["inputs"]["history_without_invocations"], 0);
+            assert_eq!(forecast["arrivals"]["done_per_day"], 0.14);
         },
     );
 }
