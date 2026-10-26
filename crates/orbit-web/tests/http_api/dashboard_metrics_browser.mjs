@@ -123,18 +123,21 @@ function tokens(key, url) {
   const { count, window, start } = trendWindow(key);
   const workspace = url.searchParams.get('workspace') || 'ws_fixture';
   const scope = url.searchParams.get('scope') || 'all';
+  const selectedTags = (url.searchParams.get('tags') || '').split(',').filter(Boolean);
   const mean = workspace === 'ws_b' ? (scope === 'implement' ? 222 : 1000) : 111;
   const cell = () => ({ n: 5, mean, median: mean, thin: false, excluded_uncovered: 0, excluded_no_invocations: 0 });
   return {
     window, outcome: url.searchParams.get('outcome') || 'done', scope,
-    tags: [], model: null, min_tasks: 3,
+    tags: selectedTags, model: null, min_tasks: 3,
     bucket_starts: Array.from({ length: count }, (_, i) => start(i)),
     series: [{ complexity: 'low', cohort: 'all', points: Array.from({ length: count }, () => cell()), total: cell() }],
-    total: cell(), excluded_other_model: 0, available_models: [], available_tags: [],
+    total: cell(), excluded_other_model: 0, available_models: [],
+    available_tags: Array.from({ length: 9 }, (_, i) => ({ tag: `tag${i}`, tasks: 5 })),
   };
 }
 
 const requests = [];
+const tokenTagRequests = [];
 // An older host has no defect trend; set to serve its 404.
 let defectsMissing = false;
 // Controlled token replies: while `holdTokensPredicate` matches a request,
@@ -165,6 +168,7 @@ function payloadFor(url) {
     ];
     case '/api/diagnostics/task_tokens':
       requests.push(`task_tokens?since=${url.searchParams.get('since')}&scope=${url.searchParams.get('scope')}&workspace=${url.searchParams.get('workspace')}`);
+      tokenTagRequests.push((url.searchParams.get('tags') || '').split(',').filter(Boolean));
       return tokens(url.searchParams.get('since'), url);
     case '/api/crews': return { default_crew: null, crews: [] };
     case '/api/workflows/auto/readiness': return { capacity: {}, tasks: [] };
@@ -468,6 +472,40 @@ try {
   const tokenValue = () => body.locator('.mx-sc-value').first().textContent();
   await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
   assert.equal(await tokenValue(), '111', 'workspace A tokens at 7d');
+  const tagPicker = () => body.getByRole('combobox', { name: 'Compare a tag' });
+  const tagChips = () => body.locator('.mx-tags .mx-chip');
+  await page.screenshot({ path: path.join(evidence, 'tokens-tags-before-1440.jpg'), type: 'jpeg', quality: 82 });
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.screenshot({ path: path.join(evidence, 'tokens-tags-before-375.jpg'), type: 'jpeg', quality: 82 });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  for (let i = 0; i < 8; i++) {
+    await tagPicker().selectOption(`tag${i}`);
+    await body.getByRole('button', { name: `Remove tag tag${i}` }).waitFor();
+    if (i < 7) await tagPicker().locator(`option[value="tag${i + 1}"]`).waitFor({ state: 'attached' });
+  }
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
+  assert.equal(await tagChips().count(), 8, 'eight compared tag chips remain visible');
+  assert.equal(await tagPicker().locator('option').count(), 1, 'the picker offers no ninth tag');
+  assert.equal(await tagPicker().locator('option:checked').textContent(), 'Maximum of 8 tags selected');
+  await page.screenshot({ path: path.join(evidence, 'tokens-tags-cap-1440.jpg'), type: 'jpeg', quality: 82 });
+  await page.setViewportSize({ width: 375, height: 900 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'tag chips fit the 375px layout');
+  await page.screenshot({ path: path.join(evidence, 'tokens-tags-cap-375.jpg'), type: 'jpeg', quality: 82 });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+  await body.getByRole('button', { name: 'Remove tag tag0' }).click();
+  await body.getByRole('button', { name: 'Remove tag tag0' }).waitFor({ state: 'detached' });
+  assert.equal(await tagChips().count(), 7, 'removing a chip makes room');
+  await tagPicker().locator('option[value="tag8"]').waitFor({ state: 'attached' });
+  assert.ok(await tagPicker().locator('option').count() > 1, 'the picker offers tags again after removal');
+  await tagPicker().selectOption('tag8');
+  await body.getByRole('button', { name: 'Remove tag tag8' }).waitFor();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '111');
+  assert.equal(await tagChips().count(), 8, 'a newly available tag can be selected after removal');
+  assert.equal(await body.getByText('Tokens per task unavailable').count(), 0, 'the chart remains available after remove-then-add');
+  assert.ok(tokenTagRequests.some(tags => tags.length === 8), 'the browser sends requests with eight selected tags');
+  assert.ok(tokenTagRequests.every(tags => tags.length <= 8), 'no token request carries more than eight selected tags');
+  pass('tokens tag picker cap and recovery', { requests: tokenTagRequests.length, maxTags: Math.max(...tokenTagRequests.map(tags => tags.length)) });
+
   const invocations = body.getByRole('group', { name: 'Invocations' });
   holdTokensPredicate = url => url.searchParams.get('workspace') === 'ws_fixture' && url.searchParams.get('scope') === 'implement';
   await invocations.getByRole('button', { name: 'Implement only' }).click();
