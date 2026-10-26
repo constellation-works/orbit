@@ -167,7 +167,10 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
         // Configured and unrelated drafts still require the operator.
         if status.is_draft || status.merge_state_status.as_deref() == Some("DRAFT") {
             let configured = host.pr_config().conventions.draft;
-            if !configured {
+            // Only an explicit draft carries a body to repair. A DRAFT merge
+            // state without isDraft is an older answer without body evidence,
+            // so refuse without an extra view.
+            if !configured && status.is_draft {
                 let missing =
                     draft_recovery::handed_off_section_gaps(host, &workspace, &pr_number)?;
                 if !missing.is_empty() {
