@@ -1,5 +1,5 @@
 ---
-title: Investigate Failures from the Terminal
+title: Investigate failures from the terminal
 description: "Trace a bounded failure through doctor, run captures, host logs, audit events, and server health checks."
 ---
 

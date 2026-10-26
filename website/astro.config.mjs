@@ -169,7 +169,7 @@ export default defineConfig({
         {
           label: 'Get started',
           items: [
-            { slug: 'index', label: 'What Orbit is' },
+            { slug: 'index', label: 'What Orbit Is' },
             { slug: 'getting-started', label: 'Quickstart' },
             { slug: 'getting-started/install', label: 'Install Orbit' },
             { slug: 'how-to/mcp-integration', label: 'Connect your agent' },
@@ -202,7 +202,8 @@ export default defineConfig({
             { slug: 'how-to/scoping-rules', label: 'Choose scopes' },
             { slug: 'how-to/multi-host', label: 'Run Orbit across hosts' },
             { slug: 'how-to/task-publication', label: 'Publish and restore tasks' },
-            { slug: 'how-to/state-and-backup', label: 'Back up and move state' },
+            { slug: 'how-to/diagnostics', label: 'Investigate failures from the terminal' },
+            { slug: 'how-to/state-and-backup', label: 'Back up and move Orbit state' },
             { slug: 'how-to/workspace-maintenance', label: 'Maintain and remove workspaces' },
             { slug: 'how-to/distributed-drain', label: 'Set up a distributed drain' },
             { slug: 'how-to/friction', label: 'Report and triage friction' },
