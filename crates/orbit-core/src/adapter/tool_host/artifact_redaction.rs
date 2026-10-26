@@ -285,6 +285,10 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
                 ..NO_REDACTION
             },
         },
+        OrbitBuiltinAction::Lease(verb) => ActionPolicy {
+            declared: verb.spec().params,
+            ..NO_REDACTION
+        },
         OrbitBuiltinAction::Friction(verb) => ActionPolicy {
             declared: verb.spec().params,
             ..NO_REDACTION
@@ -452,6 +456,7 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | WorkspaceClaimVerb::Release
             | WorkspaceClaimVerb::Show => false,
         },
+        OrbitBuiltinAction::Lease(_) => false,
         OrbitBuiltinAction::Search(verb) => match verb {
             SearchVerb::Query => false,
         },
@@ -880,6 +885,7 @@ fn response_string<'a>(response: &'a Value, field: &str) -> Result<&'a str, Orbi
 
 fn tool_name(action: OrbitBuiltinAction) -> &'static str {
     match action {
+        OrbitBuiltinAction::Lease(verb) => verb.tool_name(),
         OrbitBuiltinAction::Task(verb) => verb.tool_name(),
         OrbitBuiltinAction::Decision(verb) => verb.tool_name(),
         OrbitBuiltinAction::Experiment(verb) => verb.tool_name(),

@@ -629,6 +629,12 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.experiment.reweight", Placement::Advertised),
     ("orbit.experiment.start", Placement::Advertised),
     ("orbit.experiment.update", Placement::Advertised),
+    ("orbit.lease.check", Placement::Advertised),
+    ("orbit.lease.list", Placement::Advertised),
+    ("orbit.lease.release", Placement::Advertised),
+    ("orbit.lease.renew", Placement::Advertised),
+    ("orbit.lease.request", Placement::Advertised),
+    ("orbit.lease.show", Placement::Advertised),
     ("orbit.pipeline.invoke", Placement::Advertised),
     ("orbit.routine.control", Placement::Advertised),
     ("orbit.task.delete", Placement::Unadvertised),
@@ -718,13 +724,25 @@ fn authorization_matrix_matches_live_registry() {
         .iter()
         .filter(|op| op.surface == OperationSurface::Tool && advertised.contains(op.id))
     {
-        assert!(
-            !operation.allowed.contains(&McpCapability::Agent),
-            "'{}' is advertised to MCP and governed, yet lists `agent` among its allowed \
-             capabilities — governing an operation an ordinary MCP caller already holds \
-             buys nothing and hides the entries that do refuse",
-            operation.id
-        );
+        if operation.id.starts_with("orbit.lease.") {
+            // Interactive agents coordinate their own paths. Lease governance
+            // is an identity floor, while owner placement and lease policy
+            // constrain their requests.
+            let unidentified = CallerCapabilities::resolve(&CallerEnvelope::default());
+            assert!(
+                authorize(operation, &unidentified).is_err(),
+                "{} must protect owner state from an unidentified caller",
+                operation.id
+            );
+        } else {
+            assert!(
+                !operation.allowed.contains(&McpCapability::Agent),
+                "'{}' is advertised to MCP and governed, yet lists `agent` among its allowed \
+                 capabilities — governing an operation an ordinary MCP caller already holds \
+                 buys nothing and hides the entries that do refuse",
+                operation.id
+            );
+        }
     }
     let mut operations = std::collections::BTreeMap::new();
     for schema in registry.all_schemas() {

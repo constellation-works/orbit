@@ -5,6 +5,7 @@ use orbit_common::governance::decision::DECISION;
 use orbit_common::governance::drain::DRAIN;
 use orbit_common::governance::experiment::EXPERIMENT;
 use orbit_common::governance::friction::FRICTION;
+use orbit_common::governance::lease::LEASE;
 use orbit_common::governance::orchestrator::ORCHESTRATOR;
 use orbit_common::governance::task::TASK;
 use orbit_common::governance::workflow::WORKFLOW;
@@ -35,6 +36,7 @@ pub fn register(registry: &mut ToolRegistry) {
     // Workspace claims are coordination holds like task locks and remain off
     // the MCP surface.
     operation::register_noun(registry, &WORKSPACE_CLAIM);
+    operation::register_noun(registry, &LEASE);
     // Agent invocation is workspace-scoped: the admission is made against the
     // checkout that owns it, and Core is where that decision lives.
     registry.register_mcp(agent::OrbitAgentInvokeTool, McpToolScope::WorkspaceRequired);

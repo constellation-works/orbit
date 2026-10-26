@@ -18,12 +18,12 @@ related_artifacts: []
 
 Record non-obvious decisions here by title. Task references carry provenance; superseded decisions remain in place so their original reasoning stays legible. See [CONVENTIONS.md §4](../CONVENTIONS.md#4-decisions) for the admission rule and required `Cost:` line.
 
-These entries are proposals inside a Draft design. Each gets its task on the `Recorded` line
-when the work is filed.
+Phase 1 decisions name their implementation tasks on the `Recorded` line. Later-phase
+proposals remain inside this Draft design and gain task references when filed.
 
 ## Outside work and drain tasks share one lock index
 
-**Recorded:** 2026-10 · proposed in the Draft design, no task yet
+**Recorded:** 2026-10-26 · ORB-18404, ORB-18405, ORB-18406
 
 ### Context
 
@@ -48,7 +48,7 @@ never a parallel store with its own conflict rules.
 
 ## A lease is advisory unless policy makes it exclusive
 
-**Recorded:** 2026-10 · proposed in the Draft design, no task yet
+**Recorded:** 2026-10-26 · ORB-18404, ORB-18405, ORB-18406
 
 ### Context
 
@@ -199,6 +199,9 @@ is not a sufficient deployment.
 
 ## Task References
 
+- ORB-18404 — lease rows alongside reservations in the owner lock store.
+- ORB-18405 — advisory/hard runtime operations and principal policy.
+- ORB-18406 — owner control-plane tools, CLI and task-lock lease listing.
 - ORB-18410 — `orbit-auth` and lease tokens for the listener user.
 - ORB-18430 — the intake socket.
 - ORB-18412 — the listener as its own OS user.

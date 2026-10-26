@@ -6,6 +6,7 @@ pub mod decision;
 pub mod drain;
 pub mod experiment;
 pub mod friction;
+pub mod lease;
 pub mod operation;
 pub mod orchestrator;
 pub mod search;

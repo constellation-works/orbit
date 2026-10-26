@@ -71,6 +71,13 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_task_pull"
         | "orbit_drain_claim_bind"
         | "orbit_drain_claim_settle"
+        // Leases, including reads, answer for the owner's single lock state.
+        | "orbit_lease_request"
+        | "orbit_lease_renew"
+        | "orbit_lease_release"
+        | "orbit_lease_show"
+        | "orbit_lease_list"
+        | "orbit_lease_check"
         | "orbit_workflow_ship" => McpToolClass::ControlPlane,
         // A replica may resolve an existing host-local legacy friction. Core
         // checks the update's fields and still refuses every other mutation.

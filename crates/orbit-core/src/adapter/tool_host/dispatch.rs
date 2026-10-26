@@ -158,6 +158,9 @@ pub(super) fn execute(
             model,
             submission_trigger(session_context),
         ),
+        OrbitBuiltinAction::Lease(verb) => {
+            super::lease_tools::dispatch(runtime, verb, input, agent, model)
+        }
         OrbitBuiltinAction::WorkspaceClaim(verb) => {
             super::workspace_claim_tools::dispatch(runtime, verb, input, agent, model)
         }

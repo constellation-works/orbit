@@ -849,6 +849,244 @@
     }
   },
   {
+    "name": "orbit_lease_check",
+    "description": "Check each path selector for coverage by an optional lease, unlocked-path policy and overlapping task locks, reservations and leases. Reads owner state without expiring or releasing holders.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Path selectors to check, such as file:src/lib.rs."
+        },
+        "lease_id": {
+          "type": "string",
+          "description": "Optional caller lease to check coverage against; excluded from overlapping holders."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "paths"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  {
+    "name": "orbit_lease_list",
+    "description": "List active advisory and hard path leases on the workspace owner, oldest first, with mode, principal, priority, selectors and expiry. Expires stale leases before listing.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "orbit_lease_release",
+    "description": "Release a path lease early. Returns released=false if the lease is unknown or already ended.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "description": "Lease identifier returned by request."
+        },
+        "agent": {
+          "type": "string",
+          "description": "Deprecated attribution alias; prefer model."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok",
+            "muse"
+          ],
+          "description": "Agent family for attribution: codex, claude, gemini, grok or muse."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "lease_id"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "orbit_lease_renew",
+    "description": "Renew an active path lease from now with a bounded TTL. Unknown, released and expired leases are refused. Returns the renewed lease and expiry.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "description": "Lease identifier returned by request."
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "description": "Lifetime in seconds, from 1 to 14400. Defaults to 1800, measured from now."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "lease_id"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "orbit_lease_request",
+    "description": "Request a lease on path selectors; advisory leases never block, while hard leases refuse overlapping task locks, reservations or hard leases. Returns the lease identifier, mode, principal, priority and expiry, or the conflicting holders. Requires lease.enabled in the workspace.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "selectors": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "File or directory selectors to lease, such as file:src/lib.rs or dir:src."
+        },
+        "principal": {
+          "type": "string",
+          "description": "Person or named agent holding the lease (attribution over SSH)."
+        },
+        "mode": {
+          "type": "string",
+          "description": "advisory or hard; defaults to the workspace lease.default_mode policy."
+        },
+        "priority": {
+          "type": "string",
+          "description": "low, normal or high, bounded by the caller class's ceiling; defaults to normal or the lower ceiling."
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "Optional lease tags."
+        },
+        "machine_id": {
+          "type": "string",
+          "description": "Optional caller machine identity for attribution."
+        },
+        "base_branch": {
+          "type": "string",
+          "description": "Optional base branch binding (no automatic release in this phase)."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Optional working branch binding (no automatic release in this phase)."
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "description": "Lifetime in seconds, from 1 to 14400. Defaults to 1800, measured from now."
+        },
+        "agent": {
+          "type": "string",
+          "description": "Deprecated attribution alias; prefer model."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok",
+            "muse"
+          ],
+          "description": "Agent family for attribution: codex, claude, gemini, grok or muse."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "selectors",
+        "principal"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
+    "name": "orbit_lease_show",
+    "description": "Inspect one path lease in any state, including its mode, principal, priority, selectors and expiry. Expired leases are marked expired.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "description": "Lease identifier returned by request."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "lease_id"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
     "name": "orbit_orchestrator_scorecard",
     "description": "Deprecated alias of `orbit_agents_scorecard` with role orchestrators, removed in the next release: returns that payload with a `deprecation` note naming the replacement.",
     "inputSchema": {

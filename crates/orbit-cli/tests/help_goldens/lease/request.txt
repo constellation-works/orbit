@@ -1,0 +1,49 @@
+Request an advisory or hard path lease
+
+Usage: orbit lease request [OPTIONS] --principal <PRINCIPAL> <SELECTORS>...
+
+Arguments:
+  <SELECTORS>...
+          File or directory selectors to lease
+
+Options:
+      --principal <PRINCIPAL>
+          Person or named agent holding the lease
+
+      --mode <MODE>
+          Lease mode (default: workspace policy)
+          
+          [possible values: advisory, hard]
+
+      --hard
+          Request a hard lease
+
+      --priority <PRIORITY>
+          Priority within the caller class's ceiling
+          
+          [possible values: low, normal, high]
+
+      --tag <TAGS>
+          Lease tag (repeat for several)
+
+      --remote-caller-machine-id <MACHINE_ID>
+          Caller machine identity for attribution
+
+      --base <BASE_BRANCH>
+          Base branch binding
+
+      --branch <BRANCH>
+          Working branch binding
+
+      --ttl <TTL>
+          Lifetime from now, e.g. 45m or 2h (default: 30m, maximum: 4h)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

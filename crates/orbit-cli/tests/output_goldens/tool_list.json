@@ -1534,6 +1534,179 @@
     ]
   },
   {
+    "name": "orbit.lease.check",
+    "description": "Check each path selector for coverage by an optional lease, unlocked-path policy and overlapping task locks, reservations and leases. Reads owner state without expiring or releasing holders.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "paths",
+        "description": "Path selectors to check, such as file:src/lib.rs.",
+        "param_type": "string_list",
+        "required": true
+      },
+      {
+        "name": "lease_id",
+        "description": "Optional caller lease to check coverage against; excluded from overlapping holders.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.lease.list",
+    "description": "List active advisory and hard path leases on the workspace owner, oldest first, with mode, principal, priority, selectors and expiry. Expires stale leases before listing.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": []
+  },
+  {
+    "name": "orbit.lease.release",
+    "description": "Release a path lease early. Returns released=false if the lease is unknown or already ended.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "lease_id",
+        "description": "Lease identifier returned by request.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "agent",
+        "description": "Deprecated attribution alias; prefer model.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Agent family for attribution: codex, claude, gemini, grok or muse.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.lease.renew",
+    "description": "Renew an active path lease from now with a bounded TTL. Unknown, released and expired leases are refused. Returns the renewed lease and expiry.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "lease_id",
+        "description": "Lease identifier returned by request.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "ttl_seconds",
+        "description": "Lifetime in seconds, from 1 to 14400. Defaults to 1800, measured from now.",
+        "param_type": "u64",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.lease.request",
+    "description": "Request a lease on path selectors; advisory leases never block, while hard leases refuse overlapping task locks, reservations or hard leases. Returns the lease identifier, mode, principal, priority and expiry, or the conflicting holders. Requires lease.enabled in the workspace.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "selectors",
+        "description": "File or directory selectors to lease, such as file:src/lib.rs or dir:src.",
+        "param_type": "string_list",
+        "required": true
+      },
+      {
+        "name": "principal",
+        "description": "Person or named agent holding the lease (attribution over SSH).",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "mode",
+        "description": "advisory or hard; defaults to the workspace lease.default_mode policy.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "priority",
+        "description": "low, normal or high, bounded by the caller class's ceiling; defaults to normal or the lower ceiling.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "tags",
+        "description": "Optional lease tags.",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
+        "name": "machine_id",
+        "description": "Optional caller machine identity for attribution.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "base_branch",
+        "description": "Optional base branch binding (no automatic release in this phase).",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "branch",
+        "description": "Optional working branch binding (no automatic release in this phase).",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "ttl_seconds",
+        "description": "Lifetime in seconds, from 1 to 14400. Defaults to 1800, measured from now.",
+        "param_type": "u64",
+        "required": false
+      },
+      {
+        "name": "agent",
+        "description": "Deprecated attribution alias; prefer model.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Agent family for attribution: codex, claude, gemini, grok or muse.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.lease.show",
+    "description": "Inspect one path lease in any state, including its mode, principal, priority, selectors and expiry. Expired leases are marked expired.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "lease_id",
+        "description": "Lease identifier returned by request.",
+        "param_type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
     "name": "orbit.orchestrator.scorecard",
     "description": "Deprecated alias of `orbit.agents.scorecard` with role orchestrators, removed in the next release: returns that payload with a `deprecation` note naming the replacement.",
     "enabled": true,
