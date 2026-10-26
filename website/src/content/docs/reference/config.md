@@ -56,6 +56,9 @@ descriptions are one sentence; the tables below keep the defaults and ranges.
 If the workspace file does not exist yet, add `--fresh` to start it empty or
 `--seed-from-global` to start from a copy of the global file.
 
+For extra agent instructions selected by a task's tags, edit the
+[Tag instructions](#tag-instructions) tables directly.
+
 ## Scheduled credentials: clock.env
 
 `~/.orbit/clock.env` holds the credentials for runs no login shell starts.
@@ -600,6 +603,138 @@ Declare only rebuildable paths; evidence matching a declared pattern is reclaima
 Cost, task-store Codebase rankings, `orbit task flow` and friction stats keep working
 across audit, run and journal pruning. Upgrade backfills retained denial and commit
 facts once before pruning; history deleted before upgrade cannot be recovered.
+
+## Tag instructions
+
+Use `[workflow.tag_instructions.<tag>]` when a class of tasks needs extra
+implementation, review or recovery guidance. For example, a custom
+`data-migration` tag can select your repository's migration checklist without
+copying it into every task. A tag selects instructions; task descriptions,
+comments and tags never supply the instruction text itself.
+
+Edit `.orbit/config.toml` for workspace mappings, or `~/.orbit/config.toml`
+for global mappings. `orbit config set` does not write these dynamic keys.
+This example names files you supply in your own repository:
+
+```toml
+[workflow.tag_instructions.data-migration]
+implement = "agent-guidance/migration-implement.md"
+review = "agent-guidance/migration-review.md"
+recovery = "agent-guidance/migration-recovery.md"
+
+[workflow.tag_instructions.ui]
+review = false # Disable the shipped reviewer instruction for this tag.
+```
+
+For example, `agent-guidance/migration-implement.md` could contain:
+
+```markdown
+For a data migration, identify the affected records and compatibility needs.
+Use the repository's migration checks and record their results.
+Describe rollback steps and any operator action needed before rollout.
+```
+
+Create the review and recovery files too: the review checklist can ask for
+compatibility and rollback evidence; recovery guidance can ask the agent to
+preserve failure logs before making a repair. Commit all mapped files to the
+delivery's base branch before using the tag on a task.
+
+The role determines which activities receive the file:
+
+- `implement`: `agent_implement`, including QA sweeps tagged `qa-sweep`.
+- `review`: `agent_review_repair` and `review_reconciliation_review`.
+- `recovery`: `step_failure_recovery`, `final_recovery` and
+  `pr_conflict_recovery`.
+
+### Scope, layering and defaults
+
+Each value must be a repository-relative file path using `/` separators,
+without absolute paths, empty path segments or `..`. A leading `./` is
+accepted; other `.` segments are refused. `false` supplies no instruction
+for that tag and role, including any shipped default. `true` is invalid.
+
+Mappings layer per tag and role: a workspace `review` entry replaces the
+global `review` entry for that tag, while its other roles and other global
+tags remain inherited. An omitted role uses the inherited mapping, then
+Orbit's shipped default if one exists. A mapped file replaces that default
+for the same tag and role.
+
+Orbit ships these defaults:
+
+- `no-diff-expected`, for `implement`: read-only handoff, with no workspace
+  gates or `no-diff.json`.
+- `skip-validation`, for `implement`: no local validation while every
+  changed path matches `workflow.light_delivery_paths`.
+- `ui`, for `implement` and `review`: capture screenshots and check that
+  they are attached, respectively.
+
+Replacing or disabling a tag instruction changes the added prompt text.
+Built-in safety, sandbox, gate and handoff rules still win over it. The full
+screenshot rule also remains in the task-execution and task-review
+references: it follows a visible change, even without the `ui` tag.
+Instruction mappings do not themselves grant a validation or review skip;
+see [Review-skip tags](#review-skip-tags) for review policy.
+
+Tags are trimmed and lowercased for matching, deduplicated and applied in
+sorted order. `DATA-MIGRATION` selects `data-migration`. Config validation
+refuses blank tags, duplicate normalized tags, unknown roles, invalid values
+or paths, and more than 32 mapped tags.
+
+### Committed text and refusals
+
+Orbit reads each file from the delivery's recorded `base_sha`, or from the
+checkout's `HEAD` when no worktree base was recorded. It never reads the
+working copy. Changes committed or left uncommitted by that delivery cannot
+alter the instructions it runs under.
+
+The activity receives one **Tag instructions** section after its built-in
+instruction and any steering or inspection text. Each entry identifies its
+tag and source. An untagged task, or a tag with no mapping or shipped
+default for that role, adds nothing.
+
+A refused mapping fails the activity before its provider starts; Orbit
+does not silently omit or truncate it. File refusals affect only tasks
+carrying the relevant tag:
+
+- `tag_instruction_unreadable`: the file is missing at the base revision,
+  is not a file, is not UTF-8, or is empty/whitespace-only.
+- `tag_instruction_too_large`: a file exceeds 8 KiB.
+- `tag_instructions_too_large`: the combined tag instruction text for one
+  prompt exceeds 16 KiB.
+
+File errors identify the tag, role and path; the combined-size error names
+the role and byte count.
+
+For a distributed claim, the owner captures instructions and refusals in
+the claim receipt. It reads files from its last-fetched `origin/<base>` for
+PR delivery, or the local base ref for local delivery; capture does not
+fetch. An unavailable authoritative ref is captured as a refusal, without
+falling back to another branch or `HEAD`. The leaf uses that capture rather
+than its replica's mappings or files, including any applicable refusal.
+The receipt holds at most 64 KiB of instruction text; entries beyond that
+limit are captured as refusals. A claim from an older owner with no capture
+falls back to the replica's mappings and files, with a warning.
+
+### Inspect applied instructions
+
+Use your run ID to inspect what each activity actually received:
+
+```bash
+orbit run show "$RUN_ID"
+orbit run show "$RUN_ID" --json
+```
+
+The text view prints a `Tag instructions:` line per dispatch that received
+instructions. JSON, including the `orbit.workflow.run.show` tool, exposes
+`tag_instructions` with state `observed`, `none` (audit evidence exists but
+no dispatch received instructions), or `unavailable` (no audit evidence).
+The projection lists up to 32 dispatches and reports `truncated` when more
+exist.
+
+Each `activity.tag_instructions_applied` audit event records the step,
+activity, task, tag, role, source, SHA-256 and byte size, without the text.
+The source is `default` or `workspace`; `workspace` records the repository
+path and revision, including for a mapping inherited from global config.
 
 ## Review-skip tags
 
