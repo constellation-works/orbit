@@ -23,9 +23,13 @@ use crate::repository::task::v2::{TaskV2Store, task_comment_from_row, task_histo
 pub type ValidationHold<'a> =
     dyn Fn(&Task, &[TaskComment], &[TaskHistoryEntry]) -> Result<Option<String>, OrbitError> + 'a;
 
-/// Owner callback invoked only for the selected task, before claim persistence.
+/// Owner experiment-assignment callback, invoked before claim persistence.
 pub type ExperimentCapture<'a> =
     dyn Fn(&Task) -> Result<orbit_types::workflow::CapturedExperiments, OrbitError> + 'a;
+
+/// Owner callback invoked only for the selected task, before claim persistence.
+pub type AdmissionGuidanceCapture<'a> =
+    dyn Fn(&Task) -> Result<AdmissionTaskGuidance, OrbitError> + 'a;
 
 pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
 const CLAIM_KIND: &str = "distributed-execution-claim-v1";
@@ -280,7 +284,7 @@ impl TaskCommitBoundary {
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
-        self.admit_task_with_experiments(
+        self.admit_task_with_guidance(
             identity,
             request,
             ordering,
@@ -291,16 +295,19 @@ impl TaskCommitBoundary {
             held,
             validation_hold,
             &|task| {
-                Ok(orbit_types::workflow::CapturedExperiments {
-                    task_id: task.id.clone(),
-                    assignments: Vec::new(),
+                Ok(AdmissionTaskGuidance {
+                    experiments: orbit_types::workflow::CapturedExperiments {
+                        task_id: task.id.clone(),
+                        assignments: Vec::new(),
+                    },
+                    explore_brief: None,
                 })
             },
         )
     }
 
-    /// Admission with the owner's experiment assignment callback, before the
-    /// receipt is written. The callback must not acquire task admission locks.
+    /// Admission with the owner's experiment assignment callback. Callers
+    /// that also capture an explore brief use [`Self::admit_task_with_guidance`].
     #[allow(clippy::too_many_arguments)]
     pub fn admit_task_with_experiments(
         &self,
@@ -314,6 +321,41 @@ impl TaskCommitBoundary {
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
         experiment_capture: &ExperimentCapture<'_>,
+    ) -> Result<AdmissionLookup, OrbitError> {
+        self.admit_task_with_guidance(
+            identity,
+            request,
+            ordering,
+            owner_version,
+            repo_root,
+            orbit_dir,
+            admission_holds,
+            held,
+            validation_hold,
+            &|task| {
+                Ok(AdmissionTaskGuidance {
+                    experiments: experiment_capture(task)?,
+                    explore_brief: None,
+                })
+            },
+        )
+    }
+
+    /// Admission with the owner's task-guidance callback, before the
+    /// receipt is written. The callback must not acquire task admission locks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_task_with_guidance(
+        &self,
+        identity: &AdmissionIdentity,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+        owner_version: &str,
+        repo_root: &Path,
+        orbit_dir: &Path,
+        admission_holds: &BTreeMap<String, String>,
+        held: &BTreeMap<String, String>,
+        validation_hold: &ValidationHold<'_>,
+        guidance_capture: &AdmissionGuidanceCapture<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
         let mut snapshot = self.admission_snapshot(ordering)?;
@@ -338,7 +380,7 @@ impl TaskCommitBoundary {
                 admission_holds,
                 held,
                 validation_hold,
-                experiment_capture,
+                guidance_capture,
                 ordering,
                 census.as_ref(),
                 reach,
@@ -362,7 +404,7 @@ impl TaskCommitBoundary {
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
-        experiment_capture: &ExperimentCapture<'_>,
+        guidance_capture: &AdmissionGuidanceCapture<'_>,
         ordering: &AdmissionOrdering,
         census: Option<&ExecutorCensusEntry>,
         reach: DependencyReach,
@@ -426,6 +468,7 @@ impl TaskCommitBoundary {
             gates: ordering.gates.clone(),
             tag_instructions: ordering.tag_instructions.clone(),
             experiments: None,
+            explore_brief: None,
             affinity: None,
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
@@ -437,7 +480,7 @@ impl TaskCommitBoundary {
             orbit_dir,
             &in_flight.tasks,
             &mut receipt,
-            experiment_capture,
+            guidance_capture,
         )? {
             return self
                 .lookup_admission(identity, &request.request_id)
@@ -503,7 +546,9 @@ impl TaskCommitBoundary {
                 .as_ref()
                 .filter(|offer| offer.fresh.is_none())
                 .map(|offer| offer.candidate.clone());
-            receipt.experiments = Some(experiment_capture(&task)?);
+            let guidance = guidance_capture(&task)?;
+            receipt.experiments = Some(guidance.experiments);
+            receipt.explore_brief = guidance.explore_brief;
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
                 actor: receipt.machine_id.clone(),

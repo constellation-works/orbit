@@ -36,10 +36,10 @@ use orbit_engine::KnownRedUnconfirmed;
 use orbit_store::TaskCommitBoundary;
 use orbit_store::contracts::{
     AdmissionIdentity, AdmissionLookup, AdmissionOrdering, AdmissionReceipt, AdmissionRequest,
-    ClaimAttribution, ClaimEvidence, ClaimFailure, ClaimInvocation, ClaimMutation,
-    ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase, ExecutorCapability,
-    HandoffObservation, HandoffReviewObservation, JobRunQuery, KnownRedObservation,
-    KnownRedOsAcceptance,
+    AdmissionTaskGuidance, ClaimAttribution, ClaimEvidence, ClaimFailure, ClaimInvocation,
+    ClaimMutation, ClaimMutationResult, ClaimRun, ExecutionClaim, ExecutionClaimPhase,
+    ExecutorCapability, HandoffObservation, HandoffReviewObservation, JobRunQuery,
+    KnownRedObservation, KnownRedOsAcceptance,
 };
 use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};
 use orbit_types::task::{Task, TaskStatus};
@@ -792,7 +792,7 @@ impl crate::OrbitRuntime {
             .flatten();
         #[cfg(feature = "test-support")]
         super::admission_checkpoint::notify();
-        boundary.admit_task_with_experiments(
+        boundary.admit_task_with_guidance(
             identity,
             request,
             &AdmissionOrdering {
@@ -826,7 +826,12 @@ impl crate::OrbitRuntime {
                     _ => Ok(None),
                 }
             },
-            &|task| self.capture_claimed_task_experiments(task, &request.ship),
+            &|task| {
+                Ok(AdmissionTaskGuidance {
+                    experiments: self.capture_claimed_task_experiments(task, &request.ship)?,
+                    explore_brief: self.captured_explore_brief(&task.id),
+                })
+            },
         )
     }
 

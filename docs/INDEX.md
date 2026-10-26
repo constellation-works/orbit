@@ -118,7 +118,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Experiments](./design/experiments/1_scope.md) | Slice 4: skills, crew and config surfaces (phase 3) | claude |
-| [Explore Brief](./design/explore-brief/1_scope.md) | File slice S4, capturing the brief into the admission claim for claimed runs | claude |
+| [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Refuse unknown fields after the warn window; ORB-15934 was archived, no live task | claude |
 | [Path Leases](./design/path-leases/1_overview.md) | Land ORB-18406 (orbit.lease tools and CLI), then listener tasks ORB-18410, 18412, 18430 | claude |
