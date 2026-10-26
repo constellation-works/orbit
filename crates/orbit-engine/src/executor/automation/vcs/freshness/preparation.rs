@@ -273,7 +273,20 @@ fn refresh<H: RuntimeHost + ?Sized>(
     let _deadline = GitDeadlineGuard::install(std::time::Duration::from_millis(remaining));
     let workspace = &context.workspace_path;
     let head = required_input_string(effective, "head")?;
-    let head_sha = required_input_string(effective, "head_sha")?;
+    // Conflict recovery may have rewritten the prepared candidate before the
+    // base moved again. Pin that exact authenticated HEAD for this refresh;
+    // the initial preparation still records the pre-recovery identity.
+    let head_sha = commit_sha(workspace, "HEAD")?;
+    if head_sha != required_input_string(effective, "head_sha")?
+        && !matches!(
+            recovered_rewrite(host, effective, context, &head_sha)?,
+            RecoveredRewrite::Current(_) | RecoveredRewrite::Overtaken(_)
+        )
+    {
+        return Err(refusal(
+            "candidate changed without an authenticated rewrite",
+        ));
+    }
     let base_ref = required_input_string(effective, "base_ref")?;
     let old_base = required_input_string(effective, "base_sha")?;
     let unchanged = || -> Result<(), OrbitError> {
@@ -288,7 +301,7 @@ fn refresh<H: RuntimeHost + ?Sized>(
                 "candidate, branch, remote lease or rebase state changed",
             ));
         }
-        ensure_clean_for_rewrite(workspace, head_sha, "a stale prepared base")
+        ensure_clean_for_rewrite(workspace, &head_sha, "a stale prepared base")
     };
     unchanged()?;
     let mut prepare_input = input.clone();

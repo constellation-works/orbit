@@ -566,6 +566,92 @@ fn fresh_preparation_preserves_conflict_and_absorbed_paths() {
     assert_eq!(refresh_count(&prepared.host), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn recovered_candidate_refreshes_after_base_advances() {
+    isolated_in(
+        module_path!(),
+        "recovered_candidate_refreshes_after_base_advances",
+        || {
+            let mut prepared =
+                PreparedRebase::new("jrun-recovered-base-race", "README.md", "README.md");
+            git(&prepared.fixture.repo, &["push", "origin", BASE]);
+            let provider = prepared.fixture.root.path().join("codex");
+            write_executable(
+                &provider,
+                &provider_script("printf 'resolved\\n' > README.md"),
+            );
+            prepared.host.provider = Some(provider);
+            let repo = prepared.fixture.repo.clone();
+            *prepared.host.preparation_hook.lock().unwrap() = Some(Box::new(move |checkpoint| {
+                if checkpoint["step_id"] == "sync_base" && checkpoint["rewritten"] == true {
+                    commit_file(&repo, "after-recovery.txt", "concurrent\n");
+                    git(&repo, &["push", "origin", BASE]);
+                }
+            }));
+            *prepared.host.required_commands.lock().unwrap() = vec![
+                "test -f after-recovery.txt && git rev-parse HEAD > .orbit/validated-head".into(),
+            ];
+            let (result, events) = run_job(&prepared, &shipped_sync_job("task_pr_pipeline", true));
+            assert!(
+                result.as_ref().is_ok_and(|outcome| outcome.success),
+                "a base advance after certified conflict recovery must refresh the recovered candidate: {result:?}; events: {events:#?}"
+            );
+            let base = git(&prepared.fixture.repo, &["rev-parse", BASE]);
+            let head = prepared.head();
+            assert!(is_ancestor(&prepared.checkout.path, &base, "HEAD"));
+            assert_eq!(
+                fs::read_to_string(prepared.checkout.path.join("README.md")).unwrap(),
+                "resolved\n"
+            );
+            assert_eq!(
+                fs::read_to_string(prepared.checkout.path.join("after-recovery.txt")).unwrap(),
+                "concurrent\n"
+            );
+            assert_eq!(
+                fs::read_to_string(prepared.checkout.path.join(".orbit/validated-head"))
+                    .unwrap()
+                    .trim(),
+                head,
+                "final validation exercises the refreshed candidate"
+            );
+            assert_eq!(
+                prepared.host.stub_calls_of("deliver"),
+                [json!({
+                    "head_sha":head,"base_sha":base,"run_id":prepared.run_id,"step_id":"deliver"
+                })]
+            );
+            assert_eq!(refresh_count(&prepared.host), 1);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(
+                        event,
+                        V2AuditEventKind::StepRecoveryAttempted {
+                            recovery_succeeded: true,
+                            ..
+                        }
+                    ))
+                    .count(),
+                1
+            );
+            let checkpoints = prepared.host.checkpoints();
+            let (_, _, recovery) = checkpoints
+                .iter()
+                .find(|(_, step, _)| step == "sync_base")
+                .unwrap();
+            let (_, _, fresh) = checkpoints
+                .iter()
+                .find(|(_, step, _)| step == "sync_base_preparation")
+                .unwrap();
+            assert_eq!(fresh["head_sha_before"], recovery["head_sha"]);
+            assert_ne!(fresh["head_sha_before"], prepared.candidate);
+            assert_eq!(fresh["source_preparation"]["head_sha"], prepared.candidate);
+            assert_eq!(fresh["base_sha"], base);
+        },
+    );
+}
+
 fn replacement_evidence_and_simultaneous_candidate_changes_fail_closed() {
     for case in [
         "tamper-refresh",
