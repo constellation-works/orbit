@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-23
+last_validated: 2026-10-26
 ---
 # Boundary-First Testing
 
@@ -358,6 +358,8 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 - `crates/orbit-config/src/tests/seed.rs`: `every_family_combination_seeds_valid_defaults_pools_and_enabled_flags` (criterion 1, combinatorial seed rendering) checks all detected-family subsets in memory: defaults name enabled crews, pools parse and reference enabled crews, and each crew's enabled flag follows its provider availability. It avoids filesystem setup for every subset. `rendering_refuses_a_pool_entry_the_seed_does_not_write_enabled` (criterion 2, fault injection) removes or disables a dynamically selected pool member in the private renderer's crew map; the public seeder always constructs that map itself. Neither test fixes crew choices, models or weights as policy.
 
 - `crates/orbit-web/src/log_format/tests/scan.rs`: `post_window_errors_do_not_consume_the_match_budget_or_advance_coverage` (criterion 1, combinatorial scan budgets and coverage). A table drives the existing segmented-reader seam with complete, capped and retention-limited windows and excess newer records. The HTTP boundary fixes the process scan budget at 50,000; this seam proves those cases with a handful of rows, while the HTTP month test covers endpoint wiring and agreement with stderr.
+
+- `crates/orbit-web/src/lease_intake/tests/server.rs::ambiguous_workspace_id_name_selector_is_refused_without_touching_either_workspace` (criterion 3, workspace-selection safety at the Unix socket boundary). A real registry-backed dashboard gives two workspaces the `ws_alpha` id/name collision, and the test sends request, renew and release frames through the server and public client. Unique name and id requests must grant leases in their own runtimes, while ambiguous operations are refused and both leases keep their original expiry and granted state. The server's test listener and registry-backed state builder are crate-private, so the crate-root integration binary cannot assemble the same fixture without widening the production API.
 
 - The four [worker log sibling tests](../../crates/orbit-core/src/application/job/pipeline/worker/tests/log.rs) — `appends_after_the_size_snapshot_are_excluded_from_the_bounded_read`, `empty_short_and_exact_limit_logs_keep_their_expected_content`, `long_logs_report_the_snapshot_window_and_return_only_its_tail`, and `shrink_after_the_size_snapshot_reports_only_bytes_still_available` (criterion 2, deterministic interleaving). A captured size is passed through the same bounded reader used by the audit and supervisor callers; the append case proves bytes written after that snapshot cannot exceed the 16 KiB window, while controls cover empty, short, exact-limit, long and shrinking files. The callers do not lock out the append-oriented worker, and an integration test cannot force the metadata/read order reproducibly [ORB-15610].
 - `crates/orbit-core/src/application/job/pipeline/worker/tests/supervisor.rs`: `store_read_faults_retain_supervision_and_reap_in_a_live_parent` (criterion 2, fault injection). A SQLite store wrapper injects unreadable and missing startup records and a post-exit read fault while a socket rendezvous bounds a real child. The isolated parent asserts fresh-state settlement and OS reaping before it exits; the public runtime cannot inject these observer reads.

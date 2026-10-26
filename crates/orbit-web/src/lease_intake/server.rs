@@ -338,21 +338,19 @@ fn dispatch(state: &DashboardState, request: LeaseIntakeRequest) -> LeaseIntakeR
     }
 }
 
-/// The runtime of the active workspace whose id, or else whose unique name,
-/// is `selector`; tokens name workspaces either way.
+/// The runtime for the unique registered workspace whose id or name is
+/// `selector`; ambiguous selectors are refused.
 fn workspace_runtime(state: &DashboardState, selector: &str) -> Option<Arc<OrbitRuntime>> {
     let pinned = state.pin();
     let entries = pinned.entries();
-    let id = match entries.iter().find(|entry| entry.id == selector) {
-        Some(entry) => entry.id.clone(),
-        None => {
-            let mut named = entries.iter().filter(|entry| entry.name == selector);
-            match (named.next(), named.next()) {
-                (Some(entry), None) => entry.id.clone(),
-                _ => return None,
-            }
-        }
-    };
+    let mut matches = entries
+        .iter()
+        .filter(|entry| entry.id == selector || entry.name == selector);
+    let entry = matches.next()?;
+    if matches.next().is_some() {
+        return None;
+    }
+    let id = entry.id.clone();
     match pinned.runtime_for(&id) {
         Ok(runtime) => Some(runtime),
         Err(rejection) => {
