@@ -6,6 +6,7 @@ use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::LandingObservationStatus;
 use serde_json::Value;
 
+use crate::LandedDiffStats;
 use crate::OrbitRuntime;
 use crate::application::job::CodebaseDeliveryScan;
 use crate::application::task::{
@@ -114,7 +115,34 @@ fn landing_completed(history: &[TaskHistoryEntry]) -> Option<(String, DateTime<U
     })
 }
 
+impl OrbitRuntime {
+    /// Read each delivery's distinct old and new file paths from its recorded
+    /// base to its landed commit, in input order. Opens the local repository
+    /// once and never fetches. Missing repositories or Git objects yield
+    /// `None`, distinct from an empty diff (`Some` with an empty set).
+    pub fn landed_diff_file_paths(
+        &self,
+        deliveries: &[LandedDiffStats],
+    ) -> Vec<Option<BTreeSet<String>>> {
+        let repo = git2::Repository::open(&self.paths().repo_root).ok();
+        deliveries
+            .iter()
+            .map(|row| {
+                changed_paths_between(repo.as_ref()?, &row.landed_commit, Some(&row.base_commit))
+            })
+            .collect()
+    }
+}
+
 fn changed_paths(repo: &git2::Repository, commit: &str) -> Option<BTreeSet<String>> {
+    changed_paths_between(repo, commit, None)
+}
+
+fn changed_paths_between(
+    repo: &git2::Repository,
+    commit: &str,
+    base: Option<&str>,
+) -> Option<BTreeSet<String>> {
     let _span = tracing::trace_span!(
         target: "orbit.core.codebase",
         "codebase_landed_diff",
@@ -123,7 +151,14 @@ fn changed_paths(repo: &git2::Repository, commit: &str) -> Option<BTreeSet<Strin
     .entered();
     let landed = repo.find_commit(git2::Oid::from_str(commit).ok()?).ok()?;
     let tree = landed.tree().ok()?;
-    let parent = if landed.parent_count() == 0 {
+    let parent = if let Some(base) = base {
+        Some(
+            repo.find_commit(git2::Oid::from_str(base).ok()?)
+                .ok()?
+                .tree()
+                .ok()?,
+        )
+    } else if landed.parent_count() == 0 {
         None
     } else {
         Some(landed.parent(0).ok()?.tree().ok()?)

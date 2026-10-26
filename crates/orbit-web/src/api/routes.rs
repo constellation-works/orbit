@@ -243,6 +243,10 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             get(diagnostics::diagnostics_diff_stats),
         )
         .route(
+            "/diagnostics/brief_accuracy",
+            get(diagnostics::diagnostics_brief_accuracy),
+        )
+        .route(
             "/diagnostics/delivery_friction",
             get(diagnostics::diagnostics_delivery_friction),
         )
