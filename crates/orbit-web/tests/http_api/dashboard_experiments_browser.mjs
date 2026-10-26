@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 
-assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, 'America/Los_Angeles', 'the harness pins the zone');
+if (!process.argv[2]) {
+  assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, 'America/Los_Angeles', 'the harness pins the zone');
+}
 
 const classesOf = node => String(node.className || '').split(/\s+/).filter(Boolean);
 
@@ -80,6 +82,8 @@ class Node {
 
   setAttribute(name, value) { this.attrs[name] = String(value); }
   getAttribute(name) { return Object.prototype.hasOwnProperty.call(this.attrs, name) ? this.attrs[name] : null; }
+  // Geometry is exercised in Chromium mode, not in this clock-only DOM shim.
+  getBoundingClientRect() { return { left: 0, right: 300, width: 300 }; }
   addEventListener(type, fn) { (this.listeners[type] ||= []).push(fn); }
   dispatch(type, extra = {}) {
     const event = { type, target: this, stopPropagation() {}, preventDefault() {}, ...extra };
@@ -131,6 +135,7 @@ const experimentsCount = Object.assign(new Node('span'), { id: 'experiments-coun
 const byId = { 'experiments-body': experimentsBody, 'experiments-count': experimentsCount };
 const document = {
   activeElement: null,
+  documentElement: { clientWidth: 1440 },
   body: new Node('body'),
   createElement: tag => new Node(tag),
   createElementNS: (_ns, tag) => new Node(tag),
@@ -207,6 +212,14 @@ const readout = {
     ],
   },
 };
+
+// With module/evidence arguments, exercise real browser geometry using the
+// same buckets as the clock regression below. No browser is needed for that
+// default VM mode, which remains part of the ordinary HTTP test target.
+if (process.argv[2]) {
+  await checkCumulativeTooltipBounds();
+  process.exit(0);
+}
 
 function jsonResponse(body) {
   return {
@@ -318,3 +331,132 @@ assert.deepEqual(local.hovers.map(hover => hover.title), [
   '2026-10-26 02:10 PDT–02:12:30',
 ], `Local hover follows the browser zone and the same cutoff: ${local.hovers.map(hover => hover.title).join(' | ')}`);
 assert.deepEqual(local.hovers.map(hover => `${hover.n} ${hover.value}`), ['n 1 0%', 'n 2 50%', 'n 2 50%']);
+
+// Usage: node dashboard_experiments_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/experiments-browser [--before]
+async function checkCumulativeTooltipBounds() {
+  const { default: http } = await import('node:http');
+  const { default: path } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const { dashboardFile, dashboardCsp } = await import('../../src/tests/dashboard_static.mjs');
+  const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
+  const evidence = path.resolve(process.argv[3]);
+  fs.mkdirSync(evidence, { recursive: true });
+  const suffix = process.argv.includes('--before') ? '-before' : '';
+  const initializer = `
+    import * as experiments from '/static/js/experiments.js';
+    document.querySelector('.tab-pane[data-tab=analytics]').classList.add('active');
+    document.querySelectorAll('.tab-pane[data-tab=analytics] > main').forEach(node => {
+      node.style.display = node.id === 'analytics-experiments-main' ? 'grid' : 'none';
+    });
+    experiments.setExperimentId('exp-intraday');
+    await experiments.fetchAndRenderExperiments();
+    window.fixtureReady = true;
+  `;
+  let currentExperiment = experiment;
+  let currentReadout = readout;
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url, 'http://fixture');
+    if (url.pathname.startsWith('/api/diagnostics/experiments/')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(url.pathname.endsWith('/readout') ? currentReadout : currentExperiment));
+      return;
+    }
+    const served = url.pathname === '/fixture.mjs'
+      ? { data: initializer, type: 'text/javascript' } : dashboardFile(url.pathname);
+    if (!served) { res.writeHead(404); res.end(); return; }
+    const data = url.pathname === '/' ? served.data.toString().replace(
+      /<script[^>]*src="[^"]*app.js"[^>]*><\/script>/,
+      '<script type="module" src="/fixture.mjs"></script>',
+    ) : served.data;
+    res.writeHead(200, { 'content-type': served.type, 'content-security-policy': dashboardCsp() });
+    res.end(data);
+  });
+  const results = [];
+  const failures = [];
+  const errors = [];
+  let browser;
+  try {
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    page.on('pageerror', error => errors.push(String(error)));
+    for (const width of [1440, 375]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const scenario of ['short', 'long', 'wider']) {
+        currentExperiment = structuredClone(experiment);
+        currentReadout = structuredClone(readout);
+        if (scenario !== 'short') {
+          const names = ['controlWithAnUnbrokenArmNameThatIsLong', 'candidateWithAnUnbrokenArmNameThatIsLong'];
+          currentExperiment.arms.forEach((arm, index) => { arm.name = names[index]; });
+          currentReadout.arms.forEach((arm, index) => { arm.name = names[index]; });
+          currentReadout.metrics[0].arms.forEach((arm, index) => { arm.arm = names[index]; });
+          currentReadout.cumulative.arms.forEach((arm, index) => { arm.arm = names[index]; });
+        }
+        await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&case=${width}-${scenario}#analytics/experiments/exp-intraday`);
+        await page.waitForFunction(() => window.fixtureReady);
+        assert.equal(await page.locator('.ex-cum-col').count(), 3);
+        if (scenario === 'wider') {
+          // Placement must follow measured size rather than the shared CSS's
+          // current 244px desktop / 200px phone defaults.
+          await page.locator('.ex-cum-tip').evaluate(node => { node.style.width = '280px'; });
+        }
+        await page.locator('.ex-cum-frame').scrollIntoViewIfNeeded();
+        const overflow = () => page.evaluate(() => {
+          const pane = document.querySelector('.tab-pane[data-tab=analytics]');
+          return { document: document.scrollingElement.scrollWidth, viewport: document.documentElement.clientWidth,
+            pane: pane.scrollWidth, paneClient: pane.clientWidth };
+        });
+        const before = await overflow();
+        for (const bucket of [0, 1, 2]) {
+          await page.locator('.ex-cum-col').nth(bucket).hover();
+          const geometry = await page.locator('.ex-cum-tip').evaluate(node => {
+            const rect = element => {
+              const { left, right, top, bottom, width, height } = element.getBoundingClientRect();
+              return { left, right, top, bottom, width, height };
+            };
+            const textRects = element => {
+              const range = document.createRange();
+              range.selectNodeContents(element);
+              return [...range.getClientRects()].map(({ left, right, top, bottom }) => ({ left, right, top, bottom }));
+            };
+            return { tip: rect(node), frame: rect(node.parentElement),
+              viewport: { left: 0, right: document.documentElement.clientWidth, top: 0, bottom: innerHeight },
+              rows: [...node.querySelectorAll('.mx-tip-row')].map(row => ({
+                name: row.querySelector('.mx-tip-name').textContent,
+                nameRects: textRects(row.querySelector('.mx-tip-name')),
+                value: row.querySelector('.mx-tip-value').textContent,
+                valueRect: rect(row.querySelector('.mx-tip-value')),
+              })) };
+          });
+          const after = await overflow();
+          const label = `${width}px ${scenario} bucket ${bucket}`;
+          assert.deepEqual(geometry.rows.map(row => row.name), currentReadout.cumulative.arms.map(arm => arm.arm), `${label}: requested arm labels render`);
+          const contains = (outer, inner) => inner.left >= outer.left - 1 && inner.right <= outer.right + 1
+            && inner.top >= outer.top - 1 && inner.bottom <= outer.bottom + 1;
+          const check = (condition, message) => { if (!condition) failures.push(`${label}: ${message}`); };
+          check(contains(geometry.viewport, geometry.tip), 'complete tooltip is inside the viewport');
+          check(contains(geometry.frame, geometry.tip), 'complete tooltip is inside the chart frame');
+          for (const row of geometry.rows) {
+            check(contains(geometry.tip, row.valueRect), `${row.name}: ${row.value} stays inside the tooltip`);
+            check(contains(geometry.viewport, row.valueRect), `${row.name}: value stays inside the viewport`);
+            check(row.nameRects.every(rect => contains(geometry.tip, rect)), `${row.name}: full label wraps inside the tooltip`);
+          }
+          check(after.document <= after.viewport && after.document <= before.document, 'no document overflow is introduced');
+          check(after.pane <= after.paneClient && after.pane <= before.pane, 'no pane overflow hides values');
+          results.push({ width, scenario, bucket, ...geometry, before, after });
+          if (bucket === 1) {
+            await page.screenshot({ path: path.join(evidence, `cumulative-${scenario}-dark-${width}${suffix}.png`) });
+          }
+        }
+        await page.mouse.move(0, 0);
+        assert.equal(await page.locator('.ex-cum-tip').isVisible(), false, 'leaving the chart hides its tooltip');
+      }
+    }
+    assert.deepEqual(errors, [], 'no browser errors');
+    assert.deepEqual(failures, [], 'cumulative tooltips and metric values remain readable');
+  } finally {
+    fs.writeFileSync(path.join(evidence, 'bounds.json'), JSON.stringify({ results, failures, errors }, null, 2));
+    if (browser) await browser.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
