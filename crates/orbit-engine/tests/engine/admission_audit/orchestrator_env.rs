@@ -5,6 +5,9 @@ use orbit_agent::loop_engine::audit::NullSink;
 use orbit_engine::activity_job::cli_runner::run_cli_backend;
 use orbit_engine::{DispatchError, V2AuditWriter};
 use orbit_types::workflow::activity_job::{ActivityToolPolicyMode, V2AuditEventKind};
+use orbit_types::workflow::{
+    ExperimentActivityOverlay, ExperimentOverlayRecord, TagInstructionRole,
+};
 use std::{
     fs,
     path::Path,
@@ -343,6 +346,180 @@ fi
             outcome.output, outcome.message
         );
     }
+}
+
+fn experiment_tool_overlay(add: &[&str], remove: &[&str]) -> ExperimentActivityOverlay {
+    ExperimentActivityOverlay {
+        experiment: "exp-overlay-audit".to_string(),
+        arm: "treatment".to_string(),
+        segment: 1,
+        role: TagInstructionRole::Implement,
+        instruction: None,
+        suppress_default_instructions: false,
+        tools_add: add.iter().map(|tool| (*tool).to_string()).collect(),
+        tools_remove: remove.iter().map(|tool| (*tool).to_string()).collect(),
+    }
+}
+
+fn experiment_overlay_records(
+    overlay: ExperimentActivityOverlay,
+    required_tools: &[&str],
+    claimed: bool,
+    deny_mode: bool,
+    spec_tools: &[&str],
+) -> Vec<ExperimentOverlayRecord> {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_executable(
+        &script,
+        r##"#!/bin/sh
+cat >/dev/null
+printf '%s\n' '{"schemaVersion":1,"status":"success","result":{},"error":null}'
+"##,
+    );
+    let audit = persisted_writer(
+        &temp.path().join("audit"),
+        "job-exp-overlay",
+        "grok:grok-build",
+    );
+    let host = TestHost::with_command(script.display().to_string())
+        .with_experiment_overlays(vec![overlay])
+        .with_required_tools(required_tools);
+    let mut spec = test_agent_loop_spec_for("grok", Duration::from_secs(5));
+    if deny_mode {
+        spec.tool_disallow_list = Some(Vec::new());
+    } else {
+        spec.tools = spec_tools.iter().map(|tool| (*tool).to_string()).collect();
+    }
+    let mut input = serde_json::json!({"prompt": "hi"});
+    if claimed {
+        input["claimed"] = serde_json::json!(true);
+    }
+    let outcome = run_cli_backend(
+        &host,
+        &spec,
+        "agent_implement",
+        "job-exp-overlay",
+        audit.clone(),
+        &input,
+        None,
+    )
+    .expect("run succeeds");
+    assert!(outcome.success, "dispatch failed: {:?}", outcome.output);
+    audit
+        .events_snapshot()
+        .expect("audit snapshot")
+        .into_iter()
+        .filter_map(|event| match event.kind {
+            V2AuditEventKind::ExperimentOverlayApplied { overlays, .. } => Some(overlays),
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+#[test]
+fn experiment_overlay_claimed_denied_addition_emits_no_applied_record() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_claimed_denied_addition_emits_no_applied_record"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&["orbit.task.update"], &[]),
+        &[],
+        true,
+        true,
+        &[],
+    );
+    assert!(
+        records.is_empty(),
+        "claimed-denied addition is a no-op: {records:?}"
+    );
+}
+
+#[test]
+fn experiment_overlay_required_tool_removal_emits_no_applied_record() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_required_tool_removal_emits_no_applied_record"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&[], &["github.run.list"]),
+        &["github.run.list"],
+        false,
+        true,
+        &[],
+    );
+    assert!(
+        records.is_empty(),
+        "required-tool removal is filtered: {records:?}"
+    );
+}
+
+#[test]
+fn experiment_overlay_already_effective_addition_emits_no_applied_record() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_already_effective_addition_emits_no_applied_record"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&["orbit.search"], &[]),
+        &[],
+        false,
+        true,
+        &[],
+    );
+    assert!(
+        records.is_empty(),
+        "already-effective addition is a no-op: {records:?}"
+    );
+}
+
+#[test]
+fn experiment_overlay_wildcard_effective_addition_emits_no_applied_record() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_wildcard_effective_addition_emits_no_applied_record"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&["orbit.task.show"], &[]),
+        &[],
+        false,
+        false,
+        &["orbit.task.*"],
+    );
+    assert!(
+        records.is_empty(),
+        "wildcard-effective addition is a no-op: {records:?}"
+    );
+}
+
+#[test]
+fn experiment_overlay_actual_removal_records_only_removed_tool() {
+    if !super::run_isolated(concat!(
+        module_path!(),
+        "::experiment_overlay_actual_removal_records_only_removed_tool"
+    )) {
+        return;
+    }
+    let records = experiment_overlay_records(
+        experiment_tool_overlay(&[], &["github.run.list"]),
+        &[],
+        false,
+        true,
+        &[],
+    );
+    assert_eq!(records.len(), 1, "{records:?}");
+    assert_eq!(records[0].tools_removed, ["github.run.list"], "{records:?}");
+    assert!(records[0].tools_added.is_empty(), "{records:?}");
 }
 
 /// A blob the audit store cannot write is counted as an audit failure and
