@@ -839,17 +839,20 @@ See [first-run.md](first-run.md) for the Linux prerequisite.
 ## Crew selection and actual execution
 
 For ship dispatch, an explicit run crew overrides the task's explicit pin,
-validated pool assignment, or `default` fallback. Otherwise the complexity pool
-and default chain apply as described below. A creation without a crew draws
-from its complexity pool, falling back to `default_crew`, and stores
-`crew_source` as `explicit`, `pool:<complexity>`, `purpose:<purpose>` (a task
-whose system tag or `crew-purpose:<purpose>` tag names a configured purpose
-pool), or `default`, also recorded
-in assignment history. A complexity re-rate redraws a pool-sourced crew from
-another tier or a `default` fallback and records the previous and new sources
-and crews in `crew_redrawn` history; explicit crews stay pinned. A `default`
-fallback is not an explicit pin. Status transitions alone preserve the choice.
-Admission revalidates pool assignments and `default` fallbacks against the
+validated pool assignment, or `default` fallback. Otherwise the purpose, type,
+complexity and default chain apply as described below. A creation without a
+crew draws in this order: its purpose pool, when its task carries a system tag
+or `crew-purpose:<purpose>` tag naming a configured purpose pool with an enabled
+member; else its type pool, `workflow.type_complexity_crews.<type>.<tier>`, when
+its type and tier have one; else its complexity pool, falling back to
+`default_crew`. It stores `crew_source` as `explicit`, `purpose:<purpose>`,
+`type:<type>/<tier>`, `pool:<complexity>` or `default`, also recorded in
+assignment history. A complexity re-rate, or a tag or context-file edit that
+changes the task's type pool, redraws a pool-, type- or default-sourced crew
+and records the previous and new sources and crews in `crew_redrawn` history;
+explicit and purpose-sourced crews stay pinned. A `default` fallback is not an
+explicit pin. Status transitions alone preserve the choice. Admission
+revalidates pool and type-pool assignments and `default` fallbacks against the
 current tier and enabled pool members, recovering legacy provenance from
 assignment history when needed, without writing to the task. An empty crew
 string on task update re-draws for the task's current complexity rather than
