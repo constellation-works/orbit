@@ -93,6 +93,6 @@ agent can do most of them for you with the bundled `orbit-setup` or
   </a>
   <a class="orbit-card" href="./path-leases/">
     <h3>Hold Paths with Leases</h3>
-    <p>Announce or reserve the workspace paths you are editing outside a drain, then check, renew and release the lease over HTTP.</p>
+    <p>Announce or reserve the workspace paths you are editing outside a drain, then check, renew and release the lease.</p>
   </a>
 </div>
