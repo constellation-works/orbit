@@ -561,7 +561,7 @@ pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitEr
     )))
 }
 
-async fn shutdown_signal() {
+pub(crate) async fn shutdown_signal() {
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };

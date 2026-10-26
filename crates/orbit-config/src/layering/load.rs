@@ -15,8 +15,8 @@ use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
 };
 use crate::registry::{
-    CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX, LEASE_INTAKE_PEER_USER_KEY, read_optional,
-    resolve_percent,
+    CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX, LEASE_INTAKE_PEER_USER_KEY,
+    LEASE_LISTENER_KEY_PREFIX, read_optional, resolve_percent,
 };
 use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
 
@@ -341,24 +341,34 @@ pub(crate) fn reject_workspace_crew_env(
     )))
 }
 
-/// Refuse `lease.intake.peer_user` in a workspace `config.toml`.
+/// Refuse `lease.intake.peer_user` and `lease.listener.*` in a workspace
+/// `config.toml`.
 ///
-/// It names the OS user Orbit Web accepts lease operations from, so a
-/// checkout must not be able to choose it; only the global file may.
+/// The first names the OS user Orbit Web accepts lease operations from, so a
+/// checkout must not be able to choose it; the second belongs to the lease
+/// listener user's own Orbit home. Only the global file may set either.
 pub(crate) fn reject_workspace_lease_intake(
     document: &toml::Value,
     path: &Path,
 ) -> Result<(), OrbitError> {
-    if value_at_path(document, LEASE_INTAKE_PEER_USER_KEY).is_none() {
-        return Ok(());
+    if value_at_path(document, LEASE_INTAKE_PEER_USER_KEY).is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "{LEASE_INTAKE_PEER_USER_KEY} is not a workspace setting: remove it from '{}'. It \
+             names the OS user allowed on Orbit Web's lease intake socket, so it is read only \
+             from the global config.toml; `orbit config set --global \
+             {LEASE_INTAKE_PEER_USER_KEY} <user>` edits it",
+            redact_home_dir(&path.display().to_string())
+        )));
     }
-    Err(OrbitError::InvalidInput(format!(
-        "{LEASE_INTAKE_PEER_USER_KEY} is not a workspace setting: remove it from '{}'. It \
-         names the OS user allowed on Orbit Web's lease intake socket, so it is read only \
-         from the global config.toml; `orbit config set --global \
-         {LEASE_INTAKE_PEER_USER_KEY} <user>` edits it",
-        redact_home_dir(&path.display().to_string())
-    )))
+    let listener = LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.');
+    if value_at_path(document, listener).is_some() {
+        return Err(OrbitError::InvalidInput(format!(
+            "[{listener}] is not a workspace setting: remove it from '{}'. The lease listener \
+             reads its settings only from the listener user's global config.toml",
+            redact_home_dir(&path.display().to_string())
+        )));
+    }
+    Ok(())
 }
 
 /// Refuse a `[machine]` table in a workspace `config.toml`.
