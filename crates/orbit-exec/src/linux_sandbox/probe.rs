@@ -7,7 +7,8 @@ use std::time::Duration;
 use orbit_common::process::{BoundedRunError, CapturedOutput, run_bounded_capped_typed};
 
 use super::wrapper::{
-    BUNDLED_BWRAP_PATH, BwrapSource, HOST_BWRAP_PATH, trusted_wrapper, verify_root_owned_wrapper,
+    BUNDLED_BWRAP_PATH, BwrapSource, HOST_BWRAP_PATH, verified_bwrap_path,
+    verify_root_owned_wrapper,
 };
 
 /// Namespace setup and `--help` answer in milliseconds; a probe still running
@@ -36,7 +37,7 @@ pub fn bwrap_path() -> Option<PathBuf> {
     if !cfg!(target_os = "linux") {
         return None;
     }
-    trusted_wrapper(bwrap_program_for_audit())
+    verified_bwrap_path(bwrap_program_for_audit())
         .ok()
         .filter(|path| is_executable(path))
 }

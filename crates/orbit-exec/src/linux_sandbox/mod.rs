@@ -87,7 +87,7 @@ use rules::{
 #[cfg(all(test, target_os = "linux"))]
 use spawn::inherit_mount_sources;
 use spawn::prepare_mount_source;
-use wrapper::trusted_wrapper;
+use wrapper::verified_bwrap_path;
 use write_grants::{CompiledModifyRules, compile_rule_regex, render_glob_path};
 
 #[cfg(test)]
