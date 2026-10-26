@@ -243,7 +243,7 @@ pub(crate) fn health_router() -> Router<state::DashboardState> {
 pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitError> {
     Ok(assets::dashboard_file_router()?
         .merge(health_router())
-        .nest("/api", api::router())
+        .nest("/api", api::router(state.clone()))
         // Stream JSON through gzip when negotiated. SSE and other media stay
         // untouched; tower-http also preserves already-encoded remote bodies
         // and static assets rather than compressing them a second time.

@@ -5,10 +5,11 @@
 //! large dependency subtree (axum, etc). Behavior is identical to the prior
 //! in-tree implementation.
 //!
-//! Public surface is deliberately tiny: `ServeArgs` (clap) plus two entry
-//! points — `serve()` for a caller-supplied runtime (single-workspace mode)
-//! and `serve_from_env()`, the entry point for `orbit web serve`, which
-//! always serves every registered workspace (global mode; see ORB-10029).
+//! Public entry points include `ServeArgs` (clap), `serve()` for a
+//! caller-supplied runtime (single-workspace mode), and `serve_from_env()`,
+//! the entry point for `orbit web serve`, which always serves every registered
+//! workspace (global mode; see ORB-10029). [`lease_router`] exposes just the
+//! lease API over a [`LeaseBackend`] for servers with their own authentication.
 //! All routes, content types, defaults, and graceful shutdown are preserved.
 
 mod api;
@@ -30,6 +31,7 @@ mod why_stuck;
 #[cfg(test)]
 mod tests;
 
+pub use api::leases::{LeaseBackend, LeaseBackendResult, LeaseCaller, lease_router};
 pub use connect::{ConnectArgs, connect};
 
 pub(crate) use serve::{DEFAULT_DASHBOARD_PORT, default_workspace_selection, open_browser};

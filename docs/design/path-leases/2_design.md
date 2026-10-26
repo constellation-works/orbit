@@ -18,8 +18,8 @@ related_artifacts: []
 
 This document proposes how path leases work. The lease row of §2, the advisory/hard grant rules
 of §3 without the queue, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
-runtime operations, with no MCP, CLI or REST surface yet (see "Stored so far" and
-"Runtime operations" in §2); the rest of §2–§9 is not. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
+runtime operations, with a loopback REST surface (see §6) and no MCP or CLI surface yet
+(see "Stored so far" and "Runtime operations" in §2); the rest of §2–§9 is not. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
 [conflict-budget](../conflict-budget/1_scope.md), and open directions to
 [3_vision.md](./3_vision.md).
 
@@ -182,6 +182,27 @@ All surfaces call one runtime operation per verb, so they cannot drift.
 | show, list | `orbit.lease.show`, `orbit.lease.list` | `orbit lease show <id>`, `orbit lease list` | `GET /api/leases[/<id>]` |
 | notices | `orbit.lease.notices` | `orbit lease notices [--follow]` | `GET /api/leases/notices?after=` and `GET /api/leases/events` (SSE) |
 | check | `orbit.lease.check` | `orbit lease check <path>…` | `POST /api/leases/check` |
+
+**Implemented loopback REST surface.** Orbit Web serves request, renew, release, show, list
+and check through the same runtime operations and returns their JSON unchanged. An overlapping
+hard request returns `granted: false` with the runtime's typed `conflicts`, naming each holder
+by kind and ID. Expansion returns HTTP 501 with `code: "not_available_in_this_phase"`; notices
+and events are not implemented. Select a workspace with `?workspace=<id>` or use the server's
+default. Request and check bodies are the corresponding operation's JSON input; renew accepts
+its TTL fields and permits an omitted body to use the default TTL. Expansion also permits an
+omitted body. For show, renew and release the URL supplies `lease_id`, overriding a body ID.
+Request declares `principal` in its JSON body or query string; other verbs may declare it too.
+If both body and query declare a principal, they must match. Release accepts query attribution.
+Writes (request, renew, expand and release) require the dashboard's operator session and its
+normal matching loopback Host/Origin headers. Check remains readable without the operator session,
+even though its HTTP method is POST; its Origin check still applies.
+
+`orbit_web::lease_router(backend)` exposes only these `/leases` routes for nesting under `/api`.
+Its public `LeaseBackend` receives `LeaseCaller` (workspace and declared principal) separately
+from the operation JSON and executes on the blocking pool. The dashboard adapter selects its
+runtime from a pinned workspace snapshot and enforces operator write authority. Other servers
+supply their own backend and authentication/Origin policy; the future listener must bind caller
+declarations to its authenticated token. No listener or intake implementation is provided here.
 
 `check` answers "may I edit these paths under my lease, and does anyone else hold them?" without
 changing state. It is what an editor hook calls: a Claude Code `PreToolUse` hook on `Edit` and
