@@ -291,8 +291,18 @@ fn backlog_forecast(
         .into_iter()
         .filter(|row| row.status == TaskStatus::Done)
     {
-        let completed_at = runtime
-            .get_task_history(&row.task_id)?
+        let task_history = match runtime.get_task_history(&row.task_id) {
+            Ok(history) => history,
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %row.task_id,
+                    %error,
+                    "backlog forecast: task history unreadable"
+                );
+                continue;
+            }
+        };
+        let completed_at = task_history
             .into_iter()
             .rev()
             .find(|entry| entry.to_status == Some(TaskStatus::Done))
