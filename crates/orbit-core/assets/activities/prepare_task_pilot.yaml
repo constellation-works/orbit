@@ -30,7 +30,10 @@ spec:
     host, a task the PR pipeline would deliver is excluded as
     `pr_forge_remote_missing`, and `pr_forge_refusal` carries the refusal
     naming the remotes and the fixes; a `delivery:task_local_pipeline` tag
-    keeps a task eligible.
+    keeps a task eligible. Under `workflow.explore_brief.*` in a Git
+    workspace, each requested task carries `explore_brief_requested: true`
+    and its partition lists it in `explore_brief_task_ids`, so the pilot
+    returns an explore brief for it; both are absent when none is requested.
   input_schema_json:
     type: object
     properties:

@@ -197,6 +197,7 @@ pub(super) struct PreparedTask {
     material_components: Field<Option<Map<String, Value>>>,
     history_len: Field<Option<usize>>,
     context_creation_identity: Field<Option<String>>,
+    explore_brief_requested: Field<Option<bool>>,
 }
 
 /// Prepare's exclusions: echoed verbatim in the report, and read for the
@@ -500,6 +501,12 @@ impl PreparedTask {
             material_components,
             history_len,
             context_creation_identity,
+            // Absent on a payload prepared before briefs, and tolerated when
+            // malformed: a brief never refuses its assessment.
+            explore_brief_requested: matches!(
+                self.explore_brief_requested,
+                Field::Present(Some(true))
+            ),
         };
         Ok((task_id.to_string(), snapshot))
     }

@@ -118,7 +118,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Experiments](./design/experiments/1_scope.md) | Land slice 1 (ORB-18473, in progress), then slice 2 (ORB-18474) | claude |
-| [Explore Brief](./design/explore-brief/1_scope.md) | File slice S2, the pilot storing briefs in shadow (no task yet) | claude |
+| [Explore Brief](./design/explore-brief/1_scope.md) | File slice S3, delivering a fresh or drifted brief to owner runs | claude |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Refuse unknown fields after the warn window; ORB-15934 was archived, no live task | claude |
 | [Path Leases](./design/path-leases/1_overview.md) | Land ORB-18406 (orbit.lease tools and CLI), then listener tasks ORB-18410, 18412, 18430 | claude |

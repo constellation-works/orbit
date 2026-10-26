@@ -1,11 +1,11 @@
 ---
 title: "Scope: explore briefs from task-pilot"
 owner: claude
-last_updated: 2026-10-25
+last_updated: 2026-10-26
 last_validated: 2026-10-25
 status: Draft
 stage: building
-next: "File slice S2, the pilot storing briefs in shadow (no task yet)"
+next: "File slice S3, delivering a fresh or drifted brief to owner runs"
 feature: explore-brief
 doc_role: scope
 type: design
@@ -15,7 +15,8 @@ tags: [explore-brief, task-pilot, task-artifacts, explore, implement-prompt]
 
 # Scope: explore briefs from task-pilot
 
-Status: proposed. Direction approved by Daniel on 2026-10-25; nothing is implemented.
+Status: building. Direction approved by Daniel on 2026-10-25. S2 is implemented: the pilot
+produces and stores briefs in shadow ([ORB-18539]); no brief reaches an implementer yet.
 Bearing: task-pilot already inspects every prepared task read-only at a pinned revision
 before it runs. The `task_pilot_pipeline` job runs `prepare_task_pilot`, fans `task_pilot`
 out over partitions of one to five tasks, then validates the results in the deterministic
@@ -476,5 +477,6 @@ and orchestrator tasks. Anchors are `path::symbol`, not line numbers.
 - [ORB-18033] — reads out the explore-first trial (`ws_constellation`).
 - [ORB-18363] — designed explore briefs (this doc).
 - [ORB-18364] — charts average normalized tokens per task over time by complexity and tag cohort.
+- [ORB-18539] — S2: the pilot produces and stores briefs in shadow.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

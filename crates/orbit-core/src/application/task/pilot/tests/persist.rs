@@ -260,3 +260,184 @@ fn overlapping_pilot_graphs_lock_in_order_and_refuse_the_closing_edge() {
     assert!(dependencies(&c).is_empty());
     assert_eq!(dependencies(&d), std::slice::from_ref(&a));
 }
+
+/// An explore brief is the pilot's own product, stored apart from its
+/// receipt: a valid brief is written as the system-written artifact the
+/// receipt names, and an invalid sibling's brief is dropped with its reason
+/// while its assessment still applies, unrepaired [ORB-18539].
+#[test]
+fn pilot_apply_writes_a_valid_explore_brief_and_drops_an_invalid_one() {
+    use orbit_types::task::{ArtifactWriter, EXPLORE_BRIEF_ARTIFACT, TaskArtifact};
+
+    let workspace = workspace(Some("[workflow.explore_brief]\nenabled = true\n"));
+    std::fs::create_dir_all(workspace.repo.join("src")).expect("src dir");
+    std::fs::write(workspace.repo.join("src/lib.rs"), "pub fn greet() {}\n").expect("lib");
+    git(&workspace.repo, &["add", "src/lib.rs"]);
+    git(&workspace.repo, &["commit", "-m", "lib"]);
+    let valid = add_task(&workspace.runtime, "valid brief", TaskStatus::Backlog).id;
+    let dropped = add_task(&workspace.runtime, "dropped brief", TaskStatus::Backlog).id;
+    let path = workspace.repo.canonicalize().expect("canonicalize repo");
+    let prepared = workspace
+        .runtime
+        .run_deterministic(
+            "prepare_task_pilot",
+            &json!({}),
+            &json!({
+                "workspace_path": path,
+                "task_ids": [valid, dropped],
+                "base_branch": "main",
+            }),
+            ToolContext::default(),
+        )
+        .expect("prepare task pilot");
+    assert_eq!(
+        prepared["partitions"][0]["explore_brief_task_ids"],
+        json!([valid, dropped]),
+        "{prepared}"
+    );
+    let assessment = |task_id: &str, what: &str| {
+        json!({
+            "task_id": task_id,
+            "context_files_after": ["file:src/lib.rs"],
+            "disposition": "selectors",
+            "recommended_crew": "opus",
+            "recommended_complexity": "low",
+            "assessment_rationale": "src/lib.rs holds greet.",
+            "validation_approach": "Run the apply action.",
+            "confidence": "high",
+            "evidence_gaps": [],
+            "reassessment_triggers": [],
+            "blocked_by": [],
+            "adr_conflicts": [],
+            "utility_warnings": [],
+            "surface_warnings": [],
+            "duplicate_of": Value::Null,
+            "already_landed": Value::Null,
+            "explore_brief": {
+                "change": [{"target": "symbol:src/lib.rs#greet:function", "what": what}],
+                "pattern": [{"target": "file:README.md", "why": "The fixture's only doc."}],
+                "gotchas": [{"text": "Keep the public name.", "cite": "file:src/lib.rs"}],
+                "out_of_scope": ["Renaming the crate."],
+                "confidence": "high",
+            },
+        })
+    };
+    let (revision, tree) = proof(&prepared);
+    let output = workspace
+        .runtime
+        .run_deterministic(
+            "apply_task_pilot_results",
+            &json!({}),
+            &json!({
+                "workspace_path": prepared["workspace_path"],
+                "prepared": prepared,
+                "results": [{
+                    "partition_index": 0,
+                    "observed_revision": revision,
+                    "observed_tree": tree,
+                    "task_ids": [valid, dropped],
+                    "tasks": [
+                        assessment(&valid, "Return a greeting."),
+                        assessment(&dropped, "Return a greeting from src/lib.rs:1."),
+                    ],
+                }],
+            }),
+            ToolContext::default(),
+        )
+        .expect("apply task pilot");
+    assert_eq!(output["status"], "succeeded", "{output}");
+    assert_eq!(
+        output["applied_count"], 2,
+        "an invalid brief never fails its task: {output}"
+    );
+    assert_eq!(
+        output["repair_count"], 0,
+        "an invalid brief spends no repair: {output}"
+    );
+
+    let receipt = |task_id: &str| {
+        let task = workspace.runtime.get_task(task_id).expect("task");
+        let comment = workspace
+            .runtime
+            .get_task_comments(task_id)
+            .expect("comments")
+            .into_iter()
+            .rev()
+            .find(|comment| comment.by == "task-pilot")
+            .expect("pilot receipt");
+        let operation_id = comment.receipt().expect("receipt").operation_id.to_string();
+        let audit: Value = serde_json::from_str(&comment.message).expect("audit json");
+        (task, operation_id, audit)
+    };
+
+    let (task, operation_id, audit) = receipt(&valid);
+    assert_eq!(task.context_files, ["file:src/lib.rs"]);
+    let manifest = workspace
+        .runtime
+        .get_task_artifact_manifest(&valid)
+        .expect("manifest");
+    let entry = manifest
+        .iter()
+        .find(|entry| entry.path == EXPLORE_BRIEF_ARTIFACT)
+        .expect("the valid brief is stored");
+    assert_eq!(entry.writer, Some(ArtifactWriter::System));
+    let artifact = workspace
+        .runtime
+        .get_task_artifact(&valid, EXPLORE_BRIEF_ARTIFACT)
+        .expect("read brief")
+        .expect("brief artifact");
+    let brief: Value = serde_json::from_slice(&artifact.content).expect("brief json");
+    assert_eq!(brief["receipt_operation_id"], operation_id, "{brief}");
+    assert_eq!(brief["inspection_revision"], revision, "{brief}");
+    assert_eq!(brief["observed_tree"], tree, "{brief}");
+    assert_eq!(
+        brief["material_fingerprint"], audit["applied_material"]["material"][0],
+        "the brief is keyed to the material its receipt sealed: {brief}"
+    );
+    assert_eq!(
+        brief["brief"]["change"][0]["target"],
+        "symbol:src/lib.rs#greet:function"
+    );
+    assert_eq!(audit["explore_brief"]["written"], EXPLORE_BRIEF_ARTIFACT);
+    assert_eq!(audit["explore_brief"]["bytes"], artifact.content.len());
+    assert!(
+        audit["assessment"].get("explore_brief").is_none(),
+        "the receipt never carries the brief itself: {audit}"
+    );
+
+    let (task, _, audit) = receipt(&dropped);
+    assert_eq!(
+        task.context_files,
+        ["file:src/lib.rs"],
+        "the assessment applied"
+    );
+    let reason = audit["explore_brief"]["dropped"]
+        .as_str()
+        .unwrap_or_else(|| panic!("dropped reason in the audit: {audit}"));
+    assert!(reason.contains("line number"), "{reason}");
+    assert!(
+        workspace
+            .runtime
+            .get_task_artifact(&dropped, EXPLORE_BRIEF_ARTIFACT)
+            .expect("read brief")
+            .is_none(),
+        "a dropped brief is not stored"
+    );
+
+    let forged = workspace.runtime.update_task(
+        &dropped,
+        TaskUpdateParams {
+            upsert_artifacts: vec![TaskArtifact {
+                path: "./Explore-Brief.json".to_string(),
+                content: b"{}".to_vec(),
+                media_type: "application/json".to_string(),
+                created_by: None,
+            }],
+            ..Default::default()
+        },
+    );
+    let error = forged
+        .expect_err("only the pilot writes the brief")
+        .to_string();
+    assert!(error.contains("reserved"), "{error}");
+}

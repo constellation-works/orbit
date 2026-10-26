@@ -479,6 +479,9 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.explore]`: whether implement and review-repair runs may
     /// delegate read-only exploration, and its per-run budgets.
     explore: orbit_config::ExploreSettings,
+    /// `[workflow.explore_brief]`: whether the task pilot is asked for
+    /// explore briefs, for which tasks, and whether they are delivered.
+    explore_brief: orbit_config::ExploreBriefSettings,
     /// `workflow.crew_performance_types`: the scorecard's task-type lens.
     crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
     /// `workflow.crew_performance`: whether the snapshot refresh scans.
@@ -544,6 +547,7 @@ impl OrbitRuntimeSettings {
         ),
         regression_risk: orbit_config::RegressionRiskSettings,
         explore: orbit_config::ExploreSettings,
+        explore_brief: orbit_config::ExploreBriefSettings,
         crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
         crew_performance: orbit_config::CrewPerformanceMode,
         crew_performance_window_days: u32,
@@ -595,6 +599,7 @@ impl OrbitRuntimeSettings {
             diff_non_code_paths: diff_path_filters.1,
             regression_risk,
             explore,
+            explore_brief,
             crew_performance_types,
             crew_performance,
             crew_performance_window_days,
@@ -649,6 +654,10 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn explore(&self) -> orbit_config::ExploreSettings {
         self.explore
+    }
+
+    pub(crate) fn explore_brief(&self) -> &orbit_config::ExploreBriefSettings {
+        &self.explore_brief
     }
 
     pub(crate) fn regression_risk(&self) -> orbit_config::RegressionRiskSettings {

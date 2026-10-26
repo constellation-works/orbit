@@ -49,7 +49,12 @@
 # checkout; only a selector the task's durable creation grant names (recorded
 # by an operator `allow_missing_context` write) may be missing there, and apply
 # keeps every such target the assessment omits. Apply atomically persists context_files, assessed complexity, its
-# audit rationale/evidence, and a replay receipt. A CI sweep may pass its
+# audit rationale/evidence, and a replay receipt.
+# Under `workflow.explore_brief.*`, prepare lists the tasks requesting an
+# explore brief in each partition's `explore_brief_task_ids`; apply validates
+# each returned brief and writes it as the system-written `explore-brief.json`
+# task artifact before the receipt. An invalid brief is dropped with its
+# reason in the receipt and never fails or repairs the assessment. A CI sweep may pass its
 # exact filing record plus literal promotion authority; only then can apply
 # promote a warning-free, selector-backed proposed repair to backlog. A filed
 # task another writer already promoted settles superseded `promoted_elsewhere`. An
@@ -140,6 +145,9 @@ spec:
           default_input:
             task_ids: "{{ item.task_ids }}"
             partition_index: "{{ item.partition_index }}"
+            # The whole item, so a partition without
+            # `explore_brief_task_ids` (none requested) still dispatches.
+            partition: "{{ item }}"
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
             owner_machine: "{{ steps.prepare.output.owner_machine }}"
             implementation_lane: "{{ steps.prepare.output.implementation_lane }}"
@@ -175,6 +183,7 @@ spec:
             task_ids: "{{ item.task_ids }}"
             partition_index: "{{ item.partition_index }}"
             validation_errors: "{{ item.validation_errors }}"
+            partition: "{{ item }}"
             repair_attempt: true
             workspace_path: "{{ steps.prepare.output.workspace_path }}"
             owner_machine: "{{ steps.prepare.output.owner_machine }}"

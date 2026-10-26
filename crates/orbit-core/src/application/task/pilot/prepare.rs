@@ -15,8 +15,8 @@ use super::persist::{no_target_assessment_marker, source_superseded};
 use super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::validation_tools::ImplementationLane;
 use super::{
-    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, VALIDATION_TOOL_WARNINGS,
-    requested_base_branch,
+    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, EXPLORE_BRIEF_REQUESTED,
+    EXPLORE_BRIEF_TASK_IDS, VALIDATION_TOOL_WARNINGS, requested_base_branch,
 };
 
 const DEFAULT_MAX_PARTITION_SIZE: usize = 5;
@@ -305,6 +305,7 @@ pub(crate) fn prepare(
     #[cfg(test)]
     hydration_test_hook::run(runtime);
     let lane = ImplementationLane::resolve(runtime);
+    let explore_brief = runtime.explore_brief_settings();
     let mut retained = Vec::with_capacity(task_ids.len());
     let mut superseded_during_preparation = Vec::new();
     for (task_id, mut snapshot) in task_ids.into_iter().zip(task_snapshots) {
@@ -340,6 +341,14 @@ pub(crate) fn prepare(
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         snapshot[CONTEXT_CREATION_SELECTORS] = json!(creation.selectors());
         snapshot[CONTEXT_CREATION_IDENTITY] = json!(creation.identity());
+        // A brief is keyed to the pinned revision, so a non-Git workspace
+        // never requests one. Tags are read now: a task tagged after its
+        // pilot gets a brief only when it is piloted again. The mark is
+        // written only when set, so a workspace without briefs keeps its
+        // prepared shape.
+        if source.is_some() && explore_brief.requested_for(&task.tags) {
+            snapshot[EXPLORE_BRIEF_REQUESTED] = json!(true);
+        }
 
         if let Some(source) = &source {
             let fingerprints = runtime
@@ -427,15 +436,28 @@ pub(crate) fn prepare(
             groups.push(vec![task_id.clone()]);
         }
     }
+    let brief_requested = task_snapshots
+        .iter()
+        .filter(|snapshot| snapshot[EXPLORE_BRIEF_REQUESTED] == json!(true))
+        .filter_map(|snapshot| snapshot["task_id"].as_str())
+        .collect::<BTreeSet<_>>();
     let partitions = groups
         .iter()
         .flat_map(|ids| ids.chunks(max_partition_size))
         .enumerate()
         .map(|(partition_index, ids)| {
-            json!({
+            let mut partition = json!({
                 "partition_index": partition_index,
                 "task_ids": ids,
-            })
+            });
+            let requested = ids
+                .iter()
+                .filter(|id| brief_requested.contains(id.as_str()))
+                .collect::<Vec<_>>();
+            if !requested.is_empty() {
+                partition[EXPLORE_BRIEF_TASK_IDS] = json!(requested);
+            }
+            partition
         })
         .collect::<Vec<_>>();
 

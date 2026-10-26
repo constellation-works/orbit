@@ -241,6 +241,13 @@ impl RuntimeKernel {
         self.context.settings().explore()
     }
 
+    /// `[workflow.explore_brief]` as admitted: whether the task pilot is
+    /// asked for explore briefs, for which tasks, and whether they reach the
+    /// implementer.
+    pub fn explore_brief_settings(&self) -> &orbit_config::ExploreBriefSettings {
+        self.context.settings().explore_brief()
+    }
+
     /// `[workflow.tag_instructions]` as admitted.
     pub fn tag_instruction_settings(&self) -> &orbit_config::TagInstructionSettings {
         self.context.settings().tag_instructions()
