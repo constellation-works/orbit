@@ -63,12 +63,20 @@ loopback address `http://127.0.0.1:7878`; substitute your server's port.
 | `advisory` | Always | Nothing. The answer names the holders it overlaps. |
 | `hard` | Only when its surface overlaps nothing else held | Overlapping hard requests are refused while it is active. |
 
-A hard request first drops any selector covered by
-`workflow.unlocked_context_paths` from its stored surface. It is then granted
-only when the remaining surface overlaps no context lock of an `in-progress`
-or `review` task, no task reservation and no other hard lease. There is no
-waiting queue: an overlapping hard request is refused at once (see
-[Refusals](#refusals)).
+A hard request uses `workflow.unlocked_context_paths` to determine its stored
+surface. If every selector matches, the request keeps all selectors. Only a
+mixed request — one with both matching and non-matching selectors — drops the
+matching selectors. The request is then granted only when its stored surface
+overlaps no context lock of an `in-progress` or `review` task, no task
+reservation and no other hard lease. There is no waiting queue: an overlapping
+hard request is refused at once (see [Refusals](#refusals)).
+
+For example, with `workflow.unlocked_context_paths = ["docs/**"]`, a docs-only
+hard request for `["file:docs/guide.md"]` keeps that selector in its stored
+surface and can be refused if another holder locks that guide. A mixed hard
+request for `["file:docs/guide.md", "file:src/lib.rs"]` drops the guide and
+keeps only `file:src/lib.rs`; a holder of the guide alone does not conflict
+with that request.
 
 If you omit `mode`, the request uses `lease.default_mode` (`advisory` unless
 configured otherwise). If your principal class is configured with
