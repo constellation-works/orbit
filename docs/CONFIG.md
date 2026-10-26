@@ -2168,7 +2168,7 @@ An experiment compares a control arm against one or more treatment arms, each an
 
 | Key | Default | What it does |
 |---|---|---|
-| `experiments.enabled` | `false` | Allow experiments to start in this workspace. While false, `start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
+| `experiments.enabled` | `false` | Allow experiments to start in this workspace. While false, new assignments are disabled and `start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
 | `experiments.max_running` | `3` | **Advanced.** Experiments that may run at once in this workspace (`1`–`20`). `start` and `resume` are refused while that many are running; a paused experiment does not count. |
 | `experiments.config_keys` | `[]` | **Advanced.** Config keys an arm's `config` overlay may set. `start` is refused while any arm sets a key not on this list, so the default allows no config overlay. |
 
@@ -2178,6 +2178,10 @@ enabled = true
 max_running = 2
 config_keys = ["workflow.explore.enabled"]
 ```
+
+At a task's first delivery admission, running shadow experiments match complexity, task type, all included tags, no excluded tags and origin. The draw uses the leading eight bytes (big-endian) of `sha256("<salt>:<experiment_id>:<task_id>")` modulo the total active arm weight, walked in arm declaration order. The recorded arm and segment survive retries, reweights and experiment conclusion. Later admissions do not reconsider an initially ineligible task. Overlapping surfaces are reserved across all arms, including control; later experiments record `surface_conflict` exclusions.
+
+`orbit experiment assign <experiment> --task <task> --arm <arm>` forces an unassigned task into an active arm, recording `forced=true`; it refuses existing assignments or exclusions and surface conflicts. `orbit task show --fields experiments` exposes the assignments and exclusions. `orbit run show` labels captured arms `shadow`: prompts, tools and crew selection are unchanged. Owner claims carry a task-bound overlay capture, limited to 256 KiB; followers refuse missing, malformed or digest-mismatched captures without consulting local experiment configuration.
 
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 

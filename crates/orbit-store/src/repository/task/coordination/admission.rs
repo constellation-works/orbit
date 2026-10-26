@@ -23,6 +23,10 @@ use crate::repository::task::v2::{TaskV2Store, task_comment_from_row, task_histo
 pub type ValidationHold<'a> =
     dyn Fn(&Task, &[TaskComment], &[TaskHistoryEntry]) -> Result<Option<String>, OrbitError> + 'a;
 
+/// Owner callback invoked only for the selected task, before claim persistence.
+pub type ExperimentCapture<'a> =
+    dyn Fn(&Task) -> Result<orbit_types::workflow::CapturedExperiments, OrbitError> + 'a;
+
 pub(super) const RECEIPT_KIND: &str = "distributed-admission-receipt-v1";
 const CLAIM_KIND: &str = "distributed-execution-claim-v1";
 pub const ADMISSION_RESERVATION_TTL_SECONDS: u32 = 14_400;
@@ -276,6 +280,41 @@ impl TaskCommitBoundary {
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
     ) -> Result<AdmissionLookup, OrbitError> {
+        self.admit_task_with_experiments(
+            identity,
+            request,
+            ordering,
+            owner_version,
+            repo_root,
+            orbit_dir,
+            admission_holds,
+            held,
+            validation_hold,
+            &|task| {
+                Ok(orbit_types::workflow::CapturedExperiments {
+                    task_id: task.id.clone(),
+                    assignments: Vec::new(),
+                })
+            },
+        )
+    }
+
+    /// Admission with the owner's experiment assignment callback, before the
+    /// receipt is written. The callback must not acquire task admission locks.
+    #[allow(clippy::too_many_arguments)]
+    pub fn admit_task_with_experiments(
+        &self,
+        identity: &AdmissionIdentity,
+        request: &AdmissionRequest,
+        ordering: &AdmissionOrdering,
+        owner_version: &str,
+        repo_root: &Path,
+        orbit_dir: &Path,
+        admission_holds: &BTreeMap<String, String>,
+        held: &BTreeMap<String, String>,
+        validation_hold: &ValidationHold<'_>,
+        experiment_capture: &ExperimentCapture<'_>,
+    ) -> Result<AdmissionLookup, OrbitError> {
         validate_request(identity, request, owner_version)?;
         let mut snapshot = self.admission_snapshot(ordering)?;
         if ordering.repairs_only {
@@ -299,6 +338,7 @@ impl TaskCommitBoundary {
                 admission_holds,
                 held,
                 validation_hold,
+                experiment_capture,
                 ordering,
                 census.as_ref(),
                 reach,
@@ -322,6 +362,7 @@ impl TaskCommitBoundary {
         admission_holds: &BTreeMap<String, String>,
         held: &BTreeMap<String, String>,
         validation_hold: &ValidationHold<'_>,
+        experiment_capture: &ExperimentCapture<'_>,
         ordering: &AdmissionOrdering,
         census: Option<&ExecutorCensusEntry>,
         reach: DependencyReach,
@@ -384,12 +425,20 @@ impl TaskCommitBoundary {
                 .count(),
             gates: ordering.gates.clone(),
             tag_instructions: ordering.tag_instructions.clone(),
+            experiments: None,
             affinity: None,
         };
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so
         // it is offered before any backlog candidate [ORB-14261].
-        if self.admit_repair_locked(&screen, &key, orbit_dir, &in_flight.tasks, &mut receipt)? {
+        if self.admit_repair_locked(
+            &screen,
+            &key,
+            orbit_dir,
+            &in_flight.tasks,
+            &mut receipt,
+            experiment_capture,
+        )? {
             return self
                 .lookup_admission(identity, &request.request_id)
                 .map(Some);
@@ -454,6 +503,7 @@ impl TaskCommitBoundary {
                 .as_ref()
                 .filter(|offer| offer.fresh.is_none())
                 .map(|offer| offer.candidate.clone());
+            receipt.experiments = Some(experiment_capture(&task)?);
             let params = TaskCoordinationCommitParams {
                 task_id: task.id.clone(),
                 actor: receipt.machine_id.clone(),
