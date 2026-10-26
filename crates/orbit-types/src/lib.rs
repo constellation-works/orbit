@@ -1,5 +1,5 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
-// Legacy domain-schema surfaces still need a focused documentation pass.
+// Existing schema types lack caller-facing docs, so this crate opts out of `missing_docs`.
 #![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 //! Lowest internal Orbit contract crate.

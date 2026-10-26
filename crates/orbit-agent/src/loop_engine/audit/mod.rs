@@ -1,11 +1,7 @@
-//! Structured audit contracts used by the runtime's persistent sinks.
+//! Audit event contracts and sinks for runtime persistence.
 //!
-//! Session, HTTP, tool and policy event variants are retained for historical
-//! rows in `v2_audit_events`. Events carry hashes pointing to payloads redacted
-//! at write time in a separate content-addressed [`BlobStore`].
-//!
-//! Persistent audit storage is owned by the runtime layer. Tests use
-//! [`InMemorySink`], callers with no need for persistence use [`NullSink`].
+//! Payload blobs are redacted before storage, and event variants remain
+//! available for reading historical rows.
 
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
@@ -13,8 +9,7 @@ use std::sync::{Mutex, PoisonError};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
-// Keep the engine's existing audit imports stable. New code can use the
-// common crate's storage and redaction mechanisms directly.
+// Compatibility re-exports keep engine call sites on the audit module path.
 pub use orbit_common::security::redaction::PatternRedactor as RedactionMiddleware;
 pub use orbit_common::storage::blob_store::BlobStore;
 
