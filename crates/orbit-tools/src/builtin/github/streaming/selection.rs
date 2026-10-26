@@ -95,7 +95,7 @@ impl WindowBoundaryTokens {
             let visible_prefix = String::from_utf8_lossy(&self.context[visible_index..token_index]);
             if self.overlong
                 || self.token_start < from
-                || !Self::context_redacts_token(&visible_prefix, &token)
+                || !Self::redactor_masks_token(&visible_prefix, &token)
             {
                 self.omit_prefix_until = end;
             }
@@ -105,8 +105,9 @@ impl WindowBoundaryTokens {
     fn context_redacts_token(prefix: &str, token: &str) -> bool {
         // Assignments are credential introducers even when the generic text
         // redactor only recognizes JSON/header spellings. The separator may
-        // precede this token (key = value) or belong to it (key=value/key =value).
-        let assignment_key = if let Some(key) = prefix.trim_end().strip_suffix('=') {
+        // precede this token (key = value, key: value) or belong to it
+        // (key=value/key =value).
+        let assignment_key = if let Some(key) = prefix.trim_end().strip_suffix(['=', ':']) {
             key.split_whitespace().last()
         } else {
             token.split_once('=').and_then(|(key, _)| {
@@ -163,8 +164,12 @@ impl WindowBoundaryTokens {
             // an acronym followed by `Api`), and an all-caps `API` segment.
             separated || camel_case_boundary || uppercase_api
         });
-        api_key_assignment
-            || redact_all(&format!("{prefix}{token}")) != format!("{}{token}", redact_all(prefix))
+        api_key_assignment || Self::redactor_masks_token(prefix, token)
+    }
+
+    /// Whether the generic redactor masks `token` when it follows `prefix`.
+    fn redactor_masks_token(prefix: &str, token: &str) -> bool {
+        redact_all(&format!("{prefix}{token}")) != format!("{}{token}", redact_all(prefix))
     }
 
     pub(super) fn safe_slice<'a>(
