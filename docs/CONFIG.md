@@ -125,7 +125,13 @@ so redirected service logs never contain them. Browser launchers receive a
 private local redirect-file path, not the credential. These launch documents
 remain in the masked directory; their tickets expire after five minutes.
 `web connect` obtains the ticket over authenticated SSH and uses the forwarded
-local port. A dashboard without the setting serves `/api/session` as 404.
+local port. If ticket retrieval or the private browser launch fails, it warns,
+keeps the tunnel connected and opens the plain local dashboard URL unless
+`--no-open` is given. Existing dashboard routes remain available; features
+requiring a browser session need a fresh ticket. With `--no-open` and redirected
+stdout, it skips ticket retrieval because no browser or interactive terminal
+will consume the URL. A dashboard without the setting serves `/api/session` as
+404.
 
 ### `[machine.auto_concurrency]` — host forecast admission
 

@@ -21,7 +21,7 @@
 //! Unlike [`crate::serve`], this command reads no local `.orbit/` state: the
 //! workspace lives on the remote, so it needs no [`orbit_core::OrbitRuntime`].
 
-use std::io::{self, ErrorKind, Read, Write};
+use std::io::{self, ErrorKind, IsTerminal, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -146,11 +146,25 @@ pub fn connect(args: ConnectArgs, root_override: Option<&Path>) -> Result<(), Or
         }
     }
 
-    if http_get_ok_body(local_port, "/api/session").is_some() {
-        let session_url = remote_browser_session_url(&args, local_port)?;
-        crate::browser_session::print_interactive_session_url(&session_url);
-        if !args.no_open {
-            crate::browser_session::open_private_browser_url(&session_url)?;
+    // Browser credentials are optional: failure must not drop a healthy tunnel.
+    // With redirected --no-open there is no consumer for a private URL at all.
+    if (!args.no_open || io::stdout().is_terminal())
+        && http_get_ok_body(local_port, "/api/session").is_some()
+    {
+        let session_result =
+            remote_browser_session_url(&args, local_port).and_then(|session_url| {
+                crate::browser_session::print_interactive_session_url(&session_url);
+                if args.no_open {
+                    Ok(())
+                } else {
+                    crate::browser_session::open_private_browser_url(&session_url)
+                }
+            });
+        if let Err(error) = session_result {
+            tracing::warn!(%error, "Browser session unavailable; continuing with {url}");
+            if !args.no_open {
+                open_browser(&url);
+            }
         }
     } else if !args.no_open {
         open_browser(&url);
