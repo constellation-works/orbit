@@ -321,6 +321,9 @@ entries.
   before the step ends, or name them so the deny does not match.
 - **CodeQL name heuristics.** `rust/cleartext-logging` treats a function whose
   name contains `trusted` as a secret source. A code-scanning sweep task for
-  such an alert has nothing to fix (ORB-15140, `trusted_wrapper` returns a fixed
-  Bubblewrap path). Dismiss the alert on GitHub as a false positive with the
-  reason, then reject the task.
+  such an alert has nothing to fix (ORB-15140, `trusted_wrapper` returned a fixed
+  Bubblewrap path). Dismiss the hosted alert on GitHub as a false positive with
+  the reason, then reject the task. Local CodeQL has no dismissal path, and a
+  single result holds every security-tagged delivery at `findings_reported`
+  (ORB-18412), so rename instead: helpers on such flows avoid the `trusted`
+  token and name what they do, as `verified_bwrap_path` now does (ORB-18661).
