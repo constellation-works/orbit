@@ -190,7 +190,8 @@ pub(crate) fn format_task_locks(locks: &Value) -> String {
         .map_or(&[][..], Vec::as_slice);
 
     let mut out = String::new();
-    if by_task.is_empty() && by_reservation.is_empty() {
+    let by_lease = locks["by_lease"].as_array().map_or(&[][..], Vec::as_slice);
+    if by_task.is_empty() && by_reservation.is_empty() && by_lease.is_empty() {
         out.push_str("No files currently locked.\n");
         return out;
     }
@@ -243,6 +244,20 @@ pub(crate) fn format_task_locks(locks: &Value) -> String {
         }
     }
 
+    if !by_lease.is_empty() {
+        out.push_str("\nLeases:\n");
+        for lease in by_lease {
+            let id = lease["lease_id"].as_str().unwrap_or_default();
+            let mode = lease["mode"].as_str().unwrap_or_default();
+            let principal = lease["principal"].as_str().unwrap_or_default();
+            let files = json_str_list(&lease["selectors"]);
+            let expires_at = lease["expires_at"].as_str().unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "[{id}] mode={mode} principal={principal} files=[{files}] expires_at={expires_at}"
+            );
+        }
+    }
     out
 }
 

@@ -116,10 +116,16 @@ pub fn list(runtime: &RuntimeKernel) -> Result<Value, OrbitError> {
     let repo_root = runtime.paths().repo_root.as_path();
     let locked_surfaces = TaskLockIndex::load(runtime, &[])?.into_active_lock_surfaces(repo_root);
 
-    Ok(super::projection::lock_listing_json(
-        &locked_surfaces,
-        &reservation_result.reservations,
-    ))
+    let leases = runtime
+        .stores()
+        .task_reservations()
+        .list_active_leases(&workspace_orbit_dir(runtime), workspace_id.as_deref())?;
+    super::audit::emit_expired_lease_events(runtime, "orbit.task.locks", &leases.expired_leases)?;
+    let mut listing =
+        super::projection::lock_listing_json(&locked_surfaces, &reservation_result.reservations);
+    listing["by_lease"] = json!(leases.leases);
+    listing["total_leases"] = json!(leases.leases.len());
+    Ok(listing)
 }
 
 pub fn release(

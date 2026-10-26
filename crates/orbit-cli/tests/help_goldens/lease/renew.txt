@@ -1,0 +1,21 @@
+Renew an active lease from now
+
+Usage: orbit lease renew [OPTIONS] <LEASE_ID>
+
+Arguments:
+  <LEASE_ID>
+          Lease identifier returned by request
+
+Options:
+      --ttl <TTL>
+          Lifetime from now, e.g. 45m or 2h (default: 30m, maximum: 4h)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

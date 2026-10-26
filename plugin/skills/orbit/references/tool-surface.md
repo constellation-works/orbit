@@ -447,6 +447,38 @@ Submission success means a durable run exists, not that the
 change landed. An operator session resumes with `orbit_workflow_run_resume`;
 it returns a new linked run; preserve both IDs.
 
+## Path leases
+
+`orbit.lease.request`, `.renew`, `.release`, `.show`, `.list` and `.check`
+are active tools on MCP (advertised as `orbit_lease_request`, etc.) and
+`orbit tool run`. They all answer for the owner's coordination store and
+require an identified agent, operator or runner. Federated calls must target
+the owner; replicas refuse the `control_plane` class, including lease reads.
+Enable `lease.enabled` in the workspace first.
+
+Request takes `principal`, `selectors` (`file:...` or `dir:...`), optional
+`mode` (`advisory` or `hard`), `priority` (`low`, `normal`, `high`),
+`ttl_seconds` (1–14400; default 1800), tags and branch/machine attribution.
+It returns `granted` and a `lease` with `lease_id`, mode, principal, priority
+and expiry, or `granted: false` with conflicting holders. Advisory never blocks;
+hard requests honor task locks, reservations and other hard leases. Workspace
+policy may downgrade hard to advisory or refuse priority above the caller's
+ceiling. Over SSH, principal/class policy is attribution and a guard.
+
+Renew, release and show take `lease_id`; renew optionally takes `ttl_seconds`.
+List returns active leases. Check takes `paths` and optional `lease_id` and
+reports coverage, unlocked policy and overlapping holders without mutations.
+Show and list expire stale leases and can write expiry audit events.
+
+The CLI is `orbit lease request <selector>... --principal <name>
+[--mode advisory|hard | --hard] [--priority low|normal|high] [--ttl 30m]`,
+`renew <lease-id> [--ttl 30m]`, `release <lease-id>`, `show <lease-id>`,
+`list`, and `check <path>... [--lease-id <lease-id>]`. All support `--json`.
+A refused request exits 3. `orbit task locks list` shows leases alongside
+reservations with mode and principal; task/reservation counts retain their
+existing meaning, with `by_lease` and `total_leases` added separately.
+Notices, hooks, queueing and automatic release on landing belong to later phases.
+
 ## Missing operations
 
 A CLI-only operation is not a nonexistent product feature. It requires process

@@ -1,0 +1,21 @@
+Check path coverage and overlapping holders
+
+Usage: orbit lease check [OPTIONS] <PATHS>...
+
+Arguments:
+  <PATHS>...
+          Path selectors to check
+
+Options:
+      --lease-id <LEASE_ID>
+          Caller lease to check coverage against
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

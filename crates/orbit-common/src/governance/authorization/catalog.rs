@@ -378,6 +378,68 @@ pub fn governed_plugin_tool(mutating: bool) -> &'static GovernedOperation {
 ///    — only the chokepoint can see the process envelope a CLI caller's
 ///    authority actually lives in.
 pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
+    // Identified people and agents may coordinate paths. This is an identity
+    // floor, while owner placement and lease policy constrain the operation.
+    GovernedOperation {
+        id: "orbit.lease.request",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.renew",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.release",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.show",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.list",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
+        id: "orbit.lease.check",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
     GovernedOperation {
         id: "orbit.task.retry_handoff",
         surface: OperationSurface::Tool,

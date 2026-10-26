@@ -60,8 +60,10 @@ fn enabled_runtime() -> (tempfile::TempDir, OrbitRuntime, PathBuf) {
     lease_runtime("[lease]\nenabled = true\n")
 }
 
-fn request(runtime: &OrbitRuntime, input: Value) -> Value {
-    lease::request(runtime, input, None, Some("codex".into())).expect("lease request")
+fn request(runtime: &OrbitRuntime, mut input: Value) -> Value {
+    input["model"] = json!("codex");
+    super::tool_support::run_tool_as_operator(runtime, "orbit.lease.request", input)
+        .expect("lease request")
 }
 
 fn holder_ids(conflicts: &Value) -> Vec<(String, String)> {
@@ -150,6 +152,19 @@ fn hard_requests_are_refused_by_holders_and_advisory_ones_are_granted() {
     assert_eq!(hard["granted"], true, "{hard}");
     assert_eq!(hard["lease"]["mode"], "hard", "{hard}");
     let hard_id = hard["lease"]["lease_id"].as_str().unwrap().to_string();
+    let listing =
+        super::tool_support::run_tool_as_operator(&runtime, "orbit.task.locks", json!({}))
+            .expect("list locks");
+    let listed = listing["by_lease"]
+        .as_array()
+        .expect("lease holders in lock listing")
+        .iter()
+        .find(|lease| lease["lease_id"] == hard_id)
+        .expect("active hard lease listed");
+    assert_eq!(listed["mode"], "hard");
+    assert_eq!(listed["principal"], "alice");
+    assert_eq!(listed["priority"], "normal");
+    assert!(listed["expires_at"].is_string());
 
     let second = request(
         &runtime,

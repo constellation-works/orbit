@@ -35,7 +35,18 @@ fn a_replica_refuses_control_plane_and_runs_execute_class_tools() {
         &checkout_record(Some(WorkspaceCheckoutRole::Replica)),
     );
 
-    for tool in ["orbit.task.add", "orbit.task.review_reset"] {
+    for tool in [
+        "orbit.task.add",
+        "orbit.task.review_reset",
+        "orbit.lease.request",
+        "orbit.lease.renew",
+        "orbit.lease.release",
+        "orbit.lease.show",
+        "orbit.lease.list",
+        "orbit.lease.check",
+        "orbit_lease_request",
+        "orbit_lease_check",
+    ] {
         let refused =
             ensure_tool_class_held(tool, held).expect_err("a replica is not the control plane");
         assert!(

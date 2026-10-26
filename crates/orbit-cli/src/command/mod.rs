@@ -14,6 +14,7 @@ pub mod host;
 pub(crate) mod host_route;
 pub mod init;
 pub mod job;
+pub mod lease;
 pub mod locks;
 pub mod log;
 pub mod mcp;
@@ -100,6 +101,7 @@ Operate:
   run         Run workflows, drain the backlog, and inspect runs
   job         Define, list, and manage job workflows
   experiment  Define, run and conclude experiments over agent treatments
+  lease       Coordinate path leases with the workspace owner
   tool        Manage and run Orbit tools, including external MCP plugins
   gc          Inspect and explicitly reap Orbit-managed garbage
 
@@ -166,6 +168,7 @@ pub enum Commands {
     Run(run::RunCommand),
     Job(job::JobCommand),
     Experiment(experiment::ExperimentCommand),
+    Lease(lease::LeaseCommand),
     Tool(tool::ToolCommand),
     Gc(gc::GcCommand),
 

@@ -173,6 +173,24 @@ part of v1 (§9).
 
 All surfaces call one runtime operation per verb, so they cannot drift.
 
+**Phase 1 CLI and MCP.** Request, renew, release, show, list and check are
+implemented as the `orbit.lease.*` tools and `orbit lease` commands (ORB-18406),
+over the lease rows (ORB-18404) and runtime operations (ORB-18405). All six are
+owner control-plane operations: reads answer for the same owner lock state as
+writes. Identified agents, operators and runners may call them; workspace lease
+policy still sets mode and priority ceilings. Show and list can expire stale
+leases, so they are mutating tools; check is read-only. `orbit task locks list`
+adds separate `by_lease` and `total_leases` fields beside its task/reservation
+projections and renders mode and principal in human output.
+
+Request uses `<selector>... --principal <name> [--mode advisory|hard | --hard]
+[--priority low|normal|high] [--ttl 30m] [--branch <name>] [--base <name>]`.
+Renew takes `<lease-id> [--ttl 30m]`; check takes `<path>... [--lease-id <id>]`.
+All six accept `--json`; refusal of a hard request exits 3. TTL is 1–14400 seconds,
+default 1800. Branch bindings are recorded only. The table below also includes
+later-phase surfaces; `expand`, `notices`, queueing and `--no-wait` are not part
+of the phase 1 CLI or MCP contract.
+
 | Verb | MCP tool | CLI | REST |
 |---|---|---|---|
 | request | `orbit.lease.request` | `orbit lease request <selector>… [--hard] [--priority] [--branch] [--ttl] [--no-wait]` | `POST /api/leases` |

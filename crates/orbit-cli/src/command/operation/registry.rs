@@ -423,6 +423,9 @@ impl Commands {
             // ADR-0209 bearing 1 [ORB-10358]: friction is registry-driven, so
             // runtime need and audit metadata derive from its spec. A new
             // friction verb needs no edit here.
+            Commands::Lease(command) => {
+                registry_operation(&command.command, runtime_dispatch!(Lease))
+            }
             Commands::Friction(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Friction))
             }

@@ -1147,6 +1147,96 @@
   },
   {
     "surface": "tool",
+    "operation": "orbit.lease.check",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.lease.list",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.lease.release",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.lease.renew",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.lease.request",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
+    "operation": "orbit.lease.show",
+    "required_any": [
+      "agent",
+      "operator",
+      "runner"
+    ],
+    "verdicts": {
+      "operator_terminal": "allow",
+      "agent_session": "allow",
+      "remote_agent_session": "allow",
+      "replica": "allow"
+    }
+  },
+  {
+    "surface": "tool",
     "operation": "orbit.orchestrator.scorecard",
     "required_any": [],
     "verdicts": {
