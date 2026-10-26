@@ -1,8 +1,8 @@
 ---
 title: Terminal Interface — Design
 owner: claude
-last_updated: 2026-10-18
-last_validated: 2026-10-18
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Accepted
 feature: terminal-interface
 doc_role: design
@@ -26,11 +26,11 @@ This document describes what `orbit-cli` renders today. It is deliberately a rec
 
 ## 2. Table Construction
 
-`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` buffers cells; `Table::render_at` builds each `comfy_table::Row` with `max_height(1)`, keeping every rendered row to one line and making the unbounded path that made a row span three or four lines unreachable from a command module [ORB-10567]. The 33 command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
+`output/table.rs` owns a `Table` type that buffers rows and renders them itself; `comfy_table` is an implementation detail it never hands out. `Table::add_row` buffers cells; `Table::render_at` builds each `comfy_table::Row` with `max_height(1)`, keeping every rendered row to one line and making the unbounded path that made a row span three or four lines unreachable from a command module [ORB-10567]. The 35 command source files that construct tables use either `build_table(&headers)` (all columns plain text) or `Table::new(vec![Column…])` when a column is an identifier, a number, or a path.
 
 Rendering applies the `NOTHING` preset with `ContentArrangement::Disabled`, two-space right padding on every column but the last, and a dim header row. Widths are computed from the result set: natural widths first, then flexible columns shrink widest-first to a floor of 8, then flexible columns drop from the right with a notice on stderr. Fixed columns never move. Overflow truncates with `…` — tail truncation is `comfy_table`'s, middle truncation (`Column::path`) is applied before the grid sees the cell.
 
-Two selection rules run before layout: a column whose value is identical in every row of a result set is suppressed unless the caller marked it `filtered` (the user filtered on it) or the view opted out with `keep_all_columns`, and a result set with no records prints its empty-state line to stderr, leaving stdout empty. Satisfies [./specs/table-rendering.md](./specs/table-rendering.md) §§1–6 [Borderless Tables With Truncate-to-Width Rows](./4_decisions.md#borderless-tables-with-truncate-to-width-rows). Width and styling are both read from the sink in `Table::emit` [ORB-10570], so a zero-width sink truncates nothing and a sink that disallows color renders the bytes a file would get. The plain form now suppresses the header and disables truncation, while [./references/detail-commands.md](./references/detail-commands.md) records which truncatable columns have detail commands and which views still lack one.
+Two selection rules run before layout: a column whose value is identical in every row of a result set is suppressed in the table form unless the caller marked it `filtered` (the user filtered on it), the view opted out with `keep_all_columns`, or the table form was requested with `--format table`, and a result set with no records prints its empty-state line to stderr, leaving stdout empty. Satisfies [./specs/table-rendering.md](./specs/table-rendering.md) §§1–6 [Borderless Tables With Truncate-to-Width Rows](./4_decisions.md#borderless-tables-with-truncate-to-width-rows). Width and styling are both read from the sink in `Table::emit` [ORB-10570], so a zero-width sink truncates nothing and a sink that disallows color renders the bytes a file would get. The plain form now suppresses the header and disables truncation, while [./references/detail-commands.md](./references/detail-commands.md) records which truncatable columns have detail commands and which views still lack one.
 
 ## 3. Line Output
 
@@ -68,7 +68,7 @@ A global `--format auto|table|plain|json|ndjson` is accepted on every command th
 
 ## 7. Empty States and Errors
 
-Table-backed empty results print their configured empty-state line to stderr and leave stdout empty; for example, `orbit run history` uses `no runs recorded`. The hidden legacy `command/task/artifacts.rs` path still prints a human sentence for task artifacts.
+Table-backed empty results print their configured empty-state line to stderr and leave stdout empty; for example, `orbit run history` uses `no runs recorded`. Task artifact reads go through `command/task/artifact.rs`, which returns a payload like every other command; no separate legacy path prints its own sentence.
 
 Errors are routed through `main.rs::print_error`, which emits the JSON error payload when the command declared a JSON preference *or* the sink resolved a JSON mode, and a plain message otherwise. **Both go to stderr, in every mode** [ORB-10570]. This is a breaking change for any script that parsed the error object off stdout; the exit code (`1`, or `2` for a clap usage error) was already the reliable signal and is unchanged.
 
