@@ -390,6 +390,13 @@ worktree checkpoint, unchanged branch, candidate and remote lease, cleanliness
 and absence of a rebase. It observes Git again using the certified base/sync
 mode, requires the same base ref and a strict descendant of the previous pin,
 and issues a new preparation. No caller-provided replacement SHA is accepted.
+If conflict recovery already rewrote the candidate, refresh authenticates that
+exact HEAD with the same recovery-checkpoint provenance checks as synchronization
+and pins it for every subsequent candidate check. The replacement certificate
+records the recovered HEAD as `head_sha_before`, while `source_preparation`
+retains the original candidate identity. A base that advances after certified
+conflict recovery can therefore be retried without discarding its resolution;
+an unexplained rewrite still refuses refresh.
 
 One run may reserve at most two fresh preparations in `sync_base_preparation`,
 within one signed 120-second deadline starting at its first refresh. All fetches
