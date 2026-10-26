@@ -385,6 +385,17 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
         })
     }
 
+    fn sweep_lease_lifetimes(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<LeaseListResult, OrbitError> {
+        self.in_boundary(|| {
+            self.store
+                .sweep_lease_lifetimes(workspace_orbit_dir, workspace_id)
+        })
+    }
+
     fn list_lease_notices(
         &self,
         orbit_dir: &str,

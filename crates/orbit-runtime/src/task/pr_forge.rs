@@ -41,6 +41,14 @@ pub struct MergedPullRequest {
     pub merge_commit: String,
 }
 
+/// State of the PR a lease's branch or explicit `#number` binds to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeasePullRequest {
+    pub number: u64,
+    pub base_branch: String,
+    pub merged: bool,
+}
+
 /// What holds an open pull request back from merging, as an out-of-run
 /// auto-fix repair reads it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -65,6 +73,17 @@ pub struct PullRequestBlockers {
 /// settling a task from its merged delivery PR, and finding the merge
 /// blockers an out-of-run auto-fix repairs.
 pub trait TaskPrForge: Send + Sync {
+    /// The PR for this binding, including an unmerged PR. `None` proves the
+    /// branch has no PR; errors must never fall back to ancestry. The caller
+    /// checks the returned base, rather than treating a different base as no PR.
+    fn lease_pull_request(
+        &self,
+        _repo_root: &Path,
+        _binding: &str,
+    ) -> Result<Option<LeasePullRequest>, OrbitError> {
+        Err(OrbitError::Execution("lease PR lookup unavailable".into()))
+    }
+
     /// Every open pull request of the repository checked out at `repo_root`.
     fn open_pull_requests(&self, repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError>;
 
@@ -148,6 +167,14 @@ pub fn default_task_pr_forge() -> Arc<dyn TaskPrForge> {
 pub struct NoTaskPrForge;
 
 impl TaskPrForge for NoTaskPrForge {
+    fn lease_pull_request(
+        &self,
+        _repo_root: &Path,
+        _binding: &str,
+    ) -> Result<Option<LeasePullRequest>, OrbitError> {
+        Ok(None)
+    }
+
     fn open_pull_requests(&self, _repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
         Ok(Vec::new())
     }
@@ -177,6 +204,55 @@ impl TaskPrForge for NoTaskPrForge {
 pub struct GhTaskPrForge;
 
 impl TaskPrForge for GhTaskPrForge {
+    fn lease_pull_request(
+        &self,
+        repo_root: &Path,
+        binding: &str,
+    ) -> Result<Option<LeasePullRequest>, OrbitError> {
+        let entry = if let Some(number) = binding.strip_prefix('#') {
+            let number = number.parse::<u64>().map_err(|_| {
+                OrbitError::InvalidInput("lease PR binding must be #<number>".into())
+            })?;
+            view_pull_request(repo_root, number)?
+        } else {
+            let stdout = run_gh(
+                orbit_tools::github_cli::bound_branch_pull_request_request(binding),
+                repo_root,
+                "gh pr list",
+            )?;
+            let entries = orbit_tools::github_cli::parse_gh_json(&stdout, "gh pr list")?;
+            let entries = entries.as_array().ok_or_else(|| {
+                OrbitError::Execution("gh pr list did not return an array".into())
+            })?;
+            let Some(entry) = entries.first() else {
+                return Ok(None);
+            };
+            entry.clone()
+        };
+        let state = entry
+            .get("state")
+            .and_then(Value::as_str)
+            .filter(|state| {
+                ["open", "closed", "merged"]
+                    .iter()
+                    .any(|known| state.eq_ignore_ascii_case(known))
+            })
+            .ok_or_else(|| {
+                OrbitError::Execution("lease PR lookup returned no valid state".into())
+            })?;
+        Ok(Some(LeasePullRequest {
+            number: entry.get("number").and_then(Value::as_u64).ok_or_else(|| {
+                OrbitError::Execution("lease PR lookup returned no number".into())
+            })?,
+            base_branch: entry
+                .get("baseRefName")
+                .and_then(Value::as_str)
+                .ok_or_else(|| OrbitError::Execution("lease PR lookup returned no base".into()))?
+                .into(),
+            merged: state.eq_ignore_ascii_case("merged"),
+        }))
+    }
+
     fn open_pull_requests(&self, repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
         let stdout = run_gh(
             orbit_tools::github_cli::open_pull_requests_request(),

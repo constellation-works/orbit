@@ -297,6 +297,40 @@ impl Store {
             })
         })
     }
+
+    /// Owner-clock maintenance. Expiry and warning writes are independent of
+    /// the forge, and warnings are deduplicated for each grant/renewal period.
+    pub fn sweep_lease_lifetimes(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<LeaseListResult, OrbitError> {
+        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+            let now = Utc::now();
+            let now_text = now.to_rfc3339();
+            let expired_leases = expire_leases(tx, workspace_orbit_dir, workspace_id, &now_text)?;
+            let mut stmt = tx.tx.prepare(&active_leases_sql()).map_err(sqlite_store_error)?;
+            let rows = stmt.query_map(params![workspace_id, workspace_orbit_dir, now_text], lease_row)
+                .map_err(sqlite_store_error)?;
+            let mut leases = Vec::new();
+            for row in rows {
+                leases.push(row.map_err(sqlite_store_error)?.into_record()?);
+            }
+            for lease in &leases {
+                let heartbeat = chrono::DateTime::parse_from_rfc3339(&lease.heartbeat_at)
+                    .map_err(|error| OrbitError::Store(format!("invalid lease heartbeat: {error}")))?;
+                let expires = chrono::DateTime::parse_from_rfc3339(&lease.expires_at)
+                    .map_err(|error| OrbitError::Store(format!("invalid lease expiry: {error}")))?;
+                let warning_at = heartbeat + (expires - heartbeat) * 4 / 5;
+                if now >= warning_at {
+                    notices::append_lease_notice(tx, &lease.lease_id, "expiring",
+                        &json!({"expires_at": lease.expires_at, "heartbeat_at": lease.heartbeat_at}),
+                        &format!("expiring:{}:{}", lease.heartbeat_at, lease.expires_at))?;
+                }
+            }
+            Ok(LeaseListResult { leases, expired_leases })
+        })
+    }
 }
 
 /// Active leases, oldest first; binds ?1 and ?2 as

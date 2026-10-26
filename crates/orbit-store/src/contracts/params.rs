@@ -229,6 +229,7 @@ pub enum TaskReservationReleaseReason {
     StaleRunReconciled,
     DoctorStaleTaskLock,
     TtlExpired,
+    Landed,
 }
 
 impl TaskReservationReleaseReason {
@@ -239,6 +240,7 @@ impl TaskReservationReleaseReason {
             Self::StaleRunReconciled => "stale_run_reconciled",
             Self::DoctorStaleTaskLock => "doctor_stale_task_lock",
             Self::TtlExpired => "ttl_expired",
+            Self::Landed => "landed",
         }
     }
 }
