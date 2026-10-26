@@ -230,7 +230,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 ParamType::StringList,
                 "Optional exact canonical tool names an operator grants the implementing activity despite its deny list, as a string or array of strings. Requires operator authority: any other caller supplying it is refused, never stripped. Stored and shown. Only the implementing activity (`agent_implement`) reads a grant: it lifts that tool's deny entry only for a read/repeat-safe tool, and a mutating tool stays denied",
                 flag_with_delimiter("granted-tools", &["granted-tool"], None),
-                "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only; stored and shown, not yet honored by admission)",
+                "Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only; stored and shown). Only `agent_implement` reads a grant: it lifts an exact deny entry only for a read/repeat-safe tool; a mutating grant stays denied",
             ),
             both(
                 "requires_labels",

@@ -20,8 +20,9 @@ pub struct Task {
     /// Exact canonical tool names an operator granted the implementing
     /// activity despite its deny list. Separate from `required_tools`
     /// because only operator authority may set it, and only before the task
-    /// has a live attempt. Stored and shown; activity admission does not yet
-    /// read it.
+    /// has a live attempt. Stored and shown; only `agent_implement` admission
+    /// reads this field, lifting an exact deny entry only for a read/repeat-safe
+    /// tool while a mutating grant stays denied.
     #[serde(
         default,
         deserialize_with = "deserialize_required_tools",
