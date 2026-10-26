@@ -292,8 +292,12 @@ Each one advertises MCP annotations
 auto-approve; Orbit still enforces authority on every call.
 
 - `orbit_task_list` and `orbit_task_eligible` return
-  `{ tasks, total, truncated }`. Task records are full by default; pass
-  `fields` (for example `["id", "title", "status"]`) to keep a listing small.
+  `{ tasks, total, truncated }`. `orbit_task_list` returns compact task rows by
+  default (id, title, status, priority, type, dependencies,
+  resolved_dependencies, implemented_by, created_at, updated_at, and workspace).
+  Pass `fields` to add long-text fields such as `description` or `plan`.
+  `orbit_task_eligible` task records remain full by default; pass `fields` (for
+  example `["id", "title", "status"]`) to keep a listing small.
 - `orbit_task_eligible` lists, in dispatch order, the `backlog` and `proposed`
   tasks whose files overlap no running or in-review task. With
   `explain: true`, `conflicting` also lists the held-back tasks, each with the

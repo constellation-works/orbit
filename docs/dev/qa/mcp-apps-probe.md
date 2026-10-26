@@ -35,8 +35,9 @@ The panel discovers workspaces and requires an explicit returned selector.
 The selected host/workspace/entity stays visible. Existing domain readers expose
 `view: "bounded"` on `orbit_task_list`, `orbit_task_show`,
 `orbit_workflow_run_list`, `orbit_workflow_run_show` and `orbit_auto_task_list`.
-Ordinary calls retain their existing full-record responses. `orbit_task_show`
-with `snapshot: true` returns an opaque revision plus server-computed actions.
+`orbit_task_show` retains its full-record default, while `orbit_task_list`
+defaults to compact task rows. A `snapshot: true` `orbit_task_show` call
+returns an opaque revision plus server-computed actions.
 
 Task writes reuse the existing task verbs. `orbit_task_add` with `request_id`
 creates a proposed task from title, description, acceptance criteria, priority
