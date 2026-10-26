@@ -27,7 +27,7 @@ Options:
           Exact canonical tool names the task adds to its agent activity baseline
 
       --granted-tools <GRANTED_TOOLS>
-          Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only; stored and shown, not yet honored by admission)
+          Exact canonical tool names an operator grants the implementing activity despite its deny list (operator only; stored and shown). Only `agent_implement` reads a grant: it lifts an exact deny entry only for a read/repeat-safe tool; a mutating grant stays denied
 
       --requires-labels <LABEL>
           Capability labels a host must carry, all of them, to run the task (its `machine.labels` plus its OS). Repeat or comma-separate for multiple labels
