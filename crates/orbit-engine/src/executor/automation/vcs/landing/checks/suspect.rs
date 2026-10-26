@@ -117,6 +117,37 @@ pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     untouched_without_fresh_base(host, workspace, head, base, tip, base_branch, job, paths)
 }
 
+/// Whether `log` cites only repository files the candidate did not change
+/// from `base` to `head`: the precondition for a base-suspect failure.
+pub(super) fn is_untouched_failure(
+    workspace: &Path,
+    head: &str,
+    base: &str,
+    log: &str,
+) -> Result<bool, String> {
+    let paths = repository_citations(workspace, head, log)?;
+    if paths.is_empty() {
+        return Ok(false);
+    }
+    let changed = annotations::candidate_changed_paths(workspace, base, head)?;
+    Ok(paths.is_disjoint(&changed))
+}
+
+/// Whether `other` started at or after `job` completed. Missing or
+/// unparseable timestamps are never fresh evidence.
+pub(super) fn started_after_completion(job: &Value, other: &Value) -> bool {
+    let completed = job["completed_at"]
+        .as_str()
+        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+    let started = other["started_at"]
+        .as_str()
+        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+    match (completed, started) {
+        (Some(completed), Some(started)) => started >= completed,
+        _ => false,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn untouched_without_fresh_base<H: RuntimeHost + ?Sized>(
     host: &H,

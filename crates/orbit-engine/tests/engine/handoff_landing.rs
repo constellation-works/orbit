@@ -2031,6 +2031,93 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
     }
 }
 
+/// A base-suspect failure whose landing tip has moved is decided only by
+/// a fresh run of the same job on that tip: a fresh pass is the
+/// candidate's (one repair, no branch update), and a fresh
+/// same-signature failure is inherited (one branch update, then a review
+/// stop while the tip does not pass).
+#[test]
+fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
+    const UNTOUCHED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
+                             ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
+    for (case, tip_passes) in [("fresh pass", true), ("fresh same failure", false)] {
+        let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
+        let fixed = fix_base(&forge.repo);
+        forge.job(&candidate, failed(1, 11, UNTOUCHED));
+        forge.job(&base, passed(2, 21));
+        forge.job(
+            &fixed,
+            if tip_passes {
+                passed(3, 31)
+            } else {
+                failed(3, 31, UNTOUCHED)
+            },
+        );
+        if !tip_passes {
+            forge.state.lock().unwrap().after_update = Some(failed(4, 41, UNTOUCHED));
+        }
+        {
+            let mut state = forge.state.lock().unwrap();
+            state
+                .job_times
+                .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+            state
+                .job_times
+                .insert(21, ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z"));
+            state
+                .job_times
+                .insert(31, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
+            state
+                .job_times
+                .insert(41, ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"));
+        }
+
+        let error = land_now(&forge).expect_err(case);
+
+        assert!(
+            error.to_string().contains("allocator shim"),
+            "{case}: {error}"
+        );
+        assert_not_sent(&forge, &["pr.merge", "ci.rerun_failed"], case);
+        if tip_passes {
+            assert_not_sent(&forge, &["pr.update_branch"], case);
+            assert_steps(
+                &forge.steps(),
+                &[HandoffLandingStep::Stop { repairable: true }],
+                case,
+            );
+            assert_reason(&forge, case, &["classified `candidate`"]);
+            assert_eq!(
+                forge
+                    .history
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| row.event == "ci_base_suspect")
+                    .count(),
+                0,
+                "{case}: a fresh pass is not recorded as base-suspect"
+            );
+        } else {
+            assert_sent_len(&forge, "pr.update_branch", 1, case);
+            assert_steps(
+                &forge.steps(),
+                &[HandoffLandingStep::Stop { repairable: false }],
+                case,
+            );
+            assert_reason(
+                &forge,
+                case,
+                &[
+                    "classified `inherited`",
+                    "one branch update",
+                    "stays in review",
+                ],
+            );
+        }
+    }
+}
+
 /// [ORB-15956] A check that failed on the network is rerun once before it is
 /// judged: a passing rerun lands, and a second transient failure stops in
 /// review with the classification rather than rerunning again.

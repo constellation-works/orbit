@@ -187,7 +187,9 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
         host,
         workspace,
         job,
+        log,
         &signature.text,
+        head,
         base,
         moved_tip,
         base_jobs,
@@ -401,7 +403,9 @@ fn inherited<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     job: &Value,
+    log: &str,
     signature: &str,
+    head: &str,
     base: &str,
     moved_tip: Option<&str>,
     base_jobs: &mut CommitJobs,
@@ -447,15 +451,52 @@ fn inherited<H: RuntimeHost + ?Sized>(
         .map_err(|error| {
             format!("the jobs on the current base {tip} could not be read: {error}")
         })?;
-    Ok(tip_jobs
-        .iter()
-        .any(|candidate| {
-            same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
-        })
-        .then(|| Inheritance {
+    // A base-suspect failure (only untouched files cited, and the old base
+    // does not fail it that way) is decided only by a fresh tip run: leave
+    // it to `stale_untouched_failure`, which makes a fresh pass candidate
+    // and anything else base-suspect. A stale tip pass must not become the
+    // inherited branch update, and a fresh same-signature tip failure is
+    // inherited below.
+    let untouched = super::suspect::is_untouched_failure(workspace, head, base, log)?;
+    if tip_jobs.iter().any(|candidate| {
+        same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")
+    }) {
+        if untouched {
+            return Ok(None);
+        }
+        return Ok(Some(Inheritance {
             why: format!("the base branch moved from {base} to {tip}, where it passes"),
             tip_passes: true,
-        }))
+        }));
+    }
+    if untouched {
+        for candidate in tip_jobs
+            .iter()
+            .filter(|candidate| same_job(candidate, job) && unsuccessful(candidate))
+        {
+            let fresh = super::suspect::started_after_completion(job, candidate)
+                || contains(workspace, tip, head);
+            if !fresh {
+                continue;
+            }
+            let (Some(run_id), Some(job_id)) =
+                (candidate["run_id"].as_u64(), candidate["job_id"].as_u64())
+            else {
+                continue;
+            };
+            let Ok(tip_log) = job_log(host, workspace, run_id, job_id, candidate) else {
+                continue;
+            };
+            let found = error_signature(&tip_log, failed_step(candidate));
+            if !found.step_fallback && found.text == signature {
+                return Ok(Some(Inheritance {
+                    why: format!("the same signature fails on the current base {tip}"),
+                    tip_passes: false,
+                }));
+            }
+        }
+    }
+    Ok(None)
 }
 
 /// Whether every inherited job passes on the moved base tip. One that does
