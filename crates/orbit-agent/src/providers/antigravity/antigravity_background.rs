@@ -1,12 +1,6 @@
-//! Antigravity (`agy`) background-task classification. [ORB-15243]
+//! Classifies Antigravity stdout reports of still-running background tasks.
 //!
-//! `agy` can start a command as a background task and end its headless turn
-//! while that task still runs: since 1.3 a `-p` run waits for background tasks
-//! only until `--print-timeout`, capped at 30 minutes, then exits 0 with
-//! whatever it has. The stream carries no Orbit envelope, so completion is
-//! already refused; this module only names the cause. It reads the tail of
-//! the raw stdout for the agent's last `manage_task` style status reports
-//! (`task-34 ... running`) and never decides success.
+//! It explains incomplete turns but never decides run success.
 
 use std::time::Duration;
 

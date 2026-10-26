@@ -1,36 +1,11 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
-// Legacy persistence surfaces still need a focused documentation pass.
+// Existing persistence APIs lack caller-facing docs, so this crate opts out of `missing_docs`.
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-//! One directional persistence crate for Orbit data.
+//! Persistence contracts and storage composition for Orbit.
 //!
-//! Consumer-visible traits and data live in [`contracts`]. Private file and
-//! SQLite drivers never import one another; live invariants are joined by
-//! repositories, one-shot migration/repair operations live in [`workflow`],
-//! and [`compose`] is the construction boundary. Shared locking, path-safety,
-//! atomic-write, and YAML mechanics live in narrowly named filesystem modules.
-//!
-//! # Role
-//! Depends on `orbit-common` and `orbit-types`. Consumed by `orbit-core`, `orbit-engine`,
-//! and `orbit-cmd`.
-//!
-//! # Key exports
-//! - Backend trait types in [`contracts`]: [`contracts::TaskStoreBackend`],
-//!   [`contracts::TaskDocumentStoreBackend`],
-//!   [`contracts::TaskHistoryStoreBackend`],
-//!   [`contracts::TaskArtifactStoreBackend`],
-//!   [`contracts::TaskReservationStoreBackend`],
-//!   [`contracts::JobRunStoreBackend`], [`contracts::AuditEventStoreBackend`],
-//!   [`contracts::ToolStoreBackend`]
-//! - Composition functions: `compose::workspace_task_backends`, `compose::workspace_job_run_store`,
-//!   `global_executor_def_store`, `global_policy_def_store`,
-//!   `audit_event_store_sqlite`, `workspace_coordinated_backends`, `tool_store_sqlite`
-//! - [`SessionLogStore`] — lock-safe workspace session-log persistence
-//! - [`Store`] — SQLite connection handle and transaction wrapper
-//!
-//! # Dependency direction
-//! `orbit-common` / `orbit-types` ← `orbit-store` ← consumers such as orbit-core and orbit-engine
+//! File and SQLite drivers stay behind repositories and composition boundaries.
 
 #[cfg(test)]
 #[path = "../tests/store/support/git.rs"]
@@ -63,8 +38,7 @@ pub mod skill_store {
     pub use crate::driver::file::skill_store::*;
 }
 
-/// Friction records. Live reads and writes go through `FrictionStore`
-/// (SQLite, ORB-10680); the tag taxonomy file did not move.
+/// Friction record access and default tag-taxonomy initialization.
 pub mod friction_store {
     pub use crate::driver::file::friction_store::ensure_default_tag_taxonomy;
     pub use crate::repository::friction::{FrictionAddParams, FrictionListFilter, FrictionStore};

@@ -1,5 +1,5 @@
 #![deny(clippy::print_stderr, clippy::print_stdout)]
-// Legacy public provider surfaces still need a focused documentation pass.
+// Existing provider APIs lack caller-facing docs, so this crate opts out of `missing_docs`.
 #![allow(missing_docs)]
 // Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
