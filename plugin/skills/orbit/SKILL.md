@@ -60,6 +60,7 @@ plugin or passing protocol test alone does not prove rendering/context delivery.
 | Need | Read |
 |---|---|
 | Implement an assigned task | [Task execution](references/task-execution.md) |
+| Prepare configured agent-filled pull request sections | [Agent-filled PR sections](references/task-execution.md#agent-filled-pr-sections) |
 | Set dependencies, relations or validation tools | [Task fields](references/task-fields.md) |
 | Create or revise a task | [Task authoring](references/task-authoring.md) |
 | Review a delivered diff | [Task review](references/task-review.md) |
