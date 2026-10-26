@@ -12,6 +12,7 @@ import { el, fetchJson, getWorkspaceRevision } from './common.js';
 const COMPLEXITY_LABELS = { low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unset: "Unassessed" };
 const OUTCOMES = [["done", "Done"], ["all", "All closed"]];
 const SCOPES = [["all", "All invocations"], ["implement", "Implement only"]];
+const MAX_TAGS = 8;
 
 const filters = { outcome: "done", scope: "all", model: "", tags: [] };
 let sequence = 0;
@@ -115,13 +116,16 @@ export function tokensTools({ segGroup, windowKey, payload, onChange }) {
   ]);
   model.addEventListener("change", () => apply({ model: model.value }));
 
-  const available = ((payload && payload.available_tags) || []).filter((entry) => !filters.tags.includes(entry.tag));
+  const atTagLimit = filters.tags.length >= MAX_TAGS;
+  const available = atTagLimit ? [] : ((payload && payload.available_tags) || []).filter((entry) => !filters.tags.includes(entry.tag));
   const picker = el("select", { class: "mx-select", "aria-label": "Compare a tag" }, [
-    option("", filters.tags.length ? "Add a tag…" : "Compare a tag…", true),
+    option("", atTagLimit ? `Maximum of ${MAX_TAGS} tags selected` : filters.tags.length ? "Add a tag…" : "Compare a tag…", true),
     ...available.map((entry) => option(entry.tag, `${entry.tag} (${entry.tasks})`, false)),
   ]);
   picker.addEventListener("change", () => {
-    if (picker.value) apply({ tags: [...filters.tags, picker.value].sort() });
+    if (picker.value && filters.tags.length < MAX_TAGS && available.some((entry) => entry.tag === picker.value)) {
+      apply({ tags: [...filters.tags, picker.value].sort() });
+    }
   });
   const chips = filters.tags.map((tag) => {
     const chip = el("button", { class: "mx-chip", type: "button", title: `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [tag, el("span", { "aria-hidden": "true", text: "×" })]);
