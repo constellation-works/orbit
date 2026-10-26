@@ -496,7 +496,7 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `publication.routine_allow_unscanned_attachments` | **Advanced.** boolean · **Default:** `false`<br>Explicitly accept unscanned attachments when the routine policy is `include`; sensitive path and size limits still apply. |
 | `automation.stall_window_minutes` | **Advanced.** integer · **Default:** `60`<br>Minutes a delivery-automation deferral may persist before Orbit logs a warning and files one friction (1–1440). |
 | `decision_channel.enabled` | bool · **Default:** `false`<br>Raise decision requests for work held on a human decision. |
-| `lease.enabled` | bool · **Default:** `false`<br>Accept path-lease operations in this workspace. While false, every lease operation is refused with an error naming this key. |
+| `lease.enabled` | bool · **Default:** `false`<br>Accept path-lease operations in this workspace. While false, every lease operation is refused with an error naming this key. See [Hold paths with leases](../../how-to/path-leases/). |
 | `lease.default_mode` | **Advanced.** string · **Default:** `advisory`<br>Mode of a lease request that names none: `advisory` (always granted, blocks nothing) or `hard` (refused while another task, reservation or hard lease holds an overlapping path). |
 | `lease.hard.human` | **Advanced.** string · **Default:** `allow`<br>Whether a human principal may hold hard leases: `allow`, or `never` to grant hard requests as advisory. |
 | `lease.hard.agent` | **Advanced.** string · **Default:** `allow`<br>Whether an agent principal (a declared agent or managed run) may hold hard leases: `allow`, or `never` to grant hard requests as advisory. |
