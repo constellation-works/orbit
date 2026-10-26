@@ -91,11 +91,13 @@ The connected tool schema is authoritative for supported fields.
   never silently stripped. Names are checked like `required_tools`. An update
   replaces the list (`[]`, or CLI `--granted-tools ""`, clears it) and is
   accepted only while the task is `proposed`, `backlog` or `someday` with no
-  live run or execution claim; once an attempt is dispatched the grant is
-  frozen, and a change waits for a new attempt (requeue first). Every change
-  records a `granted_tools_changed` history entry naming the writer, both
-  tool sets and the run/claim state. Grants are stored and shown only for now:
-  activity admission still refuses a granted tool the deny list covers.
+  live run, footprint-protecting execution claim or worktree. A preserved
+  worktree keeps the grant frozen after its run stops or claim is released;
+  requeue and remove any preserved worktree before changing the grant for a
+  new attempt. Every change records a `granted_tools_changed` history entry
+  naming the writer, both tool sets and the run/claim/worktree state. Grants
+  are stored and shown only for now: activity admission still refuses a
+  granted tool the deny list covers.
 - `requires_labels: ["<label>", ...]` — capability labels a host must carry,
   **all of them**, to run the task. A host carries its `machine.labels` setting
   plus its OS as an implicit label (`linux`, `macos`, `windows`); `orbit doctor`
