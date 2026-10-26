@@ -12,7 +12,9 @@
 //! lease API over a [`LeaseBackend`] for servers with their own authentication.
 //! [`lease_intake`] is the Unix socket Orbit Web serves to the lease listener
 //! user when `lease.intake.peer_user` is set, and the client the listener
-//! calls it with.
+//! calls it with. [`lease_listener`] is that listener: the lease routes and
+//! `/healthz` behind lease-token authentication, run by `orbit lease listen`
+//! as the listener user.
 //! All routes, content types, defaults, and graceful shutdown are preserved.
 
 mod api;
@@ -25,6 +27,8 @@ mod heap;
 mod host_tunnels;
 #[cfg(unix)]
 pub mod lease_intake;
+#[cfg(unix)]
+pub mod lease_listener;
 mod log_format;
 mod parse;
 mod projections;
@@ -37,7 +41,9 @@ mod why_stuck;
 #[cfg(test)]
 mod tests;
 
-pub use api::leases::{LeaseBackend, LeaseBackendResult, LeaseCaller, lease_router};
+pub use api::leases::{
+    LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseCallerToken, lease_router,
+};
 pub use api::session::RequireBrowserSession;
 pub use browser_session::{OpenArgs, open_dashboard};
 pub use connect::{ConnectArgs, connect};

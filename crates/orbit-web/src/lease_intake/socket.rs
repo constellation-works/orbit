@@ -140,7 +140,7 @@ impl LeaseIntakeSocket {
     /// A socket around an already-bound `listener` that admits `peer_uid`,
     /// so a test can connect as its own user, which [`Self::bind`] refuses.
     #[cfg(test)]
-    pub(super) fn for_test_listener(
+    pub(crate) fn for_test_listener(
         listener: UnixListener,
         path: PathBuf,
         peer_uid: libc::uid_t,

@@ -80,6 +80,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["lease", "token", "create"], "lease/token-create.txt"),
     (&["lease", "token", "list"], "lease/token-list.txt"),
     (&["lease", "token", "revoke"], "lease/token-revoke.txt"),
+    (&["lease", "listen"], "lease/listen.txt"),
     (&["lease", "notices"], "lease/notices.txt"),
     (&["friction"], "friction/root.txt"),
     (&["friction", "add"], "friction/add.txt"),

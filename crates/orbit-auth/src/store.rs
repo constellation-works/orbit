@@ -21,7 +21,7 @@ use rusqlite::{Connection, OptionalExtension, Row, TransactionBehavior, params};
 use crate::environment::{LISTENER_USER, check_listener_execution_environment};
 use crate::scope::{LeaseTokenRecord, LeaseTokenRefusal, LeaseTokenScope, LeaseTokenVerb};
 use crate::token::{
-    LeaseTokenSecret, generate_lease_token_id, generate_lease_token_secret,
+    LEASE_TOKEN_PREFIX, LeaseTokenSecret, generate_lease_token_id, generate_lease_token_secret,
     is_lease_token_secret_shape, lease_token_digest,
 };
 
@@ -164,6 +164,7 @@ impl LeaseTokenStore {
                 verb: None,
                 reason: None,
                 actor: Some(actor),
+                origin: None,
             },
         )?;
         transaction.commit().map_err(sqlite_store_error)?;
@@ -229,6 +230,7 @@ impl LeaseTokenStore {
                 verb: None,
                 reason: None,
                 actor: Some(actor),
+                origin: None,
             },
         )?;
         transaction.commit().map_err(sqlite_store_error)?;
@@ -249,6 +251,34 @@ impl LeaseTokenStore {
         workspace: &str,
         verb: LeaseTokenVerb,
         now: DateTime<Utc>,
+    ) -> Result<LeaseTokenDecision, OrbitError> {
+        self.verify_with_origin(secret, Some(workspace), verb, now, None)
+    }
+
+    /// [`verify`](Self::verify) for a listener request from `origin`.
+    ///
+    /// `workspace` is `None` when the request names none: the token's only
+    /// workspace is used, and a token with several is refused as
+    /// [`LeaseTokenRefusal::WorkspaceUnnamed`]. A refusal's audit row also
+    /// carries the request's remote address and route.
+    pub fn verify_listener_request(
+        &mut self,
+        secret: &str,
+        workspace: Option<&str>,
+        verb: LeaseTokenVerb,
+        now: DateTime<Utc>,
+        origin: &LeaseRequestOrigin,
+    ) -> Result<LeaseTokenDecision, OrbitError> {
+        self.verify_with_origin(secret, workspace, verb, now, Some(origin))
+    }
+
+    fn verify_with_origin(
+        &mut self,
+        secret: &str,
+        workspace: Option<&str>,
+        verb: LeaseTokenVerb,
+        now: DateTime<Utc>,
+        origin: Option<&LeaseRequestOrigin>,
     ) -> Result<LeaseTokenDecision, OrbitError> {
         let found = if is_lease_token_secret_shape(secret) {
             let digest = lease_token_digest(secret);
@@ -272,9 +302,15 @@ impl LeaseTokenStore {
         } else {
             None
         };
-        let decision = match &found {
-            None => Err(LeaseTokenRefusal::Unknown),
-            Some(record) => record.decide(workspace, verb, now),
+        let decision = match (&found, workspace) {
+            (None, _) => Err(LeaseTokenRefusal::Unknown),
+            (Some(record), Some(workspace)) => record.decide(workspace, verb, now),
+            (Some(record), None) => match record.scope.workspaces.as_slice() {
+                [only] => record.decide(only, verb, now),
+                _ if record.revoked_at.is_some() => Err(LeaseTokenRefusal::Revoked),
+                _ if record.expires_at <= now => Err(LeaseTokenRefusal::Expired),
+                _ => Err(LeaseTokenRefusal::WorkspaceUnnamed),
+            },
         };
         match decision {
             Ok(()) => {
@@ -300,16 +336,68 @@ impl LeaseTokenStore {
                         event: "verify_refused",
                         token_id: found.as_ref().map(|record| record.token_id.as_str()),
                         principal: found.as_ref().map(|record| record.scope.principal.as_str()),
-                        workspace: Some(workspace),
+                        workspace,
                         verb: Some(verb.as_str()),
                         reason: Some(refusal.as_str()),
                         actor: None,
+                        origin,
                     },
                 )?;
                 Ok(LeaseTokenDecision::Deny(refusal))
             }
         }
     }
+
+    /// Audit a listener refusal that no token decision covers: a missing
+    /// token, an unresolvable client address, a rate limit, or a request
+    /// refused after authentication without reaching Orbit.
+    pub fn record_listener_refusal(
+        &mut self,
+        refusal: &LeaseListenerRefusal<'_>,
+    ) -> Result<(), OrbitError> {
+        insert_audit(
+            &self.connection,
+            &AuditRow {
+                at: refusal.at,
+                event: "listener_refused",
+                token_id: refusal.token_id,
+                principal: refusal.principal,
+                workspace: refusal.workspace,
+                verb: refusal.verb.map(LeaseTokenVerb::as_str),
+                reason: Some(refusal.reason),
+                actor: None,
+                origin: Some(refusal.origin),
+            },
+        )
+    }
+}
+
+/// Where a listener request came from, for its audit row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeaseRequestOrigin {
+    /// The resolved client address, or the TCP peer when none resolved.
+    pub remote_address: String,
+    /// Method and path, such as `POST /api/leases`.
+    pub route: String,
+}
+
+/// A listener refusal to audit. It never carries a secret.
+#[derive(Debug, Clone)]
+pub struct LeaseListenerRefusal<'a> {
+    /// When it was refused.
+    pub at: DateTime<Utc>,
+    /// The request.
+    pub origin: &'a LeaseRequestOrigin,
+    /// Stable reason, such as `missing_token` or `rate_limited`.
+    pub reason: &'a str,
+    /// The authenticated token's id, when known.
+    pub token_id: Option<&'a str>,
+    /// The authenticated token's principal, when known.
+    pub principal: Option<&'a str>,
+    /// The workspace the request addressed, when known.
+    pub workspace: Option<&'a str>,
+    /// The verb the request needed, when known.
+    pub verb: Option<LeaseTokenVerb>,
 }
 
 /// Who is running a token command, for the audit row: the `sudo` caller when
@@ -348,27 +436,58 @@ struct AuditRow<'a> {
     verb: Option<&'a str>,
     reason: Option<&'a str>,
     actor: Option<&'a str>,
+    origin: Option<&'a LeaseRequestOrigin>,
 }
 
 fn insert_audit(connection: &Connection, row: &AuditRow<'_>) -> Result<(), OrbitError> {
+    // A client can send a token where a workspace or a path belongs.
+    let workspace = row.workspace.map(audit_text);
+    let route = row.origin.map(|origin| audit_text(&origin.route));
     connection
         .execute(
             "INSERT INTO lease_token_audit \
-             (at, event, token_id, principal, workspace, verb, reason, actor) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (at, event, token_id, principal, workspace, verb, reason, actor, remote_address, \
+             route) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 timestamp(row.at),
                 row.event,
                 row.token_id,
                 row.principal,
-                row.workspace,
+                workspace,
                 row.verb,
                 row.reason,
                 row.actor,
+                row.origin.map(|origin| origin.remote_address.as_str()),
+                route,
             ],
         )
         .map(|_| ())
         .map_err(sqlite_store_error)
+}
+
+/// `text` with every word that contains the token prefix replaced, so an
+/// audit row never keeps a token a client sent (STD-05). Words are runs of
+/// letters, digits and `_`, so a token is caught wherever it sits in a path
+/// or query, whatever follows it.
+fn audit_text(text: &str) -> String {
+    let mut redacted = String::with_capacity(text.len());
+    let mut word = String::new();
+    // The appended separator closes a final word and is removed below.
+    for character in text.chars().chain(std::iter::once(' ')) {
+        if character.is_ascii_alphanumeric() || character == '_' {
+            word.push(character);
+            continue;
+        }
+        if word.contains(LEASE_TOKEN_PREFIX) {
+            redacted.push_str("[redacted]");
+        } else {
+            redacted.push_str(&word);
+        }
+        word.clear();
+        redacted.push(character);
+    }
+    redacted.pop();
+    redacted
 }
 
 fn timestamp(at: DateTime<Utc>) -> String {

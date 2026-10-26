@@ -403,7 +403,10 @@ pub(super) fn dispatch_browser_kit(command: Commands, _context: DispatchContext<
     }
 }
 
-pub(super) fn dispatch_lease_token(command: Commands, context: DispatchContext<'_>) -> CommandOut {
+pub(super) fn dispatch_lease_listener_user(
+    command: Commands,
+    context: DispatchContext<'_>,
+) -> CommandOut {
     match command {
         Commands::Lease(command) => {
             command.execute_without_runtime(context.workspace_selector, context.root_override)

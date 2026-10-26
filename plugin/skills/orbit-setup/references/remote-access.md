@@ -257,8 +257,8 @@ turn a raw TCP socket or dashboard into an authenticated per-user service.
 ## Lease listener user and lease tokens
 
 Path leases let people who have no SSH login to the owner, and their agents,
-coordinate through a lease-only listener with bearer **lease tokens**. Tokens
-exist now; no network surface accepts them yet. Agents run as your Unix user,
+coordinate through a lease-only listener (`orbit lease listen`) with bearer
+**lease tokens**. Agents run as your Unix user,
 so anything your user can write, an agent can write too. The tokens, their
 store and the commands that mint them therefore belong to a dedicated system
 user, `orbit-lease` by convention, that you become through `sudo -u`.
@@ -338,3 +338,115 @@ The commands refuse to run:
   path; fix its owner or mode.
 
 On macOS the same checks apply; create the user with your usual tooling.
+
+### Run the lease listener
+
+The listener serves `/healthz` and the lease routes under `/api/leases`, and
+nothing else, to token holders. It runs as `orbit-lease` and hands each
+authenticated operation to Orbit Web over the lease intake socket, so it never
+opens your Orbit store. Your dashboard stays loopback-only. Leave all of this
+unset unless the sudo prerequisite above holds on this host.
+
+1. As yourself, turn on the intake socket and restart Orbit Web. Your user
+   must be a member of `orbit-lease`'s primary group, and `orbit-lease` needs
+   search permission on every directory above `~/.orbit/run`:
+
+   ```bash
+   sudo usermod -aG orbit-lease "$USER"   # then log in again
+   orbit config set --global lease.intake.peer_user orbit-lease
+   orbit web serve                        # or restart its service; it prints the socket path
+   ```
+
+2. Write the listener's settings into its own Orbit home, which your user
+   cannot write:
+
+   ```bash
+   sudo install -m 0600 -o orbit-lease -g orbit-lease /dev/stdin \
+     /var/lib/orbit-lease/.orbit/config.toml <<'EOF'
+   [lease.listener]
+   bind = "100.64.0.5:7480"     # a tailnet or private address
+   intake_socket = "/home/<you>/.orbit/run/lease-intake.sock"
+   # Behind a TLS-terminating proxy instead:
+   # bind = "127.0.0.1:7480"
+   # behind_proxy = true
+   # trusted_proxy = ["127.0.0.1"]
+   EOF
+   ```
+
+   Keys and defaults are in `orbit config keys` under `lease.listener.`.
+   `lease.listener.limits.failed_auth` (default 10) and
+   `lease.listener.limits.failed_auth_window_seconds` (default 300) set when
+   an address that keeps failing authentication gets 429.
+
+3. Run it from a systemd unit, `/etc/systemd/system/orbit-lease-listener.service`:
+
+   ```ini
+   [Unit]
+   Description=Orbit lease listener
+   After=network-online.target
+   Wants=network-online.target
+
+   [Service]
+   User=orbit-lease
+   Group=orbit-lease
+   Environment=HOME=/var/lib/orbit-lease
+   ExecStart=/usr/local/bin/orbit lease listen
+   Restart=on-failure
+   RestartSec=5
+   NoNewPrivileges=yes
+   PrivateTmp=yes
+   ProtectSystem=strict
+   ReadWritePaths=/var/lib/orbit-lease/.orbit
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now orbit-lease-listener
+   journalctl -u orbit-lease-listener -f
+   curl -s http://100.64.0.5:7480/healthz          # {"status":"ok"}
+   curl -s -H "Authorization: Bearer orbl_…" \
+     "http://100.64.0.5:7480/api/leases?workspace=ws_example"
+   ```
+
+   It runs the root-owned `/usr/local/bin/orbit`. After `orbit update`,
+   reinstall that copy and restart the unit; until then the listener and
+   Orbit Web refuse each other with a protocol-version message.
+
+`orbit lease listen` refuses to start, with a message naming the reason:
+
+- as root; as the user that owns the intake socket (that is you); or when the
+  executable, the listener's Orbit home or a directory above either is
+  writable by another user;
+- when `lease.listener.bind` is unset, when it is `0.0.0.0` or `::` without
+  `behind_proxy = true`, when `behind_proxy` is set without `trusted_proxy`,
+  or when `lease.listener.tls` is set (native TLS is not available yet;
+  terminate TLS at a proxy).
+
+**Behind a proxy.** The listener believes `X-Forwarded-For` only from a peer
+in `trusted_proxy`, and takes the rightmost entry that is not a trusted proxy
+as the client; `Forwarded` is never read. So the proxy must append the address
+it received the connection from (nginx `$proxy_add_x_forwarded_for`) or
+overwrite the header with it (nginx `$remote_addr`). It must never pass a
+client's `X-Forwarded-For` through as the only entry, or clients choose their
+own address. A malformed entry is answered with 400, never replaced by the
+proxy's address.
+
+**What clients see.** No token, or an unknown, revoked or expired one: 401
+`{"error":"unauthorized"}`. A token without the verb or workspace: 403. A
+`principal` in a request is ignored; the token's is used. Requests are the
+same JSON as Orbit Web's `/api/leases` routes; add `?workspace=<id>` when a
+token names several workspaces.
+
+**Audit.** Granted and refused operations that reach Orbit are in your audit
+log as `lease.intake.<operation>`. Refusals that stop at the listener are rows
+in `lease_token_audit` in its `lease-tokens.db`, with remote address, route
+and reason, never a secret:
+
+```bash
+sudo -u orbit-lease sqlite3 /var/lib/orbit-lease/.orbit/lease-tokens.db \
+  "select at, event, reason, remote_address, route, token_id
+   from lease_token_audit order by audit_id desc limit 20"
+```
