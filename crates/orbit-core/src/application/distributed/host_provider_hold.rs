@@ -80,10 +80,19 @@ impl OrbitRuntime {
         let since = now - LOOKBACK;
         let fallback = self.fallback_host();
         let aliases = self.host_aliases(&fallback);
-        let failures = self
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&hold_query(JobRunState::Failed, since, true))?
+        let mut stopped_runs = self.stores().jobs().list_job_runs_filtered(&hold_query(
+            JobRunState::Failed,
+            since,
+            true,
+        ))?;
+        // Capacity runs now end held. Keep reading failed runs too, both for
+        // unavailability and for capacity recorded by older executors.
+        stopped_runs.extend(self.stores().jobs().list_job_runs_filtered(&hold_query(
+            JobRunState::Held,
+            since,
+            true,
+        ))?);
+        let failures = stopped_runs
             .into_iter()
             .filter(|run| on_this_host(run, &aliases, &fallback))
             .filter_map(|run| {

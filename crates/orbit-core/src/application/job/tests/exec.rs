@@ -217,9 +217,10 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
 
 /// [ORB-15517] A claimed leaf its provider's usage limit stopped holds on
 /// the provider and its reset, through either finalization branch, and
-/// records the deferral Incidents lists; any other job fails on the same
-/// text. Targets the finalizer because only an owner-bound worker can
-/// execute a claimed leaf, which no crate-root fixture can stand up.
+/// records the deferral Incidents lists. Owner-local provider holds have
+/// public-worker coverage in the runtime integration tests. Targets the
+/// finalizer because only an owner-bound worker can execute a claimed leaf,
+/// which no crate-root fixture can stand up.
 #[test]
 fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
     if crate::application::tests::run_isolated_test(std::any::type_name_of_val(
@@ -230,11 +231,7 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
     let limit = "step `implement` failed: [provider_limit] provider=codex \
                  resets_at=2026-10-09T22:42:00Z cli subprocess exited with code 1: You've hit \
                  your usage limit.";
-    for job in [
-        "task_claimed_local_pipeline",
-        "task_claimed_pr_pipeline",
-        "task_local_pipeline",
-    ] {
+    for job in ["task_claimed_local_pipeline", "task_claimed_pr_pipeline"] {
         for as_error in [false, true] {
             let root = tempfile::tempdir().unwrap();
             let global = root.path().join("global");
@@ -281,7 +278,6 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
                 .unwrap();
 
             let stored = runtime.get_job_run_backend(&run.run_id).unwrap().unwrap();
-            let claimed = job.starts_with("task_claimed_");
             let case = format!("{job}, as_error={as_error}: {:?}", stored.steps);
             let deferred = runtime
                 .audit_failure_incidents(&orbit_store::contracts::FailureIncidentQuery::default())
@@ -294,11 +290,6 @@ fn a_claimed_leaf_provider_limit_holds_and_records_a_deferral() {
                 })
                 .map(|incident| incident.class)
                 .collect::<Vec<_>>();
-            if !claimed {
-                assert_eq!(stored.state, JobRunState::Failed, "{case}");
-                assert!(deferred.is_empty(), "{case}: {deferred:?}");
-                continue;
-            }
             assert_eq!(stored.state, JobRunState::Held, "{case}");
             let step = stored.steps.last().expect("held diagnostic step");
             assert_eq!(step.error_code.as_deref(), Some("provider_limit"), "{case}");
