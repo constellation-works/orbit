@@ -338,6 +338,19 @@ a live owner's sudoers.
 - **Linux first.** The user, its systemd unit and the root-owned binary are documented for
   Linux owners. On macOS the same checks apply; creating the user is the operator's.
 
+**Implemented token commands.** `orbit-auth` and `orbit lease token create|list|revoke` exist;
+no network surface accepts a token yet. Orbit never creates `lease-tokens.db`: root provisions
+it empty (`0600`, in the `0700` Orbit home) when it creates the listener user, and Orbit adds
+its schema on first open. That is how a command run as the operator finds no store, for
+`create` too, and refuses with how to run it as the listener user. The Orbit home is `$HOME/.orbit`,
+so the documented command line is `sudo -H -u orbit-lease …`; under a preserved operator
+`HOME` the home is the operator's and the ownership checks refuse it. A token's workspaces come
+from the global `--workspace` flag, comma-separated. The commands open no workspace runtime,
+pin no executable generation and write no Orbit audit row; the token store audits mints,
+revocations and refused verifications itself. The execution-environment check reads ownership
+and mode bits, accepts a sticky directory above the checked path, and does not read ACLs. Setup
+is in the orbit-setup skill's remote-access reference.
+
 ### 7.2 The intake socket
 
 The listener user cannot open the operator's Orbit store, so it hands authenticated lease

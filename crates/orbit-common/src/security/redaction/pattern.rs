@@ -188,6 +188,11 @@ impl PatternRedactor {
                 Regex::new(r"xox[baprs]-[A-Za-z0-9\-]{10,}").expect("valid regex"),
                 "[REDACTED_SECRET]",
             ),
+            // Orbit lease listener bearer tokens (`orbit-auth`).
+            (
+                Regex::new(r"orbl_[A-Za-z0-9]{32,}").expect("valid regex"),
+                "[REDACTED_SECRET]",
+            ),
         ];
         Self { patterns }
     }
@@ -274,6 +279,7 @@ fn high_confidence_single_token_patterns() -> &'static [Regex] {
                 .expect("valid regex"),
                 Regex::new(r"^ghp_[A-Za-z0-9]{36}$").expect("valid regex"),
                 Regex::new(r"^xox[baprs]-[A-Za-z0-9\-]{10,}$").expect("valid regex"),
+                Regex::new(r"^orbl_[A-Za-z0-9]{32,}$").expect("valid regex"),
             ]
         })
         .as_slice()

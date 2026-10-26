@@ -21,6 +21,7 @@ clap.workspace = true
 colored = "2"
 comfy-table = "7"
 csv = "1"
+orbit-auth = { path = "../orbit-auth" }
 orbit-cmd = { path = "../orbit-cmd" }
 orbit-common = { path = "../orbit-common" }
 orbit-config = { path = "../orbit-config" }

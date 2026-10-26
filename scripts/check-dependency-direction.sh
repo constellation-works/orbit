@@ -33,6 +33,11 @@ allowed_internal_deps() {
     orbit-policy | orbit-exec | orbit-store)
       echo "orbit-common orbit-types"
       ;;
+    orbit-auth)
+      # Credential code only: no HTTP framework, runtime handle or Orbit store,
+      # so its surfaces (CLI, listener) wrap it rather than the reverse.
+      echo "orbit-common orbit-types"
+      ;;
     orbit-search)
       echo "orbit-common orbit-types"
       ;;
@@ -77,7 +82,7 @@ allowed_internal_deps() {
     orbit-cli)
       # The executable assembles MCP and Web feature crates with Registry state
       # and Core's authoritative runtime dispatcher.
-      echo "orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types orbit-engine orbit-exec orbit-tools"
+      echo "orbit-auth orbit-common orbit-cmd orbit-config orbit-core orbit-mcp orbit-registry orbit-web orbit-types orbit-engine orbit-exec orbit-tools"
       ;;
     *)
       return 1

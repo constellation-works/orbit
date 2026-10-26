@@ -1,0 +1,21 @@
+Mint, list and revoke lease listener tokens (run as the listener user)
+
+A lease token lets a person or their agent use the lease listener, and nothing else. Tokens live in lease-tokens.db in the listener user's own Orbit home, so run these commands as that user, for example `sudo -H -u orbit-lease orbit lease token list`. Run as any other user they find no store and refuse. They also refuse to run as root, from an agent context, or when the executable or the Orbit home can be changed by another user.
+
+Usage: orbit lease token [OPTIONS] <COMMAND>
+
+Commands:
+  create  Mint a token and print its secret once
+  list    List tokens with their scope and state, never their secrets
+  revoke  Revoke a token; its next use is refused
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

@@ -424,7 +424,21 @@ impl Commands {
             // runtime need and audit metadata derive from its spec. A new
             // friction verb needs no edit here.
             Commands::Lease(command) => {
-                registry_operation(&command.command, runtime_dispatch!(Lease))
+                use super::super::lease::LeaseSubcommand;
+                match &command.command {
+                    LeaseSubcommand::Operation(invocation) => {
+                        registry_operation(invocation, runtime_dispatch!(Lease))
+                    }
+                    // Token commands run as the lease listener user against its
+                    // own token store, which audits mint and revoke itself. They
+                    // open no workspace, so no Orbit audit row is written.
+                    LeaseSubcommand::Token(_) => CommandOperation::new(
+                        RuntimeNeed::Forbidden,
+                        None,
+                        None,
+                        dispatch_lease_token,
+                    ),
+                }
             }
             Commands::Friction(command) => {
                 registry_operation(&command.command, runtime_dispatch!(Friction))
