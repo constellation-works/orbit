@@ -284,6 +284,122 @@ forwarded caller machine ID — attribution, not a grant — plus the workspace
 checkout and cwd. See [remote-access.md](../../orbit-setup/references/remote-access.md). Do not
 relaunch a server with more privileges to work around a denied call.
 
+### Blocked-task triage
+
+`orbit_task_block_triage` (`orbit.task.block_triage`) records one triage
+decision on a blocked task's current block episode. `candidates` lists the
+episodes that await triage: the final-recovery decision escalated, or the block
+has no decision and the backstop never decides it (it is older than 72 hours).
+An episode already triaged, or touched by a human after the block, is excluded.
+Each other action records one decision on a qualifying episode, as one task
+comment plus a history marker, and refuses any other episode. No action
+completes, rejects or archives a task.
+
+- `requeue` returns the task to `backlog` as a final-recovery requeue, counted
+  against the requeue bound shared with final recovery: 2 per 24 hours. Past the
+  bound, for a task tagged `security` or `security-review`, or for a run another
+  machine executed, the requeue is recorded as refused with the human action and
+  the task stays blocked. When the count cannot be read, nothing is written and
+  the refusal says so.
+- `propose` records the quoted blocker, two or three options with their
+  consequences and ready-to-apply replacement text, and a recommendation. It
+  changes nothing else.
+- `report` records the human action. It changes nothing else.
+
+With `subject` `pilot_warning`, the same actions read `proposed` tasks whose
+latest task-pilot assessment holds promotion on warning findings. `candidates`
+lists each held assessment that is not yet triaged and has no operator decision,
+quoting its holding findings. `propose` and `report` record one comment quoting
+those findings plus a `pilot_warning_triaged` history marker, which excludes that
+assessment afterwards, and they refuse a task that no longer qualifies. `requeue`
+is refused. A pilot-warning triage never approves, promotes, clears the hold or
+edits any other task field.
+
+Inspection proof: a decision on a task that a live escalation triage run holds
+must carry that run's proof, in three fields:
+
+- `source_revision`: the commit the run pinned.
+- `observed_revision`: `git rev-parse HEAD` in the run's inspection checkout.
+- `observed_tree`: `git rev-parse 'HEAD^{tree}'` in the same checkout.
+
+Core checks that `observed_revision` equals the pinned revision and that
+`observed_tree` equals that revision's tree. In a non-Git workspace the run pins
+no revision: pass `source_revision` as null and omit both observed values. A
+missing or mismatched proof is refused, naming the run and the expected values,
+and nothing is recorded. A proof passed on any other decision is checked the same
+way.
+
+### Decision requests
+
+`orbit_decision_submit` (`orbit.decision.submit`) and `orbit_decision_digest`
+(`orbit.decision.digest`) are governed. Both are callable only by the plugin the
+channel is bound to, through its callback session, or by the operator; an agent
+session is refused `caller_not_allowed`.
+
+**Submit.** Core verifies that the channel is registered and unrevoked, that the
+request is still open against its binding, that the answer is allowed, and the
+per-request token: single-use, expiring with the request, and keyed to the
+channel's current key epoch. A submission with `raw_message` also gets core's own
+DKIM check: core reads the selector key from DNS, verifies the body hash and the
+header signature, checks signing-domain alignment with the sender, and refuses
+when its result contradicts the forwarded verdicts. A channel registered with
+`require_dkim_verification` refuses a submission without a raw message
+(`dkim_verification_required`). Only then is the answer applied as the registered
+human, with the channel and the token fingerprint recorded as provenance.
+
+A refusal applies nothing. The refusal codes are `channel_not_registered`,
+`channel_revoked`, `caller_not_allowed`, `sender_not_allowed`,
+`authentication_failed`, `dkim_verification_failed`,
+`dkim_verification_unavailable`, `dkim_verification_required`,
+`raw_message_too_large`, `token_invalid`, `token_consumed`, `request_expired`,
+`request_superseded`, `answer_not_allowed`, `answer_not_applicable`,
+`request_not_found` and `decision_channel_disabled`. A parse-level
+refusal does not consume the token. `dkim_verification_unavailable` is the only
+retryable refusal: retry the same submission unchanged; it consumes nothing.
+
+**Digest.** `orbit_decision_digest` takes one `channel`. For every proposed task
+without an open `proposed_approval` request, and every review task without an
+open `review_approval` request, it raises one open request per (task, gate,
+binding), with answers `approve` and `reject` and `raised_by` `digest`. A plugin
+the channel is not bound to is refused `channel_not_registered`; an unregistered
+or revoked channel is refused with `channel_not_registered` or `channel_revoked`.
+
+- `proposed_approval` binds to the task's description and acceptance criteria
+  plus its proposed status.
+- `review_approval` also binds to the candidate under review.
+- Either request reads `superseded` once its binding stops matching.
+
+The result carries `requests` (the digest), `raised` (what this call raised) and
+`expiring` (every still-open request expiring within 24 hours). A repeated call
+raises nothing new and returns the same request IDs. With the decision channel
+disabled in this workspace, the call raises nothing, writes nothing and returns
+no requests.
+
+### Agent scorecards
+
+`orbit_agents_scorecard` ranks one agent role's crews and models over the window.
+
+- **Score.** Each term's count per 100 units of work is weighted and summed.
+  Implementers start at 100 and score actual counts against fleet expectations
+  for the same tier mix; other roles sum weighted actual rates. A row above the
+  fleet average is pulled down toward it. Tasks tagged `no-diff-expected`, when
+  an attempt was admitted, are not implementer work and count nowhere on the
+  implementers scorecard.
+- **Ranking.** Rows below the minimum support are listed last without a rank. A
+  role whose terms are not computed yet answers `status: not_computed`, with its
+  terms and no rows.
+- **Switches.** `by_type` returns one cell per (crew, model, tier, type) with
+  `n`, `raw`, `crew_mean` and `score`, plus the type list used. `shadow` (with
+  `by_type`) returns each crew's draw count and its static, drawn and would-be
+  share per pool and type over the window; draws with no performance record are
+  counted separately as static. `per_task` returns one row per implemented task
+  with its crew, model, tier, configured type, tags, context-file selectors, path
+  prefixes and per-term counts, plus the type list used. Without these switches,
+  the ranking is returned.
+- **Cost.** Each call scans the workspace once (`cache_ttl_seconds` is 0), except
+  the `shadow` report, which reads recorded draws only.
+- The dashboard's Agents view reads this payload.
+
 ## Common MCP arguments
 
 These are JSON arguments to the named tool, not shell commands:
