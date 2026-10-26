@@ -49,7 +49,7 @@ const TABS = ["tasks", "jobs", "drain", "diagnostics", "analytics", "operations"
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
-const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "forecast", "cost", "agents"];
+const ANALYTICS_SUBTABS = ["metrics", "reliability", "codebase", "resources", "forecast", "cost", "agents", "experiments"];
 // Analytics › Cost tabs: `#analytics/cost?tab=exploration`; no `tab` is Spend.
 const COST_TABS = ["spend", "exploration"];
 // Analytics › Reliability views: `#analytics/reliability[/tools]`.
@@ -71,6 +71,7 @@ const ANALYTICS_MAINS = {
   forecast: "analytics-forecast-main",
   cost: "analytics-cost-main",
   agents: "agents-main",
+  experiments: "analytics-experiments-main",
 };
 const RUN_DETAIL_SUBTABS = ["steps", "events"];
 // Rail labels name destinations the way an operator reads them; some hashes
@@ -110,6 +111,7 @@ function analyticsSubtabRoute(ctx, sub) {
   if (sub === "agents") return `analytics/agents/${ctx.getAgentsRole()}`;
   if (sub === "codebase") return ctx.buildCodebaseHash().slice(1);
   if (sub === "reliability" && ctx.getReliabilityView() === "tools") return "analytics/reliability/tools";
+  if (sub === "experiments" && ctx.experimentsRoute) return ctx.experimentsRoute();
   return `analytics/${sub}`;
 }
 
@@ -340,6 +342,7 @@ function setAnalyticsSubtabImpl(ctx, name, view = ctx.getReliabilityView()) {
   if (shown === "pipeline" && ctx.fetchReliability) ctx.fetchReliability();
   if (shown === "resources" && ctx.fetchResources) ctx.fetchResources();
   if (shown === "forecast" && ctx.fetchForecast) ctx.fetchForecast();
+  if (shown === "experiments" && ctx.fetchExperiments) ctx.fetchExperiments();
 }
 
 // Agents shows one role at a time behind its secondary tabs, and reads it as
@@ -584,6 +587,18 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
       if (segments[1]) ctx.applyCodebaseHashQuery(query, segments[2] || null);
     } else {
       adoptHashedWindow();
+    }
+    if (sub === "experiments" && segments[1] && ctx.setExperimentId) {
+      // `#analytics/experiments[/<id>]`: the segment names one experiment; a
+      // malformed escape opens the list. A bare `#analytics` keeps the
+      // remembered view.
+      let id = null;
+      try {
+        id = segments[2] ? decodeURIComponent(segments[2]) : null;
+      } catch {
+        id = null;
+      }
+      ctx.setExperimentId(id);
     }
     setAnalyticsSubtabImpl(ctx, sub, view);
     setCostTabView(sub === "cost" ? query.get("tab") : null);

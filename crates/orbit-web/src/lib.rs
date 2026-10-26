@@ -54,6 +54,7 @@ pub(crate) const DASHBOARD_CSS: &str = concat!(
     include_str!("../assets/dashboard/css/audit.css"),
     include_str!("../assets/dashboard/css/health.css"),
     include_str!("../assets/dashboard/css/forecast.css"),
+    include_str!("../assets/dashboard/css/experiments.css"),
     include_str!("../assets/dashboard/css/scoreboard.css"),
     include_str!("../assets/dashboard/css/agents.css"),
     include_str!("../assets/dashboard/css/knowledge.css"),

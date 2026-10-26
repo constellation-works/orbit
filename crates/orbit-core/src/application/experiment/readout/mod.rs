@@ -42,6 +42,18 @@ pub struct ExperimentReadout {
     pub guardrails: Vec<GuardrailReadout>,
     pub verdict: Verdict,
     pub warnings: Vec<ReadoutWarning>,
+    /// The primary metric's settled per-task values, oldest assignment
+    /// first, for the dashboard's cumulative series; not part of the JSON.
+    #[serde(skip)]
+    pub primary_observations: Vec<PrimaryObservation>,
+}
+
+/// One enrolled task's settled value of the primary metric.
+#[derive(Debug, Clone)]
+pub struct PrimaryObservation {
+    pub arm: String,
+    pub assigned_at: DateTime<Utc>,
+    pub value: f64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -393,6 +405,25 @@ fn build_readout(
         primary,
         &guardrail_readouts,
     );
+    let mut primary_observations: Vec<PrimaryObservation> = experiment
+        .primary_metric
+        .as_deref()
+        .and_then(metric_spec)
+        .map(|spec| {
+            tasks
+                .iter()
+                .filter_map(|task| match task.values.get(spec.name) {
+                    Some(Outcome::Value(value)) => Some(PrimaryObservation {
+                        arm: task.arm.clone(),
+                        assigned_at: task.assigned_at,
+                        value: *value,
+                    }),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    primary_observations.sort_by_key(|observation| observation.assigned_at);
     let metrics = match metric {
         Some(name) => all_metrics
             .into_iter()
@@ -424,6 +455,7 @@ fn build_readout(
         guardrails: guardrail_readouts,
         verdict,
         warnings,
+        primary_observations,
     })
 }
 

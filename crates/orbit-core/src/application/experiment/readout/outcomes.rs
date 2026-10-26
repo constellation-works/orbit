@@ -166,6 +166,7 @@ pub(super) struct TaskOutcome {
     pub(super) complexity: String,
     pub(super) crew: String,
     pub(super) terminal: bool,
+    pub(super) assigned_at: DateTime<Utc>,
     pub(super) assignment_digest: Option<String>,
     pub(super) values: BTreeMap<&'static str, Outcome>,
 }
@@ -347,6 +348,7 @@ impl OrbitRuntime {
                     .to_string(),
                 crew: task.crew.clone().unwrap_or_else(|| "unset".to_string()),
                 terminal,
+                assigned_at: row.assigned_at,
                 assignment_digest: row.digest.clone(),
                 values,
             });
