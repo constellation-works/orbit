@@ -84,6 +84,32 @@ orbit workspace publication remove --confirm
 Remove deletes the local binding and last-success record only; it does not
 delete the publication repository or erase published history.
 
+## Transfer the source repository
+
+Use `orbit workspace source-remote rebind --remote <new-source-url>` on the
+declared owner after a repository transfer. It updates the registered source
+and the task-registry pairing in the same audited command. Pairing comparisons
+normalize existing raw URLs to their portable host/owner/repository identity:
+SSH and HTTPS spellings of one repository compare equal, while a different
+owner or repository requires the explicit source rebind. No store edits or
+data migration are needed.
+
+An existing publication binding prevents a source identity change. Save
+`orbit workspace publication show --json`, remove that binding with
+`orbit workspace publication remove --confirm`, preview the source rebind with
+`--dry-run --json`, then apply without `--dry-run`. Update Git `origin`
+separately. Use `orbit workspace publication rebind` with reviewed settings,
+a new publication ID and an empty publication branch, then verify with
+`orbit workspace publication show --json`. Old snapshots retain their original
+source identity; the new binding starts without last-success metadata.
+
+For a transfer already performed by an older Orbit version, repeat
+`orbit workspace source-remote rebind --remote <registered-source-url>`.
+It reconciles a stale task pairing even when the source reports `unchanged`.
+The workspace registration is saved before the task pairing; if the pairing
+write fails or the command is interrupted, repeat the same command to finish.
+`--dry-run` leaves both pairings untouched.
+
 ## Publish and choose attachment exposure
 
 ```bash

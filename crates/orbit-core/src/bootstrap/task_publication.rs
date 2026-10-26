@@ -27,7 +27,8 @@ impl OrbitRuntime {
     }
 
     /// Pair the coordination registry with the explicit publication binding's
-    /// portable source identity. A previously different value is refused.
+    /// portable source identity. A previously different repository is refused;
+    /// equivalent SSH and HTTPS URLs are accepted without rewriting old rows.
     pub fn record_task_publication_source(
         &self,
         workspace_id: &str,
@@ -35,6 +36,19 @@ impl OrbitRuntime {
     ) -> Result<(), OrbitError> {
         self.open_publication_task_registry()?
             .record_workspace_repo_fingerprint(workspace_id, source_repository_fingerprint)?;
+        Ok(())
+    }
+
+    /// Reconcile the task partition after the owner explicitly rebinds its
+    /// registered source remote. Call after saving the workspace registration,
+    /// under its registry lock, including on retries of an unchanged source.
+    pub fn rebind_task_publication_source(
+        &self,
+        task_workspace_id: &str,
+        source_remote: &str,
+    ) -> Result<(), OrbitError> {
+        self.open_publication_task_registry()?
+            .rebind_workspace_repo_fingerprint(task_workspace_id, source_remote)?;
         Ok(())
     }
 

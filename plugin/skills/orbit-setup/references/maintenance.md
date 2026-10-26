@@ -270,9 +270,15 @@ Choose by intent:
   After reviewing that result, apply the same command without `--dry-run` and
   update the checkout's Git `origin` separately. The new URL must be portable;
   credentials, local paths and remote aliases are refused. Rebinding changes
-  the registered source remote and repository identity, not Git configuration.
+  the registered source remote and repository identity and reconciles the
+  task-registry source pairing. Equivalent SSH and HTTPS URLs compare equal.
+  Repeat the command with the registered URL to repair a pairing left stale
+  by an older Orbit version, even when the source reports `unchanged`.
+  Git configuration is updated separately.
   It refuses to rewrite an existing publication binding or its lineage and
-  snapshots; remove and recreate that binding explicitly around the move.
+  snapshots; record and remove that binding before the move, then use
+  `orbit workspace publication rebind` with a new publication ID and an empty
+  publication branch. Verify with `orbit workspace publication show --json`.
   See [Publication](publication.md) and [Multi-host](multi-host.md) before
   moving state between hosts.
 

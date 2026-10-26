@@ -332,7 +332,9 @@ fn assert_registered_workspace(
         )));
     }
     match binding.repo_fingerprint.as_deref() {
-        Some(fingerprint) if fingerprint == request.source_repository_fingerprint => Ok(()),
+        Some(fingerprint) if remotes_match(fingerprint, &request.source_repository_fingerprint) => {
+            Ok(())
+        }
         Some(_) => Err(publish_error(format!(
             "task workspace '{}' publication fingerprint does not match its registered source remote",
             request.task_workspace_id

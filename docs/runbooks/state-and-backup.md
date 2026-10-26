@@ -285,8 +285,8 @@ workflow below. No workspace removal is needed for first binding or a repository
 Use the source-remote command when a Git repository moves to a different owner, name, or
 host but remains the same logical Orbit workspace. Do not rerun `workspace init`, edit
 `workspaces.json`, or perform a broad URL replacement: the supported operation changes only
-the logical workspace's registered `git_remote`. Workspace ID, owner identity, task bundles,
-checkout roles, and checkout/path registrations remain unchanged.
+the logical workspace's registered `git_remote` and task-registry source pairing. Workspace ID,
+owner identity, task bundles, checkout roles, and checkout/path registrations remain unchanged.
 
 Inspect the current registration and save the old URL for rollback:
 
@@ -331,11 +331,20 @@ orbit --workspace "$ORBIT_WORKSPACE" workspace show --format json
 orbit --workspace "$ORBIT_WORKSPACE" task list --limit 1 --format json
 ```
 
-If publication was previously configured, use `workspace publication bind` with the captured
-remote, branch, and publication ID after reviewing that they still describe the intended
+If publication was previously configured, use `workspace publication rebind` with the captured
+remote, a new publication ID, and an empty publication branch after reviewing the intended
 dedicated publication repository. This creates a fresh local binding and clears local
 last-success metadata; it does not move, rewrite, or delete snapshots in the publication
 repository. Follow the publication runbook's verification procedure before the next publish.
+
+Pairing comparison normalizes existing raw URLs: SSH and HTTPS URLs for the same
+host/owner/repository are equivalent. A different owner or repository still requires this
+explicit source rebind. To finish a transfer performed with an older Orbit version, repeat
+the rebind using the currently registered URL; it repairs a stale task pairing even when
+the source reports `unchanged`. The workspace registration is saved before the task pairing,
+so repeat the command if the pairing write fails or the process is interrupted. A dry run
+changes neither registration nor pairing. Verify with `workspace publication bind` (or
+`rebind` when replacing lineage) and `workspace publication show --json`.
 
 To roll back, run the same source-remote command with the saved old URL, then restore the
 checkout's `origin`. If a publication binding was already recreated, remove it explicitly

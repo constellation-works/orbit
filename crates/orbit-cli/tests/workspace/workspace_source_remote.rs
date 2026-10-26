@@ -15,6 +15,8 @@ use tempfile::tempdir;
 const OLD_REMOTE: &str = "git@github.com:example/orbit.git";
 const NEW_REMOTE: &str = "ssh://github.com/example/orbit-renamed.git";
 
+mod publication_pairing;
+
 fn force_init_binds_first_origin_and_preserves_task_partition_and_publication() {
     let home = tempdir().expect("home");
     let repo = tempdir().expect("repo");
