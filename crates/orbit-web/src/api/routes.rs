@@ -277,6 +277,12 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/diagnostics/experiments/{id}/readout",
             get(diagnostics::diagnostics_experiment_readout),
         )
+        // Operator conclusion. The handler authorizes `experiment.conclude`
+        // and then calls the same `change_experiment` path as the CLI.
+        .route(
+            "/diagnostics/experiments/{id}/conclude",
+            post(diagnostics::diagnostics_experiment_conclude),
+        )
         .route("/diagnostics/denials", get(denials::list_denials))
         // Analytics › Codebase: per-path regression, contention, footprint-miss,
         // coupling, blocked and rejected rates from one cached scan.

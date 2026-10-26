@@ -138,7 +138,7 @@ fn experiment_blocks(value: &Value) -> Vec<Block> {
             Column::new("AT"),
             Column::new("REASON"),
         ]);
-        for event in events {
+        for event in &events {
             let status = match (event["from_status"].as_str(), event["to_status"].as_str()) {
                 (Some(from), Some(to)) if from != to => format!("{from} → {to}"),
                 (_, Some(to)) => to.to_string(),
@@ -156,6 +156,25 @@ fn experiment_blocks(value: &Value) -> Vec<Block> {
         }
         blocks.push(Block::text("\nEvents:"));
         blocks.push(Block::table(table));
+    }
+    for event in &events {
+        if event["kind"] != "concluded" {
+            continue;
+        }
+        let detail = &event["detail"];
+        if detail["readout"].is_object() {
+            blocks.push(Block::text(format!(
+                "\nConclusion readout snapshot (event {}): {}",
+                text(&event["seq"]),
+                text(&detail["readout"]["verdict"]["label"])
+            )));
+        }
+        if let Some(task_id) = detail["promotion_task"]
+            .as_str()
+            .filter(|task_id| !task_id.is_empty())
+        {
+            blocks.push(Block::text(format!("Promotion task: {task_id}")));
+        }
     }
     blocks
 }

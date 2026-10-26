@@ -244,6 +244,15 @@ pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
     rationale: "config.toml governs sandboxing, crews, and unattended delivery for every surface on this machine",
 };
 
+/// Conclude an experiment from the dashboard, recording the decision and
+/// filing a promotion task when an arm is chosen.
+pub const DASHBOARD_EXPERIMENT_CONCLUDE: GovernedOperation = GovernedOperation {
+    id: "experiment.conclude",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "concluding an experiment records the operator's decision, stops assignment and may file a promotion task, so only an operator may do it",
+};
+
 /// Add, rename or remove a host-file entry from the dashboard's Settings ›
 /// Hosts view [ORB-14451].
 pub const DASHBOARD_HOST_EDIT: GovernedOperation = GovernedOperation {
@@ -807,6 +816,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_TASK_POST_DEPLOY,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
+    DASHBOARD_EXPERIMENT_CONCLUDE,
     DASHBOARD_HOST_EDIT,
     DASHBOARD_HOST_FORWARD,
     DASHBOARD_PLUGIN_ENABLE,

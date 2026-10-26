@@ -236,18 +236,35 @@ impl OrbitRuntime {
             }
             ExperimentChange::Conclude { arm } => {
                 require_status(current, &[RUNNING, PAUSED], "conclude")?;
-                if let Some(arm) = &arm
-                    && !record.arms.iter().any(|known| &known.name == arm)
+                if let Some(chosen) = &arm
+                    && !record.arms.iter().any(|known| &known.name == chosen)
                 {
                     return Err(OrbitError::InvalidInput(format!(
-                        "experiment `{}` has no arm `{arm}`; its arms are {}",
+                        "experiment `{}` has no arm `{chosen}`; its arms are {}",
                         current.name,
                         arm_names(&record.arms)
                     )));
                 }
+                // Snapshot the readout before the status flip, and file any
+                // promotion task before the event write. The event is
+                // append-only, so a failed write retries onto the same task.
+                let readout = self.experiment_readout(&current.id, None)?;
+                let readout_json = serde_json::to_value(&readout).map_err(|error| {
+                    OrbitError::Execution(format!("experiment readout is not JSON: {error}"))
+                })?;
+                let promotion_task = match &arm {
+                    Some(chosen) => {
+                        Some(self.file_experiment_promotion(&record, chosen, &readout)?)
+                    }
+                    None => None,
+                };
                 experiment.status = CONCLUDED.into();
                 experiment.concluded_arm = arm.clone();
-                ("concluded", json!({ "arm": arm }))
+                let mut detail = json!({ "arm": arm, "readout": readout_json });
+                if let Some(task_id) = promotion_task {
+                    detail["promotion_task"] = json!(task_id);
+                }
+                ("concluded", detail)
             }
             ExperimentChange::Abandon => {
                 require_status(current, &[DRAFT, RUNNING, PAUSED], "abandon")?;

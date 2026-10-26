@@ -3,7 +3,9 @@
 // readout: arm cards, a forest plot of every metric's difference from
 // control, the primary metric's cumulative per-arm series, the
 // per-complexity table, crew mix, health warnings and the event timeline.
-// Read-only. Read from /api/diagnostics/experiments[/{id}[/readout]].
+// An operator concludes a running or paused experiment from this page.
+// Read from /api/diagnostics/experiments[/{id}[/readout]]; conclude posts
+// to /api/diagnostics/experiments/{id}/conclude.
 // Pure vanilla JS, split into ES modules with no build step; every node is
 // built with DOM calls, never markup strings.
 //
@@ -12,7 +14,7 @@
 // usual placeholder.
 
 import {
-  el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
+  el as makeEl, syncNodes, fetchJson, postJson, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, formatDate, formatClock,
   infoHint, scopedHashHref,
 } from './common.js';
@@ -351,6 +353,7 @@ function detailView(experiment, readout) {
       complexityCard(primary, color),
       crewCard(readout, color),
     ]),
+    concludeCard(experiment),
     timelineCard(experiment),
   ]);
 }
@@ -373,7 +376,9 @@ function headerCard(experiment, readout) {
     ["As of", formatDateTime(readout.as_of)],
   ];
   if (experiment.concluded_arm) facts.splice(2, 0, ["Concluded with", experiment.concluded_arm]);
+  else if (experiment.status === "concluded") facts.splice(2, 0, ["Concluded with", "no winner"]);
   const reasons = readout.verdict?.reasons || [];
+  const promotion = promotionTaskId(experiment);
   return el("section", { class: "mx-card ex-card ex-head", "aria-label": "Experiment" }, [
     experimentLink(null, ["All experiments"], "ex-back"),
     el("div", { class: "ex-item-head" }, [
@@ -388,7 +393,83 @@ function headerCard(experiment, readout) {
     el("dl", { class: "ex-facts" }, facts.map(([label, value]) =>
       el("div", { class: "ex-fact" }, [el("dt", { text: label }), el("dd", { text: value })]))),
     reasons.length ? el("p", { class: "mx-blurb ex-reasons", text: `Verdict: ${reasons.join("; ")}.` }) : null,
+    promotion ? el("p", { class: "ex-promotion" }, [
+      el("span", { text: "Promotion task " }),
+      taskLink(promotion),
+    ]) : null,
   ]);
+}
+
+function promotionTaskId(experiment) {
+  const event = (experiment.events || []).find((item) => item.kind === "concluded"
+    && item.detail && typeof item.detail.promotion_task === "string" && item.detail.promotion_task);
+  return event ? event.detail.promotion_task : null;
+}
+
+function taskLink(id) {
+  const link = el("a", {
+    class: "ex-task-link",
+    href: scopedHashHref(`#tasks/${encodeURIComponent(id)}`),
+    text: id,
+  });
+  link.addEventListener("click", (event) => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    window.location.hash = `#tasks/${encodeURIComponent(id)}`;
+  });
+  return link;
+}
+
+function concludeCard(experiment) {
+  const open = experiment.conclude_authorized
+    && (experiment.status === "running" || experiment.status === "paused");
+  if (!open) return null;
+  const select = el("select", { class: "ex-conclude-control", "aria-label": "Winning arm" });
+  const none = el("option", { text: "No winner" });
+  none.value = "";
+  select.append(none);
+  for (const arm of (experiment.arms || []).filter((item) => item.retired_segment == null)) {
+    const option = el("option", { text: arm.control ? `${arm.name} (control)` : arm.name });
+    option.value = arm.name;
+    select.append(option);
+  }
+  const reason = el("textarea", { class: "ex-conclude-control", "aria-label": "Reason" });
+  reason.rows = 3;
+  const status = el("p", { class: "ex-conclude-status", role: "status" });
+  const button = el("button", { class: "ex-conclude-submit", type: "button", text: "Conclude experiment" });
+  button.addEventListener("click", () => submitConclude(experiment, select, reason, button, status));
+  return el("section", { class: "mx-card ex-card ex-conclude", "aria-label": "Conclude experiment" }, [
+    el("div", { class: "mx-card-head" }, [
+      el("h2", { class: "mx-card-title", text: "Conclude" }),
+    ]),
+    el("p", { class: "mx-blurb", text: "Choosing an arm files one proposed task to make that arm's overlay the default. No winner files nothing. This does not change configuration or repository files." }),
+    el("div", { class: "ex-conclude-fields" }, [
+      el("label", { class: "ex-conclude-field" }, [el("span", { text: "Winning arm" }), select]),
+      el("label", { class: "ex-conclude-field" }, [el("span", { text: "Reason" }), reason]),
+    ]),
+    el("div", { class: "ex-conclude-actions" }, [button]),
+    status,
+  ]);
+}
+
+async function submitConclude(experiment, select, reason, button, status) {
+  const why = reason.value.trim();
+  if (!why) {
+    status.textContent = "A reason is required.";
+    return;
+  }
+  button.disabled = true;
+  status.textContent = "Concluding…";
+  try {
+    await postJson(`${ENDPOINT}/${encodeURIComponent(experiment.id)}/conclude`, {
+      arm: select.value.trim() || null,
+      reason: why,
+    });
+    await fetchAndRenderExperiments();
+  } catch (error) {
+    status.textContent = error && error.message ? error.message : "Conclude failed.";
+    button.disabled = false;
+  }
 }
 
 function warningsCard(readout) {
@@ -745,6 +826,13 @@ function eventDetail(event) {
     parts.push(`weights ${Object.entries(weights).map(([arm, weight]) => `${arm} ${weight}`).join(" · ")}`);
   }
   if (Object.hasOwn(detail, "arm") && event.kind === "concluded") parts.push(detail.arm ? `arm ${detail.arm}` : "no arm chosen");
+  if (event.kind === "concluded" && detail.readout && typeof detail.readout === "object") {
+    const label = detail.readout.verdict && detail.readout.verdict.label;
+    if (label) parts.push(`readout snapshot ${label}`);
+  }
+  if (typeof detail.promotion_task === "string" && detail.promotion_task) {
+    parts.push(`promotion task ${detail.promotion_task}`);
+  }
   if (Array.isArray(detail.retired) && detail.retired.length) parts.push(`retired ${detail.retired.join(", ")}`);
   return parts.join(" · ");
 }
