@@ -638,6 +638,8 @@ cat > "$ns_diagnostic_bin/bwrap" <<'EOF'
 import os
 from pathlib import Path
 import sys
+import signal
+import time
 
 args = sys.argv[1:]
 if args[-1] == "/bin/true":
@@ -649,11 +651,35 @@ for i, arg in enumerate(args):
 target = Path(env["CARGO_TARGET_DIR"])
 root = target.parent
 participant = target.name[-1].upper()
-stage = ("client-side-shared-tcp" if env.get("SCCACHE_CLIENT_SIDE") == "1"
+stage = ("server-side-shared-tcp" if env.get("SCCACHE_CLIENT_SIDE") == "0"
+         else "client-side-shared-tcp" if env.get("SCCACHE_CLIENT_SIDE") == "1"
          else "warm-identical-source" if participant == "E" else "isolated-daemon")
 with open(os.environ["NS_DIAGNOSTIC_EVENTS"], "a") as events:
     events.write(f"{os.getpid()} {root}\n")
-if stage == os.environ["NS_FAIL_STAGE"]:
+scenario = os.environ.get("NS_SCENARIO", "")
+if scenario == stage or (stage == "server-side-shared-tcp" and
+                         ((scenario in ("owner-timeout", "failure-cleanup") and participant == "C")
+                          or (scenario == "peer-timeout" and participant == "D"))):
+    # Both generations ignore TERM; the grandchild escapes the process group.
+    # Handshake before readiness makes cleanup exercise a known live tree.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    child = os.fork()
+    child_ready = root / ("child-ready-" + participant)
+    if child == 0:
+        os.setsid()
+        with open(os.environ["NS_DIAGNOSTIC_EVENTS"], "a") as events:
+            events.write(f"{os.getpid()} {root}\n")
+        child_ready.touch()
+    else:
+        while not child_ready.exists():
+            time.sleep(0.01)
+        if scenario == "failure-cleanup":
+            # Deliberately fail the owner's stats precondition after readiness.
+            Path(env["READY_FILE"]).touch()
+    print("stubborn transport ready", flush=True)
+    while True:
+        time.sleep(1)
+if stage == os.environ.get("NS_FAIL_STAGE", ""):
     # Keep both ends recognizable, including stats at the end of long stdout.
     sys.stdout.write(f"stdout-{participant}-begin\n" + "o" * 12000
                      + f"\n__SCCACHE_STATS__\nstdout-{participant}-end\n")
@@ -668,7 +694,16 @@ binary.touch()
 binary.chmod(0o700)
 (target / "debug/deps/liborbit_cache_probe-fixture.rlib").touch()
 print("6" if participant == "D" else "3")
-print("__SCCACHE_STATS__\nCache hits (Rust) 1")
+print("__SCCACHE_STATS__\nCache hits (Rust) 1", flush=True)
+if stage == "server-side-shared-tcp":
+    if participant == "C":
+        print("Compile requests 1", flush=True)
+        Path(env["READY_FILE"]).touch()
+        while not Path(env["DONE_FILE"]).exists():
+            time.sleep(0.01)
+    else:
+        print("extern location does not exist", file=sys.stderr)
+        sys.exit(42)
 EOF
 chmod +x "$ns_diagnostic_bin/bwrap" "$ns_diagnostic_bin/cargo"
 
@@ -728,6 +763,90 @@ assert_ns_diagnostics warm-identical-source 0 0 23
 assert_ns_diagnostics client-side-shared-tcp 37 0 0
 assert_ns_diagnostics client-side-shared-tcp 0 41 0
 assert_ns_diagnostics client-side-shared-tcp 37 41 0
+
+# Linux namespace supervision must adopt/reap escaped grandchildren. The outer
+# fixture is itself a subreaper so even a broken candidate is fully cleaned up
+# at the independent watchdog deadline; it never leaves a test process behind.
+if [[ "$(uname -s)" == Linux ]]; then
+  python3 - "$ROOT/scripts/test-compiler-cache-namespaces.sh" "$TMP" \
+    "$ns_home" "$ns_diagnostic_bin" "$ns_sccache" <<'PYTIMEOUT'
+import ctypes
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+script, tmp, home, fixture_bin, sccache = sys.argv[1:]
+libc = ctypes.CDLL(None, use_errno=True)
+assert libc.prctl(36, 1, 0, 0, 0) == 0, "fixture needs descendant reaping"
+
+for scenario, stage, participants in [
+    ("isolated-daemon", "isolated-daemon", "CD"),
+    ("warm-identical-source", "warm-identical-source", "E"),
+    ("client-side-shared-tcp", "client-side-shared-tcp", "CD"),
+    ("owner-timeout", "server-side-shared-tcp", "C"),
+    ("peer-timeout", "server-side-shared-tcp", "D"),
+    ("failure-cleanup", "server-side-shared-tcp", "C"),
+    ("success", "", ""),
+]:
+    fixture = Path(tmp) / ("ns-timeout-" + scenario)
+    (fixture / "scratch").mkdir(parents=True)
+    env = dict(HOME=home, PATH=fixture_bin + ":/usr/bin:/bin",
+               TMPDIR=str(fixture / "scratch"), ORBIT_COMPILER_CACHE_BIN=sccache,
+               ORBIT_COMPILER_CACHE_REQUIRE_NS="1", NS_SCENARIO=scenario,
+               NS_DIAGNOSTIC_EVENTS=str(fixture / "events"),
+               # Cleanup must finish before this longer participant deadline.
+               ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS="10" if scenario == "failure-cleanup" else "1")
+    start = time.monotonic()
+    with open(fixture / "out", "w") as out, open(fixture / "err", "w") as err:
+        process = subprocess.Popen([script], env=env, stdout=out, stderr=err,
+                                   start_new_session=True)
+        try:
+            status = process.wait(timeout=5)
+            elapsed = time.monotonic() - start
+            output = (fixture / "err").read_text()
+            assert status == (0 if scenario == "success" else 1), (scenario, status, output)
+            assert elapsed < 5, (scenario, elapsed)
+            if scenario == "success":
+                assert "test-compiler-cache-namespaces: ok" in (fixture / "out").read_text()
+            else:
+                for participant in participants:
+                    expected = 143 if scenario == "failure-cleanup" else 124
+                    assert (f"stage={stage} participant={participant} exit_status={expected}") in output, output
+                assert "stubborn transport ready" in output, output
+            assert not list((fixture / "scratch").iterdir()), "namespace scratch leaked"
+            events = (fixture / "events").read_text().splitlines()
+            for line in events:
+                pid, root = line.split(" ", 1)
+                assert not Path(root).exists(), "fixture root survived cleanup"
+                assert not Path(f"/proc/{pid}").exists(), f"{scenario}: child {pid} survived or was not reaped"
+            print(f"namespace-supervision: {scenario} exit={status} elapsed={elapsed:.3f}s reaped={len(events)}", flush=True)
+        finally:
+            # Independent cleanup for assertion failures and the legacy hang.
+            # As subreaper, this fixture owns all adopted descendants as well.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            deadline = time.monotonic() + 3
+            while True:
+                children = Path(f"/proc/{os.getpid()}/task/{os.getpid()}/children").read_text().split()
+                for pid in children:
+                    try:
+                        os.kill(int(pid), signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                try:
+                    while os.waitpid(-1, os.WNOHANG)[0]:
+                        pass
+                except ChildProcessError:
+                    break
+                assert time.monotonic() < deadline, "fixture could not reap its children"
+                time.sleep(0.01)
+PYTIMEOUT
+fi
 
 # Live mount-namespace compile lives in the sibling script and is invoked as
 # a separate CI process after this unit process exits.

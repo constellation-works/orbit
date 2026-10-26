@@ -5,7 +5,7 @@ tags: [operations, rust, cache, worktrees, sandbox, linux]
 paths: ["scripts/rustc-compiler-cache.sh", "scripts/compiler-cache.sh", "scripts/test-compiler-cache.sh", "scripts/test-compiler-cache-namespaces.sh", "scripts/bench-compiler-cache.sh", "scripts/cross-revision-check.sh", "scripts/test-cross-revision-check.sh", ".cargo/config.toml"]
 related_features: [policy-sandbox, executors]
 related_artifacts: [ORB-11259, ORB-11755, ORB-11981]
-last_validated: 2026-10-19
+last_validated: 2026-10-25
 ---
 
 # Share Rust dependency compilation across worker worktrees
@@ -261,6 +261,18 @@ add no compilation or waits to a successful live run. The companion
 `scripts/test-compiler-cache.sh` drives deterministic failures through the namespace
 entrypoint with transport fixtures; those checks cover diagnostic bounds and
 cleanup, while the live namespace run remains required for cache isolation.
+
+Every namespace participant, including warm reuse and the shared-daemon owner,
+has a deadline measured from its launch. Set
+`ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS` to a positive integer to override the
+300-second default. Timeout produces participant status 124; it cannot count
+as the shared-daemon control's expected compilation failure. Termination allows
+one second for SIGTERM, escalates to SIGKILL, and allows one more second to
+reap. Failure cleanup uses the same supervision. On Linux the supervisor adopts
+and reaps orphaned descendants, including processes that start new sessions;
+status 125 reports failure to reap within the grace. The public-entrypoint
+fixtures exercise TERM-ignoring trees, warm reuse, both shared-daemon modes,
+owner readiness failure and early failure cleanup without real compilation.
 
 When the cache is disabled, that namespace script prints one line,
 `test-compiler-cache-namespaces: not applicable: host compiler cache is disabled (...)`,

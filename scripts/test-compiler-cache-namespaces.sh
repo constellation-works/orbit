@@ -141,12 +141,15 @@ release_port() {
       attempts=$((attempts + 1))
       sleep 0.05
     done
-    kill "$HOLD_PID" >/dev/null 2>&1 || true
+    kill -KILL "$HOLD_PID" >/dev/null 2>&1 || true
     wait "$HOLD_PID" 2>/dev/null || true
   fi
   HOLD_PID=""
   HOLD_RELEASE=""
 }
+
+WAIT_TIMEOUT="${ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS:-300}"
+[[ "$WAIT_TIMEOUT" =~ ^[1-9][0-9]*$ ]] || fail "namespace wait seconds must be a positive integer"
 
 WORKDIR="$(mktemp -d)"
 PIDS=()
@@ -187,8 +190,6 @@ report_participants() {
   done
 }
 
-WAIT_TIMEOUT="${ORBIT_COMPILER_CACHE_NS_WAIT_SECONDS:-300}"
-
 pid_running() {
   kill -0 "$1" 2>/dev/null || return 1
   if [[ -r "/proc/$1/status" ]] && grep -q '^State:[[:space:]]*Z' "/proc/$1/status"; then
@@ -197,23 +198,11 @@ pid_running() {
   return 0
 }
 
-# Bounded wait for one child; sets BOUNDED_STATUS (124 on timeout).
+# The supervisor enforces the deadline and reaps its complete tree before this
+# wait can return, including when cleanup requests cancellation with SIGTERM.
 bounded_wait() {
-  local pid="$1" attempts=0 max_attempts
-  max_attempts=$((WAIT_TIMEOUT * 20))
   BOUNDED_STATUS=0
-  while pid_running "$pid"; do
-    attempts=$((attempts + 1))
-    if [[ "$attempts" -ge "$max_attempts" ]]; then
-      kill "$pid" >/dev/null 2>&1 || true
-      wait "$pid" 2>/dev/null || true
-      BOUNDED_STATUS=124
-      return 0
-    fi
-    sleep 0.05
-  done
-  wait "$pid" || BOUNDED_STATUS=$?
-  return 0
+  wait "$1" || BOUNDED_STATUS=$?
 }
 
 # Reap both peers even when the first fails; never collapse their statuses.
@@ -231,7 +220,8 @@ wait_participants() {
 cleanup() {
   local exit_status=$? pid i
   if [[ -n "${HOLD_PID:-}" ]]; then
-    kill "$HOLD_PID" >/dev/null 2>&1 || true
+    kill -KILL "$HOLD_PID" >/dev/null 2>&1 || true
+    wait "$HOLD_PID" 2>/dev/null || true
   fi
   for pid in "${PIDS[@]:-}"; do
     kill "$pid" >/dev/null 2>&1 || true
@@ -246,6 +236,99 @@ cleanup() {
   rm -rf "$WORKDIR"
 }
 trap cleanup EXIT
+trap 'exit 143' TERM
+trap 'exit 130' INT
+trap 'exit 129' HUP
+
+# Each transport gets its own supervisor, so its deadline starts at launch,
+# even while the shell is waiting for its peer or an owner-ready file. Linux
+# subreaping keeps orphaned grandchildren (including new sessions) ours to reap.
+cat >"$WORKDIR/supervise.py" <<'PYSUPERVISOR'
+import ctypes
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+linux = sys.platform == "linux"
+if linux:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+        raise OSError(ctypes.get_errno(), "cannot supervise namespace descendants")
+
+cancelled = 0
+
+
+def cancel(signum, _frame):
+    global cancelled
+    cancelled = signum
+
+
+for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(signum, cancel)
+
+
+def descendants(pid):
+    if not linux:
+        return []
+    try:
+        children = list(map(int, Path(f"/proc/{pid}/task/{pid}/children").read_text().split()))
+    except (FileNotFoundError, ProcessLookupError):
+        return []
+    return [child for pid in children for child in [pid, *descendants(pid)]]
+
+
+deadline = time.monotonic() + int(sys.argv[1])
+process = subprocess.Popen(sys.argv[2:], start_new_session=True)
+status = None
+try:
+    while status is None and not cancelled and time.monotonic() < deadline:
+        status = process.poll()
+        if status is None:
+            time.sleep(0.02)
+    if cancelled:
+        status = 128 + cancelled
+    elif status is None:
+        status = 124
+        print("namespace participant timed out", file=sys.stderr, flush=True)
+    elif status < 0:
+        status = 128 - status
+finally:
+    # A successful leader may also leave daemons behind. Terminate the whole
+    # tree on every outcome, then adopt and reap orphans before returning.
+    grace_end = time.monotonic() + 1
+    reap_end = grace_end + 1
+    terminated = set()
+    while True:
+        owned = descendants(os.getpid())
+        sig = signal.SIGKILL if time.monotonic() >= grace_end else signal.SIGTERM
+        try:
+            os.killpg(process.pid, sig)
+        except ProcessLookupError:
+            pass
+        for pid in reversed(owned):
+            if sig == signal.SIGTERM and pid in terminated:
+                continue
+            try:
+                os.kill(pid, sig)
+                terminated.add(pid)
+            except ProcessLookupError:
+                pass
+        try:
+            while os.waitpid(-1, os.WNOHANG)[0]:
+                pass
+        except ChildProcessError:
+            break
+        if time.monotonic() >= reap_end:
+            print("namespace descendants did not reap after SIGKILL", file=sys.stderr)
+            status = 125
+            break
+        time.sleep(0.02)
+
+sys.exit(status)
+PYSUPERVISOR
 
 write_probe() {
   local dest="$1" value="$2"
@@ -295,7 +378,7 @@ run_ns() {
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
     extra_binds+=(--ro-bind "$HOME" "$HOME")
   fi
-  bwrap \
+  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" bwrap \
     --die-with-parent \
     --new-session \
     --unshare-all \
@@ -346,7 +429,7 @@ run_ns_hold() {
   if [[ -n "${HOME:-}" && -d "$HOME" ]]; then
     extra_binds+=(--ro-bind "$HOME" "$HOME")
   fi
-  bwrap \
+  exec python3 "$WORKDIR/supervise.py" "$WAIT_TIMEOUT" bwrap \
     --die-with-parent \
     --new-session \
     --unshare-all \
@@ -390,6 +473,7 @@ wait_for_file() {
   local path="$1" attempts=0
   while [[ ! -f "$path" ]]; do
     attempts=$((attempts + 1))
+    pid_running "$pid_c" || fail "owner namespace exited before readiness"
     [[ "$attempts" -lt 400 ]] || fail "timed out waiting for $path"
     sleep 0.05
   done
@@ -437,12 +521,12 @@ fi
 STAGE=warm-identical-source
 PARTICIPANTS=(E)
 LOGFILES=("$WORKDIR/logs/ok-e")
-STATUSES=(0)
+STATUSES=(pending)
 rm -rf "$WORKDIR/tgt-e"
 mkdir -p "$WORKDIR/tgt-e"
-run_ns "$WORKDIR/src-e" "$WORKDIR/tgt-e" "$WORKDIR/logs/ok-e" \
-  || STATUSES[0]=$?
-[[ "${STATUSES[0]}" -eq 0 ]] || fail "warm identical-source namespace failed"
+run_ns "$WORKDIR/src-e" "$WORKDIR/tgt-e" "$WORKDIR/logs/ok-e" &
+PIDS+=($!)
+wait_participants || fail "warm identical-source namespace failed"
 assert_out_e="$(probe_out "$WORKDIR/logs/ok-e")"
 [[ "$assert_out_e" == "3" ]] || fail "warm namespace E expected 3"
 if ! has_rust_hit "$WORKDIR/logs/ok-e"; then
@@ -503,6 +587,8 @@ d_status="${STATUSES[1]}"
 : >"$donef"
 bounded_wait "$pid_c"; STATUSES[0]="$BOUNDED_STATUS"
 PIDS=()
+[[ "${STATUSES[0]}" -eq 0 ]] || fail "shared TCP owner namespace failed"
+[[ "$d_status" -ne 124 && "$d_status" -ne 125 ]] || fail "shared TCP peer namespace timed out or failed cleanup"
 if [[ "$d_status" -eq 0 ]]; then
   fail "shared TCP daemon should not succeed for a different-source namespace"
 fi
