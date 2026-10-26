@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 /// Bumped whenever the sampling or simulation changes what a stored
 /// forecast means, so calibration can tell versions apart.
-pub(super) const MODEL_VERSION: u32 = 1;
+pub(super) const MODEL_VERSION: u32 = 2;
 /// Simulated drains per forecast.
 pub(super) const ITERATIONS: usize = 1_000;
 /// A complexity × crew-pool cell with fewer completed deliveries than this
@@ -261,7 +261,8 @@ pub(super) struct Arrivals<'a> {
 /// One simulated drain of `backlog` on `slots`. With arrivals, new tasks
 /// keep landing until the queue empties; `None` when it has not emptied by
 /// [`ARRIVALS_HORIZON_HOURS`], or when a task has no history to draw its
-/// hours from. Arrived work adds its known tokens and cost to `totals`.
+/// hours from. Arrived work propagates missing tokens and cost into `totals`
+/// independently, without invalidating duration.
 fn drain(
     rng: &mut Rng,
     slots: usize,
@@ -288,8 +289,8 @@ fn drain(
         let delivery = &arrivals.history[rng.index(arrivals.history.len())];
         totals.add(&Draw {
             hours: Some(delivery.hours),
-            tokens: Some(delivery.tokens.unwrap_or(0.0)),
-            usd: Some(delivery.usd.unwrap_or(0.0)),
+            tokens: delivery.tokens,
+            usd: delivery.usd,
         });
         current = schedule.place(at, delivery.hours);
         if current > ARRIVALS_HORIZON_HOURS {

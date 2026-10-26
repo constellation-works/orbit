@@ -678,22 +678,34 @@ window's limit, else the default of 5. An in-progress task counts only what
 it has left.
 
 - The tiles give **Time to drain**, **Cost**, and **Tokens** as p50 and p90.
-  A tile reads `—` when too few samples have that measure.
+  A quantile reads `—` when its measure is unavailable. Missing simulated
+  totals sort after known totals; p50 or p90 is unavailable if its rank falls
+  among those missing totals.
 - **14d**, **30d**, and **90d** choose the lookback. A longer one samples more
   tasks but older behavior.
 - **No arrivals**, the default, assumes nothing new is filed. The strip
   beside it shows how many tasks were filed a day over the last week
   (auto-tasks, sweeps, other filings) and how many were done, so you can see
   how far that assumption is off. **Recent arrivals** adds new tasks at that
-  rate.
+  rate, drawing each arrival from all finished deliveries in the lookback.
+  If a sampled arrival lacks tokens or cost, that simulation's total for
+  that measure is unavailable; it never counts as free. Time to drain and
+  the other measure remain available independently. This also applies to
+  the if-approved totals. With arrivals off, initial tasks redraw missing
+  tokens or cost from their history pool's recorded values; with none, that
+  measure is unavailable.
 - With proposed tasks waiting, a line gives the drain, cost, and tokens if
   they were all approved.
 - **By complexity** gives each complexity's work hours, cost, and tokens, and
   how many tasks sampled their own crew's history, their complexity's, or
-  every task's.
+  every task's. These rows cover initial tasks and exclude new arrivals.
 - **Coverage** counts the tasks forecast on thin evidence: unassessed, thin
   crew history, models without token prices, runs without a cost, and no
-  history at all.
+  history at all. It also counts deliveries missing tokens or cost in the
+  arrival history pool, out of all deliveries in that pool. These separate
+  history counts apply to both the backlog and if-approved arrival forecasts;
+  they do not affect the no-arrivals forecast. Fully covered arrival history
+  keeps cost and token quantiles numeric.
 
 **Calibration** checks earlier forecasts. While **Forecast** is open on its
 defaults, one forecast an hour is kept. As its tasks finish, each task's

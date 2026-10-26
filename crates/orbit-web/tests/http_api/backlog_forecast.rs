@@ -1,11 +1,11 @@
-//! Completion dates survive terminal metadata writes at the public forecast boundary.
+//! Completion dates and incomplete arrival telemetry at the public forecast boundary.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::StoredBacklogForecast;
 use orbit_core::application::task::TaskAddParams;
 use orbit_store::contracts::{InvocationInsertParams, TaskHistoryUpdateParams};
 use orbit_types::task::{TaskComment, TaskComplexity, TaskEnvelopeV2, TaskEventRowV2, TaskStatus};
-use orbit_types::telemetry::InvocationTrace;
+use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
@@ -34,11 +34,29 @@ fn history(
 /// Import a historical completion and its one-hour delivery, then date its
 /// index projection to match. Later writes use the real bundle writer.
 fn completed(fixture: &Fixture, at: DateTime<Utc>) -> String {
+    completed_delivery(
+        fixture,
+        at,
+        TaskComplexity::Medium,
+        "gpt-6.1-sol",
+        Some(1.0),
+        1,
+    )
+}
+
+fn completed_delivery(
+    fixture: &Fixture,
+    at: DateTime<Utc>,
+    complexity: TaskComplexity,
+    model: &str,
+    usd: Option<f64>,
+    hours: u64,
+) -> String {
     let id = fixture
         .runtime
         .add_task(TaskAddParams {
             title: "Historical delivery".into(),
-            complexity: TaskComplexity::Medium,
+            complexity,
             status: Some(TaskStatus::Done),
             ..Default::default()
         })
@@ -83,11 +101,15 @@ fn completed(fixture: &Fixture, at: DateTime<Utc>) -> String {
             activity_id: "implement_one".into(),
             agent: "codex".into(),
             provider: None,
-            model: Some("gpt-6.1-sol".into()),
+            model: Some(model.into()),
             task_ids: vec![id.clone()],
             trace: InvocationTrace {
-                duration_ms: 3_600_000,
-                provider_cost_usd: Some(1.0),
+                duration_ms: hours * 3_600_000,
+                usage: TokenUsage {
+                    input: 100,
+                    ..Default::default()
+                },
+                provider_cost_usd: usd,
                 ..Default::default()
             },
         })
@@ -207,6 +229,99 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
             let wide: Value = json_ok(server.get(&format!("{ENDPOINT}&lookback_days=180")));
             assert_eq!(wide["inputs"]["history_deliveries"], 2);
             assert_eq!(wide["arrivals"]["done_per_day"], 0.14);
+        },
+    );
+}
+
+#[test]
+fn arrivals_preserve_missing_metrics_without_losing_duration() {
+    isolated(
+        "backlog_forecast::arrivals_preserve_missing_metrics_without_losing_duration",
+        || {
+            // Two distinct history pools keep the initial tasks fully covered:
+            // only the workspace-wide arrival stream can sample the gap.
+            for (missing_tokens, missing_usd) in
+                [(true, false), (false, true), (true, true), (false, false)]
+            {
+                let fixture = Fixture::new();
+                let at = Utc::now() - Duration::days(2);
+                completed_delivery(
+                    &fixture,
+                    at,
+                    TaskComplexity::Medium,
+                    "gpt-6.1-sol",
+                    Some(10.0),
+                    24,
+                );
+                completed_delivery(
+                    &fixture,
+                    at,
+                    TaskComplexity::Low,
+                    if missing_tokens {
+                        "unpriced-fixture-model"
+                    } else {
+                        "gpt-6.1-sol"
+                    },
+                    if missing_usd { None } else { Some(10.0) },
+                    24,
+                );
+                for status in [TaskStatus::Backlog, TaskStatus::Proposed] {
+                    fixture
+                        .runtime
+                        .add_task(TaskAddParams {
+                            title: "Covered initial work".into(),
+                            complexity: TaskComplexity::Medium,
+                            status: Some(status),
+                            ..Default::default()
+                        })
+                        .unwrap();
+                }
+                let server = fixture.server(false);
+                let off = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1")));
+                let on = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
+                for key in ["forecast", "if_approved"] {
+                    for metric in ["time_to_drain_hours", "tokens", "usd"] {
+                        for rank in ["p50", "p90"] {
+                            assert!(
+                                off[key][metric][rank]
+                                    .as_f64()
+                                    .is_some_and(|v| v.is_finite() && v > 0.0)
+                            );
+                        }
+                    }
+                    for (metric, missing) in [
+                        ("time_to_drain_hours", false),
+                        ("tokens", missing_tokens),
+                        ("usd", missing_usd),
+                    ] {
+                        if missing {
+                            assert!(
+                                on[key][metric]["p90"].is_null(),
+                                "sampled arrivals with missing {metric} must not count as free: {}",
+                                on[key]
+                            );
+                        } else {
+                            for rank in ["p50", "p90"] {
+                                assert!(
+                                    on[key][metric][rank]
+                                        .as_f64()
+                                        .is_some_and(|v| v.is_finite() && v > 0.0),
+                                    "arrival telemetry gaps must not invalidate independent {metric}: {}",
+                                    on[key]
+                                );
+                            }
+                        }
+                    }
+                }
+                assert_eq!(on["coverage"]["uncovered_model"], 0);
+                assert_eq!(on["coverage"]["uncosted"], 0);
+                assert_eq!(on["proposed_coverage"]["uncosted"], 0);
+                // Arrival coverage is shared by backlog and if-approved totals,
+                // and reported even when arrivals are switched off.
+                let coverage = json!({"deliveries": 2, "missing_tokens": u64::from(missing_tokens), "missing_usd": u64::from(missing_usd)});
+                assert_eq!(on["arrivals"]["coverage"], coverage);
+                assert_eq!(off["arrivals"]["coverage"], coverage);
+            }
         },
     );
 }

@@ -180,6 +180,13 @@ function kpi(label, quantiles, fmt, foot) {
   ]);
 }
 
+function metricFoot(quantiles, metric) {
+  if (quantiles?.p90 != null) return metric === "tokens" ? "normalized" : null;
+  const missing = lastPayload.arrivals?.coverage?.[`missing_${metric}`];
+  if (lastPayload.inputs?.arrivals && missing) return "incomplete history or arrival telemetry";
+  return metric === "tokens" ? "not enough priced history" : "not enough costed history";
+}
+
 function drainFoot(quantiles) {
   if (quantiles?.p90 != null) return null;
   if (quantiles?.p50 != null) return "p90 beyond the 90-day horizon";
@@ -246,8 +253,8 @@ function forecastCard() {
   } else {
     children.push(el("div", { class: "mx-series fc-kpis" }, [
       kpi("Time to drain", forecast.time_to_drain_hours, fmtHours, drainFoot(forecast.time_to_drain_hours)),
-      kpi("Cost", forecast.usd, fmtUsd, forecast.usd?.p50 == null ? "not enough costed history" : null),
-      kpi("Tokens", forecast.tokens, fmtTokens, forecast.tokens?.p50 == null ? "not enough priced history" : "normalized"),
+      kpi("Cost", forecast.usd, fmtUsd, metricFoot(forecast.usd, "usd")),
+      kpi("Tokens", forecast.tokens, fmtTokens, metricFoot(forecast.tokens, "tokens")),
     ]));
   }
   children.push(arrivalsLine());
@@ -304,19 +311,23 @@ function byComplexityCard() {
 function coverageCard() {
   const coverage = lastPayload.coverage || {};
   const backlog = lastPayload.backlog || {};
+  const arrivals = lastPayload.arrivals?.coverage || {};
   const items = [
     ["Unassessed", coverage.unassessed, "No complexity yet: sampled from every delivery."],
     ["Thin-cell fallbacks", coverage.thin_cell_fallbacks, `Fewer than ${lastPayload.inputs?.min_cell_samples ?? 5} deliveries of the same complexity and crew pool: sampled from a wider pool.`],
     ["Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
     ["Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
     ["No history", coverage.no_history, "Nothing to sample at all."],
+    ["Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens in the pool used by recent arrivals."],
+    ["Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost in the pool used by recent arrivals."],
   ];
   const list = el("dl", { class: "fc-coverage" }, items.map(([label, value, hint]) => el("div", { class: "fc-cov" }, [
     el("dt", {}, [label, " ", infoHint(hint)]),
     el("dd", { class: value ? "fc-warn" : null, text: String(value ?? 0) }),
   ])));
   const left = `${backlog.review ?? 0} in review and ${backlog.blocked ?? 0} blocked are not forecast.`;
-  return card("Coverage", `${coverage.tasks ?? 0} tasks forecast`, [list, el("p", { class: "mx-blurb", text: left })]);
+  const arrivalNote = `Recent arrivals sample all ${arrivals.deliveries ?? 0} history deliveries for both the backlog and if-approved totals. A sampled arrival missing tokens or cost makes that iteration's total unavailable for that metric; duration remains independent. Missing totals sort last, so p50 or p90 can show —. These gaps do not affect the no-arrivals forecast.`;
+  return card("Coverage", `${coverage.tasks ?? 0} initial tasks forecast`, [list, el("p", { class: "mx-blurb", text: arrivalNote }), el("p", { class: "mx-blurb", text: left })]);
 }
 
 // ---- calibration -----------------------------------------------------------
