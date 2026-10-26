@@ -226,6 +226,9 @@ tasks itself, so there is no routine to enable. The file's schedule,
 template, dedupe, and preconditions are in
 [Scheduling YAML](../../reference/scheduling-yaml/).
 
+For ready-made repository audits, choose a
+[built-in maintenance sweep](#built-in-maintenance-sweeps) before writing your own.
+
 ```bash
 orbit auto-task add \
   --name weekly-dep-audit \
@@ -308,6 +311,143 @@ cancelling it. Deleting the definition runs the same audited reset, so
 `delete` refuses whenever `reset` would. The
 [auto-task reference](https://github.com/constellation-works/orbit/blob/main/plugin/skills/orbit-setup/references/auto-tasks.md)
 covers stalls and the shipped definitions.
+
+## Built-in maintenance sweeps
+
+Use these six shipped auto-task definitions to find maintenance work in your
+repository. They discover its languages, manifests, conventions, and CI
+configuration rather than assuming a particular toolchain. Start with the
+sweep that matches the decision you need to make:
+
+| Definition | Choose it when… | Shipped schedule |
+|---|---|---|
+| `code-health-sweep` | You need evidence of dead code, duplication, unnecessary complexity, local architectural drift, or compatibility paths ready for retirement. | Every 4,320 minutes (3 days). |
+| `architecture-audit` | You need a package/module dependency graph and evidence for cycles, layering drift, misplaced abstractions, or package splits and merges. | Every 20,160 minutes (14 days). |
+| `structure-sweep` | Oversized or misgrouped source and test files make navigation and maintenance difficult. | Every 10,080 minutes (7 days). |
+| `dependency-freshness` | You need an inventory of outdated, unused, or duplicate dependencies and small upgrade/removal proposals. | `0 9 1 * *` — 09:00 on the first of each month. |
+| `flaky-test-hunt` | Hosted CI tests fail and then pass without a relevant change; you need failure-log evidence for fixes. | `15 8 * * 1` — Monday at 08:15. |
+| `ci-budget-watch` | You need hosted test-job timings compared with your repository's documented CI budget. | `45 1 * * *` — daily at 01:45. |
+
+All six ship **disabled**, with `skip-if-open` dedupe and assessment tasks
+entering `backlog`. Cron times use the host's local timezone; intervals are
+elapsed minutes, not fixed weekdays. The clock files a task; an agent must
+execute that task through your normal workflow to perform the assessment.
+The assessments gather evidence and file follow-up work, without editing
+your source, dependencies, tests, or CI configuration. They do not authorize
+dispatch, merge, or release.
+
+### Inspect, preview, try, then enable
+
+Run these commands from your registered owner checkout. After an Orbit
+upgrade, inspect and apply workspace synchronization to get the current
+shipped definitions:
+
+```bash
+orbit workspace sync --check
+orbit workspace sync
+orbit auto-task list
+orbit auto-task show dependency-freshness
+orbit auto-task show dependency-freshness --json
+orbit clock tick --dry-run --verbose
+```
+
+`sync --check` writes nothing and exits 3 when convergence is pending. The
+JSON `show` output includes the full template, criteria, and required tools;
+the text view shows the definition source, body management, settings, and
+schedule. `clock tick --dry-run --verbose` previews scheduling decisions
+without filing tasks. Disabled definitions do not fire. `show --preview`
+adds baseline/source diagnostics for delivery-triggered definitions; these
+six time-based definitions have no delivery baseline to preview.
+
+Try one assessment before leaving it scheduled:
+
+```bash
+orbit auto-task mint dependency-freshness
+# After reviewing the task it creates, optionally change the cadence.
+orbit auto-task update dependency-freshness --cron "0 9 * * 1"
+orbit auto-task toggle dependency-freshness on
+orbit auto-task show dependency-freshness
+# Stop future scheduled filings while keeping the definition and history.
+orbit auto-task toggle dependency-freshness off
+```
+
+`mint` creates a real task immediately: it ignores the schedule, `enabled`,
+and dedupe, and leaves the scheduler cursor unchanged. It does not execute
+the assessment. An open manually minted task prevents later scheduled
+copies under `skip-if-open`. Turning a definition off does not cancel tasks
+already filed. Install and enable the [host clock](#1-install-the-clock)
+before expecting scheduled filings.
+
+Use `update` and `toggle` to customize a shipped definition. Operator
+settings such as cadence, enabled state, crew, priority, and complexity are
+kept separately from its managed body, so `workspace sync` can refresh the
+shipped instructions while retaining those settings. Editing the body or
+criteria creates a local fork that sync preserves; it no longer receives
+automatic body refreshes. Inspect `show` and sync's report after upgrading.
+Deleted shipped definitions stay opted out until you explicitly restore
+them, as described under [Change, turn off, or delete](#change-turn-off-or-delete).
+
+### Prerequisites and limits
+
+The executing agent needs repository access, the installed Orbit skills,
+and the definition's required tools. An unknown or human-only required tool
+is refused at task creation; a registered but disabled tool produces a
+warning and must be available for execution. Minting and scheduling use the
+checkout's local definitions: inspection from a linked checkout can show an
+owner definition without granting permission to mint or change it there.
+
+The source-oriented sweeps read a pinned integration-branch revision and
+discover your repository's own conventions. They do not run builds, tests,
+or timing experiments. Compatibility retirement needs a documented support
+window. Architecture changes need graph evidence; proposals that depend on
+unmeasured benefits get measurement prerequisites. Layout-only findings
+belong to `structure-sweep`, which uses source files over 1,000 lines,
+logic-heavy module indexes over 400 lines, and test files over 2,000 lines
+as size thresholds alongside language-specific layout checks.
+
+Dependency freshness needs ecosystem tooling, registry access, and upstream
+release notes to confirm upgrade targets. Missing tools are reported as
+gaps; unavailable network/registry access produces an evidence-bearing
+no-op. Advisory-covered dependencies belong to security work, not this sweep.
+
+The two CI sweeps need hosted CI configuration and granted, authenticated
+run-history tools; the flaky-test hunt also reads failure logs. They do not
+rerun tests locally. No hosted test job or unreachable history produces a
+report explaining the gap, not a claim that CI is healthy. Flake detection
+uses a 14-day window. CI budget watch measures the last 20 completed runs
+in the documented population; without a documented budget it records a
+trend and files no repair task.
+
+### Find the evidence and follow-up work
+
+Find assessment tasks by provenance, for example:
+
+```bash
+orbit task list --tag auto-task:dependency-freshness
+```
+
+Open the assessment task's artifacts and execution summary in the
+[dashboard](../dashboard/). The outputs differ by sweep:
+
+- **Code health:** `code-health.json`, with dispositions and up to six
+  proposed improvement tasks. Confirmed correctness bugs are filed
+  separately and do not count toward that cap.
+- **Architecture:** `architecture.json`, with up to three proposed
+  improvement tasks, plus any measurement prerequisites.
+- **Structure:** scan evidence and candidate dispositions in the execution
+  summary, with up to four proposed tasks grouped by package or subsystem.
+- **Dependencies:** `dependency-freshness.json`, with up to three proposed
+  upgrade or removal tasks.
+- **Flaky tests:** `flaky-test-hunt.json`, with up to four proposed
+  `ci-flake` fixes, highest flake count first.
+- **CI budget:** `ci-budget-watch/report.md`; an over-budget run comments on
+  existing `ci-budget` repair work or files one proposed repair task.
+
+The templates check existing work before filing and record covered,
+deferred, and rejected candidates. A run with no actionable findings can
+succeed with its evidence persisted. Missing evidence remains a stated
+gap. Review and approve proposed follow-ups before they enter delivery;
+enabling a sweep does not approve them for you.
 
 ## 4. Watch it work
 
