@@ -615,6 +615,63 @@ fn shipped_templates_filing_findings_declare_context_files_in_task_add() {
     );
 }
 
+/// `orbit.task.add` refuses retired and undeclared keys before any task is
+/// filed, and a template tells the agent to run its payload verbatim. A
+/// payload carrying a retired key therefore files nothing (ORB-18588: the
+/// design-sync divergence payload carried `status`). Every payload in a
+/// shipped template may use only keys the public ADD operation declares.
+#[test]
+fn shipped_template_task_add_payloads_use_only_declared_keys() {
+    let add = orbit_common::governance::task::TASK_OPERATIONS
+        .iter()
+        .find(|spec| spec.tool_name == "orbit.task.add")
+        .unwrap_or_else(|| panic!("orbit.task.add is a declared task operation"));
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/auto_tasks");
+    let mut templates = std::fs::read_dir(&dir)
+        .unwrap_or_else(|error| panic!("read {}: {error}", dir.display()))
+        .map(|entry| {
+            entry
+                .unwrap_or_else(|error| panic!("read auto-task directory entry: {error}"))
+                .path()
+        })
+        .filter(|path| path.extension().is_some_and(|ext| ext == "yaml"))
+        .collect::<Vec<_>>();
+    templates.sort();
+
+    let mut checked_payloads = 0;
+    let mut refused_keys = Vec::new();
+    for path in &templates {
+        let name = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or_else(|| panic!("template file name is not UTF-8: {}", path.display()));
+        let source = std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        let definition = parse_template(name, &source);
+        for payload in task_add_payloads(&definition.template.description) {
+            checked_payloads += 1;
+            let object = payload
+                .as_object()
+                .unwrap_or_else(|| panic!("{name}: task-add payload is a JSON object: {payload}"));
+            for key in object.keys() {
+                let retired = add.retired_fields.iter().any(|retired| retired.name == key);
+                if retired || add.is_undeclared_field(key.as_str()) {
+                    refused_keys.push(format!("{name}: `{key}`"));
+                }
+            }
+        }
+    }
+    assert!(
+        checked_payloads > 0,
+        "no shipped auto-task template files a task through orbit.task.add"
+    );
+    assert!(
+        refused_keys.is_empty(),
+        "shipped auto-task templates pass orbit.task.add keys it refuses, so the filing is refused verbatim (ORB-18588):\n{}",
+        refused_keys.join("\n")
+    );
+}
+
 /// The escalation triage lane that replaced the blocked-task-triage
 /// auto-task requeues only through `orbit.task.block_triage`, whose shared
 /// bound and refusals it cannot bypass: its activity withholds every agent

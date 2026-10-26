@@ -120,7 +120,7 @@ template:
     the design text. Search for an open task covering that divergence by path
     and distinctive tokens, inspect candidates, and cite an existing task when
     one covers it. Otherwise file one proposed task for the divergence:
-    `orbit tool run orbit.task.add --input '{"title":"Design/code divergence in <feature>: <what>","description":"<doc path and section; code location at the recorded HEAD; which side looks wrong and why; supporting evidence>","acceptance_criteria":["<observable resolution of the documented divergence>"],"tags":["docs","design-sync"],"type":"bug","complexity":"<low|medium|hard|xhard>","status":"proposed","relations":[{"type":"spawned_from","target":"<this task ID>"}],"context_files":["file:<file the fix would modify>"],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.add --input '{"title":"Design/code divergence in <feature>: <what>","description":"<doc path and section; code location at the recorded HEAD; which side looks wrong and why; supporting evidence>","acceptance_criteria":["<observable resolution of the documented divergence>"],"tags":["docs","design-sync"],"type":"bug","complexity":"<low|medium|hard|xhard>","relations":[{"type":"spawned_from","target":"<this task ID>"}],"context_files":["file:<file the fix would modify>"],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
     Set honest complexity and context selectors naming only files the fix
     would modify. File at most three tasks total per run, including any
     deprecation or archival follow-ups (use type `chore` for those). Record
