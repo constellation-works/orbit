@@ -275,7 +275,9 @@ pub fn alternatives(labels: impl IntoIterator<Item = String>) -> String {
 fn check_param_type(param: &ParamSpec, value: &Value) -> Result<(), OrbitError> {
     let name = param.name;
     let (valid, expected) = match param.param_type {
-        ParamType::String | ParamType::Path => (value.is_string(), "a string"),
+        ParamType::String | ParamType::RawString | ParamType::Path => {
+            (value.is_string(), "a string")
+        }
         ParamType::StringList | ParamType::EnumList(_) => match value {
             Value::Array(items) if !items.iter().all(Value::is_string) => {
                 return Err(OrbitError::InvalidInput(format!(

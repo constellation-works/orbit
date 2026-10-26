@@ -22,6 +22,9 @@ use rsa::pkcs8::DecodePublicKey;
 use rsa::signature::Verifier;
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "test-support")]
+pub(crate) mod test_support;
+
 /// How a DKIM verification can end without a pass. `Failed` is a verdict
 /// core reached about the message; `Unavailable` means core could not
 /// reach a verdict (DNS timeout or error) and the caller may retry.
@@ -482,6 +485,10 @@ impl Default for SystemDkimTxtResolver {
 
 impl DkimTxtResolver for SystemDkimTxtResolver {
     fn lookup_txt(&self, name: &str) -> Result<Vec<String>, String> {
+        #[cfg(feature = "test-support")]
+        if let Some(result) = test_support::lookup_txt(name) {
+            return result;
+        }
         let servers = system_nameservers();
         let mut last_error = String::from("no nameserver is configured");
         for server in servers {

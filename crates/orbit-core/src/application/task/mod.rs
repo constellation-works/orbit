@@ -86,6 +86,8 @@ pub use decision_channel::{
     DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionDigest, DecisionSubmitCaller,
     DecisionSubmitParams, MAX_DECISION_RAW_MESSAGE_BYTES,
 };
+#[cfg(feature = "test-support")]
+pub use decision_dkim::test_support::with_decision_dkim_resolver;
 pub use decision_dkim::{DkimTxtResolver, DkimVerifyError, SystemDkimTxtResolver};
 pub(in crate::application) use distributed_port::TaskDistributedPort;
 pub use escalation_triage_steps::{

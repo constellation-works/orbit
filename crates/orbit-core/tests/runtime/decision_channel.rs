@@ -1826,6 +1826,86 @@ fn dkim_required_request() -> (Fixture, String, DecisionRequest, String) {
     (fx, task, request, token)
 }
 
+crate::scenario_table!(
+    raw_message_ingress,
+    simple_body_signature_survives_governed_submit
+);
+
+fn simple_body_signature_survives_governed_submit() {
+    use orbit_core::test_support::with_decision_dkim_resolver;
+    use orbit_tools::ToolContext;
+    use orbit_types::policy::Role;
+    use orbit_types::tool::{McpCapability, ToolSessionContext};
+
+    let fixture: Value =
+        serde_json::from_str(include_str!("../fixtures/decision-simple-body.json")).unwrap();
+    let signed = fixture["raw_message"].as_str().unwrap();
+    assert!(signed.ends_with("approve \r\n"));
+    let tampered = signed.replacen("approve \r\n", "approv3 \r\n", 1);
+
+    // Both entry points must refuse the changed byte, leave all task state
+    // alone, and then accept the authentic message using the very same token.
+    for through_tool in [false, true] {
+        let (fx, task, request, token) = dkim_required_request();
+        let comments_before = fx.comments(&task);
+        let submit = |raw_message: &str| {
+            if through_tool {
+                with_decision_dkim_resolver(FixtureResolver, || {
+                    fx.runtime.run_tool_with_context_and_role(
+                        "orbit.decision.submit",
+                        json!({
+                            "id": request.id,
+                            "channel": CHANNEL,
+                            "answer": "1",
+                            "token": token,
+                            "sender": SENDER,
+                            "auth_results": AUTH_PASS,
+                            "raw_message": raw_message,
+                        }),
+                        Role::Admin,
+                        ToolContext {
+                            session_context: ToolSessionContext {
+                                effective_capabilities: [McpCapability::Operator].into(),
+                                ..Default::default()
+                            },
+                            ..Default::default()
+                        },
+                    )
+                })
+            } else {
+                fx.submit_dkim(
+                    &request,
+                    &token,
+                    Some(raw_message.to_string()),
+                    &FixtureResolver,
+                )
+                .map(|request| json!({"state": request.state.as_str()}))
+            }
+        };
+
+        let refused = submit(&tampered).expect_err("a changed signed body byte is refused");
+        assert!(
+            refused.to_string().contains("dkim_verification_failed"),
+            "{refused}"
+        );
+        assert_eq!(fx.status(&task), TaskStatus::Blocked);
+        assert_eq!(fx.comments(&task), comments_before);
+        let still_open = fx
+            .runtime
+            .get_decision_request(&request.id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(still_open.state, DecisionRequestState::Open);
+        assert!(still_open.resolution.is_none());
+
+        let accepted = submit(signed).expect("the authentic simple body survives ingress");
+        assert_eq!(accepted["state"], "answered");
+        assert_eq!(fx.status(&task), TaskStatus::Backlog);
+        let replay = submit(signed).expect_err("a successful submission consumes its token");
+        assert!(replay.to_string().contains("token_consumed"), "{replay}");
+    }
+}
+
 #[test]
 fn core_dkim_verifies_a_body_ending_in_non_wsp_unicode_whitespace() {
     // RFC 6376 §3.4.4 trims only SP and HTAB from body lines, so U+00A0 is

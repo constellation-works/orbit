@@ -31,6 +31,7 @@
         "command/mcp/setup/providers/tests/claude.rs::claude_home_scope_waits_for_concurrent_state_update_before_reading",
         "command/task/tests/flow.rs::rejection_then_reopen_preserves_dropped_event_and_historical_boundaries",
         "output/tests/pipe.rs::an_unwritable_stdout_still_panics",
+        "tests/main.rs::decision_submit_cli_preserves_signed_raw_message",
         "tests/main.rs::every_assembled_leaf_accepts_json_and_lists_domain_input_exclusions",
         "tests/plugin_callback_surface.rs::the_tool_call_entry_points_are_the_only_ones_a_plugin_backend_may_use"
       ]
