@@ -38,6 +38,14 @@
 //! is unchanged. A conflict hands the implementer the conflict, after which
 //! the gate requests the evidence again.
 //!
+//! [ORB-18660] When the task's latest decision is instead the requeue an owner
+//! evidence run made after reporting findings on that hold
+//! (`review_evidence_findings`), the same held candidate is resumed for its
+//! implementer: a clean apply is `resumed_repaired` with trigger `review` and
+//! the findings, from the system-written `review-evidence-findings.json`, as
+//! the repair's output. The held candidate's own claim works the same way
+//! for an owner-local run.
+//!
 //! A published owner-local candidate preserved by final-recovery requeue is
 //! authenticated by the host from its successful publication checkpoints and
 //! durable task-meaning binding. It adopts the existing PR branch under its
@@ -208,6 +216,9 @@ struct Candidate {
     /// stopped: a required check it fails, with the job, signature and log
     /// excerpt the repair starts from.
     landing_stop: Option<String>,
+    /// [ORB-18660] What the owner's evidence run reported on the held
+    /// candidate, for its implementer: the task was requeued to repair it.
+    evidence_findings: Option<String>,
 }
 
 impl Candidate {

@@ -1,11 +1,13 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
 use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceHold,
-    ReviewGateHistoryNote,
+    REVIEW_EVIDENCE_FINDINGS_ARTIFACT, REVIEW_EVIDENCE_FINDINGS_EVENT,
+    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, ReviewEvidenceFindings,
+    ReviewEvidenceHold, ReviewGateHistoryNote,
 };
 use serde_json::{Value, json};
 
@@ -18,8 +20,8 @@ use super::super::operations::valid_candidate_ref;
 use super::adopt::{Adoption, adopt_published_branch};
 use super::apply::{Applied, apply, outcome_name, output, record, resume, tail};
 use super::{
-    Candidate, ClaimSource, ForeignRun, Fresh, Outcome, PRESERVING_DECISIONS, Preserved,
-    REVIEW_VERDICT_STEP,
+    Candidate, ClaimSource, ForeignRun, Fresh, MAX_REPAIR_OUTPUT_BYTES, Outcome,
+    PRESERVING_DECISIONS, Preserved, REVIEW_VERDICT_STEP,
 };
 
 /// Apply the task's preserved candidate onto this run's base, if it may be
@@ -106,14 +108,23 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         }
     };
     // A claim candidate whose leaf's evidence hold was the task's latest
-    // decision until its evidence arrived is the held candidate itself.
+    // decision until its evidence arrived is the held candidate itself; until
+    // the owner's evidence run reported findings on it, it is the held
+    // candidate to repair [ORB-18660].
     let preserved = match preserved {
-        Preserved::Usable(mut candidate)
-            if candidate.claim.is_some()
-                && evidence_received(&host.get_task_history(&task.id)?, &candidate.run_id) =>
-        {
-            candidate.held = true;
-            candidate.needs_review_repair = false;
+        Preserved::Usable(mut candidate) if candidate.claim.is_some() => {
+            match held_decision(&host.get_task_history(&task.id)?, &candidate.run_id) {
+                Some(HeldDecision::Received) => {
+                    candidate.held = true;
+                    candidate.needs_review_repair = false;
+                }
+                Some(HeldDecision::Findings) => {
+                    candidate.evidence_findings =
+                        Some(evidence_findings(host, &task, &candidate.run_id)?);
+                    candidate.needs_review_repair = false;
+                }
+                None => {}
+            }
             Preserved::Usable(candidate)
         }
         preserved => preserved,
@@ -247,6 +258,7 @@ fn claim_candidate(preserved: &Value, claim: Option<ClaimSource>) -> Option<Cand
             .filter(|review| !review.is_null())
             .and_then(|review| serde_json::from_value(review.clone()).ok()),
         landing_stop: input_string_field(preserved, "landing_stop"),
+        evidence_findings: None,
     })
 }
 
@@ -309,6 +321,7 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
         pull_request_head: None,
         interrupted_review: None,
         landing_stop: None,
+        evidence_findings: None,
     };
     let recorded = input_string_field(evidence, "task_spec_digest");
     refuse_stale(host, task, candidate, Some(recorded.as_deref()))
@@ -316,8 +329,10 @@ fn preserved_candidate<H: RuntimeHost + ?Sized>(
 
 /// [ORB-14450] The candidate the task's evidence hold kept from run
 /// `prior_run_id`, when the task's latest decision is that hold's evidence
-/// receipt. A held run ends before the failure handoff, so the hold artifact
-/// is what names the exact commit the evidence was checked against.
+/// receipt, or [ORB-18660] the requeue to repair it after an owner evidence
+/// run reported findings on it. A held run ends before the failure handoff,
+/// so the hold artifact is what names the exact commit the evidence was
+/// checked against.
 fn held_candidate<H: RuntimeHost + ?Sized>(
     host: &H,
     task: &Task,
@@ -345,9 +360,11 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
     let Some(hold) = hold else {
         return none();
     };
-    if !evidence_received(&host.get_task_history(&task.id)?, prior_run_id) {
-        return none();
-    }
+    let evidence_findings = match held_decision(&host.get_task_history(&task.id)?, prior_run_id) {
+        None => return none(),
+        Some(HeldDecision::Received) => None,
+        Some(HeldDecision::Findings) => Some(evidence_findings(host, task, prior_run_id)?),
+    };
     let branch = host
         .read_run_state(prior_run_id)?
         .and_then(|state| {
@@ -364,13 +381,14 @@ fn held_candidate<H: RuntimeHost + ?Sized>(
         durable_ref: None,
         failed_step_id: REVIEW_VERDICT_STEP.to_string(),
         needs_review_repair: false,
-        held: true,
+        held: evidence_findings.is_none(),
         claim: None,
         published: false,
         pull_request: None,
         pull_request_head: None,
         interrupted_review: None,
         landing_stop: None,
+        evidence_findings,
     };
     // A hold from before spec provenance was released by a receipt that
     // checked the task's whole meaning; the fresh review reads the task as
@@ -458,25 +476,83 @@ fn kept_candidate(kept: KeptClaimCandidate) -> Result<Preserved, OrbitError> {
     Ok(Preserved::Refused(candidate, reason))
 }
 
-/// Whether the latest status decision in `history` is the evidence receipt
-/// for held run `run_id`. Admission into this run is not a decision.
-fn evidence_received(history: &[TaskHistoryEntry], run_id: &str) -> bool {
-    history
-        .iter()
-        .rev()
-        .find(|entry| {
-            entry.event == REVIEW_EVIDENCE_RECEIVED_EVENT
-                || entry
-                    .to_status
-                    .is_some_and(|status| status != TaskStatus::InProgress)
+/// How the task's latest status decision released held run `run_id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HeldDecision {
+    /// Every named check arrived: review the held candidate again.
+    Received,
+    /// [ORB-18660] An owner evidence run reported findings: repair it.
+    Findings,
+}
+
+/// Whether the latest status decision in `history` released held run
+/// `run_id`, and how. Admission into this run is not a decision.
+fn held_decision(history: &[TaskHistoryEntry], run_id: &str) -> Option<HeldDecision> {
+    let entry = history.iter().rev().find(|entry| {
+        entry.event == REVIEW_EVIDENCE_RECEIVED_EVENT
+            || entry.event == REVIEW_EVIDENCE_FINDINGS_EVENT
+            || entry
+                .to_status
+                .is_some_and(|status| status != TaskStatus::InProgress)
+    })?;
+    let decision = match entry.event.as_str() {
+        REVIEW_EVIDENCE_RECEIVED_EVENT => HeldDecision::Received,
+        REVIEW_EVIDENCE_FINDINGS_EVENT => HeldDecision::Findings,
+        _ => return None,
+    };
+    entry
+        .note
+        .as_deref()
+        .and_then(ReviewGateHistoryNote::from_text)
+        .is_some_and(|parsed| parsed.run_id == run_id)
+        .then_some(decision)
+}
+
+/// [ORB-18660] The repair output for a held candidate an owner evidence run
+/// reported findings on: the system-written findings for held run `run_id`,
+/// or where to find them when that record is unreadable.
+fn evidence_findings<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &Task,
+    run_id: &str,
+) -> Result<String, OrbitError> {
+    let findings = host
+        .get_task_artifacts(&task.id)?
+        .into_iter()
+        .find(|artifact| {
+            artifact.path == REVIEW_EVIDENCE_FINDINGS_ARTIFACT
+                && artifact.created_by.as_deref() == Some("system")
         })
-        .is_some_and(|entry| {
-            entry.event == REVIEW_EVIDENCE_RECEIVED_EVENT
-                && entry.note.as_deref().is_some_and(|note| {
-                    ReviewGateHistoryNote::from_text(note)
-                        .is_some_and(|parsed| parsed.run_id == run_id)
-                })
+        .and_then(|artifact| {
+            serde_json::from_slice::<ReviewEvidenceFindings>(&artifact.content).ok()
         })
+        .filter(|findings| findings.schema_version == 1 && findings.hold_run_id == run_id);
+    let lead = "The owner's evidence run reported findings on this held candidate, so it was \
+                not approved; it is applied onto the current base. Repair the candidate rather \
+                than re-implementing it: fix each finding at its location, or show in the \
+                execution summary why it is a false positive, keep what is already done, and \
+                rerun the focused checks the repair touches.";
+    let Some(findings) = findings else {
+        return Ok(format!(
+            "{lead} The findings record `{REVIEW_EVIDENCE_FINDINGS_ARTIFACT}` is unreadable; \
+             read the owner evidence fulfilment comment on task {} and the check's log artifact.",
+            task.id
+        ));
+    };
+    let mut summary = findings.summary_text();
+    let room = MAX_REPAIR_OUTPUT_BYTES - 1024;
+    if summary.len() > room {
+        summary.truncate(floor_char_boundary(&summary, room));
+        summary.push_str(&format!(
+            "\n[… cut; `{REVIEW_EVIDENCE_FINDINGS_ARTIFACT}` lists every summarized result]"
+        ));
+    }
+    Ok(format!(
+        "{lead} Evidence run '{}' on candidate {} reported:\n\n{}",
+        findings.run_id,
+        findings.candidate.commit,
+        summary.trim_end()
+    ))
 }
 
 /// Refuse `candidate` when an operator discarded it since its run began, or
@@ -559,6 +635,7 @@ fn claim_repair_resume(
         pull_request_head: None,
         interrupted_review: None,
         landing_stop: None,
+        evidence_findings: None,
     };
     let outcome = match apply(&candidate, &candidate.head_sha, workspace_path, base_sha)? {
         Applied::Refused(reason) => {

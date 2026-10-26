@@ -3,7 +3,7 @@ type: runbook
 summary: Run local Rust CodeQL once per delivery for code-scanning repairs, security-tagged tasks and CodeQL setup changes, with a verified host toolchain cache, bounded concurrency, threaded evaluation and exact-input reuse, and reject incomplete semantic extraction.
 tags: [rust, codeql, security, validation]
 paths: ["scripts/codeql-rust-local.sh", ".github/codeql/**"]
-last_validated: 2026-10-18
+last_validated: 2026-10-26
 ---
 
 # Run local Rust CodeQL for code-scanning repairs and security changes
@@ -483,13 +483,35 @@ held candidate (`resumed_held`). It settles the held review without a
 reviewer, as long as the candidate rebuilds to the same tree on the same base.
 Delivery then continues to the pull request.
 
+A complete run whose SARIF has results is no evidence, but it is a verdict on
+the candidate, so it does not wait under the hold. The run attaches its log,
+whose `sarif` records the run, result and rule counts, and
+`review-evidence-findings.json`, which lists each result's check, rule,
+message, file and line and the steps of its first data flow, source first.
+The SARIF lives in the run's checkout, which is removed, so this artifact is
+the only record. It keeps at most 50 results (the rest are counted as
+`omitted`) and eight flow steps per result (the first ones and the sink),
+and cuts each message and path to 512 bytes after redaction. The task is
+then queued to `backlog` with the history event `review_evidence_findings`,
+and a comment repeats the findings. The task's next run resumes the held
+candidate for its implementer (`resumed_repaired`, trigger `review`), with
+the findings as the repair's output; a claimed leaf's implementer, which
+always runs on a kept candidate, reads them in the task's comments. The
+repaired candidate has a new tree, so its review needs CodeQL on it again. When another
+check of the same hold failed for a different reason, the findings are still
+attached, but the hold stays for that decision.
+
+```bash
+orbit tool run orbit.task.artifact.get --input '{"id":"<task-id>","path":"review-evidence-findings.json"}' \
+  | jq '.content | fromjson | .results[] | {rule, file, line}'
+```
+
 Any other run attaches only the log and leaves the hold in place with a typed
 reason:
 
 | Reason | Cause |
 | --- | --- |
 | `analysis_incomplete` | Incomplete extraction, or no completed analysis or SARIF. |
-| `findings_reported` | The analysis reported results; a review must judge them. |
 | `tool_missing` | `codeql` or `rustup` is missing. |
 | `platform_refused` | The script exited 3. |
 | `command_failed` | The script failed for another reason. |

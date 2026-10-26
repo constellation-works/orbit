@@ -167,6 +167,11 @@ pub(super) fn resume(
             } else {
                 output
             };
+            // [ORB-18660] The findings stay at the end, which `tail` keeps.
+            let output = match &candidate.evidence_findings {
+                Some(findings) => format!("{output}\n\n{findings}"),
+                None => output,
+            };
             let output = match &candidate.landing_stop {
                 Some(stop) => {
                     format!("The owner's landing of this candidate stopped: {stop}\n\n{output}")
@@ -185,6 +190,15 @@ pub(super) fn resume(
     // checked on: the pipeline's own validation and fresh review judge it.
     if candidate.held {
         return Ok(Outcome::Held);
+    }
+    // [ORB-18660] The owner's evidence run reported findings on the held
+    // candidate: its implementer repairs them, whoever runs it.
+    if let Some(findings) = &candidate.evidence_findings {
+        return Ok(Outcome::Repair(json!({
+            "trigger": "review",
+            "failed_step_id": candidate.failed_step_id,
+            "output": findings,
+        })));
     }
     // A clean apply of work that never reached `commit` is unfinished and
     // must not skip the implementer, regardless of validation commands.

@@ -14,11 +14,11 @@ use orbit_types::task::{
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     BUBBLEWRAP_DEFERRAL_PREFIX, FindingDisposition, HostSandboxCommand, PS_DENIED_DEFERRAL_PREFIX,
-    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT, REVIEW_GATE_ARTIFACT,
-    ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold, ReviewEvidenceKind,
-    ReviewEvidenceRequirement, ReviewEvidenceRerequestReason, ReviewExternalEvidence,
-    ReviewGateHistoryNote, ReviewValidation, SEATBELT_DEFERRAL_PREFIX, ValidationOutcome,
-    ValidationRole, is_reserved_review_artifact,
+    REVIEW_EVIDENCE_FINDINGS_EVENT, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_EVIDENCE_RECEIVED_EVENT,
+    REVIEW_GATE_ARTIFACT, ReviewCertificate, ReviewEvidenceCarried, ReviewEvidenceHold,
+    ReviewEvidenceKind, ReviewEvidenceRequirement, ReviewEvidenceRerequestReason,
+    ReviewExternalEvidence, ReviewGateHistoryNote, ReviewValidation, SEATBELT_DEFERRAL_PREFIX,
+    ValidationOutcome, ValidationRole, is_reserved_review_artifact,
 };
 use serde_json::{Value, json};
 
@@ -596,4 +596,43 @@ pub(crate) fn resume_evidence_hold(
         Ok((updated, OrbitEvent::TaskUpdated { id: task_id.into() }))
     })?;
     Ok(())
+}
+
+/// [ORB-18660] Queue the held task to repair its kept candidate: an owner
+/// evidence run reported `results` findings on it, already attached as
+/// `review-evidence-findings.json`. Findings are a verdict on the candidate,
+/// so waiting on the hold would only wait for an operator. Requeues only
+/// while `hold` is still the persisted, current hold; returns whether it
+/// did. The next run resumes the held candidate for its implementer.
+pub(crate) fn route_evidence_findings(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    hold: &ReviewEvidenceHold,
+    results: usize,
+) -> Result<bool, OrbitError> {
+    let task = runtime.get_task(task_id)?;
+    if evidence_hold(runtime, task_id)?.as_ref() != Some(hold)
+        || !hold_is_current(runtime, &task, hold)?
+    {
+        return Ok(false);
+    }
+    runtime.with_mutation(|| {
+        let updated = runtime.stores().task_records().update(
+            task_id,
+            TaskRecordUpdateParams {
+                actor: "system".into(),
+                status: Some(TaskStatus::Backlog),
+                expected_status: Some(vec![TaskStatus::InProgress]),
+                status_event: Some(REVIEW_EVIDENCE_FINDINGS_EVENT.into()),
+                status_note: Some(ReviewGateHistoryNote::evidence_findings_text(
+                    &hold.run_id,
+                    &hold.candidate.commit,
+                    results,
+                )),
+                ..Default::default()
+            },
+        )?;
+        Ok((updated, OrbitEvent::TaskUpdated { id: task_id.into() }))
+    })?;
+    Ok(true)
 }

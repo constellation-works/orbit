@@ -32,8 +32,10 @@ readiness holds that backlog as `local_route_before_pr` or
 
 One fresh reviewer, from `workflow.purpose_crews.pre_landing_review` (or
 `workflow.purpose_crews.review` while that is unset), examines the implementation
-commit, fixes what it finds, and returns a verdict. There is no findings-driven
-rework loop. If PR completion rebases a conflicting reviewed head, the pipeline
+commit, fixes what it finds, and returns a verdict. A reviewer's findings never
+send the candidate back to its implementer; the one exception is an owner
+evidence run whose CodeQL analysis reports results on a held candidate, which
+queues that candidate for repair (below). If PR completion rebases a conflicting reviewed head, the pipeline
 may admit up to two fresh re-reviews in the same lineage; a conflict after the
 last of them leaves the task in review as `review_gate_stale`.
 
@@ -330,6 +332,17 @@ its log. A failed or incomplete run attaches only the log, with a typed
 reason. Each attempt is audited as `review.evidence_fulfilment`. See
 [owner fulfilment](codeql-local.md#owner-fulfilment) for CodeQL and
 [host sandbox tests](#host-sandbox-tests) below.
+
+A CodeQL run that reports results (`findings_reported`) is no evidence, but
+the hold cannot wait it out: no later run of the same tree will pass. When
+every refusal of the run is that one, the owner attaches
+`review-evidence-findings.json` (each result's rule, message, file, line and
+data flow) and queues the task in `backlog` with `review_evidence_findings`.
+The next delivery run resumes the held candidate for its implementer: its
+`resume_candidate` step reports `resumed_repaired` with trigger `review` and
+the findings as the repair's output. The repaired candidate then gets a fresh
+review, which needs CodeQL on its new tree again. A claimed leaf's
+implementer reads the findings in the task's comments.
 
 Receipt of all matching evidence queues the task in `backlog` with
 `review_evidence_received` for a fresh review, unless the hold names only owed

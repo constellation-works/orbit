@@ -418,8 +418,9 @@ impl RuntimeKernel {
                         return Ok(());
                     }
                     // A review timeout has already requeued a continuation;
-                    // an external-evidence hold has a named resumption condition.
-                    // Do not turn either decision into an operator-only block.
+                    // an external-evidence hold has a named resumption condition,
+                    // and its receipt or reported findings requeued the task.
+                    // Do not turn any of those decisions into an operator-only block.
                     if history
                         .iter()
                         .rev()
@@ -430,6 +431,7 @@ impl RuntimeKernel {
                                     "review_timeout_incomplete"
                                         | "review_awaiting_evidence"
                                         | "review_evidence_received"
+                                        | "review_evidence_findings"
                                 )
                         })
                         .is_some_and(|entry| {
@@ -438,6 +440,7 @@ impl RuntimeKernel {
                                 "review_timeout_incomplete"
                                     | "review_awaiting_evidence"
                                     | "review_evidence_received"
+                                    | "review_evidence_findings"
                             ) && entry.note.as_deref().is_some_and(|note| {
                                 ReviewGateHistoryNote::from_text(note)
                                     .is_some_and(|parsed| parsed.run_id == run_id)
