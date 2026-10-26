@@ -168,6 +168,17 @@ run was persisted but its detached worker could not start, Orbit terminalizes it
 (plus transient `retrying` and step-level `skipped`). A `held` run is resumable through its
 specific recovery path; it is not an ordinary failed terminal run.
 
+Completion and owner landing also end `held` on typed parked decisions: a
+reported head changed, a repair is already dispatched, the PR is draft or
+closed, the task refuses promotion, owner landing needs a validated conflict
+repair, or required reviews/checks are unsatisfied without a red check. Their
+`delivery_*` diagnostic codes are listed in
+[completion and landing refusals](../CONFIG.md#completion-and-landing-refusals-are-held).
+The task keeps the state the refusing action left it in, and gate/auto parents
+pass the held child. Missing or contradictory evidence, forge read failures and
+red candidate checks still fail. Resolve the decision before a new delivery
+attempt; these holds do not add a generic checkpoint-resume path.
+
 `interrupted` means the run was orphaned: its owner process died through a crash, SIGKILL,
 or reboot without finalizing the run. A job that genuinely failed is `failed`;
 `interrupted` means the worker died.

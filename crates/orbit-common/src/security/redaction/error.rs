@@ -178,6 +178,10 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             message: redact(&message),
             payload: redact_json_with(payload, redact),
         },
+        OrbitError::DeliveryRefused { refusal, message } => OrbitError::DeliveryRefused {
+            refusal,
+            message: redact(&message),
+        },
         OrbitError::Execution(m) => OrbitError::Execution(redact(&m)),
         OrbitError::CandidateAbsorbed(mut candidate) => {
             candidate.head = redact(&candidate.head);

@@ -209,6 +209,14 @@ pub enum DispatchError {
         message: String,
     },
 
+    /// A deliberate delivery refusal, with its shared typed diagnostic code.
+    #[error("deterministic action `{action}` refused: {message}")]
+    DeliveryRefused {
+        action: String,
+        refusal: orbit_types::workflow::DeliveryRefusal,
+        message: String,
+    },
+
     /// A settled review needs named external evidence. End the delivery run
     /// without retry, recovery, or the failure handoff; receipt queues review.
     #[error("review_awaiting_evidence: named external checks are pending")]
@@ -353,6 +361,7 @@ impl DispatchError {
                 | DispatchError::TaskCompletionLiveRun { .. }
                 | DispatchError::DeterministicActionRefused { .. }
                 | DispatchError::ReviewGateRefused { .. }
+                | DispatchError::DeliveryRefused { .. }
                 | DispatchError::ReviewEvidenceHold(_)
                 | DispatchError::ForgeUnavailableHold(_)
                 | DispatchError::ChildRunCancelled { .. }
@@ -372,6 +381,7 @@ impl DispatchError {
             DispatchError::RecoverableVcsConflict(_) => "recoverable_vcs_conflict",
             DispatchError::TaskCompletionLiveRun { .. } => "task_completion_live_run",
             DispatchError::ReviewGateRefused { refusal, .. } => refusal.error_code(),
+            DispatchError::DeliveryRefused { refusal, .. } => refusal.error_code(),
             _ if wf::is_validation_environment_failure(None, Some(&text())) => {
                 wf::VALIDATION_ENVIRONMENT_ERROR_CODE
             }
@@ -427,6 +437,14 @@ pub fn dispatch_error_to_orbit(error: DispatchError) -> OrbitError {
         DispatchError::TaskCompletionLiveRun { task_id, run_id } => {
             OrbitError::TaskCompletionLiveRun { task_id, run_id }
         }
+        DispatchError::DeliveryRefused {
+            action,
+            refusal,
+            message,
+        } => OrbitError::DeliveryRefused {
+            refusal,
+            message: format!("deterministic action `{action}` refused: {message}"),
+        },
         other => OrbitError::InvalidInput(format!("{other}")),
     }
 }
@@ -518,9 +536,11 @@ fn dispatch_v2_activity_inner(
     let outcome_str = match &result {
         Ok(o) if o.success => "success",
         Ok(_) => "failed",
-        Err(DispatchError::ReviewEvidenceHold(_) | DispatchError::ForgeUnavailableHold(_)) => {
-            "held"
-        }
+        Err(
+            DispatchError::ReviewEvidenceHold(_)
+            | DispatchError::ForgeUnavailableHold(_)
+            | DispatchError::DeliveryRefused { .. },
+        ) => "held",
         Err(DispatchError::ChildRunCancelled { .. }) => "cancelled",
         Err(_) => "error",
     };
@@ -628,6 +648,13 @@ fn run_deterministic(
                 Some(&state_context),
             )
             .map_err(|error| match error {
+                OrbitError::DeliveryRefused { refusal, message } => {
+                    DispatchError::DeliveryRefused {
+                        action: spec.action.clone(),
+                        refusal,
+                        message,
+                    }
+                }
                 OrbitError::RecoverableVcsConflict(conflict) => {
                     DispatchError::RecoverableVcsConflict(conflict)
                 }

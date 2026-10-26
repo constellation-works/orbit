@@ -967,6 +967,35 @@ by a flood of failures says what they were.
 
 Network-inconclusive output (HTTP status `000`; a curl connect, resolve, timeout, TLS or receive error such as `curl: (6)`, `(7)`, `(28)`, `(35)`, `(56)`; a DNS resolution failure; a TLS handshake timeout) reruns the command up to twice, after 2 s and 6 s. Only the last attempt counts; the log records `network_retries`.
 
+#### Completion and landing refusals are held
+
+A fail-closed delivery decision ends the run `held` with a typed diagnostic code:
+
+| Code | Decision |
+| --- | --- |
+| `delivery_head_changed` | The PR reports a head different from the one this run published. |
+| `delivery_repair_dispatched` | A repair was already dispatched for the blocked head. |
+| `delivery_pr_draft` | The PR is still a draft. |
+| `delivery_pr_closed` | The PR closed without merging. |
+| `delivery_task_not_promotable` | The task's current status refuses promotion. |
+| `delivery_landing_conflict` | Owner landing requires a conflict repair with fresh validation and a new handoff. |
+| `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. |
+
+These codes come from typed refusals, never from matching diagnostic wording.
+The refusing action keeps its existing task transition and landing evidence;
+run finalization does not change the task's status. Retry, step recovery, final
+recovery and the failure handoff do not run for these decisions. Gate and auto
+parents pass the held child, run history lists it as `held`, and reliability
+counts it under held, outside the failure rate. Routine fires retain their
+existing `succeeded` status for a held underlying run.
+
+A missing PR head, contradictory merge evidence, unreadable forge evidence,
+failed candidate checks, and unlisted refusals remain failures. In particular,
+`delivery_evidence_stale` text alone does not establish a hold. Completion's
+ordinary conflict-recovery path also retains its existing failure and repair
+semantics. Resolve the named refusal before starting a new delivery attempt;
+these holds do not enable generic `orbit job resume`.
+
 #### A red base is held, not blocked
 
 The integration branch has no merge gates, so a command may already fail on the base. A command still failing after its reruns is rerun on the base commit in a clean detached worktree under `<git-common-dir>/orbit-baseline/`, cached per base commit, command and selection behind a file lock (concurrent candidates on one host share one base run). `validation/<run>/<n>.json` gets a `baseline` record; `validation/<run>/<n>.baseline.json` holds the base log. Candidate logs record `failures` and `baseline_reproduces`; baseline records and logs retain their parsed `failures`. The baseline record's `decision` describes the base run's outcome separately from whether it reproduces the candidate.

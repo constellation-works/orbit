@@ -1,6 +1,7 @@
 //! Recording landing progress, completion and stops.
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::handoff::HandoffCandidate;
 use serde_json::{Value, json};
 
@@ -75,6 +76,22 @@ pub(super) fn stop_pr<H: RuntimeHost + ?Sized>(
         HandoffLandingStep::Stop { repairable },
         reason,
     )
+}
+
+/// Record the same landing stop with a deliberate held run outcome.
+pub(super) fn hold_pr<H: RuntimeHost + ?Sized>(
+    host: &H,
+    context: &LandingPass,
+    observation: &Value,
+    repairable: bool,
+    refusal: DeliveryRefusal,
+    reason: &str,
+) -> Result<OrbitError, OrbitError> {
+    let stopped = stop_pr(host, context, observation, repairable, reason)?;
+    Ok(match stopped {
+        OrbitError::Execution(message) => OrbitError::DeliveryRefused { refusal, message },
+        other => other,
+    })
 }
 
 /// [`stop_pr`] recorded as `step`, a [`HandoffLandingStep::Stop`] or

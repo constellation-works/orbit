@@ -5,7 +5,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
-use orbit_types::workflow::PrAutoFixBlocker;
+use orbit_types::workflow::{DeliveryRefusal, PrAutoFixBlocker};
 use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
@@ -16,8 +16,9 @@ use super::super::super::push::push_batch_changes;
 use super::super::answers::{ReviewedMergeOutcome, read_pr_status, read_pr_status_before};
 use super::super::auto_fix::{
     AutoFix, BlockedStopReason, BlockedVerdict, LocalRepair, adopt_published_repairs,
-    base_tip_checks, blocked_verdict, publish_local_repair, record_base_path, record_landed_repair,
-    record_published_repair, red_base_wait, repair_failed_checks, reserve_base_refresh, stopped,
+    base_tip_checks, blocked_verdict, hold_auto_fix_stop, publish_local_repair, record_base_path,
+    record_landed_repair, record_published_repair, red_base_wait, repair_failed_checks,
+    reserve_base_refresh, stopped,
 };
 use super::super::delivery::{
     BlockedCheckWait, DeliveryEvidence, DeliveryPin, PrMergeState, UnreportedChecks,
@@ -317,7 +318,11 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             let diagnose = is_blocked_merge_state(&status)
                 && matches!(verdict, BlockedVerdict::RepairChecks(_));
             if let BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)) = &verdict {
-                return Err(stopped(pr_number, &reason.to_string()));
+                let error = stopped(pr_number, &reason.to_string());
+                return Err(match reason.delivery_refusal() {
+                    Some(code) => hold_auto_fix_stop(error, code),
+                    None => error,
+                });
             }
             infrastructure_wait |= matches!(
                 super::super::infrastructure::recover(
@@ -376,10 +381,12 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 }));
             }
             PrMergeState::Closed => {
-                return Err(OrbitError::Execution(format!(
-                    "pr_complete: pull request #{pr_number} was closed without being merged; \
-                     the task stays in review"
-                )));
+                return Err(OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::PullRequestClosed,
+                    message: format!(
+                        "pr_complete: pull request #{pr_number} was closed without being merged; the task stays in review"
+                    ),
+                });
             }
             PrMergeState::Contradictory(reason) => {
                 return Err(OrbitError::Execution(format!(
@@ -393,16 +400,28 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                     let diagnosis = pin
                         .base_advance_note(input, workspace_path)
                         .unwrap_or_default();
-                    return Err(OrbitError::Execution(format!(
+                    let message = format!(
                         "pr_complete: pull request #{pr_number} cannot be merged ({reason}); \
                          branch protection or required reviews are unsatisfied and this run does \
                          not bypass them — the task stays in review.{diagnosis}"
-                    )));
+                    );
+                    return Err(reason.into_error(message));
                 };
                 match blocked_verdict(&status, unsettled_polls, pending_required) {
                     BlockedVerdict::Wait => unsettled_polls += 1,
                     BlockedVerdict::Stop(reason) => {
-                        return Err(stopped(pr_number, &reason.to_string()));
+                        let error = stopped(pr_number, &reason.to_string());
+                        return Err(match reason {
+                            BlockedStopReason::CheckRefusal(refusal) => {
+                                match refusal.delivery_refusal() {
+                                    Some(code) => hold_auto_fix_stop(error, code),
+                                    None => error,
+                                }
+                            }
+                            BlockedStopReason::UnsatisfiedChecks => {
+                                hold_auto_fix_stop(error, DeliveryRefusal::RequirementsUnsatisfied)
+                            }
+                        });
                     }
                     // A repair commit on a reviewed head is reviewed again
                     // before it is published; the last completion round has
