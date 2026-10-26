@@ -55,7 +55,7 @@ Each forecast task samples from the deliveries of its **cell**: its complexity b
 | `uncosted` | No sampled delivery has every invocation's provider cost, so the task has no USD forecast. |
 | `no_history` | Nothing to sample. |
 
-Token and USD draws use only the deliveries of the resolved pool that have a value; hours use all of them. A total is null in an iteration when any task in it has no draw for that metric, so a quantile is never a silent undercount.
+For initial backlog and proposed tasks, a delivery is drawn whole; a missing token or USD value is redrawn from deliveries of the resolved pool that recorded that metric. Hours use all deliveries. A total is null in an iteration when any task in it has no draw for that metric, so a quantile is never a silent undercount.
 
 ### Simulation
 
@@ -65,7 +65,11 @@ Each of 1000 iterations (seeded, so a refresh does not jitter) draws one deliver
 
 **Capacity.** `N` is the leaf-run ceiling the drain admits under: the live local drain's effective `max_active_leaf_runs` (a run-control adjustment, else its submitted value), else the live pull drain's, else the job default (5), the same value `GET /api/workflows/auto/readiness` reports without a requested concurrency. `concurrency` (1–64) overrides it for a what-if. `inputs.concurrency_source` and `inputs.auto_concurrency_mode` say which applied.
 
-**Arrivals.** The default assumes **no new arrivals**: the backlog only drains. The response always reports the arrival rate over the last 7 days, split into auto-task filings (`auto-task:` tags), sweep filings (CI-failure, QA, code-review, security-review, delivery-review, friction-curation and baseline-red-repair tags) and other filings, beside the done rate over the same days. `arrivals=on` adds a Poisson stream of tasks at the measured rate, each drawing from every delivery (its tokens and USD added where the delivery has them), and the drain ends when the queue first empties; a drain that has not emptied within 90 days counts as beyond the horizon, so its quantile can be null.
+**Arrivals.** The default assumes **no new arrivals**: the backlog only drains. The response always reports the arrival rate over the last 7 days, split into auto-task filings (`auto-task:` tags), sweep filings (CI-failure, QA, code-review, security-review, delivery-review, friction-curation and baseline-red-repair tags) and other filings, beside the done rate over the same days. `arrivals=on` adds a Poisson stream of tasks at the measured rate, each drawing from every delivery (preserving its token and USD values, including nulls), and the drain ends when the queue first empties; a drain that has not emptied within 90 days counts as beyond the horizon, so its quantile can be null.
+
+A sampled arrival with missing tokens or USD makes that iteration's **total** null for that metric, for both `forecast` and `if_approved`; it is never counted as free or imputed. Duration and the other metric remain independent. As with other missing iteration values, null totals sort after numeric totals for nearest-rank quantiles: a rank that lands on null is null, rather than a quantile computed after discarding incomplete iterations. Fully covered arrival histories retain numeric cost and token quantiles. Per-complexity rows describe initial tasks only and exclude arrivals.
+
+`coverage` and `proposed_coverage` count initial tasks only. `arrivals.coverage` describes the shared arrival sampling pool, even with arrivals off: `deliveries` is its size, `missing_tokens` counts deliveries without normalized tokens and `missing_usd` counts deliveries without complete provider cost. These are history-delivery counts, not counts of simulated arrivals. `assumptions.arrival_missing_metrics = "propagate_null"` identifies this policy. The panel shows the gaps and explains unavailable totals; with arrivals off these gaps do not affect initial-task draws.
 
 ### Storage
 

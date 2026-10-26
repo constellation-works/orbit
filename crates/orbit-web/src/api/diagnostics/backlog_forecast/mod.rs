@@ -548,6 +548,7 @@ fn backlog_forecast(
         "assumptions": {
             "arrivals": if options.arrivals { "recent_rate" } else { "none" },
             "excluded_statuses": ["review", "blocked", "someday"],
+            "arrival_missing_metrics": "propagate_null",
         },
         "backlog": {
             "backlog": status_count(TaskStatus::Backlog),
@@ -562,6 +563,13 @@ fn backlog_forecast(
         "proposed_coverage": coverage(true),
         "arrivals": {
             "window_days": ARRIVAL_DAYS,
+            // Shared by backlog and if-approved arrivals, even when off.
+            // Initial-task coverage above describes a different sampling pool.
+            "coverage": {
+                "deliveries": history.len(),
+                "missing_tokens": history.iter().filter(|d| d.tokens.is_none()).count(),
+                "missing_usd": history.iter().filter(|d| d.usd.is_none()).count(),
+            },
             "per_day": {
                 "total": per_day(arrived),
                 "auto_task": per_day(source_count("auto_task")),
