@@ -123,6 +123,7 @@ impl OrbitRuntime {
                 if plan.status == TaskStatus::Done {
                     self.ensure_resolves_are_workspace_local(&task)?;
                     ensure_post_deploy_criteria_met(self, &task)?;
+                    self.ensure_mutation_proposals_applied(&task)?;
                     ensure_completion_run_stopped(self, &task, None, Some(&request.run_id))?;
                 }
                 self.write_plan(&task, request, &decision, &plan)?;

@@ -98,6 +98,7 @@ impl OrbitRuntime {
             None => self.desktop_local_runs_stopped(task)?,
         }
         self.ensure_resolves_are_workspace_local(task)?;
+        self.ensure_mutation_proposals_applied(task)?;
         ensure_status_change_allowed(self, task, &TaskUpdateParams::default(), TaskStatus::Done)
     }
     /// This machine's own linked run, and every child it dispatched, must
