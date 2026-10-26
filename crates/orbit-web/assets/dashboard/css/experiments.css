@@ -138,7 +138,9 @@
 .ex-cum-lines { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
 .ex-cum-hover { position: absolute; inset: 0; display: flex; z-index: 3; }
 .ex-cum-col { flex: 1 1 0; height: 100%; }
-.ex-cum-tip { top: 4px; }
+.ex-cum-tip { top: 4px; max-width: 100%; transform: none; }
+.ex-cum-tip .mx-tip-name, .ex-cum-tip .mx-tip-name > span { min-width: 0; overflow-wrap: anywhere; }
+.ex-cum-tip .mx-tip-n, .ex-cum-tip .mx-tip-value { flex-shrink: 0; white-space: nowrap; }
 .ex-cum-x { position: relative; height: 18px; margin-left: 58px; }
 .ex-cum-xtick {
   position: absolute; transform: translateX(-50%);

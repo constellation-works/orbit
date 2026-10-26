@@ -247,6 +247,29 @@ fn experiment_cumulative_chart_names_intraday_buckets_on_the_dashboard_clock() {
 }
 
 #[test]
+#[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR"]
+fn experiment_cumulative_tooltips_stay_inside_the_chart_and_viewport() {
+    let output = std::process::Command::new("node")
+        .arg(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/http_api/dashboard_experiments_browser.mjs"),
+        )
+        .arg(std::env::var_os("ORBIT_PLAYWRIGHT_MODULE").expect("prepared Playwright module"))
+        .arg(
+            std::env::var_os("ORBIT_EXPERIMENTS_BROWSER_EVIDENCE_DIR")
+                .expect("browser evidence directory"),
+        )
+        .output()
+        .expect("node is required to execute the experiment tooltip browser fixture");
+    assert!(
+        output.status.success(),
+        "experiment tooltip bounds failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 #[ignore = "requires ORBIT_PLAYWRIGHT_MODULE and ORBIT_CONTEXT_BASENAME_BROWSER_EVIDENCE_DIR"]
 fn context_selector_basenames_keep_contention_colors_and_return_to_normal_on_refresh() {
     let output = std::process::Command::new("node")

@@ -637,7 +637,7 @@ function cumulativeCard(readout, primary, color) {
         ...arms.map((arm) => {
           const point = arm.points?.[index] || {};
           return el("div", { class: "mx-tip-row" }, [
-            el("span", { class: "mx-tip-name" }, [swatch(armColor(color(arm.arm))), arm.arm]),
+            el("span", { class: "mx-tip-name" }, [swatch(armColor(color(arm.arm))), el("span", { text: arm.arm })]),
             el("span", { class: "mx-tip-n", text: `n ${point.n ?? 0}` }),
             el("span", { class: "mx-tip-value", text: fmtValue(point.value, unit) }),
           ]);
@@ -645,9 +645,18 @@ function cumulativeCard(readout, primary, color) {
       );
       const left = xOf(index);
       cursor.style.left = `${left}%`;
-      tip.style.left = `${left}%`;
-      tip.classList.toggle("left", left > 50);
       tip.hidden = false;
+      // This narrow card can sit against the pane's clipped right edge even
+      // at its middle bucket. Measure the shown tip, then keep it inside both
+      // the plot and the viewport, including when its CSS width changes.
+      const bounds = hover.getBoundingClientRect();
+      const minLeft = Math.max(bounds.left, 0);
+      const maxRight = Math.min(bounds.right, document.documentElement.clientWidth);
+      tip.style.maxWidth = `${Math.max(0, maxRight - minLeft)}px`;
+      const tipWidth = tip.getBoundingClientRect().width;
+      const anchor = bounds.left + bounds.width * left / 100;
+      const preferred = anchor + 14 + tipWidth <= maxRight ? anchor + 14 : anchor - 14 - tipWidth;
+      tip.style.left = `${Math.max(minLeft, Math.min(preferred, maxRight - tipWidth)) - bounds.left}px`;
       cursor.hidden = false;
     };
     column.addEventListener("mouseenter", show);
