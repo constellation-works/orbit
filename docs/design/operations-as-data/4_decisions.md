@@ -215,10 +215,10 @@ This is an **accident guard, not a security boundary**. Agents on a development 
 
 Between the filing and this decision, most of that shape was deleted rather than reconciled. `McpExposure`, `allowed_capabilities()`, `admitted()`, and the `orbit-remote` crate that hosted them are all gone with the owner-route recomposition and the MCP v1 ownership cleanup. What is left is two axes and no overlap between their declarations:
 
-- **Placement** — `OperationSpec::mcp_scope`, and `ToolRegistry::register_mcp` versus `register_inactive`. Decides which surfaces *list* a tool. `tools/list` performs no capability filtering, and `ToolRegistry::execute` never consults availability, so an unadvertised tool remains reachable through `orbit tool run`.
+- **Placement** — `OperationSpec::mcp_scope`, and `ToolRegistry::register_mcp` versus `register_inactive`. Decides which surfaces *list* a tool. `tools/list` originally performed no capability filtering (amended below on 2026-10-26), and `ToolRegistry::execute` never consults availability, so an unadvertised tool remains reachable through `orbit tool run`.
 - **Permission** — `GOVERNED_OPERATIONS`, evaluated by `authorize` at `OrbitRuntime::authorize_tool_operation`, which every tool caller traverses.
 
-The gap the earlier entry named has therefore closed by deletion, not by a fix: the friction `list` / `show` / `update` operations are ungoverned, no MCP path denies them, and an agent reads them from the CLI as before. What replaced it is the inverse pairing. `orbit.workflow.ship`, `orbit.workflow.run.{show,list,resume}` ([ORB-10534]) and `orbit.command.exec` ([ORB-10711]) are advertised to every MCP session and governed `operator` at the chokepoint, so an agent session is listed five tools it cannot perform.
+The gap the earlier entry named has therefore closed by deletion, not by a fix: the friction `list` / `show` / `update` operations are ungoverned, no MCP path denies them, and an agent reads them from the CLI as before. What replaced it is the inverse pairing. `orbit.workflow.ship`, `orbit.workflow.run.{show,list,resume}` ([ORB-10534]) and `orbit.command.exec` ([ORB-10711]) were advertised to every MCP session and governed `operator` at the chokepoint, so an agent session was listed five tools it could not perform.
 
 ### Decision
 
@@ -249,8 +249,9 @@ Current surface addition (2026-10-25): `orbit.decision.submit` is advertised
 and governed by the operator capability. It is advertised because its real
 caller — a registered decision channel's plugin backend — reaches Orbit
 through MCP `tools/call` as well as `orbit tool run`, and must be able to
-discover the tool it was granted; an agent session that sees it is refused at
-the governed row, and advertisement grants it nothing. The one caller the
+discover the tool it was granted; an agent session is refused at the governed
+row, and advertisement grants it nothing. The session filtering amendment
+below now omits it from an ordinary agent session's list. The one caller the
 row cannot name is that plugin callback itself, which holds no capability,
 only a host-issued callback session: the runtime chokepoint admits an
 *identified* callback past the row and the submit handler decides it by the
@@ -271,7 +272,7 @@ no MCP scope, like `orbit.decision.answer`.
 ### Consequences
 
 - The question "may this caller perform this?" has one answer and one place to look, on every surface. "Will this caller be shown it?" is a different question with a different owner, and neither now implies the other by accident.
-- An agent MCP session still sees five tools it cannot call. This is the accepted cost of a single advertised tool list plus per-call capability enforcement, and it is recorded rather than papered over. Filtering `tools/list` by session capability would remove it, but that is an MCP-server change with its own surface implications and no current demand; it is deliberately not bundled here.
+- **Amended 2026-10-26 ([ORB-18448]):** the filing measured twelve uncallable tools at 22% of the listed definition bytes, beyond the five originally accepted here. The current surface also includes operator-only routine and auto-drain controls. The shared MCP list adapter now uses the existing governed-operation catalog and the session's fixed capabilities to omit uncallable governed tools from `tools/list`. Operator sessions retain the full placed surface. Filtering is applied after the shared response cache and combined with workspace plugin hiding; it does not change registration, placement declarations, or call authorization. Calling an omitted name still reaches the same `capability_denied` refusal. `orbit.agent.invoke` remains discoverable because its managed-run explorer admission can allow an agent without operator capability; its catalog row alone cannot determine whether the call will be refused. Registered decision-channel callbacks retain their existing direct-call admission. The real MCP roundtrip checks cover agent/operator listings and direct calls, while the authorization matrix continues to guard registry placement and permission separately.
 - Cost: adding a governed tool now requires one more line — its placement — in the guardrail table. That is the intended friction: the line is where the advertise-or-not decision gets made explicitly.
 - An MCP session's capabilities are decided once, when its server process starts, and the process environment is never consulted per call: `orbit mcp serve` grants `agent`, `orbit mcp serve --operator` grants `agent` and `operator`, and `ORBIT_OPERATOR` in the server's environment grants nothing on this surface ([ORB-10927]). The flag is the only operator path over MCP — the deliberate act has to be in the argv the operator wrote, because an environment variable is inherited by whatever server an agent happens to launch. `orbit mcp listen` is agent-only for the stronger version of the same reason: the socket authenticates no client, so a listener started with operator authority would serve it to every accepted connection.
 - Because the MCP chokepoint discards the process envelope by design, its denial names the remedy that surface actually has (`orbit mcp serve --operator`, or the CLI) rather than the `ORBIT_OPERATOR` override that is inert there. That is `CapabilityResolution` in `orbit_common::governance::authorization`: one enum on the envelope, carried into the denial, changing the remedy sentence and nothing about the decision.
