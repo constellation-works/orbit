@@ -785,24 +785,76 @@ try {
   }
   await setDock('drain');
 
-  const timeLeft = async target => {
-    await target.evaluate(() => globalThis.setDrainFixturePhase('draining'));
-    return target.evaluate(() => `${document.getElementById('auto-drain-when').textContent} ${document.getElementById('auto-drain-run').textContent}`);
+  const deadlineMs = Date.parse(sharedDrainDeadline);
+  const clockBase = deadlineMs - 2 * 60 * 60 * 1000;
+  const expectedTimeLeft = (deadline, now) => {
+    const minutes = Math.max(0, Math.ceil((deadline - now) / 60_000));
+    if (minutes === 0) return 'window closed';
+    if (minutes < 60) return `${minutes}m left`;
+    return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, '0')}m left`;
   };
-  const firstBrowser = await timeLeft(page);
+  const timeLeft = async (target, controlledNow) => target.evaluate(async (now) => {
+    const realNow = Date.now;
+    Date.now = () => now;
+    try {
+      await globalThis.setDrainFixturePhase('draining');
+      return {
+        fixtureDeadline: window.__drainDeadline,
+        when: document.getElementById('auto-drain-when').textContent,
+        run: document.getElementById('auto-drain-run').textContent,
+      };
+    } finally {
+      Date.now = realNow;
+    }
+  }, controlledNow);
+  const deadlineObservationError = (observation, expectedDeadline, now, name) => {
+    if (observation.fixtureDeadline !== expectedDeadline) {
+      return `Drain server deadline differs in ${name}: ${observation.fixtureDeadline} vs ${expectedDeadline}`;
+    }
+    const expectedWhen = expectedTimeLeft(Date.parse(expectedDeadline), now);
+    if (observation.when !== expectedWhen) {
+      return `Displayed drain deadline differs in ${name}: ${observation.when} vs ${expectedWhen}`;
+    }
+    if (!observation.run.includes('jrun-')) return `Drain run missing in ${name}: ${observation.run}`;
+    return null;
+  };
+  const assertDeadlineObservation = (observation, expectedDeadline, now, name) => {
+    const error = deadlineObservationError(observation, expectedDeadline, now, name);
+    if (error) throw new Error(error);
+  };
+  const firstNow = clockBase + 1_000;
+  const firstBrowser = await timeLeft(page, firstNow);
+  assertDeadlineObservation(firstBrowser, sharedDrainDeadline, firstNow, 'first browser');
   const otherPage = await browser.newPage({ timezoneId: 'America/Los_Angeles' });
   await otherPage.addInitScript({ content: `window.__drainDeadline = ${JSON.stringify(sharedDrainDeadline)};` });
   await otherPage.goto(`http://127.0.0.1:${server.address().port}/`);
   await otherPage.addScriptTag({ type: 'module', url: '/test.mjs' });
   await otherPage.waitForFunction(() => globalThis.operationsTestsPassed);
-  const secondBrowser = await timeLeft(otherPage);
+  const secondNow = clockBase + 61_000;
+  const secondBrowser = await timeLeft(otherPage, secondNow);
+  assertDeadlineObservation(secondBrowser, sharedDrainDeadline, secondNow, 'second browser');
+  if (firstBrowser.when === secondBrowser.when) throw new Error('Controlled drain clocks did not cross a countdown minute boundary');
   await otherPage.reload();
   await otherPage.addScriptTag({ type: 'module', url: '/test.mjs' });
   await otherPage.waitForFunction(() => globalThis.operationsTestsPassed);
-  const afterDrainReload = await timeLeft(otherPage);
-  for (const [name, value] of [['second browser', secondBrowser], ['reload', afterDrainReload]]) {
-    if (!value.includes('left') || !value.includes('jrun-') || !/\d+h \d{2}m left/.test(value)) throw new Error(`Drain deadline missing after ${name}: ${value}`);
-    if (value !== firstBrowser) throw new Error(`Drain deadline differs in ${name}: ${value} vs ${firstBrowser}`);
+  const reloadNow = clockBase + 121_000;
+  const afterDrainReload = await timeLeft(otherPage, reloadNow);
+  assertDeadlineObservation(afterDrainReload, sharedDrainDeadline, reloadNow, 'reload');
+
+  // A changed server response must still be caught even though the expected
+  // countdown is allowed to decrease as the controlled clock advances.
+  const changedServerDeadline = new Date(deadlineMs + 5 * 60_000).toISOString();
+  await otherPage.evaluate(async (endsAt) => {
+    await globalThis.setDrainFixtureReadiness({ capacity: { ends_at: endsAt } });
+  }, changedServerDeadline);
+  const changedDeadlineObservation = await timeLeft(otherPage, secondNow);
+  const changedDeadlineDisplay = expectedTimeLeft(Date.parse(changedServerDeadline), secondNow);
+  if (changedDeadlineObservation.when !== changedDeadlineDisplay) {
+    throw new Error(`Fixture did not display its changed server deadline: ${changedDeadlineObservation.when} vs ${changedDeadlineDisplay}`);
+  }
+  const changedDeadlineError = deadlineObservationError(changedDeadlineObservation, sharedDrainDeadline, secondNow, 'changed server deadline');
+  if (!changedDeadlineError?.includes('Displayed drain deadline differs')) {
+    throw new Error(`A changed server deadline was not rejected: ${changedDeadlineError || 'no mismatch'}`);
   }
   await otherPage.close();
   await page.evaluate(() => globalThis.setDrainFixturePhase('draining'));
