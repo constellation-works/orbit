@@ -6,6 +6,8 @@ owner: codex
 last_updated: 2026-08-15
 last_validated: 2026-10-24
 status: Draft
+stage: shipped
+next: "—"
 feature: auditability
 doc_role: overview
 tags: ["auditability"]

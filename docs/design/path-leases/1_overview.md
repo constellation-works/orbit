@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-26
 last_validated: 2026-10-26
 status: Draft
+stage: building
+next: "Land ORB-18406 (orbit.lease tools and CLI), then listener tasks ORB-18410, 18412, 18430"
 feature: path-leases
 doc_role: overview
 type: design

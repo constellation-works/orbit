@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-08-11
 last_validated: 2026-10-12
 status: Draft
+stage: shipped
+next: "—"
 feature: executors
 doc_role: decisions
 type: design

@@ -248,6 +248,28 @@ render_rca_rows() {
   done < <(find "$rca_dir" -maxdepth 1 -type f -name '*.md' | sort -r)
 }
 
+design_feature_title() {
+  local directory="$1"
+  local entry="$2"
+  local title
+
+  # A scope doc's H1 is a sentence ("Scope: …"); the Feature column wants the folder's name.
+  if [[ "$(basename "$entry")" == "1_scope.md" ]]; then
+    title="$(titleize_slug "$(basename "$directory")")"
+  else
+    title="$(frontmatter_value "$entry" title)"
+  fi
+
+  if [[ -z "$title" ]]; then
+    if [[ "$(basename "$entry")" == "1_overview.md" ]]; then
+      title="$(first_h1 "$entry")"
+    else
+      title="$(titleize_slug "$(basename "$directory")")"
+    fi
+  fi
+  clean_design_title "$title"
+}
+
 render_design_rows() {
   local root="$1"
   local directory
@@ -265,24 +287,10 @@ render_design_rows() {
       continue
     fi
 
-    # A scope doc's H1 is a sentence ("Scope: …"); the Feature column wants the folder's name.
-    if [[ "$(basename "$entry")" == "1_scope.md" ]]; then
-      title="$(titleize_slug "$(basename "$directory")")"
-    else
-      title="$(frontmatter_value "$entry" title)"
-    fi
+    title="$(design_feature_title "$directory" "$entry")"
     summary="$(frontmatter_value "$entry" summary)"
     status="$(frontmatter_value "$entry" status)"
     owner="$(frontmatter_value "$entry" owner)"
-
-    if [[ -z "$title" ]]; then
-      if [[ "$(basename "$entry")" == "1_overview.md" ]]; then
-        title="$(first_h1 "$entry")"
-      else
-        title="$(titleize_slug "$(basename "$directory")")"
-      fi
-    fi
-    title="$(clean_design_title "$title")"
 
     if [[ -z "$summary" ]]; then
       summary="$(first_h1 "$entry")"
@@ -309,6 +317,70 @@ render_design_rows() {
       "$(markdown_escape "$status")" \
       "$(markdown_escape "$owner")"
   done < <(find "$root" -mindepth 1 -maxdepth 1 -type d ! -name '_templates' ! -name '_archived' | sort)
+}
+
+# Delivery stages, in board order. `stage` says how far the feature is built; `status` only
+# says whether its design doc is approved. Both are documented in docs/design/CONVENTIONS.md.
+feature_stages=(building designing idea shipped parked)
+
+render_feature_board() {
+  local directory
+  local entry
+  local stage
+  local known
+  local wanted
+  local count
+  local rows
+  local next
+  local owner
+  local relative
+  local -a entries=()
+
+  while IFS= read -r directory; do
+    entry="$(design_entry_doc "$directory")"
+    if ! is_versioned "$entry"; then
+      continue
+    fi
+    stage="$(frontmatter_value "$entry" stage)"
+    known=0
+    for wanted in "${feature_stages[@]}"; do
+      if [[ "$stage" == "$wanted" ]]; then
+        known=1
+      fi
+    done
+    if [[ "$known" -eq 0 ]]; then
+      echo "error: $entry needs stage: one of ${feature_stages[*]} (got '${stage}')" >&2
+      return 1
+    fi
+    entries+=("$directory")
+  done < <(find "$design_dir" -mindepth 1 -maxdepth 1 -type d ! -name '_templates' ! -name '_archived' | sort)
+
+  for wanted in "${feature_stages[@]}"; do
+    count=0
+    rows=""
+    for directory in "${entries[@]}"; do
+      entry="$(design_entry_doc "$directory")"
+      if [[ "$(frontmatter_value "$entry" stage)" != "$wanted" ]]; then
+        continue
+      fi
+      count=$((count + 1))
+      next="$(frontmatter_value "$entry" next)"
+      owner="$(frontmatter_value "$entry" owner)"
+      relative="${entry#"$docs_dir/"}"
+      rows+="$(printf '| [%s](./%s) | %s | %s |' \
+        "$(markdown_escape "$(design_feature_title "$directory" "$entry")")" \
+        "$relative" \
+        "$(markdown_escape "${next:-—}")" \
+        "$(markdown_escape "${owner:-—}")")"$'\n'
+    done
+    if [[ "$count" -eq 0 ]]; then
+      continue
+    fi
+    printf '\n### %s (%d)\n\n' "$(titleize_slug "$wanted")" "$count"
+    printf '| Feature | Next | Lead |\n'
+    printf '| --- | --- | --- |\n'
+    printf '%s' "$rows"
+  done
 }
 
 render_index() {
@@ -367,6 +439,12 @@ render_index() {
     printf '| Incident | Date | Summary |\n'
     printf '| --- | --- | --- |\n'
     render_rca_rows
+    printf '\n'
+    printf '## Feature board\n\n'
+    printf 'Where each feature in `docs/design/` stands, from the `stage` and `next` fields of its\n'
+    printf 'entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.\n'
+    printf 'Live task progress is in Orbit; this board records what the feature lead last set.\n'
+    render_feature_board
     printf '\n'
     printf '## Designs\n\n'
     printf 'Active feature designs live under `docs/design/<feature>/`. Each row links to\n'

@@ -1,8 +1,8 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-10-24
-last_validated: 2026-10-23
+last_updated: 2026-10-25
+last_validated: 2026-10-25
 status: Accepted
 ---
 
@@ -74,12 +74,21 @@ Every numbered design doc starts with the YAML frontmatter carried by the [`_tem
 - `owner` is the accountable agent family, not a committer list or full model string.
 - `last_updated` is the calendar date of the last meaningful content change. Trivial reformat commits should not reset it.
 - `status` is `Draft` until the doc is approved by the feature lead, then `Accepted`. It moves back to `Draft` if a structural rewrite is in flight.
+- `stage` (entry doc only: `1_overview.md` or `1_scope.md`) is how far the feature is built, separate from the doc's `status`. One of:
+  - `idea`: problem stated, no agreed design, nothing built.
+  - `designing`: design written or under review; nothing implemented and nothing approved to build.
+  - `building`: implementation landed or approved, but the design's committed scope (not its vision) is incomplete.
+  - `shipped`: committed scope implemented and in use; what remains is vision or someday work.
+  - `parked`: deliberately on hold or superseded; say why in `next`.
+
+  The feature lead sets it when the feature moves, in the same change that moves it. Design approval alone does not move a feature to `building`; approved implementation tasks do.
+- `next` (entry doc only) is one line, at most about 100 characters, naming what has to happen next and the task that does it when one exists. A `shipped` feature with nothing pending uses `—`.
 - `feature` is the folder slug (e.g. `host-registry`, `task-artifacts`). It is descriptive metadata; the current generated index groups design rows by directory path.
 - `doc_role` is one of `scope`, `overview`, `design`, `vision`, `decisions` — corresponds 1:1 with the filename (`1_scope.md`, `1_overview.md`, `2_design.md`, `3_vision.md`, `4_decisions.md`).
 
 The scope template carries a shorter frontmatter (no `paths` or `related_*`); add them only when they help.
 
-The current generated design index reads `title`, `summary`, `status`, and `owner` from each entry document. `scripts/generate-doc-indexes.sh` derives a missing title or summary from the document and defaults missing status and owner; it does not validate a design-frontmatter schema. No `orbit docs` command or tolerant inference contract is present in the current source tree. The template's other fields (`feature`, `doc_role`, `type`, `tags`, `paths`, `related_features`, and `related_artifacts`) are descriptive metadata that the generated design index does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
+The current generated design index reads `title`, `summary`, `status`, `owner`, `stage` and `next` from each entry document, and groups features by `stage` into the index's feature board. `scripts/generate-doc-indexes.sh` derives a missing title or summary from the document and defaults missing status and owner. It fails on a missing or unknown `stage`; it does not otherwise validate a design-frontmatter schema. No `orbit docs` command or tolerant inference contract is present in the current source tree. The template's other fields (`feature`, `doc_role`, `type`, `tags`, `paths`, `related_features`, and `related_artifacts`) are descriptive metadata that the generated design index does not query. When using `related_artifacts`, follow the reference forms below as a writing convention, not an enforced schema. Decisions are addressed by their titles and links, not artifact IDs, so they do not need artifact references.
 
 ---
 

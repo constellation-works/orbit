@@ -4,6 +4,8 @@ summary: "Scope: a plugin standard and contract for extending Orbit with tools, 
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
 last_updated: 2026-10-21
 last_validated: 2026-10-21
+stage: shipped
+next: "—"
 ---
 
 # Scope: Orbit plugin standard

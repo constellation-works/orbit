@@ -6,6 +6,8 @@ owner: codex
 last_updated: 2026-10-12
 last_validated: 2026-10-19
 status: Accepted
+stage: shipped
+next: "—"
 feature: host-registry
 doc_role: overview
 tags: [host-registry, machine-identity, workspace-catalog]

@@ -6,6 +6,8 @@ owner: gemini
 last_updated: 2026-10-20
 last_validated: 2026-10-24
 status: Draft
+stage: shipped
+next: "—"
 feature: user-interface
 doc_role: overview
 tags: ["user-interface"]

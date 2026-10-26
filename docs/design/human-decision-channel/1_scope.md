@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-25
 last_validated: 2026-10-25
 status: Draft
+stage: building
+next: "Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446"
 feature: human-decision-channel
 doc_role: scope
 type: design

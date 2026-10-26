@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-25
 last_validated: 2026-10-25
 status: Draft
+stage: building
+next: "Land slice 1 (ORB-18473, in progress), then slice 2 (ORB-18474)"
 feature: experiments
 doc_role: scope
 type: design

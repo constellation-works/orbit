@@ -4,6 +4,8 @@ owner: codex
 last_updated: 2026-10-18
 last_validated: 2026-10-25
 status: Accepted
+stage: shipped
+next: "—"
 feature: review-gate
 doc_role: overview
 type: design

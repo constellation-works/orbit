@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-25
 last_validated: 2026-10-25
 status: Draft
+stage: building
+next: "Phase 1: ORB-18488 browser-session credential (backlog, not started)"
 feature: web-terminal
 doc_role: scope
 type: design

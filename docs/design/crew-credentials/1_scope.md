@@ -2,6 +2,8 @@
 title: "Scope: per-crew credentials (`crews.<name>.env`)"
 owner: claude
 status: Draft
+stage: shipped
+next: "—"
 feature: crew-credentials
 doc_role: scope
 type: design

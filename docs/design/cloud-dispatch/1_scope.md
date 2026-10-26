@@ -2,6 +2,8 @@
 title: "Scope: Cloud dispatch"
 owner: claude
 status: Draft
+stage: designing
+next: "Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet)"
 feature: cloud-dispatch
 doc_role: scope
 type: design

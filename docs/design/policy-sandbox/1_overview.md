@@ -6,6 +6,8 @@ owner: claude
 last_updated: 2026-10-06
 last_validated: 2026-10-25
 status: Draft
+stage: shipped
+next: "—"
 feature: policy-sandbox
 doc_role: overview
 tags: ["policy-sandbox"]

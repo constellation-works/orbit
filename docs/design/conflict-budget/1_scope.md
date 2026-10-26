@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-25
 last_validated: 2026-10-25
 status: Draft
+stage: designing
+next: "Settle the open questions (sum vs max, where weights live), then file phase 1"
 feature: conflict-budget
 doc_role: scope
 type: design

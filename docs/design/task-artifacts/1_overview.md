@@ -6,6 +6,8 @@ owner: codex
 last_updated: 2026-05-17
 last_validated: 2026-10-25
 status: Draft
+stage: shipped
+next: "—"
 feature: task-artifacts
 doc_role: overview
 tags: ["task-artifacts"]

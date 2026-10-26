@@ -4,6 +4,8 @@ owner: <agent family: codex | claude | grok | gemini>
 last_updated: YYYY-MM-DD
 last_validated: YYYY-MM-DD
 status: Draft
+stage: designing
+next: "<one line: what happens next, and its task id when one exists>"
 feature: <feature-slug>
 doc_role: scope
 type: design
@@ -13,7 +15,6 @@ tags: [<feature-slug>]
 
 # Scope: <feature in a few words>
 
-Status: proposed.
 Bearing: <!-- The existing mechanisms this builds on, with links to their docs, CONFIG.md
      sections and the tasks that built them. One short paragraph: what is already true. -->
 

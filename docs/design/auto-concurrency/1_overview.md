@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-20
 last_validated: 2026-10-24
 status: Draft
+stage: shipped
+next: "Operator decides when admission moves from shadow to forecast mode"
 feature: auto-concurrency
 doc_role: overview
 type: design

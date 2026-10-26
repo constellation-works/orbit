@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-25
 last_validated: 2026-10-25
 status: Draft
+stage: building
+next: "File slice S2, the pilot storing briefs in shadow (no task yet)"
 feature: explore-brief
 doc_role: scope
 type: design
