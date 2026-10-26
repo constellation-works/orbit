@@ -73,7 +73,8 @@ write access to the repository could create a bound branch first and block
 
 Credentials in a URL, a local path, a checkout-local alias such as `origin`,
 and a publication remote equivalent to the source repository are refused.
-Use normal Git authentication outside the URL. `bind` establishes the binding;
+Use the explicit HTTPS askpass bridge below or unattended SSH authentication.
+`bind` establishes the binding;
 `rebind` explicitly replaces lineage using the same flags. Do not use rebind as
 an automatic conflict-recovery retry.
 
@@ -109,6 +110,71 @@ It reconciles a stale task pairing even when the source reports `unchanged`.
 The workspace registration is saved before the task pairing; if the pairing
 write fails or the command is interrupted, repeat the same command to finish.
 `--dry-run` leaves both pairings untouched.
+
+## Authenticate unattended HTTPS publication
+
+Publication deliberately ignores system and global Git configuration, including
+helpers installed by `gh auth setup-git`. The supported HTTPS path is an explicit
+`GIT_ASKPASS` executable. Orbit passes through `GIT_ASKPASS`, `PATH`, `HOME`,
+`XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, `GH_TOKEN` and `GITHUB_TOKEN` when set, so the
+bridge can use the service account's existing GitHub CLI authentication. SSH
+publication can instead use `SSH_AUTH_SOCK`, `GIT_SSH` or `GIT_SSH_COMMAND` and
+that account's SSH configuration. Orbit sets `GIT_TERMINAL_PROMPT=0` and
+`GCM_INTERACTIVE=never`; neither path may require a TTY or an unlock prompt.
+
+For GitHub HTTPS, authenticate `gh` once as the account that runs Orbit, with
+write access to the dedicated publication repository. Replace `OWNER/WORKSPACE-tasks`
+with your empty repository. If already bound, verify the remote with
+`orbit workspace publication show` and skip `bind`:
+
+```sh
+orbit workspace publication bind \
+  --remote https://github.com/OWNER/WORKSPACE-tasks.git \
+  --publication-id pub_my_tasks
+gh auth login --hostname github.com
+gh auth status --hostname github.com
+mkdir -p "$HOME/.local/libexec"
+cat > "$HOME/.local/libexec/orbit-publication-askpass" <<'ASKPASS'
+#!/bin/sh
+case "$1" in
+  *"Username for 'https://github.com'"*) printf '%s\n' x-access-token ;;
+  *"Password for 'https://x-access-token@github.com'"*)
+    exec gh auth token --hostname github.com ;;
+  *) exit 1 ;;
+esac
+ASKPASS
+chmod 700 "$HOME/.local/libexec/orbit-publication-askpass"
+export GIT_ASKPASS="$HOME/.local/libexec/orbit-publication-askpass"
+export LC_ALL=C
+orbit task publication publish
+orbit task publication status
+```
+
+The bridge contains no token and sends the token only through Git's credential
+pipe. Keep credentials out of URLs, command arguments and diagnostic output;
+do not enable shell tracing in the bridge. It only answers prompts for
+`github.com`; use a separate host-scoped bridge for another provider.
+Publication disables Git tracing and withholds transport stderr because helpers
+and servers can echo credentials there. A transport failure should be diagnosed
+by checking `gh auth status`, repository access and the service environment.
+
+For a clock-tick/systemd run, keep this bridge at its persistent absolute path
+and set `GIT_ASKPASS` and `LC_ALL=C` in the **Orbit service's** environment, not
+just an interactive shell. For example, a user-service drop-in can contain:
+
+```ini
+[Service]
+Environment=GIT_ASKPASS=%h/.local/libexec/orbit-publication-askpass
+Environment=LC_ALL=C
+```
+
+Reload and restart the installed service after applying its drop-in. Ensure its
+`PATH` includes `gh` (or use its absolute executable path in the bridge), and its
+`HOME`/`GH_CONFIG_DIR` and credential store are accessible without an interactive
+keyring unlock. If using a token environment variable, provision it through the
+service's private credential mechanism rather than putting its value in a unit
+file or command line. Verify `publish` and `status` from that same service
+account/environment with stdin closed before relying on a scheduled run.
 
 ## Publish and choose attachment exposure
 

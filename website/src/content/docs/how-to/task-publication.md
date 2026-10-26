@@ -20,12 +20,11 @@ checks that it landed. Ask the same way to publish again or to restore.
 
 ## What you need
 
-- A Git repository used only for task publications, reachable over SSH. It
+- A Git repository used only for task publications, reachable over SSH or HTTPS. It
   may be shared by several workspaces, each on its own branch (below); what
   must be unused is the branch for this workspace, not the whole repository.
-  HTTPS works too, but needs the credential bridge in the
-  [runbook](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/task-publication.md),
-  because publication ignores your global Git credential helpers.
+  For HTTPS, configure the explicit credential bridge below;
+  publication ignores global Git credential helpers.
 - The workspace's owner checkout, not a replica, with a Git `origin` remote.
   Orbit identifies the source repository by that remote and refuses to bind
   without one.
@@ -80,6 +79,71 @@ lists them. Pass `--attachments omit` to publish the task records without
 them, or `--attachments include` only after you have reviewed their content
 (it also needs `--allow-unscanned-attachments`, since Orbit has no scanner).
 
+## Authenticate unattended HTTPS publication
+
+Publication deliberately ignores system and global Git configuration, including
+helpers installed by `gh auth setup-git`. The supported HTTPS path is an explicit
+`GIT_ASKPASS` executable. Orbit passes through `GIT_ASKPASS`, `PATH`, `HOME`,
+`XDG_CONFIG_HOME`, `GH_CONFIG_DIR`, `GH_TOKEN` and `GITHUB_TOKEN` when set, so the
+bridge can use the service account's existing GitHub CLI authentication. SSH
+publication can instead use `SSH_AUTH_SOCK`, `GIT_SSH` or `GIT_SSH_COMMAND` and
+that account's SSH configuration. Orbit sets `GIT_TERMINAL_PROMPT=0` and
+`GCM_INTERACTIVE=never`; neither path may require a TTY or an unlock prompt.
+
+For GitHub HTTPS, authenticate `gh` once as the account that runs Orbit, with
+write access to the dedicated publication repository. Replace `OWNER/WORKSPACE-tasks`
+with your empty repository. If already bound, verify the remote with
+`orbit workspace publication show` and skip `bind`:
+
+```sh
+orbit workspace publication bind \
+  --remote https://github.com/OWNER/WORKSPACE-tasks.git \
+  --publication-id pub_my_tasks
+gh auth login --hostname github.com
+gh auth status --hostname github.com
+mkdir -p "$HOME/.local/libexec"
+cat > "$HOME/.local/libexec/orbit-publication-askpass" <<'ASKPASS'
+#!/bin/sh
+case "$1" in
+  *"Username for 'https://github.com'"*) printf '%s\n' x-access-token ;;
+  *"Password for 'https://x-access-token@github.com'"*)
+    exec gh auth token --hostname github.com ;;
+  *) exit 1 ;;
+esac
+ASKPASS
+chmod 700 "$HOME/.local/libexec/orbit-publication-askpass"
+export GIT_ASKPASS="$HOME/.local/libexec/orbit-publication-askpass"
+export LC_ALL=C
+orbit task publication publish
+orbit task publication status
+```
+
+The bridge contains no token and sends the token only through Git's credential
+pipe. Keep credentials out of URLs, command arguments and diagnostic output;
+do not enable shell tracing in the bridge. It only answers prompts for
+`github.com`; use a separate host-scoped bridge for another provider.
+Publication disables Git tracing and withholds transport stderr because helpers
+and servers can echo credentials there. A transport failure should be diagnosed
+by checking `gh auth status`, repository access and the service environment.
+
+For a clock-tick/systemd run, keep this bridge at its persistent absolute path
+and set `GIT_ASKPASS` and `LC_ALL=C` in the **Orbit service's** environment, not
+just an interactive shell. For example, a user-service drop-in can contain:
+
+```ini
+[Service]
+Environment=GIT_ASKPASS=%h/.local/libexec/orbit-publication-askpass
+Environment=LC_ALL=C
+```
+
+Reload and restart the installed service after applying its drop-in. Ensure its
+`PATH` includes `gh` (or use its absolute executable path in the bridge), and its
+`HOME`/`GH_CONFIG_DIR` and credential store are accessible without an interactive
+keyring unlock. If using a token environment variable, provision it through the
+service's private credential mechanism rather than putting its value in a unit
+file or command line. Verify `publish` and `status` from that same service
+account/environment with stdin closed before relying on a scheduled run.
+
 ## Restore
 
 Restore puts a snapshot back into an empty task store on the same machine
@@ -107,7 +171,7 @@ tasks to a different machine identity, use `orbit task export` and
 
 | Symptom | What to do |
 |---|---|
-| Git asks for a username or password. | Use SSH, or pass a `GIT_ASKPASS` bridge (see the runbook). |
+| Git asks for a username or password. | Set the persistent `GIT_ASKPASS` bridge in the service environment as shown above, or configure unattended SSH. |
 | The first publish finds unrelated history on its own branch. | Stop. Orbit won't adopt a branch it didn't create for this workspace; bind an unused branch (other workspaces' branches in the same repository are fine). |
 | Status reports a moved branch or an authority conflict. | Stop publishing and find the other writer or the stale binding. |
 
