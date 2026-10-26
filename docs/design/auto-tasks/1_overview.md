@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-25
+last_updated: 2026-10-26
 last_validated: 2026-10-25
 status: Accepted
 stage: shipped
@@ -108,7 +108,7 @@ becomes just the first definition.
 
 ## Embedded default catalog
 
-These twenty-two YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
+These twenty-three YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
 registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
@@ -190,6 +190,21 @@ definition of the same name.
   `sweep-cursor.json`, which the definition's `skip_if_unchanged` cursor
   (keyed on `qa-full-sweep-rollup`) reads to skip a tick when nothing has
   landed since.
+- `design-sync` — disabled-by-default reconciliation of at most three design
+  feature folders every 720 minutes, at medium complexity [ORB-18557]. Reads
+  `docs/design/CONVENTIONS.md` every run; without it, makes no edits or filings
+  and finishes as a successful no-op. Features with related task status
+  changes since their ledger date come first, oldest reconciliation first,
+  falling back to entry-doc validation and git dates. It checks stage, status,
+  next, phase/slice citations, implementation claims and Task References
+  against task records and code. Owner approval is required for `Accepted`;
+  integration-branch delivery is required for `shipped`. Design intent stays
+  intact: unexplained divergences get existing or proposed tasks, with at
+  most three filings per run. Frontmatter changes regenerate the doc index.
+  Each run attaches `design-sync-ledger.json` with per-feature outcomes and
+  cumulative state, including no-ops. It locks `dir:docs`; clean runs use
+  validated no-diff evidence. Mechanical documentation checks stay with
+  `doc-duties` at low complexity.
 - `doc-duties` — disabled-by-default daily validation of the
   least-recently-attempted tracked documentation. Candidates exclude generated
   and historical records, including paths in the repository's link-check or
@@ -473,6 +488,8 @@ encode this repository's branches and gates. Re-init preserves them:
   retire it, and sync reports that it occupies the bundled default's name.
 
 ## Task References
+
+- [ORB-18557] — Adds the portable design-sync default and its reconciliation ledger.
 
 - ORB-10149 — Auto-task primitive.
 - ORB-10148 — qa-sweep V1 (first definition; depends on this).
