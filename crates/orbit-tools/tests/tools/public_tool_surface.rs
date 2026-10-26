@@ -96,6 +96,44 @@ fn registry_validated_task_tools_accept_declared_input_aliases() {
     );
 }
 
+#[test]
+fn task_add_retired_fields_keep_their_replacement_hints_at_dispatch() {
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+    let add = orbit_common::governance::task::TASK_OPERATIONS
+        .iter()
+        .find(|spec| spec.tool_name == "orbit.task.add")
+        .expect("task add operation is declared");
+
+    for retired in add.retired_fields {
+        let mut input = serde_json::json!({"title": "task", "description": "description"});
+        input
+            .as_object_mut()
+            .expect("input is an object")
+            .insert(retired.name.to_string(), serde_json::Value::Null);
+        let error = registry
+            .execute("orbit.task.add", &ToolContext::default(), input)
+            .expect_err("retired fields must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains(retired.name) && message.contains(retired.replacement),
+            "retired field {} must retain its declared replacement, got {message}",
+            retired.name
+        );
+    }
+
+    let error = registry
+        .execute(
+            "orbit.task.add",
+            &ToolContext::default(),
+            serde_json::json!({"title": "task", "description": "description", "titel": "task"}),
+        )
+        .expect_err("unknown fields must still be refused");
+    let message = error.to_string();
+    assert!(message.contains("unknown field 'titel'"), "{message}");
+    assert!(message.contains("(did you mean 'title'?)"), "{message}");
+}
+
 const RETIRED_AGENT_TOOL_NAMES: &[&str] = &[
     "git.push",
     "github.pr.comment",
