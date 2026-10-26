@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "RAII Guard Pattern"
-last_validated: 2026-10-23
+last_validated: 2026-10-26
 ---
 # RAII Guard Pattern
 
@@ -87,8 +87,8 @@ impl Drop for StagedTextFile {
 
 Patterns to copy:
 
-- **`committed: bool` is the lever.** Caller explicitly opts into the success path by calling `commit()`. Drop = rollback by default.
-- **Shape for "stage → validate → commit-or-bail."** Between `new()` and `commit()`, the caller can inspect the staged content; any early-return cleans up the temp file automatically.
+- **`committed: bool` separates staged from published.** Before `commit()`, Drop removes the staged file. `commit()` renames the target and marks it committed; if the later parent-directory sync fails, the target has already been replaced and Drop does not roll it back.
+- **Shape for "stage → validate → commit-or-bail."** Between `new()` and `commit()`, the caller can inspect the staged content; any early return before commit cleans up the temp file automatically.
 
 ## Reference: `SignalHandlerGuard` — restore global state
 
