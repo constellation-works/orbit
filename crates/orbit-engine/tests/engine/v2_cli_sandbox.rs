@@ -251,6 +251,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RecordingHost {
             requested_tools: Vec::new(),
             effective_tools: Vec::new(),
             omitted_requirement_notes: Vec::new(),
+            granted_tools: Vec::new(),
         })
     }
 

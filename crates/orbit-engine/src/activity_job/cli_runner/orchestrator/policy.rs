@@ -154,7 +154,8 @@ pub(super) struct ActivityToolGrant {
 }
 
 /// Resolve the activity's tool grant for these tasks, removing
-/// [`CLAIMED_MODE_DENIED_TOOLS`] in claimed mode.
+/// [`CLAIMED_MODE_DENIED_TOOLS`] in claimed mode. The deny list the child
+/// enforces drops the operator-granted names the host lifted.
 pub(super) fn resolve_activity_tool_grant(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,
@@ -164,7 +165,7 @@ pub(super) fn resolve_activity_tool_grant(
 ) -> Result<ActivityToolGrant, DispatchError> {
     let tool_policy = spec.tool_policy_mode();
     let claimed = claimed_mode(host, input);
-    let tool_disallow_list =
+    let mut tool_disallow_list =
         claimed_tool_disallow_list(spec.tool_disallow_list.as_deref(), claimed);
     let mut activity_tools = match tool_disallow_list.as_deref() {
         Some(disallow_list) => {
@@ -172,6 +173,9 @@ pub(super) fn resolve_activity_tool_grant(
         }
         None => host.resolve_activity_tools(task_ids, &spec.tools)?,
     };
+    if let Some(disallow_list) = tool_disallow_list.as_mut() {
+        lift_granted_denials(disallow_list, &mut activity_tools, claimed);
+    }
     if claimed && tool_disallow_list.is_none() {
         restrict_allowlist(
             host,
@@ -188,10 +192,38 @@ pub(super) fn resolve_activity_tool_grant(
     })
 }
 
+/// Removes the granted names the host lifted from the disallow list the child
+/// enforces, so a call reaches the downstream gates instead of the deny list.
+/// A lift never covers a claimed-mode denial: in claimed mode such a name
+/// leaves the lifted and callable sets and stays denied.
+fn lift_granted_denials(
+    disallow_list: &mut Vec<String>,
+    activity_tools: &mut ResolvedActivityTools,
+    claimed: bool,
+) {
+    if claimed {
+        let claimed_denied = |tool: &String| CLAIMED_MODE_DENIED_TOOLS.contains(&tool.as_str());
+        let refused = activity_tools
+            .granted_tools
+            .iter()
+            .filter(|tool| claimed_denied(tool))
+            .cloned()
+            .collect::<Vec<_>>();
+        activity_tools
+            .granted_tools
+            .retain(|tool| !claimed_denied(tool));
+        activity_tools
+            .effective_tools
+            .retain(|tool| !refused.contains(tool));
+    }
+    disallow_list.retain(|entry| !activity_tools.granted_tools.contains(entry));
+}
+
 /// Applies live experiment arms' tool deltas after the activity's grant:
 /// first each arm's removals, then its additions. A removal never takes a
-/// task's required tool or an [`AGENT_CONTRACT_TOOLS`] entry; an addition
-/// never overrides the activity's disallow list or the claimed-mode denial.
+/// task's required or lifted granted tool or an [`AGENT_CONTRACT_TOOLS`]
+/// entry; an addition never overrides the activity's disallow list or the
+/// claimed-mode denial.
 /// Returns what each arm's dispatch actually received.
 pub(super) fn apply_experiment_tool_overlays(
     host: &dyn RuntimeHost,
@@ -215,6 +247,7 @@ pub(super) fn apply_experiment_tool_overlays(
                         .activity_tools
                         .requested_tools
                         .iter()
+                        .chain(&grant.activity_tools.granted_tools)
                         .any(|required| required == tool)
             })
             .collect::<Vec<_>>();
