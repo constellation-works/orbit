@@ -26,6 +26,8 @@ operation_registry! {
         List => LIST,
         /// Check path coverage and overlapping holders.
         Check => CHECK,
+        /// Read durable notices after a cursor.
+        Notices => NOTICES,
     }
 }
 
@@ -271,6 +273,49 @@ const CHECK: OperationSpec<LeaseVerb> = OperationSpec {
                 "Caller lease to check coverage against",
             ),
             &["leaseId", "lease-id"],
+        ),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const NOTICES: OperationSpec<LeaseVerb> = OperationSpec {
+    verb: LeaseVerb::Notices,
+    cli_path: &["notices"],
+    tool_name: "orbit.lease.notices",
+    tool_description: "Read durable lease notices strictly after a workspace sequence cursor, optionally for one lease. Returns notices ordered by seq and a cursor for the next page. Reads never acknowledge or expire leases. Requires lease.enabled.",
+    cli_about: "Read durable lease notices after a cursor",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[&[
+        both(
+            "after",
+            ParamType::UnsignedInteger,
+            "Exclusive sequence cursor; defaults to zero.",
+            CliArgKind::flag("after"),
+            "Read after this sequence (default: 0)",
+        ),
+        both(
+            "lease_id",
+            ParamType::String,
+            "Optional lease to filter.",
+            CliArgKind::flag("lease-id"),
+            "Read notices for this lease",
+        ),
+        both(
+            "limit",
+            ParamType::UnsignedInteger,
+            "Page size from 1 to 500; defaults to 100.",
+            CliArgKind::flag("limit"),
+            "Page size (default: 100, maximum: 500)",
+        ),
+        cli_only(
+            "follow",
+            ParamType::Switch,
+            CliArgKind::flag("follow"),
+            "Follow new notices; JSON output is JSONL",
         ),
     ]],
     at_least_one_of: &[],

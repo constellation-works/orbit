@@ -22,6 +22,7 @@ mod helpers;
 mod host;
 mod incidents;
 mod jobs;
+mod lease_notices;
 pub(crate) mod leases;
 mod log;
 mod metrics;

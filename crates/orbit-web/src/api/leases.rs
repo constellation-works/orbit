@@ -84,7 +84,7 @@ pub(super) struct RuntimeLeaseBackend {
 }
 
 impl RuntimeLeaseBackend {
-    fn lease_runtime(
+    pub(super) fn lease_runtime(
         &self,
         caller: &LeaseCaller,
         write: bool,

@@ -606,12 +606,18 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_experiment_admissions,
     },
+    Migration {
+        version: 65,
+        name: "lease_notices",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_lease_notices,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 64;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 65;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

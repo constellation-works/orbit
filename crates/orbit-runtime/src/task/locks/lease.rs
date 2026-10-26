@@ -238,7 +238,10 @@ pub fn request(
             principal: principal.clone(),
             principal_class,
             machine_id: optional_string_alias(&input, &["machine_id", "remote_caller_machine_id"])?,
-            base_branch: optional_string_alias(&input, &["base_branch", "base"])?,
+            base_branch: Some(
+                optional_string_alias(&input, &["base_branch", "base"])?
+                    .unwrap_or_else(|| runtime.workspace_base_branch().to_string()),
+            ),
             bound_branch: optional_string_alias(&input, &["branch", "bound_branch"])?,
             actor: actor.clone(),
             ttl_seconds,
@@ -421,6 +424,47 @@ pub fn list(runtime: &RuntimeKernel) -> Result<Value, OrbitError> {
     Ok(json!({
         "leases": listed.leases.iter().map(lease_json).collect::<Vec<_>>(),
     }))
+}
+
+/// Read one bounded page of durable notices strictly after `after`. The cursor
+/// is the last returned event, so concurrent appends cannot be skipped.
+pub fn notices(runtime: &RuntimeKernel, input: Value) -> Result<Value, OrbitError> {
+    runtime.ensure_coordination_task_write_permitted()?;
+    runtime.lease_policy().ensure_enabled()?;
+    let integer = |field: &str, default: u64| -> Result<u64, OrbitError> {
+        match input.get(field) {
+            None => Ok(default),
+            Some(value) => value
+                .as_u64()
+                .filter(|n| *n <= i64::MAX as u64)
+                .ok_or_else(|| {
+                    OrbitError::InvalidInput(format!(
+                        "`{field}` must be a non-negative integer no larger than {}",
+                        i64::MAX
+                    ))
+                }),
+        }
+    };
+    let after = integer("after", 0)?;
+    let limit = integer("limit", 100)?;
+    if !(1..=500).contains(&limit) {
+        return Err(OrbitError::InvalidInput(
+            "`limit` must be between 1 and 500".into(),
+        ));
+    }
+    let lease_id = optional_string_alias(&input, &["lease_id"])?;
+    if let Some(id) = &lease_id {
+        validate_lease_id_form(id)?;
+    }
+    let notices = runtime.stores().task_reservations().list_lease_notices(
+        &workspace_orbit_dir(runtime),
+        workspace_task_reservation_id(runtime)?.as_deref(),
+        lease_id.as_deref(),
+        after,
+        limit as u32,
+    )?;
+    let cursor = notices.last().map_or(after, |notice| notice.seq);
+    Ok(json!({"notices": notices, "cursor": cursor}))
 }
 
 /// For each of `paths`: whether the caller's `lease_id` covers it, whether

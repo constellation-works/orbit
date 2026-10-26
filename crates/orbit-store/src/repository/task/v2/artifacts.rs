@@ -362,7 +362,7 @@ impl TaskV2Store {
             )?;
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
-            self.replace_index_best_effort(&bundle.envelope, "task artifact update");
+            self.publish_task_index_and_lease_notices(&bundle.envelope, "task artifact update")?;
             Ok(())
         })
     }

@@ -105,6 +105,217 @@ fn backdate(runtime: &OrbitRuntime, lease_id: &str) {
 }
 
 #[test]
+fn notices_survive_restart_and_capture_lease_and_task_transitions() {
+    if !super::isolate(
+        module_path!(),
+        "notices_survive_restart_and_capture_lease_and_task_transitions",
+    ) {
+        return;
+    }
+    let _env = caller_env(None);
+    let (_root, runtime, repo_root) =
+        lease_runtime("[lease]\nenabled = true\n[lease.hard]\nhuman = \"never\"\n");
+    let first = request(
+        &runtime,
+        json!({"principal":"alice", "selectors":["dir:src"], "mode":"hard"}),
+    );
+    assert_eq!(first["downgraded"], true);
+    let id = first["lease"]["lease_id"].as_str().unwrap();
+    let second = request(
+        &runtime,
+        json!({"principal":"bob", "selectors":["file:src/lib.rs"]}),
+    );
+    let other_id = second["lease"]["lease_id"].as_str().unwrap();
+    let task = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::InProgress,
+        &["file:src/lib.rs"],
+    );
+    super::tool_support::run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({"files":["file:src/other.rs"], "model":"codex"}),
+    )
+    .unwrap();
+    lease::release(&runtime, json!({"lease_id":id}), None, None).unwrap();
+    lease::release(&runtime, json!({"lease_id":id}), None, None).unwrap();
+    backdate(&runtime, other_id);
+    lease::show(&runtime, json!({"lease_id":other_id})).unwrap();
+    lease::show(&runtime, json!({"lease_id":other_id})).unwrap();
+    let read = |runtime: &OrbitRuntime| {
+        super::tool_support::run_tool_as_operator(
+            runtime,
+            "orbit.lease.notices",
+            json!({"after":0, "limit":500}),
+        )
+        .unwrap()
+    };
+    let page = read(&runtime);
+    let notices = page["notices"].as_array().unwrap();
+    assert!(
+        notices
+            .windows(2)
+            .all(|pair| pair[0]["seq"].as_u64() < pair[1]["seq"].as_u64())
+    );
+    assert!(
+        notices
+            .iter()
+            .all(|n| n["lease_id"] == id || n["lease_id"] == other_id),
+        "drain tasks receive no notices"
+    );
+    assert_eq!(
+        notices.iter().filter(|n| n["kind"] == "released").count(),
+        1
+    );
+    assert_eq!(notices.iter().filter(|n| n["kind"] == "expired").count(), 1);
+    assert!(
+        notices
+            .iter()
+            .any(|n| n["kind"] == "overlap" && n["payload"]["task_id"] == task.id)
+    );
+    assert!(
+        notices
+            .iter()
+            .any(|n| n["kind"] == "overlap" && n["payload"]["reservation_id"].is_string())
+    );
+    assert!(notices.iter().any(|n| n["kind"] == "granted"
+        && n["lease_id"] == id
+        && n["payload"]["mode"] == "advisory"));
+    assert!(
+        super::tool_support::run_tool_as_operator(
+            &runtime,
+            "orbit.lease.notices",
+            json!({"after": page["cursor"]})
+        )
+        .unwrap()["notices"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    let reopened =
+        OrbitRuntime::from_roots(&runtime.global_root(), &repo_root.join(".orbit")).unwrap();
+    assert_eq!(read(&reopened), page);
+    let other_workspace = repo_root.parent().unwrap().join("another/.orbit");
+    std::fs::create_dir_all(&other_workspace).unwrap();
+    std::fs::write(
+        other_workspace.join("config.toml"),
+        "[lease]\nenabled = true\n",
+    )
+    .unwrap();
+    let isolated = OrbitRuntime::from_roots(&runtime.global_root(), &other_workspace).unwrap();
+    assert!(read(&isolated)["notices"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn landed_facts_notify_only_matching_bases_once() {
+    if !super::isolate(
+        module_path!(),
+        "landed_facts_notify_only_matching_bases_once",
+    ) {
+        return;
+    }
+    let _env = caller_env(None);
+    let (_root, runtime, repo_root) = enabled_runtime();
+    let repo = git2::Repository::init(&repo_root).unwrap();
+    let signature = git2::Signature::now("fixture", "fixture@example.invalid").unwrap();
+    let mut index = repo.index().unwrap();
+    index.add_path(std::path::Path::new("src/lib.rs")).unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let initial = repo
+        .commit(
+            Some("refs/heads/agent-main"),
+            &signature,
+            &signature,
+            "initial",
+            &tree,
+            &[],
+        )
+        .unwrap();
+    repo.reference("refs/heads/unrelated", initial, true, "fixture")
+        .unwrap();
+    let first = request(
+        &runtime,
+        json!({"principal":"alice", "selectors":["dir:src"], "base":"agent-main"}),
+    );
+    let id = first["lease"]["lease_id"].as_str().unwrap();
+    request(
+        &runtime,
+        json!({"principal":"bob", "selectors":["dir:src"], "base":"unrelated"}),
+    );
+    std::fs::write(repo_root.join("src/lib.rs"), "pub fn changed() {}\n").unwrap();
+    index.add_path(std::path::Path::new("src/lib.rs")).unwrap();
+    let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+    let commit = repo
+        .commit(
+            Some("refs/heads/agent-main"),
+            &signature,
+            &signature,
+            "landed",
+            &tree,
+            &[&repo.find_commit(initial).unwrap()],
+        )
+        .unwrap();
+    let task = create_context_task(&runtime, &repo_root, TaskStatus::Done, &["file:src/lib.rs"]);
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(&runtime.global_root()),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        runtime.workspace_id().unwrap(),
+        runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(
+        &task.id,
+        orbit_store::contracts::TaskHistoryUpdateParams {
+            actor: "fixture".into(),
+            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "fixture".into(),
+                event: "landing_completed".into(),
+                note: Some(
+                    json!({"delivery":"local_candidate", "candidate":commit.to_string()})
+                        .to_string(),
+                ),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    for _ in 0..2 {
+        runtime
+            .run_tool("orbit.codebase.show", json!({"path":"src/lib.rs"}))
+            .unwrap();
+    }
+    let page =
+        super::tool_support::run_tool_as_operator(&runtime, "orbit.lease.notices", json!({}))
+            .unwrap();
+    let landings: Vec<_> = page["notices"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|n| n["kind"] == "overlap_landed")
+        .collect();
+    assert_eq!(
+        landings.len(),
+        1,
+        "repeated facts scans must not duplicate or notify a base that does not contain the commit: {page}"
+    );
+    assert_eq!(landings[0]["lease_id"], id);
+    assert_eq!(landings[0]["payload"]["task_id"], task.id);
+    assert_eq!(landings[0]["payload"]["commit"], commit.to_string());
+    assert_eq!(landings[0]["payload"]["paths"], json!(["file:src/lib.rs"]));
+}
+
+#[test]
 fn hard_requests_are_refused_by_holders_and_advisory_ones_are_granted() {
     if !super::isolate(
         module_path!(),

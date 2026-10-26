@@ -73,6 +73,41 @@ impl Execute for LeaseCommand {
             }
         };
         let Invocation { spec, mut input } = invocation;
+        if spec.verb == LeaseVerb::Notices
+            && input.remove("follow").and_then(|v| v.as_bool()) == Some(true)
+        {
+            let runtime = runtime.clone();
+            return Ok(Payload::stream(
+                json!({}),
+                Box::new(move |sink, writer| {
+                    let mut input = Value::Object(input);
+                    loop {
+                        let page = runtime.run_tool(spec.tool_name, input.clone())?;
+                        for notice in page["notices"].as_array().into_iter().flatten() {
+                            let line = match sink.mode() {
+                                crate::output::sink::OutputMode::Json
+                                | crate::output::sink::OutputMode::Ndjson => notice.to_string(),
+                                _ => lease_notice_line(notice),
+                            };
+                            if let Err(error) =
+                                writeln!(writer, "{line}").and_then(|()| writer.flush())
+                            {
+                                if crate::output::pipe::is_broken_pipe(&error) {
+                                    return Ok(());
+                                }
+                                return Err(error.into());
+                            }
+                        }
+                        let progressed = input["after"] != page["cursor"];
+                        input["after"] = page["cursor"].clone();
+                        if !progressed || page["notices"].as_array().is_none_or(Vec::is_empty) {
+                            std::thread::sleep(std::time::Duration::from_secs(1));
+                        }
+                    }
+                }),
+            )
+            .into());
+        }
         if let Some(raw) = input
             .remove("ttl")
             .and_then(|value| value.as_str().map(str::to_owned))
@@ -92,6 +127,12 @@ impl Execute for LeaseCommand {
             0
         };
         let blocks = match spec.verb {
+            LeaseVerb::Notices => value["notices"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(|notice| Block::text(lease_notice_line(notice)))
+                .collect(),
             LeaseVerb::Request if value["granted"] == false => vec![
                 Block::text("Lease refused: overlapping holders"),
                 Block::table(lease_holders_table(&value["conflicts"])),
@@ -158,6 +199,16 @@ impl Execute for LeaseCommand {
             .with_exit_code(exit_code)
             .into())
     }
+}
+
+fn lease_notice_line(notice: &Value) -> String {
+    format!(
+        "{} {} {} {}",
+        notice["seq"],
+        lease_text(&notice["lease_id"]),
+        lease_text(&notice["kind"]),
+        notice["payload"]
+    )
 }
 
 fn lease_detail(lease: &Value) -> String {

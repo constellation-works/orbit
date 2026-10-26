@@ -149,6 +149,20 @@ pub(in crate::application::codebase) fn scan(
     let mut stored = super::super::stored::StoredFacts::load(runtime);
     let mut facts = Vec::with_capacity(tasks.len());
     let mut landed_scan = include_landed.then(|| super::super::landed::Scanner::new(runtime));
+    let notice_bases: std::collections::BTreeSet<_> = if include_landed {
+        runtime
+            .stores()
+            .task_reservations()
+            .inspect_active_leases(
+                &runtime.paths().orbit_dir.to_string_lossy(),
+                Some(&runtime.workspace_id()?),
+            )?
+            .into_iter()
+            .filter_map(|lease| lease.base_branch)
+            .collect()
+    } else {
+        Default::default()
+    };
     for task in tasks {
         let id = task.id.to_string();
         let task_settlements = settlements.get(&id).map(Vec::as_slice).unwrap_or_default();
@@ -193,6 +207,31 @@ pub(in crate::application::codebase) fn scan(
                     paths: entry.facts.landed_paths.clone()?,
                 })
             });
+        if let (Some(landed), Some(scanner)) = (&landed, &landed_scan) {
+            for base in &notice_bases {
+                if scanner.base_contains(base, &landed.commit) {
+                    runtime.sqlite_store()?.record_landed_lease_notices(
+                        &orbit_store::contracts::LeaseLandedNoticeParams {
+                            workspace_id: runtime.workspace_id()?,
+                            workspace_orbit_dir: runtime
+                                .paths()
+                                .orbit_dir
+                                .to_string_lossy()
+                                .into_owned(),
+                            commit: landed.commit.clone(),
+                            task_id: id.clone(),
+                            base_branch: base.clone(),
+                            landed_at: landed.at.to_rfc3339(),
+                            paths: landed
+                                .paths
+                                .iter()
+                                .map(|path| format!("file:{path}"))
+                                .collect(),
+                        },
+                    )?;
+                }
+            }
+        }
         let no_diff = is_no_diff_expected(&task.tags);
         let pilot = (landed.is_some() && !no_diff)
             .then(|| {

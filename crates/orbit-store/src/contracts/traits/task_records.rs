@@ -146,6 +146,16 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         workspace_id: Option<&str>,
     ) -> Result<LeaseListResult, OrbitError>;
 
+    /// Durable notices strictly after a cursor, optionally for one lease.
+    fn list_lease_notices(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+        lease_id: Option<&str>,
+        after: u64,
+        limit: u32,
+    ) -> Result<Vec<crate::contracts::LeaseNotice>, OrbitError>;
+
     /// Take the exclusive workspace claim [ADR-0352, ORB-10709], or report the
     /// incumbent that refused it.
     fn acquire_workspace_claim(

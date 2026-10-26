@@ -1,6 +1,7 @@
 //! Reservation SQL: row ids, scoped expiry, conflict detection, the insert
 //! transaction and row mapping.
 
+use super::notices::{self, LeaseOverlapNotice};
 use crate::contracts::TaskReservationKind;
 use crate::{
     ActiveTaskReservation, ExpiredTaskReservation, ReleasedTaskReservation, TaskLockConflict,
@@ -11,6 +12,7 @@ use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, params};
+use serde_json::json;
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -119,6 +121,19 @@ pub(crate) fn reserve_files_in_tx(
         )
         .map_err(sqlite_store_error)?;
 
+    notices::append_lease_overlaps(
+        tx,
+        &LeaseOverlapNotice {
+            orbit_dir: &params.workspace_orbit_dir,
+            workspace_id: params.workspace_id.as_deref(),
+            holder: &reservation_id,
+            paths: &params.stored_files,
+            kind: "overlap",
+            payload: json!({"reservation_id": reservation_id, "task_ids": params.task_ids, "owner_run_id": params.owner_run_id}),
+            event_key: &format!("reservation:{reservation_id}"),
+            landing: None,
+        },
+    )?;
     Ok(TaskReservationReserveResult {
         reserved: true,
         reservation_id: Some(reservation_id),
@@ -164,7 +179,17 @@ pub(super) fn expire_leases(
         "{} AND {LEASE_ROWS}",
         reservation_scope_clause(TaskReservationScope::Files)
     );
-    expire_rows(tx, workspace_orbit_dir, workspace_id, now, &filter)
+    let expired = expire_rows(tx, workspace_orbit_dir, workspace_id, now, &filter)?;
+    for lease in &expired {
+        notices::append_lease_notice(
+            tx,
+            &lease.reservation_id,
+            "expired",
+            &json!({"expired_at": lease.expired_at}),
+            "expired",
+        )?;
+    }
+    Ok(expired)
 }
 
 /// `filter` binds ?1 and ?2 as [`reservation_scope_clause`] does.

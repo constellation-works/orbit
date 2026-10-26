@@ -29,6 +29,24 @@ pub(super) struct Scanner {
 }
 
 impl Scanner {
+    /// A notice is about this base only when its local ref actually contains
+    /// the landed commit. Missing objects or refs cannot establish that fact.
+    pub(super) fn base_contains(&self, base: &str, commit: &str) -> bool {
+        let Some(repo) = &self.repo else {
+            return false;
+        };
+        let Ok(base) = repo
+            .revparse_single(base)
+            .and_then(|object| object.peel_to_commit())
+        else {
+            return false;
+        };
+        let Ok(commit) = git2::Oid::from_str(commit) else {
+            return false;
+        };
+        base.id() == commit || repo.graph_descendant_of(base.id(), commit).unwrap_or(false)
+    }
+
     pub(super) fn new(runtime: &OrbitRuntime) -> Self {
         Self {
             repo: git2::Repository::open(&runtime.paths().repo_root).ok(),

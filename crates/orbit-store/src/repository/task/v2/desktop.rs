@@ -257,7 +257,7 @@ impl TaskV2Store {
             b.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &b.envelope)?;
             pending.finish();
-            self.replace_index_best_effort(&b.envelope, "desktop task mutation");
+            self.publish_task_index_and_lease_notices(&b.envelope, "desktop task mutation")?;
             Ok(AtomicTaskMutationOutcome::Applied)
         })
     }

@@ -385,6 +385,18 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
         })
     }
 
+    fn list_lease_notices(
+        &self,
+        orbit_dir: &str,
+        workspace_id: Option<&str>,
+        lease_id: Option<&str>,
+        after: u64,
+        limit: u32,
+    ) -> Result<Vec<crate::contracts::LeaseNotice>, OrbitError> {
+        self.store
+            .list_lease_notices(orbit_dir, workspace_id, lease_id, after, limit)
+    }
+
     fn acquire_workspace_claim(
         &self,
         params: WorkspaceClaimAcquireParams,

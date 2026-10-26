@@ -4,6 +4,99 @@ use serde_json::{Value, json};
 use super::support::{Fixture, error_code, isolated, json_ok};
 
 #[test]
+fn notice_poll_and_sse_resume_share_durable_sequence() {
+    isolated(
+        "leases::notice_poll_and_sse_resume_share_durable_sequence",
+        || {
+            use std::io::BufRead as _;
+            let fixture = Fixture::new();
+            std::fs::write(
+                fixture.work.join("config.toml"),
+                "[lease]\nenabled = true\n",
+            )
+            .unwrap();
+            std::fs::write(fixture.work.parent().unwrap().join("held.txt"), "held\n").unwrap();
+            let server = fixture.server(true);
+            let first = json_ok(server.send(
+                "POST",
+                "/api/leases",
+                json!({"principal":"alice", "selectors":["file:held.txt"]}),
+            ));
+            let id = first["lease"]["lease_id"].as_str().unwrap();
+            let before = json_ok(server.get("/api/leases/notices?after=0"));
+            assert_eq!(before["notices"][0]["kind"], "granted");
+            assert_eq!(before["notices"][0]["lease_id"], id);
+            assert_eq!(first["lease"]["notice_cursor"], 0);
+            let cursor = before["cursor"].as_u64().unwrap();
+            json_ok(server.send(
+                "POST",
+                "/api/leases",
+                json!({"principal":"bob", "selectors":["file:held.txt"]}),
+            ));
+            json_ok(server.send("DELETE", &format!("/api/leases/{id}"), json!({})));
+            let polled =
+                json_ok(server.get(&format!("/api/leases/notices?after={cursor}&limit=1")));
+            assert_eq!(polled["notices"].as_array().unwrap().len(), 1);
+            let response = server
+                .request("GET", "/api/leases/events?after=0&limit=1")
+                .header("last-event-id", cursor.to_string())
+                .send()
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()["content-type"], "text/event-stream");
+            let mut stream = std::io::BufReader::new(response);
+            let mut line = String::new();
+            let mut event_id = None;
+            loop {
+                line.clear();
+                assert!(stream.read_line(&mut line).unwrap() > 0);
+                if let Some(id) = line.strip_prefix("id: ") {
+                    event_id = Some(id.trim().parse::<u64>().unwrap());
+                }
+                if let Some(data) = line.strip_prefix("data: ") {
+                    let streamed: Value = serde_json::from_str(data).unwrap();
+                    assert_eq!(streamed, polled["notices"][0]);
+                    assert_eq!(event_id, streamed["seq"].as_u64());
+                    break;
+                }
+            }
+            drop(stream);
+            let filtered =
+                json_ok(server.get(&format!("/api/leases/notices?after={cursor}&lease_id={id}")));
+            let notices = filtered["notices"].as_array().unwrap();
+            assert_eq!(
+                notices
+                    .iter()
+                    .map(|n| n["kind"].as_str().unwrap())
+                    .collect::<Vec<_>>(),
+                ["overlap", "released"]
+            );
+            assert!(
+                notices
+                    .windows(2)
+                    .all(|rows| rows[0]["seq"].as_u64() < rows[1]["seq"].as_u64())
+            );
+            assert_eq!(server.get("/api/leases/notices?after=-1").status(), 400);
+            assert_eq!(
+                server
+                    .request("GET", "/api/leases/events")
+                    .header("last-event-id", "invalid")
+                    .send()
+                    .unwrap()
+                    .status(),
+                400
+            );
+            assert_eq!(server.get("/api/leases/notices?limit=0").status(), 400);
+            let reopened = fixture.server(false);
+            assert_eq!(
+                json_ok(reopened.get(&format!("/api/leases/notices?after={cursor}&lease_id={id}"))),
+                filtered
+            );
+        },
+    );
+}
+
+#[test]
 fn lease_routes_share_runtime_state_and_gate_writes() {
     isolated(
         "leases::lease_routes_share_runtime_state_and_gate_writes",
