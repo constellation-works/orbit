@@ -11,8 +11,8 @@ use serde_json::{Value, json};
 use crate::command::{CommandOut, Payload};
 
 /// Terminal wait statuses that mean the submitted run did not succeed.
-pub(super) const FAILED_WAIT_STATUSES: [&str; 4] =
-    ["failed", "timeout", "cancelled", "interrupted"];
+pub(super) const FAILED_WAIT_STATUSES: [&str; 5] =
+    ["failed", "timeout", "cancelled", "interrupted", "held"];
 
 #[derive(Args)]
 pub(super) struct WaitArgs {
