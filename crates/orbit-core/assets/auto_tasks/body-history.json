@@ -2843,6 +2843,34 @@
         "## Rules and command surfaces",
         "## Verify the mechanism in code"
       ],
+      "digest": "3a60f26187d0e6fa996e208c9405e7d2fde94b0088fbbe6ae2b0354fffbe4a0f",
+      "revision": "eee82459d578dfca467ec25cebd03d4203edeaf6",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Check coverage before filing",
+        "## Cluster by normalized signature",
+        "## Collect failure evidence",
+        "## Determine the scan window",
+        "## File untracked patterns",
+        "## Fold cascades by recorded cause",
+        "## Record the cursor",
+        "## Rules and command surfaces",
+        "## Verify the mechanism in code"
+      ],
       "digest": "7f9beedd6888af536324feb4a50c3c6b34cce80b00866295679e3de7a6398ee9",
       "revision": "c9ebc0bc60791950c7c6b4bec42d6eb8b4a3aabb",
       "settings": {

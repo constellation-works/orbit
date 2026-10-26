@@ -1,8 +1,8 @@
 ---
 title: Auto-tasks — Overview
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Accepted
 stage: shipped
 next: "—"
@@ -227,25 +227,37 @@ definition of the same name.
   pilot or operator) establishes the selected `file:` selectors before it
   reaches `backlog` — never a selector-free whole-tree holder in a drain
   (design §4e).
-- `run-failure-patterns` — disabled-by-default weekly scan of the workspace's
-  own run evidence (failed and interrupted runs, step failures, worker logs)
-  since the previous scan's `run-failure-cursor.json` artifact. On an owner it
-  also reads the failure and release settlements followers' claimed leaves
-  sent, through `orbit run settlements --no-reconcile`, since those leaves
-  never enter the owner's run history; a pattern seen on two hosts is one
-  pattern. Parents that fail `pipeline_success_guard` fold into their child by
-  `orbit run show`'s `root_cause`, and a parent of a `held` child is no
-  failure. Review refusals are clustered by escalation category (`base_red`,
+- `run-failure-patterns` — disabled-by-default weekly, rate-driven scan of the
+  workspace's own pipeline failures. It always analyses the 7 days before scan
+  start (the prior cursor only splits out new-since-cursor occurrences) and
+  also computes 30-day rates, storing per-job raw and folded failure rates with
+  deltas in `run-failure-report.json` (schema version 2). On an owner it also
+  reads the failure and release settlements followers' claimed leaves sent,
+  through `orbit run settlements --no-reconcile`, since those leaves never
+  enter the owner's run history; a leaf seen on two hosts counts once. Parents
+  that fail `pipeline_success_guard` fold into their child by `orbit run
+  show`'s `root_cause`, and a parent of a `held` child is no failure. Review
+  refusals are clustered by escalation category (`base_red`,
   `external_evidence`, `report_revision`, `scope_or_criteria`, `timeout`,
-  `other`). A cluster is a pattern at 3 occurrences across 2 runs, or as a
-  single occurrence when a deterministic Orbit action or tool limit blocked a
-  task and would recur. Unless an existing task or friction already tracks
-  it, each pattern's mechanism is verified in code and filed as one redacted
-  `proposed` fix task tagged `run-failure-patterns` and `no-auto-approve`; a
-  friction replaces the task only when no cause can be established. The scan
-  never mutates run state — its run and settlement reads pass
-  `--no-reconcile`, so an orphaned run it lists is not finalized — and a
-  window with no new pattern is a successful no-op.
+  `other`). For each qualifying job it accounts for the Pareto set — the top
+  classes covering at least 80% of folded failures plus every class with at
+  least 3 occurrences across 2 runs in 7 days — giving every Pareto class a
+  category (product defect, misclassified hold, provider/capacity, upstream
+  task quality, environment/flake, true one-off) and a disposition; no class
+  is dismissed by kind alone. A done covering fix is checked for deployment on
+  each failing host before later occurrences count as regressions, and fixes
+  the scan itself filed get an effectiveness verdict (effective, not
+  effective, not yet deployed, too early). Open coverage is pushed forward
+  with a comment rather than a duplicate; at most 5 new redacted `proposed`
+  fix tasks are filed per pass, tagged `run-failure-patterns` and
+  `no-auto-approve` with a `spawned_from` relation; a friction replaces the
+  task only when no cause can be established. The scan runs on the owner:
+  preparation records a `required_machine` owner-evidence contract before
+  admission, and a follower that still starts it stops with `wrong_host`
+  without filing or attaching a cursor. The scan never mutates run state —
+  its run and settlement reads pass `--no-reconcile`, so an orphaned run it
+  lists is not finalized — and a pass with nothing new is a successful no-op
+  that still stores the report and cursor.
 - `backlog-hygiene` — disabled-by-default weekly, report-only scan of blocked,
   orphaned in-progress/review, aged proposed, and dependency-unblocked idle
   tasks. Its execution summary recommends human follow-up without changing task
@@ -495,6 +507,11 @@ encode this repository's branches and gates. Re-init preserves them:
 - ORB-14439 — `run-failure-patterns` files proposed fix tasks, reads follower
   leaf settlements, folds cascades by `root_cause`, splits review refusals by
   escalation category, and files blocking one-offs.
+- ORB-18556 — Made `run-failure-patterns` rate-driven: a rolling 7-day window
+  with 30-day trend and per-job raw/folded rates, Pareto classes with a
+  category and disposition and no dismissal by kind, deployment-aware
+  regression checks, fix-effectiveness verdicts, and owner placement through
+  the `required_machine` contract with a `wrong_host` stop.
 - ORB-12932 — Added the disabled weekly, report-only `backlog-hygiene` default.
 - ORB-13636 — Added the disabled `full-code-review` coordinator default and
   keyed the `code-review` cursor selector on its provenance tag after
