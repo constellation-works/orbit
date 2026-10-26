@@ -410,9 +410,16 @@ function revealActiveRailSelection() {
   // Counts and web fonts can change this width after the route was selected.
   // Recompute the space beside the destination before revealing its view.
   $("tabs").style.setProperty("--active-tab-width", `${tab.offsetWidth}px`);
-  document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active")
-    ?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+  const rail = tab.closest(".rail");
+  const foot = rail.querySelector(".rail-foot");
+  rail.style.setProperty("--rail-foot-height", `${foot?.offsetHeight || 0}px`);
+  const subtab = document.querySelector(".rail-subtabs:not(.dimmed) .subtab.active");
+  subtab?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  // On desktop the selected leaf takes precedence: revealing its parent can
+  // scroll it back behind the foot. Phones keep both nested strips in view.
+  if (!subtab || window.matchMedia("(max-width: 760px)").matches) {
+    tab.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
 }
 
 function setActiveTabImpl(ctx, raw, opts = {}) {
@@ -674,7 +681,7 @@ function initTabsImpl(ctx) {
       focused.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
   });
-  for (const entry of document.querySelectorAll(".rail .tabs, .rail .tab, .rail-subtabs .subtab")) {
+  for (const entry of document.querySelectorAll(".rail, .rail-foot, .rail .tabs, .rail .tab, .rail-subtabs .subtab")) {
     railLayout.observe(entry);
   }
   $("skip-link")?.addEventListener("click", (event) => {

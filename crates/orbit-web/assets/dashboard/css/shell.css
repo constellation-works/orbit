@@ -135,6 +135,11 @@
    label. Keep the volume beside the label and the attention pill below it.
    The horizontal mobile rail has intrinsic-width buttons and needs no wrap. */
 @media (min-width: 761px) {
+  /* The sticky host block covers the bottom of the scrollport. The router
+     measures it as readings wrap; reserve that space and the 4px focus ring
+     when revealing a destination or a keyboard-focused view. */
+  .rail { scroll-padding-block: 4px calc(var(--rail-foot-height, 0px) + 4px); }
+  .rail .tab, .rail-subtabs .subtab { scroll-margin-block: 4px; }
   .rail .tab:has(> .rail-count + .rail-count:not([hidden])) {
     display: grid;
     grid-template-columns: 17px minmax(0, 1fr) max-content;
@@ -167,8 +172,8 @@
   }
 }
 
-/* A section's views show only while that section is open, so the rail
-   stays one screen tall and the workspace picker never scrolls away. */
+/* A section's views show only while that section is open. On shorter
+   screens the rail scrolls to reveal the active or focused view. */
 .rail-subtabs {
   display: flex;
   flex-direction: column;
