@@ -2,7 +2,7 @@
 // Analytics › Metrics (ORB-15746) through the shipped app, router, renderer and
 // CSS: duration, completion and defect trends, series toggles, statistic and table
 // views, hover and keyboard tooltips, window changes, the empty window with
-// its widen action, and a 390px phone.
+// its widen action, token-filter races, and narrow phone layouts.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -60,9 +60,11 @@ function durations(key, outcome = 'succeeded') {
   }
   return {
     window, outcome, truncated: false, buckets,
-    current: { all: outcome === 'all' ? stats(210, 30) : stats(200, 43.9), low: stats(56, 43), medium: stats(70, 41.5), hard: stats(60, 47), xhard: stats(4, 70), unset: stats(10, 25) },
+    current: { all: outcome === 'all' ? stats(210, 30) : (refreshFixture ? stats(987, 99) : stats(200, 43.9)), low: stats(56, 43), medium: stats(70, 41.5), hard: stats(60, 47), xhard: stats(4, 70), unset: stats(10, 25) },
     previous: { all: stats(180, 30.1), low: stats(50, 24.3), medium: stats(60, 31), hard: stats(55, 35), xhard: null, unset: null },
-    actors: [
+    actors: refreshFixture ? [
+      { actor: 'codex / gpt-6.1-sol', ...stats(987, 99), previous_avg: minutes(43.9), trend: buckets.map(() => minutes(99)) },
+    ] : [
       { actor: 'codex / gpt-6.1-sol', ...stats(126, 42.1), previous_avg: minutes(23.9), trend: buckets.map((_, i) => (i === 9 ? null : minutes(35 + i))) },
       { actor: 'claude / claude-opus-5-5', ...stats(60, 47.5), previous_avg: minutes(50), trend: buckets.map((_, i) => (i % 3 ? null : minutes(45))) },
       { actor: 'gemini / gemini-3.8-flash-high', ...stats(3, 25), previous_avg: null, trend: buckets.map(() => null) },
@@ -90,7 +92,7 @@ function completions(key) {
   return {
     window,
     buckets: Array.from({ length: count }, (_, i) => ({ start: start(i), ...(i === 9 ? counts(0, 0, 0, 0, 1, 0) : counts(i % 4, 5, 3, i === 2 ? 1 : 0, 0, i === 4 ? 2 : 0)) })),
-    current: counts(56, 127, 92, 1, 1, 2),
+    current: refreshFixture ? counts(60, 130, 101, 2, 1, 2) : counts(56, 127, 92, 1, 1, 2),
     previous: counts(71, 77, 81, 0, 1, 32),
   };
 }
@@ -114,7 +116,7 @@ function defects(key) {
       start: start(i),
       ...(i === 9 ? counts(0, 0, 0, {}) : i === 3 ? counts(1, 1, 1, { 'full-code-review': 2, 'friction-curation': 1 }) : counts(0, 1, 1, { 'qa-sweep': 1, other: 1 })),
     })),
-    current: counts(4, 10, 6, { 'code-review': 5, 'full-code-review': 6, 'qa-sweep': 4, 'scanning-sweep': 2, other: 3 }),
+    current: refreshFixture ? counts(8, 12, 9, { 'code-review': 5, 'full-code-review': 6, 'qa-sweep': 4, other: 8 }) : counts(4, 10, 6, { 'code-review': 5, 'full-code-review': 6, 'qa-sweep': 4, 'scanning-sweep': 2, other: 3 }),
     previous: counts(2, 8, 6, { 'code-review': 6, 'qa-sweep': 6, other: 4 }),
   };
 }
@@ -140,11 +142,14 @@ const requests = [];
 const tokenTagRequests = [];
 // An older host has no defect trend; set to serve its 404.
 let defectsMissing = false;
+let refreshFixture = false;
 // Controlled token replies: while `holdTokensPredicate` matches a request,
 // its response is parked in `heldTokens` until `releaseHeldTokens()`.
 let heldTokens = [];
 let holdTokensPredicate = null;
 let heldTokensAsError = false;
+let heldCompletions = [];
+let holdCompletionsPredicate = null;
 function releaseHeldTokens() {
   for (const held of heldTokens.splice(0)) {
     if (held.error) {
@@ -156,9 +161,19 @@ function releaseHeldTokens() {
     }
   }
 }
+function releaseHeldCompletions() {
+  for (const held of heldCompletions.splice(0)) {
+    held.res.setHeader('content-type', 'application/json');
+    held.res.end(JSON.stringify(held.payload));
+  }
+}
 async function waitForHeldTokens(count = 1) {
   for (let i = 0; i < 200 && heldTokens.length < count; i++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.equal(heldTokens.length, count, 'held token request arrived');
+}
+async function waitForHeldCompletions(count = 1) {
+  for (let i = 0; i < 200 && heldCompletions.length < count; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(heldCompletions.length, count, 'held completions request arrived');
 }
 function payloadFor(url) {
   switch (url.pathname) {
@@ -184,7 +199,9 @@ function payloadFor(url) {
       return defects(url.searchParams.get('since'));
     case '/api/tasks/completion-by-complexity': return {
       by_complexity: [
-        { complexity: 'unset', total: 762, statuses: [{ status: 'done', count: 641 }, { status: 'rejected', count: 86 }, { status: 'archived', count: 35 }] },
+        refreshFixture
+          ? { complexity: 'unset', total: 1000, statuses: [{ status: 'done', count: 900 }, { status: 'rejected', count: 60 }, { status: 'archived', count: 40 }] }
+          : { complexity: 'unset', total: 762, statuses: [{ status: 'done', count: 641 }, { status: 'rejected', count: 86 }, { status: 'archived', count: 35 }] },
         { complexity: 'low', total: 1239, statuses: [{ status: 'done', count: 1086 }, { status: 'rejected', count: 77 }, { status: 'archived', count: 60 }] },
       ],
     };
@@ -200,6 +217,10 @@ const server = http.createServer((req, res) => {
     return;
   }
   if (url.pathname.startsWith('/api/')) {
+    if (url.pathname === '/api/diagnostics/completions' && holdCompletionsPredicate && holdCompletionsPredicate(url)) {
+      heldCompletions.push({ res, payload: payloadFor(url) });
+      return;
+    }
     if (url.pathname === '/api/diagnostics/task_tokens' && holdTokensPredicate && holdTokensPredicate(url)) {
       heldTokens.push({ res, payload: payloadFor(url), error: heldTokensAsError });
       return;
@@ -551,6 +572,47 @@ try {
   assert.equal(await invocations.getByRole('button', { name: 'Implement only' }).getAttribute('aria-pressed'), 'true');
   holdTokensPredicate = null;
   pass('tokens full-refresh fence');
+
+  // A token-filter refresh can retire the tokens bundled with an in-flight
+  // full-panel refresh. The same-scope non-token metrics must still land.
+  await invocations.getByRole('button', { name: 'All invocations' }).click();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '1k');
+  await page.locator('#metrics-window-selector [data-window="24h"]').click();
+  await page.waitForFunction(() => document.getElementById('metrics-count').textContent.includes('window 24h'));
+  await body.getByRole('tab', { name: 'implement_one duration' }).click();
+  await body.getByRole('tab', { name: 'Tokens per task' }).click();
+
+  refreshFixture = true;
+  holdCompletionsPredicate = url => url.searchParams.get('since') === '24h';
+  await page.locator('#refresh-btn').click();
+  await waitForHeldCompletions();
+  await page.waitForFunction(() => document.getElementById('metrics-body').getAttribute('aria-busy') === 'true');
+  await invocations.getByRole('button', { name: 'Implement only' }).click();
+  await page.waitForFunction(() => document.querySelector('#metrics-body .mx-sc-value')?.textContent === '222');
+  holdCompletionsPredicate = null;
+  releaseHeldCompletions();
+  await page.waitForFunction(() => document.getElementById('metrics-body').getAttribute('aria-busy') === 'false');
+
+  await body.getByRole('tab', { name: 'implement_one duration' }).click();
+  await page.screenshot({ path: path.join(evidence, 'refresh-race-dark-1440.jpg'), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 1000 });
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false, 'no page overflow at 375px after refresh');
+  await page.screenshot({ path: path.join(evidence, 'refresh-race-dark-375.jpg'), type: 'jpeg', quality: 78, fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 1600 });
+
+  assert.match(await page.locator('#metrics-count').textContent(), /987 runs · 293 done · window 24h/);
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '1h 39m');
+  assert.match(await body.locator('.mx-actors tbody tr').first().textContent(), /987.*1h 39m/);
+  assert.match(await body.locator('.mx-outcome').first().textContent(), /n=1000/);
+  await body.getByRole('tab', { name: 'Tasks completed' }).click();
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '293');
+  await body.getByRole('tab', { name: 'Defects' }).click();
+  assert.equal(await body.locator('.mx-sc-value').first().textContent(), '29');
+  await body.getByRole('tab', { name: 'Tokens per task' }).click();
+  assert.equal(await tokenValue(), '222', 'the newest Implement-only token result survives the older bundled result');
+  assert.equal(await invocations.getByRole('button', { name: 'Implement only' }).getAttribute('aria-pressed'), 'true');
+  refreshFixture = false;
+  pass('non-token metrics update across token-filter race');
 
   assert.deepEqual(errors, [], 'no browser errors');
   fs.writeFileSync(path.join(evidence, 'metrics-assertions.json'), JSON.stringify({ passed: true, assertions }, null, 2));
