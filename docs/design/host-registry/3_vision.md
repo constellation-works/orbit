@@ -3,7 +3,7 @@ summary: "Host Registry — Vision"
 type: design
 title: "Host Registry — Vision"
 owner: codex
-last_updated: 2026-10-20
+last_updated: 2026-10-26
 last_validated: 2026-10-24
 status: Accepted
 feature: host-registry
@@ -84,9 +84,9 @@ crash-safe writes, future-version rejection checks and rollback classification.
 
 ## Task References
 
-- [ORB-11008] recorded the federated multi-host MCP policy later specified in federated-mcp
-- [ORB-11009] moved that contract out of this vision and into `docs/design/federated-mcp/`
-- [ORB-14448] host file and `orbit host` commands
-- [ORB-14449] task-prefix routing and `--host` selection
+- [ORB-11008] proposed the federated multi-host MCP policy.
+- [ORB-11009] established the separate implementable federated MCP contract.
+- [ORB-14448] implemented the host file and orbit host operations.
+- [ORB-14449] implemented task-prefix routing and --host selection.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -3,7 +3,7 @@ summary: "Glossary — Host Registry"
 type: design
 title: "Glossary — Host Registry"
 owner: codex
-last_updated: 2026-10-20
+last_updated: 2026-10-26
 last_validated: 2026-10-24
 status: Accepted
 feature: host-registry
@@ -43,3 +43,10 @@ related_artifacts: [ORB-14448, ORB-14449]
 | Runtime workspace ID | Workspace ID read from .orbit/config.yaml when Core's binding is built; it may differ from the logical catalog ID (`ws_*`) |
 | RegisteredRuntimeFactory | orbit-cmd composition seam that selects registry state and opens a Core runtime |
 | Caller machine label | The `caller_machine_id` claim forwarded by a direct SSH proxy or derived locally for audit. It is self-asserted and audit-only; it is not authorization. |
+
+## Task References
+
+- [ORB-14448] implemented the host file and orbit host operations.
+- [ORB-14449] implemented task-prefix routing and --host selection.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

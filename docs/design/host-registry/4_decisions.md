@@ -3,7 +3,7 @@ summary: "Host Registry — Decisions"
 type: design
 title: "Host Registry — Decisions"
 owner: codex
-last_updated: 2026-10-08
+last_updated: 2026-10-26
 last_validated: 2026-10-12
 status: Accepted
 feature: host-registry
@@ -299,12 +299,18 @@ stops asking the wrong host. Cost:
 
 ## Task References
 
-- [ORB-11008] recorded the federated multi-host MCP policy
-- [ORB-11009] moved the implementable contract to federated-mcp and left this entry as the host-registry standing constraint
-- [ORB-12725] folded host.toml into `[machine]`, deleted `orbit host`, removed `owner_host_ids`, and renamed host -> machine across the codebase
-- [ORB-14447] replica worktree GC resolves a task id with the local prefix from the local store (interim fix for DANI-10433)
-- [ORB-14448] host file and `orbit host` commands
-- [ORB-14449] task-prefix routing and `--host` selection
-- [ORB-14451] dashboard Settings › Hosts over the same registry operations
+- [DANI-10433] identified replica worktree GC querying the wrong host (historical incident citation).
+- [ORB-10247] added stable machine identity and initialization.
+- [ORB-10721] added immutable task prefixes and removed machine topology mode.
+- [ORB-11008] proposed the federated multi-host MCP policy.
+- [ORB-11009] established the separate implementable federated MCP contract.
+- [ORB-12236] removed routine host pins and the routine-source role.
+- [ORB-12718] made all .orbit definitions per-user checkout state rather than git-shared files.
+- [ORB-12725] moved local machine identity into global config and removed owner display-name projections.
+- [ORB-14441] coordinated the operator-approved host-registry specifications and delivery.
+- [ORB-14447] fixed replica GC lookup of locally owned task IDs.
+- [ORB-14448] implemented the host file and orbit host operations.
+- [ORB-14449] implemented task-prefix routing and --host selection.
+- [ORB-14451] implemented dashboard Settings › Hosts through shared registry operations.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

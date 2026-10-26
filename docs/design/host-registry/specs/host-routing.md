@@ -9,6 +9,7 @@ feature: host-registry
 tags: [host-registry, federated-mcp, task-migration, spec]
 related_features: [host-registry, federated-mcp, task-migration, distributed-drain]
 related_artifacts: [ORB-14449, ORB-14448, ORB-14447]
+last_updated: 2026-10-26
 ---
 
 # Spec: Host routing
@@ -168,3 +169,13 @@ JSON input, or run the task command on that host over SSH.
 
 Specified by opus during on-call ORB-14441 at Daniel's direction (2026-10-07), for
 implementation in [ORB-14449].
+
+## Task References
+
+- [DANI-10433] identified replica worktree GC querying the wrong host (historical incident citation).
+- [ORB-14441] coordinated the operator-approved host-registry specifications and delivery.
+- [ORB-14447] fixed replica GC lookup of locally owned task IDs.
+- [ORB-14448] implemented the host file and orbit host operations.
+- [ORB-14449] implemented task-prefix routing and --host selection.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

@@ -1,8 +1,8 @@
 ---
 title: State Compatibility — Vision
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-22
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 feature: state-compatibility
 doc_role: vision
@@ -33,11 +33,11 @@ from. The shipped mechanism is in [2_design.md](./2_design.md).
    dropped with a warning. A local spool replayed after the upgrade would
    keep the trail intact, but introduces a second write target.
 4. **Does the task registry's `user_version` floor belong in this contract?**
-   *Resolved 2026-10-12.* Yes. The registry moves onto its own ledger, run by
+   *Resolved 2026-10-12; shipped in [ORB-15822].* Yes. The registry runs on its own ledger, run by
    the store's ledger engine, and keeps `user_version` only as a fence for
    binaries that predate that ledger. See
    [4_decisions.md](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
-5. **How far back should read-only support reach?** *Resolved 2026-10-11.* The
+5. **How far back should read-only support reach?** *Resolved 2026-10-11 by [ORB-15732].* The
    record makes it possible to support arbitrarily old binaries, so support is
    bounded by a 30-day, release-gated window instead of an open-ended promise.
    A compatibility path, including a legacy reader of a persisted shape, is
@@ -98,7 +98,8 @@ External:
 
 ## Task References
 
-- [ORB-12434] introduced the forward-compatibility contract these questions
-  build on.
+- [ORB-12434] introduced declared state compatibility and enforced read-only newer-store opens.
+- [ORB-15732] recorded the 30-day, release-gated compatibility support window.
+- [ORB-15822] implemented the task registry ledger and baseline envelope stamps.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

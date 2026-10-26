@@ -3,7 +3,7 @@ summary: "Host Registry — Design"
 type: design
 title: "Host Registry — Design"
 owner: codex
-last_updated: 2026-10-09
+last_updated: 2026-10-26
 last_validated: 2026-10-19
 status: Accepted
 feature: host-registry
@@ -72,13 +72,13 @@ The prefix is also the unit of task *authority* across hosts: the host whose pre
 
 `~/.orbit/hosts.toml` (schema version 1) is the operator's record of remote Orbit hosts, beside workspaces.json. The full contract is [specs/host-commands.md](./specs/host-commands.md); this section summarises what the code does.
 
-- An entry has exactly `name`, `machine_id`, `ssh` and `task_prefix`. `machine_id` and `task_prefix` are read from the remote itself by `orbit host add`; nothing that can change on the remote (reachability, version, pull protocol, workspaces) is stored.
+- An entry requires `name`, `machine_id`, `ssh` and `task_prefix`, and may carry `host_os` (`linux`, `macos` or `windows`). `orbit host add` reads identity and the optional OS snapshot from the remote. [ORB-16763] added that snapshot for creation-time crew selection: it counts only registered hosts with recent claims in the workspace, and an OS change requires removing and adding the host again to refresh the stored value. Reachability, version, pull protocol and workspaces are never stored.
 - Load validates every entry: `name` passes the machine-name validator and is unique case-insensitively across entries and the local `machine.name`; `machine_id` is valid, unique (`ambiguous_destination`) and never the local id (`host_is_local`); `task_prefix` is a valid stored prefix, unique, and never the local prefix (`task_prefix_conflict`); `ssh` is an SSH alias or `user@host` with no leading `-`, whitespace or shell metacharacters. Unknown keys and any other `schema_version` fail the load and keep the bytes.
 - Writes validate first, serialize canonically sorted by name, and replace the file atomically under a lock. The commit re-reads both host files under that lock and refuses if either changed since the command loaded them.
 - `orbit_registry::hosts::load_host_routes` is the one loader for federated serve, follower pull drains and replica worktree GC.
 - For one release, when only the legacy `~/.orbit/mcp-destinations.toml` exists its rows are read as routes with no name or prefix. The first `orbit host add`, `rename` or `remove` probes every retained legacy row, writes them to the host file (named after the remote's `machine.name`, or its SSH target when that is taken, with a numeric suffix when the SSH target is taken too) and deletes the legacy file. Adding a host already in the legacy file commits and reports the migration; removing a legacy row never contacts that host, with or without `--force`. If a retained row does not answer, the mutation refuses with `legacy_host_unreachable` and changes neither file. Doctor names a concrete `orbit host add <existing-ssh-target>` command to migrate the file. Both files at once fail every load with `host_file_conflict`.
 
-The `orbit host` operations live in orbit-cmd so the CLI and the dashboard share them. They probe a host with the federated MCP session (`ssh -T -F <orbit-ssh-config> -- <target> orbit mcp serve --remote-caller-machine-id <local id>`, agent authority, federated probe budget) and read the discovery envelope's `machine_id`, `machine_name`, `task_prefix`, `binary_version` and `protocol_fingerprint`. A probe that answers with a different `machine_id` or `task_prefix` than the entry fails closed with `host_identity_mismatch`; the entry is never rewritten from a probe.
+The `orbit host` operations live in orbit-cmd so the CLI and the dashboard share them. They probe a host with the federated MCP session (`ssh -T -F <orbit-ssh-config> -- <target> orbit mcp serve --remote-caller-machine-id <local id>`, agent authority, federated probe budget) and read the discovery envelope's `machine_id`, `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint` and optional `host_os`. A probe that answers with a different `machine_id` or `task_prefix` than the entry fails closed with `host_identity_mismatch`; the entry is never rewritten from a probe.
 
 ## 3. Workspace catalog
 
@@ -161,7 +161,7 @@ Orbit Web loads local workspaces from orbit-registry, derives checkout-path heal
 
 orbit-mcp reads orbit-registry identity state to describe the accepting process and exposes machine-local discovery definitions. The CLI MCP server resolves each workspace-scoped call against the accepting machine's registry, composes the runtime, and dispatches through Core. `orbit.task.show` and `orbit.task.artifact.get` are the exceptions: an id-only call follows the globally unique task ID through the host task registry. These servers do not relay: an id-only call to an id-routed tool whose prefix is a registered remote host's fails with `task_prefix_remote`, naming that host, instead of reporting the task missing. Ambient initialize metadata — including a linked-worktree runtime identity — is not a filter. An explicit per-call `workspace` remains fail-closed.
 
-orbit.workspace.list returns active logical workspaces that have a checkout registered on the accepting machine. Its envelope carries the accepting machine's `machine_id` and, additively, its `machine_name`, `task_prefix`, `binary_version` and `protocol_fingerprint`; the private federated discovery path carries the same keys. This includes locally registered replicas and excludes active checkoutless catalog entries; owner_machine_id is not a discovery filter. Remote MCP uses direct SSH stdio, and the local proxy does not resolve workspaces, inspect checkouts or read the remote registry.
+orbit.workspace.list returns active logical workspaces that have a checkout registered on the accepting machine. Its envelope carries the accepting machine's `machine_id` and, additively, its `machine_name`, `task_prefix`, `binary_version`, `protocol_fingerprint` and optional `host_os`; the private federated discovery path carries the same keys. This includes locally registered replicas and excludes active checkoutless catalog entries; owner_machine_id is not a discovery filter. Remote MCP uses direct SSH stdio, and the local proxy does not resolve workspaces, inspect checkouts or read the remote registry.
 
 caller_machine_id and caller_ip are audit metadata. Neither participates in catalog ownership or authorization.
 
@@ -193,8 +193,9 @@ Older databases may retain tables and migration records from the removed fleet-r
 
 ## Task References
 
-- [ORB-14448] host file and `orbit host` commands
-- [ORB-14449] task-prefix routing and `--host` selection
-- [ORB-14451] dashboard Settings › Hosts
+- [ORB-14448] implemented the host file and orbit host operations.
+- [ORB-14449] implemented task-prefix routing and --host selection.
+- [ORB-14451] implemented dashboard Settings › Hosts through shared registry operations.
+- [ORB-16763] added registration-time host OS facts for serving-host crew selection.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
