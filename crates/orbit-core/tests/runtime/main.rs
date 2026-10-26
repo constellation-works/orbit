@@ -66,6 +66,8 @@ mod forecast_accuracy;
 mod forge_hold_resume;
 mod git_protection;
 mod held_child_guard;
+#[cfg(unix)]
+mod local_provider_holds;
 #[cfg(target_os = "linux")]
 mod muse_state_grant;
 mod rebase_recovery_attempts;

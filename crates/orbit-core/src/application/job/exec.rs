@@ -38,13 +38,13 @@ use crate::application::job::{
 };
 
 /// The hold an unsuccessful run of `job_id` ends on instead of failing, if
-/// its failure `message` names one. A claimed leaf also holds on its
-/// provider's usage limit [ORB-15517].
+/// its failure `message` names one. Owner-local runs hold on provider
+/// capacity and usage limits; claimed leaves hold on usage limits.
 fn held_failure(job_id: &str, message: Option<&str>) -> Option<HeldFailure> {
     if CLAIMED_LEAF_JOBS.contains(&job_id) {
         HeldFailure::of_claimed_leaf(None, message)
     } else {
-        HeldFailure::of(None, message)
+        HeldFailure::of_local(None, message)
     }
 }
 
@@ -637,8 +637,8 @@ impl OrbitRuntime {
             Err(error) => {
                 // [ORB-15202] A red base or a refusal awaiting a recorded
                 // decision kept its candidate: the run holds, it did not fail.
-                // [ORB-15517] So does a claimed leaf its provider's usage
-                // limit stopped.
+                // So do local provider capacity/limit holds and a claimed
+                // leaf its provider's usage limit stopped [ORB-15517].
                 let held = held_failure(&run.job_id, Some(&error.to_string()));
                 let final_state = held.map_or(JobRunState::Failed, |_| JobRunState::Held);
                 let message = held.map_or_else(
