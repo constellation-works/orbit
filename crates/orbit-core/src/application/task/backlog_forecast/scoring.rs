@@ -11,12 +11,12 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use orbit_core::StoredBacklogForecast;
+use orbit_store::contracts::StoredBacklogForecast;
 use orbit_types::task::{Task, TaskStatus, complexity_bucket};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{Run, usage};
+use super::ForecastRun;
 
 /// One task as a stored forecast recorded it.
 #[derive(Deserialize)]
@@ -90,11 +90,11 @@ fn round(value: f64) -> f64 {
 
 /// Score `stored` (newest first) against the tasks' current records, their
 /// done times and their invocations.
-pub(super) fn score(
+pub(super) fn score_backlog_forecasts(
     stored: &[StoredBacklogForecast],
     tasks: &HashMap<String, Task>,
     done_at: &HashMap<String, DateTime<Utc>>,
-    runs: &HashMap<String, Vec<Run>>,
+    runs: &HashMap<String, Vec<ForecastRun>>,
 ) -> Value {
     let mut task_hits = [Hits::default(); 3];
     let mut total_hits = [Hits::default(); 3];
@@ -127,7 +127,7 @@ pub(super) fn score(
                 pending += 1;
                 continue;
             }
-            let used = usage(
+            let used = super::forecast_usage(
                 runs.get(&stored_task.id).map_or(&[][..], Vec::as_slice),
                 Some(forecast.forecast_at),
             );
