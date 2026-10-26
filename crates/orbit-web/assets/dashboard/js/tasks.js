@@ -3166,9 +3166,9 @@ function buildWhyStuckCard(task) {
   return el("section", { class: "why-stuck", "aria-labelledby": headingId }, [
     el("h3", { class: "why-stuck-title", id: headingId, text: "Why stuck" }),
     el("dl", { class: "why-stuck-rows" }, [
-      whyStuckRow("Escalation", whyStuckNote(stuck.escalation_note)),
+      whyStuckRow("Escalation", whyStuckLongNote(task, "escalation", whyStuckNote(stuck.escalation_note))),
       whyStuckRow("Landing review", whyStuckLanding(stuck.landing_review)),
-      whyStuckRow("Root cause", whyStuckNote(stuck.root_cause)),
+      whyStuckRow("Root cause", whyStuckLongNote(task, "root cause", whyStuckNote(stuck.root_cause))),
       whyStuckRow("Mergeable", whyStuckMergeable(stuck.pull_request)),
       whyStuckRow("Required checks", whyStuckChecks(stuck.pull_request)),
     ]),
@@ -3186,6 +3186,40 @@ function whyStuckRow(label, value) {
     el("dt", { class: "why-stuck-label", text: label }),
     body,
   ]);
+}
+
+// Escalation notes and root causes can carry whole CI log excerpts; past this
+// they open clamped behind "Show full …", like a long description.
+const LONG_WHY_STUCK_CHARS = 280;
+const LONG_WHY_STUCK_LINES = 5;
+// `<task id>:<row>` of the notes the operator expanded; a rebuild keeps them open.
+const expandedWhyStuck = new Set();
+
+function whyStuckLongNote(task, name, text) {
+  if (text.length <= LONG_WHY_STUCK_CHARS && text.split("\n").length <= LONG_WHY_STUCK_LINES) return text;
+  const key = `${task.id}:${name}`;
+  const open = expandedWhyStuck.has(key);
+  const value = el("dd", { class: open ? "why-stuck-value" : "why-stuck-value clamped" }, [
+    el("div", { class: "why-stuck-text", text }),
+  ]);
+  const closedLabel = `Show full ${name}`;
+  const toggle = el("button", {
+    class: "why-stuck-toggle",
+    type: "button",
+    text: open ? "Show less" : closedLabel,
+    "aria-expanded": String(open),
+  });
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const nowOpen = value.classList.contains("clamped");
+    value.classList.toggle("clamped", !nowOpen);
+    if (nowOpen) expandedWhyStuck.add(key);
+    else expandedWhyStuck.delete(key);
+    toggle.setAttribute("aria-expanded", String(nowOpen));
+    toggle.textContent = nowOpen ? "Show less" : closedLabel;
+  });
+  value.appendChild(toggle);
+  return value;
 }
 
 function whyStuckNote(fact) {
