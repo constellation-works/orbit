@@ -284,8 +284,9 @@ spec:
         supported-platform run the guidance specifies.
       - `host_sandbox_test` with `os` (`linux` or `macos`): its command is an
         exact owner-required command or
-        `cargo test -p <crate> --test <target> [<filter>]` with no other options
-        or shell syntax. Name a test a broad diagnostic exposed in that focused
+        `cargo test -p <crate> --test <target> [<filter>]`, also accepting a single
+        `--` immediately before the one filter, with no other options or shell
+        syntax. Name a test a broad diagnostic exposed in that focused
         form, not as a full-workspace replay.
     - A genuine assertion or product failure is never external evidence. Never
       accept a run that reported incomplete analysis.

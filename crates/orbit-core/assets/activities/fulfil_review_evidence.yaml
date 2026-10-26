@@ -10,7 +10,8 @@ spec:
     `host_sandbox_test` requirements, and no result yet. A `codeql` command
     must be `scripts/codeql-rust-local.sh` with its own options and one query
     selector; a `host_sandbox_test` command must be `cargo test -p <crate>
-    --test <target> [<filter>]` or exactly one of the owner's required
+    --test <target> [<filter>]` (a single `--` may precede the one filter)
+    or exactly one of the owner's required
     validation commands, with no shell metacharacter. Any other command
     refuses the whole hold before anything runs. The Linux owner must have
     working Bubblewrap namespaces, and the scratch filesystem must have

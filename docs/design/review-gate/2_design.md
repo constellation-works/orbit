@@ -918,7 +918,15 @@ The run first admits every command against its kind's allowlist:
 - `host_sandbox_test` [ORB-14334]: the same grammar as a claimed leaf's
   settlement below, an exact owner-required command or
   `cargo test -p <crate> --test <target> [<filter>]` using only
-  `[A-Za-z0-9._/:@+=-]` and spaces.
+  `[A-Za-z0-9._/:@+=-]` and spaces. A single `--` may immediately precede
+  the one filter; it normalizes to the same command as the plain filter.
+
+A claimed before-landing review on a known non-Linux host records
+reviewer-named Linux `host_sandbox_test` requirements as `owed_evidence`,
+even without a matching workspace rule. Settlement adds any missing required
+records as `not_run`, so a broader run's covered deferrals hold for the owner
+and the received owed evidence can settle the held review. Failed required
+checks and open findings still block.
 
 One command outside its allowlist refuses the whole hold with a typed reason
 (`command_not_allowed`, `shell_metacharacter`, `argument_not_allowed`) before
@@ -951,8 +959,10 @@ otherwise be an evidence-only hold, including a broader run whose every
 deferred test a requirement covers (above), it runs each requirement whose
 `os` is this host's and that no accepted result already satisfies. The command must be
 either an exact owner-required validation command or
-`cargo test -p <crate> --test <target> [<filter>]`. That form takes no other
-option, and the command may use only `[A-Za-z0-9._/:@+=-]` and spaces. A
+`cargo test -p <crate> --test <target> [<filter>]`, with an optional single
+`--` immediately before the one filter. A bare separator, extra arguments
+and test-harness options are refused, and the command may use only
+`[A-Za-z0-9._/:@+=-]` and spaces. A
 command that fails these checks, or names another OS, is refused with a typed
 reason (`shell_metacharacter`, `command_not_allowed`, `argument_not_allowed`,
 `os_mismatch`) and never runs. An admitted command first has its candidate

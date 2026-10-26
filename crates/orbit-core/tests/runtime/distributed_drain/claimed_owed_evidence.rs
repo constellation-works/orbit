@@ -369,34 +369,131 @@ fn a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_chec
     assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
 }
 
-/// A check that failed on the candidate is an answer, not an evidence gap: a
-/// later run of it on another OS cannot settle it, so the review blocks.
-fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
-    let (leaf, admitted) = leaf_on(HostOs::Macos, "docs/**/*.md");
+/// A Mac before-landing reviewer reports a broader run that deferred three
+/// Linux sandbox tests, using Cargo's `-- <filter>` spelling for their host
+/// requirements. Settlement must owe those runs to the owner and hold,
+/// synthesizing their required records rather than blocking as incomplete.
+fn a_mac_before_landing_review_owes_named_linux_tests_with_separated_filters() {
+    let mut leaf = ReviewedLeaf::admit_before_landing();
+    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+    leaf.gate_input["before_landing"] = json!(true);
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["timing"], "before-landing", "{admitted}");
+    assert_eq!(admitted["owed_evidence"], json!([]), "{admitted}");
+    let tests = [
+        "pipeline_step_dispatches_its_catalog_activity_to_policy_and_broker",
+        "v2_cli_sandbox::dispatch_registration_failure_ends_the_provider_group",
+        "v2_cli_sandbox::auth_probe_refused_registration_ends_the_grandchild",
+    ];
+    let named = tests
+        .iter()
+        .enumerate()
+        .map(|(index, test)| ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostSandboxTest,
+            name: format!("Linux sandbox: {test}"),
+            command: format!("cargo test -p orbit-engine --test engine -- {test}"),
+            artifact: format!("evidence/linux-sandbox-{index}.json"),
+            os: Some(EvidenceHostOs::Linux),
+            hosted_check: None,
+        })
+        .collect::<Vec<_>>();
+    let mut broad = record(
+        "V2",
+        "cargo test -p orbit-engine --test engine",
+        ValidationOutcome::Passed,
+    );
+    broad.deferred = tests
+        .iter()
+        .map(|test| {
+            format!(
+                "SKIP: sandbox-exec cannot apply a profile: {test}: \
+                 sandbox_apply: Operation not permitted"
+            )
+        })
+        .collect();
     let mut reviewer_report = report(
         &admitted,
         ReviewVerdict::Incomplete,
         Vec::new(),
-        vec![ci_fast(), record("V2", CI, ValidationOutcome::Failed)],
-        Some("the hosted CI check failed on the candidate"),
+        vec![ci_fast(), broad],
+        Some("These sandbox tests need a Linux host"),
     );
-    reviewer_report.external_evidence = vec![ReviewEvidenceRequirement {
-        kind: ReviewEvidenceKind::HostedCi,
-        name: "CI".into(),
-        command: CI.into(),
-        artifact: CI_ARTIFACT.into(),
-        os: None,
-        hosted_check: None,
-    }];
+    reviewer_report.external_evidence = named.clone();
     leaf.put_report(&reviewer_report);
     let refused = leaf
         .settle()
-        .expect_err("a failed check opens no pull request");
-    assert!(refused.contains("review_gate_blocked"), "{refused}");
+        .expect_err("missing Linux evidence cannot land");
     assert!(
-        artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
-        "no hold for a failed check"
+        refused.contains("review_awaiting_evidence"),
+        "a Mac review's Linux sandbox gaps must hold instead of blocking: {refused}"
     );
+    assert!(!refused.contains("review_gate_blocked"), "{refused}");
+    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the owner receives a hold for the Linux tests");
+    assert_eq!(hold.requirements, named);
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(certificate.verdict, ReviewVerdict::Incomplete);
+    assert_eq!(certificate.owed_evidence, named);
+    for required in &named {
+        let record = certificate
+            .validation
+            .iter()
+            .find(|record| record.command == required.command)
+            .expect("each owed test has its own required record");
+        assert_eq!(
+            (record.role, record.outcome),
+            (ValidationRole::Required, ValidationOutcome::NotRun)
+        );
+    }
+    leaf.leaf_holds(&hold);
+    leaf.pair.pass(&leaf.drain);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
+}
+
+/// A check that failed on the candidate is an answer, not an evidence gap: a
+/// later run of it on another OS cannot settle it, so the review blocks.
+fn a_mac_reviewers_failed_linux_only_check_still_blocks() {
+    for named in [
+        ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostedCi,
+            name: "CI".into(),
+            command: CI.into(),
+            artifact: CI_ARTIFACT.into(),
+            os: None,
+            hosted_check: None,
+        },
+        ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostSandboxTest,
+            name: "Linux sandbox".into(),
+            command: SANDBOX.into(),
+            artifact: SANDBOX_ARTIFACT.into(),
+            os: Some(EvidenceHostOs::Linux),
+            hosted_check: None,
+        },
+    ] {
+        let mut leaf = ReviewedLeaf::admit_before_landing();
+        leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+        leaf.gate_input["before_landing"] = json!(true);
+        let admitted = leaf.admit_review();
+        let mut reviewer_report = report(
+            &admitted,
+            ReviewVerdict::Incomplete,
+            Vec::new(),
+            vec![
+                ci_fast(),
+                record("V2", &named.command, ValidationOutcome::Failed),
+            ],
+            Some("the Linux-only check failed on the candidate"),
+        );
+        reviewer_report.external_evidence = vec![named];
+        leaf.put_report(&reviewer_report);
+        let refused = leaf.settle().expect_err("a failed check cannot land");
+        assert!(refused.contains("review_gate_blocked"), "{refused}");
+        assert!(
+            artifact::<ReviewEvidenceHold>(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none(),
+            "no hold for a failed check"
+        );
+    }
 }
 
 /// The owner fulfils the held check with the candidate's CodeQL entry point
@@ -769,5 +866,6 @@ crate::scenario_table!(
 crate::scenario_table!(
     a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check_scenarios,
     a_mac_before_landing_review_holds_named_codeql_without_a_declared_hosted_check,
+    a_mac_before_landing_review_owes_named_linux_tests_with_separated_filters,
     a_mac_reviewers_failed_linux_only_check_still_blocks
 );

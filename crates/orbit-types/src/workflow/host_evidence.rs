@@ -124,7 +124,7 @@ impl HostEvidenceRefusal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HostSandboxCommand {
     /// `cargo test -p <crate> --test <target> [<filter>]`: one integration
-    /// test target, optionally filtered.
+    /// test target, optionally filtered. A single `--` may precede the filter.
     CargoTest {
         package: String,
         target: String,
@@ -184,6 +184,25 @@ impl HostSandboxCommand {
             let slot = match *word {
                 "-p" | "--package" => &mut package,
                 "--test" => &mut target,
+                "--" => {
+                    match rest.as_slice() {
+                        [value]
+                            if !value.starts_with('-')
+                                && package.is_some()
+                                && target.is_some()
+                                && filter.is_none() =>
+                        {
+                            filter = Some(value.to_string());
+                        }
+                        _ => {
+                            return Err(HostEvidenceRefusal::new(
+                                R::ArgumentNotAllowed,
+                                "`--` must follow the package and target and precede the only test filter",
+                            ));
+                        }
+                    }
+                    break;
+                }
                 _ if word.starts_with('-') => {
                     return Err(HostEvidenceRefusal::new(
                         R::ArgumentNotAllowed,

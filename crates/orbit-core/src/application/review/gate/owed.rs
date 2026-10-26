@@ -36,6 +36,11 @@
 //! the reviewer names that no such rule covers keep the hold, as does a
 //! before-PR review, since nothing hosted runs before the pull request
 //! opens. A failed CodeQL record still blocks.
+//!
+//! A claimed before-landing reviewer on a known non-Linux host also owes
+//! the Linux sandbox tests it names, without a workspace rule. These keep
+//! the evidence hold and the owner's fulfilment path; a failed required
+//! record still blocks.
 
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::{CandidateIdentity, committed_paths};
@@ -153,6 +158,33 @@ pub(super) fn owed_hold_received(
 }
 
 impl Judgement {
+    /// Add the reviewer's named Linux sandbox tests to `owed` on a claimed
+    /// before-landing host of another known OS. Workspace rules take
+    /// precedence for the same check, and failed required records stay
+    /// failed rather than becoming unavailable evidence.
+    pub(super) fn add_named_linux_sandbox_evidence(
+        &self,
+        owed: &mut Vec<ReviewEvidenceRequirement>,
+    ) {
+        for named in &self.external_evidence {
+            if named.kind != ReviewEvidenceKind::HostSandboxTest
+                || named.os != Some(EvidenceHostOs::Linux)
+                || owed.iter().any(|required| {
+                    required.artifact == named.artifact
+                        || (required.kind == named.kind && required.command == named.command)
+                })
+                || self.validation.iter().any(|record| {
+                    record.role == ValidationRole::Required
+                        && record.command.trim() == named.command.trim()
+                        && record.outcome == ValidationOutcome::Failed
+                })
+            {
+                continue;
+            }
+            owed.push(named.clone());
+        }
+    }
+
     /// Hold the verdict to the evidence `owed` names. Each owed requirement
     /// replaces any the reviewer named for the same check, and its required
     /// record is `not_run` until the evidence arrives: a reviewer record of
@@ -165,7 +197,7 @@ impl Judgement {
         }
         let host_note = |required: &ReviewEvidenceRequirement| {
             format!(
-                "owed by the workspace host-evidence rule `{}`: Orbit runs it on {} for this \
+                "owed host evidence `{}`: Orbit runs it on {} for this \
                  candidate",
                 required.name,
                 required.os.map_or("its host", EvidenceHostOs::as_str)
