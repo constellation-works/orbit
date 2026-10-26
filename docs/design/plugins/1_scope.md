@@ -637,8 +637,8 @@ single JSON text content item is also accepted. Plain text errors remain Executi
 Orbit forwards a valid plugin error as MCP `isError: true` with `structuredContent` containing
 `code`, `message`, `retryable` and any retained `detail`. `orbit tool run <ns>.<verb>`
 exits non-zero and writes the same JSON object to stderr; stdout is empty. A call using the
-deliberate `ORBIT_OPERATOR` override also emits its existing authorization warning on stderr
-before the JSON object.
+deliberate `ORBIT_OPERATOR` override records the override in the audit trail and at debug
+log level; stderr carries only the JSON object at the default level.
 
 Non-zero exit, non-JSON stdout, or output failing `output_schema` is a tool error; there is no
 partial success. Timeout is `backend.timeout_ms`, capped by the host's
