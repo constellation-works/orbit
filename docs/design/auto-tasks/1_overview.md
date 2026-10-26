@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-25
 last_validated: 2026-10-25
 status: Accepted
+stage: shipped
+next: "—"
 feature: auto-tasks
 doc_role: overview
 type: design

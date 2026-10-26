@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-25
 last_validated: 2026-10-25
 status: Draft
+stage: designing
+next: "Daniel approves the scope, then implementation slices are filed"
 feature: granted-tools
 doc_role: scope
 type: design

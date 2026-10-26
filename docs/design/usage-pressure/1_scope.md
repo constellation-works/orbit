@@ -2,6 +2,8 @@
 title: "Scope: usage-pressure crew selection"
 owner: claude
 status: Draft
+stage: shipped
+next: "—"
 feature: usage-pressure
 doc_role: scope
 type: design

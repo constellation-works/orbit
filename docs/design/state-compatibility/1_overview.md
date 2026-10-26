@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-09-13
 last_validated: 2026-10-19
 status: Draft
+stage: shipped
+next: "—"
 feature: state-compatibility
 doc_role: overview
 type: design

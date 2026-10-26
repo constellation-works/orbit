@@ -107,6 +107,75 @@ Incident reviews preserve impact, timelines, causal evidence, uncertainty, and f
 | [Cross-crate recursive test-worker OOM](./dev/rca/2026-09-23-cross-crate-test-worker-oom.md) | 2026-09-23 | Root cause analysis of the cross-crate recursive test-worker fork bomb that exhausted memory and forced a hard reset of the Linux execution host. |
 | [Recursive test-worker fork storm](./dev/rca/2026-09-06-recursive-test-worker-fork-storm.md) | 2026-09-06 | Root cause analysis of the recursive Orbit test-worker fork storm that saturated a 14-CPU Linux host. |
 
+## Feature board
+
+Where each feature in `docs/design/` stands, from the `stage` and `next` fields of its
+entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
+Live task progress is in Orbit; this board records what the feature lead last set.
+
+### Building (6)
+
+| Feature | Next | Lead |
+| --- | --- | --- |
+| [Experiments](./design/experiments/1_scope.md) | Land slice 1 (ORB-18473, in progress), then slice 2 (ORB-18474) | claude |
+| [Explore Brief](./design/explore-brief/1_scope.md) | File slice S2, the pilot storing briefs in shadow (no task yet) | claude |
+| [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
+| [Operations as Data](./design/operations-as-data/1_overview.md) | Refuse unknown fields after the warn window; ORB-15934 was archived, no live task | claude |
+| [Path Leases](./design/path-leases/1_overview.md) | Land ORB-18406 (orbit.lease tools and CLI), then listener tasks ORB-18410, 18412, 18430 | claude |
+| [Web Terminal](./design/web-terminal/1_scope.md) | Phase 1: ORB-18488 browser-session credential (backlog, not started) | claude |
+
+### Designing (3)
+
+| Feature | Next | Lead |
+| --- | --- | --- |
+| [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
+| [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
+| [Granted Tools](./design/granted-tools/1_scope.md) | Daniel approves the scope, then implementation slices are filed | claude |
+
+### Shipped (33)
+
+| Feature | Next | Lead |
+| --- | --- | --- |
+| [Activity / Job](./design/activity-job/1_overview.md) | — | codex |
+| [Agent Families](./design/agent-families/1_overview.md) | — | grok |
+| [Agent Scorecards](./design/agent-scorecards/1_overview.md) | — | claude |
+| [Auditability](./design/auditability/1_overview.md) | — | codex |
+| [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Operator decides when admission moves from shadow to forecast mode | claude |
+| [Auto-tasks](./design/auto-tasks/1_overview.md) | — | claude |
+| [Automation Triggers](./design/automation-triggers/1_overview.md) | — | codex |
+| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | — | claude |
+| [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
+| [Crew Performance](./design/crew-performance/1_scope.md) | Operator picks a workflow.crew_performance default from the shadow share report | claude |
+| [Distributed Drain](./design/distributed-drain/1_overview.md) | — | claude |
+| [Executors](./design/executors/4_decisions.md) | — | claude |
+| [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
+| [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
+| [Host Registry](./design/host-registry/1_overview.md) | — | codex |
+| [Orbit MCP](./design/mcp-bridge/1_overview.md) | — | codex |
+| [MCP Session Context](./design/mcp-session-context/1_overview.md) | — | codex |
+| [Mid-Run Operator Steering](./design/mid-run-steering/1_overview.md) | — | codex |
+| [Orbit Core](./design/orbit-core/1_overview.md) | — | codex |
+| [Task Search](./design/orbit-search/1_overview.md) | — | codex |
+| [Plugins](./design/plugins/1_scope.md) | — | — |
+| [Policy & Sandboxing](./design/policy-sandbox/1_overview.md) | — | claude |
+| [Process Supervision](./design/process-supervision/1_overview.md) | — | claude |
+| [Remote Access](./design/remote-access/1_overview.md) | — | codex |
+| [Review Gate](./design/review-gate/1_overview.md) | — | codex |
+| [Routines](./design/routines/1_overview.md) | — | claude |
+| [State Compatibility](./design/state-compatibility/1_overview.md) | — | claude |
+| [Task Artifacts](./design/task-artifacts/1_overview.md) | — | codex |
+| [Task Migration](./design/task-migration/1_overview.md) | — | claude |
+| [Task Publication](./design/task-publication/1_overview.md) | — | codex |
+| [Terminal Interface](./design/terminal-interface/1_overview.md) | — | claude |
+| [Usage Pressure](./design/usage-pressure/1_scope.md) | — | claude |
+| [User Interface](./design/user-interface/1_overview.md) | — | gemini |
+
+### Parked (1)
+
+| Feature | Next | Lead |
+| --- | --- | --- |
+| [Project Learnings](./design/project-learnings/4_decisions.md) | Retired by decision (ORB-10736); candidate to move under _archived | claude |
+
 ## Designs
 
 Active feature designs live under `docs/design/<feature>/`. Each row links to

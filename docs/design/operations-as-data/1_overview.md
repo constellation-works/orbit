@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-20
 last_validated: 2026-10-20
 status: Accepted
+stage: building
+next: "Refuse unknown fields after the warn window; ORB-15934 was archived, no live task"
 feature: operations-as-data
 doc_role: overview
 type: design

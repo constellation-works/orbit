@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-19
 last_validated: 2026-10-23
 status: Draft
+stage: shipped
+next: "—"
 feature: agent-scorecards
 doc_role: overview
 type: design

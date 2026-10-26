@@ -4,6 +4,8 @@ owner: claude
 last_updated: 2026-10-11
 last_validated: 2026-10-19
 status: Accepted
+stage: shipped
+next: "—"
 feature: routines
 doc_role: overview
 type: design

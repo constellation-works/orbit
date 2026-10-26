@@ -2,6 +2,8 @@
 title: "Scope: performance-weighted crew selection"
 owner: claude
 status: Draft
+stage: shipped
+next: "Operator picks a workflow.crew_performance default from the shadow share report"
 feature: crew-performance
 doc_role: scope
 type: design
