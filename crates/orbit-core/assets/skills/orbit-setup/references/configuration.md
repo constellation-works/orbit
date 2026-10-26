@@ -613,6 +613,119 @@ guard = "scripts/check-comment-only-diff.sh"
   task's history as `light_delivery_applied` or
   `light_delivery_ignored`, naming the tag and the failed condition.
 
+## Path-lease policy
+
+A path lease lets a named principal, a person or an agent, reserve workspace
+selectors for coordination. Leases are off until `lease.enabled` is `true`.
+While it is off, every lease operation is refused with an error naming the key.
+
+| Key | Built-in default | Accepted values | Governs |
+|---|---|---|---|
+| `lease.enabled` | `false` | `true`, `false` | Whether lease operations are accepted at all. |
+| `lease.default_mode` | `advisory` | `advisory`, `hard` | Mode of a request that names none. |
+| `lease.hard.human` | `allow` | `allow`, `never` | Whether a human principal's hard requests stay hard. `never` grants them as advisory. |
+| `lease.hard.agent` | `allow` | `allow`, `never` | The same rule for agent principals. |
+| `lease.max_priority.human` | `high` | `low`, `normal`, `high` | Highest priority a human request may name. |
+| `lease.max_priority.agent` | `normal` | `low`, `normal`, `high` | Highest priority an agent request may name. |
+
+These keys inherit per key like other settings. Set the policy and read it back:
+
+```bash
+orbit config keys --json                 # confirm the six lease.* keys in the installed version
+orbit config set lease.enabled true      # workspace config; add --global for ~/.orbit/config.toml
+orbit config get lease.enabled
+orbit config show --all                  # effective values with their source
+```
+
+The same policy as TOML, with each dotted key written as a table:
+
+```toml
+[lease]
+enabled = true
+default_mode = "advisory"
+
+[lease.hard]
+human = "allow"
+agent = "never"
+
+[lease.max_priority]
+human = "high"
+agent = "normal"
+```
+
+Enabling leases changes live coordination for everyone on the workspace, so
+make that choice deliberately and record it.
+
+### How requests behave
+
+- **Advisory** requests are granted whenever leases are enabled. They block
+  nothing. The answer lists the `overlaps` holders so the caller can coordinate.
+- **Hard** requests are granted only when no selector overlaps a task context
+  lock, a task reservation or another hard lease. Paths matching
+  `workflow.unlocked_context_paths` leave the hard surface and come back as
+  `unlocked_selectors`. An overlap refuses the request (`granted: false`,
+  `reason: held`) and names every holder in `conflicts`. There is no waiting
+  queue, so retry after the holder releases or expires.
+- **Class downgrade:** a hard request from a principal class whose
+  `lease.hard.*` is `never` is granted as advisory, with `downgraded: true`
+  and a `notice`.
+- **Priority** is stored with the lease and checked only against the class
+  ceiling. A request above `lease.max_priority.*` is refused with
+  `reason: priority_ceiling`, and the refusal is audited. Priority does not
+  reorder, preempt or queue anything. A request that names no priority gets
+  `normal`, lowered to the ceiling if the ceiling is below it.
+- **Principal class** is `agent` when the process running the operation declares
+  an agent or managed run, and `human` otherwise. Over REST, that is the serving
+  process, not the remote caller. Over SSH the class and its ceilings are
+  attribution plus a guard, not a security boundary.
+- **TTL and expiry:** `ttl_seconds` defaults to `1800` and must be between `1`
+  and `14400`. `renew` moves expiry to now plus the TTL, and `release` ends a
+  lease. An expired lease ends lazily when a request, renew, release, show or list
+  touches it, and each ending emits a `lease.expired` audit event. `check` only
+  reads: it neither expires nor audits. Renewing an inactive lease fails, and
+  releasing one returns `released: false`. Either way, request a new lease.
+- Lease expansion is not available. `POST /api/leases/{id}/expand` returns
+  `501` with `not_available_in_this_phase`.
+
+### Transports
+
+The installed release has no `orbit lease` command and no `orbit.lease.*` MCP
+tool. The `orbit.lease.*` names appear only as audit tool labels. Before relying
+on a lease command or MCP tool, check `orbit --help` and the installed tool
+catalog for one.
+
+- **Config:** the `orbit config` commands above.
+- **REST:** `orbit web serve` (default `127.0.0.1:7878`) serves `/api/leases`:
+  `GET` and `POST /api/leases`, `GET` and `DELETE /api/leases/{id}`,
+  `POST /api/leases/check` and `POST /api/leases/{id}/renew`. Select a workspace
+  with `?workspace=<name-or-id>`. Reads need no operator session. Request, renew
+  and release need the server started with `--operator`; otherwise they are denied.
+  The routes accept only localhost origins.
+- **Audit:** `orbit audit list --tool orbit.lease.request --since 1h`, or
+  `--kind lease` for every lease event. Granted requests record
+  `lease.request.granted`, refusals record `lease.request.refused` with status
+  `denied`, and expiries record `lease.expired`.
+
+### Verify the policy
+
+Use a disposable workspace for the first check. Enable leases there, start the
+dashboard with `orbit web serve --operator --no-open`, and then:
+
+1. `orbit config show --all` shows each `lease.*` value and its source.
+2. Post an advisory request. Expect `"granted": true` and a `lease` object with a `lease_id`:
+
+   ```bash
+   curl -s -X POST 'http://127.0.0.1:7878/api/leases?workspace=<workspace>' \
+     -H 'Content-Type: application/json' \
+     -d '{"principal":"<person-or-agent>","selectors":["<workspace-relative-path-or-glob>"],"mode":"advisory","ttl_seconds":600}'
+   ```
+
+3. `GET /api/leases` lists the lease, and `orbit audit list --tool orbit.lease.request --since 1h` shows the granted event.
+4. To see a hard refusal, send a `"mode":"hard"` request over a path held by another active hard lease or a task context lock. Expect `granted: false` with `conflicts` naming the holder, and a `lease.request.refused` event with status `denied`.
+5. To see a priority refusal, set `lease.max_priority.human` to `low` in the disposable workspace, then request `"priority":"high"`. Expect a refusal with `priority_ceiling` in the audit event.
+6. To see class downgrade, set `lease.hard.human` to `never`, then send a hard request. Expect `granted: true`, `downgraded: true` and a `notice`.
+7. Release the test lease with `DELETE /api/leases/<lease_id>`, and restore the previous `lease.*` values with `orbit config set`.
+
 ## Environment passthrough
 
 Agent subprocesses always start from a **cleared** environment plus the
