@@ -199,6 +199,32 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
 .agents-detail-score span { color: var(--fg-mute); font-size: 12px; }
 .agents-detail-raw { margin: 2px 0 0; color: var(--fg-dim); font-size: 12px; }
 .agents-detail-note { margin: 4px 0 0; color: var(--warn-fg); font-size: 12px; line-height: 1.45; }
+/* Numbered axes keep full term labels readable even in the 280px column.
+   Dashed spokes and explicit labels distinguish context from scored terms. */
+.agents-radar { margin-top: 14px; border-top: 1px solid var(--hair); }
+.agents-radar svg { display: block; width: 100%; max-width: 360px; margin: 4px auto 0; overflow: visible; }
+.agents-radar-grid { fill: none; stroke: var(--border); stroke-width: 1; }
+.agents-radar-spoke { stroke: var(--border); stroke-width: 1; }
+.agents-radar .is-unscored { stroke-dasharray: 3 3; color: var(--fg-mute); font-style: italic; }
+.agents-radar-label { fill: var(--fg-dim); font-size: 12px; font-family: var(--font-mono); }
+.agents-radar-own { fill: var(--accent); fill-opacity: 0.2; stroke: var(--accent); stroke-width: 2; }
+.agents-radar-fleet { fill: var(--status-review); fill-opacity: 0.1; stroke: var(--status-review); stroke-width: 2; stroke-dasharray: 5 3; }
+.agents-radar-hit { fill: transparent; }
+.agents-radar-marker { fill: var(--accent); stroke: var(--bg-elev); stroke-width: 1.5; }
+.agents-radar-vertex { cursor: help; }
+.agents-radar-vertex.is-gap .agents-radar-marker { fill: var(--bg-elev); stroke: var(--fg-mute); }
+.agents-radar-vertex:focus { outline: none; }
+.agents-radar-vertex:focus .agents-radar-hit,
+.agents-radar-vertex:hover .agents-radar-hit { stroke: var(--fg); stroke-width: 1.5; }
+.agents-radar.is-muted svg { opacity: 0.45; }
+.agents-radar-note { color: var(--warn-fg); font-size: 12px; }
+.agents-radar-legend { display: flex; flex-wrap: wrap; gap: 8px 16px; margin: 2px 0 8px; font-size: 11px; color: var(--fg-dim); }
+.agents-radar-legend span::before { content: ""; display: inline-block; width: 16px; margin-right: 5px; vertical-align: middle; }
+.agents-radar-own-key::before { border-top: 2px solid var(--accent); }
+.agents-radar-fleet-key::before { border-top: 2px dashed var(--status-review); }
+.agents-radar-axes { margin: 0; padding-left: 22px; display: grid; gap: 4px; font-size: 11px; line-height: 1.4; color: var(--fg-dim); }
+.agents-radar-tooltip { min-height: 5em; margin: 8px 0 0; padding: 8px; border: 1px solid var(--hair); color: var(--fg-dim); font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }
+
 .agents-breakdown { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .agents-breakdown li { display: grid; grid-template-columns: minmax(0, 1fr) auto 72px 3.5rem; align-items: center; gap: 8px; font-size: 12px; }
 .agents-term-context { display: block; color: var(--fg-dim); font-size: 0.75rem; font-weight: normal; }
