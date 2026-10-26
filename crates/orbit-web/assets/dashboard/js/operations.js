@@ -2887,12 +2887,48 @@ function renderDrainSummary(payload) {
   summary.hidden = false;
 }
 
+// A dismissed provider-limit note stays hidden in this browser until its set
+// of gated windows changes: another provider, account, scope or window gates,
+// a reset time moves, or the skipped crews change. Only the most recent few
+// are kept, so the list cannot grow without bound.
+const DISMISSED_PROVIDER_LIMITS_KEY = "orbit.dashboard.dismissedProviderLimits";
+const DISMISSED_PROVIDER_LIMITS_MAX = 20;
+
+function providerLimitNoteKey(gated) {
+  return JSON.stringify(gated.map(reading => [
+    reading.provider, reading.account || "", reading.scope || "", reading.window || "", reading.until || "",
+    Array.isArray(reading.crews) ? [...reading.crews].sort() : [],
+  ]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+}
+
+function dismissedProviderLimits() {
+  try {
+    const stored = JSON.parse(window.localStorage.getItem(DISMISSED_PROVIDER_LIMITS_KEY) || "[]");
+    return Array.isArray(stored) ? stored.filter(key => typeof key === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function dismissProviderLimits(key) {
+  const kept = dismissedProviderLimits().filter(existing => existing !== key);
+  kept.push(key);
+  try {
+    window.localStorage.setItem(DISMISSED_PROVIDER_LIMITS_KEY, JSON.stringify(kept.slice(-DISMISSED_PROVIDER_LIMITS_MAX)));
+  } catch {
+    /* localStorage unavailable: the note stays dismissed until the next repaint */
+  }
+}
+
 // [ORB-14698] Each provider usage window that keeps crews out of admission,
 // with its use, threshold, reset and the crews skipped until then. Readings
 // below their threshold do not hold anything, so they are not shown here.
+// The note can be dismissed; see dismissedProviderLimits.
 function autoDrainProviderLimitNote(readings) {
   const gated = (Array.isArray(readings) ? readings : []).filter(reading => reading?.gated === true);
   if (gated.length === 0) return null;
+  const key = providerLimitNoteKey(gated);
+  if (dismissedProviderLimits().includes(key)) return null;
   const lines = gated.map((reading) => {
     // A crew that sets `env` is its own account, named `provider/crew`.
     const account = reading.account ? `${reading.provider}/${reading.account}` : reading.provider;
@@ -2903,8 +2939,19 @@ function autoDrainProviderLimitNote(readings) {
     const crews = Array.isArray(reading.crews) && reading.crews.length ? reading.crews.join(", ") : "no configured crew";
     return `${label} ${usage} until ${time(reading.until)}: ${crews} skipped`;
   });
-  const note = el("p", { class: "operation-control-note drain-provider-limit-note", text: `Provider limits: ${lines.join("; ")}.` });
+  const note = el("p", { class: "operation-control-note drain-provider-limit-note" }, [
+    el("span", { class: "drain-provider-limit-text", text: `Provider limits: ${lines.join("; ")}.` }),
+  ]);
   note.setAttribute("role", "status");
+  const dismiss = el("button", {
+    class: "drain-note-dismiss", type: "button", title: "Dismiss until these limits change",
+    "aria-label": "Dismiss provider limits until they change",
+  });
+  dismiss.addEventListener("click", () => {
+    dismissProviderLimits(key);
+    note.remove();
+  });
+  note.append(dismiss);
   return note;
 }
 

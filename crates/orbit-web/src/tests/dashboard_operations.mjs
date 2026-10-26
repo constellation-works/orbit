@@ -1816,7 +1816,7 @@ releaseBacklogForecast();
 releaseBacklogForecast = null;
 await heldRefresh;
 await tick();
-assert(backlogLink()?.textContent.includes('Time to drain 6.5h – 20h'), 'the forecast summary updates after its independent request settles');
+assert(backlogLink()?.querySelector('.drain-backlog-forecast-figures')?.textContent.startsWith('6.5h – 20h'), 'the forecast summary updates after its independent request settles');
 const searchesBeforeReady = backlogForecastSearches.length;
 backlogForecastMode = 'ready';
 await fetchAndRenderAutoDrainPane();
@@ -1825,8 +1825,12 @@ const readySearch = backlogForecastSearches.at(-1) || '';
 const readyLink = backlogLink();
 const readyText = readyLink?.textContent || '';
 assert(backlogForecastSearches.length === searchesBeforeReady + 1 && !readySearch.includes('lookback_days') && !readySearch.includes('arrivals'), `the summary reads the default backlog forecast: ${readySearch}`);
-assert(readyLink?.tagName === 'A' && readyLink.getAttribute('href')?.includes('#analytics/forecast') && readyLink.getAttribute('title') === 'Analytics › Forecast', `the summary links to Analytics › Forecast: ${readyLink?.outerHTML}`);
-assert(readyText.includes('p50 – p90') && readyText.includes('Time to drain 6.5h – 20h') && readyText.includes('18 backlog · 2 in progress') && readyText.includes('Tokens 1.5M – 4.8M') && readyText.includes('Cost $12.50 – $40.00'), `ready summary: ${readyText}`);
+assert(readyLink?.tagName === 'A' && readyLink.getAttribute('href')?.includes('#analytics/forecast') && readyLink.getAttribute('title')?.endsWith('Analytics › Forecast'), `the summary links to Analytics › Forecast: ${readyLink?.outerHTML}`);
+// One line shows time to drain and cost; the counts and tokens are in the
+// tooltip and the accessible text.
+assert(readyLink.querySelector('.drain-backlog-forecast-figures')?.textContent === '6.5h – 20h · $13 – $40', `ready figures: ${readyText}`);
+assert(readyText.includes('p50 – p90') && readyText.includes('18 backlog · 2 in progress') && readyText.includes('Tokens 1.5M – 4.8M'), `ready accessible text: ${readyText}`);
+assert(readyLink.title.includes('18 backlog · 2 in progress') && readyLink.title.includes('Tokens 1.5M – 4.8M') && readyLink.title.includes('Cost $12.50 – $40.00'), `ready tooltip: ${readyLink.title}`);
 const built = forecastCard()?.querySelector('.drain-forecast-built');
 assert(built && readyLink && readyLink.parentElement === forecastCard() && readyLink === forecastCard().lastElementChild && (built.compareDocumentPosition(readyLink) & Node.DOCUMENT_POSITION_FOLLOWING), 'the summary follows the admission forecast');
 let summaryActivated = false;
@@ -1838,12 +1842,12 @@ backlogForecastMode = 'nocost';
 await fetchAndRenderAutoDrainPane();
 await tick();
 const nocostText = backlogLink()?.textContent || '';
-assert(nocostText.includes('Tokens 1.5M – 4.8M') && !nocostText.includes('Cost') && !nocostText.includes('—'), `cost is omitted when uncosted: ${nocostText}`);
+assert(nocostText.includes('Tokens 1.5M – 4.8M') && !nocostText.includes('$') && !nocostText.includes('—'), `cost is omitted when uncosted: ${nocostText}`);
 backlogForecastMode = 'notokens';
 await fetchAndRenderAutoDrainPane();
 await tick();
 const notokensText = backlogLink()?.textContent || '';
-assert(notokensText.includes('Cost $12.50 – $40.00') && !notokensText.includes('Tokens'), `tokens are omitted when absent: ${notokensText}`);
+assert(notokensText.includes('$13 – $40') && !notokensText.includes('Tokens'), `tokens are omitted when absent: ${notokensText}`);
 for (const mode of ['empty', 'error', 'missing']) {
   backlogForecastMode = mode;
   await fetchAndRenderAutoDrainPane();
@@ -1866,7 +1870,7 @@ for (const staleMode of ['ready', 'error']) {
   await fetchAndRenderAutoDrainPane();
   await tick();
   const currentSummary = backlogLink()?.textContent;
-  assert(currentSummary?.includes('Time to drain') && !currentSummary.includes('Cost'), 'the new workspace paints its own forecast');
+  assert(currentSummary?.includes('6.5h – 20h') && !currentSummary.includes('$'), 'the new workspace paints its own forecast');
   releaseStaleForecast();
   releaseBacklogForecast = null;
   await tick();

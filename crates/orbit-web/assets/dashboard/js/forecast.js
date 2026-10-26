@@ -173,46 +173,54 @@ function forecastCount(value) {
   return n == null || n < 0 ? 0 : Math.trunc(n);
 }
 
-/// Compact drain-card lines. Null when time to drain has no quantile.
-/// Tokens and cost are left out when that pair has none, so a missing cost
-/// is not a dash row.
+/// Compact drain-card figures. Null when time to drain has no quantile.
+/// Tokens and cost are null when that pair has none, so a missing cost is
+/// left out rather than shown as a dash.
 export function backlogForecastSummary(payload) {
   if (!payload || typeof payload !== "object") return null;
   const forecast = payload.forecast || {};
   const hours = forecast.time_to_drain_hours;
   if (!quantilePair(hours)) return null;
   const backlog = payload.backlog || {};
-  const lines = [
-    `Time to drain ${formatForecastQuantileRange(hours, formatForecastHours)}`,
-    `${forecastCount(backlog.backlog)} backlog · ${forecastCount(backlog.in_progress)} in progress`,
-  ];
-  if (quantilePair(forecast.tokens)) {
-    lines.push(`Tokens ${formatForecastQuantileRange(forecast.tokens, formatForecastTokens)}`);
-  }
-  if (quantilePair(forecast.usd)) {
-    lines.push(`Cost ${formatForecastQuantileRange(forecast.usd, formatForecastUsd)}`);
-  }
-  return { lines };
+  const costed = quantilePair(forecast.usd);
+  return {
+    drain: formatForecastQuantileRange(hours, formatForecastHours),
+    cost: costed ? formatForecastQuantileRange(forecast.usd, wholeUsd) : null,
+    exactCost: costed ? formatForecastQuantileRange(forecast.usd, formatForecastUsd) : null,
+    tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
+    counts: `${forecastCount(backlog.backlog)} backlog · ${forecastCount(backlog.in_progress)} in progress`,
+  };
 }
 
-/// One link to Analytics › Forecast. A null summary is the muted unavailable line.
+// Whole dollars, so the dock line fits; the tooltip keeps the cents.
+function wholeUsd(value) {
+  const n = num(value);
+  return n == null ? "—" : `$${Math.round(n).toLocaleString()}`;
+}
+
+/// One line linking to Analytics › Forecast: time to drain and cost as
+/// p50 – p90. The counts, tokens and exact cost are in its tooltip and
+/// accessible text, so the crowded dock spends one row on it. A null summary is the muted
+/// unavailable line.
 export function drainBacklogForecastLink(summary) {
   const unavailable = !summary;
-  const link = el("a", {
-    class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast",
-    title: "Analytics › Forecast",
-  });
+  const link = el("a", { class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast" });
   link.href = scopedHashHref("#analytics/forecast");
   if (unavailable) {
+    link.title = "Analytics › Forecast";
     link.textContent = "Backlog forecast unavailable";
     return link;
   }
+  const figures = [summary.drain, summary.cost].filter(Boolean).join(" · ");
+  const detail = [
+    summary.counts, summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Cost ${summary.exactCost}`,
+  ].filter(Boolean).join(" · ");
+  link.title = `p50 – p90 · ${detail}\nAnalytics › Forecast`;
   link.append(
-    el("span", { class: "drain-backlog-forecast-head" }, [
-      el("span", { class: "drain-section-label", text: "Backlog forecast" }),
-      el("span", { class: "drain-forecast-meta", text: "p50 – p90" }),
-    ]),
-    ...summary.lines.map((line) => el("span", { class: "drain-backlog-forecast-line", text: line })),
+    el("span", { class: "drain-section-label", text: "Backlog" }),
+    el("span", { class: "drain-backlog-forecast-figures", text: figures }),
+    el("span", { class: "visually-hidden", text: ` p50 – p90, ${detail}` }),
+    el("span", { class: "drain-backlog-forecast-go", text: "›", "aria-hidden": "true" }),
   );
   return link;
 }
