@@ -319,9 +319,9 @@ fn canonicalize_header(header: &Header, canon: Canon) -> String {
     match canon {
         Canon::Simple => header.raw.clone(),
         Canon::Relaxed => {
-            let name = header.name.trim().to_ascii_lowercase();
+            let name = trim_wsp(&header.name).to_ascii_lowercase();
             let value = compress_wsp(&unfold(&header.value));
-            format!("{name}:{}", value.trim())
+            format!("{name}:{}", trim_wsp(&value))
         }
     }
 }
@@ -343,6 +343,13 @@ fn compress_wsp(value: &str) -> String {
     out
 }
 
+/// Trims the WSP (SP and HTAB) that relaxed canonicalisation deletes.
+/// `str::trim` also strips Unicode whitespace such as U+00A0, which is
+/// signed content and must reach the hash unchanged.
+fn trim_wsp(value: &str) -> &str {
+    value.trim_matches([' ', '\t'])
+}
+
 fn signed_header_data(
     signature_header: &Header,
     headers: &[Header],
@@ -357,7 +364,9 @@ fn signed_header_data(
             .iter()
             .enumerate()
             .rev()
-            .find(|(index, header)| !used[*index] && header.name.trim().eq_ignore_ascii_case(name))
+            .find(|(index, header)| {
+                !used[*index] && trim_wsp(&header.name).eq_ignore_ascii_case(name)
+            })
             .map(|(index, _)| index);
         let Some(index) = index else { continue };
         used[index] = true;
@@ -430,7 +439,11 @@ fn canonicalize_body(body: &[u8], canon: Canon) -> Vec<u8> {
         Canon::Simple => lines,
         Canon::Relaxed => lines
             .into_iter()
-            .map(|line| compress_wsp(&line).trim_end().to_string())
+            .map(|line| {
+                compress_wsp(&line)
+                    .trim_end_matches([' ', '\t'])
+                    .to_string()
+            })
             .collect(),
     };
     while matches!(lines.last(), Some(line) if line.is_empty()) {
