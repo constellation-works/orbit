@@ -62,6 +62,26 @@ function cleanEnv(home) {
   return env;
 }
 
+function snapshotTree(root) {
+  const entries = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(root, absolute);
+      if (entry.isDirectory()) {
+        entries.push(`${relative}/`);
+        visit(absolute);
+      } else if (entry.isSymbolicLink()) {
+        entries.push(`${relative}->${fs.readlinkSync(absolute)}`);
+      } else {
+        entries.push(`${relative}:${fs.readFileSync(absolute).toString('base64')}`);
+      }
+    }
+  };
+  visit(root);
+  return entries;
+}
+
 function parseTomlLiteralFromCli(command) {
   const script = `
 import sys, shlex, tomllib
@@ -491,7 +511,44 @@ try {
   fs.writeFileSync(path.join(fixtureWork, '.orbit', 'config.toml'), '');
 
   const env = cleanEnv(fixtureHome);
-  execFileSync('git', ['init'], { cwd: fixtureWork });
+  const sentinelHome = path.join(fixtureBase, 'sentinel-home');
+  const sentinelGitDir = path.join(fixtureBase, 'external.git');
+  const sentinelWorkTree = path.join(fixtureBase, 'external-work');
+  fs.mkdirSync(sentinelHome, { recursive: true });
+  fs.mkdirSync(sentinelWorkTree, { recursive: true });
+  const sentinelEnv = cleanEnv(sentinelHome);
+  execFileSync('git', ['init', '--bare', sentinelGitDir], { env: sentinelEnv });
+  const sentinelBlob = execFileSync('git', ['--git-dir', sentinelGitDir, 'hash-object', '-w', '--stdin'], {
+    env: sentinelEnv,
+    input: 'git authority sentinel',
+    encoding: 'utf8',
+  }).trim();
+  execFileSync('git', ['--git-dir', sentinelGitDir, 'update-ref', 'refs/tags/sentinel', sentinelBlob], { env: sentinelEnv });
+  fs.writeFileSync(path.join(sentinelWorkTree, 'sentinel.txt'), 'leave this worktree unchanged\n');
+  const sentinelGitBefore = snapshotTree(sentinelGitDir);
+  const sentinelWorkBefore = snapshotTree(sentinelWorkTree);
+
+  // Model hostile Git authority inherited by this fixture process. The clean
+  // child environment must keep git init inside fixtureWork despite it.
+  const previousAuthority = new Map();
+  for (const [name, value] of Object.entries({ GIT_DIR: sentinelGitDir, GIT_WORK_TREE: sentinelWorkTree })) {
+    previousAuthority.set(name, process.env[name]);
+    process.env[name] = value;
+  }
+  try {
+    execFileSync('git', ['init'], { cwd: fixtureWork, env });
+  } finally {
+    for (const [name, value] of previousAuthority) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
+  assert.ok(fs.existsSync(path.join(fixtureWork, '.git')), 'git init creates the config fixture repository');
+  const fixtureGitRoot = execFileSync('git', ['-C', fixtureWork, 'rev-parse', '--show-toplevel'], { cwd: fixtureWork, env, encoding: 'utf8' }).trim();
+  assert.equal(path.resolve(fixtureGitRoot), path.resolve(fixtureWork), 'fixture Git commands stay inside fixtureWork');
+  assert.deepEqual(snapshotTree(sentinelGitDir), sentinelGitBefore, 'git init leaves sentinel repository metadata and refs unchanged');
+  assert.deepEqual(snapshotTree(sentinelWorkTree), sentinelWorkBefore, 'git init leaves sentinel worktree files unchanged');
+
   execFileSync('orbit', ['init', '--non-interactive', '--machine-name', 'test', '--task-prefix', 'TST', '--skip-host-prerequisites'], { cwd: fixtureWork, env });
   execFileSync('orbit', ['workspace', 'init', '--force'], { cwd: fixtureWork, env });
 
@@ -540,6 +597,7 @@ try {
       'cleared-or-invalid-number-refused-before-request',
       'cli-admits-whole-number-literal-for-f64-row',
       'cli-applies-beyond-i64-number-as-saved',
+      'git-init-scrubs-inherited-repository-authority',
     ],
   }, null, 2));
 
