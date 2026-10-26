@@ -2,7 +2,7 @@
 title: "Remote Access — Overview"
 owner: codex
 last_updated: 2026-10-08
-last_validated: 2026-10-22
+last_validated: 2026-10-25
 status: Accepted
 feature: remote-access
 doc_role: overview
@@ -46,6 +46,6 @@ A serving dashboard reaches the hosts in its host file through `/api/on/<host>/<
 
 Orbit Web refuses non-loopback binds and has no application authentication. Its Origin check is browser-CSRF mitigation, not access control. SSH supplies remote authentication, encryption, and host verification.
 
-The Web API includes mutations. Anyone who can reach the forwarded local port can act with the authority of the remote Orbit process. Through the host forward, an operator session on the serving dashboard can act as operator on every registered host the serving host's SSH identity can reach. Remote access is live access to one machine's state, not cross-machine synchronization, replication, or an offline shared store.
+The Web API includes mutations. Anyone who can reach the forwarded local port can act with the authority of the remote Orbit process. Through the host forward, an operator session is passed to a remote dashboard the serving dashboard starts; an already-running dashboard keeps its own operator capability. The serving host's SSH identity limits which registered hosts it can reach. Remote access is live access to one machine's state, not cross-machine synchronization, replication, or an offline shared store.
 
 See [2_design.md](./2_design.md) for mechanics, [3_vision.md](./3_vision.md) for evolution gates, [4_decisions.md](./4_decisions.md) for current choices, [specs/ssh-tunnel.md](./specs/ssh-tunnel.md) for the tunnel contract, and [specs/host-forward.md](./specs/host-forward.md) for the host forward.
