@@ -72,6 +72,8 @@ let drainCapacityOverride = {};
 // (no estimate). ready / nocost / notokens carry quantiles. empty has null
 // hours. error and missing are a failed and an absent endpoint.
 let backlogForecastMode = '';
+let delayBacklogForecast = false;
+let releaseBacklogForecast = null;
 const backlogForecastSearches = [];
 let drainTasksOverride = null;
 let providerLimitsFixture = null;
@@ -256,16 +258,18 @@ globalThis.fetch = async (path, options = {}) => {
   });
   if (url.pathname === '/api/diagnostics/backlog_forecast') {
     backlogForecastSearches.push(url.search);
-    if (backlogForecastMode === 'error') return response({ error: 'forecast failed' }, 500);
-    if (backlogForecastMode === 'missing') return response({ error: '' }, 404);
+    const mode = backlogForecastMode;
+    if (delayBacklogForecast) await new Promise(resolve => { releaseBacklogForecast = resolve; });
+    if (mode === 'error') return response({ error: 'forecast failed' }, 500);
+    if (mode === 'missing') return response({ error: '' }, 404);
     const hours = { p50: 6.5, p90: 20 };
     const tokens = { p50: 1500000, p90: 4800000 };
     const usd = { p50: 12.5, p90: 40 };
     const backlog = { backlog: 18, in_progress: 2 };
-    if (backlogForecastMode === 'empty') return response({ backlog, forecast: { tasks: 5, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null } } });
-    if (backlogForecastMode === 'nocost') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd: { p50: null, p90: null } } });
-    if (backlogForecastMode === 'notokens') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens: { p50: null, p90: null }, usd } });
-    if (backlogForecastMode === 'ready') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd } });
+    if (mode === 'empty') return response({ backlog, forecast: { tasks: 5, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null } } });
+    if (mode === 'nocost') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd: { p50: null, p90: null } } });
+    if (mode === 'notokens') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens: { p50: null, p90: null }, usd } });
+    if (mode === 'ready') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd } });
     return response({});
   }
   return response({});
@@ -1731,9 +1735,32 @@ assert(!forecastText.includes('headroom 0.0'), `an unknown headroom must not rea
 // block stays.
 const backlogLink = () => forecastCard()?.querySelector(':scope > .drain-backlog-forecast');
 const forecastTextIncludesAdmission = () => (forecastCard()?.textContent || '').includes('host capacity unknown');
+// Hold only the optional forecast: readiness, fleet and action readback all
+// succeed. Neither the dashboard refresh promise nor its control may wait for
+// the forecast, and repeated readbacks must reuse the same in-flight request.
+backlogForecastMode = 'ready';
+delayBacklogForecast = true;
+const searchesBeforeHeld = backlogForecastSearches.length;
+let heldRefreshCompleted = false;
+const heldRefresh = fetchAndRenderAutoDrainPane().then(() => { heldRefreshCompleted = true; });
+await tick();
+assert(releaseBacklogForecast && get('auto-drain-body').querySelector('[data-panel-status]')?.textContent.includes('Updated'), 'readiness completes while the forecast is held');
+const requestsBeforeHeldAction = requests.length;
+drainButton('Send pending results').click();
+await tick();
+assert(get('auto-drain-operation-feedback').textContent.includes('Admissions stopped') && requests.slice(requestsBeforeHeldAction).some(request => request.path === '/api/workflows/auto/readiness'), 'the mutation succeeds and reads readiness back while the forecast is held');
+assert(heldRefreshCompleted && drainButton('Send pending results') && !drainButton('Send pending results').disabled, `refresh and pending control finish before forecast release: refresh=${heldRefreshCompleted}, control=${get('auto-drain-body').querySelector('.drain-stop')?.textContent}`);
+assert(backlogForecastSearches.length === searchesBeforeHeld + 1, 'refresh and action readback deduplicate the held forecast');
+delayBacklogForecast = false;
+releaseBacklogForecast();
+releaseBacklogForecast = null;
+await heldRefresh;
+await tick();
+assert(backlogLink()?.textContent.includes('Time to drain 6.5h – 20h'), 'the forecast summary updates after its independent request settles');
 const searchesBeforeReady = backlogForecastSearches.length;
 backlogForecastMode = 'ready';
 await fetchAndRenderAutoDrainPane();
+await tick();
 const readySearch = backlogForecastSearches.at(-1) || '';
 const readyLink = backlogLink();
 const readyText = readyLink?.textContent || '';
@@ -1749,22 +1776,46 @@ assert(summaryActivated, 'the summary is a clickable link');
 assert(forecastTextIncludesAdmission(), 'the admission block still renders beside the summary');
 backlogForecastMode = 'nocost';
 await fetchAndRenderAutoDrainPane();
+await tick();
 const nocostText = backlogLink()?.textContent || '';
 assert(nocostText.includes('Tokens 1.5M – 4.8M') && !nocostText.includes('Cost') && !nocostText.includes('—'), `cost is omitted when uncosted: ${nocostText}`);
 backlogForecastMode = 'notokens';
 await fetchAndRenderAutoDrainPane();
+await tick();
 const notokensText = backlogLink()?.textContent || '';
 assert(notokensText.includes('Cost $12.50 – $40.00') && !notokensText.includes('Tokens'), `tokens are omitted when absent: ${notokensText}`);
 for (const mode of ['empty', 'error', 'missing']) {
   backlogForecastMode = mode;
   await fetchAndRenderAutoDrainPane();
+  await tick();
   const missed = backlogLink();
   assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.textContent === 'Backlog forecast unavailable', `${mode}: one muted line: ${missed?.textContent}`);
   assert(forecastTextIncludesAdmission() && get('auto-drain-body').querySelector('.drain-capacity'), `${mode}: the drain card still renders`);
 }
+// A detached success or failure from the previous workspace cannot replace
+// the current workspace's summary.
+for (const staleMode of ['ready', 'error']) {
+  backlogForecastMode = staleMode;
+  delayBacklogForecast = true;
+  await fetchAndRenderAutoDrainPane();
+  const releaseStaleForecast = releaseBacklogForecast;
+  assert(releaseStaleForecast, `${staleMode}: the previous workspace forecast is held`);
+  delayBacklogForecast = false;
+  backlogForecastMode = 'nocost';
+  setWorkspace('two');
+  await fetchAndRenderAutoDrainPane();
+  await tick();
+  const currentSummary = backlogLink()?.textContent;
+  assert(currentSummary?.includes('Time to drain') && !currentSummary.includes('Cost'), 'the new workspace paints its own forecast');
+  releaseStaleForecast();
+  releaseBacklogForecast = null;
+  await tick();
+  assert(backlogLink()?.textContent === currentSummary, `${staleMode}: a late previous-workspace forecast cannot alter the current summary`);
+  setWorkspace('one');
+}
 backlogForecastMode = '';
 drainCapacityOverride = {};
-await fetchAndRenderAutoDrainPane();
+await fetchAndRenderOperations();
 // A window started while another runs waits for it. The card lists it under
 // the live window with its run, ceiling, completion, crews and window, flags a
 // Claude crew it would start with no credential, and cancels it alone through

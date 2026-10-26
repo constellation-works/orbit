@@ -455,12 +455,50 @@ pub(super) fn execute_brokered(
             input.clone()
         }
         TASK_SHOW => {
-            accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
+            accept_fields(
+                object,
+                &[
+                    "id",
+                    "fields",
+                    "field",
+                    "run_id",
+                    "model",
+                    "limit",
+                    "comments_offset",
+                    "history_offset",
+                    "artifacts_offset",
+                ],
+            )?;
             require_claimed_task(object, binding)?;
             if super::claimed_recovery::wants_delivery(object) {
+                accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
                 return super::claimed_recovery::delivery(runtime, run, binding, object, session);
             }
-            input.clone()
+            let mut input = input.clone();
+            if [
+                "limit",
+                "comments_offset",
+                "history_offset",
+                "artifacts_offset",
+            ]
+            .iter()
+            .any(|key| object.contains_key(*key))
+            {
+                for field in ["field", "fields", "run_id"] {
+                    if object.contains_key(field) {
+                        return Err(OrbitError::InvalidInput(format!(
+                            "a paginated task read accepts only id, model, limit, comments_offset, \
+                             history_offset and artifacts_offset; cannot combine pagination with \
+                             `{field}`"
+                        )));
+                    }
+                }
+                // Ordinary owner reads ignore pagination. Select its existing
+                // bounded view, which validates page sizes and offsets. The
+                // binding supplies workspace; callers cannot supply the view.
+                input["view"] = json!("bounded");
+            }
+            input
         }
         GET => {
             accept_fields(object, &["id", "path", "model"])?;

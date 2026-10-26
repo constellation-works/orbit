@@ -1,9 +1,10 @@
 // Settings topic pages: Workflow, Execution, Review, Machine, All keys.
 // Rows come from /api/config/effective; the shared drawer writes via
 // PUT/DELETE /api/config/keys/:key and re-reads via context.reload.
-import { el, fetchJson, getWorkspace, requestJson } from './common.js';
+import { captureWorkspaceVisit, el, fetchJson, requestJson } from './common.js';
 
-let drawer = null; // {row, scope, text, error, pending, workspace, lockGlobal}
+let drawer = null; // {row, scope, text, error, pending, visit, lockGlobal}
+let bulkRemoval = null;
 let layerFilter = 'all';
 let topicFilter = 'all';
 let rawScope = null;
@@ -11,7 +12,7 @@ let rawText = null; // null while the latest read is in flight
 let rawSeq = 0; // numbers each read so only the latest click can apply its response
 let notice = null;
 
-export function resetTopics() { drawer = null; layerFilter = 'all'; topicFilter = 'all'; rawScope = null; rawText = null; notice = null; }
+export function resetTopics() { drawer = null; bulkRemoval = null; layerFilter = 'all'; topicFilter = 'all'; rawScope = null; rawText = null; notice = null; }
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -51,7 +52,7 @@ function openDrawer(row, context, lockGlobal) {
   if (!context.canEdit || row.settable === false) return;
   drawer = { row, scope: (lockGlobal || row.global_only) ? 'global' : (row.source?.layer === 'global' ? 'global' : 'workspace'),
     text: Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
-    error: null, pending: false, workspace: getWorkspace(), lockGlobal: !!(lockGlobal || row.global_only) };
+    error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only) };
   context.rerender?.();
 }
 function shellQuote(text) {
@@ -145,10 +146,30 @@ function section(title, rows, context, opts) {
   sec.appendChild(body); return sec;
 }
 
+function ownsDrawerMutation(session) {
+  return drawer === session && session.visit.isCurrent();
+}
+
+async function submitDrawerMutation(session, context, request) {
+  if (!ownsDrawerMutation(session) || session.pending) return;
+  session.pending = true; session.error = null; context.rerender?.();
+  try {
+    await request(session.visit);
+    if (!ownsDrawerMutation(session)) return;
+    drawer = null;
+    await context.reload();
+  } catch (error) {
+    if (!ownsDrawerMutation(session)) return;
+    session.pending = false; session.error = error.message || String(error);
+    context.rerender?.();
+  }
+}
+
 function drawerNode(payload, context) {
   if (!drawer) return null;
-  if (drawer.workspace !== getWorkspace()) { drawer = null; return null; }
-  const row = byKey(payload).get(drawer.row.key) || drawer.row;
+  if (!drawer.visit.isCurrent()) { drawer = null; return null; }
+  const session = drawer;
+  const row = byKey(payload).get(session.row.key) || session.row;
   const panel = el('aside', { class: 'config-drawer' });
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', `Edit ${row.key}`);
   panel.appendChild(el('h3', { text: row.label || row.key }));
@@ -163,38 +184,31 @@ function drawerNode(payload, context) {
   for (const scope of ['workspace', 'global']) {
     const label = el('label', { class: 'drawer-scope' });
     const input = document.createElement('input'); input.type = 'radio'; input.name = 'drawer-scope'; input.value = scope;
-    input.checked = drawer.scope === scope; input.disabled = drawer.lockGlobal && scope !== 'global';
-    input.addEventListener('change', () => { drawer.scope = scope; context.rerender?.(); });
+    input.checked = session.scope === scope; input.disabled = session.lockGlobal && scope !== 'global';
+    input.addEventListener('change', () => { session.scope = scope; context.rerender?.(); });
     label.append(input, document.createTextNode(scope === 'workspace' ? ' This workspace (.orbit/config.toml)' : ' Every workspace on this machine (~/.orbit/config.toml)'));
     panel.appendChild(label);
   }
-  if (drawer.lockGlobal) panel.appendChild(el('div', { class: 'config-note', text: 'This key can only be written to the global file.' }));
+  if (session.lockGlobal) panel.appendChild(el('div', { class: 'config-note', text: 'This key can only be written to the global file.' }));
   let field;
   if ((row.options || []).length) {
     field = el('select', { class: 'config-input' });
-    for (const o of row.options) { const opt = el('option', { text: o }); opt.value = o; if (o === drawer.text) opt.selected = true; field.appendChild(opt); }
-    field.addEventListener('change', () => { drawer.text = field.value; });
+    for (const o of row.options) { const opt = el('option', { text: o }); opt.value = o; if (o === session.text) opt.selected = true; field.appendChild(opt); }
+    field.addEventListener('change', () => { session.text = field.value; });
   } else {
-    field = el('textarea', { class: 'config-input' }); field.value = drawer.text; field.rows = Array.isArray(row.value) ? 4 : 2;
-    field.addEventListener('input', () => { drawer.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, drawer.scope, drawer.text); });
+    field = el('textarea', { class: 'config-input' }); field.value = session.text; field.rows = Array.isArray(row.value) ? 4 : 2;
+    field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   }
   panel.appendChild(field);
-  panel.appendChild(el('div', { class: 'drawer-cli mono', text: cliCmd(row, drawer.scope, drawer.text) }));
-  if (drawer.error) panel.appendChild(el('div', { class: 'config-warning', text: drawer.error }));
+  panel.appendChild(el('div', { class: 'drawer-cli mono', text: cliCmd(row, session.scope, session.text) }));
+  if (session.error) panel.appendChild(el('div', { class: 'config-warning', text: session.error }));
   const actions = el('div', { class: 'drawer-actions' });
-  const save = el('button', { class: 'config-action', text: drawer.pending ? 'Saving…' : 'Save' }); save.type = 'button'; save.disabled = drawer.pending;
-  save.addEventListener('click', async () => {
-    const session = drawer; session.pending = true; session.error = null; context.rerender?.();
-    try { await requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope });
-      if (drawer === session) drawer = null; if (session.workspace === getWorkspace()) await context.reload();
-    } catch (e) { session.pending = false; session.error = e.message || String(e); if (drawer === session) context.rerender?.(); }
-  });
-  const remove = el('button', { class: 'config-action ghost', text: 'Remove workspace value' }); remove.type = 'button';
-  remove.addEventListener('click', async () => {
-    const session = drawer; try { await requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=workspace`, 'DELETE');
-      if (drawer === session) drawer = null; await context.reload();
-    } catch (e) { session.error = e.message || String(e); context.rerender?.(); }
-  });
+  const save = el('button', { class: 'config-action', text: session.pending ? 'Saving…' : 'Save' }); save.type = 'button'; save.disabled = session.pending;
+  save.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
+    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope }, visit)));
+  const remove = el('button', { class: 'config-action ghost', text: 'Remove workspace value' }); remove.type = 'button'; remove.disabled = session.pending;
+  remove.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
+    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=workspace`, 'DELETE', undefined, visit)));
   const close = el('button', { class: 'config-action ghost', text: 'Close' }); close.type = 'button';
   close.addEventListener('click', () => { drawer = null; context.rerender?.(); });
   actions.append(save, remove, close); panel.appendChild(actions);
@@ -300,11 +314,32 @@ export function renderAllKeys(body, payload, context) {
   if (restates.length) {
     const sec = section('Keys that only repeat the global or built-in value', restates, context);
     const bulk = el('button', { class: 'config-action', text: `Remove all ${restates.length} workspace values` }); bulk.type = 'button';
+    bulk.disabled = !context.canEdit || bulkRemoval !== null;
     bulk.addEventListener('click', async () => {
+      if (!context.canEdit || bulkRemoval) return;
+      const operation = { visit: captureWorkspaceVisit() };
+      bulkRemoval = operation;
+      const ownsRemoval = () => bulkRemoval === operation && operation.visit.isCurrent();
+      notice = null;
+      context.rerender?.();
       let ok = 0; const failures = [];
-      for (const r of restates) { try { await requestJson(`/api/config/keys/${encodeURIComponent(r.key)}?scope=workspace`, 'DELETE'); ok++; } catch (e) { failures.push(`${r.key}: ${e.message}`); } }
-      notice = `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`;
-      await context.reload();
+      try {
+        for (const r of restates) {
+          if (!ownsRemoval()) return;
+          try {
+            await requestJson(`/api/config/keys/${encodeURIComponent(r.key)}?scope=workspace`, 'DELETE', undefined, operation.visit);
+            if (!ownsRemoval()) return;
+            ok++;
+          } catch (error) {
+            if (!ownsRemoval()) return;
+            failures.push(`${r.key}: ${error.message}`);
+          }
+        }
+        notice = `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`;
+        await context.reload();
+      } finally {
+        if (ownsRemoval()) { bulkRemoval = null; context.rerender?.(); }
+      }
     });
     sec.appendChild(bulk); nodes.push(sec);
   }

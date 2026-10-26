@@ -1,7 +1,7 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-25
+last_updated: 2026-10-26
 last_validated: 2026-10-25
 status: Accepted
 feature: auto-tasks
@@ -407,6 +407,47 @@ at most two per run, `spawned_from` the hygiene task — never fixed in place,
 so each delivery stays a trivially reviewable comment-only change through
 normal validation and CI.
 
+### 4f. `design-sync`: design judgment alongside mechanical doc checks
+
+The bundled `design-sync` default [ORB-18557] is disabled until enabled,
+runs every 720 minutes, uses `medium` complexity and `skip_if_open`, and
+mints a backlog chore tagged `design-sync` and `docs` with `dir:docs` as
+its footprint. It reads `docs/design/CONVENTIONS.md` before selecting work;
+repositories without it get a successful no-edit, no-filing no-op. No
+workspace identity, crew name or task ID is baked into its body, and its
+integration-branch placeholder is rendered by the same seeding path as
+the other defaults. `doc-duties` keeps its shipped mechanical checks and
+low complexity.
+
+Each run selects at most three feature folders, task-status changes since
+their previous ledger date first, then oldest reconciliation date with
+entry-doc `last_validated` and git-date fallbacks. Related tasks come from
+citations, separate path/slug/tag searches and verified relations, with each
+candidate confirmed through task records. Reconciliation checks stage,
+status, next, phase/slice citations, stale implementation prose and Task
+References against those records and the pinned checkout. A done task does
+not establish integration-branch delivery, and implementation never
+establishes owner approval of a Draft design. Historical decisions retain
+their reasoning and metadata; only links and Task References are corrected.
+
+The task corrects drift without changing design intent. An unexplained
+design/code divergence gets a cited open task or a proposed bug with the
+doc section, code location at HEAD, evidence, honest complexity, selectors
+for only the files its fix would modify, and a `spawned_from` relation.
+At most three tasks are filed per run, counting deprecation or archival
+follow-ups; these operations are never performed by the reconciliation
+itself. Frontmatter edits regenerate the repository's index. Fully checked
+features alone may advance an existing `last_validated` key.
+
+Every run attaches `design-sync-ledger.json` (schema version 1), including
+clean runs and repositories without conventions. Its `features` rows record
+selection order, changed-since-ledger, outcome, stage/status transitions,
+whether next changed, cited tasks and divergence tasks. Its cumulative
+`state` carries every other feature's date and outcome forward unchanged.
+The next run reads the newest completed design-sync chore's artifact, never
+its summary prose; missing ledgers and unverified evidence are explicit.
+Clean runs follow the workspace's validated no-diff evidence requirements.
+
 ## 5. CRUD surfaces
 
 `crud.rs` is the single choke point behind both the CLI (`orbit auto-task
@@ -769,6 +810,8 @@ accurate.
   low-risk, but not zero.
 
 ## Task References
+
+- [ORB-18557] — Adds design-sync with bounded reconciliation, intent safeguards and a cumulative ledger.
 
 - [ORB-11315] — proposes shared state-driven triggers and durable coverage semantics.
 

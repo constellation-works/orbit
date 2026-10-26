@@ -624,6 +624,10 @@ pub struct AdmissionReceipt {
     /// falls back to resolving on the replica with a warning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag_instructions: Option<orbit_types::workflow::CapturedTagInstructions>,
+    /// Owner's immutable shadow assignment capture. Missing is not an empty
+    /// capture: followers refuse claims without this field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiments: Option<orbit_types::workflow::CapturedExperiments>,
     /// [ORB-17304] How the executor census the owner ordered against classes
     /// the admitted task, and the census's machine ids. Absent from an idle
     /// or repair receipt, from an order taken without a census, and from a

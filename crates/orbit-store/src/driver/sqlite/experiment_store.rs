@@ -17,7 +17,7 @@ use crate::contracts::{
 
 use super::codec::stamp;
 
-const EXPERIMENT_COLUMNS: &str = "workspace_id, id, name, hypothesis, population_json, \
+pub(super) const EXPERIMENT_COLUMNS: &str = "workspace_id, id, name, hypothesis, population_json, \
      primary_metric, guardrails_json, min_sample_per_arm, max_days, salt, mode, status, \
      segment, concluded_arm, cloned_from, created_by, created_at, updated_at, revision";
 
@@ -28,6 +28,31 @@ const EVENT_COLUMNS: &str =
     "seq, kind, from_status, to_status, segment, actor, at, reason, detail_json";
 
 impl ExperimentStoreBackend for Store {
+    fn assign_experiments(
+        &self,
+        workspace_id: &str,
+        task_id: &str,
+        mark_admitted: bool,
+        decide: &crate::contracts::ExperimentAssignmentDecision<'_>,
+    ) -> Result<Vec<crate::contracts::ExperimentAssignment>, OrbitError> {
+        super::experiment_assignments::assign_experiments(
+            self,
+            workspace_id,
+            task_id,
+            mark_admitted,
+            decide,
+        )
+    }
+
+    fn task_experiment_assignments(
+        &self,
+        workspace_id: &str,
+        task_id: &str,
+    ) -> Result<Vec<crate::contracts::ExperimentAssignment>, OrbitError> {
+        let conn = self.read()?;
+        super::experiment_assignments::load_assignments(&conn, workspace_id, task_id)
+    }
+
     fn write_experiment(
         &self,
         write: &ExperimentWrite,
@@ -252,7 +277,7 @@ fn insert_event(
     Ok(())
 }
 
-fn load_arms(
+pub(super) fn load_arms(
     conn: &Connection,
     experiment: &ExperimentRow,
 ) -> Result<Vec<ExperimentArmRow>, OrbitError> {
@@ -308,7 +333,7 @@ fn load_events(
         .map_err(sqlite_store_error)
 }
 
-fn hydrate_experiment(row: &Row<'_>) -> rusqlite::Result<ExperimentRow> {
+pub(super) fn hydrate_experiment(row: &Row<'_>) -> rusqlite::Result<ExperimentRow> {
     Ok(ExperimentRow {
         workspace_id: row.get(0)?,
         id: row.get(1)?,

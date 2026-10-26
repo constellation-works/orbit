@@ -620,6 +620,7 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.drain.probe", Placement::Unadvertised),
     ("orbit.drain.receipt.lookup", Placement::Unadvertised),
     ("orbit.experiment.abandon", Placement::Advertised),
+    ("orbit.experiment.assign", Placement::Advertised),
     ("orbit.experiment.clone", Placement::Advertised),
     ("orbit.experiment.conclude", Placement::Advertised),
     ("orbit.experiment.create", Placement::Advertised),

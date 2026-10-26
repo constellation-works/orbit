@@ -13,7 +13,7 @@
 // Topic pages (Workflow, Execution, Review, Machine, All keys) live in
 // config-topics.js; this module owns the tab, Crews and the throttle panel.
 
-import { captureFocus, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
+import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel } from './common.js';
 import { renderAllKeys, renderExecution, renderMachine, renderReview, renderWorkflow, resetTopics } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { fetchAndRenderHosts, resetHostsView } from './hosts.js';
@@ -265,13 +265,13 @@ function displayValue(value) {
 /// An edit session. `draft` holds what the operator typed, field by field, so
 /// every re-render — a background refresh, a save in flight, a refused write —
 /// rebuilds the editor from the draft rather than the last server payload. The
-/// session is bound to the workspace it was opened in. A successful save,
-/// Cancel, Reload, a workspace or sub-tab switch, or a payload that withdraws
+/// session is bound to the host/workspace visit it was opened in. A successful
+/// save, Cancel, Reload, a workspace or sub-tab switch, or a payload that withdraws
 /// operator authority ends it.
 function startEdit(next) {
   if (!editable(lastPayload)) return;
   if (next.kind === "key" && !keySettable(next.key, lastPayload)) return;
-  editing = { ...next, error: null, pending: false, draft: {}, workspace: getWorkspace() };
+  editing = { ...next, error: null, pending: false, draft: {}, visit: captureWorkspaceVisit() };
   if (lastPayload) render(lastPayload);
   // The control that opened the editor is gone; land in the editor's first field.
   const field = $("config-body")?.querySelector(".config-editor input, .config-editor select, .config-editor textarea");
@@ -513,20 +513,22 @@ function chipListInput(initial, draft, field) {
 }
 
 async function submitKey(row, value, init) {
-  await submit(() =>
+  await submitConfigMutation((visit) =>
     requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, "PUT", {
       value,
       scope: writeScope(),
       ...(init ? { init } : {}),
-    }),
+    }, visit),
   );
 }
 
 async function submitKeyClear(row) {
-  await submit(() =>
+  await submitConfigMutation((visit) =>
     requestJson(
       `/api/config/keys/${encodeURIComponent(row.key)}?scope=${encodeURIComponent(writeScope())}`,
       "DELETE",
+      undefined,
+      visit,
     ),
   );
 }
@@ -536,22 +538,26 @@ async function submitKeyClear(row) {
 /// only on the session that issued it: a workspace switch or Reload while the
 /// write was in flight has already ended that session, and a later edit must
 /// not inherit its error or be closed by its success.
-async function submit(request) {
+async function submitConfigMutation(request) {
   const session = editing;
-  if (!session) return;
+  if (!session || session.pending || !session.visit.isCurrent()) return;
+  const ownsSubmission = () => editing === session && session.visit.isCurrent();
   session.pending = true;
   session.error = null;
   if (lastPayload) render(lastPayload);
   try {
-    await request();
-    if (editing === session) editing = null;
-    if (session.workspace !== getWorkspace()) return;
+    await request(session.visit);
+    if (!ownsSubmission()) return;
     await fetchAndRenderConfig();
-    if (editing === null) focusEditAffordance(session);
+    if (!ownsSubmission()) return;
+    editing = null;
+    if (lastPayload) render(lastPayload);
+    focusEditAffordance(session);
   } catch (error) {
     // The admission layer's message is the useful part; it names the key, the
     // value, and what was expected instead. The draft is untouched, so the
     // editor re-renders with the values that were refused.
+    if (!ownsSubmission()) return;
     session.pending = false;
     session.error = error.message || String(error);
     if (editing === session && lastPayload) render(lastPayload);
@@ -990,20 +996,22 @@ async function submitCrew(crew, fields, isNew, init) {
     const value = read();
     if (value !== undefined) body[field] = value;
   }
-  await submit(() =>
+  await submitConfigMutation((visit) =>
     requestJson(`/api/config/crews/${encodeURIComponent(name)}`, "PUT", {
       fields: body,
       scope: writeScope(),
       ...(init ? { init } : {}),
-    }),
+    }, visit),
   );
 }
 
 async function submitCrewDelete(crew) {
-  await submit(() =>
+  await submitConfigMutation((visit) =>
     requestJson(
       `/api/config/crews/${encodeURIComponent(crew.name)}?scope=${encodeURIComponent(writeScope())}`,
       "DELETE",
+      undefined,
+      visit,
     ),
   );
 }

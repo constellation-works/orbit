@@ -538,7 +538,23 @@ console.log('settings hosts: rows, freshness, load banner, inline add/rename/rem
 // this drives the shipped hosts module and stylesheet in Chromium.
 await assertHostColumnsAlign();
 
+function applyBrowserKitEnvironment() {
+  const envScript = process.env.ORBIT_BROWSER_KIT_ENV
+    || path.join(os.homedir(), '.local/chromium-deps/env.sh');
+  if (!envScript || !fs.existsSync(envScript)) return;
+  const probe = spawnSync(
+    'bash',
+    ['-c', '. "$ORBIT_KIT_ENV_FILE"; printf \'%s\\n%s\\n\' "$LD_LIBRARY_PATH" "$FONTCONFIG_FILE"'],
+    { env: { ...process.env, ORBIT_KIT_ENV_FILE: envScript }, encoding: 'utf8' },
+  );
+  if (!probe || probe.status !== 0 || typeof probe.stdout !== 'string') return;
+  const [libraries, fonts] = probe.stdout.split('\n');
+  if (libraries) process.env.LD_LIBRARY_PATH = libraries;
+  if (fonts && !process.env.FONTCONFIG_FILE) process.env.FONTCONFIG_FILE = fonts;
+}
+
 function browserModule() {
+  applyBrowserKitEnvironment();
   const fromEnv = process.env.PLAYWRIGHT_MODULE || process.env.ORBIT_PLAYWRIGHT_MODULE;
   if (fromEnv && fs.existsSync(fromEnv)) return fromEnv;
   const kit = path.join(os.homedir(), '.local/chromium-deps');

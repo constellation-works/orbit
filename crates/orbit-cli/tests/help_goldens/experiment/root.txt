@@ -10,6 +10,7 @@ Commands:
   pause     Pause a running experiment
   resume    Resume a paused experiment
   reweight  Change arm weights or retire arms, opening a new segment
+  assign    Force a task into a shadow experiment arm
   conclude  Conclude an experiment with the chosen arm, or none
   abandon   Abandon an experiment without a conclusion
   show      Show one experiment with its arms and event log
