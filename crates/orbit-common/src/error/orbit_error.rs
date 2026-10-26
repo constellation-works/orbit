@@ -15,8 +15,16 @@ use super::{
 pub enum OrbitError {
     #[error("policy denied: {0}")]
     PolicyDenied(String),
-    #[error("{kind} not found: {id}")]
-    NotFound { kind: NotFoundKind, id: String },
+    #[error(
+        "{kind} not found: {id}{guidance}",
+        guidance = .guidance.as_deref().unwrap_or_default()
+    )]
+    NotFound {
+        kind: NotFoundKind,
+        id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        guidance: Option<String>,
+    },
     /// A governed operation was refused because the caller lacked the required
     /// capability [ORB-10453]. Distinct from [`Self::PolicyDenied`], which is
     /// `orbit-policy`'s filesystem-scoping refusal: this one is about *who is

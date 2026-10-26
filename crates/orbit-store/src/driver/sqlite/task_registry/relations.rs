@@ -177,7 +177,7 @@ pub(super) fn validate_replacement_relations(
         .map(|envelope| envelope.id.clone())
         .collect::<BTreeSet<_>>();
 
-    validate_replacement_relation_targets(conn, partition_id, envelopes)?;
+    validate_replacement_relation_targets(conn, envelopes)?;
 
     let seeds = cycle_walk_seeds(&[], &replacement_edges);
     let mut validation_edges = reachable_cycle_family_edges(conn, &seeds)?
@@ -197,7 +197,6 @@ pub(super) fn validate_replacement_relations(
 
 fn validate_replacement_relation_targets(
     conn: &Connection,
-    source_workspace_id: &str,
     envelopes: &[TaskEnvelopeV2],
 ) -> Result<(), OrbitError> {
     let Some(edge) = unresolved_relation_edges(conn, envelopes)?
@@ -206,13 +205,7 @@ fn validate_replacement_relation_targets(
     else {
         return Ok(());
     };
-    Err(OrbitError::InvalidInput(format!(
-        "task relation {} {} -> '{}' from workspace '{}' does not resolve in the coordination registry",
-        edge.source,
-        relation_type_name(edge.relation_type),
-        edge.target,
-        source_workspace_id
-    )))
+    Err(unknown_relation_target(&edge.target))
 }
 
 /// Every edge in `envelopes` whose target a rebuild cannot resolve, in
@@ -469,10 +462,15 @@ fn validate_relation_targets_exist(
         if !known {
             continue;
         }
-        return Err(OrbitError::InvalidInput(format!(
-            "task relation target '{}' from workspace '{}' does not resolve in the coordination registry",
-            relation.target, source_workspace_id
-        )));
+        return Err(unknown_relation_target(&relation.target));
     }
     Ok(())
+}
+
+fn unknown_relation_target(task_id: &str) -> OrbitError {
+    OrbitError::not_found_with_guidance(
+        NotFoundKind::Task,
+        task_id,
+        ". Check the ID, create the task first, or remove the relation.",
+    )
 }

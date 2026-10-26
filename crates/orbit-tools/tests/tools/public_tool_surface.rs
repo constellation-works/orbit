@@ -228,6 +228,7 @@ fn retired_agent_tools_are_absent_from_every_registry_surface_and_dispatch() {
                 orbit_common::OrbitError::NotFound {
                     kind: orbit_common::NotFoundKind::Tool,
                     id,
+                    ..
                 } if id == retired
             ),
             "retired tool must be refused as an unknown tool: {retired}: {error}"

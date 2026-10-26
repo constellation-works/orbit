@@ -36,6 +36,62 @@ fn tool(fixture: &Fixture, name: &str, input: Value) -> Value {
     fixture.json(&["tool", "run", name, "--input", &input.to_string()])
 }
 
+fn assert_missing_task_refusal(error: &Value, code: &str, missing_id: &str) {
+    assert_eq!(error["code"], code, "{error}");
+    let message = error["error"].as_str().expect("CLI error message");
+    assert!(message.contains(missing_id), "{message}");
+    assert!(message.contains("not found"), "{message}");
+    assert!(message.contains("Check the ID"), "{message}");
+    assert!(message.contains("create the task first"), "{message}");
+    assert!(message.contains("remove the relation"), "{message}");
+    assert!(!message.contains("relation target"), "{message}");
+    assert!(!message.contains("coordination registry"), "{message}");
+}
+
+fn cli_error(fixture: &Fixture, args: &[&str]) -> Value {
+    let output = fixture.command(args).assert().code(1).get_output().clone();
+    assert!(output.stdout.is_empty(), "unexpected stdout: {output:?}");
+    serde_json::from_slice(&output.stderr).expect("CLI refusal JSON")
+}
+
+fn missing_task_dependencies_return_actionable_not_found_refusals() {
+    let fixture = Fixture::new();
+    let source = fixture.json(&["task", "list", "--json"])[0]["id"]
+        .as_str()
+        .expect("fixture task id")
+        .to_owned();
+    let missing_id = "AQ-99999";
+
+    let add = cli_error(
+        &fixture,
+        &[
+            "task",
+            "add",
+            "--title",
+            "Missing dependency",
+            "--complexity",
+            "low",
+            "--dependencies",
+            missing_id,
+            "--json",
+        ],
+    );
+    assert_missing_task_refusal(&add, "task_not_found", missing_id);
+
+    let update = cli_error(
+        &fixture,
+        &[
+            "task",
+            "update",
+            &source,
+            "--dependencies",
+            missing_id,
+            "--json",
+        ],
+    );
+    assert_missing_task_refusal(&update, "task_not_found", missing_id);
+}
+
 /// A proposed twin tagged `no-diff-expected`: it owes no selectors, so its add
 /// is clean. An untagged chore would warn, as the missing-context check does.
 fn add_proposed(fixture: &Fixture, title: &str) -> String {
@@ -113,6 +169,11 @@ fn add_warnings_match_on_cli_and_tool() {
     assert_names(&cli_warnings, "EXT-1", &cli);
     assert_names(&cli_warnings, "EXT-2", &cli);
     assert_names(&cli_warnings, "context_files", &cli);
+}
+
+#[test]
+fn missing_task_dependencies_return_actionable_not_found_refusals_on_cli() {
+    missing_task_dependencies_return_actionable_not_found_refusals();
 }
 
 fn update_and_approval_warnings_match_on_cli_and_tool() {

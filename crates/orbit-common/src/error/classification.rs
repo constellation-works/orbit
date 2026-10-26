@@ -25,6 +25,20 @@ impl OrbitError {
         Self::NotFound {
             kind,
             id: id.into(),
+            guidance: None,
+        }
+    }
+
+    /// Construct a typed not-found error with a next step for the caller.
+    pub fn not_found_with_guidance(
+        kind: NotFoundKind,
+        id: impl Into<String>,
+        guidance: impl Into<String>,
+    ) -> Self {
+        Self::NotFound {
+            kind,
+            id: id.into(),
+            guidance: Some(guidance.into()),
         }
     }
 
