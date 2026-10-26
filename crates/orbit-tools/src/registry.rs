@@ -329,10 +329,15 @@ fn declared_aliases(name: &str) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// The task operation fields deliberately rejected by its handler with a
-/// replacement hint. Let those fields reach `OperationSpec::parse_input` so
-/// the registry does not hide that more useful refusal.
+/// The fields retired by `orbit.task.add` name their replacement operation.
+/// Let those fields reach `OperationSpec::parse_input` so the registry does
+/// not hide that more useful refusal. Other task operations keep their
+/// existing registry-level unknown-field refusals.
 fn declared_retired_fields(name: &str) -> Vec<&'static str> {
+    if name != "orbit.task.add" {
+        return Vec::new();
+    }
+
     orbit_common::governance::task::TASK_OPERATIONS
         .iter()
         .filter(|spec| spec.tool_name == name)
