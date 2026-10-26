@@ -82,6 +82,7 @@ pub use contention::{LockContentionHotspot, LockContentionReport};
 pub use context_repair::{
     CONTEXT_REPAIR_SWEEP_STATUSES, ContextFileRestoration, ContextRepairCandidate,
 };
+pub use decision::DecisionRequestListing;
 pub(crate) use decision::decision_request_json;
 pub use decision_channel::{
     DECISION_CHANNEL_KEY_SECRET, DecisionChannelInfo, DecisionDigest, DecisionSubmitCaller,
@@ -135,6 +136,7 @@ pub use provider_limit::{
     UsagePressure, short_time,
 };
 pub use pull_request_links::PullRequestLinks;
+pub(crate) use record_json::task_listing_field_json;
 pub use record_json::{task_record_json, task_show_field_json, task_show_json};
 pub(crate) use records::TaskRecords;
 pub(in crate::application) use review_port::TaskReviewPort;

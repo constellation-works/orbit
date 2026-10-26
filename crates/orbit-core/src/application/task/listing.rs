@@ -19,6 +19,25 @@ pub use orbit_store::contracts::{
     TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskPage, TaskRow,
 };
 
+/// A store-wide scan can omit a corrupt bundle, but must disclose why. Other
+/// failures (including I/O and authorization errors) still fail the scan.
+pub(crate) fn task_bundle_scan_result<T>(
+    result: Result<T, OrbitError>,
+    warnings: &mut Vec<String>,
+) -> Result<Option<T>, OrbitError> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error @ OrbitError::TaskBundleCorrupt { .. }) => {
+            let warning = error.to_string();
+            if !warnings.contains(&warning) {
+                warnings.push(warning);
+            }
+            Ok(None)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[derive(Debug)]
 pub struct TaskListQuery {
     pub filter: TaskListFilter,

@@ -202,6 +202,18 @@ fn serialize_error(label: &'static str) -> impl FnOnce(serde_json::Error) -> Orb
     move |error| OrbitError::Execution(format!("serialize task {label}: {error}"))
 }
 
+/// A list projection preserves the row and marks unreadable fields as unknown,
+/// with a warning, rather than discarding every healthy task in the page.
+pub(crate) fn task_listing_field_json(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    field: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Value, OrbitError> {
+    let result = super::task_fields_response_json(runtime, task, &[field.to_string()]);
+    Ok(super::listing::task_bundle_scan_result(result, warnings)?.unwrap_or(Value::Null))
+}
+
 fn task_is_done(
     runtime: &OrbitRuntime,
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,

@@ -32,12 +32,15 @@ pub(super) fn dispatch(
                 .transpose()?;
             let task_id = input.optional_string("task_id")?;
             let include_closed = input.optional_bool("include_closed")?.unwrap_or(false);
-            let requests =
-                runtime.list_decision_requests(gate, task_id.as_deref(), include_closed)?;
-            Ok(json!({
-                "requests": requests.iter().map(decision_request_json).collect::<Vec<_>>(),
-                "count": requests.len(),
-            }))
+            let listing = runtime.list_decision_requests_with_warnings(gate, task_id.as_deref(), include_closed)?;
+            let mut value = json!({
+                "requests": listing.requests.iter().map(decision_request_json).collect::<Vec<_>>(),
+                "count": listing.requests.len(),
+            });
+            if !listing.warnings.is_empty() {
+                value["warnings"] = json!(listing.warnings);
+            }
+            Ok(value)
         }
         DecisionVerb::Show => {
             let id = input.required_string("id")?;
@@ -53,12 +56,16 @@ pub(super) fn dispatch(
             let caller = submit_caller(runtime, session_context, agent, model)?;
             let digest =
                 runtime.decision_digest(&input.required_string("channel")?, caller)?;
-            Ok(json!({
+            let mut value = json!({
                 "requests": digest.requests.iter().map(decision_request_json).collect::<Vec<_>>(),
                 "raised": digest.raised.iter().map(decision_request_json).collect::<Vec<_>>(),
                 "expiring": digest.expiring.iter().map(decision_request_json).collect::<Vec<_>>(),
                 "count": digest.requests.len(),
-            }))
+            });
+            if !digest.warnings.is_empty() {
+                value["warnings"] = json!(digest.warnings);
+            }
+            Ok(value)
         }
         DecisionVerb::Submit => {
             let caller = submit_caller(runtime, session_context, agent, model)?;
