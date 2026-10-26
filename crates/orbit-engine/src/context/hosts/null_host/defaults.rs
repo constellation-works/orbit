@@ -12,8 +12,8 @@ use orbit_types::task::{
 };
 use orbit_types::telemetry::ProviderLimitObservation;
 use orbit_types::workflow::{
-    DeferralProbe, JobRun, JobRunStartOutcome, JobRunState, NamespaceProbe, PipelineState,
-    TagInstruction,
+    DeferralProbe, ExperimentActivityOverlay, JobRun, JobRunStartOutcome, JobRunState,
+    NamespaceProbe, PipelineState, TagInstruction,
 };
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -702,6 +702,15 @@ pub trait NullRuntimeHost: Send + Sync {
         _activity_name: &str,
         _input: &Value,
     ) -> Result<Vec<TagInstruction>, DispatchError> {
+        Ok(Vec::new())
+    }
+
+    fn experiment_overlays_for_activity(
+        &self,
+        _run_id: &str,
+        _activity_name: &str,
+        _input: &Value,
+    ) -> Result<Vec<ExperimentActivityOverlay>, DispatchError> {
         Ok(Vec::new())
     }
 

@@ -1,11 +1,11 @@
 ---
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
-last_updated: 2026-10-25
+last_updated: 2026-10-26
 last_validated: 2026-10-25
 status: Draft
 stage: building
-next: "Land slice 1 (ORB-18473, in progress), then slice 2 (ORB-18474)"
+next: "Slice 4: skills, crew and config surfaces (phase 3)"
 feature: experiments
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [experiments, admission, tag-instructions, crew-pools, analytics, decision
 
 # Scope: randomized experiments over agent treatments
 
-Status: proposed. Nothing is implemented.
+Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role.
 Bearing: Orbit already has most of the parts an experiment needs, scattered across
 mechanisms that were each built for one purpose. **Tag instructions**
 (`[workflow.tag_instructions.<tag>]`,

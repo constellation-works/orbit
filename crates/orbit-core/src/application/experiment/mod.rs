@@ -7,6 +7,7 @@ mod capture;
 mod definition;
 pub(crate) use capture::validate_experiment_capture;
 mod lifecycle;
+mod overlay;
 mod view;
 
 pub use lifecycle::{ExperimentActor, ExperimentChange, ExperimentDefinitionInput};

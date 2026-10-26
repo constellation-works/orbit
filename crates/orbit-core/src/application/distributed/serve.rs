@@ -825,7 +825,7 @@ impl crate::OrbitRuntime {
                     _ => Ok(None),
                 }
             },
-            &|task| self.capture_task_experiments(task),
+            &|task| self.capture_claimed_task_experiments(task, &request.ship),
         )
     }
 

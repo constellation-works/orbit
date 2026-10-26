@@ -251,6 +251,16 @@ pub enum V2AuditEventKind {
         task_id: String,
         instructions: Vec<crate::workflow::TagInstructionRecord>,
     },
+    /// What live experiment arms changed in a CLI backend invocation, emitted
+    /// once per invocation before the subprocess starts, and only when an arm
+    /// applied. Each record carries the digest of what the dispatch received.
+    ExperimentOverlayApplied {
+        /// The pipeline step that dispatched the activity.
+        step_id: String,
+        activity_name: String,
+        task_id: String,
+        overlays: Vec<crate::workflow::ExperimentOverlayRecord>,
+    },
     /// [ORB-11354] An operator-admitted provider subprocess is about to run
     /// **outside** the executor's filesystem sandbox.
     ///
@@ -431,6 +441,9 @@ impl V2AuditEventKind {
                 "trusted_host.execution_admitted"
             }
             V2AuditEventKind::TagInstructionsApplied { .. } => "activity.tag_instructions_applied",
+            V2AuditEventKind::ExperimentOverlayApplied { .. } => {
+                "activity.experiment_overlay_applied"
+            }
             V2AuditEventKind::CliInvocationStarted { .. } => "cli.invocation.started",
             V2AuditEventKind::CliInvocationProcess { .. } => "cli.invocation.process",
             V2AuditEventKind::CliInvocationActivity { .. } => "cli.invocation.activity",

@@ -1,4 +1,5 @@
-//! Fail-closed shadow captures. No overlay is applied in this slice.
+//! Fail-closed experiment captures: the arms a run applies, carried in its
+//! input on the owner and in the admission receipt for a claimed leaf.
 use super::definition::{ExperimentOverlay, overlay_digest};
 use crate::OrbitRuntime;
 use orbit_common::OrbitError;
@@ -43,6 +44,8 @@ impl OrbitRuntime {
                     .digest
                     .ok_or_else(|| OrbitError::Store("assigned digest is missing".into()))?,
                 overlay_json: arm.overlay_json.clone(),
+                live: record.experiment.mode == super::overlay::LIVE,
+                instructions: Vec::new(),
             });
         }
         let capture = CapturedExperiments {

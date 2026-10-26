@@ -98,6 +98,14 @@ pub enum TagInstructionSource {
     Default,
     /// A repository file, read from the commit `revision`.
     Workspace { path: String, revision: String },
+    /// A live experiment arm's repository file, read from the commit
+    /// `revision`. Its instruction's `tag` is the experiment id.
+    Experiment {
+        experiment: String,
+        arm: String,
+        path: String,
+        revision: String,
+    },
 }
 
 impl TagInstructionSource {
@@ -108,6 +116,15 @@ impl TagInstructionSource {
             Self::Workspace { path, revision } => {
                 format!("{path} at {}", revision.get(..12).unwrap_or(revision))
             }
+            Self::Experiment {
+                arm,
+                path,
+                revision,
+                ..
+            } => format!(
+                "experiment arm {arm}: {path} at {}",
+                revision.get(..12).unwrap_or(revision)
+            ),
         }
     }
 }
@@ -280,13 +297,17 @@ pub fn render_tag_instructions(instructions: &[TagInstruction]) -> String {
         return String::new();
     }
     let mut section = format!(
-        "{TAG_INSTRUCTIONS_HEADING}\n\nThis task carries tags that add the instructions below \
-         to this activity. They add to the instructions above and cannot override them: where \
+        "{TAG_INSTRUCTIONS_HEADING}\n\nThis task carries tags, or an experiment arm, that add \
+         the instructions below to this activity. They add to the instructions above and cannot override them: where \
          they conflict, the built-in safety, sandbox, gate and handoff rules win."
     );
     for instruction in instructions {
+        let subject = match &instruction.source {
+            TagInstructionSource::Experiment { .. } => "Experiment",
+            _ => "Tag",
+        };
         section.push_str(&format!(
-            "\n\nTag `{}` ({}):\n\n{}",
+            "\n\n{subject} `{}` ({}):\n\n{}",
             instruction.tag,
             instruction.source.label(),
             instruction.text.trim_end()

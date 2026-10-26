@@ -49,7 +49,7 @@ pub(crate) fn log_best_effort<T>(
     }
 }
 
-pub(crate) use activity_tool_requirements::drops_disallowed_requirements;
+pub(crate) use activity_tool_requirements::{drops_disallowed_requirements, granted_tool_refusal};
 pub(in crate::application) use admission_port::JobAdmissionPort;
 pub use agent::{
     AGENT_INVOKE_JOB_ID, AgentInvokeRequest, AgentInvokeResult, AgentInvokeSubmission,
