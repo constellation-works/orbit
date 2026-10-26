@@ -823,8 +823,8 @@ assert(drainReadinessFor('ORB-9017').title.includes('throttled') && drainReadine
 assert(!drainTasksOverride.some(task => /blocked/i.test(drainReadinessFor(task.task_id).label)), 'no pool label calls a readiness group blocked');
 drainTasksOverride = null;
 
-// The throttle note and the rail block's load row state one CPU reading in one
-// unit: 164% of cores is "1.6× cores" in both, and 75% is a bare 0.75× threshold.
+// The host block separates its load label and value; the throttle note also
+// spells out the unit. Their CPU reading and hysteresis values must agree.
 {
   const { renderHostResources } = await import('./js/host-resources.js');
   const reading = percent => ({ percent, severity: 'critical' });
@@ -832,8 +832,9 @@ drainTasksOverride = null;
   const chip = get('host-block').querySelector('[data-resource="cpu"] .v');
   resourceThrottle = { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
   await fetchAndRenderAutoDrainPane();
-  const note = drainBanner.querySelector('.drain-throttle-note').textContent;
-  assert(chip.textContent === '1.6× cores' && note.includes(`load ${chip.textContent} (throttled at ≥ 0.9× cores`) && note.includes('resumes below 0.75× cores'), `chip ${chip.textContent} vs note ${note}`);
+  const note = drainBanner.querySelector('.drain-throttle-note').title;
+  const cpuReadings = [...note.matchAll(/(\d+(?:\.\d+)?×)\s+cores/g)].map(([, value]) => value);
+  assert(cpuReadings.length === 3 && cpuReadings[0] === chip.textContent.trim() && cpuReadings[1] === '0.9×' && cpuReadings[2] === '0.75×', `host load ${chip.textContent} vs throttle readings ${cpuReadings.join(', ')}`);
   assert(!/cpu \d|164/.test(note), `the note never states cpu as a bare percentage: ${note}`);
   resourceThrottle = null;
   await fetchAndRenderAutoDrainPane();
