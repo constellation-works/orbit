@@ -2,7 +2,8 @@
 // takes to drain and what it costs, as p50 and p90 resampled from this
 // workspace's delivery history, beside the recent arrival rate the forecast
 // assumes away, and how earlier stored forecasts scored against what their
-// tasks actually did. Read from /api/diagnostics/backlog_forecast.
+// tasks actually did. Read from /api/diagnostics/backlog_forecast. The Tasks
+// drain card reuses this default read (30 days, no arrivals) as a compact summary.
 // Pure vanilla JS, split into ES modules with no build step.
 //
 // The forecast is per workspace; the aggregate view shows the usual
@@ -13,6 +14,7 @@
 import {
   el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint,
+  scopedHashHref,
 } from './common.js';
 
 const $ = (id) => document.getElementById(id);
@@ -46,12 +48,21 @@ function clearForecast() {
   if (count) count.textContent = "—";
 }
 
-function endpoint() {
+// Default lookback and arrivals off omit the query, matching the stored forecast.
+export function backlogForecastPath({ lookback = 30, arrivals = "off" } = {}) {
   const params = new URLSearchParams();
-  if (view.lookback !== 30) params.set("lookback_days", String(view.lookback));
-  if (view.arrivals === "on") params.set("arrivals", "on");
+  if (lookback !== 30) params.set("lookback_days", String(lookback));
+  if (arrivals === "on") params.set("arrivals", "on");
   const query = params.toString();
   return query ? `${ENDPOINT}?${query}` : ENDPOINT;
+}
+
+function endpoint() {
+  return backlogForecastPath({ lookback: view.lookback, arrivals: view.arrivals });
+}
+
+export function fetchBacklogForecast(options) {
+  return fetchJson(backlogForecastPath(options));
 }
 
 export function placeholdForecastAggregate() {
@@ -111,7 +122,7 @@ function num(value) {
   return value == null || !Number.isFinite(n) ? null : n;
 }
 
-function fmtHours(value) {
+export function formatForecastHours(value) {
   const n = num(value);
   if (n == null) return "—";
   if (n < 1) return `${Math.round(n * 60)}m`;
@@ -120,7 +131,7 @@ function fmtHours(value) {
   return `${days >= 10 ? Math.round(days) : days.toFixed(1)}d`;
 }
 
-function fmtTokens(value) {
+export function formatForecastTokens(value) {
   const n = num(value);
   if (n == null) return "—";
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
@@ -129,7 +140,7 @@ function fmtTokens(value) {
   return `${Math.round(n)}`;
 }
 
-function fmtUsd(value) {
+export function formatForecastUsd(value) {
   const n = num(value);
   if (n == null) return "—";
   return n >= 100 ? `$${Math.round(n).toLocaleString()}` : `$${n.toFixed(2)}`;
@@ -146,11 +157,64 @@ function fmtShare(value) {
 }
 
 /// "p50 – p90" for one quantile pair; never a bare point estimate.
-function range(quantiles, fmt) {
+export function formatForecastQuantileRange(quantiles, fmt) {
   const p50 = quantiles?.p50;
   const p90 = quantiles?.p90;
   if (p50 == null && p90 == null) return "—";
   return `${fmt(p50)} – ${fmt(p90)}`;
+}
+
+function quantilePair(quantiles) {
+  return num(quantiles?.p50) != null || num(quantiles?.p90) != null;
+}
+
+function forecastCount(value) {
+  const n = num(value);
+  return n == null || n < 0 ? 0 : Math.trunc(n);
+}
+
+/// Compact drain-card lines. Null when time to drain has no quantile.
+/// Tokens and cost are left out when that pair has none, so a missing cost
+/// is not a dash row.
+export function backlogForecastSummary(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const forecast = payload.forecast || {};
+  const hours = forecast.time_to_drain_hours;
+  if (!quantilePair(hours)) return null;
+  const backlog = payload.backlog || {};
+  const lines = [
+    `Time to drain ${formatForecastQuantileRange(hours, formatForecastHours)}`,
+    `${forecastCount(backlog.backlog)} backlog · ${forecastCount(backlog.in_progress)} in progress`,
+  ];
+  if (quantilePair(forecast.tokens)) {
+    lines.push(`Tokens ${formatForecastQuantileRange(forecast.tokens, formatForecastTokens)}`);
+  }
+  if (quantilePair(forecast.usd)) {
+    lines.push(`Cost ${formatForecastQuantileRange(forecast.usd, formatForecastUsd)}`);
+  }
+  return { lines };
+}
+
+/// One link to Analytics › Forecast. A null summary is the muted unavailable line.
+export function drainBacklogForecastLink(summary) {
+  const unavailable = !summary;
+  const link = el("a", {
+    class: unavailable ? "drain-backlog-forecast unavailable" : "drain-backlog-forecast",
+    title: "Analytics › Forecast",
+  });
+  link.href = scopedHashHref("#analytics/forecast");
+  if (unavailable) {
+    link.textContent = "Backlog forecast unavailable";
+    return link;
+  }
+  link.append(
+    el("span", { class: "drain-backlog-forecast-head" }, [
+      el("span", { class: "drain-section-label", text: "Backlog forecast" }),
+      el("span", { class: "drain-forecast-meta", text: "p50 – p90" }),
+    ]),
+    ...summary.lines.map((line) => el("span", { class: "drain-backlog-forecast-line", text: line })),
+  );
+  return link;
 }
 
 // ---- forecast -------------------------------------------------------------
@@ -252,16 +316,16 @@ function forecastCard() {
     ]));
   } else {
     children.push(el("div", { class: "mx-series fc-kpis" }, [
-      kpi("Time to drain", forecast.time_to_drain_hours, fmtHours, drainFoot(forecast.time_to_drain_hours)),
-      kpi("Cost", forecast.usd, fmtUsd, metricFoot(forecast.usd, "usd")),
-      kpi("Tokens", forecast.tokens, fmtTokens, metricFoot(forecast.tokens, "tokens")),
+      kpi("Time to drain", forecast.time_to_drain_hours, formatForecastHours, drainFoot(forecast.time_to_drain_hours)),
+      kpi("Cost", forecast.usd, formatForecastUsd, metricFoot(forecast.usd, "usd")),
+      kpi("Tokens", forecast.tokens, formatForecastTokens, metricFoot(forecast.tokens, "tokens")),
     ]));
   }
   children.push(arrivalsLine());
   const approved = lastPayload.if_approved;
   if (approved && backlog.proposed) {
     children.push(el("p", { class: "fc-approved" }, [
-      `If the ${backlog.proposed} proposed task${backlog.proposed === 1 ? " is" : "s are"} approved: drain ${range(approved.time_to_drain_hours, fmtHours)}, cost ${range(approved.usd, fmtUsd)}, tokens ${range(approved.tokens, fmtTokens)} (p50 – p90).`,
+      `If the ${backlog.proposed} proposed task${backlog.proposed === 1 ? " is" : "s are"} approved: drain ${formatForecastQuantileRange(approved.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(approved.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(approved.tokens, formatForecastTokens)} (p50 – p90).`,
     ]));
   }
   return el("section", { class: "mx-card", "aria-label": "Backlog forecast" }, children);
@@ -298,9 +362,9 @@ function byComplexityCard() {
     el("th", { scope: "row", text: COMPLEXITY_LABELS[row.complexity] || row.complexity }),
     el("td", { class: "num", text: String(row.tasks) }),
     el("td", { class: "fc-basis", text: basisText(row.basis) }),
-    el("td", { class: "num", text: range(row.work_hours, fmtHours) }),
-    el("td", { class: "num", text: range(row.usd, fmtUsd) }),
-    el("td", { class: "num", text: range(row.tokens, fmtTokens) }),
+    el("td", { class: "num", text: formatForecastQuantileRange(row.work_hours, formatForecastHours) }),
+    el("td", { class: "num", text: formatForecastQuantileRange(row.usd, formatForecastUsd) }),
+    el("td", { class: "num", text: formatForecastQuantileRange(row.tokens, formatForecastTokens) }),
   ]));
   const content = rows.length
     ? table("Forecast by complexity", [["Complexity"], ["Tasks", true], ["Sampled from"], ["Work hours", true], ["Cost", true], ["Tokens", true]], rows, "p50 – p90 per complexity. Work hours sum every task's slot time, so they exceed the time to drain when runs overlap.")
@@ -350,7 +414,7 @@ function excludedText(excluded) {
 }
 
 function versus(forecast, actual, fmt) {
-  return `${range(forecast, fmt)} → ${actual == null ? "—" : fmt(actual)}`;
+  return `${formatForecastQuantileRange(forecast, fmt)} → ${actual == null ? "—" : fmt(actual)}`;
 }
 
 function calibrationCard() {
@@ -382,9 +446,9 @@ function calibrationCard() {
     el("th", { scope: "row", text: formatDateTime(row.forecast_at) }),
     el("td", { class: "num", text: `${row.done}/${row.tasks}` }),
     el("td", { text: excludedText(row.excluded) }),
-    el("td", { class: "num", text: versus(row.forecast?.time_to_drain_hours, row.actual?.time_to_drain_hours, fmtHours) }),
-    el("td", { class: "num", text: versus(row.forecast?.usd, row.actual?.usd, fmtUsd) }),
-    el("td", { class: "num", text: versus(row.forecast?.tokens, row.actual?.tokens, fmtTokens) }),
+    el("td", { class: "num", text: versus(row.forecast?.time_to_drain_hours, row.actual?.time_to_drain_hours, formatForecastHours) }),
+    el("td", { class: "num", text: versus(row.forecast?.usd, row.actual?.usd, formatForecastUsd) }),
+    el("td", { class: "num", text: versus(row.forecast?.tokens, row.actual?.tokens, formatForecastTokens) }),
     el("td", { class: "fc-state", text: row.scored_whole ? "scored" : row.settled ? "settled, not scored" : `${row.pending} pending` }),
   ]));
   const excluded = calibration.excluded || {};

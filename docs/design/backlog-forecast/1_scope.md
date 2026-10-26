@@ -1,8 +1,8 @@
 ---
 title: "Scope: backlog forecast from delivery history"
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 stage: shipped
 next: "—"
@@ -91,6 +91,7 @@ The response reports, per measure, the number scored and the fraction of actuals
 
 - `GET /api/diagnostics/backlog_forecast?workspace=…[&lookback_days=…][&concurrency=…][&arrivals=on]`, read-only apart from the throttled snapshot write.
 - Analytics › Forecast in the dashboard: the quantile tiles, the by-complexity table, coverage counts, the arrival rate beside the no-arrivals assumption, and calibration ([user interface](../user-interface/2_design.md)).
+- The Tasks page auto-drain card shows that same default forecast (30 days, no arrivals) as a compact summary under its admission forecast: time to drain p50 and p90, the backlog and in-progress counts, tokens when the payload has them, and cost only when the history is costed. The summary links to Analytics › Forecast. An error, a host without the endpoint, or no estimate is one muted line and leaves the rest of the card alone [ORB-18533].
 
 The implementation is `crates/orbit-web/src/api/diagnostics/backlog_forecast/` (`model.rs` simulates, `scoring.rs` scores) over `orbit-store`'s `BacklogForecastStoreBackend`.
 
@@ -124,5 +125,6 @@ The implementation is `crates/orbit-web/src/api/diagnostics/backlog_forecast/` (
 ## Task References
 
 - [ORB-18385] — added the backlog forecast, its storage and its scoring pass.
+- [ORB-18533] — shows the default backlog forecast on the Tasks drain card.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

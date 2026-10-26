@@ -68,6 +68,11 @@ let releaseFleetReads = [];
 let nullCapacity = false;
 let resourceThrottle = null;
 let drainCapacityOverride = {};
+// Backlog forecast fixture for the drain-card summary. '' is an empty body
+// (no estimate). ready / nocost / notokens carry quantiles. empty has null
+// hours. error and missing are a failed and an absent endpoint.
+let backlogForecastMode = '';
+const backlogForecastSearches = [];
 let drainTasksOverride = null;
 let providerLimitsFixture = null;
 let providerAuthFixture = null;
@@ -249,6 +254,20 @@ globalThis.fetch = async (path, options = {}) => {
     ...(providerLimitsFixture ? { provider_limits: providerLimitsFixture } : {}),
     ...(providerAuthFixture ? { provider_auth_failures: providerAuthFixture } : {}),
   });
+  if (url.pathname === '/api/diagnostics/backlog_forecast') {
+    backlogForecastSearches.push(url.search);
+    if (backlogForecastMode === 'error') return response({ error: 'forecast failed' }, 500);
+    if (backlogForecastMode === 'missing') return response({ error: '' }, 404);
+    const hours = { p50: 6.5, p90: 20 };
+    const tokens = { p50: 1500000, p90: 4800000 };
+    const usd = { p50: 12.5, p90: 40 };
+    const backlog = { backlog: 18, in_progress: 2 };
+    if (backlogForecastMode === 'empty') return response({ backlog, forecast: { tasks: 5, time_to_drain_hours: { p50: null, p90: null }, tokens: { p50: null, p90: null }, usd: { p50: null, p90: null } } });
+    if (backlogForecastMode === 'nocost') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd: { p50: null, p90: null } } });
+    if (backlogForecastMode === 'notokens') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens: { p50: null, p90: null }, usd } });
+    if (backlogForecastMode === 'ready') return response({ inputs: { history_deliveries: 12 }, backlog, forecast: { tasks: 20, time_to_drain_hours: hours, tokens, usd } });
+    return response({});
+  }
   return response({});
 };
 setWorkspace('one');
@@ -1706,6 +1725,44 @@ await fetchAndRenderAutoDrainPane();
 forecastText = forecastCard()?.textContent || '';
 assert(forecastText.includes('host capacity unknown') && forecastText.includes('admit 89%') && forecastText.includes('headroom unknown'), `an unmeasured host says its headroom is unknown: ${forecastText}`);
 assert(!forecastText.includes('headroom 0.0'), `an unknown headroom must not read as zero: ${forecastText}`);
+// The backlog summary sits under that admission block and uses the default
+// lookback. Tokens and cost render only when those quantiles exist. An error,
+// a missing endpoint or no estimate is one muted line, and the admission
+// block stays.
+const backlogLink = () => forecastCard()?.querySelector(':scope > .drain-backlog-forecast');
+const forecastTextIncludesAdmission = () => (forecastCard()?.textContent || '').includes('host capacity unknown');
+const searchesBeforeReady = backlogForecastSearches.length;
+backlogForecastMode = 'ready';
+await fetchAndRenderAutoDrainPane();
+const readySearch = backlogForecastSearches.at(-1) || '';
+const readyLink = backlogLink();
+const readyText = readyLink?.textContent || '';
+assert(backlogForecastSearches.length === searchesBeforeReady + 1 && !readySearch.includes('lookback_days') && !readySearch.includes('arrivals'), `the summary reads the default backlog forecast: ${readySearch}`);
+assert(readyLink?.tagName === 'A' && readyLink.getAttribute('href')?.includes('#analytics/forecast') && readyLink.getAttribute('title') === 'Analytics › Forecast', `the summary links to Analytics › Forecast: ${readyLink?.outerHTML}`);
+assert(readyText.includes('p50 – p90') && readyText.includes('Time to drain 6.5h – 20h') && readyText.includes('18 backlog · 2 in progress') && readyText.includes('Tokens 1.5M – 4.8M') && readyText.includes('Cost $12.50 – $40.00'), `ready summary: ${readyText}`);
+const built = forecastCard()?.querySelector('.drain-forecast-built');
+assert(built && readyLink && readyLink.parentElement === forecastCard() && readyLink === forecastCard().lastElementChild && (built.compareDocumentPosition(readyLink) & Node.DOCUMENT_POSITION_FOLLOWING), 'the summary follows the admission forecast');
+let summaryActivated = false;
+readyLink.addEventListener('click', (event) => { event.preventDefault(); summaryActivated = true; });
+readyLink.click();
+assert(summaryActivated, 'the summary is a clickable link');
+assert(forecastTextIncludesAdmission(), 'the admission block still renders beside the summary');
+backlogForecastMode = 'nocost';
+await fetchAndRenderAutoDrainPane();
+const nocostText = backlogLink()?.textContent || '';
+assert(nocostText.includes('Tokens 1.5M – 4.8M') && !nocostText.includes('Cost') && !nocostText.includes('—'), `cost is omitted when uncosted: ${nocostText}`);
+backlogForecastMode = 'notokens';
+await fetchAndRenderAutoDrainPane();
+const notokensText = backlogLink()?.textContent || '';
+assert(notokensText.includes('Cost $12.50 – $40.00') && !notokensText.includes('Tokens'), `tokens are omitted when absent: ${notokensText}`);
+for (const mode of ['empty', 'error', 'missing']) {
+  backlogForecastMode = mode;
+  await fetchAndRenderAutoDrainPane();
+  const missed = backlogLink();
+  assert(forecastCard()?.querySelectorAll('.drain-backlog-forecast').length === 1 && missed?.classList.contains('unavailable') && missed.textContent === 'Backlog forecast unavailable', `${mode}: one muted line: ${missed?.textContent}`);
+  assert(forecastTextIncludesAdmission() && get('auto-drain-body').querySelector('.drain-capacity'), `${mode}: the drain card still renders`);
+}
+backlogForecastMode = '';
 drainCapacityOverride = {};
 await fetchAndRenderAutoDrainPane();
 // A window started while another runs waits for it. The card lists it under
