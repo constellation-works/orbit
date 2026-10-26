@@ -26,6 +26,9 @@ mod status;
 mod verify;
 mod web_ui;
 
+#[cfg(test)]
+mod tests;
+
 pub use install::{InstallOptions, InstallReport, LibraryOutcome, install};
 pub use status::{KitProblem, KitStatus, kit_status, remove};
 pub use verify::{VerifyReport, verify};

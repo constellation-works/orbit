@@ -67,6 +67,8 @@ impl PassHome {
 
 pub(super) struct WorkerTokenFacts {
     pub macos: bool,
+    /// The effective config could not be read, so Claude routing is unknown.
+    pub config_load_error: Option<String>,
     /// A routed Claude crew relies on the shared credential `pass` admits.
     pub claude_routed: bool,
     /// A routed Claude crew maps its own credential through
@@ -94,6 +96,16 @@ pub(super) fn worker_token_row(facts: &WorkerTokenFacts) -> WorkspaceDoctorResul
             WorkspaceDoctorStatus::Skipped,
             "only macOS shares a Claude Desktop login with the claude CLI".to_string(),
             None,
+        );
+    }
+    if let Some(error) = &facts.config_load_error {
+        return row(
+            WorkspaceDoctorStatus::Warning,
+            format!(
+                "the config could not be read, so whether a routed crew uses the claude \
+                 provider cannot be checked: {error}"
+            ),
+            Some("Repair the config reported by `orbit doctor`, then rerun it.".to_string()),
         );
     }
     if !facts.claude_routed && !facts.crew_credentialed {
@@ -262,12 +274,16 @@ fn routed_claude_crews(config: &ResolvedConfig) -> (bool, Vec<(String, String)>)
 pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> WorkspaceDoctorResult {
     let macos = cfg!(target_os = "macos");
     let global_root = runtime.global_root();
-    let (claude_routed, crew_credentials) = if macos {
-        ResolvedConfig::load(&ConfigRoots::new(&global_root, runtime.shared_root()))
-            .map(|config| routed_claude_crews(&config))
-            .unwrap_or_default()
+    let (claude_routed, crew_credentials, config_load_error) = if macos {
+        match ResolvedConfig::load(&ConfigRoots::new(&global_root, runtime.shared_root())) {
+            Ok(config) => {
+                let (routed, credentials) = routed_claude_crews(&config);
+                (routed, credentials, None)
+            }
+            Err(error) => (false, Vec::new(), Some(error.to_string())),
+        }
     } else {
-        (false, Vec::new())
+        (false, Vec::new(), None)
     };
     let pass = runtime.env_pass_names();
     let clock = if macos {
@@ -277,6 +293,7 @@ pub(super) fn doctor_check_claude_worker_token(runtime: &OrbitRuntime) -> Worksp
     };
     worker_token_row(&WorkerTokenFacts {
         macos,
+        config_load_error,
         claude_routed,
         crew_credentialed: !crew_credentials.is_empty(),
         crew_sources_missing_from_clock: crew_sources_missing_from_clock(
