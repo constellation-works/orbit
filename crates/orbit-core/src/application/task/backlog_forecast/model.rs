@@ -1,6 +1,6 @@
 //! The forecast model: per-task history cells and the Monte Carlo drain.
 //!
-//! Pure computation over values the endpoint has already read; no store or
+//! Pure computation over values the forecast service has already read; no store or
 //! runtime access, so the same inputs always give the same quantiles (the
 //! generator is seeded with a constant).
 
@@ -102,7 +102,7 @@ impl Resolved {
     }
 }
 
-pub(super) fn resolve(item: &Item, history: &[Delivery]) -> Resolved {
+pub(super) fn resolve_forecast_item(item: &Item, history: &[Delivery]) -> Resolved {
     let assessed = item.complexity != UNSET_BUCKET;
     let of_complexity: Vec<usize> = (0..history.len())
         .filter(|index| assessed && history[*index].complexity == item.complexity)
@@ -408,7 +408,7 @@ pub(super) struct Forecast {
 /// Simulate [`ITERATIONS`] drains of `items` on `slots`. Items are in
 /// dispatch order with in-progress ones first; proposed ones count only
 /// toward `if_approved`.
-pub(super) fn simulate(
+pub(super) fn simulate_backlog_forecast(
     items: &[Item],
     resolved: &[Resolved],
     history: &[Delivery],

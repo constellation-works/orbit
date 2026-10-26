@@ -75,7 +75,7 @@ A sampled arrival with missing tokens or USD makes that iteration's **total** nu
 
 ### Storage
 
-The canonical forecast (default lookback, the live ceiling, no arrivals) is persisted in `backlog_forecasts` (store migration v62, additive): `workspace_id`, `forecast_at`, `model_version`, the inputs, the totals and, per task, its id, complexity, basis and its own p50/p90 of hours, tokens and USD (net of what it had spent). A request writes at most one row per workspace per 60 minutes: the recent-row check and the insert run in one immediate transaction, so concurrent requests cannot both write. A request with non-canonical inputs, an empty backlog or no delivery history never writes. A refused write is logged and does not fail the read.
+The canonical forecast (default lookback, the live ceiling, no arrivals) is persisted in `backlog_forecasts` (store migration v62, additive): `workspace_id`, `forecast_at`, `model_version`, the inputs, the totals and, per task, its id, complexity, basis and its own p50/p90 of hours, tokens and USD (net of what it had spent). The owner host’s sweep clock attempts a canonical write on each non-dry-run tick, and a canonical endpoint read may also write when the slot is free. Both triggers share the same inputs and immediate transaction: the recent-row check and insert allow at most one row per workspace per 60 minutes, including when a read and a tick race. The clock checks the newest row before reading delivery history or simulating, so ticks within the hour skip that work. Follower replicas never write on the scheduled path. Non-canonical reads, an empty dispatchable backlog or no delivery history never write. A failed write is logged and fails neither the tick nor the read.
 
 ### Scoring
 
@@ -93,7 +93,7 @@ The response reports, per measure, the number scored and the fraction of actuals
 - Analytics › Forecast in the dashboard: the quantile tiles, the by-complexity table, coverage counts, the arrival rate beside the no-arrivals assumption, and calibration ([user interface](../user-interface/2_design.md)).
 - The Tasks page auto-drain card shows that same default forecast (30 days, no arrivals) as a compact summary under its admission forecast: time to drain p50 and p90, the backlog and in-progress counts, tokens when the payload has them, and cost only when the history is costed. The summary links to Analytics › Forecast. An error, a host without the endpoint, or no estimate is one muted line and leaves the rest of the card alone [ORB-18533].
 
-The implementation is `crates/orbit-web/src/api/diagnostics/backlog_forecast/` (`model.rs` simulates, `scoring.rs` scores) over `orbit-store`'s `BacklogForecastStoreBackend`.
+The shared calculation is `crates/orbit-core/src/application/task/backlog_forecast.rs`, with `backlog_forecast/model.rs` simulating and `backlog_forecast/scoring.rs` scoring. The sweep clock and the HTTP adapter at `crates/orbit-web/src/api/diagnostics/backlog_forecast/` use that service over `orbit-store`'s `BacklogForecastStoreBackend`.
 
 ## Non-goals
 
@@ -107,7 +107,7 @@ The implementation is `crates/orbit-web/src/api/diagnostics/backlog_forecast/` (
 - **Independence.** Draws are independent, but a bad week (a flaky CI, a provider outage) correlates deliveries; p90 understates that tail.
 - **Survivor history.** Only finished work is sampled. Tasks rejected after burning cost are not in the history.
 - **Short history.** A new workspace has few deliveries per cell; most tasks fall back and the counts say so. Calibration needs stored forecasts whose tasks have finished, which takes days.
-- **Snapshot on read.** The stored row is written by the first canonical read in an hour, so a workspace nobody opens has no stored forecasts.
+- **Clock availability.** Unattended snapshots require the owner host’s sweep clock to run. A stopped clock or exhausted tick budget delays the next snapshot; a canonical read can still fill a free hourly slot.
 
 ## Phasing
 

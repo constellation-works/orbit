@@ -1,4 +1,5 @@
-//! Completion dates and incomplete arrival telemetry at the public forecast boundary.
+//! Scheduled snapshots, completion dates and incomplete arrival telemetry at
+//! the public clock and HTTP forecast boundaries.
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::StoredBacklogForecast;
@@ -11,6 +12,202 @@ use serde_json::{Value, json};
 use super::support::{Fixture, isolated, json_ok};
 
 const ENDPOINT: &str = "/api/diagnostics/backlog_forecast?workspace=ws_http_fixture";
+
+struct ForecastWorkspace<'a>(&'a Fixture);
+
+impl orbit_core::application::routines::loader::RoutineWorkspaceProvider for ForecastWorkspace<'_> {
+    fn discover_workspaces(
+        &self,
+        _: &std::path::Path,
+    ) -> Result<
+        orbit_core::application::routines::loader::DiscoveredWorkspaces,
+        orbit_core::OrbitError,
+    > {
+        let registry = orbit_registry::workspace_registry::load_registry_from(
+            &orbit_registry::workspace_registry::registry_path_for(&self.0.global),
+        )?;
+        // Deliberately include even a replica in entries: the write boundary
+        // must defend ownership as well as production discovery's partition.
+        Ok(
+            orbit_core::application::routines::loader::DiscoveredWorkspaces {
+                entries: vec![(registry.workspaces[0].clone(), self.0.runtime.clone())],
+                ..Default::default()
+            },
+        )
+    }
+}
+
+fn forecast_tick(fixture: &Fixture, now: DateTime<Utc>, dry_run: bool) {
+    let outcome = orbit_core::test_support::run_sweep_at(
+        &fixture.global,
+        orbit_core::application::routines::SweepOptions {
+            dry_run,
+            ..Default::default()
+        },
+        orbit_core::application::routines::RoutineMachineIdentity {
+            machine_id: "forecast-fixture".into(),
+            machine_name: "forecast-fixture".into(),
+        },
+        &ForecastWorkspace(fixture),
+        now,
+    )
+    .expect("forecast failures never fail the clock tick");
+    assert!(!outcome.lock_busy);
+    assert!(!outcome.deadline_exceeded);
+}
+
+#[test]
+fn clock_records_canonical_forecasts_without_endpoint_reads() {
+    isolated(
+        "backlog_forecast::clock_records_canonical_forecasts_without_endpoint_reads",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            completed(&fixture, now - Duration::days(1));
+            forecast_tick(&fixture, now, false);
+            assert!(
+                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                "empty backlog"
+            );
+
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Unattended backlog".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+            forecast_tick(&fixture, now, true);
+            assert!(
+                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                "dry run"
+            );
+            forecast_tick(&fixture, now, false);
+            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "the owner clock must store a forecast without a GET"
+            );
+            assert_eq!(
+                rows[0].forecast_at.timestamp_micros(),
+                now.timestamp_micros()
+            );
+            let inputs: Value = serde_json::from_str(&rows[0].inputs_json).unwrap();
+            assert_eq!(inputs["lookback_days"], 30);
+            assert_eq!(inputs["arrivals"], false);
+
+            let server = fixture.server(false);
+            let read = json_ok(server.get(ENDPOINT));
+            assert_eq!(read["stored"]["recorded"], false);
+            let mut read_inputs = read["inputs"].clone();
+            let mut stored_inputs = inputs;
+            read_inputs
+                .as_object_mut()
+                .unwrap()
+                .remove("lookback_start");
+            stored_inputs
+                .as_object_mut()
+                .unwrap()
+                .remove("lookback_start");
+            assert_eq!(read_inputs, stored_inputs);
+            assert_eq!(
+                read["forecast"],
+                serde_json::from_str::<Value>(&rows[0].result_json).unwrap()
+            );
+            forecast_tick(&fixture, now + Duration::minutes(59), false);
+            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
+            forecast_tick(&fixture, now + Duration::minutes(60), false);
+            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(rows.len(), 2);
+            assert_eq!(
+                rows[0].forecast_at.timestamp_micros(),
+                (now + Duration::minutes(60)).timestamp_micros()
+            );
+        },
+    );
+}
+
+#[test]
+fn clock_forecast_skips_replica_and_missing_history_and_contains_write_failure() {
+    isolated(
+        "backlog_forecast::clock_forecast_skips_replica_and_missing_history_and_contains_write_failure",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Unattended backlog".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+            forecast_tick(&fixture, now, false);
+            assert!(
+                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                "no delivery history"
+            );
+            completed(&fixture, now - Duration::days(1));
+
+            let log_path = fixture.path("forecast-warnings.log");
+            let subscriber = tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(
+                    std::fs::File::create(&log_path).unwrap(),
+                ))
+                .finish();
+            let _subscriber = tracing::subscriber::set_default(subscriber);
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute_batch(
+                            "CREATE TRIGGER refuse_forecast BEFORE INSERT ON backlog_forecasts
+                             BEGIN SELECT RAISE(ABORT, 'fixture forecast write refused'); END;",
+                        )
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+            forecast_tick(&fixture, now, false);
+            assert!(fixture.runtime.backlog_forecasts(10).unwrap().is_empty());
+            let log = std::fs::read_to_string(&log_path).unwrap();
+            assert!(
+                log.contains("fixture forecast write refused"),
+                "write failure must be logged: {log}"
+            );
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute_batch("DROP TRIGGER refuse_forecast;")
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+
+            // A read winning the slot and then the clock still leave one row.
+            let server = fixture.server(false);
+            assert_eq!(json_ok(server.get(ENDPOINT))["stored"]["recorded"], true);
+            forecast_tick(&fixture, Utc::now(), false);
+            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
+            drop(server);
+            let fixture = fixture.into_replica("hm_forecast_owner");
+            forecast_tick(&fixture, now + Duration::hours(2), false);
+            assert_eq!(
+                fixture.runtime.backlog_forecasts(10).unwrap().len(),
+                1,
+                "replica cannot fill a free slot"
+            );
+        },
+    );
+}
 
 fn history(
     fixture: &Fixture,

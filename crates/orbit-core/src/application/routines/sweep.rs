@@ -569,6 +569,25 @@ pub(crate) fn run_sweep_at_with_providers_at(
         }
     }
 
+    // Persist unattended forecasts on the owner clock as well as canonical
+    // reads. A recent hourly slot avoids history reads and simulation; all
+    // failures stay local to this workspace and never fail the tick.
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
+            if let Err(error) = runtime.record_scheduled_backlog_forecast(now_utc) {
+                tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    %error,
+                    "sweep.backlog_forecast_failed"
+                );
+            }
+        }
+    }
+
     // [ORB-14739, ORB-14823] Standing baseline-red holds are re-checked
     // here, never on a read or admission path. The tick reads only recorded
     // base results: a base tip nobody has checked gets one detached refresh
