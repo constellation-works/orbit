@@ -9,6 +9,7 @@ pub(crate) use capture::validate_experiment_capture;
 mod lifecycle;
 mod overlay;
 mod progress;
+mod promotion;
 mod readout;
 mod run_policy;
 mod skills;

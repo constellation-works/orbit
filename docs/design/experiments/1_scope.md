@@ -2,10 +2,10 @@
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
 last_updated: 2026-10-26
-last_validated: 2026-10-25
+last_validated: 2026-10-26
 status: Draft
 stage: building
-next: "Slices 6-8 of 8: the rest of the experiments series, including the conclude action"
+next: "Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today)"
 feature: experiments
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [experiments, admission, tag-instructions, crew-pools, analytics, decision
 
 # Scope: randomized experiments over agent treatments
 
-Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role. The per-arm readout (`orbit experiment readout`, `orbit.experiment.readout` and `GET /api/diagnostics/experiments/{id}/readout`) computes outcomes, intervals, the sample-ratio and drift checks and the verdict on read. The read-only Analytics › Experiments dashboard page lists each experiment's per-arm progress toward `min_sample` (`GET /api/diagnostics/experiments`) and opens one (`GET /api/diagnostics/experiments/{id}`, plus the readout with its cumulative primary-metric series) to arm cards, a forest plot, the per-complexity table, crew mix, health warnings and the event timeline; the conclude action is not built yet.
+Status: building. Phase 1 (records and shadow assignment) and the instruction and tool surfaces of phase 2 are implemented: a `live` experiment applies them on owner and claimed runs, and every dispatch it changes records an `activity.experiment_overlay_applied` audit row with the digest of what it received. Removal is refused for the tools the agent handoff contract needs (`orbit.task.show`, `orbit.task.update`, `orbit.task.artifact.put`); a `false` instruction entry leaves Orbit's shipped default tag instructions out of that role. The per-arm readout (`orbit experiment readout`, `orbit.experiment.readout` and `GET /api/diagnostics/experiments/{id}/readout`) computes outcomes, intervals, the sample-ratio and drift checks and the verdict on read. The Analytics › Experiments dashboard page lists each experiment's per-arm progress toward `min_sample` (`GET /api/diagnostics/experiments`) and opens one (`GET /api/diagnostics/experiments/{id}`, plus the readout with its cumulative primary-metric series) to arm cards, a forest plot, the per-complexity table, crew mix, health warnings and the event timeline. An operator concludes from that page, the CLI or `orbit.experiment.conclude`: the conclusion event stores the readout JSON at that moment, assignment stops, and a chosen arm files one proposed promotion task. Concluding changes no configuration or repository file.
 Skills, crew pools and allowlisted config values are also live. Skill replacement currently supports Claude on Unix through an invocation-local discovery root; other providers refuse the overlay. Bundles are pinned to the run base, carried in claimed captures, and recorded with per-bundle digests (see [configuration](../../CONFIG.md#experiments--experiments-over-agent-treatments)).
 
 Bearing: Orbit already has most of the parts an experiment needs, scattered across
@@ -309,8 +309,9 @@ Policy only. Experiment definitions are store records.
    digests.
 3. **Skills, crew and config keys.** The remaining surfaces, each validated at start.
 4. **Readout.** The analysis endpoint and Analytics › Experiments.
-5. **Decision and promotion.** Conclude with snapshot, the decision-channel prompt at the
-   horizon, and the promotion task. The explore-brief trial becomes the first live experiment.
+5. **Decision and promotion.** Conclude stores the readout snapshot and files one promotion
+   task. The decision-channel prompt at the horizon remains open: decision requests are
+   task-bound today. The explore-brief trial becomes the first live experiment.
 
 ## Open questions
 

@@ -342,7 +342,7 @@ const CONCLUDE: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Conclude,
     cli_path: &["conclude"],
     tool_name: "orbit.experiment.conclude",
-    tool_description: "Conclude a running or paused experiment, recording the chosen arm (or none) and the reason. A concluded experiment enrolls no new tasks; tasks already assigned keep their arm. Concluding changes no configuration or repository file. Operator only: an agent session is refused.",
+    tool_description: "Conclude a running or paused experiment. Records the chosen arm (or none), the reason, and the readout JSON at that moment on the conclusion event, which orbit experiment show returns. A chosen arm files one proposed task naming the experiment, arm, readout verdict and overlay; no arm files nothing. Assignment stops; tasks already assigned keep their arm. Changes no configuration or repository file. Operator only: an agent session is refused.",
     cli_about: "Conclude an experiment with the chosen arm, or none",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

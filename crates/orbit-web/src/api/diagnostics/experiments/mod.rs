@@ -1,17 +1,21 @@
 //! Analytics › Experiments: `/diagnostics/experiments` lists the workspace's
 //! experiments with each arm's enrollment, `/diagnostics/experiments/{id}`
-//! shows one with its event timeline, and `/diagnostics/experiments/{id}/readout`
-//! returns the JSON `orbit.experiment.readout` returns plus `cumulative`, the
-//! primary metric's per-arm cumulative series on the shared trend ladder.
+//! shows one with its event timeline, `/diagnostics/experiments/{id}/readout`
+//! returns the JSON `orbit.experiment.readout` returns plus `cumulative`, and
+//! `POST /diagnostics/experiments/{id}/conclude` records an operator's decision
+//! through the same `change_experiment` path as the CLI.
 
 mod cumulative;
 
-use axum::extract::{Path, Query};
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
+use orbit_common::governance::authorization::DASHBOARD_EXPERIMENT_CONCLUDE;
+use orbit_core::application::experiment::{ExperimentActor, ExperimentChange};
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::state::Ws;
+use crate::state::{DashboardState, Ws};
 
 #[derive(Deserialize, Default)]
 pub(in crate::api) struct ExperimentReadoutQuery {
@@ -28,10 +32,78 @@ pub(in crate::api) async fn diagnostics_experiments(Ws(runtime): Ws) -> Response
 }
 
 pub(in crate::api) async fn diagnostics_experiment(
+    State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,
 ) -> Response {
-    match super::super::blocking("experiment show", move || runtime.experiment_view(&id)).await {
+    let conclude_authorized = super::super::routines::authorized_caller(
+        &DASHBOARD_EXPERIMENT_CONCLUDE,
+        state.operator_session(),
+    )
+    .is_ok();
+    match super::super::blocking("experiment show", move || {
+        let view = runtime.experiment_view(&id)?;
+        let mut body = serde_json::to_value(&view).map_err(|error| {
+            orbit_core::OrbitError::Execution(format!("experiment view is not JSON: {error}"))
+        })?;
+        body["conclude_authorized"] = json!(conclude_authorized);
+        Ok(body)
+    })
+    .await
+    {
+        Ok(body) => Json(body).into_response(),
+        Err(response) => *response,
+    }
+}
+
+#[derive(Deserialize)]
+pub(in crate::api) struct ConcludeBody {
+    #[serde(default)]
+    arm: Option<String>,
+    reason: String,
+}
+
+/// `POST /diagnostics/experiments/{id}/conclude` — operator-only conclusion.
+/// Authorization runs before the body is required, and the write is
+/// `change_experiment`, the same function the CLI tool calls.
+pub(in crate::api) async fn diagnostics_experiment_conclude(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+    body: Result<Json<ConcludeBody>, JsonRejection>,
+) -> Response {
+    if let Err(denial) = super::super::routines::authorized_caller(
+        &DASHBOARD_EXPERIMENT_CONCLUDE,
+        state.operator_session(),
+    ) {
+        return super::super::routines::authorization_denied(denial);
+    }
+    let Json(body) = match body {
+        Ok(body) => body,
+        Err(rejection) => return rejection.into_response(),
+    };
+    let reason = body.reason.trim().to_string();
+    if reason.is_empty() {
+        return super::super::bad_request(
+            "conclude needs a reason; it is recorded with the decision".into(),
+        );
+    }
+    let arm = body
+        .arm
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    match super::super::blocking("experiment conclude", move || {
+        runtime.change_experiment(
+            &id,
+            ExperimentChange::Conclude { arm },
+            ExperimentActor {
+                actor: "dashboard".into(),
+                reason: Some(reason),
+            },
+        )
+    })
+    .await
+    {
         Ok(view) => Json(view).into_response(),
         Err(response) => *response,
     }

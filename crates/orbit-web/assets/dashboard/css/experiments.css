@@ -175,6 +175,28 @@
 
 .ex-missing .ex-back { align-self: center; }
 
+/* Operator conclusion. Hidden unless the session may conclude a running or paused experiment. */
+.ex-conclude-fields { display: grid; gap: 10px; }
+.ex-conclude-field { display: grid; gap: 4px; color: var(--fg-dim); font: 12px var(--font-sans); }
+.ex-conclude-control {
+  width: 100%; min-width: 0; box-sizing: border-box; padding: 8px;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elev); color: var(--fg); font: 13px var(--font-sans);
+}
+.ex-conclude-control:disabled { opacity: 0.7; }
+textarea.ex-conclude-control { resize: vertical; min-height: 72px; }
+.ex-conclude-actions { display: flex; margin-top: 12px; }
+.ex-conclude-submit {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 36px; padding: 6px 14px; border: 0; border-radius: var(--radius);
+  background: var(--accent); color: var(--bg); font: 600 13.5px var(--font-sans); cursor: pointer;
+}
+.ex-conclude-submit:hover:not(:disabled) { background: var(--accent-hover); }
+.ex-conclude-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+.ex-conclude-status { margin: 8px 0 0; color: var(--fg-mute); font-size: 12px; overflow-wrap: anywhere; min-height: 1em; }
+.ex-promotion { margin: 8px 0 0; font: 13px var(--font-sans); }
+.ex-task-link { color: var(--accent); overflow-wrap: anywhere; }
+
 @media (max-width: 760px) {
   .panel > .body.experiments-body { padding: 10px; }
   .ex-arm-progress { grid-template-columns: 1fr auto; }
@@ -185,4 +207,6 @@
   .ex-warning-text { grid-column: 1 / -1; }
   .ex-event { grid-template-columns: 1fr; }
   .ex-crew-row { grid-template-columns: 1fr; }
+  .ex-conclude-fields { grid-template-columns: 1fr; }
+  .ex-conclude-submit { width: 100%; min-height: 44px; }
 }
