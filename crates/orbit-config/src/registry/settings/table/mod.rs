@@ -235,9 +235,15 @@ macro_rules! define_config_settings {
     (@tier) => { ConfigKeyTier::Standard };
 }
 
-// The key list is split across two fragments. They are `.inc` files because they
-// are token fragments, not modules, so the orphan-module guard must not expect
-// a `mod` declaration. `with_tail_keys!` is defined by `keys_tail.inc`, so it is
-// included before the head.
-include!("keys_tail.inc");
-include!("keys_head.inc");
+// The key list is split across two modules. They are `.rs` files declared with
+// `mod`: the CodeQL Rust extractor expands `macro_rules` only from `.rs`
+// sources, and `include!` of a non-`.rs` file is outside its source set.
+// `keys_tail` defines `with_tail_keys!` and `keys_head` defines the assembler.
+// The parent calls the assembler so edition 2024 resolves the key tokens here,
+// beside `define_config_settings!`, and the generated items stay on `table::`.
+#[macro_use]
+mod keys_tail;
+#[macro_use]
+mod keys_head;
+
+assemble_config_settings!();

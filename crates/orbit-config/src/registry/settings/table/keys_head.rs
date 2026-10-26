@@ -1,4 +1,9 @@
-with_tail_keys! {
+// Assembles the settings table in the parent module. Edition 2024 resolves
+// identifiers in a nested `macro_rules` body at the outermost call site, so
+// `table` invokes this macro beside `define_config_settings!`.
+macro_rules! assemble_config_settings {
+    () => {
+        with_tail_keys! {
     publication_routine_attachments: String => String {
         key: "publication.routine_attachments", value_type: "string",
         description: "Scheduled task publication attachment policy: omit, fail, or include.",
@@ -461,4 +466,6 @@ with_tail_keys! {
         section: ConfigSection::Housekeeping, order: 60,
         resolve: |raw: Option<u32>| Ok::<_, OrbitError>(raw),
     },
+}
+    };
 }

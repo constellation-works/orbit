@@ -1,6 +1,7 @@
 // Forwards the tail key declarations after the head fragment's tokens. A macro
-// call body cannot hold `include!`, so `keys_head.inc` invokes this macro with
-// its keys and the combined list reaches `define_config_settings!` in order.
+// call body cannot hold `include!`, so the head fragment's assembler invokes
+// this macro. The parent module calls that assembler, and the combined list
+// reaches `define_config_settings!` in order.
 macro_rules! with_tail_keys {
     ($($head:tt)*) => {
         define_config_settings! {
