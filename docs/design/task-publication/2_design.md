@@ -21,8 +21,9 @@ publication` owns explicit binding lifecycle, while `orbit task publication`
 owns publish/status, read-only inspection, and deliberate same-authority
 recovery. V1 publishes one workspace's authority-owned task snapshots to one
 dedicated Git repository. Repository privacy remains operator-managed.
-Multi-workspace aggregation, unattended triggering, authority transfer, and
-multi-writer synchronization remain deferred to [3_vision.md](./3_vision.md).
+Multi-workspace aggregation, authority transfer, and multi-writer
+synchronization remain deferred to [3_vision.md](./3_vision.md). Unattended
+publication is limited to an optional weekly routine that ships disabled (§4).
 
 ## 1. Ownership Boundary
 
@@ -178,9 +179,10 @@ detached snapshot self-describing during recovery.
 
 Publication is an explicit operator operation in v1. It is not part of
 task-write acknowledgement: a task update commits to the canonical local store
-even when the publication repository is unavailable. A future routine trigger
-must be separately configurable and invoke the same publication boundary; no
-post-task-write hook or seeded routine exists.
+even when the publication repository is unavailable. A routine trigger is
+separately configurable and invokes the same publication boundary: a weekly
+routine seeded disabled runs the `task_publication_pipeline` job. No post-task-write
+hook exists.
 
 The owner performs these phases:
 
@@ -388,9 +390,9 @@ deleting the current tree erased the data.
   `--allow-unscanned-attachments`; size limits and built-in plus operator deny
   patterns still apply. `fail` remains the default and `omit` records incomplete
   recovery state.
-- The operator CLI is the only mutation surface. MCP publication/restore,
-  authority transfer, multi-writer sync, and a separately configured routine
-  trigger are deferred.
+- The operator CLI and the disabled-by-default routine are the only publication
+  entry points. MCP publication/restore, authority transfer, and multi-writer
+  sync are deferred.
 
 ## Task References
 

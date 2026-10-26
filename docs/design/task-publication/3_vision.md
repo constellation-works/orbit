@@ -2,7 +2,7 @@
 title: Task Publication — Vision
 owner: codex
 last_updated: 2026-09-24
-last_validated: 2026-10-18
+last_validated: 2026-10-25
 status: Draft
 feature: task-publication
 doc_role: vision
@@ -23,9 +23,10 @@ separate capabilities with different access and safety contracts.
 
 ## 1. Open Questions
 
-1. What separately configurable routine trigger and freshness objective are
-   justified by observed task-loss and recovery needs? V1 ships only an
-   explicit command; a post-task-write hook is excluded.
+1. What freshness objective justifies the weekly routine's cadence and any
+   further trigger, given observed task-loss and recovery needs? V1 ships an
+   explicit command and a routine seeded disabled; a post-task-write hook is
+   excluded.
 2. Should an explicit authority transfer carry the last publication generation
    as a fencing token, and what evidence must the old owner provide before the
    new owner can publish?
