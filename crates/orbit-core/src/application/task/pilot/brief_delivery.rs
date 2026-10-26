@@ -14,6 +14,7 @@ use std::path::Path;
 use std::str::FromStr;
 
 use orbit_common::fs::selector::Selector;
+use orbit_common::process::shell::quote_posix_arg;
 use orbit_common::security::release::sha256_hex;
 use orbit_types::task::EXPLORE_BRIEF_ARTIFACT;
 use orbit_types::workflow::automation::members::{MemberAttempt, PreparationPolicy};
@@ -183,7 +184,12 @@ impl OrbitRuntime {
                 "diff_command": format!(
                     "git diff {} {base} -- {}",
                     stored.inspection_revision,
-                    record.drifted_paths.join(" ")
+                    record
+                        .drifted_paths
+                        .iter()
+                        .map(|path| quote_posix_arg(&format!(":(literal){path}")))
+                        .collect::<Vec<_>>()
+                        .join(" ")
                 ),
                 "files": drift.files.iter().map(|file| json!({
                     "path": file.path,

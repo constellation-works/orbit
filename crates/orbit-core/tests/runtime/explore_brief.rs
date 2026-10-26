@@ -169,6 +169,94 @@ impl Fixture {
         );
     }
 
+    /// Pilot `task` with a brief that maps the shell-awkward drift targets
+    /// alongside `src/lib.rs`: a space, an apostrophe and a bracket path.
+    fn pilot_covering_awkward_paths(&self, task: &str) {
+        let path = self.repo.canonicalize().unwrap();
+        let prepared = self
+            .runtime
+            .run_deterministic(
+                "prepare_task_pilot",
+                &json!({}),
+                &json!({
+                    "workspace_path": path,
+                    "task_ids": [task],
+                    "base_branch": "main",
+                }),
+                ToolContext::default(),
+            )
+            .expect("prepare task pilot");
+        let revision = prepared["source"]["source_revision"]
+            .as_str()
+            .expect("prepared source revision")
+            .to_string();
+        let tree = git(&self.repo, &["rev-parse", &format!("{revision}^{{tree}}")])
+            .trim()
+            .to_string();
+        let output = self
+            .runtime
+            .run_deterministic(
+                "apply_task_pilot_results",
+                &json!({}),
+                &json!({
+                    "workspace_path": prepared["workspace_path"],
+                    "prepared": prepared,
+                    "results": [{
+                        "partition_index": 0,
+                        "observed_revision": revision,
+                        "observed_tree": tree,
+                        "task_ids": [task],
+                        "tasks": [{
+                            "task_id": task,
+                            "context_files_after": [
+                                "file:src/lib.rs",
+                                "file:docs/Getting Started.md",
+                                "file:it's.md",
+                                "file:app/[slug]/page.tsx",
+                            ],
+                            "disposition": "selectors",
+                            "recommended_crew": "opus",
+                            "recommended_complexity": "low",
+                            "assessment_rationale": "src/lib.rs holds greet.",
+                            "validation_approach": "Call greet.",
+                            "confidence": "high",
+                            "evidence_gaps": [],
+                            "reassessment_triggers": [],
+                            "blocked_by": [],
+                            "adr_conflicts": [],
+                            "utility_warnings": [],
+                            "surface_warnings": [],
+                            "duplicate_of": Value::Null,
+                            "already_landed": Value::Null,
+                            "explore_brief": {
+                                "change": [{
+                                    "target": "symbol:src/lib.rs#greet:function",
+                                    "what": "Return a greeting.",
+                                }],
+                                "pattern": [{"target": "file:README.md", "why": "The only doc."}],
+                                "maps": [
+                                    "file:docs/Getting Started.md",
+                                    "file:it's.md",
+                                    "file:app/[slug]/page.tsx",
+                                ],
+                                "confidence": "high",
+                            },
+                        }],
+                    }],
+                }),
+                ToolContext::default(),
+            )
+            .expect("apply task pilot");
+        assert_eq!(output["applied_count"], 1, "{output}");
+        assert!(
+            self.runtime
+                .get_task_artifact(task, EXPLORE_BRIEF_ARTIFACT)
+                .unwrap()
+                .is_some(),
+            "the pilot stored the brief: {output}"
+        );
+    }
+
     /// Admit `task` as an implementation would: its status moves to
     /// `in-progress`, which is not a material edit.
     fn start(&self, task: &str) {
@@ -262,7 +350,7 @@ fn an_unchanged_task_receives_its_brief_until_a_material_edit() {
     );
     assert_eq!(
         brief["drift"]["diff_command"],
-        format!("git diff {inspected} {moved} -- src/lib.rs"),
+        format!("git diff {inspected} {moved} -- ':(literal)src/lib.rs'"),
         "the patch itself is never inlined"
     );
 
@@ -370,9 +458,108 @@ fn the_run_record_names_each_dispatch_outcome() {
     );
 }
 
+fn a_quoted_diff_command_shows_shell_awkward_drift_targets() {
+    let fx = Fixture::new(ENABLED);
+    fx.commit("docs/Getting Started.md", "before\n");
+    fx.commit("it's.md", "before\n");
+    fx.commit("app/[slug]/page.tsx", "before\n");
+    fx.commit("app/s/page.tsx", "sibling\n");
+    let task = fx.task();
+    let inspected = git(&fx.repo, &["rev-parse", "HEAD"]).trim().to_string();
+    fx.pilot_covering_awkward_paths(&task);
+    fx.start(&task);
+
+    // One distinct added line per covered target; the `app/s` sibling stays
+    // unchanged so shell or Git glob expansion would visibly select it.
+    for (path, marker) in [
+        ("docs/Getting Started.md", "space-after"),
+        ("it's.md", "quote-after"),
+        ("app/[slug]/page.tsx", "bracket-after"),
+    ] {
+        let file = fx.repo.join(path);
+        let mut contents = std::fs::read_to_string(&file).unwrap();
+        contents.push_str(marker);
+        contents.push('\n');
+        std::fs::write(file, contents).unwrap();
+    }
+    git(&fx.repo, &["add", "-A"]);
+    git(&fx.repo, &["commit", "-q", "-m", "drift awkward targets"]);
+    let base = git(&fx.repo, &["rev-parse", "HEAD"]).trim().to_string();
+
+    let drifted = fx.admission(&task, &base);
+    assert_eq!(drifted.record.label(), "drifted", "{:?}", drifted.record);
+    let mut drifted_paths = drifted.record.drifted_paths.clone();
+    drifted_paths.sort();
+    assert_eq!(
+        drifted_paths,
+        ["app/[slug]/page.tsx", "docs/Getting Started.md", "it's.md",],
+        "{:?}",
+        drifted.record
+    );
+    let brief = drifted.brief.expect("a drifted brief is delivered");
+    assert_eq!(brief["drift"]["range"], format!("{inspected}..{base}"));
+    assert_eq!(
+        brief["drift"]["files"]
+            .as_array()
+            .expect("drift files")
+            .len(),
+        3,
+        "{brief}"
+    );
+    let command = brief["drift"]["diff_command"]
+        .as_str()
+        .expect("diff command is a string")
+        .to_string();
+    assert!(
+        command.starts_with(&format!("git diff {inspected} {base} -- ")),
+        "the command keeps the pinned range: {command}"
+    );
+    for path in ["docs/Getting Started.md", "it's.md", "app/[slug]/page.tsx"] {
+        let quoted = orbit_common::process::shell::quote_posix_arg(&format!(":(literal){path}"));
+        assert!(
+            command.contains(&quoted),
+            "the command carries {path} as one quoted literal pathspec: {command}"
+        );
+    }
+    assert!(
+        !command.contains("space-after"),
+        "the patch itself is never inlined: {command}"
+    );
+
+    let output = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .current_dir(&fx.repo)
+        .output()
+        .expect("run the delivered diff command");
+    assert!(
+        output.status.success(),
+        "the delivered command exits successfully: {command}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("diff output is UTF-8");
+    assert!(
+        stdout.contains("+space-after"),
+        "the space path is shown: {stdout}"
+    );
+    assert!(
+        stdout.contains("+quote-after"),
+        "the apostrophe path is shown: {stdout}"
+    );
+    assert!(
+        stdout.contains("+bracket-after"),
+        "the bracket path is shown: {stdout}"
+    );
+    assert!(
+        !stdout.contains("app/s/page.tsx"),
+        "shell expansion must not select the unchanged sibling: {stdout}"
+    );
+}
+
 crate::scenario_table!(
     explore_brief,
     an_unchanged_task_receives_its_brief_until_a_material_edit,
     a_brief_kept_in_shadow_is_classified_but_not_delivered,
     the_run_record_names_each_dispatch_outcome,
+    a_quoted_diff_command_shows_shell_awkward_drift_targets,
 );
