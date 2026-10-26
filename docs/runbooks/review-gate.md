@@ -225,7 +225,9 @@ The owner enforces what it is owed in two places:
   within `max_wait_seconds`. A failed check is classified first: one
   inherited from the base gets one branch update, a transient one gets one
   rerun, and one the candidate caused gets the claim's one automatic repair
-  ([distributed drain runbook](distributed-drain.md)). Past that budget the
+  ([distributed drain runbook](distributed-drain.md)). A new failure whose
+  log cites only files the candidate did not change is base-suspect: it
+  waits for a base run newer than the failure before any repair. Past that budget the
   landing stops, whatever branch protection requires. Branch protection may still treat a skipped or
   neutral required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.

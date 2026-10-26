@@ -27,6 +27,7 @@ pub(super) enum CheckFailureClass {
     Transient,
     Inherited,
     Candidate,
+    BaseSuspect,
     Inconclusive,
 }
 
@@ -36,6 +37,7 @@ impl CheckFailureClass {
             Self::Transient => "transient",
             Self::Inherited => "inherited",
             Self::Candidate => "candidate",
+            Self::BaseSuspect => "base-suspect",
             Self::Inconclusive => "inconclusive",
         }
     }
@@ -57,6 +59,8 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
     actions: Vec<String>,
     /// Latest required-check read during failure classification; diagnostics only.
     pub(in crate::executor::automation::vcs) required_observation: Option<Value>,
+    /// Latest suspicion, retained in timeout evidence while polling the base.
+    pub(in crate::executor::automation::vcs) base_suspicion: Option<String>,
 }
 
 impl CheckRecovery {
@@ -222,11 +226,20 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             workspace,
             job,
             &log,
+            head,
             base,
+            &context.candidate.base_branch,
             moved_tip,
             &mut base_jobs,
             &mut tip_jobs,
         );
+        if class == CheckFailureClass::BaseSuspect {
+            super::suspect::record_base_suspect(
+                host,
+                std::slice::from_ref(&context.task_id),
+                &json!({"base":landing_tip.unwrap_or(base),"check":label,"signature":signature,"reason":why}),
+            )?;
+        }
         jobs.push(FailedJob {
             run_id: Some(run_id),
             job_id,
@@ -248,6 +261,12 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     let evidence = |outcome: &str| format!("{reason}; {classified}; {outcome}");
 
     match class {
+        CheckFailureClass::BaseSuspect => {
+            recovery.base_suspicion = Some(evidence(
+                "waiting for a fresh base check within the landing deadline; no candidate repair",
+            ));
+            Ok(CheckRecoveryStep::Wait)
+        }
         CheckFailureClass::Transient if !recovery.rerun => {
             let runs: BTreeSet<u64> = jobs.iter().filter_map(|job| job.run_id).collect();
             for run_id in runs {
