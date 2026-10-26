@@ -71,6 +71,10 @@ impl LeaseIntakeSocket {
         state: DashboardState,
         limits: IntakeLimits,
     ) -> Result<impl Future<Output = ()> + Send + 'static, OrbitError> {
+        let limits = IntakeLimits {
+            max_frame_bytes: limits.max_frame_bytes.min(LEASE_INTAKE_MAX_FRAME_BYTES),
+            ..limits
+        };
         let std_listener = self.listener.take().ok_or_else(|| {
             OrbitError::Execution("the lease intake socket is already being served".to_string())
         })?;
@@ -185,14 +189,16 @@ impl IntakeServer {
                 }
             };
             let state = self.state.clone();
-            let response = tokio::task::spawn_blocking(move || dispatch(&state, request))
-                .await
-                .unwrap_or_else(|error| {
-                    LeaseIntakeResponse::Error(LeaseIntakeError::new(
-                        "operation_failed",
-                        format!("lease operation panicked: {error}"),
-                    ))
-                });
+            let max_frame_bytes = self.limits.max_frame_bytes;
+            let response =
+                tokio::task::spawn_blocking(move || dispatch(&state, request, max_frame_bytes))
+                    .await
+                    .unwrap_or_else(|error| {
+                        LeaseIntakeResponse::Error(LeaseIntakeError::new(
+                            "operation_failed",
+                            format!("lease operation panicked: {error}"),
+                        ))
+                    });
             if self.write(&mut stream, &response).await.is_err() {
                 return;
             }
@@ -262,6 +268,10 @@ impl IntakeServer {
         let Ok(body) = serde_json::to_vec(frame) else {
             return Err(());
         };
+        // Check before writing even the header, including hello and error frames.
+        if body.len() > self.limits.max_frame_bytes as usize {
+            return Err(());
+        }
         let Ok(declared) = u32::try_from(body.len()) else {
             return Err(());
         };
@@ -279,7 +289,11 @@ impl IntakeServer {
 }
 
 /// Run one operation and audit it.
-fn dispatch(state: &DashboardState, request: LeaseIntakeRequest) -> LeaseIntakeResponse {
+fn dispatch(
+    state: &DashboardState,
+    request: LeaseIntakeRequest,
+    max_frame_bytes: u32,
+) -> LeaseIntakeResponse {
     let LeaseIntakeRequest {
         operation,
         workspace,
@@ -288,22 +302,32 @@ fn dispatch(state: &DashboardState, request: LeaseIntakeRequest) -> LeaseIntakeR
     } = request;
     let runtime = workspace_runtime(state, &workspace);
     let outcome = run_operation(runtime.as_ref(), operation, &workspace, &authority, input);
-    let (status, outcome_label) = match &outcome {
-        Ok(result) if result.get("granted") == Some(&Value::Bool(false)) => {
-            (AuditEventStatus::Denied, "refused")
-        }
-        Ok(_) => (AuditEventStatus::Success, "ok"),
-        Err(error) if matches!(error.code.as_str(), "scope_refused" | "lease_not_held") => {
-            (AuditEventStatus::Denied, "refused")
-        }
-        Err(_) => (AuditEventStatus::Failure, "error"),
-    };
     let lease_id = outcome
         .as_ref()
         .ok()
         .and_then(|result| result.pointer("/lease/lease_id"))
         .and_then(Value::as_str)
         .map(str::to_owned);
+    let response = match outcome {
+        Ok(result) => LeaseIntakeResponse::Ok { result },
+        Err(error) => LeaseIntakeResponse::Error(error),
+    };
+    let response =
+        bounded_operation_response(runtime.as_deref(), operation, response, max_frame_bytes);
+    let (status, outcome_label) = match &response {
+        LeaseIntakeResponse::Ok { result }
+            if result.get("granted") == Some(&Value::Bool(false)) =>
+        {
+            (AuditEventStatus::Denied, "refused")
+        }
+        LeaseIntakeResponse::Ok { .. } => (AuditEventStatus::Success, "ok"),
+        LeaseIntakeResponse::Error(error)
+            if matches!(error.code.as_str(), "scope_refused" | "lease_not_held") =>
+        {
+            (AuditEventStatus::Denied, "refused")
+        }
+        LeaseIntakeResponse::Error(_) => (AuditEventStatus::Failure, "error"),
+    };
     let mut payload = json!({
         "operation": operation.as_str(),
         "workspace": workspace,
@@ -314,7 +338,7 @@ fn dispatch(state: &DashboardState, request: LeaseIntakeRequest) -> LeaseIntakeR
         "outcome": outcome_label,
         "lease_id": lease_id,
     });
-    if let Err(error) = &outcome {
+    if let LeaseIntakeResponse::Error(error) = &response {
         payload["error_code"] = json!(error.code);
         payload["error"] = json!(error.message);
     }
@@ -332,10 +356,51 @@ fn dispatch(state: &DashboardState, request: LeaseIntakeRequest) -> LeaseIntakeR
         }
         None => tracing::warn!(%payload, "lease intake operation for an unknown workspace"),
     }
-    match outcome {
-        Ok(result) => LeaseIntakeResponse::Ok { result },
-        Err(error) => LeaseIntakeResponse::Error(error),
+    response
+}
+
+/// Replace an oversized response before auditing or sending it. A request's
+/// new grant must be released before its caller can observe the size failure.
+fn bounded_operation_response(
+    runtime: Option<&OrbitRuntime>,
+    operation: LeaseIntakeOperation,
+    response: LeaseIntakeResponse,
+    max_frame_bytes: u32,
+) -> LeaseIntakeResponse {
+    let body = match serde_json::to_vec(&response) {
+        Ok(body) => body,
+        Err(error) => {
+            tracing::error!(%error, "lease intake could not encode its response");
+            return LeaseIntakeResponse::Error(LeaseIntakeError::new(
+                "operation_failed",
+                "could not encode the lease intake response",
+            ));
+        }
+    };
+    if body.len() <= max_frame_bytes as usize {
+        return response;
     }
+    if operation == LeaseIntakeOperation::Request
+        && let LeaseIntakeResponse::Ok { result } = &response
+        && result.get("granted") == Some(&Value::Bool(true))
+        && let Some(lease_id) = result.pointer("/lease/lease_id").and_then(Value::as_str)
+        && let Some(runtime) = runtime
+        && let Err(error) = lease::release(runtime, json!({"lease_id": lease_id}), None, None)
+    {
+        tracing::error!(%error, lease_id, "lease intake could not release an oversized grant");
+        return LeaseIntakeResponse::Error(LeaseIntakeError::new(
+            "operation_failed",
+            "could not release a lease whose intake response exceeded the frame limit",
+        ));
+    }
+    LeaseIntakeResponse::Error(LeaseIntakeError::new(
+        "frame_too_large",
+        format!(
+            "the {} response of {} bytes exceeds the {max_frame_bytes}-byte intake limit",
+            operation.as_str(),
+            body.len(),
+        ),
+    ))
 }
 
 /// The runtime for the unique registered workspace whose id or name is

@@ -6,12 +6,14 @@ use orbit_auth::scope::{
     HardLeasePermission, LeasePriorityCeiling, LeaseTokenScope, LeaseTokenVerb, PrincipalClass,
 };
 use orbit_core::OrbitRuntime;
+use orbit_core::runtime::task::locks::lease;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::{Value, json};
 
 use super::super::{
-    IntakeLimits, LeaseIntakeAuthority, LeaseIntakeClient, LeaseIntakeError, LeaseIntakeOperation,
-    LeaseIntakeRequest, LeaseIntakeResponse, LeaseIntakeSocket,
+    IntakeLimits, LEASE_INTAKE_MAX_FRAME_BYTES, LeaseIntakeAuthority, LeaseIntakeClient,
+    LeaseIntakeError, LeaseIntakeOperation, LeaseIntakeRequest, LeaseIntakeResponse,
+    LeaseIntakeSocket,
 };
 use crate::api::tests::test_support::enter_isolated_child;
 use crate::state::{DashboardState, RegistrySource, SINGLE_WORKSPACE_ID};
@@ -82,6 +84,165 @@ fn refusal(response: LeaseIntakeResponse) -> LeaseIntakeError {
     match response {
         LeaseIntakeResponse::Error(error) => error,
         LeaseIntakeResponse::Ok { result } => panic!("intake allowed: {result}"),
+    }
+}
+
+struct FrameLimitFixture {
+    runtime: Arc<OrbitRuntime>,
+    socket_path: std::path::PathBuf,
+    _socket: LeaseIntakeSocket,
+    _tokio: tokio::runtime::Runtime,
+    _tmp: tempfile::TempDir,
+}
+
+impl FrameLimitFixture {
+    fn start() -> Self {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let global_root = tmp.path().join("global");
+        std::fs::create_dir_all(&global_root).expect("global root");
+        let repo = seed_registered_workspace(tmp.path(), "ws_frame_limit");
+        let runtime = Arc::new(
+            OrbitRuntime::from_roots(&global_root, &repo.join(".orbit")).expect("runtime"),
+        );
+        let socket_path = tmp.path().join("intake.sock");
+        let listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind");
+        // SAFETY: geteuid has no preconditions and cannot fail.
+        let own_uid = unsafe { libc::geteuid() };
+        let mut socket =
+            LeaseIntakeSocket::for_test_listener(listener, socket_path.clone(), own_uid);
+        let tokio = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let accept = {
+            let _entered = tokio.enter();
+            socket
+                .serve(
+                    DashboardState::single(Arc::clone(&runtime)),
+                    IntakeLimits::default(),
+                )
+                .expect("serve")
+        };
+        tokio.spawn(accept);
+        Self {
+            runtime,
+            socket_path,
+            _socket: socket,
+            _tokio: tokio,
+            _tmp: tmp,
+        }
+    }
+
+    fn connect(&self) -> LeaseIntakeClient {
+        LeaseIntakeClient::connect(&self.socket_path, Duration::from_secs(10)).expect("connect")
+    }
+}
+
+fn oversized_response_paths() -> Vec<String> {
+    (0..200)
+        .map(|index| format!("file:src/{index:03}-{}.rs", "x".repeat(180)))
+        .collect()
+}
+
+#[test]
+fn oversized_read_responses_are_bounded_errors_and_other_connections_still_work() {
+    if !enter_isolated_child(
+        module_path!(),
+        "oversized_read_responses_are_bounded_errors_and_other_connections_still_work",
+    ) {
+        return;
+    }
+    let fixture = FrameLimitFixture::start();
+    let granted = lease::request(
+        &fixture.runtime,
+        json!({
+            "principal": "alice", "selectors": ["dir:src"],
+            "tags": ["x".repeat(LEASE_INTAKE_MAX_FRAME_BYTES as usize)]
+        }),
+        None,
+        None,
+    )
+    .expect("seed a large lease through the runtime API");
+    let lease_id = granted["lease"]["lease_id"].as_str().expect("lease id");
+    let paths = oversized_response_paths();
+    for (operation, input, result) in [
+        (
+            LeaseIntakeOperation::List,
+            json!({}),
+            lease::list(&fixture.runtime).unwrap(),
+        ),
+        (
+            LeaseIntakeOperation::Show,
+            json!({"lease_id": lease_id}),
+            lease::show(&fixture.runtime, json!({"lease_id": lease_id})).unwrap(),
+        ),
+        (
+            LeaseIntakeOperation::Check,
+            json!({"paths": paths}),
+            lease::check(&fixture.runtime, json!({"paths": paths})).unwrap(),
+        ),
+    ] {
+        assert!(
+            serde_json::to_vec(&LeaseIntakeResponse::Ok { result })
+                .unwrap()
+                .len()
+                > LEASE_INTAKE_MAX_FRAME_BYTES as usize,
+            "the fixture must exceed the real frame limit for {operation:?}"
+        );
+        let mut client = fixture.connect();
+        let error = refusal(call(&mut client, "alice", operation, input));
+        assert_eq!(error.code, "frame_too_large", "{operation:?}: {error:?}");
+
+        // Also prove framing remains synchronized on the original connection.
+        ok(call(
+            &mut client,
+            "alice",
+            LeaseIntakeOperation::Check,
+            json!({"paths": ["file:unheld.rs"]}),
+        ));
+        let mut second = fixture.connect();
+        let small = ok(call(
+            &mut second,
+            "bob",
+            LeaseIntakeOperation::Request,
+            json!({"selectors": ["file:unheld.rs"]}),
+        ));
+        assert_eq!(small["granted"], true, "{small}");
+    }
+}
+
+#[test]
+fn oversized_request_response_releases_the_grant_before_returning_an_error() {
+    if !enter_isolated_child(
+        module_path!(),
+        "oversized_request_response_releases_the_grant_before_returning_an_error",
+    ) {
+        return;
+    }
+    let fixture = FrameLimitFixture::start();
+    let held = lease::request(
+        &fixture.runtime,
+        json!({"principal": "alice", "selectors": ["dir:src"]}),
+        None,
+        None,
+    )
+    .expect("seed an overlapping lease");
+    let mut client = fixture.connect();
+    for _ in 0..2 {
+        // The request fits; its success response repeats every path in overlaps
+        // and the granted lease, exceeding the real protocol limit.
+        let error = refusal(call(
+            &mut client,
+            "bob",
+            LeaseIntakeOperation::Request,
+            json!({"selectors": oversized_response_paths(), "mode": "advisory"}),
+        ));
+        assert_eq!(error.code, "frame_too_large", "{error:?}");
+        let listed = lease::list(&fixture.runtime).expect("active leases after error");
+        let leases = listed["leases"].as_array().expect("leases");
+        assert_eq!(leases.len(), 1, "a failed response must not leave a grant");
+        assert_eq!(leases[0]["lease_id"], held["lease"]["lease_id"]);
     }
 }
 

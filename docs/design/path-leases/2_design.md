@@ -428,6 +428,12 @@ because a token authorizes leases and nothing else (`4_decisions.md`). Show, lis
 every lease in the token's workspace. The operator-session REST routes keep full authority over
 every lease.
 
+The server checks the serialized response size before writing any frame bytes. A response
+that would exceed 64 KiB becomes a bounded `frame_too_large` operation error; the connection
+remains usable. If a request just granted a lease whose success response is too large, the
+server releases that grant before returning the error. The grant and compensating release
+retain their normal audit rows, and the intake operation is audited as a failure.
+
 With the §7.1 prerequisite in force, an agent running as the operator can still stop Orbit Web,
 or edit the operator's configuration to turn intake off or name another peer user. That denies
 service and grants nothing. The agent cannot mint or revoke tokens, read their hashes, or run
