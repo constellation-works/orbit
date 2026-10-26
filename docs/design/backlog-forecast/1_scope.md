@@ -91,7 +91,7 @@ The response reports, per measure, the number scored and the fraction of actuals
 
 - `GET /api/diagnostics/backlog_forecast?workspace=…[&lookback_days=…][&concurrency=…][&arrivals=on]`, read-only apart from the throttled snapshot write.
 - Analytics › Forecast in the dashboard: the quantile tiles, the by-complexity table, coverage counts, the arrival rate beside the no-arrivals assumption, and calibration ([user interface](../user-interface/2_design.md)).
-- The Tasks page auto-drain card shows that same default forecast (30 days, no arrivals) as a compact summary under its admission forecast: time to drain p50 and p90, the backlog and in-progress counts, tokens when the payload has them, and cost only when the history is costed. The summary links to Analytics › Forecast. An error, a host without the endpoint, or no estimate is one muted line and leaves the rest of the card alone [ORB-18533].
+- The Tasks page auto-drain card shows that same default forecast (30 days, no arrivals) as one line under its admission forecast: time to drain p50 – p90, then cost in whole dollars only when the history is costed. The backlog and in-progress counts, the tokens when the payload has them, and the exact cost are in its tooltip and accessible text. The line links to Analytics › Forecast. An error, a host without the endpoint, or no estimate is one muted line and leaves the rest of the card alone [ORB-18533].
 
 The shared calculation is `crates/orbit-core/src/application/task/backlog_forecast.rs`, with `backlog_forecast/model.rs` simulating and `backlog_forecast/scoring.rs` scoring. The sweep clock and the HTTP adapter at `crates/orbit-web/src/api/diagnostics/backlog_forecast/` use that service over `orbit-store`'s `BacklogForecastStoreBackend`.
 
