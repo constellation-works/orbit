@@ -1,12 +1,10 @@
 use std::path::PathBuf;
 
-use chrono::Utc;
 use clap::{Args, Subcommand, ValueEnum};
 use orbit_core::OrbitRuntime;
 use orbit_core::bootstrap::task_publication::{
-    AttachmentPolicy, AttachmentPolicyKind, PublicationCallerRole, PublicationFreshness,
-    PublicationInspectRequest, PublicationInspection, PublicationLastSuccess,
-    PublicationPublishOutcome, PublicationPublishRequest, PublicationPublishStatus,
+    AttachmentPolicy, AttachmentPolicyKind, PublicationFreshness, PublicationInspectRequest,
+    PublicationInspection, PublicationPublishOutcome, PublicationPublishStatus,
     PublicationRecoveryCompleteness, PublicationRenderAuthority, PublicationRestoreMode,
     PublicationRestoreRequest, ScannerFailureBehavior,
 };
@@ -106,37 +104,6 @@ impl Execute for TaskPublicationPublishArgs {
                     .to_string(),
             ));
         }
-        let workspace_id = selected_workspace_id(runtime)?;
-        let task_workspace_id = selected_task_workspace_id(runtime)?;
-        let global_root = runtime.global_root();
-        let machine = load_machine_identity(&global_root)?;
-        let registry_path = workspace_registry::registry_path_for(&global_root);
-        let registry = workspace_registry::load_registry_from_read_only(&registry_path)?.registry;
-        let binding = workspace_registry::find_publication_binding_by_id(&registry, &workspace_id)
-            .cloned()
-            .ok_or_else(|| {
-                orbit_core::OrbitError::WorkspaceError(format!(
-                    "workspace '{workspace_id}' has no publication binding; run `orbit workspace publication bind` first"
-                ))
-            })?;
-        let checkout = workspace_registry::find_checkout_by_id(&registry, &workspace_id)
-            .ok_or_else(|| {
-                orbit_core::OrbitError::WorkspaceError(format!(
-                    "workspace '{workspace_id}' has no local checkout"
-                ))
-            })?;
-        let caller_role = match checkout.role {
-            Some(WorkspaceCheckoutRole::Owner) => PublicationCallerRole::Owner,
-            Some(WorkspaceCheckoutRole::Replica) | None => PublicationCallerRole::Replica,
-        };
-
-        let request = publish_request(
-            &binding,
-            task_workspace_id,
-            machine.id,
-            caller_role,
-            publication_cache(runtime),
-        );
         let mut deny_patterns = DEFAULT_DENY_PATTERNS
             .iter()
             .map(|pattern| (*pattern).to_string())
@@ -153,9 +120,12 @@ impl Execute for TaskPublicationPublishArgs {
                 ScannerFailureBehavior::Reject
             },
         };
-        let outcome = runtime.publish_task_publication(request, &policy)?;
-
-        record_success_at_registry_path(&registry_path, &binding, &outcome)?;
+        let workspace_id = selected_workspace_id(runtime)?;
+        let (binding, outcome) = runtime.publish_bound_task_publication(&policy)?
+            .ok_or_else(|| orbit_core::OrbitError::WorkspaceError(format!(
+                "workspace '{}' has no publication binding; run `orbit workspace publication bind` first",
+                workspace_id
+            )))?;
 
         Ok(Payload::detail(
             publish_json(&binding, &outcome),
@@ -163,41 +133,6 @@ impl Execute for TaskPublicationPublishArgs {
         )
         .into())
     }
-}
-
-// External publication deliberately runs without the catalog lock. Revalidate
-// its destination on a fresh snapshot before recording the completed publish.
-fn record_success_at_registry_path(
-    registry_path: &std::path::Path,
-    expected: &WorkspacePublicationBinding,
-    outcome: &PublicationPublishOutcome,
-) -> Result<(), orbit_core::OrbitError> {
-    workspace_registry::with_registry_lock(registry_path, || {
-        let mut registry = workspace_registry::load_registry_from(registry_path)?;
-        let current =
-            workspace_registry::find_publication_binding_by_id(&registry, &expected.workspace_id);
-        let same_destination = current.is_some_and(|current| {
-            current.workspace_id == expected.workspace_id
-                && current.source_repository_fingerprint == expected.source_repository_fingerprint
-                && current.publication_remote == expected.publication_remote
-                && current.publication_branch == expected.publication_branch
-                && current.publication_id == expected.publication_id
-                && current.authority_machine_id == expected.authority_machine_id
-        });
-        if !same_destination {
-            return Err(orbit_core::OrbitError::WorkspaceError(
-                "publication completed remotely, but its local binding changed; success was not recorded".to_string(),
-            ));
-        }
-        workspace_registry::record_publication_success_by_id(
-            &mut registry,
-            &expected.workspace_id,
-            outcome.generation,
-            &outcome.commit_id,
-            Some(&expected.authority_machine_id),
-        )?;
-        workspace_registry::save_registry_to(&registry, registry_path)
-    })
 }
 
 #[derive(Args)]
@@ -416,35 +351,6 @@ fn selected_task_workspace_id(runtime: &OrbitRuntime) -> Result<String, orbit_co
 
 fn publication_cache(runtime: &OrbitRuntime) -> PathBuf {
     runtime.global_root().join("state").join("task-publication")
-}
-
-fn publish_request(
-    binding: &WorkspacePublicationBinding,
-    task_workspace_id: String,
-    local_machine_id: String,
-    caller_role: PublicationCallerRole,
-    cache_dir: PathBuf,
-) -> PublicationPublishRequest {
-    PublicationPublishRequest {
-        workspace_id: binding.workspace_id.clone(),
-        task_workspace_id,
-        source_repository_fingerprint: binding.source_repository_fingerprint.clone(),
-        publication_id: binding.publication_id.clone(),
-        authority_machine_id: binding.authority_machine_id.clone(),
-        local_machine_id,
-        caller_role,
-        publication_remote: binding.publication_remote.clone(),
-        publication_branch: binding.publication_branch.clone(),
-        cache_dir,
-        published_at: Utc::now(),
-        last_success: binding
-            .last_success_generation
-            .zip(binding.last_success_commit.as_ref())
-            .map(|(generation, commit)| PublicationLastSuccess {
-                generation,
-                commit: commit.clone(),
-            }),
-    }
 }
 
 fn inspect_request_from_binding(

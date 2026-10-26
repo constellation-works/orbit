@@ -283,6 +283,10 @@ pub const DEFAULT_ACTIVITY_FILES: &[(&str, &str)] = &[
         include_str!("../../orbit-core/assets/activities/task_complete.yaml"),
     ),
     (
+        "task_publication",
+        include_str!("../../orbit-core/assets/activities/task_publication.yaml"),
+    ),
+    (
         "store_gc",
         include_str!("../../orbit-core/assets/activities/store_gc.yaml"),
     ),
@@ -404,6 +408,10 @@ pub const DEFAULT_JOB_FILES: &[(&str, &str)] = &[
     (
         "task_review_reconciliation_pipeline",
         include_str!("../../orbit-core/assets/jobs/task_review_reconciliation_pipeline.yaml"),
+    ),
+    (
+        "task_publication_pipeline",
+        include_str!("../../orbit-core/assets/jobs/task_publication_pipeline.yaml"),
     ),
     (
         "store_gc_pipeline",

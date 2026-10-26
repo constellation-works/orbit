@@ -152,10 +152,13 @@ the `claude` CLI.
 
 ## 2. Turn on routines
 
-`orbit workspace init` seeds ten routines into `.orbit/routines/`: task
+`orbit workspace init` seeds eleven routines into `.orbit/routines/`: task
 pilot, finding verification, pilot-warning triage, blocked-task triage, ship
 sweep, worktree GC, store GC (daily audit and run-state retention), the
-CI-failure and dependency-alert sweeps, and crew-performance refresh.
+CI-failure and dependency-alert sweeps, crew-performance refresh, and
+[task publication](../task-publication/#scheduled-publication) (weekly Sunday
+at 04:47 host-local time, disabled until you opt into publishing task prose;
+attachments default to `omit`).
 All start disabled except `crew_performance_refresh`, which runs hourly.
 With `workflow.crew_performance` set to `off`, that routine skips its scan and
 writes no snapshot, but still records a job run. `orbit workspace sync`

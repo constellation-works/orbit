@@ -85,6 +85,10 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/worktree_gc.yaml"),
     ),
     (
+        "task_publication",
+        include_str!("../../../assets/routines/task_publication.yaml"),
+    ),
+    (
         "store_gc",
         include_str!("../../../assets/routines/store_gc.yaml"),
     ),
