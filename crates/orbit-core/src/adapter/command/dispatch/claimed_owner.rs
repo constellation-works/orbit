@@ -24,8 +24,10 @@
 //!
 //! The before-PR gate's own artifacts keep the reviewer's attempt scope
 //! ([`super::claimed_review`]), except the named ones a claimed leaf's final
-//! recovery reads, and the claimed task's delivery view is answered from the
-//! leaf's own record ([`super::claimed_recovery`]): the owner has none of it.
+//! recovery reads and the evidence findings on the kept candidate the leaf
+//! resumes ([`super::claimed_findings`]), and the claimed task's delivery
+//! view is answered from the leaf's own record ([`super::claimed_recovery`]):
+//! the owner has none of it.
 //! The broker never opens a path the agent named:
 //! the nested `orbit` reads an artifact source inside the sandbox, no-follow,
 //! under the workspace confinement `orbit.task.artifact.put` already applies,
@@ -433,6 +435,11 @@ pub(super) fn execute_brokered(
         if super::claimed_recovery::is_final_recovery(run) {
             return super::claimed_recovery::execute_review_read(
                 runtime, run, binding, tool, object, &path, session,
+            );
+        }
+        if super::claimed_findings::is_findings_read(tool, &path) {
+            return super::claimed_findings::execute_findings_read(
+                runtime, run, binding, object, &path, session,
             );
         }
         return super::claimed_review::execute_brokered(

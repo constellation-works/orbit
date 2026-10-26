@@ -7,6 +7,8 @@ mod audit;
 mod brokered;
 mod callback;
 #[cfg(unix)]
+mod claimed_findings;
+#[cfg(unix)]
 mod claimed_owner;
 #[cfg(unix)]
 mod claimed_recovery;

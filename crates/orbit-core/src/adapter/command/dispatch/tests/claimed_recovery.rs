@@ -18,8 +18,8 @@ use orbit_common::process::ancestry::process_start_key;
 use orbit_engine::{PluginBrokerHandle, PluginBrokerRun};
 use orbit_store::contracts::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract, AdmissionTaskSummary,
-    ClaimEvidence, ClaimMutation, ExecutionClaim, ExecutionClaimPhase, ExecutionLocation,
-    LocalPullMutation, PullDestination,
+    ClaimCandidateRef, ClaimEvidence, ClaimMutation, ExecutionClaim, ExecutionClaimPhase,
+    ExecutionLocation, LocalPullMutation, PullDestination,
 };
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::policy::ResolvedFsProfile;
@@ -70,25 +70,32 @@ fn recovery_policy() -> ActivityToolDenyPolicy {
 
 /// A claimed leaf on the follower: admitted for the owner's claim on
 /// [`TASK`], created, bound and launched through its durable admission, its
-/// run running, with final recovery admitted for its failed step.
-struct Leaf {
+/// run running, with final recovery admitted for its failed step. Shared
+/// with the claimed findings read's tests.
+pub(super) struct Leaf {
     _root: TempDir,
     global_root: PathBuf,
     worktree: PathBuf,
-    owner: Arc<Owner>,
+    pub(super) owner: Arc<Owner>,
     /// The follower's runtime without the claim's binding, for host records.
     host: OrbitRuntime,
     /// The follower's runtime bound to the claim, as its step runner is.
-    runtime: OrbitRuntime,
-    binding: WorkerInvocation,
+    pub(super) runtime: OrbitRuntime,
+    pub(super) binding: WorkerInvocation,
     destination: PullDestination,
     request_id: String,
-    leaf: String,
+    pub(super) leaf: String,
     drain: String,
 }
 
 impl Leaf {
     fn admit() -> Self {
+        Self::admit_resuming(None)
+    }
+
+    /// [`Self::admit`] for a claim whose receipt offers `resume_candidate`,
+    /// the candidate an earlier claim of the task kept.
+    pub(super) fn admit_resuming(resume_candidate: Option<ClaimCandidateRef>) -> Self {
         // Short, for the broker's socket path.
         let root = tempfile::Builder::new()
             .prefix("ocf")
@@ -178,7 +185,7 @@ impl Leaf {
                 crew: None,
                 crew_source: None,
                 context_files: vec![],
-                resume_candidate: None,
+                resume_candidate,
             },
         );
         let mut record = jobs
@@ -271,7 +278,7 @@ impl Leaf {
             .unwrap();
     }
 
-    fn advance(&self, mutation: LocalPullMutation) {
+    pub(super) fn advance(&self, mutation: LocalPullMutation) {
         self.host
             .stores()
             .jobs()
@@ -280,7 +287,7 @@ impl Leaf {
     }
 
     /// The broker run the step runner builds for `activity` of the leaf.
-    fn run(&self, activity: &str) -> PluginBrokerRun {
+    pub(super) fn run(&self, activity: &str) -> PluginBrokerRun {
         PluginBrokerRun {
             run_id: format!("{}-{activity}", self.leaf),
             job_run_id: Some(self.leaf.clone()),
@@ -311,7 +318,7 @@ impl Leaf {
         }
     }
 
-    fn serve_run(&self, runtime: &OrbitRuntime, run: PluginBrokerRun) -> PluginBroker {
+    pub(super) fn serve_run(&self, runtime: &OrbitRuntime, run: PluginBrokerRun) -> PluginBroker {
         let dispatch = Arc::new(RunDispatch::new(runtime.clone(), run.clone()));
         let broker = PluginBroker::start(&self.global_root, &run.run_id, dispatch).unwrap();
         broker.bind_anchor(PeerAnchor::Ancestor(
@@ -320,7 +327,7 @@ impl Leaf {
         broker
     }
 
-    fn serve(&self, activity: &str) -> PluginBroker {
+    pub(super) fn serve(&self, activity: &str) -> PluginBroker {
         self.serve_run(&self.runtime, self.run(activity))
     }
 
@@ -345,7 +352,12 @@ impl Leaf {
         )
     }
 
-    fn forwarded(&self, broker: &PluginBroker, name: &str, input: Value) -> Result<Value, String> {
+    pub(super) fn forwarded(
+        &self,
+        broker: &PluginBroker,
+        name: &str,
+        input: Value,
+    ) -> Result<Value, String> {
         match self.call(broker.socket_path(), &self.binding, name, input) {
             Some(ClaimedOwnerRoute::Forwarded(result)) => result.map_err(|error| error.to_string()),
             other => panic!("{name} reaches the broker: {other:?}"),
@@ -354,7 +366,12 @@ impl Leaf {
 
     /// A request sent to the broker as the sandboxed agent itself can send
     /// it, bypassing whatever the nested `orbit` would prepare.
-    fn raw(&self, broker: &PluginBroker, name: &str, input: Value) -> Result<Value, String> {
+    pub(super) fn raw(
+        &self,
+        broker: &PluginBroker,
+        name: &str,
+        input: Value,
+    ) -> Result<Value, String> {
         crate::runtime::plugin::broker::forward_call_with_status(
             broker.socket_path(),
             name,
@@ -379,7 +396,7 @@ impl Leaf {
         self.forwarded(broker, SHOW, input)
     }
 
-    fn owner_untouched(&self, case: &str) {
+    pub(super) fn owner_untouched(&self, case: &str) {
         assert!(
             self.owner.calls.lock().unwrap().is_empty(),
             "{case}: nothing refused reaches the owner"
@@ -387,7 +404,7 @@ impl Leaf {
     }
 }
 
-fn refused_with(result: Result<Value, String>, reason: &str, case: &str) {
+pub(super) fn refused_with(result: Result<Value, String>, reason: &str, case: &str) {
     let error = result.expect_err(&format!("{case} is refused"));
     assert!(error.contains(reason), "{case}: {error}");
 }

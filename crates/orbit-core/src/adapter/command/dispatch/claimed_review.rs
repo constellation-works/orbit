@@ -225,7 +225,7 @@ fn not_found(error: &OrbitError) -> bool {
 }
 
 /// The artifact bytes in an owner's `orbit.task.artifact.get` answer.
-fn artifact_bytes(output: &Value, path: &str) -> Result<Vec<u8>, OrbitError> {
+pub(super) fn artifact_bytes(output: &Value, path: &str) -> Result<Vec<u8>, OrbitError> {
     match (output.get("content"), output.get("content_base64")) {
         (Some(Value::String(text)), _) => Ok(text.as_bytes().to_vec()),
         (_, Some(Value::String(encoded))) => BASE64_STANDARD

@@ -495,8 +495,13 @@ and cuts each message and path to 512 bytes after redaction. The task is
 then queued to `backlog` with the history event `review_evidence_findings`,
 and a comment repeats the findings. The task's next run resumes the held
 candidate for its implementer (`resumed_repaired`, trigger `review`), with
-the findings as the repair's output; a claimed leaf's implementer, which
-always runs on a kept candidate, reads them in the task's comments. The
+the findings as the repair's output. A claimed leaf's implementer, which
+always runs on a kept candidate, sees them in the task's comment, which keeps
+only the first 4 KiB, and reads the whole artifact through its run's
+coordinator: the coordinator answers that read for the claimed leaf only when
+the artifact is the system's findings on the held run and commit the claim
+was offered to resume
+([claimed-review artifacts runbook](claimed-review-artifacts.md#2-refusals-and-recovery)). The
 repaired candidate has a new tree, so its review needs CodeQL on it again. When another
 check of the same hold failed for a different reason, the findings are still
 attached, but the hold stays for that decision.
