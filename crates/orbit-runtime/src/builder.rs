@@ -384,6 +384,16 @@ pub(crate) fn build_context_from_roots(
                 .snapshot
                 .workflow_light_delivery_paths
                 .clone(),
+            (
+                orbit_common::fs::path_filter::PathFilter::new(
+                    "workflow.test_paths",
+                    &runtime_config.snapshot.workflow_test_paths,
+                )?,
+                orbit_common::fs::path_filter::PathFilter::new(
+                    "workflow.non_code_paths",
+                    &runtime_config.snapshot.workflow_non_code_paths,
+                )?,
+            ),
             runtime_config.snapshot.regression_risk(),
             runtime_config.snapshot.explore(),
             runtime_config.snapshot.crew_performance_types().to_vec(),

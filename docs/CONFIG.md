@@ -351,6 +351,8 @@ crew_performance_window_days = 30
 | `workflow.unlocked_path_validation_commands` | `[]` | Commands a repaired candidate runs instead of the full required list when its tree differs from the run's last fully validated tree only in `workflow.unlocked_context_paths`. Empty always runs the full list. See [revalidating an unlocked-path repair](#revalidating-an-unlocked-path-repair). |
 | `workflow.generated_paths` | `{}` | Generated files, as path glob = regenerate command. Conflict recovery regenerates a conflicting match instead of merging it. See [generated paths](#generated-paths-are-regenerated-not-merged). |
 | `workflow.light_delivery_paths` | `["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]` | Path globs a candidate must change only within for a `skip-review` or `skip-validation` task to skip agent review or local validation. A leading `!` excludes. `[]` disables both tags. See [light delivery](#light-delivery-skip-review-and-skip-validation). |
+| `workflow.test_paths` | `["**/test/**", "**/tests/**", "**/__tests__/**", "**/spec/**", "**/testdata/**", "**/*_test.*", "**/*.test.*", "**/test_*.*", "**/*_spec.*", "**/*.spec.*"]` | **Advanced.** Path globs whose changed lines count as tests in landed-delivery diff stats. See [landed diff classification](#landed-diff-classification). |
+| `workflow.non_code_paths` | `["docs/**", "**/*.md", "**/*.mdx", "**/*.rst", "**/*.txt", "**/*.json", "**/*.yaml", "**/*.yml", "**/*.toml", "**/*.lock", "**/*.csv", "**/*.golden", "**/*.png", "**/*.jpg", "**/*.jpeg", "**/*.gif", "**/*.webp", "**/*.svg", "**/*.ico", "**/LICENSE*"]` | **Advanced.** Path globs whose changed lines count as other (docs, config, data, assets) in landed-delivery diff stats; everything else is code. See [landed diff classification](#landed-diff-classification). |
 | `workflow.review_skip_tags.<tag>.paths` | unset | Path globs (same syntax as `workflow.light_delivery_paths`; `["**"]` allowed) a candidate carrying `<tag>` must change only within to skip agent review. See [review-skip tags](#review-skip-tags-workflowreview_skip_tags). |
 | `workflow.review_skip_tags.<tag>.guard` | unset | Optional repository-relative executable, read from the delivery's base revision, that must exit 0 (with the base and head as its first two arguments) for `<tag>` to skip agent review. |
 
@@ -441,6 +443,18 @@ A candidate that changes any other path, or nothing at all, ignores both tags an
 On a distributed claim, the owner captures its list in the claim's validation gates. The follower leaf judges its candidate against that copy, never its own config. An owner too old to capture one leaves the leaf with no list, so neither tag applies. The owner judges the handed-off candidate again in its own checkout when it accepts, approves or lands the handoff. It records the decision in the task's history, because a leaf cannot write history.
 
 `review.baseline_commands` are the reviewer's own checks: they run only when a review runs. Tag a task with both tags to skip review and every local check.
+
+### Landed diff classification
+
+Each landed delivery records the lines it added and deleted, and the files it changed, in three classes for Analytics › Metrics › Lines changed. A changed path matching `workflow.test_paths` counts as tests; otherwise one matching `workflow.non_code_paths` counts as other; anything else counts as code. Both lists use the `workflow.light_delivery_paths` glob syntax (`*` within a component, `**` across components, a leading `!` excludes), and a list with no positive glob matches nothing. The defaults are language-neutral naming conventions (test directories and `*_test.*`, `*.test.*`, `test_*.*`, `*_spec.*`, `*.spec.*` files; docs, Markdown, data, lock files, goldens and images). Set them to your repository's layout:
+
+```toml
+[workflow]
+test_paths = ["**/tests/**", "e2e/**"]
+non_code_paths = ["docs/**", "**/*.md", "website/**"]
+```
+
+A rename counts its changed lines only, and a binary file counts as a changed file with no lines. A change to either list applies to deliveries recorded after it; rows already recorded keep their classes.
 
 ### Review-skip tags: `workflow.review_skip_tags`
 

@@ -211,6 +211,18 @@ impl RuntimeKernel {
         self.context.settings().light_delivery_paths()
     }
 
+    /// `workflow.test_paths` as a compiled filter: the landed-diff paths
+    /// counted as tests.
+    pub fn diff_test_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
+        self.context.settings().diff_test_paths()
+    }
+
+    /// `workflow.non_code_paths` as a compiled filter: the landed-diff paths
+    /// that are not tests and count as other rather than code.
+    pub fn diff_non_code_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
+        self.context.settings().diff_non_code_paths()
+    }
+
     /// `[workflow.regression_risk]` as admitted: whether implement and
     /// review prompts mark regression-prone context files.
     pub fn regression_risk_settings(&self) -> orbit_config::RegressionRiskSettings {

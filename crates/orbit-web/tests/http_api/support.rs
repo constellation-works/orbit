@@ -764,7 +764,9 @@ pub(super) fn rewind_retention_analytics(fixture: &Fixture) {
         .with_transaction(|tx| {
             tx.connection()
                 .execute_batch(
-                    "DROP TRIGGER job_run_tasks_insert;
+                    "DROP TABLE landed_diff_stats;
+             DELETE FROM schema_meta WHERE key = 'migration.v0060';
+             DROP TRIGGER job_run_tasks_insert;
              DROP TRIGGER job_run_tasks_update;
              DROP TRIGGER job_run_tasks_delete;
              DROP TABLE job_run_tasks;

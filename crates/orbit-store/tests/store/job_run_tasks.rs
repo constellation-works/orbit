@@ -12,7 +12,8 @@ fn historical_task_deliveries_remain_visible_after_upgrade_and_rebinding() {
     drop(Store::open(&path).expect("fixture schema"));
     let conn = Connection::open(&path).expect("database");
     conn.execute_batch(
-        "DROP TRIGGER job_run_tasks_insert;
+        "DROP TABLE landed_diff_stats; DELETE FROM schema_meta WHERE key='migration.v0060';
+        DROP TRIGGER job_run_tasks_insert;
         DROP TRIGGER job_run_tasks_update; DROP TRIGGER job_run_tasks_delete;
         DROP TABLE job_run_tasks;
         DELETE FROM schema_meta WHERE key='migration.v0059';",

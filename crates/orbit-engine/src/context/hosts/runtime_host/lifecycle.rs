@@ -21,6 +21,13 @@ macro_rules! lifecycle_methods {
             &self,
             request: &orbit_types::workflow::automation::DirectLandingRequest,
         ) -> Result<(), OrbitError>;
+        /// Record a direct landing after its branch moved from `before_commit`
+        /// to `after_commit`: the per-task diff stats of the landed change. A
+        /// host without a store records nothing.
+        fn record_direct_landing(
+            &self,
+            request: &orbit_types::workflow::automation::DirectLandingRequest,
+        ) -> Result<(), OrbitError>;
         /// Coverage evidence `task_id` submitted as a delivery automation action,
         /// when the automation's own settlement accepts or would accept it for the
         /// frozen batch [ORB-14837]. A host without delivery automation has none.

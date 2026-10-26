@@ -25,6 +25,7 @@
 //! selection without rescanning.
 
 mod detail;
+mod diff_stats;
 mod facts;
 mod landed;
 mod lock_waits;
@@ -43,6 +44,9 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 
+pub use diff_stats::{
+    DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DIFF_STATS_BACKFILL_MAX_LIMIT, DiffStatsBackfill,
+};
 pub use facts::CodebaseFacts;
 pub(in crate::application) use facts::{
     Anchor, BlockCause, SettledFailure, actor_kind, classify_block, failed_claim_settlements_of,

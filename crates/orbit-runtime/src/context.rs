@@ -469,6 +469,10 @@ pub struct OrbitRuntimeSettings {
     /// `workflow.light_delivery_paths`: the paths a `skip-review` or
     /// `skip-validation` candidate may change [ORB-16855].
     light_delivery_paths: Vec<String>,
+    /// `workflow.test_paths` and `workflow.non_code_paths` as compiled
+    /// filters: how a landed diff's paths split into tests, other and code.
+    diff_test_paths: orbit_common::fs::path_filter::PathFilter,
+    diff_non_code_paths: orbit_common::fs::path_filter::PathFilter,
     /// `[workflow.regression_risk]`: whether implement and review prompts
     /// mark regression-prone context files, and the gates for a mark.
     regression_risk: orbit_config::RegressionRiskSettings,
@@ -529,6 +533,10 @@ impl OrbitRuntimeSettings {
         unlocked_path_validation_commands: Vec<String>,
         generated_paths: std::collections::BTreeMap<String, String>,
         light_delivery_paths: Vec<String>,
+        diff_path_filters: (
+            orbit_common::fs::path_filter::PathFilter,
+            orbit_common::fs::path_filter::PathFilter,
+        ),
         regression_risk: orbit_config::RegressionRiskSettings,
         explore: orbit_config::ExploreSettings,
         crew_performance_types: Vec<orbit_config::CrewPerformanceType>,
@@ -576,6 +584,8 @@ impl OrbitRuntimeSettings {
             unlocked_path_validation_commands,
             generated_paths,
             light_delivery_paths,
+            diff_test_paths: diff_path_filters.0,
+            diff_non_code_paths: diff_path_filters.1,
             regression_risk,
             explore,
             crew_performance_types,
@@ -658,6 +668,14 @@ impl OrbitRuntimeSettings {
 
     pub(crate) fn light_delivery_paths(&self) -> &[String] {
         &self.light_delivery_paths
+    }
+
+    pub(crate) fn diff_test_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
+        &self.diff_test_paths
+    }
+
+    pub(crate) fn diff_non_code_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
+        &self.diff_non_code_paths
     }
 
     pub(crate) fn set_host_shutdown_hold_minutes(&mut self, minutes: u32) {

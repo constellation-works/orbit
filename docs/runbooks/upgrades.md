@@ -841,6 +841,7 @@ orbit migrate --dry-run    # list pending without applying; exit 1 when any are 
 orbit migrate              # same safe inspection default
 orbit migrate --confirm    # open the workspace, auto-apply, and report
 orbit migrate --json       # machine-readable inspection report
+orbit migrate --backfill-diff-stats [--limit N]  # apply, then record landed diff stats
 ```
 
 Example dry run on a pre-upgrade workspace:
@@ -861,6 +862,15 @@ error: execution failed: 3 migration(s) pending; run `orbit migrate --confirm` t
 Bare `orbit migrate` and the compatibility-explicit `--dry-run` form inspect without opening
 the runtime. Applying pending migrations always requires `--confirm`; the command never prompts
 or reads stdin.
+
+`--backfill-diff-stats` applies pending migrations like `--confirm`, then records the
+lines added and deleted for done tasks that landed before Orbit recorded them, newest
+first, until it has recorded `--limit` tasks (default 500, at most 5000). It diffs each
+landed commit against its first parent in the local checkout and never fetches: a task
+whose landed commit is not available locally is counted as unresolvable and skipped, and
+one with no recorded landing is counted separately. A rerun records only what is still
+missing, and the report says how many tasks remain past the limit. The rows feed
+Analytics › Metrics › Lines changed.
 
 Before applying layout v3, pause admissions and stop every older Orbit process
 that can write tasks. Install the new binary, apply or trigger the workspace

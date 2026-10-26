@@ -439,6 +439,7 @@ backups" section has the full rule.
 ```bash
 orbit migrate               # inspect pending migrations without applying
 orbit migrate --confirm     # apply
+orbit migrate --backfill-diff-stats [--limit N]  # apply, then record diff stats for done tasks landed earlier
 ```
 
 Both ledgers — the SQLite schema and the workspace layout — auto-apply when a

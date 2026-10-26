@@ -509,6 +509,18 @@ td .rel-rate { font-size: 12px; }
 .mx-s-qa-full-sweep { --mx-c: #d55181; }
 .mx-s-security-review { --mx-c: #008300; }
 .mx-s-ci-failure-sweep { --mx-c: #9085e9; }
+/* Lines changed (ORB-18383): code blue and tests green, deletions dashed;
+   crews take the origin palette in rank order, the rest folded into Other. */
+.mx-s-code_added, .mx-s-code_deleted { --mx-c: #3987e5; }
+.mx-s-tests_added, .mx-s-tests_deleted { --mx-c: #199e70; }
+.mx-s-c1 { --mx-c: #3987e5; }
+.mx-s-c2 { --mx-c: #d95926; }
+.mx-s-c3 { --mx-c: #199e70; }
+.mx-s-c4 { --mx-c: #c98500; }
+.mx-s-c5 { --mx-c: #d55181; }
+.mx-s-c6 { --mx-c: #008300; }
+.mx-s-c7 { --mx-c: #9085e9; }
+.mx-s-crew-other { --mx-c: #4a525d; }
 .mx-muted { color: var(--fg-mute); }
 .mx-card {
   display: flex; flex-direction: column; gap: 12px; min-width: 0;
@@ -659,7 +671,7 @@ td .rel-rate { font-size: 12px; }
   color: var(--fg-mute); font: 11px var(--font-mono); white-space: nowrap;
 }
 /* Tokens rows carry a mean and a median. */
-.mx-chart-tokens .mx-tip { width: 320px; }
+.mx-chart-tokens .mx-tip, .mx-chart-diff .mx-tip { width: 320px; }
 .mx-hover { position: absolute; left: 0; right: 0; top: 0; bottom: 24px; display: flex; z-index: 3; }
 .mx-hover-col { flex: 1 1 0; height: 100%; }
 .mx-tip {
@@ -764,7 +776,7 @@ td .rel-rate { font-size: 12px; }
   .mx-chart-body { gap: 6px; }
   .mx-y-wrap { flex-basis: 32px; }
   .mx-notes { padding-left: 0; }
-  .mx-tip, .mx-chart-tokens .mx-tip { width: 200px; }
+  .mx-tip, .mx-chart-tokens .mx-tip, .mx-chart-diff .mx-tip { width: 200px; }
 }
 
 /* Analytics › Resources: this host's delivery resource profiles. CPU, memory

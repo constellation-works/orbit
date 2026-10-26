@@ -393,6 +393,20 @@ macro_rules! with_tail_keys {
         section: ConfigSection::Delivery, order: 71,
         resolve: resolve_light_delivery_paths,
     },
+    workflow_test_paths: Vec<String> => Vec<String> {
+        key: "workflow.test_paths", value_type: "array<string>",
+        description: "Path globs whose changes count as tests in landed-diff analytics.",
+        section: ConfigSection::Delivery, order: 72,
+        tier: ConfigKeyTier::Advanced,
+        resolve: resolve_test_paths,
+    },
+    workflow_non_code_paths: Vec<String> => Vec<String> {
+        key: "workflow.non_code_paths", value_type: "array<string>",
+        description: "Path globs whose changes count as other (docs, config, assets) in landed-diff analytics.",
+        section: ConfigSection::Delivery, order: 73,
+        tier: ConfigKeyTier::Advanced,
+        resolve: resolve_non_code_paths,
+    },
     workflow_unlocked_path_validation_commands: Vec<String> => Vec<String> {
         key: "workflow.unlocked_path_validation_commands", value_type: "array<string>",
         description: "Commands that replace full required validation for a prose-only repair.",

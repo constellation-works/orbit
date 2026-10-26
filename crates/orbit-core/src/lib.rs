@@ -203,5 +203,7 @@ pub use orbit_store::{
 pub use orbit_store::{RoutineFireRecord, RoutineFireState};
 // Reservation history behind the dashboard's codebase analytics.
 pub use orbit_store::contracts::TaskReservationRecord;
+// Landed-delivery diff stats behind the dashboard's Metrics diff trend.
+pub use orbit_store::contracts::LandedDiffStats;
 pub use runtime::engine::{ResolvedCrewProjection, TaskCrewRead};
 pub use runtime::{OrbitRuntime, WorkspaceRuntimeBinding};

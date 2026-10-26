@@ -56,6 +56,9 @@ impl OrbitRuntime {
         if task.status != TaskStatus::Done {
             return;
         }
+        // Every writer of a transition into done runs these effects, so the
+        // landing it names records its diff stats here too [ORB-18383].
+        self.record_done_landing_diff_stats(previous_status, task);
         let targets = named_friction_targets(task);
         if targets.is_empty() {
             return;
