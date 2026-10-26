@@ -603,36 +603,48 @@ pub(crate) fn resume_evidence_hold(
 /// `review-evidence-findings.json`. Findings are a verdict on the candidate,
 /// so waiting on the hold would only wait for an operator. Requeues only
 /// while `hold` is still the persisted, current hold; returns whether it
-/// did. The next run resumes the held candidate for its implementer.
+/// did. The task write lock keeps that check and the transition atomic with
+/// task edits and newer review decisions. The next run resumes the held
+/// candidate for its implementer.
 pub(crate) fn route_evidence_findings(
     runtime: &OrbitRuntime,
     task_id: &str,
     hold: &ReviewEvidenceHold,
     results: usize,
 ) -> Result<bool, OrbitError> {
-    let task = runtime.get_task(task_id)?;
-    if evidence_hold(runtime, task_id)?.as_ref() != Some(hold)
-        || !hold_is_current(runtime, &task, hold)?
-    {
-        return Ok(false);
-    }
-    runtime.with_mutation(|| {
-        let updated = runtime.stores().task_records().update(
-            task_id,
-            TaskRecordUpdateParams {
-                actor: "system".into(),
-                status: Some(TaskStatus::Backlog),
-                expected_status: Some(vec![TaskStatus::InProgress]),
-                status_event: Some(REVIEW_EVIDENCE_FINDINGS_EVENT.into()),
-                status_note: Some(ReviewGateHistoryNote::evidence_findings_text(
-                    &hold.run_id,
-                    &hold.candidate.commit,
-                    results,
-                )),
-                ..Default::default()
-            },
-        )?;
-        Ok((updated, OrbitEvent::TaskUpdated { id: task_id.into() }))
-    })?;
-    Ok(true)
+    #[cfg(feature = "test-support")]
+    super::fulfilment_test_support::before_findings_transition();
+    let mut requeued = false;
+    runtime
+        .stores()
+        .tasks()
+        .with_task_write_lock(task_id, &mut || {
+            let task = runtime.get_task(task_id)?;
+            if evidence_hold(runtime, task_id)?.as_ref() != Some(hold)
+                || !hold_is_current(runtime, &task, hold)?
+            {
+                return Ok(());
+            }
+            runtime.with_mutation(|| {
+                let updated = runtime.stores().task_records().update(
+                    task_id,
+                    TaskRecordUpdateParams {
+                        actor: "system".into(),
+                        status: Some(TaskStatus::Backlog),
+                        expected_status: Some(vec![TaskStatus::InProgress]),
+                        status_event: Some(REVIEW_EVIDENCE_FINDINGS_EVENT.into()),
+                        status_note: Some(ReviewGateHistoryNote::evidence_findings_text(
+                            &hold.run_id,
+                            &hold.candidate.commit,
+                            results,
+                        )),
+                        ..Default::default()
+                    },
+                )?;
+                Ok((updated, OrbitEvent::TaskUpdated { id: task_id.into() }))
+            })?;
+            requeued = true;
+            Ok(())
+        })?;
+    Ok(requeued)
 }
