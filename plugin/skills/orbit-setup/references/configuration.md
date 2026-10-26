@@ -68,6 +68,9 @@ the defaults below are built-ins, not necessarily this host's effective policy.
 | `review.timing` | Review before landing, one layer at most (default `off`). `before_pr` holds PR creation for a fresh reviewer that fixes what it finds. `before_landing` opens the PR first and reviews it while hosted CI runs; it merges only at the reviewed head, and any other outcome leaves the PR open with the task in `review` (PR route only). A run captures it at submission. After-landing review is not a key: toggle the `delivery-code-review` auto-task (`orbit auto-task toggle delivery-code-review on`). |
 | `review.before_landing_hosts` | Machine ids (`hm_...`) whose claimed leaves review their open PR before it lands, while this owner's own deliveries keep `review.timing` off. Probe and pull admission resolve the caller's label and the claim captures it. Ignored when `review.timing` is already `before_landing`. Loading fails while `review.timing` is `before_pr` and the list is non-empty. The label is caller-chosen, so this is policy, not a security boundary. Default empty. |
 | `review.minutes` | Wall-clock limit for one candidate's before-PR or before-landing review (1..=1440, default 30). Each candidate gets one review; a changed candidate, such as a completion rebase, is a new one. |
+| `review.verify_findings` | **Advanced.** Default `false`; gates review-filed bug findings on a confirmed verification for their current material before approval, promotion or drain admission. Does not enable the verification routine. |
+| `review.baseline_commands` | Default `[]`; commands the owner trusts review settlement to rerun on the host for a reviewer's red-base claim, in addition to required validation commands. Entries are trimmed strings; blank entries are dropped. A configured command is binding during settlement. |
+| `[[review.host_evidence]]` | Default `[]`; owner policy for checks owed on claimed reviews when changed paths match. This TOML array replaces the whole global list at workspace scope; see [review finding verification and owed host evidence](#review-finding-verification-and-owed-host-evidence). |
 | `workflow.purpose_crews.review` | Crew or pool for after-landing review tasks the `delivery-code-review` auto-task mints. Before-PR and before-landing review use `workflow.purpose_crews.pre_landing_review` when non-empty, falling back to this pool when it is unset or empty. A pool such as `["sol", "grok"]` (or weighted `["sol:3", "grok:1"]`) draws one crew per review, skipping disabled or provider-limited crews and preferring one that did not implement the work. |
 | `tasks.id_start` | Floor for this machine's task-id allocator; forward-only. → [multi-host.md](multi-host.md) |
 | `execution.agent_stall_minutes` | **Advanced.** Default `30`; integer `0..=1440` minutes. A provider with no stdout/stderr and no CPU use for this long fails its step as stalled, entering normal retry/recovery. `0` disables this check; the wall-clock timeout remains. Verify a stalled step's failure in `orbit run show` and provider logs; do not induce a production stall. |
@@ -140,6 +143,136 @@ them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` an
 `operation.review_repair_cycles` are ignored with a warning; delete them.
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
+
+## Review finding verification and owed host evidence
+
+These settings govern review findings and the checks an owner may owe after a
+claimed review. They do not turn on before-PR or before-landing review; set
+`review.timing` separately when that review workflow is wanted.
+
+### Set the policy
+
+`review.verify_findings` is an advanced boolean, default `false`. When true,
+a review-filed task of type `bug` tagged `code-review`,
+`delivery-code-review`, `security-review` or `qa-sweep` must have a
+`CONFIRMED` finding-verification verdict for its current material before it
+can be approved, promoted to `backlog` or admitted by a drain. Until then,
+readiness reports the `unverified_review_finding` hold. A `REJECTED` verdict
+still rejects the task even when verification is not required. The gate reads
+this setting each time it checks, so an authorized configuration change applies
+to a running drain without a restart.
+
+This switch does not enable or run `finding_verification_pipeline`. The seeded
+`finding-verification` routine is a separate, disabled-by-default schedule
+that picks up findings still owed a verdict. Inspect its workspace-specific
+name and state with `orbit routine list` and `orbit routine show <name>`.
+To run a verdict on demand, use
+`orbit run job finding_verification_pipeline --input 'task_ids=["<task-id>"]'`.
+For automatic runs, enable the routine definition separately as described in
+[Automation](automation.md#turning-the-scheduler-on); routine enablement and a
+host-local pause are separate controls. A disabled routine does not prevent a
+manual job run.
+
+`review.baseline_commands` is an array of owner-trusted commands, default
+`[]`. Review settlement may use them, along with
+`workflow.required_validation_commands`, to rerun an eligible failed check on
+the host and determine whether a reviewer's red-base claim also fails on the
+base. The reviewer cannot authorize an arbitrary host command by naming it in
+the report. If a listed command cannot be confirmed on the base, the review
+settles incomplete; the list is therefore binding policy, not a hint. These
+commands also count as required validation gates an implementer may hand off
+when its sandbox deferred only an admitted sandbox-dependent test.
+
+Both settings can be written with `orbit config set`, for example:
+
+```sh
+orbit config set review.verify_findings true
+orbit config set review.baseline_commands '["cargo test -p service --test api"]'
+```
+
+`[[review.host_evidence]]` has no `config set` key. Add its array-of-tables
+directly to `<workspace>/.orbit/config.toml` or `~/.orbit/config.toml`.
+The workspace list replaces the entire global list, including when set to
+`[]`. Replace the example paths, package, target and analysis command with
+ones that exist in your project:
+
+```toml
+[review]
+verify_findings = true
+baseline_commands = ["cargo test -p service --test api"]
+
+[[review.host_evidence]]
+kind = "host_sandbox_test"
+name = "Linux sandbox tests"
+paths = ["src/sandbox/**", "tests/sandbox/**"]
+os = "linux"
+command = "cargo test -p service --test sandbox_tests"
+artifact = "evidence/linux-sandbox.json"
+
+[[review.host_evidence]]
+kind = "codeql"
+name = "Linux code analysis"
+paths = ["src/**"]
+os = "linux"
+command = "scripts/run-analysis.sh"
+artifact = "evidence/linux-code-analysis.json"
+hosted_check = "CodeQL / Analyze"
+```
+
+Each rule admits only these fields: `kind`, `name`, `paths`, `os`,
+`command`, `artifact`, and optional `hosted_check`; unknown fields are
+rejected. `kind` is exactly `codeql` or `host_sandbox_test`, `os` is
+`linux` or `macos`, `name` and `command` must be non-empty, and `paths`
+must contain at least one valid workspace-relative glob. The `artifact` must
+be a unique relative `.json` path across rules. A `host_sandbox_test`
+command must use the admitted
+`cargo test -p <package> --test <target> [<one-filter>]` form (or use
+`--package` in place of `-p`); shell metacharacters and other command
+shapes are refused.
+
+A `codeql` rule is owed when the claimed review host has a different OS from
+the rule's `os`, and the owner fulfils it on the named OS. A
+`host_sandbox_test` rule is owed on a host of its named OS and is run outside
+the agent sandbox at settlement. Windows is not a valid evidence OS. A
+`hosted_check` is allowed only on a `codeql` rule with `os = "linux"`, and
+it must be non-empty and name a pull-request check that runs exactly the rule's
+`command` on every candidate. For a before-landing claim on a different known
+OS, this lets the owner treat that CodeQL check as owner-owed evidence and
+wait for explicit success on the reviewed head before landing. A skipped or
+neutral check is not success. When a CodeQL check is owed on another OS,
+without `hosted_check` the review remains held until the owner supplies the
+required evidence.
+
+At claim admission, the owner captures validation gates including
+`review.baseline_commands`; when the claim includes a before-PR or
+before-landing review, it also captures `review.host_evidence`. The claimed
+leaf follows those owner snapshots, not its own config. Updating owner policy
+affects new claims. If the captured policy no longer matches the owner's
+current policy at acceptance, the handoff fails closed and needs a fresh claim.
+
+### Verify the effective policy and its effect
+
+Run `orbit config show --all` to inspect the effective values and provenance
+for `review.verify_findings` and `review.baseline_commands`. Use
+`orbit config keys --json` to confirm which settings the installed version
+supports; `review.host_evidence` is TOML-only and is not a `config set` key.
+Check the global and workspace config files when reviewing host-evidence
+rules, since a workspace list replaces the global one, and run `orbit doctor`
+to catch configuration errors before a claim.
+
+Use `orbit run readiness --json` or `orbit doctor` to see an
+`unverified_review_finding` hold while a qualifying finding lacks a current
+confirmation. After a verification job runs, `orbit run show <run-id>`
+reports the run and `orbit task show <task-id>` shows the task status and
+`finding_verified` history. A confirmed verdict for current material clears
+that verification hold; changing claim or evidence selectors makes the old
+verdict stale. For a claimed review, inspect the
+task's `review-gate.json` artifact with
+`orbit task artifact get <task-id> review-gate.json --out <file>`:
+`owed_evidence` records checks the reviewer did not run and are pending host
+fulfilment, not failed checks. Compare with validation records or
+host-evidence outcomes: an executed command with a failed result is a failed
+check and follows normal review recovery.
 
 Use `orbit config keys` to distinguish fixed registry keys from settings
 authored as TOML. Read-only identity keys are listed and refused by
