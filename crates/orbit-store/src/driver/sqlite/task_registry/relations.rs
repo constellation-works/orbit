@@ -205,7 +205,11 @@ fn validate_replacement_relation_targets(
     else {
         return Ok(());
     };
-    Err(unknown_relation_target(&edge.target))
+    Err(unknown_relation_target(
+        Some(edge.source.as_str()),
+        edge.relation_type,
+        edge.target.as_str(),
+    ))
 }
 
 /// Every edge in `envelopes` whose target a rebuild cannot resolve, in
@@ -462,15 +466,32 @@ fn validate_relation_targets_exist(
         if !known {
             continue;
         }
-        return Err(unknown_relation_target(&relation.target));
+        return Err(unknown_relation_target(
+            source_task_id,
+            relation.relation_type,
+            relation.target.as_str(),
+        ));
     }
     Ok(())
 }
 
-fn unknown_relation_target(task_id: &str) -> OrbitError {
-    OrbitError::not_found_with_guidance(
-        NotFoundKind::Task,
-        task_id,
-        ". Check the ID, create the task first, or remove the relation.",
-    )
+fn unknown_relation_target(
+    source: Option<&str>,
+    relation_type: TaskRelationType,
+    target: &str,
+) -> OrbitError {
+    let guidance = match source {
+        Some(source) => format!(
+            " ({} {} -> '{}'). Check the ID, create the task first, or remove the relation.",
+            source,
+            relation_type_name(relation_type),
+            target
+        ),
+        None => format!(
+            " ({} -> '{}'). Check the ID, create the task first, or remove the relation.",
+            relation_type_name(relation_type),
+            target
+        ),
+    };
+    OrbitError::not_found_with_guidance(NotFoundKind::Task, target, guidance)
 }
