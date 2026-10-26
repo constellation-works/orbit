@@ -1,8 +1,8 @@
 ---
 title: State Compatibility — Design
 owner: claude
-last_updated: 2026-10-13
-last_validated: 2026-10-25
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 feature: state-compatibility
 doc_role: design
@@ -142,39 +142,10 @@ instead of erroring, while a breaking-newer workspace keeps the previous
 refusal and exit code. Pending listings, auto-apply on open by a newer
 binary, and the apply path are otherwise unchanged.
 
-## 6 Concerns & Honest Limitations
+## 6 Frozen store migration bodies
 
-- **Forward compatibility starts from the first release that writes records.**
-  A binary that predates [ORB-12434] still refuses any newer state, and state
-  advanced only by such binaries carries no record, so it is refused too.
-  This contract pays off from the next schema bump onward.
-- **`Additive` is a human claim.** Nothing verifies that a migration marked
-  additive is one. Records already stamped keep the class they were written
-  with, so a corrected declaration protects only state advanced by a binary
-  that carries it.
-- **The layout half is not write-gated.** See §4: an additive-newer layout
-  permits ordinary operation, so the classification carries the whole weight.
-- **Audit appends require a writable, supported schema.** Native CLI commands
-  and tool dispatch from a foreign-generation reader share an append path
-  through a separate connection to the existing database, without migration,
-  when its schema exactly matches this
-  binary. The runtime's state handles remain read-only. A newer read-only store
-  or unwritable database still refuses the audit write; the CLI warns without
-  failing the read result. Native CLI audit records retain the command's success
-  or failure outcome; tool dispatch owns its audit row and suppresses the
-  command guard's duplicate emission.
-- **The task registry fences binaries from before its ledger.** The global
-  task registry runs this contract on its own ledger (§8). Binaries from
-  before that ledger read only its `PRAGMA user_version`, so they cannot be
-  held read-only: the first registry migration that is not `Additive` refuses
-  them outright, as the layout does. The recovery authority runs on a ledger
-  of this kind too, and the store ledger absorbed the feature ledgers (§9);
-  see
-  [One versioned ledger per SQLite database](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
-
-## 7 Frozen store migration bodies
-
-The store registry in `driver/sqlite/migration/ledger/registry.rs` is append-only.
+[ORB-15821] froze the store registry in
+`crates/orbit-store/src/driver/sqlite/migration/ledger/registry.rs`; it is append-only.
 Each shipped entry owns its body and private shape-defining helpers; only
 schema-neutral primitives in `migration/introspect.rs` are shared. Later
 schema changes append an entry rather than altering what an earlier version
@@ -200,15 +171,16 @@ re-bless a changed shipped shape. Legacy recreation and actor backfill fixtures
 also run through the public store-open boundary, because an empty schema dump
 cannot prove data compatibility.
 
-## 8 The task registry ledger
+## 7 The task registry ledger
 
 `tasks/index.sqlite` is a separate SQLite file, so it has a registry of its own
 (`driver/sqlite/task_registry/ledger.rs`), run by the store's ledger engine.
 The engine takes a `LedgeredDatabase` naming the state component (`task
 registry`), and writes the same `schema_meta` ledger rows and
 `migration.compat` record into that file. Its entries follow the rules of §1
-and §7: append-only, frozen bodies, and a per-prefix schema golden
-(`task_registry/tests/registry_schema.golden`). Two engine options exist for
+and §6: append-only, frozen bodies, and a per-prefix schema golden
+(`task_registry/tests/registry_schema.golden`). [ORB-15822] implemented this
+ledger and adoption path. Two engine options exist for
 this database:
 
 - Registry migrations run with foreign-key enforcement off. SQLite ignores
@@ -247,6 +219,7 @@ classification, without an unrelated insert or manual reindex. Unchanged
 envelopes reuse freshness proofs; adding type to the fingerprint invalidates
 older proofs once.
 
+[ORB-16825] repaired freshness checks after older writers change task types.
 Repair retains the existing bounded best-effort policy: a read-only registry,
 unreadable bundle, or refused rebuild (for example, a dangling relation) can
 leave the defect projection stale. Fix unresolved edges or restore their
@@ -269,12 +242,13 @@ as version 0 with no floors, a binary that knows no registry migration. That
 fails closed: any registry migration with a writer or reader floor refuses
 it, matching the `user_version` fence.
 
-## 9 The absorbed feature ledgers
+## 8 The absorbed feature ledgers
 
 Automation (v1–v5), review (v1–v4) and local pull (v1) kept independent
 registries in `feature_schema_meta`, each with a `feature.compat.<feature>`
 record in `schema_meta`, applied the first time a feature store opened. Store
-entry v49, `absorb_feature_ledgers`, runs each registry to completion inside
+entry v49, `absorb_feature_ledgers`, delivered by [ORB-15823], runs each
+registry to completion inside
 the store migration's transaction, through the same feature engine
 (`migration/feature.rs::apply_feature_registry`) on the migration's
 connection. The feature rows and records come out exactly as a feature open
@@ -296,10 +270,13 @@ and a breaking one refuses, naming it. Upgrade admission keeps reporting the
 frozen feature versions and breaking floors in `CompatibilityIdentity`,
 because those older binaries still compare them.
 
-## 10 Handoff settlement attribution and older lifecycle readers
+<a id="10-handoff-settlement-attribution-and-older-lifecycle-readers"></a>
+
+## 9 Handoff settlement attribution and older lifecycle readers
 
 Store v57, `handoff_settlement_sidecars`, restores the closed `fail` / `release`
-settlement vocabulary in `distributed-claim-lifecycle-v1`. A typed handoff writes
+settlement vocabulary in `distributed-claim-lifecycle-v1`, repaired by
+[ORB-17530]. A typed handoff writes
 its complete settlement record as `distributed-handoff-settlement-v1`, keyed by
 the same workspace and claim, in the transaction that records handoff authority,
 the lifecycle transition and the mutation receipt. New inspection and targeted
@@ -334,16 +311,65 @@ receives the pre-mutation refusal and must restart on the repaired binary. Upgra
 admission also sees the v57 writer floor and uses the existing generation handover.
 There is no new layout version, and no shipped migration is changed.
 
+## 10 Recovery authority ledger
+
+[ORB-15824] moved the protected `authority.db` onto the shared store ledger
+engine. Its additive v1 baseline lives in
+`crates/orbit-runtime/src/recovery_authority/schema.rs` and freezes all five
+shipped tables, including the formerly first-use worker bindings. The database
+keeps its own `schema_meta` and `migration.compat`; it is separate from both
+the task registry and the ordinary store.
+
+Newer additive state stays writable, read-compatible state opens query-only,
+and breaking or unclassified newer state is refused. Worker lookups inspect
+compatibility without migrating and can read pre-ledger optional tables.
+Pre-ledger clients have no version fence, so future entries must preserve their
+table contracts throughout the support window. Root validation, permissions
+and sandbox protections are unchanged.
+
+## 11 Concerns & Honest Limitations
+
+- **Forward compatibility starts from the first release that writes records.**
+  A binary that predates [ORB-12434] still refuses any newer state, and state
+  advanced only by such binaries carries no record, so it is refused too.
+  This contract pays off from the next schema bump onward.
+- **`Additive` is a human claim.** Nothing verifies that a migration marked
+  additive is one. Records already stamped keep the class they were written
+  with, so a corrected declaration protects only state advanced by a binary
+  that carries it.
+- **The layout half is not write-gated.** See §4: an additive-newer layout
+  permits ordinary operation, so the classification carries the whole weight.
+- **Audit appends require a writable, supported schema.** Native CLI commands
+  and tool dispatch from a foreign-generation reader share an append path
+  through a separate connection to the existing database, without migration,
+  when its schema exactly matches this
+  binary. The runtime's state handles remain read-only. A newer read-only store
+  or unwritable database still refuses the audit write; the CLI warns without
+  failing the read result. Native CLI audit records retain the command's success
+  or failure outcome; tool dispatch owns its audit row and suppresses the
+  command guard's duplicate emission.
+- **The task registry fences binaries from before its ledger.** The global
+  task registry runs this contract on its own ledger (§7). Binaries from
+  before that ledger read only its `PRAGMA user_version`, so they cannot be
+  held read-only: the first registry migration that is not `Additive` refuses
+  them outright, as the layout does. The recovery authority runs on a ledger
+  of this kind too, and the store ledger absorbed the feature ledgers (§8);
+  see
+  [One versioned ledger per SQLite database](./4_decisions.md#one-versioned-ledger-per-sqlite-database-with-frozen-migration-bodies).
+
 ## Task References
 
-- [ORB-10003] versioned schema ledger; [ORB-10012] layout registry and
-  `orbit migrate`.
-- [ORB-11994] / [ORB-12078] removed the task checkout projections, the
-  worked example of a breaking layout migration.
-- [ORB-12434] added the compatibility declaration, records, decision, and
-  read-only enforcement.
-- [ORB-13631] extended `Additive` to cover older writers, added
-  `ReadCompatible`, and made the classification the basis of upgrade
-  admission.
+- [ORB-10003] added the versioned SQLite schema ledger.
+- [ORB-10012] added the workspace-layout registry and orbit migrate reporting.
+- [ORB-11994] removed task checkout projections that older binaries could recreate.
+- [ORB-12078] completed removal of task checkout projections and their compatibility paths.
+- [ORB-12434] introduced declared state compatibility and enforced read-only newer-store opens.
+- [ORB-13631] extended compatibility to older writers and based upgrade admission on compatibility floors.
+- [ORB-15821] froze shipped store migration bodies and added per-version schema goldens.
+- [ORB-15822] implemented the task registry ledger and baseline envelope stamps.
+- [ORB-15823] absorbed and froze automation, review and local-pull feature ledgers.
+- [ORB-15824] moved recovery authority onto its own versioned schema ledger.
+- [ORB-16825] repaired defect-index task-type freshness after writes from older binaries.
+- [ORB-17530] preserved older-client handoff compatibility with a sidecar and read-compatible v57.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

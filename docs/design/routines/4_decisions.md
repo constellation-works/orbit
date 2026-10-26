@@ -1,7 +1,7 @@
 ---
 title: Routines — Decisions
 owner: claude
-last_updated: 2026-10-13
+last_updated: 2026-10-26
 last_validated: 2026-10-13
 status: Accepted
 feature: routines
@@ -177,7 +177,7 @@ Existing workspaces are **left untouched**: the managed-asset manifest records e
 ## Delegate workspace ship routines through a synchronous wrapper job
 
 **Recorded:** 2026-07-15 22:19:13.834542Z · [ORB-10207]
-**Paths:** `crates/orbit-core/assets/routines/**`, `crates/orbit-core/assets/jobs/**`, `crates/orbit-core/src/runtime/v2_host/**`
+**Paths:** `crates/orbit-core/assets/routines/**`, `crates/orbit-core/assets/jobs/**`, `crates/orbit-core/src/adapter/engine_host/actions/dispatch.rs::resolve_workspace_ship_input`
 
 ### Context
 A scheduled ship routine must dispatch only its source workspace, resolve that workspace ship mode and base branch, and keep the parent run active until normal backlog shipment finishes. The alternatives were special-casing routine dispatch, spawning the legacy multi-workspace CLI sweep, or composing the existing job catalog.
@@ -231,7 +231,7 @@ The clock is host infrastructure shared by both evaluators, so its CLI moves to 
 - No `jrun-*` per tick for auto-task evaluation. Evidence of a fire is the minted task (tagged `auto-task:<name>`), the cursor file, and the tick report row — the dashboard Operations surface and `orbit doctor` read those, not run history.
 - The job-level and routine-level overlap knobs disappear for auto-tasks; the sidecar cursor lock and the host sweep lock are the only exclusion, as before.
 - Auto-task fires stop appearing on `GET /api/routines`; the Operations auto-task panel (already cursor-backed) is their surface.
-- Cost: an in-process evaluator holds the sweep lock while it mints, so a hung task-store write stalls routine dispatch for that tick (bounded, and file I/O plus one store write — but a failure mode the job wrapper did not have). Existing workspaces carry a seeded `auto_task_scheduler` routine that must be retired via `orbit workspace sync` or `orbit doctor --fix-stale-artifacts`. That retirement did not converge as written: the byte-exact provenance check counted the documented opt-in (`enabled: true`) and the dropped `hosts:` key as local edits, so sync refused, and the dead definition failed to load on every clock tick. Both are corrected in [2_design.md](2_design.md) — provenance accepts lifecycle-only differences from a shape a prior release shipped, and until the sync runs the definition is skipped as retired rather than reported faulty.
+- Cost: an in-process evaluator holds the sweep lock while it mints, so a hung task-store write stalls routine dispatch for that tick (bounded, and file I/O plus one store write — but a failure mode the job wrapper did not have). Existing workspaces carry a seeded `auto_task_scheduler` routine that must be retired via `orbit workspace sync` or `orbit doctor --fix-stale-artifacts`. That retirement did not converge as written: the byte-exact provenance check counted the documented opt-in (`enabled: true`) and the dropped `hosts:` key as local edits, so sync refused, and the dead definition failed to load on every clock tick. Both are corrected in [2_design.md](./2_design.md) — provenance accepts lifecycle-only differences from a shape a prior release shipped, and until the sync runs the definition is skipped as retired rather than reported faulty.
 
 ## Definitions carry no host pin: every owner checkout is an independent schedule
 
@@ -243,7 +243,7 @@ The clock is host infrastructure shared by both evaluators, so its CLI moves to 
 
 ### Decision
 
-Routine and auto-task definitions carry no host field. A definition is evaluated on a host iff (1) the workspace has an **owner** checkout registered on that host, (2) that host's clock is enabled, and (3) the definition's versioned `enabled` is true and no host-local pause suppresses it. A replica checkout cannot write the coordination store, so it evaluates no owner work. The narrow exception added by [ORB-14173](2_design.md#21-replica-checkouts-host-local-worktree-gc-and-store-gc) is its own cron `worktree_gc_pipeline` routine, which reclaims only that host's worktrees after checking task settlement with the owner. A later change admits one more cron job on that same predicate: `store_gc_pipeline` prunes the follower's local store and does not contact the owner ([2_design.md §2.1](2_design.md#21-replica-checkouts-host-local-worktree-gc-and-store-gc)). N owner checkouts of one repository are N independent schedules by design. There is no cross-host coordination, lease, or "exactly one of N" mode.
+Routine and auto-task definitions carry no host field. A definition is evaluated on a host iff (1) the workspace has an **owner** checkout registered on that host, (2) that host's clock is enabled, and (3) the definition's versioned `enabled` is true and no host-local pause suppresses it. A replica checkout cannot write the coordination store, so it evaluates no owner work. The narrow exception added by [ORB-14173] ([2_design.md §2.1](./2_design.md#21-replica-checkouts-host-local-worktree-gc-and-store-gc)) is its own cron `worktree_gc_pipeline` routine, which reclaims only that host's worktrees after checking task settlement with the owner. A later change admits one more cron job on that same predicate: `store_gc_pipeline` prunes the follower's local store and does not contact the owner ([2_design.md §2.1](./2_design.md#21-replica-checkouts-host-local-worktree-gc-and-store-gc)). N owner checkouts of one repository are N independent schedules by design. There is no cross-host coordination, lease, or "exactly one of N" mode.
 
 The standing rule this settles: **scheduled automation acts only on the host-local store.** A definition whose effect lands on the shared remote rather than the local store (a repo-global chore: "bump dependencies weekly") will run once per owner; such a definition must dedupe against the remote itself or must not ship as an embedded default. An `owner:` field on the definition is the additive answer if that case ever bites; it is deliberately not designed now.
 
@@ -278,25 +278,21 @@ Remove the `[routines]` config section. The tick evaluates definitions from ever
 
 ## Task References
 
-- [ORB-12718] — ignores all of `.orbit/` as per-user state; definitions no longer converge via git ([Per-user ownership of `.orbit/` (no git re-includes)](#per-user-ownership-of-orbit-no-git-re-includes)).
-- [ORB-12236] — removes `hosts:` pins and `[routines] role = "source"` (the second and third 2026-09-12 entries).
-- [ORB-12237] — moves auto-task evaluation into the host tick, adds `orbit clock`, retires the scheduler routine/job/activity (the first 2026-09-12 entry); depends on [ORB-12236].
-- [ORB-10001] — authored this design-doc folder (proposal).
-- [ORB-10021] — implemented routines v1; allocated and accepted [The OS owns the clock: stateless orbit sweep under launchd/systemd, no resident daemon](#the-os-owns-the-clock-stateless-orbit-sweep-under-launchdsystemd-no-resident-daemon)..[Routine definitions are git-shared; scheduler state is host-local and never synced](#routine-definitions-are-git-shared-scheduler-state-is-host-local-and-never-synced).
-- [ORB-10129] — shipped the default triage routine; allocated and accepted [Default routines seed per-workspace at init with host and name resolved at seed time](#default-routines-seed-per-workspace-at-init-with-host-and-name-resolved-at-seed-time).
-- [ORB-10207] — seeded disabled defaults and allocated/accepted [Delegate workspace ship routines through a synchronous wrapper job](#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job) for workspace ship.
-- [ORB-10270] — completed the (since-retired) host-registry "committed-routine ownership with host-local cursors" runtime enforcement: committed pins resolve through
-  current registry or classified spoke-cache data before scheduler mutation, diagnostics
-  remain explicit under degradation, and reassignment starts with a fresh baseline.
-- [ORB-10319] — moved the registry-specific providers that source identity, workspace
-  bindings, and runtimes into `orbit-cmd` over `orbit-registry`; the accepted routine
-  decisions and Core scheduler semantics are unchanged.
-- [ORB-10138] — exposed per-routine scheduler health over the dashboard HTTP API
-  (`GET /api/routines`), realizing the single-host half of the §7 cross-host-visibility
-  vision. Read-only projection of `routine_statuses`; no new ADR (no new architectural
-  constraint — mirrors the existing `orbit routine list --json` surface).
-- [ORB-11082] — Linux `orbit clock enable` rewrites a stale installed timer from
-  the embedded template and daemon-reloads before restart, so an `OnStartupSec` upgrade
-  leftover is recovered by the advertised command instead of looping on enable.
+- [ORB-10001] authored the routines design proposal (historical citation).
+- [ORB-10021] implemented routines v1 and its OS clock integration.
+- [ORB-10129] shipped the initial default triage routine and per-workspace seeding.
+- [ORB-10149] introduced recurring auto-task definitions and their original scheduler routine.
+- [ORB-10207] seeded disabled defaults and the workspace-local shipment wrapper.
+- [ORB-10270] implemented historical fleet-aware routine pin diagnostics and reassignment baselines.
+- [ORB-10319] extracted historical registry/MCP composition boundaries, later replaced by the local registry composition.
+- [ORB-10720] made the host sweep-clock cadence configurable and controllable.
+- [ORB-10739] seeded the disabled task-pilot routine.
+- [ORB-10986] re-armed Linux timers on installation and bounded timer coalescing.
+- [ORB-11082] made clock enable repair stale installed Linux timer units.
+- [ORB-12107] derived seeded routine names from registered workspace names.
+- [ORB-12236] removed routine host pins and the routine-source role.
+- [ORB-12237] combined routine and auto-task evaluation under orbit clock and retired the scheduler wrapper.
+- [ORB-12718] made all .orbit definitions per-user checkout state rather than git-shared files.
+- [ORB-14173] allowed replica-local scheduled worktree GC.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

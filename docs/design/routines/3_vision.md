@@ -1,7 +1,7 @@
 ---
 title: Routines — Vision
 owner: claude
-last_updated: 2026-10-11
+last_updated: 2026-10-26
 last_validated: 2026-10-19
 status: Draft
 feature: routines
@@ -36,7 +36,7 @@ and validation evidence, not by drifting in.
    possible answer is owner placement for cron, which is not designed now.
    Automatic cross-host failover and state transfer remain unsupported for all variants.
 2. **Trigger extensions.** Delivery-trigger routines and auto-tasks, plus
-   `preparation_eligible`, `finding_unverified` and `pilot_warnings_held` state
+   `preparation_eligible`, `finding_unverified`, `pilot_warnings_held` and `block_escalated` state
    routines, evaluate on
    the existing clock with durable batches and checkpoints. The current routine
    schema is in [2_design.md §1](./2_design.md#1-routine-definition), with persisted
@@ -103,14 +103,17 @@ and validation evidence, not by drifting in.
 
 ## 3. What May Be Distinctive
 
-- **Git-versioned, PR-reviewed schedules over a knowledge-integrated runtime.** Fires are
+- **Checkout-owned schedules over a knowledge-integrated runtime.** [ORB-12718]
+  replaced git-shared definitions with per-user checkout state and binary-seeded
+  defaults. Fires are
   ordinary Orbit runs with audit envelopes, linkable to tasks — the scheduler
   and the knowledge system share one substrate.
 - **Agent-invoking targets.** A routine can fire an `agent_loop` activity through a one-step wrapper job (v1 routine targets are jobs): scheduled agent
   work (nightly triage, periodic research) with the same policy and audit surface as any
   other run — most schedulers fire commands; this one fires accountable agent runs.
-- **Definitions-shared / state-local as a stance.** Hosts converge on *what* to schedule
-  through git alone and never on *whether it fired*; there is no scheduler network protocol.
+- **Definitions and state are local to each owner.** Defaults arrive through
+  init/sync; operators explicitly copy any shared customization. There is no
+  scheduler network protocol or cross-host cursor transfer.
   Under the multi-owner model that stance is the whole coordination story: the store an
   owner's automation writes to is the store that owner's prefix names.
 
@@ -135,16 +138,16 @@ External:
 
 ## Task References
 
-- [ORB-12236] — removed `hosts:` pins and `[routines] role`; the current eligibility
-  contract is in [2_design.md §2](./2_design.md#2-discovery-and-registration).
-- [ORB-12237] — delivered `orbit clock`, the combined tick, scheduler retirement, and
-  folded that graduated contract into [2_design.md](./2_design.md); depends on [ORB-12236].
-- [ORB-11315] — specified shared triggers and durable coverage; delivery/state
-  evaluation shipped in [ORB-11330]/[ORB-11331], with broader extensions deferred.
-
-- [ORB-10001] — authored this design-doc folder (proposal; no implementation).
-- [ORB-10021] — implemented routines v1.
-- [ORB-10207] — graduated workspace-local ship-sweep scheduling from this vision.
-- [ORB-10319] — historical boundary separation; current local registry/runtime composition lives in `orbit-cmd` over `orbit-registry`.
+- [ORB-10001] authored the routines design proposal (historical citation).
+- [ORB-10021] implemented routines v1 and its OS clock integration.
+- [ORB-10138] exposed routine and clock health through the dashboard API.
+- [ORB-10207] seeded disabled defaults and the workspace-local shipment wrapper.
+- [ORB-10270] implemented historical fleet-aware routine pin diagnostics and reassignment baselines.
+- [ORB-10319] extracted historical registry/MCP composition boundaries, later replaced by the local registry composition.
+- [ORB-10395] retired the v1 executor stack and External Executor Protocol.
+- [ORB-11315] specified shared state and delivery triggers with durable coverage.
+- [ORB-12236] removed routine host pins and the routine-source role.
+- [ORB-12237] combined routine and auto-task evaluation under orbit clock and retired the scheduler wrapper.
+- [ORB-12718] made all .orbit definitions per-user checkout state rather than git-shared files.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

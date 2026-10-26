@@ -9,6 +9,7 @@ feature: host-registry
 tags: [host-registry, federated-mcp, distributed-drain, spec]
 related_features: [host-registry, federated-mcp, distributed-drain]
 related_artifacts: [ORB-14448, ORB-14449, ORB-14451, ORB-14447, ORB-14261, ORB-12725]
+last_updated: 2026-10-26
 ---
 
 # Spec: Host commands
@@ -371,3 +372,16 @@ unrelated to this file.
 
 Specified by opus during on-call ORB-14441 at Daniel's direction (2026-10-07), for
 implementation in [ORB-14448] and [ORB-14451] (dashboard).
+
+## Task References
+
+- [DANI-10433] identified replica worktree GC querying the wrong host (historical incident citation).
+- [ORB-12725] moved local machine identity into global config and removed owner display-name projections.
+- [ORB-14261] added follower handoff repair after base conflicts.
+- [ORB-14441] coordinated the operator-approved host-registry specifications and delivery.
+- [ORB-14447] fixed replica GC lookup of locally owned task IDs.
+- [ORB-14448] implemented the host file and orbit host operations.
+- [ORB-14449] implemented task-prefix routing and --host selection.
+- [ORB-14451] implemented dashboard Settings › Hosts through shared registry operations.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

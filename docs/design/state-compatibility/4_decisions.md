@@ -1,8 +1,8 @@
 ---
 title: State Compatibility — Decisions
 owner: claude
-last_updated: 2026-10-12
-last_validated: 2026-10-12
+last_updated: 2026-10-26
+last_validated: 2026-10-26
 status: Draft
 feature: state-compatibility
 doc_role: decisions
@@ -374,13 +374,14 @@ registry ledger and the feature absorption copy its engine and golden.
 
 ## Task References
 
-- [ORB-12434] introduced the forward-compatibility contract.
-- [ORB-11994] and [ORB-12078] removed the task checkout projections whose
-  older writers motivated the enforced read-only open.
-- [ORB-15732] recorded the 30-day compatibility-path window and its four
-  conditions.
-- [ORB-15729] decided on one versioned ledger per SQLite database with frozen
-  migration bodies; [ORB-15821], [ORB-15822], [ORB-15823] and [ORB-15824]
-  implement it.
+- [ORB-11994] removed task checkout projections that older binaries could recreate.
+- [ORB-12078] completed removal of task checkout projections and their compatibility paths.
+- [ORB-12434] introduced declared state compatibility and enforced read-only newer-store opens.
+- [ORB-15729] designed one versioned ledger per authoritative SQLite database.
+- [ORB-15732] recorded the 30-day, release-gated compatibility support window.
+- [ORB-15821] froze shipped store migration bodies and added per-version schema goldens.
+- [ORB-15822] implemented the task registry ledger and baseline envelope stamps.
+- [ORB-15823] absorbed and froze automation, review and local-pull feature ledgers.
+- [ORB-15824] moved recovery authority onto its own versioned schema ledger.
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
