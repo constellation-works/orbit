@@ -168,6 +168,8 @@ pub use context::ActorIdentity;
 /// The per-tier pool overrides `submit_workspace_auto_run_with_mode` takes.
 pub use orbit_config::ComplexityCrewPools;
 pub use orbit_config::CrewPerformanceType;
+/// The operator's `lease.intake.peer_user`, read by Orbit Web at startup.
+pub use orbit_config::load_lease_intake_peer_user;
 pub use runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceCatalog, WorkspaceScope};
 // Shared domain types (owned by orbit-common) that the CLI and dashboard
 // render or construct.

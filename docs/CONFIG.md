@@ -2235,6 +2235,7 @@ A path lease records that a person or an agent outside the drain is editing some
 | `lease.default_mode` | `"advisory"` | **Advanced.** Mode of a request that names none: `advisory` or `hard`. |
 | `lease.hard.human`, `lease.hard.agent` | `"allow"` | **Advanced.** Per principal class, `allow` or `never`. A hard request from a class set to `never` is granted as advisory, and the answer says so. |
 | `lease.max_priority.human`, `lease.max_priority.agent` | `"high"`, `"normal"` | **Advanced.** Per principal class, the highest priority (`low`, `normal` or `high`) a request may ask for; a higher one is refused. A request that names no priority gets `normal`, or the ceiling when that is lower. |
+| `lease.intake.peer_user` | unset | **Advanced. Global only.** The OS user (the lease listener's, `orbit-lease` by convention) that Orbit Web accepts lease operations from over its intake socket. Unset serves no socket. See [lease intake socket](#lease-intake-socket). |
 
 The principal class is `agent` when the calling process declares an agent or a managed run (`ORBIT_AGENT_NAME`, `ORBIT_AGENT_MODEL`, `ORBIT_MANAGED_RUN_CONTEXT` or `ORBIT_TASK_ACTOR_KIND=agent`), otherwise `human`. Over SSH the class and its ceilings are attribution and a guard, not a security boundary: the operator can lift them by editing this configuration. The per-class keys may also be written as tables:
 
@@ -2244,6 +2245,17 @@ enabled = true
 hard = { human = "allow", agent = "never" }
 max_priority = { human = "high", agent = "normal" }
 ```
+
+#### Lease intake socket
+
+The lease listener runs as its own OS user and cannot open the operator's Orbit store, so it hands authenticated lease operations to Orbit Web over a Unix socket ([design §7.2](design/path-leases/2_design.md#72-the-intake-socket)). `lease.intake.peer_user` turns it on. It is read only from the global `~/.orbit/config.toml` (`orbit config set --global lease.intake.peer_user orbit-lease`); a workspace `config.toml` that sets it is refused. Leave it unset unless the [listener-user prerequisite](design/path-leases/2_design.md#71-the-listener-user) holds on this host.
+
+- **Location.** `orbit web serve` binds `$ORBIT_HOME/run/lease-intake.sock` (`~/.orbit/run/lease-intake.sock`, or `<root>/run/lease-intake.sock` under `--root`) and prints its path at startup. Unset, it creates no socket and the dashboard is unchanged.
+- **Permissions.** `run/` is `0750` and the socket `0660`, both owned by the operator and group-owned by the peer user's primary group, so only the operator and that group can reach them. Giving them that group needs the operator's user to be a member of it; startup is refused otherwise. The listener user also needs search permission on every directory above `run/`.
+- **Startup refusals.** A peer user that is root, that is the operator's own user, or that does not exist is refused with a message naming the setting. A path that is not a socket the operator owns, or a socket another process is serving, is refused; a stale socket of the operator's from an earlier run is removed.
+- **Peer check.** Each connection's peer user comes from the kernel (`SO_PEERCRED` on Linux, `getpeereid` on macOS). Every other user, the operator included, is refused and logged with its uid.
+- **Operations only.** The socket takes request, renew, release, show, list and check (expansion answers `not_available_in_this_phase`), each with the token's principal, class, id and scope and the client address. A request is granted within the stricter of the token's scope and this workspace's `lease.hard.*` and `lease.max_priority.*`, and the lease records the token id. Each operation writes one `lease.intake.<operation>` audit row with the principal, token id, client address and outcome.
+- **Versioned and bounded.** Both sides open with their protocol version and refuse a mismatch, naming both. A frame is at most 64 KiB, each frame must arrive within 10 seconds, and at most 16 intake connections are served at once; an oversized frame or a stalled connection is closed without affecting the others.
 
 ### `[experiments]` — experiments over agent treatments
 

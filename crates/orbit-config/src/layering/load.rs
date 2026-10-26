@@ -15,7 +15,8 @@ use crate::plugin_enablement::{
     plugin_enablement_from_document, reject_global_plugin_enablement, strip_plugin_enablement,
 };
 use crate::registry::{
-    CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX, read_optional, resolve_percent,
+    CONFIG_KEY_REGISTRY, GLOBAL_ONLY_KEY_PREFIX, LEASE_INTAKE_PEER_USER_KEY, read_optional,
+    resolve_percent,
 };
 use crate::resolved::{ResolvedConfig, warn_compatibility_keys};
 
@@ -105,6 +106,7 @@ pub(crate) fn resolve_workspace_file_document(
     let mut workspace = parse_config_document(workspace_path, raw)?;
     reject_workspace_machine_table(&workspace.value, workspace_path)?;
     reject_workspace_crew_env(&workspace.value, workspace_path)?;
+    reject_workspace_lease_intake(&workspace.value, workspace_path)?;
     let mut global = parse_config_document(global_path, global_raw)?;
     translate_layers(Some(&mut global), Some(&mut workspace))?;
     for document in [&global, &workspace] {
@@ -335,6 +337,26 @@ pub(crate) fn reject_workspace_crew_env(
         "[crews.{crew}].env is not a workspace setting: remove it from '{}'. A crew's env \
          passes host variables (credentials) to its agents, so it is read only from the \
          global config.toml; `orbit config set --global crews.{crew}.env '[...]'` edits it",
+        redact_home_dir(&path.display().to_string())
+    )))
+}
+
+/// Refuse `lease.intake.peer_user` in a workspace `config.toml`.
+///
+/// It names the OS user Orbit Web accepts lease operations from, so a
+/// checkout must not be able to choose it; only the global file may.
+pub(crate) fn reject_workspace_lease_intake(
+    document: &toml::Value,
+    path: &Path,
+) -> Result<(), OrbitError> {
+    if value_at_path(document, LEASE_INTAKE_PEER_USER_KEY).is_none() {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "{LEASE_INTAKE_PEER_USER_KEY} is not a workspace setting: remove it from '{}'. It \
+         names the OS user allowed on Orbit Web's lease intake socket, so it is read only \
+         from the global config.toml; `orbit config set --global \
+         {LEASE_INTAKE_PEER_USER_KEY} <user>` edits it",
         redact_home_dir(&path.display().to_string())
     )))
 }

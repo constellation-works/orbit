@@ -394,6 +394,20 @@ operations to Orbit over a local socket.
   client address. The listener audits what never reaches Orbit, failed authentication and
   rejected requests, in its own store, aggregated per key and window (§7.3).
 
+**Implemented intake socket.** `orbit_web::lease_intake` holds the versioned request and
+response types, the server `orbit web serve` runs, and the blocking `LeaseIntakeClient` the
+listener will call. `lease.intake.peer_user` is read only from the global `config.toml`. The
+`run/` directory (`0750`) and the socket (`0660`) belong to the operator and the peer user's
+primary group, which the operator's user must be a member of. Frames are a 4-byte big-endian
+length and a JSON body of at most 64 KiB; each must arrive within 10 seconds, and 16 connections
+are served at once. Both sides send `{"protocol_version": 1}` first and refuse a mismatch. A
+request's token scope must name its workspace (a registered id or name) and the operation's
+verb. The runtime grants the lower of the token's and the class's priority ceilings, and hard
+only when both allow it. The lease row stores the token id (store migration 65), and every
+operation writes one `lease.intake.<operation>` audit row with principal, token id, client
+address and outcome. Renew, release and show act on any lease in a token's workspace, as the
+loopback REST routes do.
+
 With the §7.1 prerequisite in force, an agent running as the operator can still stop Orbit Web,
 or edit the operator's configuration to turn intake off or name another peer user. That denies
 service and grants nothing. The agent cannot mint or revoke tokens, read their hashes, or run

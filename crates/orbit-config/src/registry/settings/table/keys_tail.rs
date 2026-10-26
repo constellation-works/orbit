@@ -517,6 +517,13 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_choice(raw, "normal", "lease.max_priority.agent", &["low", "normal", "high"]),
     },
+    lease_intake_peer_user: Option<String> => String {
+        key: "lease.intake.peer_user", value_type: "string",
+        description: "OS user Orbit Web accepts lease operations from over its intake socket; unset serves no socket.",
+        section: ConfigSection::Housekeeping, order: 146,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<String>| resolve_lease_intake_peer_user(raw),
+    },
     experiments_enabled: bool => bool {
         key: "experiments.enabled", value_type: "bool",
         description: "Whether experiments may start in this workspace.",

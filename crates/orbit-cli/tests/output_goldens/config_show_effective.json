@@ -203,6 +203,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "lease.intake.peer_user": {
+      "scope": "built-in",
+      "state": "unset",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "lease.max_priority.agent": {
       "scope": "built-in",
       "state": "default",

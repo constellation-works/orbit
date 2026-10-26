@@ -24,6 +24,7 @@ fn lease_params(owner: &Coordinated, selector: &str, mode: LeaseMode) -> LeaseIn
         bound_branch: None,
         actor: "alice".into(),
         ttl_seconds: 600,
+        token_id: None,
     }
 }
 

@@ -6,7 +6,7 @@ mod table;
 pub use machine::{
     AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
 };
-pub(crate) use resolve::{read_optional, resolve_percent};
+pub(crate) use resolve::{admit_lease_intake_peer_user, read_optional, resolve_percent};
 pub use snapshot::{
     ExperimentSettings, ExploreBriefSettings, ExploreSettings, MidRunSteeringSettings,
     RegressionRiskSettings,

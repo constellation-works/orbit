@@ -172,14 +172,36 @@ const MACHINE_SETTINGS_FILE: &str = "config.toml";
 /// document is known to admit, so an unrelated problem elsewhere in the file
 /// must not make Orbit forget who it is. A missing file has no identity.
 pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, OrbitError> {
+    match read_global_config_document(global_root)? {
+        Some((path, document)) => MachineSettings::admit(&document, &path),
+        None => Ok(MachineSettings::default()),
+    }
+}
+
+/// Read `lease.intake.peer_user` from the global `config.toml` at
+/// `global_root`: the OS user Orbit Web accepts lease operations from over
+/// its intake socket, or `None` when it serves no socket.
+///
+/// As narrow as [`load_machine_settings`], so an unrelated problem elsewhere
+/// in the file leaves the dashboard as it was. The key is global-only; a
+/// workspace file is never read here.
+pub fn load_lease_intake_peer_user(global_root: &Path) -> Result<Option<String>, OrbitError> {
+    let Some((path, document)) = read_global_config_document(global_root)? else {
+        return Ok(None);
+    };
+    registry::admit_lease_intake_peer_user(&document, &path)
+}
+
+/// The global `config.toml` parsed as TOML, or `None` when there is none.
+fn read_global_config_document(
+    global_root: &Path,
+) -> Result<Option<(PathBuf, toml::Value)>, OrbitError> {
     let Some(path) = validated_machine_settings_path(global_root)? else {
-        return Ok(MachineSettings::default());
+        return Ok(None);
     };
     let mut file = match open_read_only_no_follow(&path) {
         Ok(file) => file,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(MachineSettings::default());
-        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(OrbitError::Io(format!(
                 "failed to read runtime config '{}': {error}",
@@ -200,7 +222,7 @@ pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, Orbi
             redact_home_dir(&path.display().to_string())
         ))
     })?;
-    MachineSettings::admit(&document, &path)
+    Ok(Some((path, document)))
 }
 
 fn machine_settings_path_error(message: &str, path: &Path) -> OrbitError {

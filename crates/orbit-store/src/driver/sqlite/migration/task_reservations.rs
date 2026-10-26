@@ -160,3 +160,12 @@ pub(super) fn apply_task_reservation_leases(conn: &Connection) -> Result<(), Orb
 
     Ok(())
 }
+
+/// v66 `task_reservation_lease_token` migration: the lease token id a lease
+/// intake request authenticated with (`docs/design/path-leases`, §7.2).
+///
+/// One nullable column. Rows written before it, or by a binary without it,
+/// read as leases requested without a token.
+pub(super) fn apply_task_reservation_lease_token(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "task_reservations", "token_id", "TEXT")
+}

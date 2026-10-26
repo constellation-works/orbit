@@ -701,11 +701,12 @@ While it is off, every lease operation is refused with an error naming the key.
 | `lease.hard.agent` | `allow` | `allow`, `never` | The same rule for agent principals. |
 | `lease.max_priority.human` | `high` | `low`, `normal`, `high` | Highest priority a human request may name. |
 | `lease.max_priority.agent` | `normal` | `low`, `normal`, `high` | Highest priority an agent request may name. |
+| `lease.intake.peer_user` | unset | an OS user name | Global only. The lease listener's OS user that `orbit web serve` accepts lease operations from over `~/.orbit/run/lease-intake.sock`. Unset serves no socket. |
 
 These keys inherit per key like other settings. Set the policy and read it back:
 
 ```bash
-orbit config keys --json                 # confirm the six lease.* keys in the installed version
+orbit config keys --json                 # confirm the seven lease.* keys in the installed version
 orbit config set lease.enabled true      # workspace config; add --global for ~/.orbit/config.toml
 orbit config get lease.enabled
 orbit config show --all                  # effective values with their source
@@ -729,6 +730,14 @@ agent = "normal"
 
 Enabling leases changes live coordination for everyone on the workspace, so
 make that choice deliberately and record it.
+
+`lease.intake.peer_user` is read only from the global `~/.orbit/config.toml`.
+Set it only for a lease listener user that meets the listener-user
+prerequisite in the path-leases design. Orbit Web refuses to start when it
+names root, the operator's own user or a missing user. The socket's directory
+and file are group-owned by that user's primary group, so the operator's user
+must belong to that group. Every connection from another user, the operator
+included, is refused and logged with its uid.
 
 ### How requests behave
 

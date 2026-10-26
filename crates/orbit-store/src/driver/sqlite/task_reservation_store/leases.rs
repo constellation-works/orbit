@@ -65,9 +65,9 @@ impl Store {
                         reservation_id, workspace_orbit_dir, workspace_id, task_ids_json,
                         files_json, actor, created_at, expires_at, scope, kind, mode,
                         principal, principal_class, machine_id, priority, tags_json,
-                        base_branch, bound_branch, heartbeat_at
+                        base_branch, bound_branch, heartbeat_at, token_id
                     ) VALUES (?1, ?2, ?3, '[]', ?4, ?5, ?6, ?7, ?8, 'lease', ?9, ?10, ?11,
-                        ?12, ?13, ?14, ?15, ?16, ?6)",
+                        ?12, ?13, ?14, ?15, ?16, ?6, ?17)",
                     params![
                         lease_id,
                         params.workspace_orbit_dir,
@@ -85,6 +85,7 @@ impl Store {
                         serialize_string_list(&params.tags)?,
                         params.base_branch.as_deref(),
                         params.bound_branch.as_deref(),
+                        params.token_id.as_deref(),
                     ],
                 )
                 .map_err(sqlite_store_error)?;
@@ -316,7 +317,7 @@ fn active_leases_sql() -> String {
 
 const LEASE_COLUMNS: &str = "reservation_id, workspace_id, files_json, mode, priority, tags_json,
      principal, principal_class, machine_id, base_branch, bound_branch, actor, created_at,
-     expires_at, heartbeat_at, released_at, release_reason, notice_cursor";
+     expires_at, heartbeat_at, released_at, release_reason, notice_cursor, token_id";
 
 struct LeaseRow {
     lease_id: String,
@@ -337,6 +338,7 @@ struct LeaseRow {
     released_at: Option<String>,
     release_reason: Option<String>,
     notice_cursor: u64,
+    token_id: Option<String>,
 }
 
 fn lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
@@ -359,6 +361,7 @@ fn lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
         released_at: row.get(15)?,
         release_reason: row.get(16)?,
         notice_cursor: row.get(17)?,
+        token_id: row.get(18)?,
     })
 }
 
@@ -409,6 +412,7 @@ impl LeaseRow {
             expires_at: self.expires_at,
             released_at: self.released_at,
             release_reason,
+            token_id: self.token_id,
         })
     }
 }
