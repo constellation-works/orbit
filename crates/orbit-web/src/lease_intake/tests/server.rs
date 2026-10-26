@@ -1,10 +1,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use chrono::Utc;
 use orbit_auth::scope::{
     HardLeasePermission, LeasePriorityCeiling, LeaseTokenScope, LeaseTokenVerb, PrincipalClass,
 };
 use orbit_core::OrbitRuntime;
+use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::{Value, json};
 
 use super::super::{
@@ -12,7 +14,7 @@ use super::super::{
     LeaseIntakeRequest, LeaseIntakeResponse, LeaseIntakeSocket,
 };
 use crate::api::tests::test_support::enter_isolated_child;
-use crate::state::{DashboardState, SINGLE_WORKSPACE_ID};
+use crate::state::{DashboardState, RegistrySource, SINGLE_WORKSPACE_ID};
 
 fn call(
     client: &mut LeaseIntakeClient,
@@ -20,15 +22,25 @@ fn call(
     operation: LeaseIntakeOperation,
     input: Value,
 ) -> LeaseIntakeResponse {
+    call_workspace(client, principal, SINGLE_WORKSPACE_ID, operation, input)
+}
+
+fn call_workspace(
+    client: &mut LeaseIntakeClient,
+    principal: &str,
+    workspace: &str,
+    operation: LeaseIntakeOperation,
+    input: Value,
+) -> LeaseIntakeResponse {
     let request = LeaseIntakeRequest {
         operation,
-        workspace: SINGLE_WORKSPACE_ID.to_string(),
+        workspace: workspace.to_string(),
         authority: LeaseIntakeAuthority {
             token_id: format!("tok-{principal}"),
             scope: LeaseTokenScope {
                 principal: principal.to_string(),
                 principal_class: PrincipalClass::Human,
-                workspaces: vec![SINGLE_WORKSPACE_ID.to_string()],
+                workspaces: vec![workspace.to_string()],
                 verbs: vec![LeaseTokenVerb::Lease, LeaseTokenVerb::Read],
                 max_priority: LeasePriorityCeiling::Normal,
                 hard: HardLeasePermission::Allow,
@@ -38,6 +50,25 @@ fn call(
         input,
     };
     client.call(&request).expect("intake call")
+}
+
+fn seed_registered_workspace(base: &std::path::Path, id: &str) -> std::path::PathBuf {
+    let repo_root = base.join(id);
+    let orbit_dir = repo_root.join(".orbit");
+    std::fs::create_dir_all(orbit_dir.join("local")).expect("create workspace directories");
+    std::fs::create_dir_all(repo_root.join("src")).expect("create source directory");
+    std::fs::write(orbit_dir.join("config.toml"), "[lease]\nenabled = true\n")
+        .expect("write lease config");
+    std::fs::write(
+        orbit_dir.join("config.yaml"),
+        format!("schema_version: 1\nworkspace_id: {id}\n"),
+    )
+    .expect("write workspace identity");
+    std::fs::write(repo_root.join("src/lease.rs"), "pub fn lease() {}\n")
+        .expect("write workspace file");
+    std::fs::write(repo_root.join("src/new.rs"), "pub fn new() {}\n")
+        .expect("write unleased workspace file");
+    repo_root
 }
 
 fn ok(response: LeaseIntakeResponse) -> Value {
@@ -165,6 +196,186 @@ fn token_renews_and_releases_only_its_own_principals_leases() {
         json!({"lease_id": lease_id}),
     ));
     assert_eq!(released["released"], true, "{released}");
+    drop(client);
+    tokio.shutdown_background();
+}
+
+#[test]
+fn ambiguous_workspace_id_name_selector_is_refused_without_touching_either_workspace() {
+    if !enter_isolated_child(
+        module_path!(),
+        "ambiguous_workspace_id_name_selector_is_refused_without_touching_either_workspace",
+    ) {
+        return;
+    }
+    let _env = orbit_common::test_env::scoped([
+        ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+        ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+    ]);
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_root = tmp.path().join("global");
+    std::fs::create_dir_all(&global_root).expect("create global root");
+    let first_repo = seed_registered_workspace(tmp.path(), "ws_alpha");
+    let second_repo = seed_registered_workspace(tmp.path(), "ws_ws_alpha");
+
+    let now = Utc::now();
+    let registry = WorkspaceRegistry {
+        workspaces: vec![
+            Workspace {
+                id: "ws_alpha".to_string(),
+                name: "alpha".to_string(),
+                owner_machine_id: None,
+                git_remote: None,
+                ship_mode: None,
+                base_branch: "main".to_string(),
+                status: WorkspaceStatus::Active,
+                created_at: now,
+                updated_at: now,
+            },
+            Workspace {
+                id: "ws_ws_alpha".to_string(),
+                name: "ws_alpha".to_string(),
+                owner_machine_id: None,
+                git_remote: None,
+                ship_mode: None,
+                base_branch: "main".to_string(),
+                status: WorkspaceStatus::Active,
+                created_at: now,
+                updated_at: now,
+            },
+        ],
+        checkouts: vec![
+            WorkspaceCheckout::owner(
+                "ws_alpha".to_string(),
+                first_repo.clone(),
+                first_repo.join(".orbit"),
+            ),
+            WorkspaceCheckout::owner(
+                "ws_ws_alpha".to_string(),
+                second_repo.clone(),
+                second_repo.join(".orbit"),
+            ),
+        ],
+        ..WorkspaceRegistry::default()
+    };
+    orbit_registry::workspace_registry::save_registry_to(
+        &registry,
+        &global_root.join("workspaces.json"),
+    )
+    .expect("save registry");
+    let state = DashboardState::from_registry(
+        global_root.clone(),
+        RegistrySource::new(global_root.join("workspaces.json"), None, None),
+    )
+    .expect("registry-backed dashboard state");
+
+    let socket_path = tmp.path().join("intake.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind");
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let own_uid = unsafe { libc::geteuid() };
+    let mut socket = LeaseIntakeSocket::for_test_listener(listener, socket_path.clone(), own_uid);
+    let tokio = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .expect("tokio runtime");
+    let accept = {
+        let _entered = tokio.enter();
+        socket.serve(state, IntakeLimits::default()).expect("serve")
+    };
+    tokio.spawn(accept);
+    let mut client =
+        LeaseIntakeClient::connect(&socket_path, Duration::from_secs(10)).expect("connect");
+
+    let first_grant = ok(call_workspace(
+        &mut client,
+        "alice",
+        "alpha",
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:src/lease.rs"], "mode": "hard"}),
+    ));
+    let first_lease_id = first_grant["lease"]["lease_id"]
+        .as_str()
+        .expect("first lease id")
+        .to_string();
+    let first_expiry = first_grant["lease"]["expires_at"]
+        .as_str()
+        .expect("first lease expiry")
+        .to_string();
+    assert_eq!(first_grant["granted"], true, "{first_grant}");
+
+    let second_grant = ok(call_workspace(
+        &mut client,
+        "alice",
+        "ws_ws_alpha",
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:src/lease.rs"], "mode": "hard"}),
+    ));
+    let second_lease_id = second_grant["lease"]["lease_id"]
+        .as_str()
+        .expect("second lease id")
+        .to_string();
+    let second_expiry = second_grant["lease"]["expires_at"]
+        .as_str()
+        .expect("second lease expiry")
+        .to_string();
+    assert_eq!(second_grant["granted"], true, "{second_grant}");
+
+    let ambiguous_request = refusal(call_workspace(
+        &mut client,
+        "alice",
+        "ws_alpha",
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:src/new.rs"], "mode": "hard"}),
+    ));
+    assert_eq!(ambiguous_request.code, "unknown_workspace");
+
+    for lease_id in [&first_lease_id, &second_lease_id] {
+        let ambiguous_renew = refusal(call_workspace(
+            &mut client,
+            "alice",
+            "ws_alpha",
+            LeaseIntakeOperation::Renew,
+            json!({"lease_id": lease_id, "ttl_seconds": 600}),
+        ));
+        assert_eq!(ambiguous_renew.code, "unknown_workspace");
+
+        let ambiguous_release = refusal(call_workspace(
+            &mut client,
+            "alice",
+            "ws_alpha",
+            LeaseIntakeOperation::Release,
+            json!({"lease_id": lease_id}),
+        ));
+        assert_eq!(ambiguous_release.code, "unknown_workspace");
+    }
+
+    for (workspace, lease_id, expected_expiry) in [
+        ("alpha", first_lease_id, first_expiry),
+        ("ws_ws_alpha", second_lease_id, second_expiry),
+    ] {
+        let shown = ok(call_workspace(
+            &mut client,
+            "alice",
+            workspace,
+            LeaseIntakeOperation::Show,
+            json!({"lease_id": lease_id}),
+        ));
+        assert_eq!(shown["lease"]["state"], "granted", "{shown}");
+        assert_eq!(shown["lease"]["expires_at"], expected_expiry, "{shown}");
+
+        let listed = ok(call_workspace(
+            &mut client,
+            "alice",
+            workspace,
+            LeaseIntakeOperation::List,
+            json!({}),
+        ));
+        let leases = listed["leases"].as_array().expect("lease list");
+        assert_eq!(leases.len(), 1, "{listed}");
+        assert_eq!(leases[0]["lease_id"], lease_id, "{listed}");
+    }
+
     drop(client);
     tokio.shutdown_background();
 }
