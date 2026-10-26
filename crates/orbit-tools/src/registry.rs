@@ -188,11 +188,14 @@ impl ToolRegistry {
             && tool.plugin.is_none()
             && !is_preloaded_artifact_payload(name, &input)
         {
+            let aliases = declared_aliases(name);
+            let retired_fields = declared_retired_fields(name);
             validate_task_arguments(
                 &input,
                 &tool.tool.schema(),
                 cli_fields(name, ctx),
-                &declared_aliases(name),
+                &aliases,
+                &retired_fields,
             )?;
         }
         tool.tool.execute(ctx, input)
@@ -326,6 +329,17 @@ fn declared_aliases(name: &str) -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// The task operation fields deliberately rejected by its handler with a
+/// replacement hint. Let those fields reach `OperationSpec::parse_input` so
+/// the registry does not hide that more useful refusal.
+fn declared_retired_fields(name: &str) -> Vec<&'static str> {
+    orbit_common::governance::task::TASK_OPERATIONS
+        .iter()
+        .filter(|spec| spec.tool_name == name)
+        .flat_map(|spec| spec.retired_fields.iter().map(|field| field.name))
+        .collect()
+}
+
 /// Task argument shapes are checked before a handler can ignore a mistyped
 /// optional field or reach the application host. Required fields and richer
 /// guarded modes remain the handler's responsibility.
@@ -334,6 +348,7 @@ fn validate_task_arguments(
     schema: &ToolSchema,
     cli_fields: &[&str],
     aliases: &[(&str, &str)],
+    retired_fields: &[&str],
 ) -> Result<(), OrbitError> {
     use orbit_common::protocol::tool_input::reject_unknown_tool_fields;
     use orbit_common::protocol::tool_schema::tool_parameter_schema;
@@ -347,6 +362,7 @@ fn validate_task_arguments(
         .map(|param| param.name.as_str())
         .chain(cli_fields.iter().copied())
         .chain(aliases.iter().map(|(_, alias)| *alias))
+        .chain(retired_fields.iter().copied())
         .collect::<Vec<_>>();
     reject_unknown_tool_fields(input, &allowed)?;
     for parameter in &schema.parameters {
