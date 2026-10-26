@@ -36,7 +36,7 @@ Options:
 
           Possible values:
           - shadow: Assign and record arms but apply no overlay
-          - live:   Apply overlays; starting or resuming live experiments is not supported yet
+          - live:   Start and resume are supported; overlays apply on matching dispatches. Skill replacement supports Claude on Unix only
 
       --reason <REASON>
           Why, recorded on the event

@@ -64,7 +64,7 @@ const MODES: &[EnumValue] = &[
     EnumValue::helped("shadow", "Assign and record arms but apply no overlay"),
     EnumValue::helped(
         "live",
-        "Apply overlays; starting or resuming live experiments is not supported yet",
+        "Start and resume are supported; overlays apply on matching dispatches. Skill replacement supports Claude on Unix only",
     ),
 ];
 
@@ -152,7 +152,7 @@ const DEFINITION: &[ParamSpec] = &[
     both(
         "mode",
         ParamType::Enum(MODES),
-        "shadow (default) assigns and records arms but applies no overlay; live overlays are not available yet.",
+        "shadow (default) records assignments without applying overlays; live experiments can start and resume, applying overlays on matching dispatches. Start requires base-admissible instruction files and skill bundles, registered enabled agent-facing added tools, and preservation of handoff tools; skill replacement currently supports Claude on Unix.",
         CliArgKind::flag("mode"),
         "Whether overlays are applied",
     ),
