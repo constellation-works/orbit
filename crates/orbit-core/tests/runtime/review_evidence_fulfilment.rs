@@ -32,6 +32,7 @@ use super::review_continuation::run_review_pipeline;
 use super::review_gate_audit::Fixture;
 
 mod attempts;
+mod bounded_findings;
 mod stale_findings;
 
 const CODEQL: &str = "scripts/codeql-rust-local.sh --ram 16384 codeql/rust-queries:codeql-suites/rust-security-extended.qls";
