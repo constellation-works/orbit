@@ -5,7 +5,7 @@ use orbit_common::OrbitError;
 use orbit_common::text::floor_char_boundary;
 use orbit_engine::DispatchError;
 use orbit_engine::review_gate::run_host_sandbox_test;
-use orbit_types::task::{Task, TaskArtifact, TaskStatus};
+use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, Task, TaskArtifact, TaskStatus};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     EvidenceHostOs, HostSandboxCommand, REVIEW_EVIDENCE_FINDINGS_ARTIFACT, ReviewEvidenceFindings,
@@ -28,6 +28,8 @@ use super::{
 /// Bytes of the findings summary a task comment carries; the artifact has
 /// every summarized result.
 const MAX_FINDINGS_COMMENT_BYTES: usize = 4 * 1024;
+/// Results retained across all requirements; serialized bytes may lower this.
+const MAX_COMBINED_FINDINGS_RESULTS: usize = 50;
 
 /// A requirement's command as fulfilment admitted it.
 enum AdmittedCommand {
@@ -353,20 +355,30 @@ impl OrbitRuntime {
                 artifacts.push(json_artifact(&artifact, &evidence)?);
             }
         }
-        let findings =
-            runs.iter()
-                .any(|run| !run.findings.is_empty())
-                .then(|| ReviewEvidenceFindings {
-                    schema_version: 1,
-                    hold_run_id: hold.run_id.clone(),
-                    run_id: run_id.to_string(),
-                    attempt_id: hold.attempt_id.clone(),
-                    candidate: hold.candidate.clone(),
-                    results: runs.iter().flat_map(|run| run.findings.clone()).collect(),
-                    omitted: runs.iter().map(|run| run.omitted_findings).sum(),
-                });
-        if let Some(findings) = &findings {
-            artifacts.push(json_artifact(REVIEW_EVIDENCE_FINDINGS_ARTIFACT, findings)?);
+        let mut findings = runs.iter().any(|run| !run.findings.is_empty()).then(|| {
+            let results = runs
+                .iter()
+                .flat_map(|run| &run.findings)
+                .take(MAX_COMBINED_FINDINGS_RESULTS)
+                .cloned()
+                .collect::<Vec<_>>();
+            let omitted = runs
+                .iter()
+                .map(|run| run.omitted_findings + run.findings.len())
+                .sum::<usize>()
+                - results.len();
+            ReviewEvidenceFindings {
+                schema_version: 1,
+                hold_run_id: hold.run_id.clone(),
+                run_id: run_id.to_string(),
+                attempt_id: hold.attempt_id.clone(),
+                candidate: hold.candidate.clone(),
+                results,
+                omitted,
+            }
+        });
+        if let Some(findings) = &mut findings {
+            artifacts.push(bounded_findings_artifact(&task.id, findings)?);
         }
         // Findings are a verdict on the candidate, not a missing check: when
         // every refusal is one, the implementer repairs the kept candidate.
@@ -439,6 +451,26 @@ impl OrbitRuntime {
             Some(run_id.to_string()),
         )?;
         Ok(())
+    }
+}
+
+/// Keep the combined record readable through the public artifact tool. Measure
+/// the actual pretty JSON, including escaped text, metadata and omitted count.
+fn bounded_findings_artifact(
+    task_id: &str,
+    findings: &mut ReviewEvidenceFindings,
+) -> Result<TaskArtifact, OrbitError> {
+    loop {
+        let artifact = json_artifact(REVIEW_EVIDENCE_FINDINGS_ARTIFACT, findings)?;
+        if artifact.content.len() as u64 <= MAX_TASK_ARTIFACT_CONTENT_BYTES
+            || findings.results.is_empty()
+        {
+            // Oversized metadata alone must also never reach the store.
+            artifact.validate_inline_size(task_id)?;
+            return Ok(artifact);
+        }
+        findings.results.pop();
+        findings.omitted += 1;
     }
 }
 

@@ -489,9 +489,13 @@ whose `sarif` records the run, result and rule counts, and
 `review-evidence-findings.json`, which lists each result's check, rule,
 message, file and line and the steps of its first data flow, source first.
 The SARIF lives in the run's checkout, which is removed, so this artifact is
-the only record. It keeps at most 50 results (the rest are counted as
-`omitted`) and eight flow steps per result (the first ones and the sink),
-and cuts each message and path to 512 bytes after redaction. The task is
+the only record. Each check summarizes at most 50 results, with eight flow
+steps per result (the first ones and the sink), and cuts each message and path
+to 512 bytes after redaction. The combined artifact keeps at most 50 results
+across all requirements, in requirement and result order, and drops trailing
+results until its serialized JSON, including escaping and metadata, fits the
+1 MiB public artifact read limit. Its `omitted` count includes results dropped
+by either the per-check cap or either combined budget. The task is
 then queued to `backlog` with the history event `review_evidence_findings`,
 and a comment repeats the findings. The task's next run resumes the held
 candidate for its implementer (`resumed_repaired`, trigger `review`), with
