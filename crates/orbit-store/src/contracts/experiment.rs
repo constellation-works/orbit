@@ -151,6 +151,13 @@ pub trait ExperimentStoreBackend: Send + Sync {
         task_id: &str,
     ) -> Result<Vec<ExperimentAssignment>, OrbitError>;
 
+    /// Every assignment and exclusion of one experiment, oldest first.
+    fn experiment_assignments(
+        &self,
+        workspace_id: &str,
+        experiment_id: &str,
+    ) -> Result<Vec<ExperimentAssignment>, OrbitError>;
+
     /// Apply `write` in one immediate transaction.
     fn write_experiment(
         &self,

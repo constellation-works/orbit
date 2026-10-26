@@ -1,5 +1,5 @@
 //! `/diagnostics/{metrics,errors,friction,implement_one,completions,defects,task_tokens,turns_to_edit,diff_stats,delivery_friction,backlog_forecast}`
-//! aggregation endpoints.
+//! aggregation endpoints, and `/diagnostics/experiments/{id}/readout`.
 
 mod audit;
 mod backlog_forecast;
@@ -9,6 +9,7 @@ mod delivery_friction;
 mod diff_stats;
 mod durations;
 mod errors;
+mod experiments;
 mod friction;
 mod metrics;
 mod task_tokens;
@@ -22,6 +23,7 @@ pub(super) use delivery_friction::diagnostics_delivery_friction;
 pub(super) use diff_stats::diagnostics_diff_stats;
 pub(super) use durations::diagnostics_implement_one;
 pub(super) use errors::list_diagnostics_errors;
+pub(super) use experiments::diagnostics_experiment_readout;
 pub(super) use friction::list_diagnostics_friction;
 pub(super) use metrics::list_diagnostics_metrics;
 pub(super) use task_tokens::diagnostics_task_tokens;

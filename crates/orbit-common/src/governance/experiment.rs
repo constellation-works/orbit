@@ -43,6 +43,8 @@ operation_registry! {
         Show => SHOW,
         /// The workspace's experiments.
         List => LIST,
+        /// An experiment's per-arm outcomes, intervals, health checks and verdict.
+        Readout => READOUT,
     }
 }
 
@@ -430,6 +432,29 @@ const ASSIGN: OperationSpec<ExperimentVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[ID, ASSIGN_PARAMS, MODEL],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const READOUT_PARAMS: &[ParamSpec] = &[both(
+    "metric",
+    ParamType::String,
+    "Report only this metric; the verdict is still read on the primary metric and guardrails. One of implement_tokens, total_tokens, cost_usd, lead_time, implement_duration, turns_before_first_edit, result_bytes_before_first_edit, first_pass_acceptance, review_repairs, step_recoveries, final_recoveries, failed_checks, merge_conflicts, delivery_done_rate, escaped_regressions or lines_changed.",
+    CliArgKind::flag("metric"),
+    "Report only this metric",
+)];
+
+const READOUT: OperationSpec<ExperimentVerb> = OperationSpec {
+    verb: ExperimentVerb::Readout,
+    cli_path: &["readout"],
+    tool_name: "orbit.experiment.readout",
+    tool_description: "Read an experiment's outcomes per arm, computed now from its assignments and the records Orbit already keeps. Intention-to-treat by task; forced assignments are left out and counted. Per arm and segment: n, mean and median with 95% bootstrap intervals (fixed seed) or Wilson intervals for rates, open (lagging) outcomes and crew mix; each arm's difference from control overall (post-stratified by complexity) and per complexity; guardrail status; a sample-ratio chi-square against the weights; overlay-digest drift. The verdict is collecting until every arm reaches min_sample or max_days pass, withheld on a sample-ratio mismatch, then winner <arm>, no difference or inconclusive. The shape carries schema_version. Read-only.",
+    cli_about: "Show an experiment's per-arm outcomes, intervals and verdict",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Read,
+    params: &[ID, READOUT_PARAMS, MODEL],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,

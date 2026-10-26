@@ -92,6 +92,10 @@ pub const NOT_ID_ROUTED_TOOLS: &[(&str, &str)] = &[
         "an experiment id is workspace-local and carries no host prefix",
     ),
     (
+        "orbit.experiment.readout",
+        "an experiment id is workspace-local and carries no host prefix",
+    ),
+    (
         "orbit.workflow.run.show",
         "a run id is host-local: a run executes where it was admitted",
     ),

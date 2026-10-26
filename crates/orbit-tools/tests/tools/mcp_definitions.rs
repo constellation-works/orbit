@@ -79,6 +79,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.experiment.create",
             "orbit.experiment.list",
             "orbit.experiment.pause",
+            "orbit.experiment.readout",
             "orbit.experiment.resume",
             "orbit.experiment.reweight",
             "orbit.experiment.show",

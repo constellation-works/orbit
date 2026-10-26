@@ -58,6 +58,11 @@ pub(super) fn dispatch(
         }),
         ExperimentVerb::Abandon => change(ExperimentChange::Abandon),
         ExperimentVerb::Show => view_json(runtime.experiment_view(&input.required_string("id")?)?),
+        ExperimentVerb::Readout => serde_json::to_value(runtime.experiment_readout(
+            &input.required_string("id")?,
+            input.optional_string("metric")?.as_deref(),
+        )?)
+        .map_err(|error| OrbitError::Execution(format!("serialize experiment readout: {error}"))),
         ExperimentVerb::List => {
             let experiments =
                 runtime.experiment_views(input.optional_string("status")?.as_deref())?;

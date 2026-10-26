@@ -46,6 +46,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["experiment", "abandon"], "experiment/abandon.txt"),
     (&["experiment", "show"], "experiment/show.txt"),
     (&["experiment", "list"], "experiment/list.txt"),
+    (&["experiment", "readout"], "experiment/readout.txt"),
     (&["agents"], "agents/root.txt"),
     (&["agents", "scorecard"], "agents/scorecard.txt"),
     (&["agents", "show"], "agents/show.txt"),
