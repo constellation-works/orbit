@@ -1,4 +1,17 @@
 with_tail_keys! {
+    publication_routine_attachments: String => String {
+        key: "publication.routine_attachments", value_type: "string",
+        description: "Scheduled task publication attachment policy: omit, fail, or include.",
+        section: ConfigSection::Housekeeping, order: 22,
+        resolve: |raw: Option<String>| resolve_choice(raw, "omit", "publication.routine_attachments", &["omit", "fail", "include"]),
+    },
+    publication_routine_allow_unscanned_attachments: bool => bool {
+        key: "publication.routine_allow_unscanned_attachments", value_type: "boolean",
+        description: "Explicitly allow scheduled included attachments without a sensitivity scanner; path and size checks still apply.",
+        section: ConfigSection::Housekeeping, order: 23,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
+    },
     ci_failure_operator_suppression_hours: u32 => u32 {
         key: "ci_failure.operator_suppression_hours", value_type: "integer",
         description: "Hours an archived or rejected CI sweep task suppresses re-filing.",

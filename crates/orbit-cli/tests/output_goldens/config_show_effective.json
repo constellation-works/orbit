@@ -399,6 +399,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "publication.routine_allow_unscanned_attachments": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "publication.routine_attachments": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "retention.audit_days": {
       "scope": "built-in",
       "state": "default",

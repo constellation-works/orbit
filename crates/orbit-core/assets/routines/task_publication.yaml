@@ -1,0 +1,15 @@
+# Publishing task prose to a remote is an operator decision. Seed disabled.
+# Sunday at 04:47 host-local time collides with no other shipped default.
+schemaVersion: 1
+name: __ORBIT_ROUTINE_NAME__
+description: >
+  Weekly publication of this workspace's task recovery snapshot, omitting
+  attachments by default under publication.routine_attachments.
+enabled: false
+trigger:
+  cron: "47 4 * * 0"
+  missed_run: skip
+target: job:task_publication_pipeline
+policy:
+  timeout_minutes: 60
+  overlap: forbid

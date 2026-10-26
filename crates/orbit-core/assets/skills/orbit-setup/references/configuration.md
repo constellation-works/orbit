@@ -156,6 +156,16 @@ and the drain refuse untagged tasks before dispatch and `orbit doctor` warns on
 its `forge-remote` row. Base branch and ship mode govern source delivery,
 not task snapshot publication.
 
+## Scheduled task publication
+
+| Key | Behavior |
+|---|---|
+| `publication.routine_attachments` | `omit` (default), `fail`, or `include`. The disabled weekly `task-publication-<workspace>` routine publishes only its owned workspace; manual publication keeps its CLI policy. |
+| `publication.routine_allow_unscanned_attachments` | `false` (default). Explicitly accepts unscanned attachments with routine policy `include`; sensitive path and size limits still apply. Without this opt-in and a scanner, included attachments fail closed. |
+
+See [publication.md](publication.md#weekly-publication-routine) for the schedule,
+owner-only behavior, credentials and enablement.
+
 ## Recovery settings
 
 Read effective values with `orbit config show --all` before editing workspace

@@ -84,12 +84,13 @@ may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
 <a id="the-nine-seeded-routines"></a>
-## The ten seeded routines
+<a id="the-ten-seeded-routines"></a>
+## The eleven seeded routines
 
-`orbit workspace init` seeds all ten with a workspace-unique name
-(`<base>-<workspace>`) resolved at seed time. Nine are seeded disabled;
+`orbit workspace init` seeds all eleven with a workspace-unique name
+(`<base>-<workspace>`) resolved at seed time. Ten are seeded disabled;
 `crew-performance-refresh` is the one exception, seeded enabled because it
-no-ops while `workflow.crew_performance` is `off`. The six cron routines
+no-ops while `workflow.crew_performance` is `off`. The seven cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
 `task-pilot`, `finding-verification`, `pilot-warning-triage` and
 `blocked-task-triage` are state-triggered and additionally resolve this host's
@@ -109,6 +110,7 @@ on this host.
 | `crew-performance-refresh` | hourly at :23 | `crew_performance_refresh_pipeline` | Rebuilds this workspace's crew-performance snapshot (the implementer by-type cell matrix) that performance-weighted crew draws read. The one routine seeded enabled: while `workflow.crew_performance` is `off` (the default) it skips the scan, records `skipped: crew_performance_off` and writes no snapshot; once the feature is on, keeps the snapshot fresh — [Crew performance snapshot](#crew-performance-snapshot). |
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history older than 30 days. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
+| `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
 | `ship-sweep` | every 30m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. The 30-minute cadence leaves 10 minutes of slack past the job's 20-minute drain, so `overlap: forbid` does not skip the next fire. |
 
 ### Crew performance snapshot

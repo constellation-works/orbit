@@ -1295,7 +1295,7 @@ updated_at: 2026-01-01T00:00:00Z
         body = parse_json(evidence, "job list")
         rows = body if isinstance(body, list) else body.get("items", [])
         names = {row.get("name") or row.get("id") or row.get("job_id") for row in rows}
-        expected = {"task_pilot_pipeline", "worktree_gc_pipeline"}
+        expected = {"task_pilot_pipeline", "worktree_gc_pipeline", "task_publication_pipeline"}
         if not expected.issubset(names):
             raise ValueError(f"job catalog missing {sorted(expected-names)}")
     checked("workflow-definition-boundary",
@@ -1310,6 +1310,15 @@ updated_at: 2026-01-01T00:00:00Z
             [orbit_bin, "--root", str(root), "--workspace", str(work), "job", "show",
              "task_pilot_pipeline", "--format", "json"],
             work, ["job-show-names-step-activities"], step_activities)
+
+    def publication_activity(evidence):
+        body = parse_json(evidence, "publication job show")
+        if "activity:task_publication" not in json.dumps(body.get("steps")):
+            raise ValueError("publication job does not name its deterministic activity")
+    checked("workflow-definition-boundary",
+            [orbit_bin, "--root", str(root), "--workspace", str(work), "job", "show",
+             "task_publication_pipeline", "--format", "json"],
+            work, ["publication-job-names-task-publication-activity"], publication_activity)
 
     def search_result(evidence):
         body = parse_json(evidence, "search")
