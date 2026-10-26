@@ -84,7 +84,22 @@ impl ReservationOutcome {
     }
 }
 
+/// A reservation's or lease's lifetime when the request names none.
+const DEFAULT_TASK_RESERVATION_TTL_SECONDS: u32 = 1800;
 const MAX_TASK_RESERVATION_TTL_SECONDS: u32 = 14400;
+
+/// `ttl_seconds` from tool input, defaulted and held to the reservation
+/// bounds that reservations and leases share.
+pub(super) fn parse_ttl_seconds(input: &Value) -> Result<u32, OrbitError> {
+    let ttl_seconds = optional_u32_alias(input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?
+        .unwrap_or(DEFAULT_TASK_RESERVATION_TTL_SECONDS);
+    if !(1..=MAX_TASK_RESERVATION_TTL_SECONDS).contains(&ttl_seconds) {
+        return Err(OrbitError::InvalidInput(format!(
+            "`ttl_seconds` must be between 1 and {MAX_TASK_RESERVATION_TTL_SECONDS} seconds"
+        )));
+    }
+    Ok(ttl_seconds)
+}
 
 pub fn list(runtime: &RuntimeKernel) -> Result<Value, OrbitError> {
     let workspace_id = workspace_task_reservation_id(runtime)?;
@@ -248,13 +263,7 @@ pub fn reserve_with_index(
     empty_task_surface_policy: EmptyTaskSurfacePolicy,
 ) -> Result<ReservationOutcome, OrbitError> {
     let reservation_scope = parse_task_lock_reservation_scope(&input)?;
-    let ttl_seconds =
-        optional_u32_alias(&input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?.unwrap_or(1800);
-    if !(1..=MAX_TASK_RESERVATION_TTL_SECONDS).contains(&ttl_seconds) {
-        return Err(OrbitError::InvalidInput(format!(
-            "`ttl_seconds` must be between 1 and {MAX_TASK_RESERVATION_TTL_SECONDS} seconds"
-        )));
-    }
+    let ttl_seconds = parse_ttl_seconds(&input)?;
 
     let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
     let workspace_id = workspace_task_reservation_id(runtime)?;
@@ -299,7 +308,7 @@ pub fn reserve_with_index(
         }
         TaskLockReservationScope::Files(files) => (
             Vec::new(),
-            canonicalize_file_lock_selectors(files, repo_root)?,
+            canonicalize_file_lock_selectors(files, "files", repo_root)?,
         ),
     };
     runtime.reconcile_stale_owned_reservations_for_files(&requested_files, 32)?;
@@ -446,13 +455,7 @@ pub fn reserve_deferred_footprint(
     deferred_conflicts: Vec<TaskLockConflict>,
 ) -> Result<ReservationOutcome, OrbitError> {
     let task_ids = parse_task_ids(input)?;
-    let ttl_seconds =
-        optional_u32_alias(input, &["ttl_seconds", "ttlSeconds", "ttl-seconds"])?.unwrap_or(1800);
-    if !(1..=MAX_TASK_RESERVATION_TTL_SECONDS).contains(&ttl_seconds) {
-        return Err(OrbitError::InvalidInput(format!(
-            "`ttl_seconds` must be between 1 and {MAX_TASK_RESERVATION_TTL_SECONDS} seconds"
-        )));
-    }
+    let ttl_seconds = parse_ttl_seconds(input)?;
     let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
     let owner_run_id = reservation_owner
         .as_ref()
@@ -542,7 +545,7 @@ fn parse_task_lock_reservation_scope(
             parse_task_id_list(task_ids).map(TaskLockReservationScope::TaskIds)
         }
         (None, Some(files)) => {
-            parse_file_lock_selectors(files).map(TaskLockReservationScope::Files)
+            parse_file_lock_selectors(files, "files").map(TaskLockReservationScope::Files)
         }
     }
 }
@@ -563,12 +566,17 @@ fn parse_task_id_list(task_ids: Vec<String>) -> Result<Vec<String>, OrbitError> 
     Ok(deduped.into_iter().collect())
 }
 
-fn parse_file_lock_selectors(files: Vec<String>) -> Result<Vec<String>, OrbitError> {
+/// Validate `field`'s entries as `file:` or `dir:` selectors, deduplicated
+/// and sorted.
+pub(super) fn parse_file_lock_selectors(
+    files: Vec<String>,
+    field: &str,
+) -> Result<Vec<String>, OrbitError> {
     let mut deduped = BTreeSet::new();
     for raw in files {
         let selector: Selector = raw.parse().map_err(|error| {
             OrbitError::InvalidInput(format!(
-                "`files` entries must be canonical file or directory selectors using `file:` or `dir:`: {error}"
+                "`{field}` entries must be canonical file or directory selectors using `file:` or `dir:`: {error}"
             ))
         })?;
         match &selector {
@@ -576,23 +584,23 @@ fn parse_file_lock_selectors(files: Vec<String>) -> Result<Vec<String>, OrbitErr
                 deduped.insert(selector.to_string());
             }
             Selector::Symbol { .. } | Selector::Module { .. } | Selector::Command { .. } => {
-                return Err(OrbitError::InvalidInput(
-                    "`files` entries must be canonical file or directory selectors using `file:` or `dir:`; `symbol:`, `module:`, and `command:` selectors are not supported for task locks".to_string(),
-                ));
+                return Err(OrbitError::InvalidInput(format!(
+                    "`{field}` entries must be canonical file or directory selectors using `file:` or `dir:`; `symbol:`, `module:`, and `command:` selectors are not supported for task locks"
+                )));
             }
         }
     }
     if deduped.is_empty() {
-        return Err(OrbitError::InvalidInput(
-            "`files` must contain at least one file or directory selector using `file:` or `dir:`"
-                .to_string(),
-        ));
+        return Err(OrbitError::InvalidInput(format!(
+            "`{field}` must contain at least one file or directory selector using `file:` or `dir:`"
+        )));
     }
     Ok(deduped.into_iter().collect())
 }
 
-fn canonicalize_file_lock_selectors(
+pub(super) fn canonicalize_file_lock_selectors(
     files: &[String],
+    field: &str,
     workspace_root: &Path,
 ) -> Result<Vec<String>, OrbitError> {
     files
@@ -600,7 +608,7 @@ fn canonicalize_file_lock_selectors(
         .map(|selector| {
             canonical_selector_in_workspace(selector, workspace_root).map_err(|error| {
                 OrbitError::InvalidInput(format!(
-                    "`files` entries must remain inside workspace `{}`: {error}",
+                    "`{field}` entries must remain inside workspace `{}`: {error}",
                     workspace_root.display()
                 ))
             })
@@ -638,7 +646,7 @@ fn reservation_context_lock_exempt(
         })
 }
 
-fn reservation_actor_label(
+pub(super) fn reservation_actor_label(
     runtime: &RuntimeKernel,
     agent: Option<&str>,
     model: Option<&str>,

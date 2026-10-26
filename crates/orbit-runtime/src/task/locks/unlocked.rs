@@ -49,7 +49,7 @@ impl UnlockedContextPaths {
 
     /// Whether a selector's filesystem anchor matches a glob. A selector
     /// with no anchor (`module:`, `command:`) always locks.
-    fn unlocks(&self, selector: &str) -> bool {
+    pub(super) fn unlocks(&self, selector: &str) -> bool {
         anchor_path(selector).ok().is_some_and(|path| {
             path.to_str()
                 .is_some_and(|path| self.globs.iter().any(|glob| glob.matches(path)))

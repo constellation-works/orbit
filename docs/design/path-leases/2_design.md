@@ -16,9 +16,10 @@ related_artifacts: []
 
 # Path Leases — Design
 
-This document proposes how path leases work. Only the lease row of §2 and the advisory/hard
-overlap rule of §3 are implemented (store only, with no surface yet; see "Stored so far" in §2);
-the rest of §2–§9 is not. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
+This document proposes how path leases work. The lease row of §2, the advisory/hard grant rules
+of §3 without the queue, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
+runtime operations, with no MCP, CLI or REST surface yet (see "Stored so far" and
+"Runtime operations" in §2); the rest of §2–§9 is not. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
 [conflict-budget](../conflict-budget/1_scope.md), and open directions to
 [3_vision.md](./3_vision.md).
 
@@ -87,6 +88,15 @@ reservations and omits advisory ones, which hold nothing, until the lease surfac
 The migration is additive. A binary without it reads every lease row, advisory or hard, as an
 exclusive file reservation and refuses overlapping reserves (checked against 0.33.0, the
 previous release), and the rows it writes read here as hard task reservations.
+
+**Runtime operations.** `crates/orbit-runtime/src/task/locks/lease.rs` holds one function per
+verb: `request`, `renew`, `release`, `show`, `list` and `check`, each refused naming
+`lease.enabled` while it is false. `request` applies §3 without waiting: advisory is granted and
+names the holders it overlaps; hard drops `unlocked_context_paths` from the stored surface and is
+refused with the holders named when what is left overlaps a task context lock, task reservation
+or hard lease; a class set to `lease.hard = "never"` is granted advisory with a notice; a priority
+above the class ceiling is refused. `check` reads without expiring or auditing anything. Grant,
+refusal, renewal, release and lazy expiry each write a `lease` audit event.
 
 ## 3. Granting, queueing and the drain
 
@@ -462,7 +472,7 @@ feature multi-person.
 ## Task References
 
 - ORB-18404 — lease rows in the reservation store; advisory leases lock-free (§2, §3).
-- ORB-18405 — lease operations, principals and lease configuration.
+- ORB-18405 — lease runtime operations, principal class and the phase-1 `lease.*` keys (§3, §7, §8).
 - ORB-18406 — `orbit.lease` tools and the `orbit lease` CLI.
 - ORB-18410 — the `orbit-auth` crate and lease tokens for the listener user (§7.1, §7.3, §7.4).
 - ORB-18411 — lease REST routes over a backend trait (§6, §7.3).

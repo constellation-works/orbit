@@ -131,6 +131,14 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         lease_id: &str,
     ) -> Result<Option<LeaseRecord>, OrbitError>;
 
+    /// The workspace's active leases, advisory and hard, without expiring
+    /// or otherwise mutating rows.
+    fn inspect_active_leases(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<LeaseRecord>, OrbitError>;
+
     /// The workspace's active leases after lazy expiry.
     fn list_active_leases(
         &self,

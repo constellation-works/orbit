@@ -364,6 +364,15 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
             .get_lease(workspace_orbit_dir, workspace_id, lease_id)
     }
 
+    fn inspect_active_leases(
+        &self,
+        workspace_orbit_dir: &str,
+        workspace_id: Option<&str>,
+    ) -> Result<Vec<LeaseRecord>, OrbitError> {
+        self.store
+            .inspect_active_leases(workspace_orbit_dir, workspace_id)
+    }
+
     fn list_active_leases(
         &self,
         workspace_orbit_dir: &str,

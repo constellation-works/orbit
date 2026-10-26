@@ -1,8 +1,9 @@
-//! Task reservation and file-lock operations.
+//! Task reservation, file-lock and path-lease operations.
 
 mod audit;
 mod commands;
 mod index;
+pub mod lease;
 mod projection;
 mod unlocked;
 
@@ -17,4 +18,5 @@ pub use index::{
     lock_holder_index, merge_task_lock_conflicts, requested_task_files_indexed,
     task_lock_conflicts_indexed, task_lock_overlaps,
 };
+pub(crate) use lease::LeasePolicy;
 pub use unlocked::UnlockedContextPaths;

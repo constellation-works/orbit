@@ -1,4 +1,4 @@
-//! Audit events for task reservations.
+//! Audit events for task reservations and path leases.
 
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
@@ -76,6 +76,54 @@ pub(super) fn record_task_lock_audit_event(
         },
     )
 }
+
+/// One audit event per lease that lazy expiry ended during a lease
+/// operation, attributed to the tool whose call observed it.
+pub(super) fn emit_expired_lease_events(
+    runtime: &RuntimeKernel,
+    tool_name: &str,
+    expired_leases: &[ExpiredTaskReservation],
+) -> Result<(), OrbitError> {
+    for expired in expired_leases {
+        record_lease_audit_event(
+            runtime,
+            "lease.expired",
+            tool_name,
+            Some(expired.reservation_id.as_str()),
+            AuditEventStatus::Success,
+            json!({
+                "lease_id": expired.reservation_id,
+                "expired_at": expired.expired_at,
+            }),
+        )?;
+    }
+    Ok(())
+}
+
+pub(super) fn record_lease_audit_event(
+    runtime: &RuntimeKernel,
+    command: &str,
+    tool_name: &str,
+    lease_id: Option<&str>,
+    status: AuditEventStatus,
+    payload: Value,
+) -> Result<(), OrbitError> {
+    let workspace_id = runtime.workspace_id()?;
+    record_coordination_audit_event(
+        runtime,
+        CoordinationAuditEvent {
+            command,
+            tool_name,
+            target_type: "lease",
+            target_id: lease_id,
+            task_id: None,
+            workspace_id: Some(&workspace_id),
+            status,
+            payload,
+        },
+    )
+}
+
 pub(super) fn first_task_id(task_ids: &[String]) -> Option<&str> {
     task_ids.first().map(String::as_str)
 }
