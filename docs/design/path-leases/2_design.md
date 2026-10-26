@@ -255,8 +255,9 @@ even though its HTTP method is POST; its Origin check still applies.
 Its public `LeaseBackend` receives `LeaseCaller` (workspace and declared principal) separately
 from the operation JSON and executes on the blocking pool. The dashboard adapter selects its
 runtime from a pinned workspace snapshot and enforces operator write authority. Other servers
-supply their own backend and authentication/Origin policy; the future listener must bind caller
-declarations to its authenticated token. No listener or intake implementation is provided here.
+supply their own backend and authentication/Origin policy. A server that authenticates puts a
+`LeaseCallerToken` in the request's extensions; the router then takes the principal from it and
+ignores declared ones. The lease listener (§7.3) is that server.
 
 `check` answers "may I edit these paths under my lease, and does anyone else hold them?" without
 changing state. It is what an editor hook calls: a Claude Code `PreToolUse` hook on `Edit` and
@@ -374,7 +375,7 @@ a live owner's sudoers.
   Linux owners. On macOS the same checks apply; creating the user is the operator's.
 
 **Implemented token commands.** `orbit-auth` and `orbit lease token create|list|revoke` exist;
-no network surface accepts a token yet. Orbit never creates `lease-tokens.db`: root provisions
+the lease listener (§7.3) is the network surface that accepts them. Orbit never creates `lease-tokens.db`: root provisions
 it empty (`0600`, in the `0700` Orbit home) when it creates the listener user, and Orbit adds
 its schema on first open. That is how a command run as the operator finds no store, for
 `create` too, and refuses with how to run it as the listener user. The Orbit home is `$HOME/.orbit`,
@@ -409,7 +410,10 @@ operations to Orbit over a local socket.
   step for it).
 - **Audit in two places.** Orbit audits every intake operation with the principal, token id and
   client address. The listener audits what never reaches Orbit, failed authentication and
-  rejected requests, in its own store, aggregated per key and window (§7.3).
+  rejected requests, in its own store (§7.3). A refusal before a token is verified (no token, an
+  unknown one, an unresolvable address, a rate limit) records the remote address, route and
+  reason but no principal, since none was authenticated; principal and token id appear only when
+  the token was valid.
 
 **Implemented intake socket.** `orbit_web::lease_intake` holds the versioned request and
 response types, the server `orbit web serve` runs, and the blocking `LeaseIntakeClient` the
@@ -473,6 +477,39 @@ the peer check, the home mode and the root-owned binary then accept the caller.
 - **One token per person, one per agent.** A person's agents get their own tokens under the
   person's name (`alice/claude-code`), with the `agent` class ceiling, so notices and audit rows
   say which of Alice's sessions holds a path and revoking one agent leaves the others working.
+
+**Implemented listener.** `orbit lease listen` runs `orbit_web::lease_listener` as the listener
+user. Before binding it runs `orbit-auth`'s execution-environment check, refuses when the running
+user owns the intake socket at `lease.listener.intake_socket` (or, before Orbit Web has created
+it, its directory), validates `lease.listener.*` from the running user's global `config.toml`
+(bind required; an unspecified address only with `behind_proxy`; `behind_proxy` only with a
+non-empty `trusted_proxy`; `tls` in any form refused until native TLS), and opens only the token
+store. It never opens Orbit's main store and pins no executable generation. The router is
+`/healthz` (unauthenticated liveness) plus `lease_router` nested at `/api` behind a route layer,
+so unmatched paths are 404 without authentication. The layer resolves the client address through
+`orbit_auth::client_address`, applies `orbit_auth::limiter`, reads `Authorization: Bearer`, and
+verifies the token for the route's verb (`read` for GET and `POST …/check`, otherwise `lease`)
+and `?workspace=` (default: the token's only workspace; several without one is 400). Unknown,
+revoked and expired tokens and missing ones are 401 `unauthorized`; a missing verb or workspace is
+403. The backend strips any declared principal and forwards the token id, scope and client address
+over the intake socket, one connection per operation; intake codes map to HTTP (`scope_refused`
+403, `lease_not_held` and `unknown_workspace` 404, `invalid_input` 400, expansion 501,
+`operation_failed` 500 with the detail logged, an unreachable socket 503).
+
+The listener audits each refusal that does not reach Orbit in the token store's
+`lease_token_audit` (schema v2 adds `remote_address` and `route`): `verify_refused` rows from the
+token decision and `listener_refused` rows for `missing_token`, `rate_limited`,
+`malformed_forwarded_for`, `no_untrusted_forwarded_for`, `intake_unavailable`, `intake_refused`
+and `request_rejected` (a 4xx or 5xx after authentication that Orbit did not produce). Rows are
+written per refusal, not aggregated: 401 and 403 answers count against the failed-authentication
+limit (`lease.listener.limits.failed_auth` per `failed_auth_window_seconds`, a fixed window from
+an address's first failure, IPv6 per /64, at most 4096 addresses), so each address writes at most
+that many rows plus one `rate_limited` row per window. The broader per-address, per-token and
+whole-listener limits, body and timeout bounds, and the aggregation of other refusals are the
+later limits slice. Client-address rule as implemented: `X-Forwarded-For` values are read only
+from a peer in `trusted_proxy`, joined in header order, split on commas and walked from the right;
+IPv4-mapped IPv6 addresses compare as IPv4; a non-UTF-8 value, a malformed entry or an all-trusted
+chain (including no header) is 400.
 
 ### 7.4 The `orbit-auth` crate
 

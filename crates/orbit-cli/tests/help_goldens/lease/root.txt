@@ -11,6 +11,7 @@ Commands:
   check    Check path coverage and overlapping holders
   notices  Read durable lease notices after a cursor
   token    Mint, list and revoke lease listener tokens (run as the listener user)
+  listen   Serve the lease routes to token holders (run as the listener user)
 
 Options:
   -h, --help

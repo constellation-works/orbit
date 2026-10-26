@@ -6,10 +6,12 @@
 use std::sync::Arc;
 
 use axum::Router;
-use axum::extract::{Path, Query, State};
+use axum::extract::{FromRequestParts, Path, Query, State};
 use axum::http::StatusCode;
+use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
+use orbit_auth::scope::LeaseTokenScope;
 use orbit_common::governance::authorization::DASHBOARD_LEASE_WRITE;
 use orbit_common::protocol::tool_input::optional_string_alias;
 use orbit_core::runtime::task::locks::lease;
@@ -24,15 +26,49 @@ use crate::state::DashboardState;
 /// Caller attribution and workspace selection for a lease operation.
 ///
 /// The dashboard accepts these in the query string; JSON operations may also
-/// declare `principal` in their body. A listener must authenticate and bind
-/// these declarations to its token before invoking its backend. As on SSH,
-/// dashboard declarations are attribution, not authentication.
+/// declare `principal` in their body. As on SSH, dashboard declarations are
+/// attribution, not authentication. A server that authenticates its callers
+/// puts a [`LeaseCallerToken`] in the request's extensions; the router then
+/// takes the principal from it and ignores every declared one.
 #[derive(Clone, Debug, Default, Deserialize)]
 pub struct LeaseCaller {
     /// Declared person or agent name; required by the request operation.
     pub principal: Option<String>,
     /// Workspace selector, or the server's default when omitted.
     pub workspace: Option<String>,
+    /// The authenticated token, set only from the request's extensions.
+    #[serde(skip)]
+    pub token: Option<LeaseCallerToken>,
+}
+
+/// A caller authenticated by a lease token, which the mounting server's
+/// authentication inserts into the request's extensions.
+#[derive(Clone, Debug)]
+pub struct LeaseCallerToken {
+    /// The token's public id.
+    pub token_id: String,
+    /// The token's principal, class and scope.
+    pub scope: LeaseTokenScope,
+    /// The workspace the request addresses, already checked against the
+    /// token's scope.
+    pub workspace: String,
+    /// The resolved client address.
+    pub client_address: String,
+}
+
+/// The query-string caller plus the authenticated token, if any.
+struct LeaseCallerParts(LeaseCaller);
+
+impl<S: Send + Sync> FromRequestParts<S> for LeaseCallerParts {
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let Query(mut caller) = Query::<LeaseCaller>::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        caller.token = parts.extensions.get::<LeaseCallerToken>().cloned();
+        Ok(Self(caller))
+    }
 }
 
 /// A runtime-contract JSON answer, or an HTTP error using the web error mapping.
@@ -167,6 +203,10 @@ fn lease_call_input(mut caller: LeaseCaller, input: &Value) -> Result<LeaseCalle
             "lease input must be a JSON object".to_string(),
         )));
     }
+    if let Some(token) = &caller.token {
+        caller.principal = Some(token.scope.principal.clone());
+        return Ok(caller);
+    }
     let principal =
         optional_string_alias(input, &["principal"]).map_err(|e| Box::new(map_runtime_error(e)))?;
     if let Some(principal) = principal {
@@ -205,7 +245,7 @@ async fn lease_backend_call(
 
 async fn request_lease(
     State(backend): State<Arc<dyn LeaseBackend>>,
-    Query(caller): Query<LeaseCaller>,
+    LeaseCallerParts(caller): LeaseCallerParts,
     Json(input): Json<Value>,
 ) -> Response {
     lease_backend_call(backend, caller, input, |b, c, i| b.request(c, i)).await
@@ -215,7 +255,7 @@ async fn request_lease(
 // Content-Type must default, not fail as malformed JSON.
 async fn renew_lease(
     State(backend): State<Arc<dyn LeaseBackend>>,
-    Query(caller): Query<LeaseCaller>,
+    LeaseCallerParts(caller): LeaseCallerParts,
     Path(id): Path<String>,
     OptionalJson(mut input): OptionalJson<Map<String, Value>>,
 ) -> Response {
@@ -228,7 +268,7 @@ async fn renew_lease(
 
 async fn expand_lease(
     State(backend): State<Arc<dyn LeaseBackend>>,
-    Query(caller): Query<LeaseCaller>,
+    LeaseCallerParts(caller): LeaseCallerParts,
     Path(id): Path<String>,
     OptionalJson(mut input): OptionalJson<Map<String, Value>>,
 ) -> Response {
@@ -241,7 +281,7 @@ async fn expand_lease(
 
 async fn release_lease(
     State(backend): State<Arc<dyn LeaseBackend>>,
-    Query(caller): Query<LeaseCaller>,
+    LeaseCallerParts(caller): LeaseCallerParts,
     Path(id): Path<String>,
 ) -> Response {
     lease_backend_call(backend, caller, json!({"lease_id": id}), |b, c, i| {
@@ -252,7 +292,7 @@ async fn release_lease(
 
 async fn show_lease(
     State(backend): State<Arc<dyn LeaseBackend>>,
-    Query(caller): Query<LeaseCaller>,
+    LeaseCallerParts(caller): LeaseCallerParts,
     Path(id): Path<String>,
 ) -> Response {
     lease_backend_call(backend, caller, json!({"lease_id": id}), |b, c, i| {
@@ -263,14 +303,14 @@ async fn show_lease(
 
 async fn list_leases(
     State(backend): State<Arc<dyn LeaseBackend>>,
-    Query(caller): Query<LeaseCaller>,
+    LeaseCallerParts(caller): LeaseCallerParts,
 ) -> Response {
     lease_backend_call(backend, caller, json!({}), |b, c, _| b.list(c)).await
 }
 
 async fn check_leases(
     State(backend): State<Arc<dyn LeaseBackend>>,
-    Query(caller): Query<LeaseCaller>,
+    LeaseCallerParts(caller): LeaseCallerParts,
     Json(input): Json<Value>,
 ) -> Response {
     lease_backend_call(backend, caller, input, |b, c, i| b.check(c, i)).await

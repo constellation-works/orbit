@@ -1,5 +1,6 @@
 //! Registry-derived path-lease CLI with standard structured and human output,
-//! plus `orbit lease token`, the lease listener user's token commands.
+//! plus the lease listener user's commands: `orbit lease token` and
+//! `orbit lease listen`.
 
 use chrono::{DateTime, Utc};
 use clap::{Args, Subcommand};
@@ -34,17 +35,26 @@ pub enum LeaseSubcommand {
     /// Mint, list and revoke lease listener tokens (run as the listener user)
     #[command(long_about = LEASE_TOKEN_LONG_ABOUT)]
     Token(LeaseTokenCommand),
+    /// Serve the lease routes to token holders (run as the listener user)
+    #[command(long_about = LEASE_LISTEN_LONG_ABOUT)]
+    Listen(LeaseListenArgs),
 }
 
+#[derive(Args)]
+pub struct LeaseListenArgs {}
+
 impl LeaseCommand {
-    /// Whether this is `orbit lease token …`, which opens no workspace runtime
-    /// and pins no executable generation: it runs as the lease listener user
-    /// against that user's own token store.
-    pub fn is_token_command(&self) -> bool {
-        matches!(self.command, LeaseSubcommand::Token(_))
+    /// Whether this runs as the lease listener user (`orbit lease token …`
+    /// and `orbit lease listen`): it opens no workspace runtime and pins no
+    /// executable generation, and touches only that user's own Orbit home.
+    pub fn runs_as_listener_user(&self) -> bool {
+        matches!(
+            self.command,
+            LeaseSubcommand::Token(_) | LeaseSubcommand::Listen(_)
+        )
     }
 
-    /// Run a token command. `workspace_selector` is the global
+    /// Run a listener-user command. `workspace_selector` is the global
     /// `--workspace`, which scopes a new token.
     pub fn execute_without_runtime(
         self,
@@ -55,6 +65,7 @@ impl LeaseCommand {
             LeaseSubcommand::Token(command) => {
                 command.execute_as_listener_user(workspace_selector, root_override)
             }
+            LeaseSubcommand::Listen(_) => lease_listen(root_override),
             LeaseSubcommand::Operation(_) => Err(OrbitError::Execution(
                 "lease operations need a workspace runtime".to_string(),
             )),
@@ -66,9 +77,9 @@ impl Execute for LeaseCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let invocation = match self.command {
             LeaseSubcommand::Operation(invocation) => invocation,
-            LeaseSubcommand::Token(_) => {
+            LeaseSubcommand::Token(_) | LeaseSubcommand::Listen(_) => {
                 return Err(OrbitError::Execution(
-                    "lease token commands run without a workspace runtime".to_string(),
+                    "lease token and listen commands run without a workspace runtime".to_string(),
                 ));
             }
         };
@@ -268,6 +279,35 @@ const LEASE_TOKEN_LONG_ABOUT: &str = "Mint, list and revoke lease listener token
     user, for example `sudo -H -u orbit-lease orbit lease token list`. Run as any other user they \
     find no store and refuse. They also refuse to run as root, from an agent context, or when the \
     executable or the Orbit home can be changed by another user.";
+
+const LEASE_LISTEN_LONG_ABOUT: &str = "Serve the lease routes to token holders (run as the listener user)\n\n\
+    Serves /healthz and the lease routes under /api, and nothing else, to holders of lease \
+    tokens, and forwards each authenticated operation to Orbit Web over its lease intake socket. \
+    Settings come from lease.listener.* in the running user's ~/.orbit/config.toml. Run it as \
+    the listener user, normally from its service unit. It refuses to start as root, as the user \
+    that owns the intake socket, when the executable or the Orbit home can be changed by \
+    another user, or when lease.listener.bind is unset, listens on every interface without a \
+    proxy, or sets lease.listener.behind_proxy without lease.listener.trusted_proxy.";
+
+#[cfg(unix)]
+fn lease_listen(root_override: Option<&Path>) -> CommandOut {
+    if root_override.is_some() {
+        return Err(OrbitError::InvalidInput(
+            "--root does not apply to `orbit lease listen`: it uses the running user's own \
+             Orbit home"
+                .to_string(),
+        ));
+    }
+    orbit_web::lease_listener::run_lease_listener()?;
+    Ok(crate::command::CommandOutput::Silent)
+}
+
+#[cfg(not(unix))]
+fn lease_listen(_root_override: Option<&Path>) -> CommandOut {
+    Err(OrbitError::PolicyDenied(
+        "the lease listener needs a Unix host".to_string(),
+    ))
+}
 
 #[derive(Args)]
 #[command(subcommand_required = true, arg_required_else_help = true)]

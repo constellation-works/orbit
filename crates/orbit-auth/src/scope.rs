@@ -244,6 +244,8 @@ pub enum LeaseTokenRefusal {
     WrongWorkspace,
     /// The token does not grant the requested verb.
     VerbNotGranted,
+    /// The request names no workspace and the token has more than one.
+    WorkspaceUnnamed,
 }
 
 impl LeaseTokenRefusal {
@@ -255,6 +257,7 @@ impl LeaseTokenRefusal {
             Self::Expired => "expired",
             Self::WrongWorkspace => "wrong_workspace",
             Self::VerbNotGranted => "verb_not_granted",
+            Self::WorkspaceUnnamed => "workspace_unnamed",
         }
     }
 }
