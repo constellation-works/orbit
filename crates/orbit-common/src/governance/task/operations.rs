@@ -505,7 +505,7 @@ const SHOW: TaskOperation = TaskOperation {
     verb: TaskVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.task.show",
-    tool_description: "Fetch a task as JSON by global `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
+    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
     cli_help: CliHelp {
         long_about: Some(
