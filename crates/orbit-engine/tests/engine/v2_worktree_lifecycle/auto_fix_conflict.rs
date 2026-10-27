@@ -55,6 +55,11 @@ fn completion_conflict_follows_only_recorded_auto_fix_pushes() {
                 "target_base_sha": conflict.target_base_sha,
                 "conflicting_paths": conflict.conflicting_paths,
             });
+            assert_eq!(
+                git(checkout, &["branch", "--show-current"]),
+                "",
+                "the incident stops with detached HEAD"
+            );
             let mut input = conflict_recovery_input(&prepared, &conflict);
             input["failed_step_id"] = json!("complete_pr");
             input["activity_name"] = json!("pr_complete");
@@ -345,7 +350,14 @@ fn authorize_rebase_completion_reports_distinct_refusal_reasons() {
             let checkout = &prepared.checkout.path;
             let conflict = stopped_conflict(&prepared);
             let input = conflict_recovery_input(&prepared, &conflict);
-            let host = prepared.with_provider("exit 0");
+            let launched = prepared
+                .fixture
+                .root
+                .path()
+                .join("refusal-provider-launched");
+            let host = prepared.with_provider(&format!(": > '{}'", launched.display()));
+            let original_status = git(checkout, &["status", "--porcelain"]);
+            let original_file = fs::read(checkout.join("README.md")).unwrap();
 
             // 1. Input validation and metadata mismatches while the rebase is stopped.
             let mut bad_kind = input.clone();
@@ -413,6 +425,30 @@ fn authorize_rebase_completion_reports_distinct_refusal_reasons() {
             );
             fs::write(&onto_path, &saved_onto).unwrap();
 
+            // Missing and mismatched retained metadata must fail before dispatch.
+            for name in ["head-name", "orig-head", "onto"] {
+                let path = rebase_dir.join(name);
+                let saved = fs::read(&path).unwrap();
+                for replacement in [Some(b"foreign\n".as_slice()), None] {
+                    if let Some(value) = replacement {
+                        fs::write(&path, value).unwrap();
+                    } else {
+                        fs::remove_file(&path).unwrap();
+                    }
+                    let error = recover(&host, &prepared.run_id, input.clone())
+                        .expect_err("invalid retained metadata must refuse");
+                    assert!(error.to_string().contains("rebase"), "{name}: {error}");
+                    assert!(!launched.exists(), "{name}: no provider dispatch");
+                    assert_eq!(git(checkout, &["status", "--porcelain"]), original_status);
+                    assert_eq!(fs::read(checkout.join("README.md")).unwrap(), original_file);
+                    assert!(
+                        host.checkpoints().is_empty(),
+                        "{name}: no success checkpoint"
+                    );
+                    fs::write(&path, &saved).unwrap();
+                }
+            }
+
             // 3. Missing rebase directory reason when neither rebase-merge nor rebase-apply exists.
             fs::remove_dir_all(&rebase_dir).unwrap();
             let err = recover(&host, &prepared.run_id, input).unwrap_err();
@@ -425,10 +461,359 @@ fn authorize_rebase_completion_reports_distinct_refusal_reasons() {
     );
 }
 
+/// Preserved recovery refusals, exercised at the public `recover` boundary.
+///
+/// Host admission recomputes workspace, branch, head, publication and
+/// completion authority and refuses before the provider is dispatched. A
+/// caller-supplied publication pin cannot replace that head. The substitute
+/// leaf refuses a terminal task before it edits. Administrative neighbours
+/// stay on their existing contracts:
+/// - stale checkpoint or evidence: `a_resumed_run_recovers_the_same_step_again_as_a_new_attempt`
+///   refuses "no exact host-validated recovery checkpoint", and
+///   `absorbed_candidate` refuses `stale_checkpoint` for another attempt, run,
+///   step or task;
+/// - re-authored scope: `absorbed_candidate` "a task whose criteria changed
+///   since recovery" refuses `task_scope_changed`;
+/// - wrong ownership or revoked authorization:
+///   `earlier_repairs_are_not_continued_once_ownership_or_authorization_changed`;
+/// - preparation stale or foreign workspace, run and candidate:
+///   `direct_stale_and_invalid_preparations_refuse_without_mutation`;
+/// - wrong or missing head-name, orig-head, onto, and a missing rebase:
+///   `authorize_rebase_completion_reports_distinct_refusal_reasons`;
+/// - unrecorded or unrelated pushes and a wrong base:
+///   `completion_conflict_follows_only_recorded_auto_fix_pushes`.
+#[test]
+fn preserved_recovery_refusals_leave_no_edit_or_checkpoint() {
+    isolated_in(
+        module_path!(),
+        "preserved_recovery_refusals_leave_no_edit_or_checkpoint",
+        || {
+            let prepared = PreparedRebase::new("jrun-preserved-refusals", "README.md", "README.md");
+            let checkout = &prepared.checkout.path;
+            let conflict = stopped_conflict(&prepared);
+            let input = conflict_recovery_input(&prepared, &conflict);
+            let launched = prepared.fixture.root.path().join("preserved-launched");
+            let host = prepared.with_provider(&format!(": > '{}'", launched.display()));
+            let readme = fs::read(checkout.join("README.md")).unwrap();
+
+            let refuse = |case: &str, case_input: Value, needle: &str| {
+                let _ = fs::remove_file(&launched);
+                let before = git(checkout, &["status", "--porcelain"]);
+                let error = recover(&host, &prepared.run_id, case_input).expect_err(case);
+                assert!(error.to_string().contains(needle), "{case}: {error}");
+                assert!(!launched.exists(), "{case}: provider must not run");
+                assert_eq!(git(checkout, &["status", "--porcelain"]), before, "{case}");
+                assert_eq!(
+                    fs::read(checkout.join("README.md")).unwrap(),
+                    readme,
+                    "{case}"
+                );
+                assert!(
+                    host.checkpoints().is_empty(),
+                    "{case}: no success checkpoint"
+                );
+                assert!(
+                    rebase_in_progress(checkout),
+                    "{case}: stopped rebase preserved"
+                );
+            };
+
+            let mut different_roots = input.clone();
+            different_roots["repo_root"] = json!(prepared.fixture.repo);
+            refuse(
+                "workspace and repo root are different checkouts",
+                different_roots,
+                "different Git checkouts",
+            );
+
+            let mut primary = input.clone();
+            primary["workspace_path"] = json!(prepared.fixture.repo);
+            primary["repo_root"] = json!(prepared.fixture.repo);
+            refuse(
+                "workspace collapses to the registered primary",
+                primary,
+                "registered primary checkout",
+            );
+
+            let nested = checkout.join("nested");
+            fs::create_dir_all(&nested).unwrap();
+            let mut not_root = input.clone();
+            not_root["workspace_path"] = json!(&nested);
+            not_root["repo_root"] = json!(&nested);
+            refuse(
+                "workspace is not the checkout root",
+                not_root,
+                "exact Git checkout root",
+            );
+            fs::remove_dir_all(&nested).unwrap();
+
+            let mut absent_head = input.clone();
+            let failed = absent_head["failed_step_input"].as_object_mut().unwrap();
+            failed.remove("head_sha");
+            failed.remove("published_head_sha");
+            failed.insert(
+                "authenticated_published_head_sha".to_string(),
+                json!(prepared.candidate),
+            );
+            refuse(
+                "a pin cannot stand in for the prepared head",
+                absent_head,
+                "missing prepared head_sha or published_head_sha",
+            );
+
+            let mut forged_overrides_head = input.clone();
+            forged_overrides_head["failed_step_input"]["head_sha"] = json!(prepared.base_sha);
+            forged_overrides_head["failed_step_input"]["authenticated_published_head_sha"] =
+                json!(prepared.candidate);
+            refuse(
+                "a pin cannot override the prepared head",
+                forged_overrides_head,
+                "expected original HEAD",
+            );
+
+            let mut auto_fix_without_completion = input.clone();
+            auto_fix_without_completion["failed_step_id"] = json!("complete_pr");
+            auto_fix_without_completion["activity_name"] = json!("pr_complete");
+            auto_fix_without_completion["failed_step_input"]["auto_fix"] = json!(true);
+            auto_fix_without_completion["failed_step_input"]["pr_number"] = json!("42");
+            auto_fix_without_completion["failed_step_input"]["published_head_sha"] =
+                json!(prepared.candidate);
+            refuse(
+                "auto_fix does not replace completion authorization",
+                auto_fix_without_completion,
+                "completion == 'done'",
+            );
+
+            let mut missing_pr = input.clone();
+            missing_pr["failed_step_id"] = json!("complete_pr");
+            missing_pr["activity_name"] = json!("pr_complete");
+            missing_pr["failed_step_input"]["completion"] = json!("done");
+            missing_pr["failed_step_input"]["published_head_sha"] = json!(prepared.candidate);
+            refuse(
+                "completion recovery without a pull request",
+                missing_pr,
+                "missing prepared pr_number",
+            );
+
+            let mut duplicate_paths = input.clone();
+            duplicate_paths["conflicting_paths"] = json!(["README.md", "README.md"]);
+            refuse(
+                "duplicate conflict paths",
+                duplicate_paths,
+                "duplicate entries",
+            );
+
+            let mut escaped_path = input.clone();
+            escaped_path["conflicting_paths"] = json!(["../README.md"]);
+            refuse(
+                "conflict path outside the checkout",
+                escaped_path,
+                "not a safe relative path",
+            );
+
+            let mut empty_paths = input.clone();
+            empty_paths["conflicting_paths"] = json!([]);
+            refuse(
+                "empty conflict set",
+                empty_paths,
+                "conflicting_paths is empty",
+            );
+
+            let attached =
+                PreparedRebase::new("jrun-attached-wrong-branch", "README.md", "README.md");
+            let attached_checkout = &attached.checkout.path;
+            let attached_conflict = stopped_conflict(&attached);
+            let attached_input = conflict_recovery_input(&attached, &attached_conflict);
+            let attached_launched = attached.fixture.root.path().join("attached-launched");
+            let attached_host =
+                attached.with_provider(&format!(": > '{}'", attached_launched.display()));
+            let attached_readme = fs::read(attached_checkout.join("README.md")).unwrap();
+            git(
+                attached_checkout,
+                &["symbolic-ref", "HEAD", &format!("refs/heads/{BASE}")],
+            );
+            let attached_before = git(attached_checkout, &["status", "--porcelain"]);
+            let attached_error = recover(&attached_host, &attached.run_id, attached_input)
+                .expect_err("an ordinary checked-out wrong branch is still rejected");
+            assert!(
+                attached_error
+                    .to_string()
+                    .contains("stopped rebase HEAD does not descend from target base"),
+                "{attached_error}"
+            );
+            assert!(
+                !attached_launched.exists(),
+                "attached wrong branch: provider must not run"
+            );
+            assert_eq!(
+                git(attached_checkout, &["status", "--porcelain"]),
+                attached_before
+            );
+            assert_eq!(
+                fs::read(attached_checkout.join("README.md")).unwrap(),
+                attached_readme
+            );
+            assert!(attached_host.checkpoints().is_empty());
+            assert!(rebase_in_progress(attached_checkout));
+
+            let mut terminal = prepared;
+            terminal.host.publish_task_context = true;
+            let terminal_launched = terminal.fixture.root.path().join("terminal-launched");
+            let provider = terminal.fixture.root.path().join("codex-terminal");
+            write_executable(&provider, &terminal_task_provider(&terminal_launched));
+            let terminal_readme = fs::read(terminal.checkout.path.join("README.md")).unwrap();
+            let terminal_conflict = conflict;
+            let terminal_input = conflict_recovery_input(&terminal, &terminal_conflict);
+            for status in [TaskStatus::Done, TaskStatus::Archived, TaskStatus::Rejected] {
+                let _ = fs::remove_file(&terminal_launched);
+                terminal.host.set_status("T-REBASE", status);
+                let host = terminal.host.with_provider(&provider);
+                let before = git(&terminal.checkout.path, &["status", "--porcelain"]);
+                let outcome = recover(&host, &terminal.run_id, terminal_input.clone())
+                    .expect("a terminal refusal still finishes the invocation");
+                let case = status.cli_name();
+                assert!(!outcome.success, "{case}: {:?}", outcome.message);
+                let message = outcome.message.unwrap_or_default();
+                assert!(
+                    message.contains("status=\"failed\"")
+                        && message.contains("task_refuses_writes"),
+                    "{case}: {message}"
+                );
+                assert!(terminal_launched.exists(), "{case}: leaf ran");
+                assert_eq!(
+                    git(&terminal.checkout.path, &["status", "--porcelain"]),
+                    before,
+                    "{case}"
+                );
+                assert_eq!(
+                    fs::read(terminal.checkout.path.join("README.md")).unwrap(),
+                    terminal_readme,
+                    "{case}: no provider edit"
+                );
+                assert!(
+                    host.checkpoints().is_empty(),
+                    "{case}: no success checkpoint"
+                );
+                assert!(rebase_in_progress(&terminal.checkout.path), "{case}");
+            }
+
+            let forged = PreparedRebase::new("jrun-forged-pin", "README.md", "README.md");
+            let forged_conflict = stopped_conflict(&forged);
+            let mut forged_input = conflict_recovery_input(&forged, &forged_conflict);
+            forged_input["failed_step_input"]["authenticated_published_head_sha"] =
+                json!(forged.base_sha);
+            let seen_pin = forged.fixture.root.path().join("seen-pin");
+            let forged_launched = forged.fixture.root.path().join("forged-launched");
+            let forged_provider = forged.fixture.root.path().join("codex-pin");
+            write_executable(
+                &forged_provider,
+                &host_authenticated_pin_provider(&forged_launched, &seen_pin),
+            );
+            let forged_host = forged.host.with_provider(&forged_provider);
+            let outcome = recover(&forged_host, &forged.run_id, forged_input)
+                .expect("the host replaces a mismatched publication pin");
+            assert!(outcome.success, "{:?}", outcome.message);
+            assert_eq!(
+                fs::read_to_string(&seen_pin).unwrap().trim(),
+                forged.candidate,
+                "the leaf must see the host pin, not the forged one"
+            );
+            assert!(forged_launched.exists());
+            assert!(!rebase_in_progress(&forged.checkout.path));
+            assert_eq!(forged_host.checkpoints().len(), 1);
+        },
+    );
+}
+
+/// Substitute leaf that stops before editing when the envelope says the task
+/// refuses writes. A missing or non-terminal task falls through to an edit so
+/// the contract fails closed in the fixture.
+fn terminal_task_provider(launched: &std::path::Path) -> String {
+    format!(
+        r#"#!/bin/sh
+set -eu
+: > '{launched}'
+python3 -c '
+import json, sys
+payload = sys.stdin.read()
+marker = "Execution envelope:\n"
+start = payload.find(marker)
+text = payload[start + len(marker):] if start >= 0 else payload
+try:
+    env = json.loads(text)
+except json.JSONDecodeError:
+    env = {{}}
+task = env.get("task") if isinstance(env.get("task"), dict) else {{}}
+status = task.get("status") or ""
+if task.get("terminal") is True or status in ("done", "archived", "rejected"):
+    json.dump({{
+        "schemaVersion": 1,
+        "status": "failed",
+        "result": {{}},
+        "error": {{"code": "task_refuses_writes", "message": "the task refuses writes"}},
+    }}, sys.stdout)
+    raise SystemExit(0)
+with open("README.md", "w", encoding="utf-8") as handle:
+    handle.write("should not edit\n")
+json.dump({{"schemaVersion": 1, "status": "success", "result": {{}}, "error": None}}, sys.stdout)
+'
+"#,
+        launched = launched.display(),
+    )
+}
+
+/// Substitute leaf that edits only when the host-injected publication pin
+/// equals `ORIG_HEAD`. It records the pin it actually saw.
+fn host_authenticated_pin_provider(
+    launched: &std::path::Path,
+    seen_pin: &std::path::Path,
+) -> String {
+    format!(
+        r#"#!/bin/sh
+set -eu
+: > '{launched}'
+python3 -c '
+import json, subprocess, sys
+payload = sys.stdin.read()
+marker = "Execution envelope:\n"
+start = payload.find(marker)
+text = payload[start + len(marker):] if start >= 0 else payload
+try:
+    env = json.loads(text)
+except json.JSONDecodeError:
+    env = {{}}
+failed = env.get("input", {{}}).get("failed_step_input", {{}})
+if not isinstance(failed, dict):
+    failed = {{}}
+pin = failed.get("authenticated_published_head_sha") or ""
+orig = subprocess.check_output(["git", "rev-parse", "ORIG_HEAD"], text=True).strip()
+with open("{seen_pin}", "w", encoding="utf-8") as handle:
+    handle.write(pin)
+if pin != orig:
+    json.dump({{
+        "schemaVersion": 1,
+        "status": "failed",
+        "result": {{}},
+        "error": {{
+            "code": "pre_rewrite_head_mismatch",
+            "message": "ORIG_HEAD is not the host-authenticated publication",
+        }},
+    }}, sys.stdout)
+    raise SystemExit(0)
+with open("README.md", "w", encoding="utf-8") as handle:
+    handle.write("candidate and target\n")
+json.dump({{"schemaVersion": 1, "status": "success", "result": {{}}, "error": None}}, sys.stdout)
+'
+"#,
+        launched = launched.display(),
+        seen_pin = seen_pin.display(),
+    )
+}
+
 /// Provider stand-in for the leaf's pre-rewrite check.
 ///
 /// Touches `launched` as soon as it is dispatched, then edits only when the
-/// host pin equals `ORIG_HEAD` and the raw publication fields are still
+/// retained rebase branch matches and the host pin equals `ORIG_HEAD` and the raw publication fields are still
 /// `original_publication`. A missing pin refuses before any edit.
 fn publication_pin_provider(launched: &std::path::Path, original_publication: &str) -> String {
     format!(
@@ -453,7 +838,19 @@ published = failed.get("published_head_sha") or ""
 head = failed.get("head_sha") or ""
 orig = subprocess.check_output(["git", "rev-parse", "ORIG_HEAD"], text=True).strip()
 expected = sys.argv[1]
-if pin != orig or published != expected or (head and head != expected):
+branch = subprocess.check_output(["git", "branch", "--show-current"], text=True).strip()
+expected_branch = failed.get("head") or ""
+if not branch:
+    for backend in ("rebase-merge", "rebase-apply"):
+        path = subprocess.check_output(["git", "rev-parse", "--git-path", backend], text=True).strip()
+        try:
+            with open(path + "/head-name", encoding="utf-8") as handle:
+                branch = handle.read().strip()
+            branch = branch.removeprefix("refs/heads/") if branch.startswith("refs/heads/") else ""
+            break
+        except FileNotFoundError:
+            pass
+if not expected_branch or branch != expected_branch or pin != orig or published != expected or (head and head != expected):
     json.dump({{
         "schemaVersion": 1,
         "status": "failed",
