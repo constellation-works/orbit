@@ -18,7 +18,9 @@ use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
-use super::lease_listener::{audit_rows, bearer, config, mint, provisioned_store, send};
+use super::lease_listener::{
+    audit_rows, bearer, config, mint, provisioned_store, send, short_intake_socket,
+};
 
 #[tokio::test]
 async fn ipv6_prefixes_mapped_ipv4_and_proxy_clients_keep_one_address_budget() {
@@ -177,7 +179,7 @@ async fn token_writes_reads_and_other_tokens_have_separate_budgets() {
             .1,
         );
     }
-    let socket = tmp.path().join("intake.sock");
+    let (_sockets, socket) = short_intake_socket();
     let intake = std::os::unix::net::UnixListener::bind(&socket).unwrap();
     let server = tokio::task::spawn_blocking(move || {
         for _ in 0..4 {

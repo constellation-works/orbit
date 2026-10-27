@@ -65,6 +65,27 @@ pub(super) fn mint(
     )
 }
 
+/// An intake socket path that fits `sun_path` (108 bytes with the NUL), and
+/// the directory that holds it, which the caller keeps alive. A managed run's
+/// TMPDIR can be too long for that, so the socket takes the first of the
+/// process temp dir and `/dev/shm` that fits. The token store stays under the
+/// fixture's own tempdir.
+pub(super) fn short_intake_socket() -> (tempfile::TempDir, PathBuf) {
+    for parent in [std::env::temp_dir(), PathBuf::from("/dev/shm")] {
+        let Ok(dir) = tempfile::Builder::new()
+            .prefix("intake")
+            .tempdir_in(&parent)
+        else {
+            continue;
+        };
+        let socket = dir.path().join("intake.sock");
+        if socket.as_os_str().as_encoded_bytes().len() < 108 {
+            return (dir, socket);
+        }
+    }
+    panic!("no directory short enough for an intake socket path");
+}
+
 pub(super) fn config(
     intake_socket: PathBuf,
     client_address: LeaseClientAddressPolicy,
