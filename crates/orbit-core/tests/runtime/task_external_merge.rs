@@ -17,6 +17,8 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::application::review::{DistributedClaimState, ExpectedCandidate};
+use orbit_core::application::routines::loader::{DiscoveredWorkspaces, RoutineWorkspaceProvider};
+use orbit_core::application::routines::{RoutineMachineIdentity, SweepOptions, SweepOutcome};
 use orbit_core::application::task::{EXTERNAL_MERGE_SETTLED_EVENT, TaskAddParams};
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
@@ -35,6 +37,7 @@ use orbit_types::workflow::handoff::{
     HandoffCandidate, HandoffDelivery, HandoffReview, HandoffReviewDisposition,
     LandingAttemptState, LandingStartState, TaskHandoff,
 };
+use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -69,6 +72,8 @@ struct Handoff {
 
 #[derive(Default)]
 struct ForgeState {
+    /// Fail the merged listing, as a forge outage would.
+    fail_merged: bool,
     /// What the most-recently-merged listing returns.
     recent: Vec<MergedPullRequest>,
     /// Merged PRs only a lookup by number reaches.
@@ -122,7 +127,11 @@ impl TaskPrForge for FakeForge {
         &self,
         _repo_root: &Path,
     ) -> Result<Vec<MergedPullRequest>, OrbitError> {
-        Ok(self.0.lock().unwrap().recent.clone())
+        let state = self.0.lock().unwrap();
+        if state.fail_merged {
+            return Err(OrbitError::Execution("forge unavailable".into()));
+        }
+        Ok(state.recent.clone())
     }
 
     fn merged_pull_request(
@@ -1281,4 +1290,138 @@ fn external_merge_does_not_settle_a_sibling_delivery_named_in_an_external_ref() 
     assert_eq!(settlement.pr_number, 61);
     assert_eq!(settlement.task_id, owner);
     assert_eq!(fx.status(&owner), TaskStatus::Done);
+}
+
+struct TickProvider {
+    runtime: OrbitRuntime,
+    replica: bool,
+}
+
+impl RoutineWorkspaceProvider for TickProvider {
+    fn discover_workspaces(&self, _: &Path) -> Result<DiscoveredWorkspaces, OrbitError> {
+        let workspace = Workspace {
+            id: self.runtime.workspace_id()?,
+            name: "tick-workspace".into(),
+            owner_machine_id: None,
+            git_remote: None,
+            ship_mode: None,
+            base_branch: "main".into(),
+            status: WorkspaceStatus::Active,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        let pair = (workspace, self.runtime.clone());
+        if self.replica {
+            Ok(DiscoveredWorkspaces {
+                replicas: vec![pair],
+                ..DiscoveredWorkspaces::default()
+            })
+        } else {
+            Ok(DiscoveredWorkspaces {
+                entries: vec![pair],
+                ..DiscoveredWorkspaces::default()
+            })
+        }
+    }
+}
+
+fn tick(fx: &Fixture, dry_run: bool, replica: bool) -> SweepOutcome {
+    orbit_core::test_support::run_sweep_at(
+        &fx.runtime.global_root(),
+        SweepOptions {
+            dry_run,
+            ..SweepOptions::default()
+        },
+        RoutineMachineIdentity {
+            machine_id: "tick-machine".into(),
+            machine_name: "tick-host".into(),
+        },
+        &TickProvider {
+            runtime: fx.runtime.clone(),
+            replica,
+        },
+        Utc::now(),
+    )
+    .expect("the tick runs")
+}
+
+#[test]
+fn clock_tick_settles_blocked_and_review_tasks_without_a_drain() {
+    let fx = Fixture::new();
+    let blocked = fx.add_task("Tick blocked", TaskStatus::Blocked, &[601]);
+    let reviewed = fx.add_task("Tick reviewed", TaskStatus::Review, &[602]);
+    fx.forge.merge_recent(601, &blocked, BOT, &fx.base);
+    fx.forge.merge_recent(602, &reviewed, BOT, &fx.base);
+
+    let dry = tick(&fx, true, false);
+    assert!(dry.external_merge_settlements.is_empty(), "{dry:?}");
+    assert_eq!(fx.status(&blocked), TaskStatus::Blocked);
+
+    let outcome = tick(&fx, false, false);
+    assert_eq!(fx.status(&blocked), TaskStatus::Done);
+    assert_eq!(fx.status(&reviewed), TaskStatus::Done);
+    let mut settled: Vec<(&str, u64)> = outcome
+        .external_merge_settlements
+        .iter()
+        .map(|row| (row.task_id.as_str(), row.pr_number))
+        .collect();
+    settled.sort();
+    let mut expected = vec![(blocked.as_str(), 601), (reviewed.as_str(), 602)];
+    expected.sort();
+    assert_eq!(settled, expected, "{outcome:?}");
+    assert!(
+        outcome
+            .external_merge_settlements
+            .iter()
+            .all(|row| row.source == "tick-workspace")
+    );
+    for task in [&blocked, &reviewed] {
+        let history = fx.runtime.get_task_history(task).unwrap();
+        let entry = history
+            .iter()
+            .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
+            .expect("settled event");
+        assert_eq!(entry.to_status, Some(TaskStatus::Done));
+        assert!(entry.note.as_deref().unwrap().contains(MERGE_COMMIT));
+    }
+}
+
+#[test]
+fn clock_tick_leaves_guarded_tasks_and_follower_hosts_unsettled() {
+    let fx = Fixture::new();
+    let live = fx.add_task("Tick live run", TaskStatus::InProgress, &[611]);
+    let claimed = fx.add_task("Tick claimed", TaskStatus::Blocked, &[612]);
+    fx.bind_live_run(&live);
+    fx.claim(&claimed, "jrun-tick-claim");
+    fx.forge.merge_recent(611, &live, BOT, &fx.base);
+    fx.forge.merge_recent(612, &claimed, BOT, &fx.base);
+
+    let outcome = tick(&fx, false, false);
+    assert!(outcome.external_merge_settlements.is_empty(), "{outcome:?}");
+    assert_eq!(fx.status(&live), TaskStatus::InProgress);
+    assert_eq!(fx.status(&claimed), TaskStatus::Blocked);
+
+    // A follower (replica) host settles nothing even for an eligible task.
+    let eligible = fx.add_task("Tick follower", TaskStatus::Blocked, &[613]);
+    fx.forge.merge_recent(613, &eligible, BOT, &fx.base);
+    let replica = tick(&fx, false, true);
+    assert!(replica.external_merge_settlements.is_empty(), "{replica:?}");
+    assert_eq!(fx.status(&eligible), TaskStatus::Blocked);
+}
+
+#[test]
+fn clock_tick_forge_failure_does_not_fail_the_tick() {
+    let fx = Fixture::new();
+    let task = fx.add_task("Tick forge down", TaskStatus::Blocked, &[621]);
+    fx.forge.merge_recent(621, &task, BOT, &fx.base);
+    fx.forge.0.lock().unwrap().fail_merged = true;
+
+    let outcome = tick(&fx, false, false);
+    assert!(outcome.external_merge_settlements.is_empty(), "{outcome:?}");
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+
+    fx.forge.0.lock().unwrap().fail_merged = false;
+    let outcome = tick(&fx, false, false);
+    assert_eq!(outcome.external_merge_settlements.len(), 1);
+    assert_eq!(fx.status(&task), TaskStatus::Done);
 }

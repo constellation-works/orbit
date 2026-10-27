@@ -46,11 +46,13 @@
 //! authorization, records no merge intent or landing attempt, and leaves the
 //! revoked landing request revoked.
 //!
-//! Two entry points run it. Each `orbit run auto` admission pass settles from
+//! Three entry points run it. Each `orbit run auto` admission pass settles from
 //! one listing of the most recently merged PRs, and reads the forge only when
-//! a candidate task has a PR to match. `orbit task settle-merged <id>` reads
-//! the task's own PRs one by one, so a merge older than that listing settles
-//! too.
+//! a candidate task has a PR to match. Each scheduler clock tick
+//! (`orbit clock tick` / `orbit sweep`) runs the same owner pass for every
+//! registered, active owner workspace, so a merged task settles with no drain
+//! running. `orbit task settle-merged <id>` reads the task's own PRs one by
+//! one, so a merge older than that listing settles too.
 
 use std::collections::{BTreeMap, BTreeSet};
 
