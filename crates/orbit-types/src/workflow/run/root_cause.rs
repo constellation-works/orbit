@@ -22,6 +22,7 @@ use super::DeliveryRefusal;
 use super::failure_classification_text;
 use serde::{Deserialize, Serialize};
 
+use super::agent_blocker::{TASK_BLOCKED_BY_AGENT_ERROR_CODE, is_task_blocked_by_agent};
 use super::baseline::{BASELINE_RED_ERROR_CODE, is_baseline_red_failure};
 use super::provider_hold::{ProviderFailureClass, ProviderLimitFailure, failed_provider};
 use super::state::{PROVIDER_CAPACITY_ERROR_CODE, PROVIDER_LIMIT_ERROR_CODE, is_provider_limit};
@@ -75,6 +76,8 @@ pub enum HeldFailure {
     /// An owner-local run's selected model had no capacity; the task waits
     /// for another crew or the capacity backoff to end.
     ProviderCapacity,
+    /// An implementer declared a blocker; the task awaits an operator.
+    AgentBlocker,
     /// A typed fail-closed delivery decision left its candidate parked.
     DeliveryRefused(DeliveryRefusal),
 }
@@ -83,6 +86,9 @@ impl HeldFailure {
     /// The hold an unsuccessful run's diagnostic names, if it is one.
     #[must_use]
     pub fn of(error_code: Option<&str>, message: Option<&str>) -> Option<Self> {
+        if is_task_blocked_by_agent(error_code, message) {
+            return Some(Self::AgentBlocker);
+        }
         if let Some(refusal) = error_code.and_then(DeliveryRefusal::from_error_code) {
             return Some(Self::DeliveryRefused(refusal));
         }
@@ -122,6 +128,7 @@ impl HeldFailure {
     #[must_use]
     pub fn error_code(self) -> &'static str {
         match self {
+            Self::AgentBlocker => TASK_BLOCKED_BY_AGENT_ERROR_CODE,
             Self::BaselineRed => BASELINE_RED_ERROR_CODE,
             Self::DecisionPending => REVIEW_DECISION_PENDING_ERROR_CODE,
             Self::ProviderLimit => PROVIDER_LIMIT_ERROR_CODE,
