@@ -23,8 +23,9 @@ pub enum DeliveryRefusal {
     RequirementsUnsatisfied,
     /// Failed checks require the base's own result before candidate recovery.
     BaseChecksPending,
-    /// The completion deadline expired before the PR merged.
-    /// The PR stays open and the task stays in review.
+    /// The completion deadline expired while the last observed PR state was
+    /// unmerged. The task stays in review; the PR may have merged since, through
+    /// auto-merge or another actor, so the forge is authoritative.
     CompletionBudgetExpired,
     /// An auto-fix stop whose check evidence could not be read conclusively.
     CheckEvidenceInconclusive,

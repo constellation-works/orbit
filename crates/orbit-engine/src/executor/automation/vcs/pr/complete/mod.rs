@@ -10,9 +10,11 @@
 //! reading GitHub's merged state back, never inferred from having asked. In
 //! particular, enabling auto-merge is not terminal success: the poll continues
 //! until the PR reports `MERGED`, or the wait budget expires and completion
-//! returns the typed `CompletionBudgetExpired` hold. The PR stays open and the
-//! task stays in `review`; a provider read or subprocess timeout remains a
-//! failure.
+//! returns the typed `CompletionBudgetExpired` hold. That hold reports only the
+//! last PR state the wait observed, which was not merged, and the task stays in
+//! `review`. The PR may have merged since, through auto-merge (which the hold
+//! does not cancel) or another actor. A provider read or subprocess timeout
+//! remains a failure.
 //!
 //! Branch protection is respected by construction. The merge request is an
 //! ordinary provider merge (ungated runs may use `--auto`); no administrative

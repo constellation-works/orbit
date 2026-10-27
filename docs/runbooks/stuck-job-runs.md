@@ -172,10 +172,12 @@ Completion and owner landing also end `held` on typed parked decisions: a
 reported head changed, a repair is already dispatched, the PR is draft or
 closed, the task refuses promotion, owner landing needs a validated conflict
 repair, or required reviews/checks are unsatisfied without a red check. A
-completion budget expiry is also held as `delivery_completion_budget_expired`,
-leaving the PR open and the task in review; failed checks that need the base's
-own result are held as `delivery_base_checks_pending` until candidate recovery
-can proceed. Their `delivery_*` diagnostic codes are listed in
+completion budget expiry is also held as `delivery_completion_budget_expired`:
+the task stays in review, and the PR was unmerged at the last state the run
+observed but may have merged since, through auto-merge (a held run does not
+cancel it) or another actor, so check the forge. Failed checks that need the
+base's own result are held as `delivery_base_checks_pending` until candidate
+recovery can proceed. Their `delivery_*` diagnostic codes are listed in
 [completion and landing refusals](../CONFIG.md#completion-and-landing-refusals-are-held).
 The task keeps the state the refusing action left it in, and gate/auto parents
 pass the held child. Missing or contradictory evidence, forge read failures and
@@ -680,8 +682,10 @@ GraphQL. Invalid or truncated evidence, a changed head, base, policy or
 identity, a credential, permission, administrative-rule or other permanent
 refusal keep their ordinary failure. If the completion budget expires between
 reads or while waiting, completion instead returns the typed
-`delivery_completion_budget_expired` hold: the PR stays open, the task stays in
-review, and this read-only final-recovery path is not dispatched. A provider
+`delivery_completion_budget_expired` hold: the task stays in review, and this
+read-only final-recovery path is not dispatched. The PR state the hold reports is
+the last one completion read, so the PR may have merged since, through auto-merge
+(a hold does not cancel it) or another actor; check the forge. A provider
 read that itself errors or exhausts its subprocess timeout remains a failure,
 even when the completion deadline has also passed; it is not reclassified as a
 budget hold. A failed read never counts as passing required checks; the resumed
