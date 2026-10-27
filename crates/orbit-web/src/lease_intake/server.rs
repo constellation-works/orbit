@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbit_auth::scope::{HardLeasePermission, LeasePriorityCeiling, PrincipalClass};
+use orbit_common::security::redaction::{redact_all, redact_all_json};
 use orbit_core::runtime::task::locks::lease::{
     self, LeasePrincipalClass, LeasePriority, LeaseTokenGrant,
 };
@@ -310,7 +311,10 @@ fn dispatch(
         .map(str::to_owned);
     let response = match outcome {
         Ok(result) => LeaseIntakeResponse::Ok { result },
-        Err(error) => LeaseIntakeResponse::Error(error),
+        Err(mut error) => {
+            error.message = redact_all(&error.message);
+            LeaseIntakeResponse::Error(error)
+        }
     };
     let response =
         bounded_operation_response(runtime.as_deref(), operation, response, max_frame_bytes);
@@ -354,7 +358,9 @@ fn dispatch(
                 tracing::error!(%error, "lease intake could not write its audit row");
             }
         }
-        None => tracing::warn!(%payload, "lease intake operation for an unknown workspace"),
+        None => {
+            tracing::warn!(payload = %redact_all_json(payload), "lease intake operation for an unknown workspace")
+        }
     }
     response
 }

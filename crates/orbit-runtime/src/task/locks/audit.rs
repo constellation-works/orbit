@@ -1,6 +1,7 @@
 //! Audit events for task reservations and path leases.
 
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::{redact_all, redact_all_json};
 use orbit_store::contracts::{
     ExpiredTaskReservation, ReleasedTaskReservation, TaskReservationReleaseReason,
 };
@@ -109,17 +110,18 @@ pub(super) fn record_lease_audit_event(
     payload: Value,
 ) -> Result<(), OrbitError> {
     let workspace_id = runtime.workspace_id()?;
+    let lease_id = lease_id.map(redact_all);
     record_coordination_audit_event(
         runtime,
         CoordinationAuditEvent {
             command,
             tool_name,
             target_type: "lease",
-            target_id: lease_id,
+            target_id: lease_id.as_deref(),
             task_id: None,
             workspace_id: Some(&workspace_id),
             status,
-            payload,
+            payload: redact_all_json(payload),
         },
     )
 }

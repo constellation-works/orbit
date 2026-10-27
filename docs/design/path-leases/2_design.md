@@ -409,7 +409,7 @@ operations to Orbit over a local socket.
   separately from the operator's binary (an owner's update procedure gains a `sudo install`
   step for it).
 - **Audit in two places.** Orbit audits every intake operation with the principal, token id and
-  client address. The listener audits what never reaches Orbit, failed authentication and
+  client address. Owner lease audit payloads and intake errors redact known secret shapes, including tokens embedded in selectors; the mint response still returns the secret once. The listener audits what never reaches Orbit, failed authentication and
   rejected requests, in its own store (§7.3). A refusal before a token is verified (no token, an
   unknown one, an unresolvable address, a rate limit) records the remote address, route and
   reason but no principal, since none was authenticated; principal and token id appear only when

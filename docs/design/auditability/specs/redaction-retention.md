@@ -26,6 +26,7 @@ Auditability and secrecy pull in opposite directions. Orbit needs faithful recor
   scrubbed for sensitive live environment values and known secret patterns before
   they become downstream step input or persisted pipeline state. JSON keys and
   non-string values retain their types.
+- Lease audit payload string values, including nested selectors and intake errors, are scrubbed with the shared redactor before persistence; lease target IDs and returned intake errors are scrubbed too. Non-secret principal, public token ID, client address, operation and outcome remain available for attribution. Minted token secrets remain available only in the one-time mint response.
 - HTTP-shaped payload redaction covers authorization headers, x-api-key headers, JSON API-key fields, and bearer tokens.
 - Shared pattern redaction covers high-confidence provider token shapes embedded in prose; exact whole-token artifact fields are rejected instead of persisted.
 - Shared pattern redaction covers structural OpenSSH fingerprints, public-key comments, and connection hosts without applying a general hostname or high-entropy-string heuristic.
