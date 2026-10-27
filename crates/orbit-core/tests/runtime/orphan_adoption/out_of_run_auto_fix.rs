@@ -772,6 +772,119 @@ fn holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired() 
     );
 }
 
+/// ORB-18801: a run whose failure hook published the pull request never
+/// recorded `pr_open`, so the drain used to skip with `no_pull_request`
+/// ("the run did not open a pull request"). The handoff checkpoint names an
+/// open pull request on the same terms as a run-opened one for readiness: the
+/// skip names the requeue action that can continue the published candidate.
+fn a_failure_handoff_pull_request_without_pr_open_names_the_requeue_action() {
+    let fx = fixture();
+    let leaf = fx.stopped_leaf(97, "review", Shelf::Escalated);
+    // The source run opened no pull request: drop its `pr_open` checkpoint
+    // and keep only the failure hook's publication of the task's PR.
+    let mut state = fx.jobs.read_run_state(&leaf.run).unwrap().unwrap();
+    if let Some(pipeline) = state.pipeline.as_object_mut() {
+        pipeline.remove("pr_open");
+    }
+    state.record_failure_activity(
+        "pr_failure_handoff".into(),
+        "complete_pr".into(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "blocked_conflict_pr",
+            "task_id": leaf.task,
+            "pr_number": leaf.number.to_string(),
+            "branch": leaf.head,
+            "head_sha": "handoff-head",
+            "task_spec_digest": "spec-digest",
+        }),
+    );
+    fx.jobs.write_run_state(&leaf.run, &state).unwrap();
+    fx.blocked(&leaf, "handoff-head", "orbit-bot", true, &[]);
+    // A handoff naming another pull request is not this task's publication.
+    let other = fx.stopped_leaf(98, "review", Shelf::Escalated);
+    let mut other_state = fx.jobs.read_run_state(&other.run).unwrap().unwrap();
+    if let Some(pipeline) = other_state.pipeline.as_object_mut() {
+        pipeline.remove("pr_open");
+    }
+    other_state.record_failure_activity(
+        "pr_failure_handoff".into(),
+        "complete_pr".into(),
+        json!({
+            "phase": "failure_handoff",
+            "decision": "blocked_conflict_pr",
+            "task_id": other.task,
+            "pr_number": "999",
+            "branch": other.head,
+            "head_sha": "other-head",
+            "task_spec_digest": "spec-digest",
+        }),
+    );
+    fx.jobs.write_run_state(&other.run, &other_state).unwrap();
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+    assert_eq!(pass["auto_fix"]["started"], json!([]), "{pass}");
+    assert_eq!(
+        repair_skip(&pass, &other.task).as_deref(),
+        Some("no_pull_request"),
+        "a handoff for another pull request keeps the old skip: {pass}"
+    );
+    let skip = pass["auto_fix"]["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == leaf.task)
+        .unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(skip["reason"], "failure_handoff", "{pass}");
+    assert_ne!(skip["reason"], "no_pull_request", "{pass}");
+    assert_eq!(skip["pr_number"], leaf.number.to_string(), "{pass}");
+    let detail = skip["detail"].as_str().unwrap_or("");
+    assert!(
+        detail.contains("orbit task requeue <task-id>"),
+        "the skip names the requeue action with placeholders only: {pass}"
+    );
+    assert!(
+        detail.contains("--reason '<why this candidate can continue>'"),
+        "the skip names the requeue reason placeholder: {pass}"
+    );
+    assert!(
+        !detail.contains(&leaf.task),
+        "the detail uses placeholders, not the task id: {pass}"
+    );
+    assert!(
+        !detail.contains(&leaf.number.to_string()),
+        "the detail uses placeholders, not the pull request number: {pass}"
+    );
+    assert!(
+        fx.retries(&leaf.run).is_empty(),
+        "a handoff is not resumed: {pass}"
+    );
+    assert!(
+        fx.retries(&other.run).is_empty(),
+        "a mismatched handoff is not resumed: {pass}"
+    );
+
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    let skipped = readiness["out_of_run_auto_fix"].as_array().unwrap();
+    assert!(
+        skipped.iter().any(|entry| entry["pr_number"] == "97"
+            && entry["state"] == "skipped"
+            && entry["reason"] == "failure_handoff"),
+        "{readiness}"
+    );
+    assert!(
+        skipped
+            .iter()
+            .filter(|entry| entry["pr_number"] == "97")
+            .all(|entry| entry["reason"] != "no_pull_request"),
+        "{readiness}"
+    );
+}
+
 fn the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs() {
     let fx = fixture();
     // A pull request whose in-run auto-fix already spent its three repairs.
@@ -1015,6 +1128,7 @@ crate::scenario_table!(
     skipped_repairs_are_checkpointed_and_visible_in_readiness,
     full_capacity_still_reports_the_pull_requests_left_alone,
     red_checks_and_review_or_requeued_tasks_are_repaired_too,
+    a_failure_handoff_pull_request_without_pr_open_names_the_requeue_action,
     a_genuine_forge_failure_still_defers_later_blocker_reads,
     holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired,
     the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs,
