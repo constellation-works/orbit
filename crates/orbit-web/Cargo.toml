@@ -20,8 +20,8 @@ clap.workspace = true
 flate2.workspace = true
 futures-core.workspace = true
 getrandom.workspace = true
-hyper.workspace = true
-hyper-util.workspace = true
+hyper = { workspace = true, features = ["server"] }
+hyper-util = { workspace = true, features = ["service"] }
 # Lease intake socket: the token scope the lease listener sends.
 orbit-auth = { path = "../orbit-auth" }
 orbit-cmd = { path = "../orbit-cmd" }
@@ -38,7 +38,7 @@ tokio-rustls.workspace = true
 tokio = { workspace = true, features = ["io-util", "time", "process"] }
 # Answers `/api/on/<serving host>/…` by dispatching into the local router.
 tower.workspace = true
-tower-http.workspace = true
+tower-http = { workspace = true, features = ["limit", "timeout"] }
 tracing.workspace = true
 url.workspace = true
 

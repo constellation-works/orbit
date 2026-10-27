@@ -164,7 +164,6 @@ impl LeaseTokenStore {
                 verb: None,
                 reason: None,
                 actor: Some(actor),
-                origin: None,
             },
         )?;
         transaction.commit().map_err(sqlite_store_error)?;
@@ -230,7 +229,6 @@ impl LeaseTokenStore {
                 verb: None,
                 reason: None,
                 actor: Some(actor),
-                origin: None,
             },
         )?;
         transaction.commit().map_err(sqlite_store_error)?;
@@ -252,33 +250,16 @@ impl LeaseTokenStore {
         verb: LeaseTokenVerb,
         now: DateTime<Utc>,
     ) -> Result<LeaseTokenDecision, OrbitError> {
-        self.verify_with_origin(secret, Some(workspace), verb, now, None)
+        self.verify_lease_token_request(secret, Some(workspace), verb, now, true)
     }
 
-    /// [`verify`](Self::verify) for a listener request from `origin`.
-    ///
-    /// `workspace` is `None` when the request names none: the token's only
-    /// workspace is used, and a token with several is refused as
-    /// [`LeaseTokenRefusal::WorkspaceUnnamed`]. A refusal's audit row also
-    /// carries the request's remote address and route.
-    pub fn verify_listener_request(
+    fn verify_lease_token_request(
         &mut self,
         secret: &str,
         workspace: Option<&str>,
         verb: LeaseTokenVerb,
         now: DateTime<Utc>,
-        origin: &LeaseRequestOrigin,
-    ) -> Result<LeaseTokenDecision, OrbitError> {
-        self.verify_with_origin(secret, workspace, verb, now, Some(origin))
-    }
-
-    fn verify_with_origin(
-        &mut self,
-        secret: &str,
-        workspace: Option<&str>,
-        verb: LeaseTokenVerb,
-        now: DateTime<Utc>,
-        origin: Option<&LeaseRequestOrigin>,
+        audit_refusal: bool,
     ) -> Result<LeaseTokenDecision, OrbitError> {
         let found = if is_lease_token_secret_shape(secret) {
             let digest = lease_token_digest(secret);
@@ -329,75 +310,59 @@ impl LeaseTokenStore {
                 }))
             }
             Err(refusal) => {
-                insert_audit(
-                    &self.connection,
-                    &AuditRow {
-                        at: now,
-                        event: "verify_refused",
-                        token_id: found.as_ref().map(|record| record.token_id.as_str()),
-                        principal: found.as_ref().map(|record| record.scope.principal.as_str()),
-                        workspace,
-                        verb: Some(verb.as_str()),
-                        reason: Some(refusal.as_str()),
-                        actor: None,
-                        origin,
-                    },
-                )?;
+                if audit_refusal {
+                    insert_audit(
+                        &self.connection,
+                        &AuditRow {
+                            at: now,
+                            event: "verify_refused",
+                            token_id: found.as_ref().map(|record| record.token_id.as_str()),
+                            principal: found.as_ref().map(|record| record.scope.principal.as_str()),
+                            workspace,
+                            verb: Some(verb.as_str()),
+                            reason: Some(refusal.as_str()),
+                            actor: None,
+                        },
+                    )?;
+                }
                 Ok(LeaseTokenDecision::Deny(refusal))
             }
         }
     }
 
-    /// Audit a listener refusal that no token decision covers: a missing
-    /// token, an unresolvable client address, a rate limit, or a request
-    /// refused after authentication without reaching Orbit.
-    pub fn record_listener_refusal(
+    /// Authenticate for a rate-limited surface that coalesces its own refusals.
+    /// The surface must record every denial with the keyed limiter.
+    pub fn verify_listener_coalesced(
         &mut self,
-        refusal: &LeaseListenerRefusal<'_>,
-    ) -> Result<(), OrbitError> {
-        insert_audit(
-            &self.connection,
-            &AuditRow {
-                at: refusal.at,
-                event: "listener_refused",
-                token_id: refusal.token_id,
-                principal: refusal.principal,
-                workspace: refusal.workspace,
-                verb: refusal.verb.map(LeaseTokenVerb::as_str),
-                reason: Some(refusal.reason),
-                actor: None,
-                origin: Some(refusal.origin),
-            },
-        )
+        secret: &str,
+        workspace: Option<&str>,
+        verb: LeaseTokenVerb,
+        now: DateTime<Utc>,
+    ) -> Result<LeaseTokenDecision, OrbitError> {
+        self.verify_lease_token_request(secret, workspace, verb, now, false)
     }
-}
 
-/// Where a listener request came from, for its audit row.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LeaseRequestOrigin {
-    /// The resolved client address, or the TCP peer when none resolved.
-    pub remote_address: String,
-    /// Method and path, such as `POST /api/leases`.
-    pub route: String,
-}
-
-/// A listener refusal to audit. It never carries a secret.
-#[derive(Debug, Clone)]
-pub struct LeaseListenerRefusal<'a> {
-    /// When it was refused.
-    pub at: DateTime<Utc>,
-    /// The request.
-    pub origin: &'a LeaseRequestOrigin,
-    /// Stable reason, such as `missing_token` or `rate_limited`.
-    pub reason: &'a str,
-    /// The authenticated token's id, when known.
-    pub token_id: Option<&'a str>,
-    /// The authenticated token's principal, when known.
-    pub principal: Option<&'a str>,
-    /// The workspace the request addressed, when known.
-    pub workspace: Option<&'a str>,
-    /// The verb the request needed, when known.
-    pub verb: Option<LeaseTokenVerb>,
+    /// Persist a bounded batch of aggregate snapshots, updating each window's
+    /// existing row rather than appending one row per refused request.
+    pub fn record_limit_audits(
+        &mut self,
+        rows: &[crate::limiter::LimitAudit],
+    ) -> Result<(), OrbitError> {
+        let transaction = self.connection.transaction().map_err(sqlite_store_error)?;
+        for row in rows {
+            transaction.execute(
+                "INSERT INTO lease_listener_limit_audit (limit_key, limit_name, first_at, last_at, count)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (limit_key, limit_name, first_at) DO UPDATE
+                 SET last_at = max(last_at, excluded.last_at), count = max(count, excluded.count)",
+                params![audit_text(&row.key), row.limit,
+                    row.first_at.to_rfc3339_opts(SecondsFormat::Nanos, true),
+                    row.last_at.to_rfc3339_opts(SecondsFormat::Nanos, true),
+                    row.count.min(i64::MAX as u64) as i64],
+            ).map_err(sqlite_store_error)?;
+        }
+        transaction.commit().map_err(sqlite_store_error)
+    }
 }
 
 /// Who is running a token command, for the audit row: the `sudo` caller when
@@ -436,18 +401,16 @@ struct AuditRow<'a> {
     verb: Option<&'a str>,
     reason: Option<&'a str>,
     actor: Option<&'a str>,
-    origin: Option<&'a LeaseRequestOrigin>,
 }
 
 fn insert_audit(connection: &Connection, row: &AuditRow<'_>) -> Result<(), OrbitError> {
     // A client can send a token where a workspace or a path belongs.
     let workspace = row.workspace.map(audit_text);
-    let route = row.origin.map(|origin| audit_text(&origin.route));
     connection
         .execute(
             "INSERT INTO lease_token_audit \
-             (at, event, token_id, principal, workspace, verb, reason, actor, remote_address, \
-             route) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             (at, event, token_id, principal, workspace, verb, reason, actor) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 timestamp(row.at),
                 row.event,
@@ -457,8 +420,6 @@ fn insert_audit(connection: &Connection, row: &AuditRow<'_>) -> Result<(), Orbit
                 row.verb,
                 row.reason,
                 row.actor,
-                row.origin.map(|origin| origin.remote_address.as_str()),
-                route,
             ],
         )
         .map(|_| ())

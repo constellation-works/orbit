@@ -59,6 +59,15 @@ const MIGRATIONS: &[&str] = &[
          FROM lease_token_audit;
      DROP TABLE lease_token_audit;
      ALTER TABLE lease_token_audit_v2 RENAME TO lease_token_audit;",
+    // v3: coalesced listener rejections; no per-request row on a flooded path.
+    "CREATE TABLE lease_listener_limit_audit (
+         limit_key TEXT NOT NULL,
+         limit_name TEXT NOT NULL,
+         first_at TEXT NOT NULL,
+         last_at TEXT NOT NULL,
+         count INTEGER NOT NULL,
+         PRIMARY KEY (limit_key, limit_name, first_at)
+     );",
 ];
 
 /// Bring the store to the newest schema this binary knows.

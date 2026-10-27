@@ -377,9 +377,54 @@ unset unless the sudo prerequisite above holds on this host.
    ```
 
    Keys and defaults are in `orbit config keys` under `lease.listener.`.
-   `lease.listener.limits.failed_auth` (default 10) and
-   `lease.listener.limits.failed_auth_window_seconds` (default 300) set when
-   an address that keeps failing authentication gets 429.
+   Limits below are read from the listener user's global configuration,
+   validated at load and reset on restart. Put overrides in
+   `[lease.listener.limits]`; invalid values name the key. Defaults suit one
+   small-team listener process:
+
+   | Key under `lease.listener.limits` | Default | Range |
+   |---|---|---|
+   | `failed_auth` | 10 | 1–1000 |
+   | `failed_auth_window_seconds` | 300 | 1–86400 |
+   | `address_per_minute` | 120 | 1–100000 |
+   | `ipv6_prefix_len` | 64 | 0–128 |
+   | `token_reads_per_minute` | 60 | 1–100000 |
+   | `token_writes_per_minute` | 20 | 1–100000 |
+   | `max_streams_per_token` | 2 | 1–100 |
+   | `max_in_flight_per_token` | 8 | 1–1000 |
+   | `max_connections` | 64 | 1–10000 |
+   | `max_in_flight_requests` | 16 | 1–1000 |
+   | `max_body_bytes` | 65536 | 1–1048576 |
+   | `header_timeout_seconds` | 5 | 1–300 |
+   | `request_timeout_seconds` | 10 | 1–300 |
+   | `max_tracked_keys` | 4096 | 3–65536 |
+
+   All routes use the address budget before token lookup. A 401 or 403 also
+   counts against `failed_auth`; token reads (`GET` and `POST …/check`) and
+   writes have separate minute budgets that follow the token across networks.
+   IPv6 shares a /64 by default; IPv4-mapped addresses count as IPv4. Trusted
+   proxies must append the real client address; changing entries to its left
+   never gives a new budget. At the tracked-key cap, new addresses share a
+   conservative overflow bucket; new tokens share a separate one. Live
+   budgets are never evicted to admit new identities.
+
+   Rate limits return 429 with `Retry-After`, body limits 413, handler/body
+   timeouts 408 and concurrency limits 503. Connection limits include TLS
+   handshakes; both handshakes and HTTP headers have the header timeout.
+   Connections close after their response; headers allow at most 64 fields
+   and a 16 KiB parsing buffer. One extra bounded refusal lane can complete
+   TLS and return 503; further saturated TLS connections close immediately
+   (plain HTTP gets a best-effort 503). Open response bodies retain global
+   and token concurrency; the separate stream counter is ready for future
+   listener SSE routes, which are not yet exposed.
+
+   Refusals never reach the owner's store. The listener coalesces them by
+   canonical key, limit/reason and window in `lease_listener_limit_audit` in
+   its own `lease-tokens.db`, recording count and first/last times without
+   principals, secrets, paths or queries. First snapshots are prompt and
+   subsequent counts flush every second and at graceful shutdown; abrupt
+   termination can lose unflushed counts. Token administration retains its
+   `lease_token_audit` trail. Use one listener process to share these budgets.
 
    For native TLS, provision a PEM certificate chain (leaf first) and its
    matching unencrypted PEM key at those paths, readable by `orbit-lease`.

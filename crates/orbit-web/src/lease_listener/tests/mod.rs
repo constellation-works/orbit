@@ -80,6 +80,7 @@ fn config(intake_socket: PathBuf, client_address: LeaseClientAddressPolicy) -> L
         intake_socket,
         failed_auth_limit: 1000,
         failed_auth_window: Duration::from_secs(300),
+        limits: Default::default(),
     }
 }
 

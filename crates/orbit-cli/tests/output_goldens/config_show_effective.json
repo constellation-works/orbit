@@ -231,6 +231,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "lease.listener.limits.address_per_minute": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "lease.listener.limits.failed_auth": {
       "scope": "built-in",
       "state": "default",
@@ -239,6 +246,83 @@
       "shadowed_by": []
     },
     "lease.listener.limits.failed_auth_window_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.header_timeout_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.ipv6_prefix_len": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_body_bytes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_connections": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_in_flight_per_token": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_in_flight_requests": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_streams_per_token": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.max_tracked_keys": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.request_timeout_seconds": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.token_reads_per_minute": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
+    "lease.listener.limits.token_writes_per_minute": {
       "scope": "built-in",
       "state": "default",
       "tier": "advanced",
