@@ -1,15 +1,15 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-25
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Accepted
 feature: auto-tasks
 doc_role: design
 type: design
 summary: Current implementation of the auto-task record, due-math, host-local cursor, generic scheduler, CRUD surfaces, the on-demand manual mint, and the dashboard Operations surface.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations.js"]
+paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations.js"]
 related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327]
 ---
@@ -171,6 +171,12 @@ and carries `detail` instead. It explains why a due
 definition minted nothing — `orbit auto-task show <name>` renders it under
 `cursor`, and the dashboard carries it on `last_evaluation.last_skip`. A fire
 clears it.
+
+`orbit.auto_task.list` projects the same cursor into a bounded `last_fire`:
+`{ kind: "fired", at, task_id, task_status }` for a fire,
+`{ kind: "skipped", at, skip_reason }` for the latest precondition skip, or
+`null` before either. The fired projection reads the task's current status by
+its ID. It exposes no run ID, logs, step output, or skip comparison metadata.
 
 ## 4. The scheduler pass
 

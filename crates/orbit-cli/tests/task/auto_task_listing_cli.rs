@@ -40,6 +40,103 @@ fn bounded(fixture: &Fixture) -> Value {
     serde_json::from_slice(&output).unwrap()
 }
 
+/// [ORB-19112] Plain agent-capability listing exposes only the latest
+/// scheduler fire or skip, with the minted task's current status.
+#[test]
+fn listing_reports_last_fire_outcomes_from_scheduler_cursors() {
+    const TEST: &str =
+        "auto_task_listing_cli::listing_reports_last_fire_outcomes_from_scheduler_cursors";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    let runtime = open_runtime(&fixture);
+    for name in ["fired", "skipped", "never"] {
+        runtime
+            .auto_task_add(AutoTaskAddParams {
+                name: name.into(),
+                description: "last fire listing fixture".into(),
+                schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+                template: AutoTaskTemplate {
+                    title: format!("Last fire {name}"),
+                    description: "Last fire listing fixture".into(),
+                    acceptance_criteria: vec![],
+                    task_type: TaskType::Chore,
+                    tags: vec![],
+                    required_tools: vec![],
+                    context_files: vec![],
+                    priority: TaskPriority::Medium,
+                    complexity: None,
+                    crew: None,
+                    status: TaskStatus::Backlog,
+                },
+                dedupe: DedupePolicy::Always,
+            })
+            .unwrap();
+    }
+    let task = runtime.auto_task_mint("fired").unwrap();
+    let task_id = task.id.to_string();
+    let cursor_path =
+        orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
+    let baseline_at = (Utc::now() - Duration::hours(2)).to_rfc3339();
+    let fired_at = (Utc::now() - Duration::hours(1)).to_rfc3339();
+    let skipped_at = Utc::now().to_rfc3339();
+    fs::create_dir_all(cursor_path.parent().unwrap()).unwrap();
+    fs::write(
+        cursor_path,
+        json!({"definitions": {
+            "fired": {
+                "baseline_at": baseline_at,
+                "last_slot": fired_at,
+                "last_fired_at": fired_at,
+                "last_task_id": task_id,
+            },
+            "skipped": {
+                "baseline_at": baseline_at,
+                "last_skip": {
+                    "at": skipped_at,
+                    "slot": skipped_at,
+                    "reason": "no_blocked_candidates",
+                },
+            },
+            "never": {"baseline_at": baseline_at},
+        }})
+        .to_string(),
+    )
+    .unwrap();
+
+    let rows = runtime
+        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .unwrap();
+    let fired = named(&rows, "fired");
+    assert_eq!(
+        fired["last_fire"],
+        json!({
+            "kind": "fired",
+            "at": fired_at,
+            "task_id": task.id,
+            "task_status": task.status,
+        }),
+        "the fired task's current status is read by id"
+    );
+    let skipped = named(&rows, "skipped");
+    assert_eq!(
+        skipped["last_fire"],
+        json!({
+            "kind": "skipped",
+            "at": skipped_at,
+            "skip_reason": "no_blocked_candidates",
+        })
+    );
+    assert!(named(&rows, "never")["last_fire"].is_null());
+    for row in [fired, skipped] {
+        assert!(row.get("run_id").is_none(), "{row}");
+        assert!(row.get("logs").is_none(), "{row}");
+        assert!(row.get("step_output").is_none(), "{row}");
+    }
+}
+
 /// [ORB-12867] An enabled delivery definition another machine owns never
 /// fires here. The CLI already said so; MCP and its bounded view now report
 /// the same reason and a non-live state instead of looking live.
