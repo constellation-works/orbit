@@ -21,8 +21,9 @@ use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 /// sampling and explicit mode-pooled fallback [ORB-18687]. 5: blocked,
 /// failed and abandoned attempts, returns and blocked tasks [ORB-18688].
 /// 6: gap fit holds work below the ceiling where the drain enforces it
-/// [ORB-18689].
-pub(super) const MODEL_VERSION: u32 = 6;
+/// [ORB-18689]. 7: sub-second and same-instant returns stay drawable for
+/// a fresh blocked attempt [ORB-18853].
+pub(super) const MODEL_VERSION: u32 = 7;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [

@@ -379,3 +379,133 @@ fn abandoned_and_blocked_tasks_do_not_corrupt_settled_actuals() {
         },
     );
 }
+
+/// One blocked episode that returns `delay` after leaving the queue, then
+/// one delivery. A zero delay is a return at the same instant as the block.
+fn block_that_returned(fixture: &Fixture, delay: Duration) {
+    let at = Utc::now() - Duration::days(10);
+    let blocked = at + Duration::hours(1);
+    let back = blocked + delay;
+    dated_task(
+        fixture,
+        TaskStatus::Done,
+        &[
+            (at, TaskStatus::InProgress),
+            (blocked, TaskStatus::Blocked),
+            (back, TaskStatus::Backlog),
+            (back + Duration::hours(1), TaskStatus::InProgress),
+            (back + Duration::hours(2), TaskStatus::Review),
+            (back + Duration::hours(3), TaskStatus::Done),
+        ],
+    );
+}
+
+fn assert_observed_return_can_finish(forecast: &Value, id: &str) {
+    let completion = prediction(forecast, id)["completion_probability"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        completion >= 0.99,
+        "a recorded return must stay possible for a new block: {completion} {}",
+        forecast["forecast"]
+    );
+    let no_return = forecast["forecast"]["outcomes"]["no_return"]
+        .as_f64()
+        .unwrap();
+    assert!(
+        no_return <= 0.02,
+        "observed returns must not become no-return mass: {no_return}"
+    );
+    assert!(
+        forecast["forecast"]["time_to_drain_hours"]["p50"]
+            .as_f64()
+            .is_some(),
+        "time to drain p50: {}",
+        forecast["forecast"]["time_to_drain_hours"]
+    );
+    assert!(
+        forecast["forecast"]["time_to_drain_hours"]["p90"]
+            .as_f64()
+            .is_some(),
+        "time to drain p90: {}",
+        forecast["forecast"]["time_to_drain_hours"]
+    );
+    assert_eq!(forecast["coverage"]["return_tail_unsupported"], 0);
+}
+
+#[test]
+fn subsecond_and_immediate_returns_stay_drawable() {
+    isolated(
+        "backlog_outcomes::subsecond_and_immediate_returns_stay_drawable",
+        || {
+            for delay in [Duration::milliseconds(500), Duration::zero()] {
+                let fixture = Fixture::new();
+                one_hour_history(&fixture);
+                block_that_returned(&fixture, delay);
+                let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
+                let forecast = forecast(&fixture);
+                assert_eq!(forecast["model_version"], 7);
+                assert_eq!(
+                    forecast["inputs"]["outcomes"]["episodes"],
+                    json!({"blocked": 1, "delivered": 1})
+                );
+                assert_eq!(
+                    forecast["inputs"]["outcomes"]["returns"],
+                    json!({"waits": 1, "returned": 1, "resolved": 0, "absorbed": 0, "censored": 0})
+                );
+                assert_observed_return_can_finish(&forecast, &id);
+            }
+
+            // Already waiting two hours: the one-hour returns have elapsed,
+            // so the draw is the remainder of the day-later return.
+            let aged = Fixture::new();
+            one_hour_history(&aged);
+            block_that_returned(&aged, Duration::hours(1));
+            block_that_returned(&aged, Duration::hours(1));
+            block_that_returned(&aged, Duration::hours(24));
+            dated_task(
+                &aged,
+                TaskStatus::Blocked,
+                &[(Utc::now() - Duration::hours(2), TaskStatus::Blocked)],
+            );
+            let aged_forecast = forecast(&aged);
+            let blocked = aged_forecast["forecast"]["task_predictions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["status"] == "blocked")
+                .unwrap();
+            let start = blocked["predicted_start_hours"]["p50"].as_f64().unwrap();
+            assert!(
+                (start - 22.0).abs() < 0.1,
+                "age must drop returns already elapsed: {blocked}"
+            );
+
+            // A censored wait clamped to the same instant as the only
+            // return leaves an unknown tail at age 0. A fresh block is
+            // not past that observation.
+            let fresh = Fixture::new();
+            one_hour_history(&fresh);
+            block_that_returned(&fresh, Duration::zero());
+            dated_task(
+                &fresh,
+                TaskStatus::Blocked,
+                &[(Utc::now() + Duration::hours(1), TaskStatus::Blocked)],
+            );
+            let id = backlog_task(&fresh, "Fresh", &["file:fresh.rs"], &[], &[]);
+            let fresh_forecast = forecast(&fresh);
+            assert_eq!(
+                fresh_forecast["inputs"]["outcomes"]["returns"]["censored"],
+                1
+            );
+            assert_eq!(fresh_forecast["coverage"]["return_tail_unsupported"], 0);
+            let completion = prediction(&fresh_forecast, &id)["completion_probability"]
+                .as_f64()
+                .unwrap();
+            assert!(
+                completion > 0.6,
+                "the same-instant return must still be drawn: {completion}"
+            );
+        },
+    );
+}
