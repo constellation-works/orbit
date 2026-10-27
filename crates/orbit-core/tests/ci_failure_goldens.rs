@@ -626,6 +626,116 @@ fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
     );
 }
 #[test]
+fn ci_compiler_observation_receipt_without_comment_is_appended_once() {
+    if !isolated("ci_compiler_observation_receipt_without_comment_is_appended_once") {
+        return;
+    }
+    use orbit_types::task::TaskArtifact;
+    let (_root, runtime, commits) = operator_fixture("");
+    let path = r"crates\orbit-core\src\application\distributed\entry.rs";
+    let message = "cannot find `git_sandbox` in `runtime`";
+    let first_log = compiler_log("E0433", message, path, 277, 25);
+    let second_log = compiler_log("E0433", message, path, 280, 28);
+    let first = file(&runtime, vec![failure(&first_log, 0, &commits[0])]);
+    let owner = first["filed"][0]["task_id"].as_str().unwrap();
+    let second_run = failure(&second_log, 1, &commits[1]);
+    let second = file(&runtime, vec![second_run.clone()]);
+    assert_eq!(second["filed_count"], 0, "{second}");
+    let failure_key = second["skipped_existing"][0]["failure_key"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // A matching receipt whose comment is already present adds no second comment.
+    let comments_before = runtime.get_task_comments(owner).unwrap();
+    file(&runtime, vec![second_run]);
+    assert_eq!(runtime.get_task_comments(owner).unwrap(), comments_before);
+    // Seed the exact receipt a later observation would write, without its
+    // comment: the state left when the artifact commit succeeded and the
+    // history write failed.
+    let third_run = failure(&second_log, 2, &commits[1]);
+    let third_content = format!(
+        "{{\"run_id\":\"12\",\"run_url\":\"{}\",\"checkout\":\"{}\",\"failure_key\":\"{failure_key}\"}}",
+        third_run["url"].as_str().unwrap(),
+        commits[1]
+    );
+    let third_path = format!(
+        "ci-compiler-observations/{}.json",
+        orbit_common::security::release::sha256_hex(third_content.as_bytes())
+    );
+    runtime
+        .update_task_as_human(
+            owner,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(&third_path, &third_content)],
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    assert!(
+        runtime
+            .get_task_artifact(owner, &third_path)
+            .unwrap()
+            .is_some()
+    );
+    let comments_before = runtime.get_task_comments(owner).unwrap();
+    assert!(
+        !comments_before
+            .iter()
+            .any(|comment| comment.message.contains("run `12`"))
+    );
+    let recovered = file(&runtime, vec![third_run.clone()]);
+    assert_eq!(recovered["filed_count"], 0, "{recovered}");
+    let comments = runtime.get_task_comments(owner).unwrap();
+    assert_eq!(comments.len(), comments_before.len() + 1);
+    assert_eq!(
+        comments.last().unwrap().message,
+        format!(
+            "CI compiler observation: run `12` {}; checkout `{}`; exact failure key `ci-failure:{failure_key}`.",
+            third_run["url"].as_str().unwrap(),
+            commits[1]
+        )
+    );
+    file(&runtime, vec![third_run]);
+    assert_eq!(runtime.get_task_comments(owner).unwrap(), comments);
+    // A receipt at the identity path whose stored observation differs still
+    // errors and writes no comment.
+    let fourth_run = failure(&second_log, 3, &commits[1]);
+    let expected_content = format!(
+        "{{\"run_id\":\"13\",\"run_url\":\"{}\",\"checkout\":\"{}\",\"failure_key\":\"{failure_key}\"}}",
+        fourth_run["url"].as_str().unwrap(),
+        commits[1]
+    );
+    let fourth_path = format!(
+        "ci-compiler-observations/{}.json",
+        orbit_common::security::release::sha256_hex(expected_content.as_bytes())
+    );
+    let mismatched_content = format!(
+        "{{\"run_id\":\"13\",\"run_url\":\"{}\",\"checkout\":\"{}\",\"failure_key\":\"{failure_key}\"}}",
+        fourth_run["url"].as_str().unwrap(),
+        commits[0]
+    );
+    runtime
+        .update_task_as_human(
+            owner,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(&fourth_path, &mismatched_content)],
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
+    let comments_before = runtime.get_task_comments(owner).unwrap();
+    let error = file_result(&runtime, vec![fourth_run]).expect_err("mismatched receipt must error");
+    assert!(
+        error
+            .to_string()
+            .contains("compiler observation receipt does not match its identity"),
+        "{error}"
+    );
+    assert_eq!(runtime.get_task_comments(owner).unwrap(), comments_before);
+}
+#[test]
 fn ci_landed_compiler_repair_does_not_cover_locationless_diagnostic() {
     if !isolated("ci_landed_compiler_repair_does_not_cover_locationless_diagnostic") {
         return;

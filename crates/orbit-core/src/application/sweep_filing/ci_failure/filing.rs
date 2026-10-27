@@ -831,16 +831,6 @@ fn retain_compiler_observations(
             "ci-compiler-observations/{}.json",
             sha256_hex(content.as_bytes())
         );
-        if let Some(artifact) = runtime.get_task_artifact(owner, &path)? {
-            let stored: CiCompilerObservation = serde_json::from_slice(&artifact.content)
-                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
-            if stored != observation {
-                return Err(OrbitError::InvalidInput(
-                    "compiler observation receipt does not match its identity".into(),
-                ));
-            }
-            continue;
-        }
         let message = format!(
             "CI compiler observation: run `{}` {}; checkout `{}`; exact failure key `{CI_FAILURE_KEY_TAG_PREFIX}{}`.",
             observation.run_id, observation.run_url, observation.checkout, observation.failure_key,
@@ -849,6 +839,27 @@ fn retain_compiler_observations(
             .get_task_comments(owner)?
             .iter()
             .any(|comment| comment.message == message);
+        if let Some(artifact) = runtime.get_task_artifact(owner, &path)? {
+            let stored: CiCompilerObservation = serde_json::from_slice(&artifact.content)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            if stored != observation {
+                return Err(OrbitError::InvalidInput(
+                    "compiler observation receipt does not match its identity".into(),
+                ));
+            }
+            // The receipt and the comment are separate writes, so a stored
+            // receipt does not prove the comment landed: append it if missing.
+            if !already_commented {
+                runtime.update_task(
+                    owner,
+                    TaskUpdateParams {
+                        comment: Some(message),
+                        ..Default::default()
+                    },
+                )?;
+            }
+            continue;
+        }
         runtime.update_task(
             owner,
             TaskUpdateParams {
