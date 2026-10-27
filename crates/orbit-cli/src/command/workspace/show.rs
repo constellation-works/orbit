@@ -1,7 +1,12 @@
 use std::path::Path;
 
 use clap::Args;
-use orbit_core::OrbitRuntime;
+use orbit_config::{SeedingPolicy, WorkspaceSeedingPolicies};
+use orbit_core::application::seeding_policy::{
+    SeedingPolicyExclusions, workspace_seeding_policies,
+};
+use orbit_core::application::workspace_preset::{AppliedWorkspacePreset, applied_workspace_preset};
+use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 use orbit_types::workspace::{
     Workspace, WorkspaceCheckout, WorkspaceRegistry, git_remote_identity, redact_git_remote,
@@ -28,11 +33,14 @@ impl Execute for WorkspaceShowArgs {
             .map(|binding| binding.repo_root.as_path());
 
         match registered_workspace_for_repo_root(&registry, repo_root) {
-            Some((workspace, checkout)) => Ok(Payload::detail(
-                workspace_show_json(workspace, checkout),
-                format_workspace_show(workspace, checkout),
-            )
-            .into()),
+            Some((workspace, checkout)) => {
+                let seeding = WorkspaceSeeding::read(&global_root, &checkout.orbit_dir)?;
+                Ok(Payload::detail(
+                    workspace_show_json(workspace, checkout, &seeding),
+                    format_workspace_show(workspace, checkout, &seeding),
+                )
+                .into())
+            }
             // An unregistered root is still a describable state, not an error:
             // the record says which root it is and that it is not registered.
             None => Ok(Payload::detail(
@@ -49,6 +57,52 @@ impl Execute for WorkspaceShowArgs {
             )
             .into()),
         }
+    }
+}
+
+/// The seeding policy a workspace resolves and the preset last applied to it.
+struct WorkspaceSeeding {
+    policies: WorkspaceSeedingPolicies,
+    left_out: SeedingPolicyExclusions,
+    preset: Option<AppliedWorkspacePreset>,
+}
+
+impl WorkspaceSeeding {
+    fn read(global_root: &Path, orbit_dir: &Path) -> Result<Self, OrbitError> {
+        let policies = workspace_seeding_policies(global_root, orbit_dir)?;
+        Ok(Self {
+            left_out: SeedingPolicyExclusions::of(&policies),
+            policies,
+            preset: applied_workspace_preset(orbit_dir)?,
+        })
+    }
+
+    fn json(&self) -> (Value, Value) {
+        (
+            json!({
+                "routines": self.policies.routines.to_json(),
+                "auto_tasks": self.policies.auto_tasks.to_json(),
+                "left_out": self.left_out,
+            }),
+            self.preset
+                .as_ref()
+                .map(|preset| {
+                    json!({
+                        "name": preset.name,
+                        "digest": preset.digest,
+                        "applied_at": preset.applied_at,
+                    })
+                })
+                .unwrap_or(Value::Null),
+        )
+    }
+}
+
+fn policy_label(policy: &SeedingPolicy) -> String {
+    match policy {
+        SeedingPolicy::All => "all".to_string(),
+        SeedingPolicy::None => "none".to_string(),
+        SeedingPolicy::Only(names) => names.iter().cloned().collect::<Vec<_>>().join(", "),
     }
 }
 
@@ -72,7 +126,12 @@ fn registered_workspace_for_repo_root<'a>(
 /// `workspace show` had no machine-readable form; this is the record behind
 /// the text below, added with the rest of the payload conversion (ORB-10586).
 /// Both halves are built from the same two structs, so they cannot disagree.
-fn workspace_show_json(workspace: &Workspace, checkout: &WorkspaceCheckout) -> Value {
+fn workspace_show_json(
+    workspace: &Workspace,
+    checkout: &WorkspaceCheckout,
+    seeding: &WorkspaceSeeding,
+) -> Value {
+    let (policy, preset) = seeding.json();
     json!({
         "orbit_root": checkout.orbit_dir.to_string_lossy(),
         "registered": true,
@@ -98,10 +157,16 @@ fn workspace_show_json(workspace: &Workspace, checkout: &WorkspaceCheckout) -> V
                 .as_ref()
                 .or(workspace.owner_machine_id.as_ref()),
         },
+        "seeding": policy,
+        "preset": preset,
     })
 }
 
-fn format_workspace_show(workspace: &Workspace, checkout: &WorkspaceCheckout) -> String {
+fn format_workspace_show(
+    workspace: &Workspace,
+    checkout: &WorkspaceCheckout,
+    seeding: &WorkspaceSeeding,
+) -> String {
     let mut output = format!(
         "name:        {}\nid:          {}\nroot:        {}\norbit_dir:   {}\nbase_branch: {}\nship_mode:   {}\nstatus:      {}\n",
         workspace.name,
@@ -133,5 +198,23 @@ fn format_workspace_show(workspace: &Workspace, checkout: &WorkspaceCheckout) ->
         "created_at:  {}\nupdated_at:  {}\n",
         workspace.created_at, workspace.updated_at
     ));
+    output.push_str(&format!(
+        "seeding:     routines={}; auto_tasks={}\n",
+        policy_label(&seeding.policies.routines),
+        policy_label(&seeding.policies.auto_tasks),
+    ));
+    if !seeding.policies.is_default() {
+        output.push_str(&format!(
+            "left_out:    {} default routine(s), {} default auto-task(s)\n",
+            seeding.left_out.routines.len(),
+            seeding.left_out.auto_tasks.len(),
+        ));
+    }
+    if let Some(preset) = &seeding.preset {
+        output.push_str(&format!(
+            "preset:      {} ({}, applied {})\n",
+            preset.name, preset.digest, preset.applied_at
+        ));
+    }
     output
 }

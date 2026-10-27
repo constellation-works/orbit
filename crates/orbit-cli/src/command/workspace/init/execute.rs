@@ -3,6 +3,7 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_cmd::registry_runtime::RegisteredRuntimeFactory;
 use orbit_common::fs::io::atomic_write_text;
+use orbit_core::application::workspace_preset::WorkspacePreset;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
 use orbit_core::{OrbitError, RoutineSeedIdentity};
 use orbit_registry::workspace_registry;
@@ -24,7 +25,9 @@ use super::super::support::{
 use super::WorkspaceInitArgs;
 use super::WorkspaceInitResult;
 use super::browser_kit::offer_browser_kit;
-use super::report::{collect_init_report, format_workspace_init, workspace_init_json};
+use super::report::{
+    AppliedPresetOutcome, collect_init_report, format_workspace_init, workspace_init_json,
+};
 use super::validate::{
     canonical_workspace_id, preserve_corrupt_workspace_identity, read_workspace_identity,
     registry_claims, reject_colliding_routine_names, validate_existing_registration,
@@ -53,8 +56,27 @@ impl WorkspaceInitArgs {
         let inject_rules = self.inject_agent_rules;
         let task_id_start = self.task_id_start;
         let install_browser_kit = self.install_browser_kit;
+        // The whole preset is validated against this workspace before init
+        // writes anything.
+        let preset = self
+            .preset
+            .as_deref()
+            .map(WorkspacePreset::load)
+            .transpose()?;
+        if let Some(preset) = &preset {
+            preset.validate_for_workspace(&global_root, &orbit_dir)?;
+        }
 
-        let init_result = self.execute_at_path(&cwd, &orbit_dir, &global_root, &registry_path)?;
+        let init_result = self.execute_at_path(
+            &cwd,
+            &orbit_dir,
+            &global_root,
+            &registry_path,
+            preset.clone(),
+        )?;
+        let preset = preset
+            .map(|preset| apply_preset_definitions(&global_root, &init_result, preset))
+            .transpose()?;
         // Offered after registration, so a declined or failed install never
         // undoes the workspace.
         let browser_kit = offer_browser_kit(&init_result.root, install_browser_kit);
@@ -66,6 +88,7 @@ impl WorkspaceInitArgs {
             mcp,
             inject_rules,
             browser_kit,
+            preset,
         )?;
 
         Ok(
@@ -81,6 +104,7 @@ impl WorkspaceInitArgs {
         orbit_dir: &Path,
         global_root: &Path,
         registry_path: &Path,
+        preset: Option<WorkspacePreset>,
     ) -> Result<WorkspaceInitResult, OrbitError> {
         // Validate before bootstrapping any workspace state so invalid modes
         // fail closed at the command boundary.
@@ -270,6 +294,7 @@ impl WorkspaceInitArgs {
                         // Host detection is a CLI concern: Core seeds config from the
                         // families this adapter reports, never by probing PATH itself.
                         config_seed: Some(config_seed_from_detection(&detect())),
+                        workspace_preset: preset,
                         ..Default::default()
                     },
                 )?;
@@ -388,6 +413,48 @@ impl WorkspaceInitArgs {
             owner_machine_id,
         })
     }
+}
+
+/// Enable the plugin-seeded definitions `preset` names through the registered
+/// checkout's runtime, then record the preset as applied.
+fn apply_preset_definitions(
+    global_root: &Path,
+    init_result: &WorkspaceInitResult,
+    preset: WorkspacePreset,
+) -> Result<AppliedPresetOutcome, OrbitError> {
+    let mut enabled = Vec::new();
+    if !preset.enable_routines.is_empty() || !preset.enable_auto_tasks.is_empty() {
+        let registry = workspace_registry::load_registry_from(
+            &workspace_registry::registry_path_for(global_root),
+        )?;
+        let checkout = registry
+            .checkouts
+            .iter()
+            .find(|checkout| checkout.repo_root == init_result.root)
+            .ok_or_else(|| {
+                OrbitError::WorkspaceError(format!(
+                    "workspace '{}' has no registered checkout at '{}'",
+                    init_result.id,
+                    init_result.root.display()
+                ))
+            })?;
+        let workspace = workspace_registry::find_workspace_by_id(&registry, &init_result.id)
+            .ok_or_else(|| {
+                OrbitError::WorkspaceError(format!(
+                    "workspace '{}' is not registered",
+                    init_result.id
+                ))
+            })?;
+        let runtime =
+            RegisteredRuntimeFactory::open_registered_checkout(global_root, workspace, checkout)?;
+        enabled = runtime.enable_preset_definitions(&preset)?;
+    }
+    preset.record_applied(&init_result.orbit_dir)?;
+    Ok(AppliedPresetOutcome {
+        name: preset.name,
+        digest: preset.digest,
+        enabled,
+    })
 }
 
 /// Returns the current local branch for a newly registered checkout.

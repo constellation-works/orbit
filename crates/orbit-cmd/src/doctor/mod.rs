@@ -51,6 +51,7 @@ mod git_protection;
 mod permissions;
 mod report;
 mod retired_config;
+mod seeding;
 mod system;
 mod task;
 mod worker_containment;

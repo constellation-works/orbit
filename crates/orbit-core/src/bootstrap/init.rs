@@ -81,6 +81,10 @@ pub struct InitOptions {
     /// the built-in crew registry. Ignored when config.toml already exists —
     /// init remains idempotent.
     pub config_seed: Option<ConfigSeed>,
+    /// A validated preset (`orbit workspace init --preset`) whose seeding
+    /// policy and config keys are written into the workspace config before its
+    /// defaults are reconciled, so the policy governs this very seed.
+    pub workspace_preset: Option<crate::application::workspace_preset::WorkspacePreset>,
 }
 
 /// Ensures both global and workspace roots are bootstrapped.
@@ -280,6 +284,12 @@ pub fn init_workspace_at_root(
             created_skills_symlink = global_result.created_skills_symlink;
             if let Some(ship_mode) = options.workspace_ship_mode {
                 seed_workspace_review(&ConfigRoots::new(&global_root, &orbit_root), ship_mode)?;
+            }
+            // After the review seed, which carries the security policy into a
+            // first workspace layer; before reconciliation, which reads the
+            // seeding policy this writes.
+            if let Some(preset) = &options.workspace_preset {
+                preset.apply_config(&global_root, &orbit_root)?;
             }
             // Routines and auto-tasks are workspace-scoped, so their managed-asset
             // reconciliation happens here rather than in the global branch; fold

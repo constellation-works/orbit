@@ -11,6 +11,8 @@ use orbit_common::fs::io::atomic_write_text;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_common::security::release::sha256_hex;
 
+use orbit_config::SeedingPolicy;
+
 use super::seed::{DEFAULT_ROUTINE_FILES, RoutineSeedIdentity};
 use super::template::{
     ShippedShape, adoptable_binding, binding_of, reconcile_lifecycle_variant, render_refresh,
@@ -23,6 +25,7 @@ use crate::application::managed_assets::{
     RoutineMaterializationBinding, encode_managed_asset_manifest, load_managed_asset_manifest,
     preserve_modified_retired_asset, record_managed_manifest_write, retired_preservation_path,
 };
+use crate::application::seeding_policy::seeded_defaults;
 
 /// Seed every entry in [`DEFAULT_ROUTINE_FILES`] under `routines_dir`,
 /// resolving the routine-name placeholder. Mirrors the activity /
@@ -50,8 +53,31 @@ pub(crate) fn seed_default_routines(
     )
 }
 
-/// Reconcile the shipped default routines in `routines_dir` against its
-/// managed manifest.
+/// [`reconcile_default_routines_for_policy`] under the default `all` policy.
+#[cfg(test)]
+pub(crate) fn reconcile_default_routines(
+    routines_dir: &Path,
+    identity: &RoutineSeedIdentity,
+    overwrite_bindings: bool,
+    mode: ManagedAssetReconcileMode,
+) -> Result<ManagedAssetReconciliation, OrbitError> {
+    reconcile_default_routines_for_policy(
+        routines_dir,
+        identity,
+        overwrite_bindings,
+        mode,
+        &SeedingPolicy::All,
+    )
+}
+
+/// Reconcile the shipped default routines `policy` (`seeding.routines`)
+/// includes in `routines_dir` against its managed manifest.
+///
+/// A shipped default the policy leaves out is reconciled as a default a
+/// release dropped: an Orbit-written copy is retired by its recorded digest,
+/// and an operator-edited one is preserved under `.retired-managed/`. It is
+/// never created, so a default a later release adds outside the policy is
+/// never seeded.
 ///
 /// Every path this reads, creates, refreshes, retires, or preserves into is
 /// held to one confinement contract: the catalog, its manifest, each
@@ -60,19 +86,21 @@ pub(crate) fn seed_default_routines(
 /// links. A symbolic link anywhere on that route, dangling or not, is refused
 /// and reported, so no sync creates, overwrites, or retires a file outside the
 /// catalog. The routine loader refuses the same links.
-pub(crate) fn reconcile_default_routines(
+pub(crate) fn reconcile_default_routines_for_policy(
     routines_dir: &Path,
     identity: &RoutineSeedIdentity,
     overwrite_bindings: bool,
     mode: ManagedAssetReconcileMode,
+    policy: &SeedingPolicy,
 ) -> Result<ManagedAssetReconciliation, OrbitError> {
+    let defaults = seeded_defaults(DEFAULT_ROUTINE_FILES, policy);
     let manifest_path = routines_dir.join(MANAGED_ASSET_MANIFEST_FILE);
     let mut result = ManagedAssetReconciliation::default();
     if let Some(detail) = unconfined_catalog(routines_dir, &manifest_path)? {
         // The manifest and every definition live behind the refused path, so
         // nothing below can be judged, let alone written.
         result.warnings.push(detail.clone());
-        for (name, _) in DEFAULT_ROUTINE_FILES {
+        for (name, _) in &defaults {
             result.actions.push(ManagedAssetAction {
                 name: (*name).to_string(),
                 path: routines_dir.join(format!("{name}.yaml")),
@@ -89,6 +117,7 @@ pub(crate) fn reconcile_default_routines(
         .iter()
         .map(|(name, _)| *name)
         .collect();
+    let seeded: BTreeSet<&str> = defaults.iter().map(|(name, _)| *name).collect();
     // Create-only carries every recorded entry forward; only absent defaults
     // gain new ones.
     let mut catalog = match &previous {
@@ -101,9 +130,10 @@ pub(crate) fn reconcile_default_routines(
 
     if let Some(previous) = previous.as_ref().filter(|_| !mode.creates_only()) {
         for (name, rendered_digest) in &previous.assets {
-            if shipped.contains(name.as_str()) {
+            if seeded.contains(name.as_str()) {
                 continue;
             }
+            let left_out = shipped.contains(name.as_str());
             let path = routines_dir.join(format!("{name}.yaml"));
             let entry = inspect_catalog_entry(&path, CatalogEntryKind::File)?;
             if entry == CatalogEntry::Unsafe {
@@ -128,6 +158,9 @@ pub(crate) fn reconcile_default_routines(
                 // added — still retires without demanding a manual move, but
                 // a copy is kept so nothing they authored is destroyed.
                 if byte_exact {
+                    if left_out {
+                        retired_detail = Some(LEFT_OUT_DETAIL.to_string());
+                    }
                     if mode == ManagedAssetReconcileMode::Apply {
                         fs::remove_file(&path).map_err(|error| {
                             OrbitError::Io(format!(
@@ -138,15 +171,29 @@ pub(crate) fn reconcile_default_routines(
                     }
                 } else if shipped_shape_of(name, &existing).is_some() {
                     let preserved = preserved_retired_path(mode, routines_dir, name, &path)?;
-                    retired_detail = Some(format!(
-                        "retired a prior release's routine whose only differences were operator lifecycle settings; a copy is at '{}'",
-                        preserved.display()
-                    ));
+                    retired_detail = Some(if left_out {
+                        format!(
+                            "{LEFT_OUT_DETAIL}; its only differences from the shipped template were operator lifecycle settings, and a copy is at '{}'",
+                            preserved.display()
+                        )
+                    } else {
+                        format!(
+                            "retired a prior release's routine whose only differences were operator lifecycle settings; a copy is at '{}'",
+                            preserved.display()
+                        )
+                    });
                 } else {
                     let preserved = preserved_retired_path(mode, routines_dir, name, &path)?;
                     let detail = format!(
-                        "retired managed routine '{}' was locally modified; Orbit {} it from the active catalog and preserved it at '{}'. Review that file, then migrate it under a new user-authored name or delete it",
-                        path.display(),
+                        "{} was locally modified; Orbit {} it from the active catalog and preserved it at '{}'. Review that file, then migrate it under a new user-authored name or delete it",
+                        if left_out {
+                            format!(
+                                "managed routine '{}', which `seeding.routines` leaves out,",
+                                path.display()
+                            )
+                        } else {
+                            format!("retired managed routine '{}'", path.display())
+                        },
                         if mode == ManagedAssetReconcileMode::Apply {
                             "removed"
                         } else {
@@ -167,7 +214,7 @@ pub(crate) fn reconcile_default_routines(
         }
     }
 
-    for (name, template) in DEFAULT_ROUTINE_FILES {
+    for (name, template) in &defaults {
         let path = routines_dir.join(format!("{name}.yaml"));
         let requested_binding = identity.binding(name, template);
         let template_digest = sha256_hex(template.as_bytes());
@@ -498,6 +545,9 @@ pub(crate) fn reconcile_default_routines(
     }
     Ok(result)
 }
+
+/// Why a retired shipped default left the catalog while Orbit still ships it.
+const LEFT_OUT_DETAIL: &str = "`seeding.routines` leaves out this shipped default";
 
 /// Reconcile every top-level definition in `routines_dir` that targets a
 /// retired job and that the manifest does not track. A copy of a template a

@@ -93,6 +93,7 @@ mod resolved;
 mod review_skip_tags;
 mod roots;
 mod seed;
+mod seeding;
 mod store;
 mod tag_instructions;
 mod unknown;
@@ -161,6 +162,11 @@ pub use resolved::{
 pub use review_skip_tags::{REVIEW_SKIP_TAGS_KEY, ReviewSkipSettings};
 pub use roots::ConfigRoots;
 pub use seed::{ConfigSeed, seed_default_config, seed_workspace_review};
+pub use seeding::{
+    RETIRED_DEFAULT_AUTO_TASKS, RETIRED_DEFAULT_ROUTINES, SEEDING_AUTO_TASKS_KEY,
+    SEEDING_ROUTINES_KEY, SHIPPED_DEFAULT_AUTO_TASKS, SHIPPED_DEFAULT_ROUTINES, SeedingPolicy,
+    WorkspaceSeedingPolicies, load_workspace_seeding_policies,
+};
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
 pub use tag_instructions::{TAG_INSTRUCTIONS_KEY, TagInstructionSetting, TagInstructionSettings};
 
