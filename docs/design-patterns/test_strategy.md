@@ -887,6 +887,14 @@ cap case uses real SSE ownership and follows the configured capacity without pin
 its value. Dashboard Node fixtures live beside these integration modules and exercise
 the shipped JavaScript with their existing assertions.
 
+`crates/orbit-web/src/lease_intake/tests/server.rs::token_queued_selector_expansion_retries_do_not_double_count`
+is admitted under criterion 3 for the token selector resource bound (ORB-19005,
+regressing ORB-18776). It drives the real token intake socket and checks single
+and batch retries, a mixed duplicate/new expansion, and refusal of a new 65th
+selector without changing the lease. The test stays in the in-crate fixture
+because `LeaseIntakeSocket::for_test_listener` is crate-private; an external
+integration target cannot start the same socket without widening that seam.
+
 Two SSH decisions are corrected under criteria 2 and 4. The delayed-bind control
 injects a 500 ms attach budget and a 2 s bind delay; host forwarding fixes that budget
 at 5 s and also negotiates identity. The oversized-status case directly observes the
