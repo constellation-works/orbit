@@ -11,7 +11,8 @@ use std::process::Output;
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use orbit_core::application::task::TaskAddParams;
-use orbit_types::task::{TaskComplexity, TaskStatus};
+use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
+use orbit_types::task::{TaskComplexity, TaskHistoryEntry, TaskStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
@@ -26,6 +27,9 @@ pub(crate) struct TaskSeed {
     pub(crate) complexity: TaskComplexity,
     pub(crate) status: TaskStatus,
     pub(crate) tags: Vec<String>,
+    /// Appended after creation, for history no public command writes (such as
+    /// the evidence a retired prune left behind).
+    pub(crate) history: Vec<TaskHistoryEntry>,
 }
 
 impl TaskSeed {
@@ -37,6 +41,7 @@ impl TaskSeed {
             complexity: TaskComplexity::Low,
             status: TaskStatus::Proposed,
             tags: Vec::new(),
+            history: Vec::new(),
         }
     }
 }
@@ -297,20 +302,30 @@ fn seed_if_requested() -> bool {
     let seeded: Vec<Value> = tasks
         .into_iter()
         .map(|task| {
-            serde_json::to_value(
-                runtime
-                    .add_task(TaskAddParams {
-                        title: task.title,
-                        description: task.description,
-                        acceptance_criteria: task.acceptance_criteria,
-                        complexity: task.complexity,
-                        status: Some(task.status),
-                        tags: task.tags,
+            let history = task.history;
+            let created = runtime
+                .add_task(TaskAddParams {
+                    title: task.title,
+                    description: task.description,
+                    acceptance_criteria: task.acceptance_criteria,
+                    complexity: task.complexity,
+                    status: Some(task.status),
+                    tags: task.tags,
+                    ..Default::default()
+                })
+                .expect("seed task through runtime");
+            if !history.is_empty() {
+                RuntimeHost::apply_task_automation_update(
+                    &runtime,
+                    &created.id,
+                    TaskAutomationUpdate {
+                        append_history: history,
                         ..Default::default()
-                    })
-                    .expect("seed task through runtime"),
-            )
-            .unwrap()
+                    },
+                )
+                .expect("seed task history");
+            }
+            serde_json::to_value(created).unwrap()
         })
         .collect();
     fs::write(response, serde_json::to_vec(&seeded).unwrap()).unwrap();
