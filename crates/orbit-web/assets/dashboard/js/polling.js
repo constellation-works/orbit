@@ -144,11 +144,13 @@ function watchScope() {
 // What the hidden tab last saw. The first read after hiding, or after a scope
 // change, only records; later reads compare against it.
 let watch = null;
+let visibilityGeneration = 0;
 
 async function checkBackground() {
   const scope = watchScope();
+  const generation = visibilityGeneration;
   const seen = await readBackground();
-  if (!document.hidden || scope !== watchScope()) return;
+  if (!document.hidden || generation !== visibilityGeneration || scope !== watchScope()) return;
   if (!watch || watch.scope !== scope) {
     watch = { scope, failed: seen.failed, phase: seen.phase, holds: seen.holds };
     return;
@@ -237,6 +239,7 @@ export function startDashboardPolling(refresh) {
   };
 
   document.addEventListener("visibilitychange", () => {
+    visibilityGeneration += 1;
     clearScheduled();
     if (document.hidden) {
       runBackground();

@@ -710,6 +710,10 @@ try {
   assert.equal(await page.getByRole('button', { name: 'Use all time' }).isVisible(), true);
   const contrastFile = await contrastFailures();
   await page.screenshot({ path: path.join(evidence, 'codebase-file-1440.png'), fullPage: true, animations: 'disabled' });
+  await page.setViewportSize({ width: 375, height: 900 });
+  await page.locator('.codebase-file-related').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'codebase-file-dark-375.png'), animations: 'disabled' });
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator('#codebase-body a.codebase-back').click();
   assert.equal(await page.evaluate(() => globalThis.codebaseHashes.at(-1)), '#analytics/codebase');
 

@@ -20,6 +20,7 @@ let failedTotal = 3;
 let failedStatus = 200;
 // Workspaces the aggregate total left out, as `/api/job-runs/all` lists them.
 let failedUnavailable = [];
+let heldReadiness = null;
 let readiness = { capacity: { drain_phase: 'draining' }, tasks: [] };
 const urls = [];
 const respond = (status, body) => ({
@@ -36,7 +37,11 @@ const fetch = async url => {
       ? { items: [], total: failedTotal, unavailable: failedUnavailable }
       : { items: [], total: failedTotal });
   }
-  if (path === '/api/workflows/auto/readiness') return respond(200, readiness);
+  if (path === '/api/workflows/auto/readiness') {
+    const snapshot = readiness;
+    if (heldReadiness) return new Promise(resolve => heldReadiness.push(() => resolve(respond(200, snapshot))));
+    return respond(200, snapshot);
+  }
   return respond(404, { error: `unexpected ${url}` });
 };
 
@@ -216,5 +221,27 @@ assert.equal(document.title, '(5 failed) Jobs · orbit', 'a workspace that retur
 failedTotal = 122;
 await fire(pending('runBackground')[0]);
 assert.equal(document.title, '(7 failed) Jobs · orbit', 'counting resumes once the answering workspaces match');
+
+// A completion from a retired hidden visit cannot replace the new baseline.
+await setHidden(false);
+common.namespace.setWorkspace('one');
+failedTotal = 3;
+Notification.permission = 'granted';
+await button.click();
+const noticesBeforeRetiredVisit = shown.length;
+readiness = { capacity: { drain_phase: 'draining' }, tasks: [] };
+heldReadiness = [];
+await setHidden(true);
+const retired = heldReadiness[0];
+await setHidden(false);
+heldReadiness = null;
+failedTotal = 5;
+readiness = { capacity: { drain_phase: 'idle' }, tasks: [{ task_id: 'ORB-5', reason: 'baseline_red_hold' }] };
+await setHidden(true);
+retired();
+await settle();
+await fire(pending('runBackground')[0]);
+assert.equal(document.title, 'Jobs · orbit', 'old hidden visit cannot overwrite the new failure baseline');
+assert.equal(shown.length, noticesBeforeRetiredVisit, 'old hidden visit cannot overwrite phase or hold baselines');
 
 console.log('hidden dashboard polls every 60 s, prefixes the title with new failures until shown, and notifies a drain end or new hold only after opt-in');

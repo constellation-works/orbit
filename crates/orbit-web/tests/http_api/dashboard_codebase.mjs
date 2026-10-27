@@ -486,11 +486,14 @@ let relatedRequest = pending.at(-1);
 assert.equal(relatedRequest.url.pathname, '/api/codebase/related');
 assert.deepEqual(['path', 'window', 'min_support', 'top', 'workspace'].map(name => relatedRequest.url.searchParams.get(name)), ['src/a.rs', '30d', '10', '10', 'ws-a']);
 assert.match(relatedBox().textContent, /Loading related files/);
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=10&rollup=file'), 'coupling');
 relatedRequest.resolve(response({ path: 'src/a.rs', path_support: 12, min_support: 10, rows: [
   { path: 'docs/design.md', jaccard: 0.5, conditional_rate: 1, support: { both: 10, path: 12, partner: 18, either: 20 }, footprint_miss_count: 1, tasks: [{ task_id: 'ORB-9', title: '<img src=x onerror=bad()>', commit: 'abc' }], footprint_miss_tasks: [] },
   { path: 'src/b.rs', jaccard: 0.25, conditional_rate: 0.5, support: { both: 10, path: 12, partner: 38, either: 40 }, footprint_miss_count: 2, tasks: [], footprint_miss_tasks: [] },
 ] }));
 await settle();
+codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=10&rollup=file&path=src/a.rs'), 'file');
+assert.equal(pending.at(-1), relatedRequest, 'settled off-route answer is reused on return');
 assert.deepEqual(relatedBox().querySelectorAll('li.codebase-related-row').map(row => [row.dataset.path, row.querySelector('span.codebase-frac').textContent]), [['docs/design.md', '10/20'], ['src/b.rs', '10/40']]);
 assert.equal(relatedBox().querySelector('a.codebase-task-link').textContent, '<img src=x onerror=bad()>', 'task titles stay text');
 assert.match(relatedBox().querySelector('a.codebase-task-link').getAttribute('href'), /open=ORB-9$/);

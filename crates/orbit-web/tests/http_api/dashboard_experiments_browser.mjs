@@ -172,6 +172,7 @@ const experiment = {
     { name: 'candidate', control: false, weight: 1 },
   ],
   events: [],
+  conclude_authorized: true,
 };
 const points = (ns, values) => starts.map((start, index) => ({ start, n: ns[index], value: values[index] }));
 const readout = {
@@ -231,7 +232,9 @@ function jsonResponse(body) {
   };
 }
 
-function fetchImpl(url) {
+let finishConclude;
+function fetchImpl(url, options = {}) {
+  if (options.method === 'POST') return new Promise(resolve => { finishConclude = resolve; });
   const path = String(url);
   if (path.includes('/api/diagnostics/experiments/exp-intraday/readout')) return Promise.resolve(jsonResponse(readout));
   if (path.includes('/api/diagnostics/experiments/exp-intraday')) return Promise.resolve(jsonResponse(experiment));
@@ -307,6 +310,58 @@ function chartLabels() {
 setExperimentId('exp-intraday');
 await fetchAndRenderExperiments();
 assert.equal(getClockZone(), 'utc', 'the chart opens on the UTC dashboard clock');
+
+const winner = experimentsBody.querySelector('select.ex-conclude-control');
+const reason = experimentsBody.querySelector('textarea.ex-conclude-control');
+winner.value = 'candidate'; winner.dispatch('change');
+reason.value = 'Keep the candidate'; reason.dispatch('input');
+readout.as_of = '2026-10-26T09:13:00Z';
+await fetchAndRenderExperiments();
+assert.equal(experimentsBody.querySelector('select.ex-conclude-control').value, 'candidate');
+assert.equal(experimentsBody.querySelector('textarea.ex-conclude-control').value, 'Keep the candidate');
+experimentsBody.querySelector('button.ex-conclude-submit').dispatch('click');
+readout.as_of = '2026-10-26T09:14:00Z';
+await fetchAndRenderExperiments();
+assert.equal(experimentsBody.querySelector('button.ex-conclude-submit').disabled, true);
+assert.match(experimentsBody.querySelector('.ex-conclude-status').textContent, /Concluding/);
+setExperimentId(null);
+await fetchAndRenderExperiments();
+finishConclude(jsonResponse({}));
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(experiments.namespace.getExperimentId(), null, 'a delayed submission cannot restore its old selection');
+setExperimentId('exp-intraday');
+await fetchAndRenderExperiments();
+assert.equal(experimentsBody.querySelector('textarea.ex-conclude-control').value, '', 'changing experiment retires the draft');
+
+const retiredWinner = experimentsBody.querySelector('select.ex-conclude-control');
+const retiredReason = experimentsBody.querySelector('textarea.ex-conclude-control');
+retiredWinner.value = 'candidate'; retiredWinner.dispatch('change');
+retiredReason.value = 'Keep the candidate'; retiredReason.dispatch('input');
+common.namespace.setWorkspace('ws_other');
+await fetchAndRenderExperiments();
+assert.equal(experimentsBody.querySelector('textarea.ex-conclude-control').value, '', 'a workspace change retires the conclusion draft');
+assert.equal(experimentsBody.querySelector('select.ex-conclude-control').value, '', 'a workspace change retires the winning arm');
+common.namespace.setWorkspace('ws_fixture');
+await fetchAndRenderExperiments();
+const failedWinner = experimentsBody.querySelector('select.ex-conclude-control');
+const failedReason = experimentsBody.querySelector('textarea.ex-conclude-control');
+failedWinner.value = 'candidate'; failedWinner.dispatch('change');
+failedReason.value = 'Keep the candidate'; failedReason.dispatch('input');
+experimentsBody.querySelector('button.ex-conclude-submit').dispatch('click');
+setExperimentId(null);
+await fetchAndRenderExperiments();
+finishConclude({
+  ok: false,
+  status: 409,
+  headers: { get: () => null },
+  text: async () => JSON.stringify({ error: 'conclude refused' }),
+});
+await new Promise(resolve => setImmediate(resolve));
+setExperimentId('exp-intraday');
+await fetchAndRenderExperiments();
+assert.equal(experimentsBody.querySelector('textarea.ex-conclude-control').value, '', 'a delayed failure cannot restore a retired draft');
+assert.equal(experimentsBody.querySelector('.ex-conclude-status').textContent, '', 'a delayed failure cannot mark another selection');
+assert.equal(experimentsBody.querySelector('button.ex-conclude-submit').disabled, false, 'a delayed failure cannot leave another selection pending');
 
 const utc = chartLabels();
 assert.deepEqual(utc.ticks, ['09:00', '09:05', '09:10'], `UTC ticks name each 5-minute bucket: ${utc.ticks.join(' | ')}`);
@@ -395,6 +450,21 @@ async function checkCumulativeTooltipBounds() {
         await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&case=${width}-${scenario}#analytics/experiments/exp-intraday`);
         await page.waitForFunction(() => window.fixtureReady);
         assert.equal(await page.locator('.ex-cum-col').count(), 3);
+        if (scenario === 'short') {
+          const winner = page.locator('select.ex-conclude-control');
+          const reason = page.locator('textarea.ex-conclude-control');
+          await winner.selectOption('candidate');
+          await reason.fill('Keep the candidate');
+          await reason.focus();
+          currentReadout.as_of = '2026-10-26T09:13:00Z';
+          await page.evaluate(async () => (await import('/static/js/experiments.js')).fetchAndRenderExperiments());
+          assert.equal(await winner.inputValue(), 'candidate');
+          assert.equal(await reason.inputValue(), 'Keep the candidate');
+          assert.equal(await reason.evaluate(node => document.activeElement === node), true, 'poll restores conclusion focus');
+          await reason.scrollIntoViewIfNeeded();
+          await page.screenshot({ path: path.join(evidence, `conclusion-dark-${width}.png`) });
+        }
+
         if (scenario === 'wider') {
           // Placement must follow measured size rather than the shared CSS's
           // current 244px desktop / 200px phone defaults.

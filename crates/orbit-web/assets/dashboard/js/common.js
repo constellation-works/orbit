@@ -51,6 +51,7 @@ export function getWorkspace() {
 let currentHost = params.get("host") || null;
 let servingHost = null;
 let registeredHosts = [];
+const registeredHostListeners = new Set();
 let hostWrites = null;
 let hostRevision = 0;
 
@@ -74,7 +75,13 @@ export function setRegisteredHosts(rows) {
   const hosts = Array.isArray(rows) ? rows.filter((row) => row && row.name) : [];
   const local = hosts.find((row) => row.local);
   servingHost = local ? { name: local.name, machine_id: local.machine_id } : null;
+  const previous = registeredHosts;
   registeredHosts = hosts;
+  for (const listener of registeredHostListeners) listener(previous, hosts);
+}
+
+export function onRegisteredHostsChange(listener) {
+  registeredHostListeners.add(listener);
 }
 
 export function getRegisteredHosts() {

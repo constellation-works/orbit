@@ -20,7 +20,7 @@
 // their first control, close on Escape as Cancel does unless a request is in
 // flight, and hand focus back to the button that opened them.
 
-import { captureFocus, el, fetchJson, getHost, requestHostSwitch, requestJson, requestPanel } from './common.js';
+import { captureFocus, el, fetchJson, getHost, setRegisteredHosts, requestHostSwitch, requestJson, requestPanel } from './common.js';
 import { describeResource, fetchHostResourcePayloadFor, hostResources, hostVerdict } from './host-resources.js';
 
 const $ = (id) => document.getElementById(id);
@@ -78,6 +78,7 @@ export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
           probeNext = false;
         }
         lastPayload = payload;
+        setRegisteredHosts(payload && payload.hosts);
         render();
       },
       "config-count",

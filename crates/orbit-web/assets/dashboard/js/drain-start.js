@@ -143,7 +143,7 @@ const poolText = (entries) => poolEntryTexts(entries).join(",");
 // Weights are read here only to draw the shares; the server checks the names.
 function overrideEntries(checkout, tier) {
   const text = choices.overrides[tier] ?? poolText(workspacePool(checkout, tier));
-  return text.split(/[\s,]+/).map((part) => part.trim()).filter(Boolean);
+  return text.split(",").map((part) => part.trim()).filter(Boolean);
 }
 
 function tierEntries(checkout, tier) {
@@ -259,26 +259,32 @@ function composerSettings(checkout, source) {
   };
 }
 
+// Quote each value as one literal POSIX shell argument.
+function shellArgument(value) {
+  const text = String(value);
+  return /^[a-zA-Z0-9_@%+=:,./-]+$/.test(text) ? text : "'" + text.replace(/'/g, "'\\''") + "'";
+}
+
 // The `orbit run auto` command for `settings`, one flag per element. A claim
 // token is only ever its placeholder.
 export function drainCommandParts(settings) {
   const parts = ["orbit run auto"];
   const pull = settings.source === "pull";
-  if (pull) parts.push(settings.host ? `--pull ${settings.pull} --host ${settings.host}` : `--pull ${settings.selector || settings.pull}`);
-  else if (settings.workspace) parts.push(`--workspace ${settings.workspace}`);
-  if (settings.window && settings.window !== "once") parts.push(`--for ${settings.window}`);
-  if (settings.concurrency) parts.push(`--concurrency ${settings.concurrency}`);
-  if (!pull && settings.mode) parts.push(`--auto-concurrency ${settings.mode}`);
-  if (settings.allowCrews?.length) parts.push(`--allow-crew ${settings.allowCrews.join(",")}`);
+  if (pull) parts.push(settings.host ? `--pull ${shellArgument(settings.pull)} --host ${shellArgument(settings.host)}` : `--pull ${shellArgument(settings.selector || settings.pull)}`);
+  else if (settings.workspace) parts.push(`--workspace ${shellArgument(settings.workspace)}`);
+  if (settings.window && settings.window !== "once") parts.push(`--for ${shellArgument(settings.window)}`);
+  if (settings.concurrency) parts.push(`--concurrency ${shellArgument(settings.concurrency)}`);
+  if (!pull && settings.mode) parts.push(`--auto-concurrency ${shellArgument(settings.mode)}`);
+  if (settings.allowCrews?.length) parts.push(`--allow-crew ${shellArgument(settings.allowCrews.join(","))}`);
   if (!pull) {
     for (const [tier] of DRAIN_TIERS) {
       const pool = settings.pools?.[tier];
-      if (Array.isArray(pool)) parts.push(pool.length ? `--${tier}-complexity-crews ${pool.join(",")}` : `--${tier}-complexity-crews`);
+      if (Array.isArray(pool)) parts.push(pool.length ? `--${tier}-complexity-crews ${shellArgument(pool.join(","))}` : `--${tier}-complexity-crews`);
     }
     if (settings.complete) parts.push("--complete");
     if (settings.approve) parts.push("--approve-proposed");
     if (settings.autoFix) parts.push("--auto-fix");
-    if (settings.review) parts.push(`--review ${settings.review}`);
+    if (settings.review) parts.push(`--review ${shellArgument(settings.review)}`);
     if (settings.strict) parts.push("--strict-worker-containment");
     if (settings.claimToken) parts.push("--claim-token <token>");
   }
