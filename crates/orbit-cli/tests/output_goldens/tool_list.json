@@ -2717,6 +2717,52 @@
     ]
   },
   {
+    "name": "orbit.task.recover_claim",
+    "description": "Recover a live execution claim on its owner workspace to blocked or backlog, fencing the attempt, invalidating pending landing authority and releasing its reservation in one transaction. Requires trusted operator authority; unavailable to managed runs. Supply the claim phase you observed, the target status, a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original recovery.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "claim_id",
+        "description": "Live claim to recover",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_phase",
+        "description": "Claim phase you observed; a claim that moved on is refused",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "status",
+        "description": "Target status: blocked for diagnosis or backlog for retry",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Required operator reason retained durably",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "request_key",
+        "description": "Durable request key; reuse exactly after a lost reply",
+        "param_type": "string",
+        "required": true
+      }
+    ]
+  },
+  {
     "name": "orbit.task.requeue",
     "description": "Return a blocked task to the backlog so its next run resumes the candidate and pull request its stopped run published, re-authenticating that publication exactly as automatic adoption does, or the latest candidate a claim of the task kept. A later claim that ended without a candidate does not replace that one. Requires trusted operator authority; unavailable to managed runs. A task whose run has not stopped, or whose claim is unsettled, is refused. A changed task specification is refused with the option to set discard_candidate, which closes the task's undelivered Orbit pull requests and lets the next run implement fresh.",
     "enabled": true,
@@ -2845,6 +2891,52 @@
         "description": "Explicitly adopt current configured review limits; default retains the captured limits",
         "param_type": "boolean",
         "required": false
+      }
+    ]
+  },
+  {
+    "name": "orbit.task.revoke_handoff",
+    "description": "Revoke a handoff's completion authority on its owner workspace, cancelling its pending landing request while the task stays in review. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base, supply a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original revocation. Refused while an external merge intent is unresolved.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "workspace",
+        "description": "Workspace selector from discovery. Omitted, a bound session uses its workspace and an unbound one resolves the task id through this host's task registry",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "handoff_id",
+        "description": "Accepted handoff whose authority to revoke",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_candidate_commit",
+        "description": "Accepted candidate commit the operator observed",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "expected_base_commit",
+        "description": "Accepted base commit the operator observed",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "reason",
+        "description": "Required operator reason retained durably",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "request_key",
+        "description": "Durable request key; reuse exactly after a lost reply",
+        "param_type": "string",
+        "required": true
       }
     ]
   },

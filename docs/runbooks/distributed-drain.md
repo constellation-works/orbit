@@ -29,7 +29,7 @@ operations are absent from public MCP discovery and refused by public
 and initialize metadata cannot enable internal access. Both endpoints must
 support the internal transport revision; preflight fails closed with no public
 fallback. CLI diagnostics below retain their authority requirements, and
-completion approval, revocation and recovery remain owner-dashboard actions.
+completion approval remains an owner-dashboard action; revocation and recovery are also available as the operator commands `orbit task revoke-handoff` and `orbit task recover-claim` (and the matching operator tools `orbit.task.revoke_handoff` and `orbit.task.recover_claim`).
 The follower never merges.
 
 Internal worker reads and typed claim updates use host-owned session
@@ -1500,10 +1500,12 @@ Deliberate recovery is operator-driven:
 3. Revoke the old claim, invalidate pending landing authority, release only
    that reservation, and choose the task transition in one authorized recovery.
    On the owner's dashboard, use **Recover claim → blocked** to diagnose or
-   **Recover claim → backlog** to retry. Both controls require a reason and the
-   phase you were shown, and refuse if the claim moved on. There is still no CLI
-   verb and no registered tool for it; do not invent one, and do not admit a
-   second attempt by shipping the task again while the old claim is unfenced.
+   **Recover claim → backlog** to retry, or run the equivalent operator command
+   `orbit task recover-claim <claim-id> --phase <phase> --status blocked --reason <reason> --request <key>`
+   (or `--status backlog` to retry; the operator tool is `orbit.task.recover_claim`).
+   Both require a reason and the phase you were shown, refuse if the claim moved
+   on, and replay when the same request key is resubmitted with the same input.
+   Do not admit a second attempt by shipping the task again while the old claim is unfenced.
 4. A sleeping worker that returns receives `stale_claim`. Its local compute
    and an in-flight GitHub write cannot be undone; its old candidate cannot
    become authoritative.
@@ -1838,7 +1840,7 @@ or provider-evidence JSON from the caller.
 
 A source edit, foreign merge, failed fetch or unavailable proof cannot use
 that exception. If deliberate operator recovery is needed, revoke the handoff
-and use **Recover claim → blocked** on the owner before moving the task through
+and use **Recover claim → blocked** (or `orbit task recover-claim`) on the owner before moving the task through
 `in-progress` to `review`. The task keeps its original `job_run_id` and
 `job_run_machine`. Changed source needs fresh review and validation; the old
 certificate is never copied to a new head.
@@ -2087,17 +2089,18 @@ settle-only pass ignores the backoff, though it also closes the drain's
 window.
 
 To give the claim up instead, revoke or recover it from the owner's dashboard
-(**Recover claim → blocked** or **→ backlog**). The next delivery on the
+(**Recover claim → blocked** or **→ backlog**) or with `orbit task recover-claim`. The next delivery on the
 follower, whether a drain iteration or `orbit run auto --stop`, looks the
 claim up, sees it has ended, and closes the record `closed_obsolete`, which
 frees the slot. A claim whose bind the owner refuses before the leaf ever
 launched closes the same way: the leaf is failed and never starts.
 
 Handoff **approval** and **revocation** are owner-operator mutations (agent
-capability cannot approve). They are owner-domain seams reached from the
-owner's dashboard — `POST /api/distributed/handoffs/<handoff-id>/approve` and
-`.../revoke`, governed as `handoff.approve` and `handoff.revoke` — and they are
-still not `orbit tool run` entry points. Never substitute `--complete` on a
+capability cannot approve). Approval is reached from the owner's dashboard —
+`POST /api/distributed/handoffs/<handoff-id>/approve`, governed as
+`handoff.approve`. Revocation is reached the same way (`.../revoke`, governed
+as `handoff.revoke`) and also as `orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --reason <reason> --request <key>`
+(the operator tool `orbit.task.revoke_handoff`). Never substitute `--complete` on a
 follower or `orbit job resume`:
 
 - Approval records one immutable candidate-scoped authorization and one

@@ -471,6 +471,18 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "retrying an authorized stopped landing is a deliberate owner operator decision",
     },
     GovernedOperation {
+        id: "orbit.task.recover_claim",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "recovery fences a live attempt on another host and moves its task; there is no heartbeat, so only an operator decides the attempt is over",
+    },
+    GovernedOperation {
+        id: "orbit.task.revoke_handoff",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "revocation cancels a pending landing request for work already handed off; only an operator decides that",
+    },
+    GovernedOperation {
         id: "orbit.task.reconcile_review",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],

@@ -322,6 +322,8 @@ fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => ActionPolicy {
                 declared: verb.spec().params,
@@ -486,6 +488,8 @@ fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject => true,
             TaskVerb::List
             | TaskVerb::Eligible
@@ -800,6 +804,8 @@ fn artifact_target<'a>(
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject => {
                 let id = persisted_task_id.ok_or_else(|| {
                     OrbitError::Execution("redaction audit missing persisted task id".to_string())

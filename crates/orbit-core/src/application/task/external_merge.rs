@@ -400,7 +400,10 @@ impl OrbitRuntime {
         let unsettled = unsettled_claim_reason(&claim);
         if claim.claim.phase != ExecutionClaimPhase::HandedOff {
             return Err(format!(
-                "{unsettled}; that run lands or fails the task itself"
+                "{unsettled}; that run lands or fails the task itself; if the attempt is over, \
+                 recover it with `orbit task recover-claim {} --status blocked --reason <reason> \
+                 --request <key>` (see `orbit task recover-claim --help`)",
+                claim.claim.claim_id
             ));
         }
         let tasks = self.stores().tasks();
@@ -424,13 +427,22 @@ impl OrbitRuntime {
             Some(LandingStartState::Revoked) => {}
             None => {
                 return Err(format!(
-                    "{unsettled}: its handoff awaits completion approval, which completes it"
+                    "{unsettled}: its handoff awaits completion approval, which completes it; \
+                     to withdraw it instead, use `orbit task revoke-handoff {} --candidate \
+                     <commit> --base <commit> --reason <reason> --request <key>`, then \
+                     `orbit task recover-claim {} --status blocked --reason <reason> --request \
+                     <key>`",
+                    accepted.handoff_id, claim.claim.claim_id
                 ));
             }
             Some(LandingStartState::Pending) => {
                 return Err(format!(
                     "{unsettled}: its handoff holds completion authority, and the owner's \
-                     landing job completes it"
+                     landing job completes it; to withdraw it instead, use `orbit task \
+                     revoke-handoff {} --candidate <commit> --base <commit> --reason <reason> \
+                     --request <key>`, then `orbit task recover-claim {} --status blocked \
+                     --reason <reason> --request <key>`",
+                    accepted.handoff_id, claim.claim.claim_id
                 ));
             }
             Some(LandingStartState::Completed) => {
@@ -456,7 +468,9 @@ impl OrbitRuntime {
         let HandoffDelivery::PullRequest { number } = candidate.delivery else {
             return Err(format!(
                 "{unsettled}: its revoked handoff delivered no pull request; recover the claim \
-                 to blocked or backlog"
+                 to blocked or backlog with `orbit task recover-claim {} --status blocked \
+                 --reason <reason> --request <key>`",
+                claim.claim.claim_id
             ));
         };
         Ok(Some(RevokedHandoff {

@@ -77,6 +77,8 @@ pub(crate) fn execute(
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => true,
         },
@@ -309,6 +311,8 @@ pub(crate) fn execute(
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => {
                 return Err(OrbitError::PolicyDenied(

@@ -1662,7 +1662,8 @@ as its own live claim or no merge into its target branch.
 ### After revoking a claimed handoff
 
 Revoking a claimed handoff's completion authority (the dashboard's **Revoke
-authority**) cannot be undone, and nothing lands that handoff afterwards. Its
+authority**, or `orbit task revoke-handoff <handoff-id> --candidate <commit> --base <commit> --reason <reason> --request <key>`)
+cannot be undone, and nothing lands that handoff afterwards. Its
 claim stays `handed_off` and keeps the task in `review`, so **Approve** and a plain
 status write are both refused. The owner console's authority line names the way
 out:
@@ -1675,7 +1676,8 @@ out:
   no completion authority, records no merge intent or landing attempt, and leaves
   the revoked request revoked.
 - Otherwise, recover the claim to `blocked` or `backlog` from the dashboard's
-  claim panel.
+  claim panel, or with `orbit task recover-claim <claim-id> --phase <phase> --status blocked --reason <reason> --request <key>`
+  (or `--status backlog`).
 
 Settlement is refused, with the reason, while an owner landing job still carries
 the handoff (its attempt is `dispatched`) or a merge intent is unresolved. It is

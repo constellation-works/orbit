@@ -363,6 +363,8 @@ fn workflow_critical_tools_remain_registered() {
         // surface; its inactive-classification is covered by
         // `inactive_ops_tools_*` and `INACTIVE_TOOL_NAMES` above.
         "orbit.task.retry_handoff",
+        "orbit.task.recover_claim",
+        "orbit.task.revoke_handoff",
         "orbit.task.artifact.get",
         "orbit.task.artifact.put",
         "proc.spawn",

@@ -177,7 +177,11 @@ fn prepare(
             }
             Ok(ListView::default())
         }
-        TaskVerb::ReviewReset | TaskVerb::ReconcileReview | TaskVerb::Requeue => {
+        TaskVerb::ReviewReset
+        | TaskVerb::ReconcileReview
+        | TaskVerb::Requeue
+        | TaskVerb::RecoverClaim
+        | TaskVerb::RevokeHandoff => {
             input.shift_remove("host");
             input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
             Ok(ListView::default())
@@ -396,9 +400,12 @@ fn render(
             let text = super::reconcile_review::reconciliation_text(&value);
             Ok(Payload::detail(value, text).into())
         }
-        TaskVerb::RetryHandoff | TaskVerb::BlockTriage | TaskVerb::Reject | TaskVerb::Delete => {
-            Ok(Payload::document(value).into())
-        }
+        TaskVerb::RetryHandoff
+        | TaskVerb::RecoverClaim
+        | TaskVerb::RevokeHandoff
+        | TaskVerb::BlockTriage
+        | TaskVerb::Reject
+        | TaskVerb::Delete => Ok(Payload::document(value).into()),
     }
 }
 

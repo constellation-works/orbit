@@ -343,6 +343,8 @@ pub(super) fn task_operation(
         | TaskVerb::BlockTriage
         | TaskVerb::ReconcileReview
         | TaskVerb::RetryHandoff
+        | TaskVerb::RecoverClaim
+        | TaskVerb::RevokeHandoff
         | TaskVerb::Reject
         | TaskVerb::Delete => {}
     }
