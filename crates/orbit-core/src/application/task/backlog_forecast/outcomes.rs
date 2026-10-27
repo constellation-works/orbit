@@ -199,13 +199,23 @@ impl CellRow for AwayWait {
 }
 
 /// What follows an attempt that did not deliver, or a blocked task's wait.
+///
+/// `Censored` is still waiting when the horizon arrives. `Absorb` and
+/// `Never` have stopped: absorption after its own wait, abandonment or an
+/// attempt cap with none. Collapsing those into one variant either drops
+/// the censored wait or keeps a finished task blocked for the rest of the
+/// horizon.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(super) enum Follow {
     /// Back in the dispatch queue after this many hours.
     Requeue(f64),
     /// Finished outside the drain after this many hours.
     Resolve(f64),
-    /// No return within the horizon (or absorbed).
+    /// Rejected or archived after this many hours out of the queue.
+    Absorb(f64),
+    /// No event drawn: unresolved through the horizon, holding no slot.
+    Censored,
+    /// Stopped with no return wait: abandoned, or attempts ran out.
     Never,
 }
 
@@ -293,8 +303,9 @@ impl ReturnCurve {
             .map(|atom| atom.2)
             .sum();
         let surviving = 1.0 - elapsed;
+        // Nothing left to draw is an unresolved wait, not an absorbing event.
         if surviving <= 1e-9 {
-            return Follow::Never;
+            return Follow::Censored;
         }
         let mut left = rng.unit() * surviving;
         for &(at, event, mass) in self
@@ -307,12 +318,12 @@ impl ReturnCurve {
                 return match event {
                     ReturnEvent::Returned => Follow::Requeue(wait),
                     ReturnEvent::Resolved => Follow::Resolve(wait),
-                    ReturnEvent::Absorbed => Follow::Never,
+                    ReturnEvent::Absorbed => Follow::Absorb(wait),
                 };
             }
             left -= mass;
         }
-        Follow::Never
+        Follow::Censored
     }
 
     /// Probability of returning to the queue within the horizon.

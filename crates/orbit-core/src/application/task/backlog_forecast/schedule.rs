@@ -10,9 +10,11 @@
 //! Each task follows its iteration's [`Script`] [ORB-18688]: an attempt that
 //! does not deliver frees its slot and locks when its sampled hold ends,
 //! then the task requeues at once (failed), returns after its sampled wait
-//! (blocked), finishes outside the drain, or never returns. A blocked task
-//! starts out waiting. A scenario drains only once every scheduled task has
-//! finished.
+//! (blocked), finishes outside the drain, or waits unresolved. A censored
+//! block holds no slot and keeps waiting until the horizon. Absorption
+//! waits only until that event; abandonment and an attempt cap stop with
+//! no return wait. A blocked task starts out waiting. A scenario drains
+//! only once every scheduled task has finished.
 //!
 //! Under resource fit [ORB-18689] the pass also asks gap fit, which prices
 //! each running task's profile by the hours since its admission (an
@@ -113,7 +115,8 @@ pub(super) struct Run {
     pub(super) parallelism: Option<f64>,
     /// Summed task-hours spent waiting, per [`ForecastWait::ALL`] reason.
     pub(super) waits: Option<[f64; WAITS]>,
-    /// Summed task-hours waiting to return to the queue.
+    /// Summed task-hours out of the queue: finite returns and resolutions,
+    /// the wait until absorption, and censored waits through the horizon.
     pub(super) return_wait: Option<f64>,
     /// Attempts started that were blocked, failed or abandoned.
     pub(super) setbacks: [u64; 3],
@@ -127,6 +130,14 @@ pub(super) struct Run {
 /// A heap entry: the earliest end first, ties by key.
 #[derive(PartialEq)]
 struct End(f64, usize);
+
+/// How the outstanding wait in [`ScheduleState::returns`] ends.
+#[derive(Clone, Copy)]
+enum ReturnKind {
+    Requeue,
+    Resolve,
+    Absorb,
+}
 
 impl Eq for End {}
 
@@ -155,10 +166,10 @@ pub(super) struct ScheduleState {
     reason: Vec<ForecastWait>,
     queued: VecDeque<f64>,
     scratch: ForecastPassScratch,
-    /// Waits out of the queue, earliest first, and whether each ends in a
-    /// resolution rather than a requeue.
+    /// Waits out of the queue, earliest first. [`ScheduleState::return_kind`]
+    /// says whether each ends in a requeue, a resolution or absorption.
     returns: BinaryHeap<End>,
-    resolving: Vec<bool>,
+    return_kind: Vec<ReturnKind>,
     /// Per task: its current attempt, and its position in dispatch order.
     attempt: Vec<usize>,
     dispatch_rank: Vec<usize>,
@@ -195,7 +206,7 @@ impl ScheduleState {
             queued: VecDeque::new(),
             scratch: admission.scratch(),
             returns: BinaryHeap::new(),
-            resolving: vec![false; len],
+            return_kind: vec![ReturnKind::Requeue; len],
             attempt: vec![0; len],
             dispatch_rank: {
                 let mut rank = vec![0; len];
@@ -290,6 +301,8 @@ pub(super) fn simulate_drain(
     let mut left = 0usize;
     let mut setbacks = [0u64; 3];
     let mut no_return = 0usize;
+    // Blocked tasks still waiting at the horizon. They hold no slot.
+    let mut unresolved = 0usize;
     // Start task `index`'s current attempt at `at`, charging its use.
     let mut begin = |state: &mut ScheduleState, totals: &mut Draw, index: usize, at: f64| {
         let step: Step = scripts[index].steps[state.attempt[index]];
@@ -315,11 +328,7 @@ pub(super) fn simulate_drain(
         }
         match scripts[index].initial {
             Follow::Requeue(wait) if wait <= 0.0 => {}
-            Follow::Requeue(wait) | Follow::Resolve(wait) => {
-                state.resolving[index] = matches!(scripts[index].initial, Follow::Resolve(_));
-                state.returns.push(End(wait, index));
-            }
-            Follow::Never => no_return += 1,
+            follow => schedule_follow(state, &mut unresolved, &mut no_return, index, 0.0, follow),
         }
     }
     state
@@ -423,7 +432,7 @@ pub(super) fn simulate_drain(
         for &index in &state.pending {
             waits[wait_slot(state.reason[index])] += span;
         }
-        return_wait += state.returns.len() as f64 * span;
+        return_wait += (state.returns.len() + unresolved) as f64 * span;
         if !next.is_finite() || next > HORIZON_HOURS {
             // Nothing left that could start the pending work, or the
             // horizon came first.
@@ -455,26 +464,26 @@ pub(super) fn simulate_drain(
             let more = state.attempt[index] < scripts[index].steps.len();
             match step.then {
                 Follow::Requeue(wait) if more && wait <= 0.0 => state.requeue(index),
-                Follow::Requeue(wait) if more => {
-                    state.resolving[index] = false;
-                    state.returns.push(End(at + wait, index));
+                // No attempt left to run this requeue.
+                Follow::Requeue(_) if !more => no_return += 1,
+                follow => {
+                    schedule_follow(state, &mut unresolved, &mut no_return, index, at, follow)
                 }
-                Follow::Resolve(wait) => {
-                    state.resolving[index] = true;
-                    state.returns.push(End(at + wait, index));
-                }
-                Follow::Requeue(_) | Follow::Never => no_return += 1,
             }
         }
         while state.returns.peek().is_some_and(|end| end.0 <= at) {
             let Some(End(_, index)) = state.returns.pop() else {
                 break;
             };
-            if state.resolving[index] {
-                left -= 1;
-                finish(state, scenario, index);
-            } else {
-                state.requeue(index);
+            match state.return_kind[index] {
+                ReturnKind::Resolve => {
+                    left -= 1;
+                    finish(state, scenario, index);
+                }
+                ReturnKind::Requeue => state.requeue(index),
+                // Absorption ends the wait. The task stays unfinished and
+                // does not keep accruing return time.
+                ReturnKind::Absorb => {}
             }
         }
         if let (Some(arrives), Some(arrivals)) = (next_arrival, arrivals)
@@ -501,6 +510,42 @@ pub(super) fn simulate_drain(
         no_return,
         unfinished: scheduled().filter(|index| !state.finished[*index]).count(),
         truncated,
+    }
+}
+
+/// Put `follow` on the schedule at `at`. A non-positive requeue is the
+/// caller's immediate requeue. Censored work joins `unresolved` and holds
+/// no slot; absorption and a bare stop do not wait past their own end.
+fn schedule_follow(
+    state: &mut ScheduleState,
+    unresolved: &mut usize,
+    no_return: &mut usize,
+    index: usize,
+    at: f64,
+    follow: Follow,
+) {
+    match follow {
+        Follow::Requeue(wait) if wait <= 0.0 => {}
+        Follow::Requeue(wait) => {
+            state.return_kind[index] = ReturnKind::Requeue;
+            state.returns.push(End(at + wait, index));
+        }
+        Follow::Resolve(wait) => {
+            state.return_kind[index] = ReturnKind::Resolve;
+            state.returns.push(End(at + wait, index));
+        }
+        Follow::Absorb(wait) => {
+            *no_return += 1;
+            if wait > 0.0 {
+                state.return_kind[index] = ReturnKind::Absorb;
+                state.returns.push(End(at + wait, index));
+            }
+        }
+        Follow::Censored => {
+            *no_return += 1;
+            *unresolved += 1;
+        }
+        Follow::Never => *no_return += 1,
     }
 }
 
