@@ -50,6 +50,10 @@ impl FailureLog<'_> {
             ("output".to_string(), json!(run.output)),
             ("failures".to_string(), json!(run.failures)),
             (
+                "diagnostic_fingerprint".to_string(),
+                json!(run.diagnostic_fingerprint),
+            ),
+            (
                 "baseline_reproduces".to_string(),
                 json!(self.baseline_reproduces()),
             ),

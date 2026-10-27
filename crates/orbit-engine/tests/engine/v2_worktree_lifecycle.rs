@@ -1051,7 +1051,10 @@ fn a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output()
             "shared-plus-new",
             "echo 'test suite::broken ... FAILED'; test ! -f feature.txt || echo 'test suite::added ... FAILED'; exit 3",
         ),
-        ("unknown", "echo 'lint is red' >&2; exit 3"),
+        (
+            "unknown",
+            "if test -f feature.txt; then echo 'lint is red'; else echo 'other lint is red'; fi >&2; exit 3",
+        ),
     ] {
         let (preserved, setup, resumed) = PreservedCandidate::committed(command);
         assert_resumed(case, &resumed, "resumed_carried", false);

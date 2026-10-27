@@ -22,7 +22,8 @@
 //!   records the run's scratch checkout, so worktree GC can reclaim the
 //!   checkout's host validation target while holding it;
 //! - a comparable completed base failure with the same exit status and
-//!   every candidate failure identity makes the
+//!   every candidate failure identity (or equal diagnostic fingerprints when
+//!   neither run names identities) makes the
 //!   failure typed `[baseline_red]`: no recovery repairs it, and the
 //!   task is held until the base moves to a commit where the command passes
 //!   ([`baseline_hold_status`]);
@@ -31,7 +32,7 @@
 //!   them, so it is not held, and the step records the known-red tests and
 //!   proceeds. Review settlement applies the same rule to a reviewer's
 //!   red-base claim [ORB-15546];
-//! - missing identities, candidate-specific identities and timeouts cannot
+//! - unmatched diagnostics, candidate-specific identities and timeouts cannot
 //!   establish reproduction: both logs remain evidence for candidate repair;
 //! - a comparable passing base allows one bounded candidate replay of only
 //!   the failed tests ([`super::flaky`]); tests passing that isolated replay
@@ -63,6 +64,7 @@
 mod cache;
 mod command;
 mod compare;
+pub(super) mod diagnostic;
 mod hold;
 
 // Preserve the existing module surface even for helpers used only by this split.

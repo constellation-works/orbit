@@ -1431,8 +1431,9 @@ fn an_env_prefixed_claim_on_a_registered_check_is_that_check() {
 
 /// [ORB-15546] Failures shaped like known red that the host cannot vouch
 /// for keep their refusal: a failing run that also deferred a sandbox-confined
-/// path is held; a run naming no failure leaves the comparison unconfirmed
-/// and the review incomplete. An open finding or external evidence still owed
+/// path is held; matching identity-less diagnostics also hold, while empty
+/// output leaves the comparison unconfirmed and the review incomplete.
+/// An open finding or external evidence still owed
 /// keeps the review from settling. None records a known-red entry.
 fn a_known_red_shaped_failure_the_host_cannot_vouch_for_still_refuses() {
     let notice = orbit_exec::bwrap_deferral_notice(
@@ -1453,31 +1454,48 @@ fn a_known_red_shaped_failure_the_host_cannot_vouch_for_still_refuses() {
     unnamed.put_report(&report);
     let failure = unnamed
         .settle()
-        .expect_err("unidentified failures cannot confirm the reviewer's baseline claim")
+        .expect_err("matching diagnostics hold the review without known-red continuation")
         .to_string();
-    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    assert!(is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let hold = BaselineRedHold::from_text(&failure).expect("the refusal carries its hold");
     let settled = certificate(&unnamed);
-    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert_eq!(settled.verdict, ReviewVerdict::Reject);
     assert!(!settled.validation_complete);
-    assert!(
-        settled.baseline_red.is_empty(),
-        "no inherited failure was established"
-    );
+    assert_eq!(settled.baseline_red, vec![hold.clone()]);
     let evidence: Value = serde_json::from_slice(
         &unnamed
             .runtime
             .get_task_artifact(&unnamed.task_id, REVIEW_BASELINE_ARTIFACT)
             .unwrap()
-            .expect("the inconclusive comparison preserves both runs")
+            .expect("the diagnostic comparison preserves both runs")
             .content,
     )
     .unwrap();
     let check = &evidence["checks"][0];
-    assert_eq!(check["decision"], "refused", "{evidence}");
+    assert_eq!(check["decision"], "confirmed", "{evidence}");
     for run in ["candidate", "base"] {
         assert_eq!(check[run]["exit_code"], 1, "{run}: {evidence}");
         assert_eq!(check[run]["failures"], json!([]), "{run}: {evidence}");
+        let fingerprint = check[run]["diagnostic_fingerprint"]
+            .as_str()
+            .expect("complete diagnostics have a fingerprint");
+        assert_eq!(hold.failures.identities, vec![fingerprint]);
     }
+
+    let mut silent = fixture("#!/bin/sh\nexit 1\n", "after\n");
+    silent.admit();
+    let mut report = claim_report(&silent, CHECK, &["check.sh"]);
+    report["validation"][0]["baseline"]["failures"] = json!([]);
+    silent.put_report(&report);
+    let failure = silent
+        .settle()
+        .expect_err("empty output cannot confirm the reviewer's baseline claim")
+        .to_string();
+    assert!(!is_baseline_red_failure(None, Some(&failure)), "{failure}");
+    let settled = certificate(&silent);
+    assert_eq!(settled.verdict, ReviewVerdict::Incomplete);
+    assert!(!settled.validation_complete);
+    assert!(settled.baseline_red.is_empty());
 
     let mut open = fixture(RED, "after\n");
     open.admit();
@@ -1512,6 +1530,7 @@ fn a_known_red_shaped_failure_the_host_cannot_vouch_for_still_refuses() {
     for (case, fixture) in [
         ("sandbox gap", &sandbox_gap),
         ("no failure named", &unnamed),
+        ("empty output", &silent),
         ("open finding", &open),
         ("evidence owed", &owed),
     ] {

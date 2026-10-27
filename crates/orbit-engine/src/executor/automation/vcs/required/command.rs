@@ -80,6 +80,7 @@ use serde_json::{Value, json};
 use crate::context::RuntimeHost;
 
 use super::super::base::claim::{failure_identities, normalize_output};
+use super::super::baseline::diagnostic;
 use super::super::build_output::bind_host_output;
 pub(in crate::executor::automation::vcs) use super::capture::capture;
 
@@ -151,6 +152,9 @@ pub(in crate::executor::automation::vcs) struct RequiredCommandRun {
     /// ([`failure_identities`]), before capture bounded it [ORB-15375].
     /// Empty for a run that passed.
     pub(in crate::executor::automation::vcs) failures: BTreeSet<String>,
+    /// Normalized complete diagnostics, independent of bounded log capture.
+    /// Absent for passing or identified runs and empty diagnostics; never known red.
+    pub(in crate::executor::automation::vcs) diagnostic_fingerprint: Option<String>,
     /// The timeout allowance in milliseconds the command ran under [ORB-15350].
     pub(in crate::executor::automation::vcs) timeout_ms: u64,
     /// Advisory elapsed and admission evidence; never used to judge a pass.
@@ -592,6 +596,14 @@ pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost 
     let first_failure = infrastructure_failure
         .as_ref()
         .and_then(|_| first_failure_cause(&format!("{}\n{}", outcome.stdout, outcome.stderr)));
+    let diagnostic_fingerprint = (!passed && failures.is_empty())
+        .then(|| {
+            diagnostic::diagnostic_fingerprint(
+                &format!("{}\n{}", outcome.stdout, outcome.stderr),
+                workspace_path,
+            )
+        })
+        .flatten();
     let mut output = capture(&outcome.stdout, &outcome.stderr);
     let missing_tool = (!passed && !outcome.timed_out)
         .then(|| missing_tool(outcome.exit_code, &output, environment.path().unwrap_or("")))
@@ -618,6 +630,7 @@ pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost 
         network_retries: 0,
         network_evidence: None,
         summary,
+        diagnostic_fingerprint,
         failures,
         timeout_ms,
         timing,
