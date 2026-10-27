@@ -1,127 +1,258 @@
 ---
-title: "Scope: workspace seeding policy and presets for distributions"
+title: "Scope: Distributions and workspace presets"
 owner: claude
 last_updated: 2026-10-27
 last_validated: 2026-10-27
-status: Accepted
-stage: shipped
-next: "Count left-out defaults on the dashboard Automation view; decide whether routines need a per-name delete verb beside the list policy"
+status: Draft
+stage: designing
+next: "Build the seeding policy and presets (ORB-19186); orbit-office adopts them (ORB-19187)"
 feature: distributions
 doc_role: scope
 type: design
-summary: "Scope: persisted `seeding.routines` and `seeding.auto_tasks` policies over Orbit's shipped default routines and auto-tasks, honoured by every seeding path with digest-based retirement, plus `orbit workspace init --preset <file>` that applies a policy, enables plugin-seeded definitions and sets config without granting consent"
-tags: [distributions, seeding, routines, auto-tasks, presets, plugins]
+summary: "Scope: name the role of an app built on Orbit (a distribution), and let it choose which of Orbit's shipped default routines and auto-tasks a workspace carries through a persisted seeding policy and a preset file"
+tags: [distributions, presets, routines, auto-tasks, plugins, workspace]
 ---
 
-# Scope: workspace seeding policy and presets for distributions
+# Scope: Distributions and workspace presets
 
-Status: shipped. This page records what was built. The operator reference is
-[configuration › `[seeding]`](../../CONFIG.md#seeding--which-shipped-defaults-a-workspace-carries).
+Status: designing. Nothing is built; [ORB-19186] builds the Orbit side and
+[ORB-19187] is the first distribution adopting it.
+
+Bearing: The [plugin standard](../plugins/1_scope.md) lets a package add tools, CLI groups,
+panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
+definitions land `enabled: false` and become active only through an operator act.
+`orbit workspace init` seeds eleven shipped default routines
+([seeded defaults](../routines/2_design.md#seeded-defaults-and-ownership)) and 24 shipped
+default auto-tasks ([managed seeding](../auto-tasks/2_design.md#5a-managed-seeding)). All of
+them are disabled except `crew_performance_refresh` [ORB-17816]. Since [ORB-10800], seeding
+is manifest-aware. Each kind records the digest Orbit last wrote, so a default Orbit wrote can be
+retired by content, and an operator-edited one is preserved. Deleting a shipped
+auto-task records a durable opt-out, and `orbit auto-task restore` clears it. Routines have
+no opt-out: plain re-init recreates a deleted default.
 
 ## Problem
 
-Every workspace carries every default routine and auto-task Orbit ships. A distribution that
-builds on Orbit (a plugin bundle, a team setup, a narrow product) cannot keep a workspace to the
-defaults it wants. Deleting them works only partly. An auto-task deleted with
-`orbit auto-task delete` stays out, but a routine comes back on the next `orbit workspace sync`.
-Nothing stops an upgrade from seeding a default the distribution never chose. A distribution also
-had no single, reviewable way to set a workspace up. Its setup was a script of `orbit config set`
-calls and hand edits that nothing recorded.
+orbit-office is an app for office workers that runs on Orbit. It installs the `office` and
+`gateway` plugins and creates the user's workspace at `~/orbit` with
+`orbit workspace init`. That workspace then carries Orbit's developer automation:
 
-## What was built
+- **35 definitions**: CI-failure and Dependabot sweeps, task pilot, finding verification,
+  ship sweep, code review, flaky-test hunts and architecture audits, beside office's own
+  four routines and two auto-tasks.
+- **One running by default.** `crew_performance_refresh` records a job run every hour.
+- **Visible clutter.** The app's Routines screen reads `orbit.auto_task.list`, so an office
+  worker would see 24 developer auto-tasks they will never use, any of them one click
+  from running.
+- **No lasting way out.** Deleting the auto-tasks one by one survives, because delete
+  records an opt-out. Deleting routines does not: re-init recreates them. Either way, the
+  next Orbit release seeds any newly shipped default into every workspace.
+
+There is a second gap behind the first: nothing in Orbit names what orbit-office *is*. It is
+not a plugin. It is a product that uses Orbit as its engine and ships plugins as some of its
+parts. With no name for that role, each such product invents its own install rules, and the
+question "which of Orbit's defaults belong here?" has nowhere to live.
+
+## Goal
+
+Name the role: an app built on Orbit is a **distribution**. Give a distribution one
+supported, durable way to choose which of Orbit's shipped default routines and auto-tasks its
+workspaces carry, and which of its own plugin-seeded definitions start enabled. The choice
+must survive re-init, `orbit workspace sync` and Orbit upgrades. Orbit stays generic: a
+preset is data the distribution ships, and Orbit knows no particular distribution.
+A workspace with no policy behaves exactly as it does today.
+
+## Shape
+
+### Vocabulary
+
+| Term | Meaning | Example |
+|---|---|---|
+| **Engine** | Orbit: tasks, runs, routines, auto-tasks, the tool registry, MCP, the clock | `orbit` 0.34 |
+| **Component** | A plugin: the unit that adds tools and definitions to the engine | `office`, `gateway`, `cloudcli` |
+| **Distribution** | A product built on Orbit for one audience: its own app or UI, the components it installs, a preset, and an installer. It lives in its own repository and uses only Orbit's public surfaces | orbit-office |
+| **Preset** | A file the distribution ships that says what a workspace it creates carries | `office.yaml` |
+
+"Plugin" stays the right word for a component. It is the wrong word for the product.
+A distribution may consist of a single plugin plus a preset; it is still a distribution
+when it has an audience and an install story of its own.
+
+### Who owns what
+
+| Concern | Orbit | Distribution |
+|---|---|---|
+| Engine behaviour, defaults, upgrades | yes | pins a tested Orbit version |
+| Tools and definitions | plugin standard | ships its components |
+| Which shipped defaults a workspace carries | the seeding policy mechanism | the policy, in its preset |
+| Which of its own definitions start enabled | honours the recorded preset | lists them in its preset |
+| Plugin permissions | `orbit plugin enable` consent | asks the user, never bypasses |
+| UI, onboarding, install script | — | all of it |
 
 ### Seeding policy
 
-Two config keys, read per workspace over the global layer like every key:
+Two workspace config keys decide which shipped defaults are seeded:
 
-- `seeding.routines`: `"all"` (default), `"none"`, or a list of shipped routine file stems.
-- `seeding.auto_tasks`: the same, by shipped auto-task name.
+```toml
+[seeding]
+routines = "none"                       # "all" (default) | "none" | ["worktree_gc", "store_gc"]
+auto_tasks = "none"
+```
 
-The rules:
+Rules:
 
-- **One choke point.** `workspace_sync::reconcile_managed_artifacts` reads the policy itself and
-  hands reconciliation only the defaults it includes. Every seeding path runs through it:
-  `orbit workspace init`, `--force` re-init, `orbit workspace sync`, and the create-only seeding
-  host `orbit init` runs over registered workspaces after an upgrade. None of them can skip it.
-- **Upgrades.** A list and `"none"` never seed a default added in a later release. `"all"` still
-  does, unchanged.
-- **Admission.** `orbit-config` admits the keys against its own copy of the shipped and retired
-  names, because it cannot see the embedded assets. `orbit-core` asserts at compile time that its
-  asset tables carry exactly those names. An unknown name fails config load, `orbit config set`
-  and every seeding command, naming the key and the name. A name a later release retires still
-  admits, so the workspace that lists it stays loadable.
-- **Retirement by digest.** A default the policy leaves out takes the existing path for a default
-  a release dropped:
-  - an unedited file whose digest Orbit recorded is removed;
-  - an edited file moves under `.orbit/.retired-managed/`, with a warning to migrate it;
-  - a file Orbit never recorded is left alone.
-- **Reseeding.** Widening the policy seeds the default again, because retirement removed its
-  manifest entry.
-- **Opt-outs.** Auto-task opt-outs recorded by `orbit auto-task delete` are kept while the default
-  is left out. `orbit auto-task restore` refuses a left-out name and names the policy.
-- **Light loader.** The policy loader reads only the two keys, so a fault elsewhere in either
-  config file does not stop convergence. A full config load still reports that fault.
+1. The policy is read by every path that seeds shipped defaults: `orbit workspace init`,
+   plain re-init, `orbit workspace sync`, and the seeding an upgrade performs. A shipped
+   default outside the policy is never written, including one a later release adds.
+2. A list names shipped defaults by their base name, with no workspace suffix. An unknown
+   name fails config load and names it.
+3. Narrowing the policy on an existing workspace retires defaults through the managed-asset
+   path. A file whose bytes match the digest Orbit recorded is removed. An operator-edited
+   file is preserved under `.retired-managed/`, as release retirement does today. Widening
+   it seeds the newly included defaults.
+4. A default left out by policy is not "missing". Doctor and sync do not report it, and
+   routines gain the same opt-out record auto-tasks already keep, so an explicit
+   per-name delete also survives re-init.
+5. `"all"` is the default and the absence of the section, so every existing workspace keeps
+   today's behaviour.
 
 ### Presets
 
-`orbit workspace init --preset <file>` applies a TOML preset. It also works with `--force` on a
-registered workspace. The file holds:
+A preset is a small, versioned YAML file:
 
-- `name` (required, 1–64 of `[A-Za-z0-9._-]`);
-- `[seeding]` with `routines` and `auto_tasks`;
-- `[enable]` with `routines` and `auto_tasks`, by seeded name;
-- `[config]` with workspace keys, nested or dotted.
+```yaml
+schemaVersion: 1
+kind: WorkspacePreset
+name: office
+seeding:
+  routines: none
+  auto_tasks: none
+enable:                     # plugin-seeded definitions to start enabled
+  routines: [office-daily-digest, office-kt-inbox, office-signals]
+  auto_tasks: []
+config:                     # only keys `orbit config set` accepts
+  workflow.auto_ship: false
+```
 
-Every table denies unknown fields. The whole file is validated before anything is written or
-registered:
+`orbit workspace init --preset <file>` applies it to a new or an existing workspace:
 
-- each `[config]` key and value is staged into the workspace config exactly as `orbit config set`
-  would, then validated for this workspace;
-- `seeding.*` under `[config]` is refused, because it belongs in `[seeding]`;
-- each `[enable]` name must be a definition an enabled plugin already seeded into this workspace,
-  checked against the plugin asset manifest;
-- the file is capped at 256 KiB.
+1. **Validated before any write.** Unknown fields are refused, and so is any `config` key
+   that `orbit config set` refuses. A preset has no field that grants a permission, enables
+   a plugin or names a crew pool, so it cannot ask for one.
+2. **Recorded.** The workspace records the preset's `name` and the digest of its bytes,
+   beside the seeding policy it wrote. Applying the same file again is a no-op. Applying a
+   changed file is an update, and it follows the policy rules above.
+3. **Enabling is deferred to seeding.** Workspace init runs before the user enables the
+   plugins, because `orbit plugin enable` needs a workspace. So when a plugin seeds its
+   definitions into a workspace, it seeds the ones the recorded preset names
+   `enabled: true` and the rest `enabled: false`. The operator's preset is the operator
+   act the plugin standard requires; a plugin still never enables its own schedules.
+4. **No layering.** A workspace has at most one recorded preset. A later
+   `--preset` replaces it.
 
-**Consent stays with the operator.** A preset never grants plugin permissions or enables a
-plugin. These fields are refused at the top level or under `[enable]`: `grant`, `grants`,
-`permissions`, `plugin`, `plugins`, `enable_plugins` and `plugin_enablement`. So is any
-`plugin_enablement*` key under `[config]`. The operator runs `orbit plugin enable` first.
+### How a distribution installs
 
-**Ordering.** `[seeding]` and `[config]` are written in one locked, validated save after the review
-policy is seeded and before defaults are reconciled. The first seeding therefore already follows
-the policy. `[enable]` runs after seeding:
+A distribution's installer (orbit-office's `install.sh` and `office init`, [ORB-19181])
+does this, in order:
 
-- auto-tasks through `auto_task_toggle`;
-- routines through the routine edit path.
+1. Install or check the pinned Orbit release, and never upgrade an existing one unasked.
+2. `orbit plugin add` each component.
+3. Create the folder and run `orbit workspace init --preset <its preset>`.
+4. Run `orbit plugin enable <component>` in that workspace, after showing the grants and
+   getting consent. Definitions the preset names come up enabled here.
+5. Store secrets with `orbit plugin secret set`. Never write them to a file.
+6. Start its own app, which talks to Orbit only through `orbit tool run`, MCP or the
+   documented HTTP API, and never reads `.orbit/` directly.
 
-**Provenance.** `.orbit/state/workspace-preset.json` records `name`, the `sha256:` digest of the
-file bytes and `applied_at`.
+### Configuration
+
+| Key | Default | Meaning |
+|---|---|---|
+| `seeding.routines` | `"all"` | Shipped default routines this workspace carries: `"all"`, `"none"`, or a list of base names |
+| `seeding.auto_tasks` | `"all"` | Shipped default auto-tasks this workspace carries, same forms |
+
+The recorded preset (name and digest) is workspace state, not a config key. Operators change
+it only by applying a preset.
 
 ### Surfaces
 
-- `orbit workspace init` prints the applied preset and the definitions it enabled. Its JSON gains
-  a `preset` object.
-- `orbit workspace show` prints both policies, the shipped defaults they leave out, and the
-  applied preset. Its JSON gains `seeding` (`routines`, `auto_tasks`, `left_out`) and `preset`.
-- `orbit doctor`:
-  - drops left-out defaults from the artifact catalogs, so they are not reported missing;
-  - reports a leftover file of a left-out default as one `orbit workspace sync` will retire;
-  - adds a `seeding-policy` row. The row is silent under the default policy and otherwise
-    summarizes what is left out. It warns while `workflow.crew_performance` is not `off` and
-    `seeding.routines` leaves out `crew_performance_refresh`, since nothing then refreshes the
-    snapshot that crew draws read.
-- `orbit config keys` and the configuration references list both keys.
+- `orbit workspace show` and its tool report the preset's name and digest, and the
+  effective policy.
+- `orbit doctor` stays quiet about defaults the policy excludes. It warns when
+  `workflow.crew_performance` is not `off` while `crew_performance_refresh` is excluded,
+  because draws would then read a snapshot that never refreshes.
+- The dashboard's Automation view says "N shipped defaults not seeded (preset `office`)"
+  rather than leaving the count silently smaller.
+- `orbit auto-task list` and `orbit routine list` are unchanged: they list what exists.
 
-## Not built
+## Non-goals
 
-- **Dashboard count.** The Automation view does not count left-out defaults. `orbit workspace
-  show` and `orbit doctor` carry that information today.
-- **Routine delete verb.** There is no per-name delete verb for routines. A list policy is the
-  durable per-name opt-out for routines.
-- **MCP.** There is no MCP tool for `workspace show`. The CLI JSON carries the fields.
-- **Settings forks.** The settings-only fork migration still runs over every shipped auto-task
-  name, whatever the policy.
+- **Packaging or hosting distributions.** Orbit does not build, publish, sign or update
+  them. They ship from their own repositories with their own installers.
+- **A distribution registry or an `orbit distribution` command.** The noun is a role,
+  not an engine object. Revisit only if several distributions need Orbit to know about them.
+- **Per-distribution behaviour in core.** Nothing in Orbit branches on a preset's `name`.
+- **Granting permissions.** Consent stays with `orbit plugin enable`. A preset cannot widen
+  what a plugin may do.
+- **Removing a plugin's own definitions.** A distribution that does not want one of its own
+  definitions should not ship it.
+- **Theming the dashboard.** A distribution brings its own UI. Orbit's dashboard stays
+  Orbit's.
 
-## Counts at the time of writing
+## Concerns and honest limitations
 
-11 shipped default routines and 23 shipped default auto-tasks.
+- **Excluding `crew_performance_refresh`.** Crew performance draws then have no fresh
+  snapshot. That is harmless while `workflow.crew_performance` is `off`, the default, and
+  doctor warns otherwise.
+- **Surprise for developers.** Someone who later wants a developer default in a preset
+  workspace finds it absent. The fix is to widen the policy or run `orbit auto-task restore`,
+  and `orbit workspace show` makes the policy visible.
+- **Deferred enabling ties preset to plugin seeding.** If the preset is applied after the
+  plugin was already enabled, the named definitions already exist, disabled. Applying the
+  preset then enables them directly, which needs the same refusal rules for definitions an
+  operator has edited.
+- **Narrowing is destructive for Orbit-written bytes only.** Retirement proves authorship by
+  digest. A workspace created before managed provenance has no digests, so its defaults are
+  preserved rather than removed, and sync says so.
+
+## Phasing
+
+1. **Seeding policy.** `seeding.*` keys honoured by init, re-init, sync and upgrade seeding.
+   Routine opt-out parity. Retirement on narrowing [ORB-19186].
+2. **Presets.** The file format, `orbit workspace init --preset`, the recorded preset, and
+   plugin seeding consulting it for `enable` [ORB-19186].
+3. **Surfaces.** `workspace show`, the doctor rules and the dashboard count [ORB-19186].
+4. **First distribution.** orbit-office ships `office.yaml`, applies it from `office init`
+   and its installer, and adopts the distribution wording [ORB-19187].
+
+## Open questions
+
+1. **Key names?** `seeding.*` describes the mechanism; `defaults.*` reads better to an
+   operator but collides with the many "default" values in CONFIG.md.
+2. **Should a single-plugin distribution declare its preset in the plugin manifest?** It
+   would save a file. But a plugin would then shape Orbit's own defaults, which crosses
+   the capability boundary the plugin standard draws. Leaning no.
+3. **Should presets carry crew or model routing?** An office workspace wants a cheaper
+   default crew. But crew pools are host-owned operator settings, and a preset that
+   names crews would not travel between hosts. Leaning no for now.
+
+## Acceptance (feature level)
+
+- Given `seeding.routines = "none"` and `seeding.auto_tasks = "none"`, Orbit seeds no shipped
+  default on init, re-init, sync or after an upgrade that ships a new default.
+- Given an existing workspace narrowed from `all` to `none`, Orbit removes the defaults it
+  wrote and preserves operator-edited ones.
+- Given `orbit workspace init --preset office.yaml` and then `orbit plugin enable office`,
+  the workspace lists no Orbit shipped default, and office's named routines are enabled
+  while its others are disabled.
+- Given a preset with an unknown field or a refused config key, Orbit writes nothing and
+  names the problem.
+- Given no seeding section, Orbit seeds exactly what it does today.
+
+## Task References
+
+- [ORB-10800] — gave seeded definitions managed provenance and digest-based retirement.
+- [ORB-17816] — added `crew_performance_refresh`, the one default seeded enabled.
+- [ORB-19181] — builds orbit-office's `office init`, which applies the preset.
+- [ORB-19186] — builds the seeding policy, presets and their surfaces.
+- [ORB-19187] — makes orbit-office the first distribution to ship a preset.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
