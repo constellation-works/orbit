@@ -42,6 +42,9 @@ if [ -f "$forge/base-applied" ]; then
     checks="$checks,{\"id\":2,\"name\":\"Protected (rust)\",\"head_sha\":\"$head\",\"app\":{\"id\":900},\"check_suite\":{\"id\":800},\"status\":\"completed\",\"conclusion\":\"success\"}"
 fi
 check_count=$([ -f "$forge/base-applied" ] && echo 2 || echo 1)
+if [ -f "$forge/pending-before-emission" ]; then
+    rollup="$rollup,"'{"__typename":"CheckRun","name":"Protected (rust)","status":"IN_PROGRESS","conclusion":"","isRequired":true}'
+fi
 # ci.yml's full-mode run: the change-scope job succeeds and the docs-only job
 # reports skipped under its unchanged name.
 if [ -f "$forge/scope-checks" ]; then
@@ -141,6 +144,14 @@ case "$1 ${2:-}" in
     'api '*)
         case "$2" in
             *'/rules/branches/'*)
+                if [ -f "$forge/unreadable-integration" ]; then
+                    seen=$(($(cat "$forge/integration-reads" 2>/dev/null || echo 0) + 1))
+                    echo "$seen" > "$forge/integration-reads"
+                    if [ "$seen" -ge "$(cat "$forge/unreadable-integration")" ] && { [ ! -f "$forge/integration-hit" ] || [ -f "$forge/integration-repeat" ]; }; then
+                        touch "$forge/integration-hit"
+                        echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":"unavailable"}]}}]'; exit
+                    fi
+                fi
                 if [ -f "$forge/policy-empty" ] || [ -f "$forge/policy-no-rule" ]; then echo '[]'; exit; fi
                 if [ -f "$forge/legacy-extra" ]; then
                     echo '[{"type":"required_status_checks","ruleset_id":55,"ruleset_source":"orbit/test","ruleset_source_type":"Repository","parameters":{"required_status_checks":[{"context":"Protected (rust)","integration_id":900},{"context":"external-ci","integration_id":null}]}}]'; exit

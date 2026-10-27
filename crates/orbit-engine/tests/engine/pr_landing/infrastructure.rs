@@ -726,10 +726,7 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                     if case == "deadline" {
                         input["max_wait_seconds"] = json!(0);
                     }
-                    let result = orbit_engine::test_support::with_vcs_retry_wait(
-                        |_| {},
-                        || action(&host, "pr_complete", &input),
-                    );
+                    let result = super::complete_with_logical_clock(&host, &input);
                     let error = result.expect_err(case).to_string();
                     let expected = match case {
                         "optional" => "only optional",

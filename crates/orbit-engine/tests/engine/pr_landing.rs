@@ -58,6 +58,7 @@ mod absent_context;
 pub(super) use absent_context::adopted_policy_cases;
 mod auto_fix;
 mod check_annotations;
+mod completion_observation;
 mod conventions;
 mod draft_handoff;
 mod flaky;
@@ -1104,6 +1105,11 @@ fn open_for_completion(fx: &Fixture, host: &DeliveryHost) -> usize {
     fx.forge_calls().len()
 }
 fn complete_with_logical_clock(host: &DeliveryHost, input: &Value) -> Res<Value> {
+    with_completion_clock(|| action(host, "pr_complete", input))
+}
+
+/// Advance completion's absolute clock by logical waits, including adapter retries.
+fn with_completion_clock<T>(run: impl FnOnce() -> T) -> T {
     let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
     let now = std::rc::Rc::clone(&clock);
     let waited = std::rc::Rc::clone(&clock);
@@ -1120,7 +1126,7 @@ fn complete_with_logical_clock(host: &DeliveryHost, input: &Value) -> Res<Value>
                     let millis = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
                     waited.set(waited.get().saturating_add(millis));
                 },
-                || action(host, "pr_complete", input),
+                run,
             )
         },
     )
@@ -5575,8 +5581,21 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     fn apply_final_recovery(
         &self,
         _: &str,
-        _: &FinalRecoveryApplication,
+        application: &FinalRecoveryApplication,
     ) -> Res<FinalRecoveryApplied> {
+        locked(&self.scripted_inputs).insert(
+            "applied_final_recovery".into(),
+            serde_json::to_value(&application.decision).unwrap(),
+        );
+        if matches!(
+            application.decision,
+            orbit_types::workflow::FinalRecoveryDecision::Requeue { .. }
+        ) {
+            self.set_status(&application.task_id, TaskStatus::Backlog);
+            return Ok(FinalRecoveryApplied::Settled {
+                outcome: "requeued".into(),
+            });
+        }
         Ok(FinalRecoveryApplied::Escalated {
             outcome: "fixture".into(),
         })

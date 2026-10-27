@@ -74,6 +74,48 @@ pub(super) fn snapshot(
     {
         return Err(unreadable("PR/head selector"));
     }
+    let mut previous_unreadable = None;
+    loop {
+        let error = match snapshot_once(deadline, workspace, pr, head, branch, base) {
+            Ok(snapshot) => return Ok(snapshot),
+            Err(error) => error,
+        };
+        // An in-flight retry can itself run out of time. Keep the last
+        // unavailable snapshot's cause when that happens as well.
+        if deadline.remaining().is_err() {
+            return Err(previous_unreadable.unwrap_or(error));
+        }
+        // Only this adapter's unavailable-evidence errors are retried here.
+        // Transport/authentication failures retain their provider class and
+        // existing recovery policy. Never act on a partial snapshot.
+        if !matches!(&error, OrbitError::Execution(message)
+            if message.starts_with("workflow prerequisite evidence is unavailable ("))
+        {
+            return Err(error);
+        }
+        let Ok(remaining) = deadline.remaining() else {
+            return Err(error);
+        };
+        super::super::remote_probe::fixed_wait(std::time::Duration::from_millis(
+            remaining.min(5_000),
+        ));
+        // Keep the original unreadable-evidence diagnostic at exhaustion,
+        // rather than replacing it with a generic deadline error.
+        if deadline.remaining().is_err() {
+            return Err(error);
+        }
+        previous_unreadable = Some(error);
+    }
+}
+
+fn snapshot_once(
+    deadline: Deadline,
+    workspace: &Path,
+    pr: &str,
+    head: &str,
+    branch: &str,
+    base: &str,
+) -> Result<Snapshot, OrbitError> {
     let repo = api(deadline, workspace, "repos/{owner}/{repo}")?;
     let repository = text(&repo, "full_name", unreadable)?.to_string();
     let repository_id = number(&repo, "id", unreadable)?;
