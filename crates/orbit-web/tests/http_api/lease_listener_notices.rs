@@ -25,7 +25,9 @@ use serde_json::{Value, json};
 use tokio::net::TcpStream;
 use tower::ServiceExt;
 
-use super::lease_listener::{audit_rows, bearer, config, mint, provisioned_store, send};
+use super::lease_listener::{
+    audit_rows, bearer, config, mint, provisioned_store, send, short_intake_socket,
+};
 
 fn read_frame(stream: &mut UnixStream) -> Option<Value> {
     let mut header = [0; 4];
@@ -105,7 +107,7 @@ async fn open_notice_streams_count_toward_the_listeners_limits() {
         tokens.push(bearer(&secret));
     }
     let [alice, bob, carol]: [String; 3] = tokens.try_into().unwrap();
-    let socket = tmp.path().join("intake.sock");
+    let (_sockets, socket) = short_intake_socket();
     scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.max_in_flight_requests = 2;
@@ -206,7 +208,7 @@ async fn opening_a_notice_stream_spends_the_tokens_read_budget() {
         HardLeasePermission::Allow,
     );
     let alice = bearer(&secret);
-    let socket = tmp.path().join("intake.sock");
+    let (_sockets, socket) = short_intake_socket();
     scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.token_reads_per_minute = 1;
@@ -241,7 +243,7 @@ async fn a_notice_stream_holds_a_connection_and_ends_at_shutdown() {
         LeasePriorityCeiling::Normal,
         HardLeasePermission::Allow,
     );
-    let socket = tmp.path().join("intake.sock");
+    let (_sockets, socket) = short_intake_socket();
     scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.max_connections = 1;
@@ -318,7 +320,7 @@ async fn a_refused_health_check_is_read_before_its_overload_response() {
         LeasePriorityCeiling::Normal,
         HardLeasePermission::Allow,
     );
-    let socket = tmp.path().join("intake.sock");
+    let (_sockets, socket) = short_intake_socket();
     scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.max_connections = 1;
@@ -432,7 +434,7 @@ async fn an_orbit_of_another_intake_protocol_version_is_refused_naming_both() {
         LeasePriorityCeiling::Normal,
         HardLeasePermission::Allow,
     );
-    let socket = tmp.path().join("intake.sock");
+    let (_sockets, socket) = short_intake_socket();
     let other = LEASE_INTAKE_PROTOCOL_VERSION + 1;
     scripted_intake(&socket, other);
 
