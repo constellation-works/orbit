@@ -12,9 +12,10 @@
 //! source is re-read before the group is minted, and the group is abandoned if
 //! any of them moved, so a task that started between preview and apply is not
 //! rewritten. And the replacement carries each member's per-alert coverage key
-//! while the sources are rejected with a covering-task comment — the evidence
-//! both the sweep's exact-key path and its confirmed-duplicate path already
-//! understand, so a second run finds nothing left to consolidate.
+//! while the replacement links to each rejected source with an inbound
+//! `Supersedes` relation. The confirmed-duplicate path uses that relation; it
+//! reads covering-task comments only for legacy rejected tasks without one,
+//! so a second run finds nothing left to consolidate.
 
 use std::collections::{BTreeMap, BTreeSet};
 
