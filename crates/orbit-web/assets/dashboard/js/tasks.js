@@ -3615,8 +3615,9 @@ function buildTaskDetail(task, context, drain = null) {
       content: commentsContent,
     },
   ], context);
-  // Everything above the tab content (state, callouts, delivery progress and
-  // the tab strip) shares one band, so the strip reads apart from the content.
+  // Everything above the tab content shares one band. The task's stage strip
+  // closes it after the metadata, callouts and delivery progress, just above
+  // the tab strip.
   const [tabStrip, ...tabPanels] = sections;
   const band = el("div", { class: "detail-band" });
   band.appendChild(metaBlock);
@@ -3632,6 +3633,8 @@ function buildTaskDetail(task, context, drain = null) {
   if (deliveryAttentionBanner) band.appendChild(deliveryAttentionBanner);
   band.appendChild(attentionSlot);
   band.appendChild(progressSlot);
+  const stageStrip = buildStageStrip(task);
+  if (stageStrip) band.appendChild(stageStrip);
   band.appendChild(tabStrip);
   detail.appendChild(band);
   for (const panel of tabPanels) detail.appendChild(panel);
@@ -3650,13 +3653,14 @@ function buildTaskDetail(task, context, drain = null) {
   return detail;
 }
 
-// The detail's head, above the tabs: what the task is and where it stands.
+// The detail's metadata head: what the task is and where it stands.
 // The levers an operator sets (status, complexity, crew, host, tags) share
 // one row of chips; the lifecycle strip places the status on the way to done;
 // the delivery card gathers the pull request, the run, the hands that carried
-// the task and its relations to other tasks. The pane head carries only the
-// id and title, so nothing here is repeated there, and the timestamps close
-// the Overview.
+// the task and its relations to other tasks. The delivery-stage strip is
+// appended to the shared band immediately before its tabs. The pane head
+// carries only the id and title, so nothing here is repeated there, and the
+// timestamps close the Overview.
 function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const levers = el("div", { class: "task-levers" });
   levers.appendChild(buildStatusUpdateControl(task, context));
@@ -3692,8 +3696,6 @@ function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   if (riskDetail) head.appendChild(riskDetail);
   const lifecycle = buildLifecycleStrip(task.status);
   if (lifecycle) head.appendChild(lifecycle);
-  const stageStrip = buildStageStrip(task);
-  if (stageStrip) head.appendChild(stageStrip);
   const delivery = buildDeliveryCard(task, drain, context);
   if (delivery) head.appendChild(delivery);
   return head;
@@ -3731,9 +3733,9 @@ function buildLifecycleStrip(status) {
 // The delivery stage the task's run is on, as a thinner second strip in the
 // lifecycle strip's past/current/future language. The detail API derives
 // `job_run_stage` from durable run and step state; a task with no readable
-// run carries none and shows no strip. Rendered full-width under the
-// lifecycle strip rather than confined to its current column: at 375px a
-// one-column strip cannot keep the current stage readable.
+// run carries none and shows no strip. Rendered full-width at the end of the
+// shared band, just above the tabs; at 375px a one-column strip cannot keep
+// the current stage readable.
 const RUN_ENDED_STATES = ["failed", "cancelled", "timeout", "interrupted"];
 
 function buildStageStrip(task) {
