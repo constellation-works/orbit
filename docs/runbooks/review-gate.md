@@ -5,7 +5,7 @@ tags: [operations, review-gate, delivery]
 paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849"]
-last_validated: 2026-10-26
+last_validated: 2026-10-27
 ---
 
 # Operate the Review Gate
@@ -165,8 +165,13 @@ PR (`held_pull_request`) and the owner keeps it with the held candidate, so the
 run that resumes the candidate after the evidence arrives publishes on its own
 branch and its `pr_open` closes the earlier PR as superseded
 (`superseded_pull_request` in that step's output; `close_failed` leaves it for
-you to close). Other non-approving claimed reviews still block the task on the
-owner with its PR open.
+you to close). When that resume's landing admission decides
+`evidence_received` — the hold named only owed evidence and it matches the
+unchanged candidate — `landing_review` does not start a reviewer. Settlement
+reuses the held certificate, as a before-PR resume does. A fresh `admitted` or
+`resumed` decision still starts the reviewer. Missing or mismatched evidence
+leaves the hold in place. Other non-approving claimed reviews still block the
+task on the owner with its PR open.
 
 #### Sandboxed reviewers on a claimed leaf
 

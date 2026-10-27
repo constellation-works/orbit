@@ -95,7 +95,10 @@
 # than an approve fails the leaf with the PR open and unmerged, and its
 # failure settlement blocks the task on the owner. An evidence-only gap
 # holds the leaf and releases its claim with the reviewed candidate and open
-# PR. If the evidence-branch push fails, settlement carries the tip to its
+# PR. Once that evidence arrives, a landing admission of `evidence_received`
+# skips `landing_review` and settlement reuses the held certificate. A fresh
+# `admitted` or `resumed` decision still starts the reviewer.
+# If the evidence-branch push fails, settlement carries the tip to its
 # durable candidate ref, or records why it remains on the source host.
 #
 # ORB-14261: a repair claim — admitted after the owner's landing of an earlier
@@ -437,8 +440,10 @@ spec:
         before_landing: true
         host_validation_step: validate
 
+    # Same exclusion as `review`: an owed hold whose evidence arrived settles
+    # on the held certificate and must not start another reviewer.
     - id: landing_review
-      when: "{{ steps.landing_review_gate_admit.output.applies }} == true"
+      when: "{{ steps.landing_review_gate_admit.output.applies }} == true && {{ steps.landing_review_gate_admit.output.decision }} != evidence_received"
       retry:
         max_attempts: 2
         initial_backoff_ms: 5000
