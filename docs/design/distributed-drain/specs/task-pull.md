@@ -17,15 +17,19 @@ related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-1
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
 receipt. The internal store foundation now implements admission receipts, claims and replay,
-though tombstone compaction is not yet written, and [ORB-12495] exposed the owner's read-only half — the
-[preflight probe](../2_design.md#41-read-only-admission-probe) and the
-[receipt lookup](#read-only-receipt-reconciliation) below — on the managed MCP and registered CLI
-surfaces. [ORB-13625] registered the executor's mutating half — `orbit.task.pull`,
-`orbit.drain.claim.bind` and `orbit.drain.claim.settle` — and opened the one named gate
-(`orbit-core`'s `application::distributed`) that every mutating entry point still names, so the
-feature is closed again only by a source change. Handoff approval is not a registered
-tool. Revocation and recovery are the operator-only `orbit.task.revoke_handoff` and
-`orbit.task.recover_claim` tools, which managed runs cannot call.
+though tombstone compaction is not yet written. For follower execution, the five protocol
+operations — the
+[preflight probe](../2_design.md#41-read-only-admission-probe),
+[receipt lookup](#read-only-receipt-reconciliation), `orbit.task.pull`,
+`orbit.drain.claim.bind` and `orbit.drain.claim.settle` — use the deterministic owner/follower
+internal runtime route ([ORB-12495], [ORB-13625]). Their handlers remain active in the CLI/runtime
+tool registry, while the MCP adapter omits all five from ordinary discovery and refuses public
+calls under both dotted and underscore names, including in operator sessions. The owner-side
+probe and receipt diagnostics remain available through `orbit tool run`; operators also use
+`orbit tool run orbit.drain.claims` for the separate claim inspection, which is off MCP. Handoff
+approval is dashboard-only. Recovery and revocation remain operator-only CLI commands and
+matching MCP tools — `orbit.task.revoke_handoff` and `orbit.task.recover_claim` — which managed
+runs cannot call.
 
 ## Why This Exists
 
@@ -745,9 +749,10 @@ change.
 The job-store caller checkpoint preserves request identity, unique leaf
 binding, launch uncertainty and disconnected settlement. Its refill loop is the
 follower's pull drain: `orbit run auto --pull <selector>` runs it as the
-`workspace_pull_pipeline` job against the registered `orbit.task.pull`,
-`orbit.drain.claim.bind` and `orbit.drain.claim.settle` tools (see
-[ORB-13625] below). The owner exposes no other pull endpoint.
+`workspace_pull_pipeline` job, invoking the owner's `orbit.task.pull`,
+`orbit.drain.claim.bind` and `orbit.drain.claim.settle` operations over the runtime-owned
+internal route (see [ORB-13625] below). These handlers are absent from ordinary MCP; the owner
+exposes no other pull endpoint.
 
 [ORB-12616] made the owner-local half executable. A claim's leaf is one of two
 internal handoff-only definitions chosen by the owner-resolved ship mode —
