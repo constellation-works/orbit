@@ -1427,8 +1427,10 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
 - [ORB-15894] — reports a protected head whose miss stops improving (§5.3).
 - [ORB-16379] — scoped provider-unavailable holds to the host whose login
   failed (§5).
-- [ORB-16608] — stopped pull-drain forecast fit offering an auto-task
-  template the executor has no profile for (§5).
+- [ORB-16608] — enabled pull-drain forecast fit to offer an auto-task
+  template the executor has no profile for when its base-class fallback
+  fits, allowing the owner to admit it while still refusing profiled
+  templates that do not fit (§6).
 - [ORB-16778] — evaluated crew/tag profile keys, per-horizon CPU bias
   correction and phase-aligned profiles (§4.2).
 - [ORB-18010] — recorded the 2026-10-25 CPU bias-correction replay in
