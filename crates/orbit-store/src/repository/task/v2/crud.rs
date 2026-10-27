@@ -214,6 +214,7 @@ impl TaskV2Store {
                 required_tools: orbit_types::task::normalize_required_tools(params.required_tools),
                 granted_tools,
                 requires_labels,
+                not_before: params.not_before,
                 context_files: params.context_files,
                 external_refs: params.external_refs,
                 created_by: params.created_by,

@@ -749,7 +749,16 @@ impl crate::OrbitRuntime {
         // cannot produce the evidence, so it is judged against the requesting
         // executor.
         let machine_id = Some(identity.location().machine_id.as_str());
+        let now = chrono::Utc::now();
         for task in &backlog {
+            // A task scheduled ahead is claimed by no follower until its
+            // time; the first request after it may take it.
+            if let Some(hold) = crate::application::task::schedule_hold_in(task, now, &|| {
+                self.get_task_history(&task.id)
+            })? {
+                admission_holds.insert(task.id.clone(), hold.detail());
+                continue;
+            }
             let comments = self.get_task_comments(&task.id)?;
             match self
                 .pilot_admission_hold_in(task, &comments, &|| self.get_task_history(&task.id))?
@@ -837,6 +846,15 @@ impl crate::OrbitRuntime {
             &admission_holds,
             &self.baseline_held_tasks(&backlog),
             &|task, comments, history| {
+                // Re-read under the section: a `not_before` set after the
+                // backlog read above still holds the candidate.
+                if let Some(hold) =
+                    crate::application::task::schedule_hold_in(task, chrono::Utc::now(), &|| {
+                        Ok(history.to_vec())
+                    })?
+                {
+                    return Ok(Some(hold.detail()));
+                }
                 if identity.is_remote()
                     && let Some(why) = claimed_tool_hold(self, task)
                 {

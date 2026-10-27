@@ -105,6 +105,7 @@ fn ship(
         JobRunTrigger::cli(),
         false,
         review,
+        false,
     )
 }
 

@@ -113,7 +113,7 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (7)
+### Building (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -123,15 +123,15 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
 | [Operations as Data](./design/operations-as-data/1_overview.md) | Restore ORB-15934 after 2026-11-12 to refuse unknown fields | claude |
 | [Path Leases](./design/path-leases/1_overview.md) | Land native TLS and the listener's full rate limits (ORB-18413, ORB-18421) | claude |
+| [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Build the list filter, --scheduled, the dashboard field and the forecast placement (ORB-19215) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 1: ORB-18488 browser-session credential (in review); then the terminal routes | claude |
 
-### Designing (3)
+### Designing (2)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
-| [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Build the field, the admission hold and the ship refusal (ORB-19214); then the list filter and surfaces (ORB-19215) | claude |
 
 ### Shipped (34)
 

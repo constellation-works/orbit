@@ -540,7 +540,8 @@ is unsettled; successful settlement does not clear the warning. Fix the reported
 A pull drain also records what its owner kept off this host. When a request is answered idle,
 the receipt's diagnostics fill `drain_last_pass` as a local drain's classifier does: `queued` is
 the receipt's `queue_depth`; `deferred` lists footprint holds (`context_lock_conflict`, the holder
-in `blocked_by`) and other owner holds (`owner_hold`); `excluded` lists unmet dependencies
+in `blocked_by`), tasks scheduled ahead (`scheduled`, the time in `detail`) and other owner
+holds (`owner_hold`); `excluded` lists unmet dependencies
 (`dependency_not_done`, the unfinished tasks in `blocked_by`), `os:` waits (`host_os_mismatch`),
 browser-kit waits for `ui` tasks (`browser_kit_missing`), unrunnable crews (`crew_unavailable`) and work the host has no room for (`capacity_unavailable`), both lists bounded to 20 with `deferred_total` and `excluded_total` the full counts; and
 `waiting_by_reason` counts every kept-off task by code. `waiting_recorded_at` dates the owner's

@@ -125,6 +125,7 @@ fn create_task_with_crew(
             comments: Vec::new(),
             context_creation: Vec::new(),
             creation_decision: None,
+            not_before: None,
         })
         .expect("create task")
 }

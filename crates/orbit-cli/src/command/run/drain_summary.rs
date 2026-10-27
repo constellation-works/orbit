@@ -371,6 +371,7 @@ fn kept_off_cause(reason: &str) -> &str {
         "unverified_review_finding" => "review findings awaiting verification",
         "crew_unavailable" => "needing a crew this host cannot run",
         "owner_hold" => "held on the owner",
+        "scheduled" => "scheduled for later",
         "invalid_candidate" => "invalid",
         other => other,
     }
@@ -483,8 +484,8 @@ fn waiting_line(
     let reason = waiting_reason(task.reason.as_deref().unwrap_or(default_reason));
     let mut line = format!("Task {}: {}", task.task_id, reason);
     line.push_str(&formatter.blockers(&json!({"reason": reason, "blocked_by": task.blocked_by})));
-    // A host-OS wait names the host it waits for, a browser-kit wait the
-    // install command, and a native-OS requirement the tag to add. A local-route review hold names the
+    // A host-OS wait names the host it waits for, a scheduled task its time,
+    // a browser-kit wait the install command, and a native-OS requirement the tag to add. A local-route review hold names the
     // remedy. A verified-no-diff hold names the pilot's evidence and the
     // commits it cites, and an unverified review finding the verification
     // job to run. Other details (long repair instructions) stay in `--json`.
@@ -499,6 +500,7 @@ fn waiting_line(
                 | "local_route_before_landing"
                 | "crew_unavailable"
                 | "owner_hold"
+                | "scheduled"
                 | "invalid_candidate"
                 | "pilot_verified_no_diff"
                 | "unverified_review_finding"

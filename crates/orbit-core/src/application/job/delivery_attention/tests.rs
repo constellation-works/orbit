@@ -45,6 +45,7 @@ fn task(status: TaskStatus, with_pr: bool) -> Task {
         origin: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
+        not_before: None,
     }
 }
 

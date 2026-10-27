@@ -67,6 +67,7 @@ impl OrbitRuntime {
             origin: None,
             created_at: now,
             updated_at: now,
+            not_before: None,
         };
         input["auto_crew_pools"] = serde_json::to_value(self.auto_crew_pools_for_input(input)?)
             .map_err(|error| OrbitError::Execution(format!("serialize crew pools: {error}")))?;

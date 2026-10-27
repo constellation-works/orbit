@@ -147,6 +147,9 @@ pub struct TaskEnvelopeV2 {
     /// Capability labels a host must all carry to run the task (normalized).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_labels: Vec<String>,
+    /// Scheduled start; see [`crate::task::Task::not_before`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<DateTime<Utc>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub context_files: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

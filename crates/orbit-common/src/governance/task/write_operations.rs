@@ -129,6 +129,12 @@ const fn path(mut param: ParamSpec) -> ParamSpec {
     param
 }
 
+/// `not_before` on `orbit.task.add`.
+const NOT_BEFORE_MCP_HELP: &str = "Optional scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC. No dispatcher starts the task from the backlog before it; the hold lifts by itself on the first admission pass after it. A malformed time is refused";
+
+/// `--not-before` on `orbit task add|update`.
+const NOT_BEFORE_CLI_HELP: &str = "Earliest time a dispatcher may start the task: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or a local `YYYY-MM-DDTHH:MM` in this host's time zone. Until then a backlog task waits, reported `scheduled`";
+
 const ADD_RETIRED_FIELDS: &[RetiredField] = &[
     RETIRED_AGENT_FIELD,
     RetiredField::unknown_field("plan", "set it with orbit.task.update"),
@@ -161,6 +167,7 @@ pub(super) const ADD: TaskOperation = TaskOperation {
             "required_tools",
             "granted_tools",
             "requires_labels",
+            "not_before",
             "plan",
             "external_refs",
             "context_files",
@@ -238,6 +245,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 "Optional capability labels a host must carry, all of them, to run the task, as a string or array of strings. A host carries its `machine.labels` plus its OS (`linux`, `macos` or `windows`). Refused when no registered serving host carries them together with the task's `os:` tags",
                 flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
                 "Capability labels a host must carry, all of them, to run the task (its `machine.labels` plus its OS). Repeat or comma-separate for multiple labels",
+            ),
+            both(
+                "not_before",
+                ParamType::String,
+                NOT_BEFORE_MCP_HELP,
+                flag_named("not-before", "TIME"),
+                NOT_BEFORE_CLI_HELP,
             ),
             path(both(
                 "context_files",
@@ -404,6 +418,8 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             "tags",
             "granted_tools",
             "requires_labels",
+            "not_before",
+            "clear_not_before",
             "plan",
             "execution_summary",
             "comment",
@@ -492,6 +508,13 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 "Replacement capability labels a host must carry, all of them, to run the task from its next admission, as a string or array of strings; an empty array clears it. A host carries its `machine.labels` plus its OS. Refused when no registered serving host carries them together with the task's `os:` tags",
                 flag_with_delimiter("requires-labels", &["requires-label"], Some("LABEL")),
                 "Replacement capability labels a host must carry, all of them, to run the task (empty string clears). Repeat or comma-separate for multiple labels",
+            )),
+            preserve_empty(both(
+                "not_before",
+                ParamType::String,
+                "Replacement scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC; an empty string clears it (null, like any omitted field, leaves it unchanged). No dispatcher starts a backlog task before it, and the hold lifts by itself on the first admission pass after it. A malformed time is refused",
+                flag_named("not-before", "TIME"),
+                NOT_BEFORE_CLI_HELP,
             )),
             both(
                 "allow_drop_system_tags",
@@ -673,6 +696,12 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 ParamType::String,
                 flag_named("host", "HOST"),
                 TASK_HOST_HELP,
+            ),
+            cli_only(
+                "clear_not_before",
+                ParamType::Switch,
+                CliArgKind::flag("clear-not-before"),
+                "Clear the task's scheduled start, so dispatchers may start it at their next admission pass",
             ),
             cli_only(
                 "artifacts",

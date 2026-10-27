@@ -15,6 +15,7 @@ use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
     browser_kit_exclusion, clears_complexity_gate, host_labels_exclusion, host_os_exclusion,
     inherited_only_epic_root_exclusion, pilot_finding_exclusion, pilot_preparation_exclusion,
+    scheduled_exclusion,
 };
 use super::listing::active_pilot_preparations;
 use super::ordering::task_root_id;
@@ -151,6 +152,16 @@ pub(super) fn backlog_snapshot_in_mode(
     let dispatch_order = runtime.owner_dispatch_order(&executor_host_os);
     sort_tasks_for_automatic_dispatch(&mut backlog, &expiring_batches, &dispatch_order);
     let mut excluded = Vec::new();
+    // A task scheduled ahead waits for its time whatever else holds it, so
+    // it reports `scheduled` first. Read every pass: the first pass after
+    // the time admits it, and an edited `not_before` counts at the next.
+    backlog.retain(|task| {
+        let Some(exclusion) = scheduled_exclusion(runtime, task) else {
+            return true;
+        };
+        excluded.push(exclusion);
+        false
+    });
     let pilot_preparations = active_pilot_preparations(runtime, action)?;
     backlog.retain(|task| {
         if !pilot_preparations.contains_key(&task.id) {

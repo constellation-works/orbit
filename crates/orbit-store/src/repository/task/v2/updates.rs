@@ -235,6 +235,10 @@ impl TaskV2Store {
                 )?;
                 envelope_changed = true;
             }
+            if let Some(value) = fields.not_before {
+                bundle.envelope.not_before = value;
+                envelope_changed = true;
+            }
             if let Some(value) = &fields.context_files {
                 append_creation_grant(
                     &self.bundle_store,

@@ -126,6 +126,12 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// task on that crew instead. `detail` names the run, the failure, the
     /// excluded crews and the time.
     ProviderBackoff,
+    /// The task's `not_before` is still ahead. No dispatcher starts it until
+    /// then: the hold lifts by itself on the first admission pass after that
+    /// time, with no timer. `detail` names the time. An operator's
+    /// `orbit run ship --ignore-schedule` records a `schedule_overridden`
+    /// event for that time, which lifts it early.
+    Scheduled,
     /// Every crew the task may run as belongs to a provider whose latest usage
     /// reading on this host is exhausted, or at or above the configured
     /// threshold, and the reading is still live [ORB-14697]. A crew left

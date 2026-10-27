@@ -652,6 +652,7 @@ pub(super) async fn create_task_action(
         origin: body.origin,
         context_creation: Default::default(),
         creation_decision: None,
+        not_before: None,
     };
     task_mutation_response(runtime, "task creation", move |runtime| {
         runtime.add_task_screened(
@@ -745,6 +746,7 @@ pub(super) async fn update_task_action(
         trusted_artifact_origin: None,
         discard_candidate: false,
         allow_drop_system_tags: body.allow_drop_system_tags,
+        not_before: None,
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {

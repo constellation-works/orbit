@@ -145,7 +145,8 @@ pub(crate) fn gate_admission_stop(
                     } else if OrbitRuntime::workflow_admissible_statuses().contains(&status) {
                         // The status never left the admissible set, so the
                         // refusal is the admission check's own: a pilot hold,
-                        // a native-OS wait or an unreadable pilot receipt.
+                        // a native-OS wait, a scheduled start or an
+                        // unreadable pilot receipt.
                         // Keep its text; "the status changed" would be false.
                         refused.push((task_id.clone(), status.to_string(), error.to_string()));
                     } else {

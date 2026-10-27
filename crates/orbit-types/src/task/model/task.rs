@@ -34,6 +34,12 @@ pub struct Task {
     /// label requirement. Normalized (lowercase, sorted, deduplicated).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_labels: Vec<String>,
+    /// The instant before which no dispatcher starts the task, in UTC. A
+    /// `backlog` task whose time is still ahead is held out of admission;
+    /// the hold lifts on the first admission pass after it. Absent places no
+    /// hold, and status transitions never change it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<DateTime<Utc>>,
     #[serde(default, alias = "instructions")]
     pub plan: String,
     #[serde(default)]
@@ -167,6 +173,7 @@ impl Task {
             required_tools: normalize_required_tools(envelope.required_tools),
             granted_tools: normalize_required_tools(envelope.granted_tools),
             requires_labels: envelope.requires_labels,
+            not_before: envelope.not_before,
             plan,
             execution_summary,
             context_files: envelope.context_files,

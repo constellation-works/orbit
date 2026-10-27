@@ -101,6 +101,29 @@ pub(super) fn browser_kit_exclusion(
     })
 }
 
+/// The exclusion for a `backlog` task whose `not_before` is still ahead.
+/// Shared by automatic selection and the explicit ship override, like
+/// [`host_os_exclusion`]. A hold that cannot be read is not one: the
+/// workflow-entry check at dispatch reads it again.
+pub(super) fn scheduled_exclusion(
+    runtime: &OrbitRuntime,
+    task: &Task,
+) -> Option<BacklogTaskExclusion> {
+    match runtime.schedule_hold(task) {
+        Ok(hold) => hold.map(|hold| BacklogTaskExclusion {
+            id: task.id.clone(),
+            reason: BacklogTaskExclusionReason::Scheduled,
+            conflicts: Vec::new(),
+            crew: None,
+            detail: Some(hold.detail()),
+        }),
+        Err(error) => {
+            tracing::warn!(task_id = %task.id, "could not read scheduled hold: {error}");
+            None
+        }
+    }
+}
+
 /// The exclusion for an inherited-only `epic` root.
 ///
 /// Shared by automatic backlog selection and the explicit ship override so both

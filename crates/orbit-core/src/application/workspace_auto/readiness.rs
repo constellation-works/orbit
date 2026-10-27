@@ -440,6 +440,22 @@ pub fn explain_workspace_auto_readiness(
                         object.insert("reason".to_string(), json!(excluded.reason));
                         object.insert("detail".to_string(), json!(excluded.detail));
                     }
+                    // Waits, never runnable: lifts by itself on the first
+                    // pass after `not_before`, which the entry names.
+                    BacklogTaskExclusionReason::Scheduled => {
+                        object.insert("reason".to_string(), json!(excluded.reason));
+                        object.insert("detail".to_string(), json!(excluded.detail));
+                        if let Some(not_before) = snapshot
+                            .task_lookup
+                            .get(&excluded.id)
+                            .and_then(|task| task.not_before)
+                        {
+                            object.insert(
+                                "not_before".to_string(),
+                                json!(orbit_types::task::format_not_before(not_before)),
+                            );
+                        }
+                    }
                     BacklogTaskExclusionReason::UnassessedComplexity => {
                         object.insert(
                             "reason".to_string(),
