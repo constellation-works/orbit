@@ -136,6 +136,27 @@ fn runtime() -> (TempDir, OrbitRuntime, PathBuf) {
     (root, runtime, repo)
 }
 
+/// Open a calm runtime with fixture configuration and workspace files in place.
+fn configured_runtime(config: &str, files: &[&str]) -> (TempDir, OrbitRuntime, Arc<PressureProbe>) {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let repo = root.path().join("repo");
+    let workspace = repo.join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    for file in files {
+        let path = repo.join(file);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "fn queued() {}\n").unwrap();
+    }
+    std::fs::write(global.join("config.toml"), config).unwrap();
+    let probe = PressureProbe::calm();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .expect("build runtime")
+        .with_host_resource_probe(probe.clone());
+    (root, runtime, probe)
+}
+
 /// The readiness view dispatch and ship share: no explicit tasks, the default
 /// page, and no tag filter.
 fn default_readiness(runtime: &OrbitRuntime) -> Value {
@@ -1852,20 +1873,8 @@ fn sustained_io_pressure_holds_local_admission_until_it_clears_below_resume() {
 /// With `workflow.resource_throttle.enabled = false` admission is what it was
 /// before the throttle: no sample is taken for it and pressure holds nothing.
 fn a_disabled_throttle_admits_under_pressure_without_sampling() {
-    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let global = root.path().join("home/.orbit");
-    let workspace = root.path().join("repo/.orbit");
-    std::fs::create_dir_all(&global).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::write(
-        global.join("config.toml"),
-        "[workflow.resource_throttle]\nenabled = false\n",
-    )
-    .unwrap();
-    let probe = PressureProbe::calm();
-    let runtime = OrbitRuntime::from_roots(&global, &workspace)
-        .expect("build runtime")
-        .with_host_resource_probe(probe.clone());
+    let (_root, runtime, probe) =
+        configured_runtime("[workflow.resource_throttle]\nenabled = false\n", &[]);
     let task = seed(&runtime, Seed::default());
     let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
     probe.memory(99.0, Utc::now() - chrono::Duration::seconds(12));
@@ -2002,26 +2011,27 @@ fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
 
     let definitions = runtime.paths().local_dir.join("auto_tasks");
     std::fs::create_dir_all(&definitions).unwrap();
-    std::fs::write(
-        definitions.join("qa-sweep.yaml"),
-        include_str!("../../assets/auto_tasks/qa-sweep.yaml"),
-    )
-    .unwrap();
-    std::fs::write(
-        definitions.join("qa-full-sweep.yaml"),
-        include_str!("../../assets/auto_tasks/qa-full-sweep.yaml"),
-    )
-    .unwrap();
-    std::fs::write(
-        definitions.join("code-review.yaml"),
-        include_str!("../../assets/auto_tasks/code-review.yaml"),
-    )
-    .unwrap();
-    std::fs::write(
-        definitions.join("friction-curation.yaml"),
-        include_str!("../../assets/auto_tasks/friction-curation.yaml"),
-    )
-    .unwrap();
+    for (name, definition) in [
+        (
+            "qa-sweep",
+            include_str!("../../assets/auto_tasks/qa-sweep.yaml"),
+        ),
+        (
+            "qa-full-sweep",
+            include_str!("../../assets/auto_tasks/qa-full-sweep.yaml"),
+        ),
+        (
+            "code-review",
+            include_str!("../../assets/auto_tasks/code-review.yaml"),
+        ),
+        (
+            "friction-curation",
+            include_str!("../../assets/auto_tasks/friction-curation.yaml"),
+        ),
+    ] {
+        std::fs::write(definitions.join(format!("{name}.yaml")), definition)
+            .unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
 
     let qa_sweep = runtime.auto_task_mint("qa-sweep").unwrap();
     let qa_full_sweep = runtime.auto_task_mint("qa-full-sweep").unwrap();
@@ -2045,13 +2055,14 @@ fn a_cpu_only_throttle_holds_qa_sweep_while_admitting_review_auto_tasks() {
 
     let readiness = default_readiness(&runtime);
 
-    let review_entry = readiness_task(&readiness, &code_review.id);
-    assert_eq!(review_entry["reason"], "ready", "{review_entry}");
-    assert_eq!(review_entry["cpu_light"], true, "{review_entry}");
-
-    let curation_entry = readiness_task(&readiness, &friction_curation.id);
-    assert_eq!(curation_entry["reason"], "ready", "{curation_entry}");
-    assert_eq!(curation_entry["cpu_light"], true, "{curation_entry}");
+    for (name, task) in [
+        ("code-review", &code_review),
+        ("friction-curation", &friction_curation),
+    ] {
+        let entry = readiness_task(&readiness, &task.id);
+        assert_eq!(entry["reason"], "ready", "{name}: {entry}");
+        assert_eq!(entry["cpu_light"], true, "{name}: {entry}");
+    }
 
     for qa_task in [&qa_sweep.id, &qa_full_sweep.id] {
         let entry = readiness_task(&readiness, qa_task);
@@ -2348,22 +2359,10 @@ pub(super) fn admitted_frozen_batch(
 /// an unattended entry. One minute past that horizon admits, while readiness
 /// and the entry decision still name the schedule.
 fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits() {
-    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let global = root.path().join("home/.orbit");
-    let repo = root.path().join("repo");
-    let workspace = repo.join(".orbit");
-    std::fs::create_dir_all(&global).unwrap();
-    std::fs::create_dir_all(repo.join("src")).unwrap();
-    std::fs::create_dir_all(&workspace).unwrap();
-    std::fs::write(repo.join("src/queued.rs"), "fn queued() {}\n").unwrap();
-    std::fs::write(
-        global.join("config.toml"),
+    let (_root, runtime, _probe) = configured_runtime(
         "[machine]\nhost_shutdown_hold_minutes = 30\n",
-    )
-    .unwrap();
-    let runtime = OrbitRuntime::from_roots(&global, &workspace)
-        .expect("runtime")
-        .with_host_resource_probe(PressureProbe::calm());
+        &["src/queued.rs"],
+    );
     assert_eq!(runtime.host_shutdown_hold_minutes(), 30);
     let queued = seed(&runtime, Seed::default().files(&["file:src/queued.rs"]));
     let schedule = |minutes: i64| {
