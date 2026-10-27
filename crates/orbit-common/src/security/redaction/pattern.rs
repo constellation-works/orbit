@@ -55,6 +55,24 @@ impl PatternRedactor {
                     .expect("valid regex"),
                 r#""api_key":"[REDACTED_AUTH]""#,
             ),
+            // Pretty-printed JSON API-key properties allow JSON whitespace
+            // (including line breaks) around the colon. Keep this separate
+            // from general assignments, whose horizontal-only separators
+            // prevent an empty assignment from consuming the next line.
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])("(?:[a-z0-9]+[_-])*api[_-]?key"[ \t\r\n]*:[ \t\r\n]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                )
+                .expect("valid regex"),
+                "$1$2[REDACTED_AUTH]$3",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])("(?:(?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key)))"[ \t\r\n]*:[ \t\r\n]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                )
+                .expect("valid regex"),
+                "$1$2[REDACTED_AUTH]$3",
+            ),
             // Same-line API-key assignments (`key=value` / `key: value`),
             // wherever they appear on the line, not only at line start.
             // The key must end in an `api key` segment at a separator,

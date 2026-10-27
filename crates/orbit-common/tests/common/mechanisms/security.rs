@@ -289,6 +289,29 @@ fn redact_all_leaves_following_line_alone_after_empty_api_key_assignment() {
 }
 
 #[test]
+fn redact_all_masks_prefixed_api_key_values_in_pretty_printed_json() {
+    const VALUE: &str = "q7Lx2Rv9Kp4Nm8Zs3Tw6";
+    for key in ["serviceApiKey", "my_api_key"] {
+        let raw = format!("{{\"{key}\":\n  \"{VALUE}\"}}\n");
+        let redacted = redact_all(&raw);
+        assert_eq!(
+            redacted,
+            format!("{{\"{key}\":\n  \"[REDACTED_AUTH]\"}}\n"),
+            "pretty-printed JSON value leaked for {key}"
+        );
+        assert!(!redacted.contains(VALUE), "credential leaked for {key}");
+    }
+
+    // An empty JSON value and an empty unquoted assignment carry no secret;
+    // neither may consume an unrelated value from the following line.
+    let empty_json = "{\"serviceApiKey\":\n  \"\"}\n2026-10-26T14:42:00.0000000Z safe output";
+    assert_eq!(redact_all(empty_json), empty_json);
+
+    let empty_assignment = "serviceApiKey=\n2026-10-26T14:42:00.0000000Z safe output";
+    assert_eq!(redact_all(empty_assignment), empty_assignment);
+}
+
+#[test]
 fn redact_all_masks_embedded_quotes_in_api_key_assignments() {
     for key in ["api_key", "serviceApiKey", "\"api_key\""] {
         for (value, quote) in [
