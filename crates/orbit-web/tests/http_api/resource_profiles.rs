@@ -10,6 +10,97 @@ use super::support::{Fixture, isolated, json_ok};
 
 const GIB: i64 = 1024 * 1024 * 1024;
 
+#[test]
+fn resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliveries() {
+    isolated(
+        "resource_profiles::resource_profiles_disclose_the_all_selection_limit_with_more_retained_deliveries",
+        || {
+            let fixture = Fixture::new();
+            let config = fixture.global.join("config.toml");
+            let mut text = std::fs::read_to_string(&config).unwrap();
+            text.push_str("\n[machine.auto_concurrency]\nprofile_window = 1500\n");
+            std::fs::write(&config, text).unwrap();
+            let runtime = admitting_runtime(&fixture);
+            let ws = runtime.workspace_id().unwrap();
+            let admitted = Utc::now() - chrono::Duration::days(1);
+            // All deliveries have one current regime and are inside ordinary
+            // age retention. Seed them in one transaction, without live workers.
+            runtime.sqlite_store().unwrap().with_transaction(|tx| {
+                let db = tx.connection();
+                let store = |error: rusqlite::Error| orbit_core::OrbitError::Store(error.to_string());
+                let mut run = db.prepare(
+                    "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, \
+                         scheduled_at, created_at, finished_at) \
+                     VALUES (?1, ?2, 'task_auto_pipeline', 1, 'success', ?3, ?3, ?3)",
+                ).map_err(store)?;
+                let mut minute = db.prepare(
+                    "INSERT INTO run_resource_minutes (workspace_id, run_id, minute_index, \
+                         minute_started_at, task_id, work_class, complexity, resumed, \
+                         delivery_admitted_at, cpu_cores, memory_bytes, samples, cpu_accounting, crew_model, orbit_version) \
+                     VALUES (?1, ?2, 0, ?3, ?2, 'change', 'medium', 0, ?3, ?4, ?5, 12, 'linux-cgroup-v1', 'fixture-model', 'fixture-version')",
+                ).map_err(store)?;
+                for index in 0..1500 {
+                    let id = format!("jrun-history-{index}");
+                    let stamp = (admitted + chrono::Duration::seconds(index))
+                        .to_rfc3339_opts(SecondsFormat::Micros, true);
+                    run.execute(rusqlite::params![id, ws, stamp]).map_err(store)?;
+                    // The older 500 would visibly change the served mean.
+                    let cpu = if index < 500 { 9.0 } else { 2.0 };
+                    minute.execute(rusqlite::params![ws, id, stamp, cpu, GIB]).map_err(store)?;
+                }
+                Ok(())
+            }).unwrap();
+
+            let server = fixture.server(false);
+            let default = json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture"));
+            assert_eq!(default["profiles"][0]["delivery_count"], json!(1500));
+
+            let all =
+                json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture&last=all"));
+            assert_eq!(all["profiles"][0]["delivery_count"], json!(1000));
+            assert_eq!(
+                all["profiles"][0]["deliveries"].as_array().unwrap().len(),
+                1000
+            );
+            assert_eq!(all["profiles"][0]["series"][0]["cpu_cores"], json!(2.0));
+            assert_eq!(
+                all["profiles"][0]["regime"]["crew_model"],
+                json!("fixture-model")
+            );
+            assert_eq!(all["last"], json!("all"));
+            assert_eq!(all["profile_window"], json!(1500));
+            assert_eq!(
+                all["delivery_limit"],
+                json!(1000),
+                "the legacy all selection must disclose its actual per-key cap"
+            );
+            assert_eq!(all["max_last"], json!(1000));
+            assert_eq!(default["last"], Value::Null);
+            assert_eq!(default["delivery_limit"], json!(1500));
+
+            for count in [200, 1000] {
+                let body = json_ok(server.get(&format!(
+                    "/api/resource-profiles?workspace=ws_http_fixture&last={count}"
+                )));
+                assert_eq!(body["last"], json!(count.to_string()));
+                assert_eq!(body["delivery_limit"], json!(count));
+                assert_eq!(body["profiles"][0]["delivery_count"], json!(count));
+            }
+            assert_eq!(
+                server
+                    .get("/api/resource-profiles?workspace=ws_http_fixture&last=1001")
+                    .status(),
+                400
+            );
+            let after = json_ok(server.get("/api/resource-profiles?workspace=ws_http_fixture"));
+            assert_eq!(
+                after["profiles"], default["profiles"],
+                "history selection must leave admission's larger window intact"
+            );
+        },
+    );
+}
+
 /// One finished single-run delivery admitted `hours_ago`, one row per minute
 /// at `cores` and 1 GiB.
 fn delivery(

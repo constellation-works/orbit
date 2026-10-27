@@ -3,7 +3,7 @@
 // the work-class selector, complexity series ending at their horizons, the
 // sparse marking, hover and keyboard tooltips, series toggles, the % of host
 // toggle with admit thresholds, the empty state, the aggregate placeholder
-// and a 390px phone.
+// the bounded history selection and a 375px phone.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -56,19 +56,23 @@ const profiles = [
   profile('change', 'medium', 8, false, 45, 50, 4, 4),
   profile('no-diff', 'medium', 5, false, 15, 18, 0.8, 1),
 ];
-const report = (workspace, list) => ({
+const report = (workspace, list, last) => ({
   workspace_id: workspace,
   built_at: '2026-10-17T12:00:00Z',
   host: { cpu_count: 16, memory_total_bytes: 64 * GIB },
   admit_cpu_percent: 90,
   admit_memory_percent: 75,
   profile_window: 50,
+  last,
+  delivery_limit: last == null ? 50 : (last === 'all' ? 1000 : Number(last)),
+  max_last: 1000,
   min_profile_deliveries: 3,
   horizon_cap_minutes: 120,
   profiles: list,
 });
 
 const requests = [];
+const histories = [];
 function payloadFor(url) {
   switch (url.pathname) {
     case '/api/workspaces': return [
@@ -80,7 +84,9 @@ function payloadFor(url) {
     case '/api/resource-profiles': {
       const workspace = url.searchParams.get('workspace');
       requests.push(workspace);
-      return workspace === 'ws_fixture' ? report(workspace, profiles) : report(workspace, []);
+      const last = url.searchParams.get('last');
+      histories.push(last);
+      return report(workspace, workspace === 'ws_fixture' ? profiles : [], last);
     }
     default: return { items: [], total: 0, limit: 100, truncated: false };
   }
@@ -228,6 +234,18 @@ try {
   assert.match(rows[2].text, /Hard2 \(sparse\)60m6\.0 cores @ \+4m6\.0 GiB @ \+5m/);
   pass('work classes and table', { rows });
 
+  // The legacy all request is bounded, including its label and tooltip.
+  const history = body.getByRole('group', { name: 'Deliveries per profile' });
+  assert.deepEqual(await history.getByRole('button').allTextContents(), ['Last 50', 'Last 200', 'Last 1,000']);
+  const capped = history.getByRole('button', { name: 'Last 1,000', exact: true });
+  assert.match(await capped.getAttribute('title'), /Up to 1,000 retained completed deliveries.*newest crew model and Orbit version/);
+  await capped.click();
+  await page.waitForFunction(() => document.querySelector('.rp-history [data-history="all"]')?.getAttribute('aria-pressed') === 'true');
+  assert.equal(histories.at(-1), 'all');
+  assert.match(await body.locator('.rp-meta').textContent(), /each profile: up to 1,000 retained completed deliveries/);
+  await shot('resources-history-dark-1440.png');
+  pass('history cap disclosure', { title: await capped.getAttribute('title'), summary: await body.locator('.rp-meta').textContent() });
+
   // The dashboard is dark-only: an OS light preference changes nothing.
   await page.emulateMedia({ colorScheme: 'light' });
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(11, 13, 16)');
@@ -236,20 +254,25 @@ try {
   pass('dark-only under a light preference');
 
   // Phone width: no sideways page scroll; plots keep most of the width.
-  await page.setViewportSize({ width: 390, height: 1500 });
+  await page.setViewportSize({ width: 375, height: 1500 });
   const phone = await page.evaluate(() => ({
     overflow: document.documentElement.scrollWidth > window.innerWidth,
     plot: document.querySelector('#resources-body .rp-area-cpu').getBoundingClientRect().width,
     table: getComputedStyle(document.querySelector('#resources-body .mx-table-wrap')).overflowX,
   }));
-  assert.equal(phone.overflow, false, `no page overflow at 390px: ${JSON.stringify(phone)}`);
-  assert.ok(phone.plot > 240, `plots keep most of the phone width: ${phone.plot}`);
+  assert.equal(phone.overflow, false, `no page overflow at 375px: ${JSON.stringify(phone)}`);
+  assert.ok(phone.plot > 375 * 0.6, `plots keep most of the phone width: ${phone.plot}`);
   await body.locator('.rp-frame').focus();
   await page.keyboard.press('End');
-  await shot('resources-390.png');
+  assert.equal(await capped.getAttribute('aria-pressed'), 'true');
+  await shot('resources-history-dark-375.png');
   await page.keyboard.press('Escape');
   pass('phone layout', phone);
   await page.setViewportSize({ width: 1440, height: 1700 });
+
+  await history.getByRole('button', { name: 'Last 50', exact: true }).click();
+  await page.waitForFunction(() => document.querySelector('.rp-history [data-history="window"]')?.getAttribute('aria-pressed') === 'true');
+  assert.equal(histories.at(-1), null);
 
   // A workspace whose host has no profiles yet says so.
   await page.goto(`${base}?workspace=ws_empty#analytics/resources`);
