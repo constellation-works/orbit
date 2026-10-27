@@ -11,8 +11,8 @@
 // View state (work class, units, hidden series, hover minute) is local and
 // re-renders from the cached payload without a fetch. The history selector
 // is counted in deliveries, not days, and refetches: the default is the
-// window admission prices with (`profile_window`), and `Last 200` or `All
-// kept` profile more of each key's retained deliveries without changing it. CPU, memory and the
+// window admission prices with (`profile_window`); `Last 200` and `Last
+// 1,000` use bounded retained history without changing admission. CPU, memory and the
 // still-running strip share one x-axis and one hover cursor.
 
 import {
@@ -53,7 +53,7 @@ const BASE_CLASSES = [
 const TEMPLATE_PREFIX = "auto-task:";
 const UNITS = [["abs", "Cores · GiB"], ["pct", "% of host"]];
 // Deliveries per profile: `null` is admission's own `profile_window`.
-const HISTORIES = [[null, null], ["200", "Last 200"], ["all", "All kept"]];
+const HISTORIES = [null, "200", "all"];
 
 const view = {
   last: null,
@@ -308,8 +308,9 @@ function classPicker(classes, current) {
 /// deliveries leaves every choice as it was.
 function historyPicker() {
   const window = lastPayload.profile_window;
+  const maximum = lastPayload.max_last ?? 1000;
   const options = HISTORIES
-    .map(([key, text]) => [key, text || `Last ${window}`])
+    .map((key) => [key, `Last ${Number(key == null ? window : (key === "all" ? maximum : key)).toLocaleString("en-US")}`])
     .filter(([key]) => key == null || key !== String(window));
   const current = lastPayload.last ?? null;
   return el("div", { class: "mx-seg rp-history", role: "group", "aria-label": "Deliveries per profile" }, options.map(([key, text]) => {
@@ -321,7 +322,7 @@ function historyPicker() {
       "aria-pressed": on ? "true" : "false",
       title: key == null
         ? `The last ${window} deliveries of each kind: the window admission prices with`
-        : (key === "all" ? "Every delivery of each kind this host keeps" : `The last ${key} deliveries of each kind`),
+        : `Up to ${Number(key === "all" ? maximum : key).toLocaleString("en-US")} retained completed deliveries of each kind, following the newest crew model and Orbit version; admission is unchanged`,
     });
     button.dataset.history = key ?? "window";
     button.addEventListener("click", () => {
@@ -685,10 +686,10 @@ function regimeTitle(profile) {
 
 function metaLine() {
   const p = lastPayload;
-  const window = p.last == null ? p.profile_window : (p.last === "all" ? "every kept" : p.last);
+  const window = p.delivery_limit ?? (p.last == null ? p.profile_window : (p.last === "all" ? (p.max_last ?? 1000) : Number(p.last)));
   const parts = [
     `built ${formatDateTime(p.built_at)}`,
-    `each profile: last ${window} completed deliveries of its kind under its newest crew model and Orbit version, whatever their age`,
+    `each profile: up to ${Number(window).toLocaleString("en-US")} retained completed deliveries of its kind under its newest crew model and Orbit version`,
     `sparse below ${p.min_profile_deliveries}`,
     p.host ? hostText(p.host) : "host size unavailable",
     `admit at ${p.admit_cpu_percent}% cpu · ${p.admit_memory_percent}% memory`,

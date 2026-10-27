@@ -719,9 +719,15 @@ newest one and keeps older deliveries only until it has
 delivery count to see which. The page prints the number in effect, the
 host's cores and memory, and the admit thresholds.
 
-The history selector beside the work class shows more deliveries without
-changing admission: **Last 50** (admission's own window), **Last 200**, or
-**All kept**.
+The history selector beside the work class changes the displayed history
+without changing admission: **Last 50** (admission's own window, or its
+configured count), **Last 200**, or **Last 1,000**. Each count is an upper
+bound of retained completed deliveries per kind; regime filtering can leave
+fewer. **Last 1,000** is capped at 1,000 even when the host retains more. An
+admission window configured above 1,000 still applies to the default
+selection. The API's `last=all` is a compatibility alias for this capped
+choice; `delivery_limit` reports the effective bound and `max_last` reports
+the 1,000-delivery maximum for explicit selections.
 
 **Work class** is **Change**, **No-diff**, then each auto-task template that
 already has a profile. Change and no-diff split by complexity: **Low**,

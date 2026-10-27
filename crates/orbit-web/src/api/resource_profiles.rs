@@ -2,24 +2,26 @@
 //! workspace's delivery resource profiles on this host, the same set admission
 //! prices candidates with, beside the host's size and admit thresholds.
 //! `?last=<n>` (or `last=all`) instead profiles each key's last `n`
-//! deliveries, or every retained one, without changing admission's set.
+//! retained deliveries, up to 1,000; `all` is a compatibility alias for that
+//! maximum, without changing admission's set. `delivery_limit` discloses the
+//! effective per-key bound and `max_last` the maximum explicit selection.
 
 use axum::extract::Query;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
-use orbit_core::runtime::host_resource::profile::RESOURCE_HISTORY_DELIVERIES_PER_KEY;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::blocking;
 use crate::state::Ws;
 
-/// The most deliveries a `last` count may name.
+/// The most deliveries an explicit `last` selection, including `all`, serves.
 const MAX_LAST: usize = 1_000;
 
 #[derive(Deserialize, Default)]
 pub(super) struct ResourceProfilesQuery {
-    /// A count of deliveries per key, or `all`; absent is `profile_window`.
+    /// A count of deliveries per key, or `all` for the maximum explicit
+    /// selection; absent is `profile_window`, which may be larger.
     #[serde(default)]
     last: Option<String>,
 }
@@ -33,7 +35,7 @@ pub(super) async fn resource_profiles(
 ) -> Response {
     let window = match query.last.as_deref().map(str::trim) {
         None | Some("") => None,
-        Some("all") => Some(MAX_LAST.max(RESOURCE_HISTORY_DELIVERIES_PER_KEY)),
+        Some("all") => Some(MAX_LAST),
         Some(raw) => match raw.parse::<usize>() {
             Ok(count) if (1..=MAX_LAST).contains(&count) => Some(count),
             _ => {
@@ -71,8 +73,11 @@ pub(super) async fn resource_profiles(
             "admit_cpu_percent": settings.admit_cpu_percent,
             "admit_memory_percent": settings.admit_memory_percent,
             "profile_window": settings.profile_window,
-            // The window this answer used: `null` is `profile_window`.
+            // Preserve the requested selection, including the legacy `all`
+            // alias, and disclose its effective bound independently.
             "last": selected,
+            "delivery_limit": window.unwrap_or(settings.profile_window as usize),
+            "max_last": MAX_LAST,
             "min_profile_deliveries": settings.min_profile_deliveries,
             "horizon_cap_minutes": settings.horizon_cap_minutes,
             "profiles": profiles,
