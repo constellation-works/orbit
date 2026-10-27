@@ -369,6 +369,9 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn review_baseline_commands(&self) -> Vec<String> {
         NullRuntimeHost::review_baseline_commands(self)
     }
+    fn workspace_base_branch(&self) -> String {
+        NullRuntimeHost::workspace_base_branch(self)
+    }
     fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
         NullRuntimeHost::validation_gates(self)
     }

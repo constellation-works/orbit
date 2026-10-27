@@ -2508,6 +2508,89 @@ fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
     );
 }
 
+/// [ORB-19177] The ORB-18737 shape: a run starts while an operator has the
+/// primary on a hand hotfix branch, and the primary returns to the base branch
+/// mid-run. The guard's baseline is `workflow.base_branch`, never the branch
+/// the primary had checked out, so the clean return is not drift.
+#[cfg(unix)]
+fn primary_returned_to_the_base_branch_mid_run_is_not_drift() {
+    let (fixture, host, checkout) = Fixture::with_checkout("T-RETURN", "jrun-primary-return");
+    let base_tip = head(&fixture.repo);
+    git(&fixture.repo, &["checkout", "-b", "hotfix/side"]);
+    commit_file(&fixture.repo, "hotfix.txt", "hotfix\n");
+
+    let primary = fixture.repo.display().to_string();
+    let host = fixture.with_provider(
+        &host,
+        &format!(
+            "printf 'candidate\\n' > candidate.txt\ngit -C '{primary}' checkout --quiet {BASE}"
+        ),
+    );
+    let outcome =
+        dispatch_linked_provider(&host, "jrun-primary-return", "T-RETURN", &checkout.path)
+            .expect("a primary returned to the base branch is not drift");
+    assert!(outcome.success, "{:?}", outcome.message);
+    assert_eq!(branch(&fixture.repo), BASE);
+    assert_eq!(head(&fixture.repo), base_tip);
+    assert_eq!(read(checkout.path.join("candidate.txt")), "candidate\n");
+}
+
+/// [ORB-19177] Keying the baseline on `workflow.base_branch` still fails
+/// closed: a primary that leaves the base branch, a side-branch primary that
+/// moves anywhere but onto the base branch, and a return to the base branch
+/// carrying dirt on the run's paths are all drift, named against the base.
+#[cfg(unix)]
+fn primary_moves_off_the_base_branch_still_fail_closed() {
+    for (run_id, start_on_side, body, conflicting) in [
+        (
+            "jrun-primary-away",
+            false,
+            "git -C '{primary}' checkout --quiet -b hotfix/away",
+            json!([]),
+        ),
+        (
+            "jrun-primary-side-advance",
+            true,
+            "printf 'more\\n' > '{primary}/hotfix.txt'\ngit -C '{primary}' commit --quiet -am 'side advance'",
+            json!([]),
+        ),
+        (
+            "jrun-primary-dirty-return",
+            true,
+            "printf 'primary\\n' > '{primary}/candidate.txt'\ngit -C '{primary}' checkout --quiet {BASE}",
+            json!(["candidate.txt"]),
+        ),
+    ] {
+        let (fixture, host, checkout) = Fixture::with_checkout("T-AWAY", run_id);
+        if start_on_side {
+            git(&fixture.repo, &["checkout", "-b", "hotfix/side"]);
+            commit_file(&fixture.repo, "hotfix.txt", "hotfix\n");
+        }
+        let primary = fixture.repo.display().to_string();
+        let body = body.replace("{primary}", &primary).replace("{BASE}", BASE);
+        let host = fixture.with_provider(
+            &host,
+            &format!("printf 'candidate\\n' > candidate.txt\n{body}"),
+        );
+
+        let error = dispatch_linked_provider(&host, run_id, "T-AWAY", &checkout.path)
+            .expect_err(&format!("{run_id}: the primary move is drift"));
+        let diagnostic = integrity_diagnostic(&error, "primary_checkout_drift");
+        assert_eq!(diagnostic["primary_base_branch"], BASE, "{run_id}");
+        assert_eq!(diagnostic["conflicting_paths"], conflicting, "{run_id}");
+        let reason = diagnostic["reason"].as_str().unwrap();
+        assert!(
+            reason.contains(&format!("workflow.base_branch `{BASE}`")),
+            "{run_id}: {reason}"
+        );
+        assert_eq!(
+            reason.contains("is on `hotfix/side`"),
+            start_on_side,
+            "{run_id}: a side-branch start is named for the operator: {reason}"
+        );
+    }
+}
+
 /// User Git presentation settings must not hide a second edit to tracked WIP
 /// or change the fingerprints and patches needed to detect and recover it.
 #[cfg(unix)]
@@ -3771,6 +3854,10 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         self.pr_config.lock().unwrap().clone()
     }
 
+    fn workspace_base_branch(&self) -> String {
+        BASE.to_string()
+    }
+
     fn task_context_for_agent_input(
         &self,
         _run_id: &str,
@@ -4648,5 +4735,9 @@ worktree_families! {
     worktree_contracts_9: [
         #[cfg(unix)]
         repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts,
+        #[cfg(unix)]
+        primary_returned_to_the_base_branch_mid_run_is_not_drift,
+        #[cfg(unix)]
+        primary_moves_off_the_base_branch_still_fail_closed,
     ],
 }

@@ -33,6 +33,13 @@ macro_rules! environment_methods {
         /// implementer may hand off for a native replay [ORB-15287].
         fn review_baseline_commands(&self) -> Vec<String>;
 
+        /// The branch this workspace integrates into: the registered workspace
+        /// base branch, else `workflow.base_branch`. The provider boundary
+        /// guard keys the registered primary checkout's baseline on it, so a
+        /// primary that sits on another branch never becomes a run's base
+        /// [ORB-19177].
+        fn workspace_base_branch(&self) -> String;
+
         /// The gates this host holds a candidate to, with where it read them
         /// [ORB-15622]. An owner answers with its own accessors; a claimed leaf's
         /// host answers with the owner's gates its claim captured, so a

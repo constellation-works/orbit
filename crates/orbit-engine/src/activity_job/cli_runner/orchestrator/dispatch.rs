@@ -518,6 +518,8 @@ pub(crate) fn run_cli_backend_for_step(
     // provider spawn. `tool_ctx.workspace_root` is the registered primary
     // checkout; `subprocess_cwd` is the canonical assigned worktree. Direct
     // invocations where those resolve to the same checkout remain unchanged.
+    // The primary's baseline is the workspace base branch, never whichever
+    // branch it has checked out [ORB-19177].
     let mut worktree_boundary = WorktreeBoundaryGuard::capture(
         input,
         task_ctx.as_ref(),
@@ -526,6 +528,7 @@ pub(crate) fn run_cli_backend_for_step(
         source_cwd.as_deref(),
         tool_ctx.workspace_root.as_deref(),
         declared_worktree_pair.as_ref(),
+        &host.workspace_base_branch(),
     )?
     // A violation's full fingerprints belong in the run's blob store, not in
     // the error string every downstream reader copies [ORB-12467].

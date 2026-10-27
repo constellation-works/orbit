@@ -399,6 +399,10 @@ impl RuntimeHost for OrbitRuntime {
         self.host_validation_gates().gates.baseline_commands
     }
 
+    fn workspace_base_branch(&self) -> String {
+        crate::runtime::RuntimeKernel::workspace_base_branch(self).to_string()
+    }
+
     fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
         self.host_validation_gates()
     }
