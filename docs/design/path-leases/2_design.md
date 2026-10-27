@@ -485,7 +485,9 @@ remains usable. If a request just granted a lease whose success response is too 
 server releases that grant before returning the error. The grant and compensating release
 retain their normal audit rows, and the intake operation is audited as a failure. That release
 is a backstop only: a compensated grant has already written its `overlap` notices, so the
-runtime sizes token answers before writing (below) and a token request does not reach it.
+runtime sizes token answers before writing (below) and a token request does not reach it. A
+token expansion whose complete deadlock cycle cannot fit is refused inside the store
+transaction before that transaction commits, so it does not reach this release either.
 
 **Token resource bounds.** A token's request rate alone does not bound the owner's work: at 20
 writes a minute and a 4-hour TTL it allows about 4,800 unexpired disjoint leases, and each
@@ -519,7 +521,21 @@ selector pair. So the runtime bounds token callers (`LeaseTokenGrant`), before a
   is ordered by requested selector, then task locks, reservations and hard leases, then holder
   id. `queued_ahead` follows queue order and gets only what `conflicts` left. A queued request
   or expansion writes the same prefix to its `queued` notice (`holders`, and `queued_ahead` for
-  a request) with `truncated: true`, so the notice fits the frame too. Ranking still reads every
+  a request) with `truncated: true`, so the notice fits the frame too. An expansion's fixed
+  answer sizes `deadlock` as JSON `null` (four bytes). The bytes left for `conflicts` are one
+  budget shared with the deadlock object. Inside `Store::expand_lease`'s immediate transaction,
+  after the cycle is known and before any queued or deadlock notice, the store measures this
+  expansion's complete `deadlock` value. When this lease is the victim and that value exceeds
+  the budget even with `conflicts` empty, the transaction returns `invalid_input` and rolls
+  back: the expansion's queued surface is unchanged, no queued or deadlock notice is written,
+  no other lease's queue is changed, and lazy expiry from that same transaction is not
+  committed. When the object fits, it is returned whole (the cycle is never shortened) and
+  `conflicts` keeps only the prefix that still fits beside it, with `truncated: true` when that
+  prefix is short. The victim remains the expansion ranked last (lowest effective priority,
+  then youngest). Its `deadlock` notice, written only when the expansion commits, still carries
+  the full cycle. A deadlock that refuses a different lease leaves this answer's `deadlock`
+  null. SSH and dashboard callers pass no budget, so they keep the full cycle and every
+  conflict. Ranking still reads every
   waiting queue entry, which is queue state rather than answer data. A truncated grant is
   delivered, not released, so each `overlap` notice names a lease that exists. `check`, a read,
   answers per path and stays bounded only by the frame.

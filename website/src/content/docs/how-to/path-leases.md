@@ -214,7 +214,9 @@ are added. A lease still waiting as a request cannot be expanded.
 When two leases each wait on paths the other holds, the owner refuses the
 expansion ranked last (lower priority, then younger): its waiting paths are
 dropped, it keeps what it holds, and it gets a `deadlock` notice. The answer's
-`deadlock` field is set when that expansion is yours.
+`deadlock` field is set when that expansion is yours. A lease token whose answer
+cannot also carry that full cycle is refused before any queue change or notice.
+The cycle itself is never shortened.
 
 ## List and show leases
 

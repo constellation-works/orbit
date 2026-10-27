@@ -130,7 +130,9 @@ fn expand_as(
             ensure_token_selector_count(
                 current.selectors.len() + current.queued_selectors.len() + surface.len(),
             )?;
-            // The largest answer: every new selector both added and queued.
+            // The largest answer with empty holder lists and no cycle yet.
+            // `deadlock` is null here; the store spends the leftover budget
+            // on the complete cycle or refuses the expansion before writing.
             let mut provisional = current.clone();
             provisional.selectors.extend(surface.iter().cloned());
             provisional.queued_selectors.extend(surface.iter().cloned());
@@ -150,6 +152,12 @@ fn expand_as(
             )?
         }
     };
+    // JSON `null` is four bytes. A cycle may grow into the holder slack; the
+    // store then shortens `conflicts` so the two share that slack.
+    let deadlock_budget_bytes = match token {
+        Some(_) => budget.holder_list_bytes().map(|slack| slack + 4),
+        None => None,
+    };
     let index = TaskLockIndex::load(runtime, &[])?;
     let task_conflicts = if current.mode == LeaseMode::Hard && !surface.is_empty() {
         runtime.reconcile_stale_owned_reservations_for_files(&surface, 32)?;
@@ -166,6 +174,7 @@ fn expand_as(
         aging_minutes: runtime.lease_policy().aging_minutes,
         holder_list_bytes: budget.holder_list_bytes(),
         max_selectors: token.map(|_| TOKEN_MAX_LEASE_SELECTORS as u32),
+        deadlock_budget_bytes,
     })?;
     emit_expired_lease_events(runtime, EXPAND_TOOL, &result.expired_leases)?;
     if !result.expired_leases.is_empty() {
