@@ -9,8 +9,10 @@
 //! The invariant this module exists to hold is that *merged* is established by
 //! reading GitHub's merged state back, never inferred from having asked. In
 //! particular, enabling auto-merge is not terminal success: the poll continues
-//! until the PR reports `MERGED`, or the wait budget expires and the run fails
-//! with the tasks still in `review`.
+//! until the PR reports `MERGED`, or the wait budget expires and completion
+//! returns the typed `CompletionBudgetExpired` hold. The PR stays open and the
+//! task stays in `review`; a provider read or subprocess timeout remains a
+//! failure.
 //!
 //! Branch protection is respected by construction. The merge request is an
 //! ordinary provider merge (ungated runs may use `--auto`); no administrative

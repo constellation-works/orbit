@@ -23,7 +23,8 @@ pub enum DeliveryRefusal {
     RequirementsUnsatisfied,
     /// Failed checks require the base's own result before candidate recovery.
     BaseChecksPending,
-    /// The completion budget expired while the pull request was parked.
+    /// The completion deadline expired before the PR merged.
+    /// The PR stays open and the task stays in review.
     CompletionBudgetExpired,
     /// An auto-fix stop whose check evidence could not be read conclusively.
     CheckEvidenceInconclusive,
