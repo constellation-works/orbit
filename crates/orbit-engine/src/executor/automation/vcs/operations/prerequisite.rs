@@ -209,18 +209,19 @@ pub(super) fn snapshot(
                 .as_array()
                 .ok_or_else(|| unreadable("effective required checks"))?
             {
-                let integration = check
-                    .get("integration_id")
-                    .ok_or_else(|| unreadable("required integration"))?;
-                let app_id = if integration.is_null() || integration.as_i64() == Some(-1) {
-                    None
-                } else {
-                    Some(
+                let app_id = match check.get("integration_id") {
+                    None => None,
+                    Some(integration)
+                        if integration.is_null() || integration.as_i64() == Some(-1) =>
+                    {
+                        None
+                    }
+                    Some(integration) => Some(
                         integration
                             .as_u64()
                             .filter(|n| *n > 0)
                             .ok_or_else(|| unreadable("required integration"))?,
-                    )
+                    ),
                 };
                 let gate = RequiredGate {
                     context: text(check, "context", unreadable)?.into(),

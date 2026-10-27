@@ -5886,7 +5886,7 @@ status() {
             rollup='{"__typename":"CheckRun","name":"Read state","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"FAILURE"}'
             if [ -f "$forge/rerun-applied" ]; then
                 case "$(cat "$forge/infrastructure")" in
-                    positive|merge|lost|moved|deleted|legacy_success) merge_state=CLEAN; rollup='{"__typename":"CheckRun","name":"Protected (rust)","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
+                    positive|merge|lost|moved|deleted|legacy_success|rules_unpinned) merge_state=CLEAN; rollup='{"__typename":"CheckRun","name":"Protected (rust)","workflowName":"Guarded CI","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
                     clean_missing|legacy_substitute) merge_state=CLEAN; rollup=$(check success) ;;
                 esac
             fi ;;
