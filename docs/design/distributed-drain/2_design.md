@@ -1113,11 +1113,13 @@ claim for it, and a replica says the owner holds that state.
   revocation or death; `review` awaits authority, not a passed code review; merged means into the
   landing branch, not deployed; a remote run names the host to inspect; absent provenance is
   *unknown*.
-- **Act:** `approve_task_handoff`, `revoke_task_handoff` and `ClaimMutation::Recover` behind the
-  operator-only dashboard governed rows `handoff.approve`, `handoff.revoke`, `claim.recover`. Each
-  action carries the identity shown plus a replay identity; approval rebuilds its observation from
-  the owner's record. Stale identity, replica checkout and unresolved merge intent are distinct
-  typed refusals.
+- **Act:** `approve_task_handoff`, `revoke_task_handoff` and `ClaimMutation::Recover` remain
+  available through the operator-only dashboard governed rows `handoff.approve`,
+  `handoff.revoke`, `claim.recover`. Recovery and revocation also have operator-only CLI commands
+  and MCP tools: `orbit task recover-claim` / `orbit.task.recover_claim` and
+  `orbit task revoke-handoff` / `orbit.task.revoke_handoff`. Each dashboard action carries the
+  identity shown plus a replay identity; approval rebuilds its observation from the owner's record.
+  Stale identity, replica checkout and unresolved merge intent are distinct typed refusals.
 - **Attention:** the task detail's Delivery tab reads the claim once, and the same read drives a
   callout above the tabs for a stopped landing, an unresolved merge intent or invalidated landing
   authority, and a progress strip (Implemented, Handed off, Approved, Landing, Done). The callout
@@ -1171,8 +1173,9 @@ the probe reports the first refusal admission would raise by running the same or
   needs no operator capability ([ORB-14439]); its
   executor lifecycle is `orbit.task.pull`, `orbit.drain.claim.bind` and `orbit.drain.claim.settle`
   ([ORB-13625]). MCP and `orbit tool run` reach them through one registry and
-  `application::distributed`. All six are `control_plane`, so a replica refuses them. Approval,
-  revocation and recovery stay dashboard-only owner-operator actions.
+  `application::distributed`. All six are `control_plane`, so a replica refuses them. Handoff
+  approval is dashboard-only; operators can also recover claims and revoke handoffs through the
+  `orbit task recover-claim` and `orbit task revoke-handoff` CLI commands and matching MCP tools.
 - Each settlement reports the crew and model its leaf run resolved, for attribution only
   ([ORB-17292]): a failure or release in its evidence's `crew` and `crew_model`, and every
   settlement, a typed handoff included, as the same two optional fields on the
