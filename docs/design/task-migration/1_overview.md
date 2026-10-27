@@ -83,7 +83,7 @@ machine a disjoint id range).
 | Prefix projection into the allocator | [crates/orbit-cmd/src/registry/runtime/selection.rs](../../../crates/orbit-cmd/src/registry/runtime/selection.rs) | [ORB-10721] |
 | Runtime facades | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
-| `[tasks] id_start` config | [crates/orbit-config/src/raw.rs](../../../crates/orbit-config/src/raw.rs) | [ORB-00034] |
+| `[tasks] id_start` config | [crates/orbit-config/src/registry/settings/table/keys_head.rs](../../../crates/orbit-config/src/registry/settings/table/keys_head.rs) | [ORB-00034] |
 | Owner-wins mirror sync | [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-12126] |
 
 ## 4. The migration recipe
@@ -221,7 +221,7 @@ When the registry is missing or unusable:
    configured `[tasks] id_start` floor does not.
 
 Full-bundle readers, writers, creation, deletion, and reindex coordinate through
-persistent `.<task-id>.bundle.lock` files beside the canonical bundles.
+persistent `<task-id>.bundle` lock files beside the canonical bundles.
 These lock files must not be removed while Orbit processes run. Writers recheck
 the envelope after acquiring the lock, so a queued update cannot recreate a
 deleted bundle. Upgrades changing this lock location require restarting all
