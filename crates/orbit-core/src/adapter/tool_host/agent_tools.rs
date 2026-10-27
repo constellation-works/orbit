@@ -59,32 +59,10 @@ fn trusted_host_response(
     submission: AgentInvokeSubmission,
     wait_seconds: Option<u64>,
 ) -> Result<Value, OrbitError> {
-    let mut response = json!({
-        "run_id": submission.run_id,
-        "job_id": submission.job_id,
-        "submitted_at": submission.submitted_at,
-        "state": if submission.queued { "queued" } else { "submitted" },
-        "queued": submission.queued,
-        "queue_position": submission.queue_position,
-        "waited": wait_seconds.is_some(),
-        "deduplicated": submission.deduplicated,
-        "timeout_seconds": submission.timeout_seconds,
-        "authorized_by": submission.admission.authorized_by,
-        "authorizer_provenance": submission.admission.authorizer_provenance,
-        "caller_machine_id": submission.admission.caller_machine_id,
-        "workspace_path": submission.admission.workspace_path,
-        "cwd": submission.admission.cwd,
-        "sandboxed": false,
-        "provider_sandbox": submission.provider_sandbox,
-        "warnings": submission.warnings,
-    });
+    let mut response = submission.tool_submission_json(wait_seconds.is_some());
     if let Some(seconds) = wait_seconds {
         let result = runtime.wait_agent_invoke_run(&submission.run_id, Some(seconds))?;
-        response["state"] = json!(result.outcome);
-        let result = serde_json::to_value(result)
-            .map_err(|error| OrbitError::Execution(format!("encode agent invocation: {error}")))?;
-        response["answer"] = result["answer"].clone();
-        response["agent_invocation"] = result;
+        result.project_submission_result(&mut response)?;
     }
     Ok(response)
 }

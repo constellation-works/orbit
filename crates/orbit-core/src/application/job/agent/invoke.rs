@@ -31,6 +31,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::redact_all;
 use orbit_common::text::floor_char_boundary;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::tool::ToolSessionContext;
@@ -130,6 +131,58 @@ pub struct AgentInvokeSubmission {
     pub warnings: Vec<String>,
 }
 
+enum AgentInvokeSubmissionProfile {
+    Cli,
+    Tool,
+}
+
+impl AgentInvokeSubmission {
+    /// Project a trusted-host CLI submission, redacting warnings for JSON,
+    /// human output and wait progress. Caller machine identity stays omitted.
+    pub fn cli_submission_json(&self, waited: bool) -> Value {
+        self.submission_json(waited, AgentInvokeSubmissionProfile::Cli)
+    }
+
+    /// Project a trusted-host tool submission, retaining caller machine
+    /// identity and warnings for the tool's response boundary.
+    pub fn tool_submission_json(&self, waited: bool) -> Value {
+        self.submission_json(waited, AgentInvokeSubmissionProfile::Tool)
+    }
+
+    fn submission_json(&self, waited: bool, profile: AgentInvokeSubmissionProfile) -> Value {
+        let warnings = match profile {
+            AgentInvokeSubmissionProfile::Cli => self
+                .warnings
+                .iter()
+                .map(|warning| redact_all(warning))
+                .collect(),
+            AgentInvokeSubmissionProfile::Tool => self.warnings.clone(),
+        };
+        let mut response = json!({
+            "run_id": self.run_id,
+            "job_id": self.job_id,
+            "submitted_at": self.submitted_at,
+            "state": if self.queued { "queued" } else { "submitted" },
+            "queued": self.queued,
+            "queue_position": self.queue_position,
+            "waited": waited,
+            "deduplicated": self.deduplicated,
+            "timeout_seconds": self.timeout_seconds,
+            "authorized_by": self.admission.authorized_by,
+            "authorizer_provenance": self.admission.authorizer_provenance,
+            "workspace_path": self.admission.workspace_path,
+            "cwd": self.admission.cwd,
+            "sandboxed": false,
+            "provider_sandbox": self.provider_sandbox,
+            "warnings": warnings,
+        });
+        if let AgentInvokeSubmissionProfile::Tool = profile {
+            response["caller_machine_id"] = json!(self.admission.caller_machine_id);
+        }
+        response
+    }
+}
+
 /// A finished (or running) invocation, rendered for an operator.
 ///
 /// Deliberately distinguishes the ways an invocation can end. A provider that
@@ -170,6 +223,18 @@ pub struct AgentInvokeResult {
     /// Effective provider inner sandbox persisted at submission, as
     /// `provider:mode`. Absent on runs submitted before this field existed.
     pub provider_sandbox: Option<String>,
+}
+
+impl AgentInvokeResult {
+    /// Add the current result to a trusted-host submission response after a
+    /// wait, including a bounded wait that left the invocation active.
+    pub fn project_submission_result(&self, response: &mut Value) -> Result<(), OrbitError> {
+        response["state"] = json!(self.outcome);
+        response["agent_invocation"] = serde_json::to_value(self)
+            .map_err(|error| OrbitError::Execution(format!("encode agent invocation: {error}")))?;
+        response["answer"] = response["agent_invocation"]["answer"].clone();
+        Ok(())
+    }
 }
 
 /// The agent's answer, as its response envelope and final message gave it
