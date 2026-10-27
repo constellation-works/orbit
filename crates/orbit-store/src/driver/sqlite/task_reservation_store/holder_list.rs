@@ -26,7 +26,12 @@ pub(super) struct HolderList {
     /// smallest serialized conflict.
     conflict_limit: usize,
     conflicts: BTreeSet<ConflictKey>,
-    truncated: bool,
+    /// A conflict was dropped by `conflict_limit`. The kept conflicts sort
+    /// first, so `admit` still shows them; only `truncated` reports the drop.
+    overflowed: bool,
+    /// `admit` refused an entry for lack of bytes, so every later entry is
+    /// refused too.
+    exhausted: bool,
 }
 
 impl HolderList {
@@ -37,7 +42,8 @@ impl HolderList {
             remaining: bytes,
             conflict_limit: bytes.map_or(usize::MAX, |bytes| bytes / smallest_conflict_bytes()),
             conflicts: BTreeSet::new(),
-            truncated: false,
+            overflowed: false,
+            exhausted: false,
         }
     }
 
@@ -51,7 +57,7 @@ impl HolderList {
         ));
         if self.conflicts.len() > self.conflict_limit {
             self.conflicts.pop_last();
-            self.truncated = true;
+            self.overflowed = true;
         }
     }
 
@@ -80,17 +86,17 @@ impl HolderList {
             return true;
         };
         let size = serialized_len(entry) + 1;
-        if self.truncated || size > *remaining {
-            self.truncated = true;
+        if self.exhausted || size > *remaining {
+            self.exhausted = true;
             return false;
         }
         *remaining -= size;
         true
     }
 
-    /// Whether any holder was left out.
+    /// Whether any holder was left out, by the count bound or the budget.
     pub(super) fn truncated(&self) -> bool {
-        self.truncated
+        self.overflowed || self.exhausted
     }
 }
 
