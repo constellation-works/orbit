@@ -50,16 +50,18 @@ impl AgentQuery {
         match self.span {
             WindowSpan::Hours(hours) => Utc::now() - chrono::Duration::hours(hours),
             WindowSpan::Attempts(count) => {
+                let horizon = facts.computed_at - chrono::Duration::days(SCAN_DAYS);
                 let mut starts: Vec<DateTime<Utc>> = facts
                     .tasks
                     .iter()
                     .flat_map(|task| task.attempts.iter().map(|attempt| attempt.start))
+                    .filter(|start| *start >= horizon)
                     .collect();
                 starts.sort_unstable_by(|a, b| b.cmp(a));
                 starts
                     .get(count.min(starts.len()).saturating_sub(1))
                     .copied()
-                    .unwrap_or(facts.computed_at - chrono::Duration::days(SCAN_DAYS))
+                    .unwrap_or(horizon)
             }
         }
     }
