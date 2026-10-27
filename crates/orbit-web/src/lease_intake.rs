@@ -82,7 +82,7 @@ pub enum LeaseIntakeOperation {
     Request,
     /// `orbit.lease.renew`.
     Renew,
-    /// Lease expansion; not available in this phase.
+    /// `orbit.lease.expand`.
     Expand,
     /// `orbit.lease.release`.
     Release,

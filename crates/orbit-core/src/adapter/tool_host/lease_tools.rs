@@ -21,6 +21,7 @@ pub(super) fn dispatch(
     match verb {
         LeaseVerb::Request => lease::request(runtime, input, agent, model),
         LeaseVerb::Renew => lease::renew(runtime, input),
+        LeaseVerb::Expand => lease::expand(runtime, input, agent, model),
         LeaseVerb::Release => lease::release(runtime, input, agent, model),
         LeaseVerb::Show => lease::show(runtime, input),
         LeaseVerb::List => lease::list(runtime),

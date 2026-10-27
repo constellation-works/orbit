@@ -347,9 +347,10 @@ fn hard_requests_are_refused_by_holders_and_advisory_ones_are_granted() {
 
     let refused = request(
         &runtime,
-        json!({"principal": "alice", "selectors": ["file:src/lib.rs"], "mode": "hard"}),
+        json!({"principal": "alice", "selectors": ["file:src/lib.rs"], "mode": "hard", "wait": false}),
     );
     assert_eq!(refused["granted"], false, "{refused}");
+    assert_eq!(refused["queued"], false, "{refused}");
     assert_eq!(
         holder_ids(&refused["conflicts"]),
         [("task".to_string(), task.id.clone())],
@@ -379,7 +380,7 @@ fn hard_requests_are_refused_by_holders_and_advisory_ones_are_granted() {
 
     let second = request(
         &runtime,
-        json!({"principal": "bob", "selectors": ["dir:src"], "mode": "hard"}),
+        json!({"principal": "bob", "selectors": ["dir:src"], "mode": "hard", "wait": false}),
     );
     assert_eq!(second["granted"], false, "{second}");
     assert!(
@@ -388,7 +389,7 @@ fn hard_requests_are_refused_by_holders_and_advisory_ones_are_granted() {
     );
     let overlapping = request(
         &runtime,
-        json!({"principal": "bob", "selectors": ["file:src/other.rs"], "mode": "hard"}),
+        json!({"principal": "bob", "selectors": ["file:src/other.rs"], "mode": "hard", "wait": false}),
     );
     assert_eq!(overlapping["granted"], false, "{overlapping}");
     assert_eq!(
@@ -724,5 +725,302 @@ fn disabled_leases_refuse_every_operation_naming_the_key() {
             let message = invalid_input_message(result);
             assert!(message.contains("lease.enabled"), "{config:?}: {message}");
         }
+    }
+}
+
+fn lease_id(answer: &Value) -> String {
+    answer["lease"]["lease_id"].as_str().unwrap().to_string()
+}
+
+fn lease_notices(runtime: &OrbitRuntime, lease_id: &str) -> Vec<Value> {
+    super::tool_support::run_tool_as_operator(
+        runtime,
+        "orbit.lease.notices",
+        json!({"after": 0, "limit": 500, "lease_id": lease_id}),
+    )
+    .expect("read lease notices")["notices"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+/// Write `lib/core.rs`, a path outside the default unlocked context paths
+/// that the fixture's own files leave free.
+fn write_locked_fixture(repo_root: &std::path::Path) {
+    std::fs::create_dir_all(repo_root.join("lib")).unwrap();
+    std::fs::write(repo_root.join("lib/core.rs"), "pub fn core() {}\n").unwrap();
+}
+
+/// Move a queued lease's `queued_at` back by `minutes`.
+fn age_queue_entry(runtime: &OrbitRuntime, lease_id: &str, minutes: i64) {
+    let connection = rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+    let queued_at = chrono::Utc::now() - chrono::Duration::minutes(minutes);
+    assert_eq!(
+        connection
+            .execute(
+                "UPDATE task_reservations SET queued_at=?1 WHERE reservation_id=?2",
+                rusqlite::params![queued_at.to_rfc3339(), lease_id],
+            )
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn hard_requests_queue_by_priority_and_age_and_are_granted_when_blockers_end() {
+    if !super::isolate(
+        module_path!(),
+        "hard_requests_queue_by_priority_and_age_and_are_granted_when_blockers_end",
+    ) {
+        return;
+    }
+    let _env = caller_env(None);
+    let (_root, runtime, repo_root) = enabled_runtime();
+    write_locked_fixture(&repo_root);
+    let holder = request(
+        &runtime,
+        json!({"principal": "alice", "selectors": ["file:src/lib.rs"], "mode": "hard"}),
+    );
+    let holder_id = lease_id(&holder);
+
+    let normal = request(
+        &runtime,
+        json!({"principal": "bob", "selectors": ["dir:src"], "mode": "hard"}),
+    );
+    assert_eq!(normal["granted"], false, "{normal}");
+    assert_eq!(normal["queued"], true, "{normal}");
+    assert_eq!(normal["queue_position"], 1, "{normal}");
+    assert_eq!(normal["lease"]["state"], "queued", "{normal}");
+    assert_eq!(
+        holder_ids(&normal["conflicts"]),
+        vec![("lease".to_string(), holder_id.clone())],
+        "{normal}"
+    );
+    let normal_id = lease_id(&normal);
+    let queued = lease_notices(&runtime, &normal_id);
+    assert!(
+        queued.iter().any(|n| n["kind"] == "queued"
+            && n["payload"]["position"] == 1
+            && n["payload"]["holders"][0]["held_by_id"] == holder_id.as_str()),
+        "the queued notice names the holders and the position: {queued:?}"
+    );
+
+    let high = request(
+        &runtime,
+        json!({"principal": "carol", "selectors": ["file:src/lib.rs"], "mode": "hard", "priority": "high"}),
+    );
+    assert_eq!(high["queued"], true, "{high}");
+    assert_eq!(
+        high["queue_position"], 1,
+        "a higher priority request queues ahead of an older normal one: {high}"
+    );
+    let high_id = lease_id(&high);
+
+    let refused = request(
+        &runtime,
+        json!({"principal": "dave", "selectors": ["file:src/lib.rs"], "mode": "hard", "wait": false}),
+    );
+    assert_eq!(refused["granted"], false, "{refused}");
+    assert_eq!(refused["queued"], false, "{refused}");
+    assert!(refused["lease"].is_null(), "{refused}");
+    assert_eq!(
+        holder_ids(&refused["conflicts"]),
+        vec![("lease".to_string(), holder_id.clone())],
+        "{refused}"
+    );
+
+    let reserved = super::tool_support::run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.reserve",
+        json!({"files": ["file:src/other.rs"], "model": "codex"}),
+    )
+    .unwrap();
+    assert_eq!(
+        reserved["reserved"], true,
+        "a queued lease on dir:src holds nothing, so a reservation inside it is granted: {reserved}"
+    );
+    let listed = lease::list(&runtime).unwrap();
+    let states = listed["leases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|lease| {
+            (
+                lease["lease_id"].as_str().unwrap().to_string(),
+                lease["state"].clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        states.contains(&(normal_id.clone(), json!("queued"))),
+        "{listed}"
+    );
+
+    super::tool_support::run_tool_as_operator(
+        &runtime,
+        "orbit.task.locks.release",
+        json!({"reservation_id": reserved["reservation_id"]}),
+    )
+    .unwrap();
+    age_queue_entry(&runtime, &normal_id, 31);
+    lease::release(&runtime, json!({"lease_id": holder_id}), None, None).unwrap();
+    let aged = lease::show(&runtime, json!({"lease_id": normal_id})).unwrap();
+    assert_eq!(
+        aged["lease"]["state"], "granted",
+        "past lease.aging_minutes the older request moves up to high and, older, goes first: {aged}"
+    );
+    assert_eq!(aged["lease"]["selectors"], json!(["dir:src"]), "{aged}");
+    assert!(
+        lease_notices(&runtime, &normal_id)
+            .iter()
+            .any(|n| n["kind"] == "granted" && n["payload"]["from_queue"] == true)
+    );
+    let waiting = lease::show(&runtime, json!({"lease_id": high_id})).unwrap();
+    assert_eq!(waiting["lease"]["state"], "queued", "{waiting}");
+    assert!(
+        !lease_notices(&runtime, &high_id)
+            .iter()
+            .any(|n| n["kind"] == "granted")
+    );
+
+    let task = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::InProgress,
+        &["file:lib/core.rs"],
+    );
+    let behind_task = request(
+        &runtime,
+        json!({"principal": "erin", "selectors": ["file:lib/core.rs"], "mode": "hard"}),
+    );
+    assert_eq!(behind_task["queued"], true, "{behind_task}");
+    assert_eq!(
+        holder_ids(&behind_task["conflicts"]),
+        vec![("task".to_string(), task.id.clone())],
+        "{behind_task}"
+    );
+    let behind_id = lease_id(&behind_task);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    lease::sweep_lease_lifetimes(&runtime, deadline).unwrap();
+    assert_eq!(
+        lease::show(&runtime, json!({"lease_id": behind_id})).unwrap()["lease"]["state"],
+        "queued",
+        "a lease never preempts an in-progress task"
+    );
+    orbit_engine::RuntimeHost::apply_task_automation_update(
+        &runtime,
+        &task.id,
+        orbit_engine::TaskAutomationUpdate {
+            status: Some(TaskStatus::Done),
+            ..orbit_engine::TaskAutomationUpdate::default()
+        },
+    )
+    .expect("settle the task");
+    lease::sweep_lease_lifetimes(&runtime, deadline).unwrap();
+    let settled = lease::show(&runtime, json!({"lease_id": behind_id})).unwrap();
+    assert_eq!(
+        settled["lease"]["state"], "granted",
+        "the clock grants the lease once the task settles: {settled}"
+    );
+    let commands = lease_audit_commands(&runtime);
+    for command in ["lease.request.queued", "lease.request.granted"] {
+        assert!(
+            commands.iter().any(|c| c == command),
+            "{command}: {commands:?}"
+        );
+    }
+}
+
+#[test]
+fn expand_adds_free_paths_queues_blocked_ones_and_refuses_a_deadlock() {
+    if !super::isolate(
+        module_path!(),
+        "expand_adds_free_paths_queues_blocked_ones_and_refuses_a_deadlock",
+    ) {
+        return;
+    }
+    let _env = caller_env(None);
+    let (_root, runtime, repo_root) = enabled_runtime();
+    write_locked_fixture(&repo_root);
+    let first = request(
+        &runtime,
+        json!({"principal": "alice", "selectors": ["file:src/lib.rs"], "mode": "hard"}),
+    );
+    let first_id = lease_id(&first);
+    let second = request(
+        &runtime,
+        json!({"principal": "bob", "selectors": ["file:src/other.rs"], "mode": "hard"}),
+    );
+    let second_id = lease_id(&second);
+    let expand = |lease_id: &str, selectors: Value| {
+        lease::expand(
+            &runtime,
+            json!({"lease_id": lease_id, "selectors": selectors}),
+            None,
+            Some("codex".into()),
+        )
+        .expect("expand lease")
+    };
+
+    let widened = expand(&first_id, json!(["file:src/other.rs", "file:lib/core.rs"]));
+    assert_eq!(widened["added"], json!(["file:lib/core.rs"]), "{widened}");
+    assert_eq!(widened["queued"], json!(["file:src/other.rs"]), "{widened}");
+    assert_eq!(widened["queue_position"], 1, "{widened}");
+    assert!(widened["deadlock"].is_null(), "{widened}");
+    assert_eq!(
+        widened["lease"]["selectors"],
+        json!(["file:lib/core.rs", "file:src/lib.rs"]),
+        "the lease keeps what it holds and gains the free path: {widened}"
+    );
+    assert_eq!(
+        holder_ids(&widened["conflicts"]),
+        vec![("lease".to_string(), second_id.clone())],
+        "{widened}"
+    );
+
+    let crossing = expand(&second_id, json!(["file:src/lib.rs"]));
+    assert_eq!(
+        crossing["deadlock"]["lease_id"],
+        second_id.as_str(),
+        "the younger expansion closing the cycle is refused: {crossing}"
+    );
+    assert_eq!(
+        crossing["lease"]["queued_selectors"],
+        json!([]),
+        "{crossing}"
+    );
+    assert!(
+        lease_notices(&runtime, &second_id)
+            .iter()
+            .any(|n| n["kind"] == "deadlock")
+    );
+    assert_eq!(
+        lease::show(&runtime, json!({"lease_id": first_id})).unwrap()["lease"]["queued_selectors"],
+        json!(["file:src/other.rs"]),
+        "the older expansion keeps waiting"
+    );
+
+    lease::release(&runtime, json!({"lease_id": second_id}), None, None).unwrap();
+    let granted = lease::show(&runtime, json!({"lease_id": first_id})).unwrap();
+    assert_eq!(
+        granted["lease"]["selectors"],
+        json!(["file:lib/core.rs", "file:src/lib.rs", "file:src/other.rs"]),
+        "the queued expansion is granted when its holder releases: {granted}"
+    );
+    assert!(
+        lease_notices(&runtime, &first_id)
+            .iter()
+            .any(|n| n["kind"] == "granted" && n["payload"]["expansion"] == true)
+    );
+    let commands = lease_audit_commands(&runtime);
+    for command in [
+        "lease.expanded",
+        "lease.expand.deadlock",
+        "lease.expand.granted",
+    ] {
+        assert!(
+            commands.iter().any(|c| c == command),
+            "{command}: {commands:?}"
+        );
     }
 }

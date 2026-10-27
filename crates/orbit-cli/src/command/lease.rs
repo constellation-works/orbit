@@ -28,8 +28,8 @@ pub struct LeaseCommand {
 
 #[derive(Subcommand)]
 pub enum LeaseSubcommand {
-    // Request, renew, release, show, list and check, derived from the lease
-    // operation registry.
+    // Request, renew, expand, release, show, list, check and notices, derived
+    // from the lease operation registry.
     #[command(flatten)]
     Operation(Invocation<LeaseVerb>),
     /// Mint, list and revoke lease listener tokens (run as the listener user)
@@ -131,12 +131,24 @@ impl Execute for LeaseCommand {
         if input.remove("hard").and_then(|value| value.as_bool()) == Some(true) {
             input.insert("mode".into(), json!("hard"));
         }
+        if input.remove("no_wait").and_then(|value| value.as_bool()) == Some(true) {
+            input.insert("wait".into(), json!(false));
+        }
         let value = runtime.run_tool(spec.tool_name, Value::Object(input))?;
-        let exit_code = if spec.verb == LeaseVerb::Request && value["granted"] == false {
-            3
-        } else {
-            0
+        // A queued request is not granted either: a script must not edit
+        // until the `granted` notice arrives. An expansion refused to break a
+        // deadlock never will be.
+        let refused = match spec.verb {
+            LeaseVerb::Request => value["granted"] == false,
+            LeaseVerb::Expand => !value["deadlock"].is_null(),
+            LeaseVerb::Renew
+            | LeaseVerb::Release
+            | LeaseVerb::Show
+            | LeaseVerb::List
+            | LeaseVerb::Check
+            | LeaseVerb::Notices => false,
         };
+        let exit_code = if refused { 3 } else { 0 };
         let blocks = match spec.verb {
             LeaseVerb::Notices => value["notices"]
                 .as_array()
@@ -144,10 +156,63 @@ impl Execute for LeaseCommand {
                 .flatten()
                 .map(|notice| Block::text(lease_notice_line(notice)))
                 .collect(),
-            LeaseVerb::Request if value["granted"] == false => vec![
-                Block::text("Lease refused: overlapping holders"),
-                Block::table(lease_holders_table(&value["conflicts"])),
-            ],
+            LeaseVerb::Request if value["queued"] == true => {
+                let mut blocks = vec![
+                    Block::text(format!(
+                        "Lease queued at position {}; it holds nothing until granted (watch \
+                         `orbit lease notices --lease-id {}`)",
+                        value["queue_position"],
+                        lease_text(&value["lease"]["lease_id"])
+                    )),
+                    Block::text(lease_detail(&value["lease"])),
+                ];
+                if value["conflicts"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    blocks.push(Block::table(lease_holders_table(&value["conflicts"])));
+                }
+                if let Some(ahead) = lease_id_list(&value["queued_ahead"]) {
+                    blocks.push(Block::text(format!("Queued ahead: {ahead}")));
+                }
+                blocks
+            }
+            LeaseVerb::Request if value["granted"] == false => {
+                let mut blocks = vec![
+                    Block::text("Lease refused: overlapping holders"),
+                    Block::table(lease_holders_table(&value["conflicts"])),
+                ];
+                if let Some(ahead) = lease_id_list(&value["queued_ahead"]) {
+                    blocks.push(Block::text(format!("Queued ahead: {ahead}")));
+                }
+                blocks
+            }
+            LeaseVerb::Expand => {
+                let mut blocks = vec![Block::text(lease_detail(&value["lease"]))];
+                if let Some(deadlock) = value["deadlock"].as_object() {
+                    blocks.push(Block::text(format!(
+                        "Expansion refused to break a deadlock with {}",
+                        lease_selectors(deadlock.get("cycle").unwrap_or(&Value::Null))
+                    )));
+                } else if value["queued"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    blocks.push(Block::text(format!(
+                        "Queued at position {}: {}",
+                        value["queue_position"],
+                        lease_selectors(&value["queued"])
+                    )));
+                    blocks.push(Block::table(lease_holders_table(&value["conflicts"])));
+                }
+                if value["overlaps"]
+                    .as_array()
+                    .is_some_and(|rows| !rows.is_empty())
+                {
+                    blocks.push(Block::table(lease_holders_table(&value["overlaps"])));
+                }
+                blocks
+            }
             LeaseVerb::Request | LeaseVerb::Renew | LeaseVerb::Show => {
                 let mut blocks = vec![Block::text(lease_detail(&value["lease"]))];
                 if let Some(notice) = value["notice"].as_str() {
@@ -169,6 +234,7 @@ impl Execute for LeaseCommand {
             LeaseVerb::List => {
                 let mut table = Table::new(vec![
                     Column::new("LEASE").fixed(),
+                    Column::new("STATE").fixed(),
                     Column::new("MODE").fixed(),
                     Column::new("PRINCIPAL").fixed(),
                     Column::new("PRIORITY").fixed(),
@@ -180,11 +246,12 @@ impl Execute for LeaseCommand {
                 for lease in value["leases"].as_array().into_iter().flatten() {
                     table.add_row(vec![
                         lease_text(&lease["lease_id"]),
+                        lease_text(&lease["state"]),
                         lease_text(&lease["mode"]),
                         lease_text(&lease["principal"]),
                         lease_text(&lease["priority"]),
                         lease_text(&lease["expires_at"]),
-                        lease_selectors(&lease["selectors"]),
+                        lease_list_selectors(lease),
                     ]);
                 }
                 vec![Block::table(table)]
@@ -222,6 +289,11 @@ fn lease_notice_line(notice: &Value) -> String {
     )
 }
 
+fn lease_id_list(ids: &Value) -> Option<String> {
+    let ids = lease_selectors(ids);
+    (!ids.is_empty()).then_some(ids)
+}
+
 fn lease_detail(lease: &Value) -> String {
     let mut out = format!(
         "{} ({})\nMode: {}\nPrincipal: {}\nPriority: {}\nExpires: {}\nSelectors:",
@@ -232,8 +304,25 @@ fn lease_detail(lease: &Value) -> String {
         lease_text(&lease["priority"]),
         lease_text(&lease["expires_at"])
     );
-    for selector in lease["selectors"].as_array().into_iter().flatten() {
+    let mut held = lease["selectors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .peekable();
+    if held.peek().is_none() {
+        out.push_str(" none");
+    }
+    for selector in held {
         let _ = write!(out, "\n  - {}", lease_text(selector));
+    }
+    if lease["queued_selectors"]
+        .as_array()
+        .is_some_and(|rows| !rows.is_empty())
+    {
+        out.push_str("\nQueued:");
+        for selector in lease["queued_selectors"].as_array().into_iter().flatten() {
+            let _ = write!(out, "\n  - {}", lease_text(selector));
+        }
     }
     out
 }
@@ -263,6 +352,17 @@ fn lease_holders_table(holders: &Value) -> Table {
 fn lease_text(value: &Value) -> String {
     value.as_str().unwrap_or_default().to_string()
 }
+/// Held selectors, then queued ones marked as waiting.
+fn lease_list_selectors(lease: &Value) -> String {
+    let held = lease_selectors(&lease["selectors"]);
+    let queued = lease_selectors(&lease["queued_selectors"]);
+    match (held.is_empty(), queued.is_empty()) {
+        (_, true) => held,
+        (true, false) => format!("queued: {queued}"),
+        (false, false) => format!("{held}; queued: {queued}"),
+    }
+}
+
 fn lease_selectors(value: &Value) -> String {
     value
         .as_array()

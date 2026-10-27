@@ -1,13 +1,13 @@
 //! Lease-only HTTP routes shared by the dashboard and the lease listener.
 //!
 //! The runtime operations own the JSON input/output contract. Backends return
-//! those values unchanged, including structured refusals such as `granted: false`.
+//! those values unchanged, including structured answers such as a queued
+//! request's `granted: false, queued: true`.
 
 use std::sync::Arc;
 
 use axum::Router;
 use axum::extract::{FromRequestParts, Path, Query, State};
-use axum::http::StatusCode;
 use axum::http::request::Parts;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
@@ -87,7 +87,7 @@ pub trait LeaseBackend: Send + Sync + 'static {
     fn request(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
     /// Renew the URL's lease, returning the `orbit.lease.renew` contract.
     fn renew(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
-    /// Expand a lease; unavailable until the expansion phase.
+    /// Expand the URL's lease, returning the `orbit.lease.expand` contract.
     fn expand(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
     /// Release the URL's lease, returning the `orbit.lease.release` contract.
     fn release(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
@@ -161,19 +161,9 @@ impl LeaseBackend for RuntimeLeaseBackend {
         lease::renew(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
     }
 
-    fn expand(&self, _caller: &LeaseCaller, _input: Value) -> LeaseBackendResult {
-        authorized_caller(&DASHBOARD_LEASE_WRITE, self.state.operator_session())
-            .map_err(|denial| Box::new(authorization_denied(denial)))?;
-        Err(Box::new(
-            (
-                StatusCode::NOT_IMPLEMENTED,
-                Json(json!({
-                    "error": "lease expansion is not available in this phase",
-                    "code": "not_available_in_this_phase",
-                })),
-            )
-                .into_response(),
-        ))
+    fn expand(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, true)?;
+        lease::expand(&runtime, input, None, None).map_err(|e| Box::new(map_runtime_error(e)))
     }
 
     fn release(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
