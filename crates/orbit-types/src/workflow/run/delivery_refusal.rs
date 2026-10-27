@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 pub enum DeliveryRefusal {
     /// The forge reports a head different from the candidate this run published.
     HeadChanged,
+    /// Delivery evidence is missing, contradictory, or cannot be confirmed.
+    EvidenceStale,
     /// The blocked head already has a dispatched repair.
     RepairDispatched,
     /// The pull request is still a draft.
@@ -37,6 +39,7 @@ impl DeliveryRefusal {
     pub const fn error_code(self) -> &'static str {
         match self {
             Self::HeadChanged => "delivery_head_changed",
+            Self::EvidenceStale => "delivery_evidence_stale",
             Self::RepairDispatched => "delivery_repair_dispatched",
             Self::PullRequestDraft => "delivery_pr_draft",
             Self::PullRequestClosed => "delivery_pr_closed",
@@ -54,6 +57,7 @@ impl DeliveryRefusal {
     pub fn from_error_code(code: &str) -> Option<Self> {
         match code {
             "delivery_head_changed" => Some(Self::HeadChanged),
+            "delivery_evidence_stale" => Some(Self::EvidenceStale),
             "delivery_repair_dispatched" => Some(Self::RepairDispatched),
             "delivery_pr_draft" => Some(Self::PullRequestDraft),
             "delivery_pr_closed" => Some(Self::PullRequestClosed),

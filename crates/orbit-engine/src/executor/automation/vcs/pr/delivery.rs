@@ -268,10 +268,13 @@ fn ensure_matches(
         return Ok(());
     };
     let Some(reported) = reported else {
-        return Err(OrbitError::Execution(format!(
-            "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
+        return Err(OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::EvidenceStale,
+            message: format!(
+                "delivery_evidence_stale: pull request #{pr_number} did not report {field}, so \
              the authorized candidate '{pinned}' cannot be confirmed; the task stays in review"
-        )));
+            ),
+        });
     };
     if reported != pinned {
         let message = format!(
@@ -285,7 +288,10 @@ fn ensure_matches(
                 message,
             }
         } else {
-            OrbitError::Execution(message)
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::EvidenceStale,
+                message,
+            }
         });
     }
     Ok(())

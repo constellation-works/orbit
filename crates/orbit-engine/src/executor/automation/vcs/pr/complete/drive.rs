@@ -416,11 +416,14 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
                 });
             }
             PrMergeState::Contradictory(reason) => {
-                return Err(OrbitError::Execution(format!(
-                    "delivery_evidence_stale: pull request #{pr_number} reports a contradictory \
+                return Err(OrbitError::DeliveryRefused {
+                    refusal: DeliveryRefusal::EvidenceStale,
+                    message: format!(
+                        "delivery_evidence_stale: pull request #{pr_number} reports a contradictory \
                      merge state ({reason}); completion needs an unambiguous merged state, so the \
                      task stays in review"
-                )));
+                    ),
+                });
             }
             PrMergeState::Blocked(reason) => {
                 let Some(auto_fix) = auto_fix.filter(|_| is_blocked_merge_state(&status)) else {

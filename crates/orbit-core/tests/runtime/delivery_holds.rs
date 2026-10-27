@@ -59,7 +59,7 @@ fn completion_refusals_hold_the_run_and_pass_its_parents() {
         (
             "no_head",
             json!({"headRefOid": null}),
-            None,
+            Some(DeliveryRefusal::EvidenceStale),
             "did not report headRefOid",
         ),
         (
@@ -83,7 +83,7 @@ fn completion_refusals_hold_the_run_and_pass_its_parents() {
         (
             "contradictory",
             json!({"mergedAt": "2026-10-25T00:00:00Z"}),
-            None,
+            Some(DeliveryRefusal::EvidenceStale),
             "contradictory merge state",
         ),
         (

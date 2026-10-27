@@ -379,7 +379,11 @@ impl PullDrain<'_> {
                 LocalPullPhase::Settling => {
                     let delivered = self.deliver(&record)?;
                     if delivered.phase == LocalPullPhase::Settling {
-                        return Ok(Reconciled::Held(ReconciliationHold::Settlement));
+                        return Ok(if delivered.settlement_refusal.is_some() {
+                            Reconciled::Open
+                        } else {
+                            Reconciled::Held(ReconciliationHold::Settlement)
+                        });
                     }
                     delivered
                 }

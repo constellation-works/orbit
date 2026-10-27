@@ -477,6 +477,103 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
     );
 }
 
+/// A delivery-evidence refusal (the PR head moved past the published
+/// candidate) backs off its own settlement but does not hold the pass:
+/// other work is still claimed, and once the owner ends the claim the
+/// refused settlement closes as obsolete.
+#[cfg(unix)]
+fn a_delivery_refused_settlement_backs_off_closes_and_lets_other_work_proceed() {
+    let pair = Pair::new(2);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 2);
+    let task = pair.claimed_task(&leaf);
+    pair.leaf_hands_off(&leaf);
+    let bin = std::path::PathBuf::from(std::env::var_os("HOME").unwrap()).join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    let admission = pair.admission(&leaf);
+    let candidate = handoff(&admission).candidate;
+    let status = json!({
+        "number": 42, "state": "OPEN", "headRefName": candidate.source_branch,
+        "baseRefName": candidate.base_branch, "headRefOid": "moved-by-hand",
+        "url": "https://github.com/owner/repository/pull/42"
+    });
+    std::fs::write(&gh, format!("#!/bin/sh\nprintf '%s' '{}'\n", status)).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Use the owner's real observation path; the provider reports a head
+    // different from the candidate in the follower's handoff.
+    *pair.wire.observe_handoffs.lock().unwrap() = true;
+    let pulls = pair.wire.calls("orbit.task.pull").len();
+
+    let pass = pair.pass_with(&drain, 2);
+    assert_eq!(pass["settlement_refused"], 1, "{pass}");
+    assert_eq!(pass["settlement_refused_holding"], 0, "{pass}");
+    let refused = pair
+        .admission(&leaf)
+        .settlement_refusal
+        .clone()
+        .expect("refused");
+    assert_eq!(
+        refused.code.as_deref(),
+        Some("delivery_head_changed"),
+        "{refused:?}"
+    );
+    assert!(refused.retry_after > refused.last_refused_at, "{refused:?}");
+    assert!(
+        pair.wire.calls("orbit.task.pull").len() > pulls,
+        "a delivery refusal must not stop other claims: {pass}"
+    );
+    assert_eq!(pair.leaf_runs().len(), 2, "other work was claimed");
+
+    let handoff_settles = pair
+        .wire
+        .calls("orbit.drain.claim.settle")
+        .iter()
+        .filter(|call| call["settlement"].get("AcceptHandoff").is_some())
+        .count();
+    pair.pass_with(&drain, 2);
+    assert_eq!(
+        pair.wire
+            .calls("orbit.drain.claim.settle")
+            .iter()
+            .filter(|call| call["settlement"].get("AcceptHandoff").is_some())
+            .count(),
+        handoff_settles,
+        "no redelivery before the backoff elapses"
+    );
+
+    let claim = pair.owner_claim_for_leaf(&leaf);
+    pair.wire
+        .owner
+        .recover_claim_as_operator(
+            claim["claim"]["claim_id"].as_str().unwrap(),
+            "running",
+            orbit_types::task::TaskStatus::Blocked,
+            "operator",
+            "The follower stopped; the PR was rescued by hand",
+            "recover-delivery-refused-handoff",
+        )
+        .unwrap();
+    pair.elapse_settlement_backoff(&leaf);
+    let closed = pair.pass_with(&drain, 2);
+    assert!(
+        closed["error"].is_null() || launch_refused(&closed),
+        "{closed}"
+    );
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    let claim_view = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
+    assert_eq!(claim_view.settlement_phase, "settled");
+    assert!(
+        claim_view
+            .refusal
+            .as_deref()
+            .unwrap()
+            .contains("already ended")
+    );
+    assert_eq!(pair.owner_status(&task), "blocked");
+}
+
 /// [ORB-13979] An operator who fixed the owner need not wait out the
 /// backoff: `orbit run auto --stop` delivers a refused settlement at once.
 fn an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff() {
@@ -664,4 +761,10 @@ crate::scenario_table!(
     an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff,
     a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends,
     a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep
+);
+
+#[cfg(unix)]
+crate::scenario_table!(
+    delivery_refused_settlement_scenarios,
+    a_delivery_refused_settlement_backs_off_closes_and_lets_other_work_proceed,
 );
