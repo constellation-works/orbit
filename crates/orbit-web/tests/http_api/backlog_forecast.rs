@@ -564,7 +564,7 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
             {
                 let fixture = Fixture::new();
                 let at = Utc::now() - Duration::days(2);
-                completed_delivery(
+                let donor = completed_delivery(
                     &fixture,
                     at,
                     TaskComplexity::Medium,
@@ -572,7 +572,10 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
                     Some(10.0),
                     24,
                 );
-                completed_delivery(
+                super::backlog_rework::edit_task(&fixture, &donor, |task| {
+                    task.tags.push("no-diff-expected".into())
+                });
+                let donor = completed_delivery(
                     &fixture,
                     at,
                     TaskComplexity::Low,
@@ -584,6 +587,9 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
                     if missing_usd { None } else { Some(10.0) },
                     24,
                 );
+                super::backlog_rework::edit_task(&fixture, &donor, |task| {
+                    task.tags.push("no-diff-expected".into())
+                });
                 for status in [TaskStatus::Backlog, TaskStatus::Proposed] {
                     fixture
                         .runtime
@@ -596,8 +602,12 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
                         .unwrap();
                 }
                 let server = fixture.server(false);
-                let off = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1")));
-                let on = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")));
+                let off = initial_work_forecast_baseline(json_ok(
+                    server.get(&format!("{ENDPOINT}&concurrency=1")),
+                ));
+                let on = initial_work_forecast_baseline(json_ok(
+                    server.get(&format!("{ENDPOINT}&concurrency=1&arrivals=on")),
+                ));
                 for key in ["forecast", "if_approved"] {
                     for metric in ["time_to_drain_hours", "tokens", "usd"] {
                         for rank in ["p50", "p90"] {
@@ -638,8 +648,11 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
                 // Arrival coverage is shared by backlog and if-approved totals,
                 // and reported even when arrivals are switched off.
                 let coverage = json!({"deliveries": 2, "missing_tokens": u64::from(missing_tokens), "missing_usd": u64::from(missing_usd)});
-                assert_eq!(on["arrivals"]["coverage"], coverage);
-                assert_eq!(off["arrivals"]["coverage"], coverage);
+                for key in ["deliveries", "missing_tokens", "missing_usd"] {
+                    assert_eq!(on["arrivals"]["coverage"][key], coverage[key]);
+                    assert_eq!(off["arrivals"]["coverage"][key], coverage[key]);
+                }
+                assert_eq!(on["arrivals"]["coverage"]["conflict_donors"], 2);
             }
         },
     );
@@ -675,6 +688,19 @@ pub(super) fn backlog_task(
         .to_string()
 }
 
+/// Initial-work fixtures have no fix history. Inspect the explicitly
+/// labelled initial-work baseline; rework fixtures assert full totals.
+pub(super) fn initial_work_forecast_baseline(mut response: Value) -> Value {
+    for key in ["forecast", "if_approved"] {
+        if response[key]["pre_regression_baseline"].is_object() {
+            let predictions = response[key]["task_predictions"].take();
+            response[key] = response[key]["pre_regression_baseline"].take();
+            response[key]["task_predictions"] = predictions;
+        }
+    }
+    response
+}
+
 pub(super) fn drain_hours(forecast: &Value) -> (f64, f64) {
     let hours = &forecast["forecast"]["time_to_drain_hours"];
     (
@@ -703,7 +729,9 @@ fn dependency_chain_runs_in_sequence_despite_free_slots() {
             let b = backlog_task(&fixture, "Chain B", &["file:b.rs"], &[], &[&a]);
             let c = backlog_task(&fixture, "Chain C", &["file:c.rs"], &[], &[&b]);
             let server = fixture.server(false);
-            let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=4")));
+            let forecast = initial_work_forecast_baseline(json_ok(
+                server.get(&format!("{ENDPOINT}&concurrency=4")),
+            ));
             // Admission arrived in model 3; later sampling factors retain it.
             assert!(forecast["model_version"].as_u64().unwrap() >= 3);
             // Every draw is one hour, so every iteration drains in exactly the
@@ -779,7 +807,9 @@ fn overlapping_locks_serialize_and_unknown_footprints_run_alone() {
                     backlog_task(&fixture, &format!("{case} {index}"), files, tags, &[]);
                 }
                 let server = fixture.server(false);
-                let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=3")));
+                let forecast = initial_work_forecast_baseline(json_ok(
+                    server.get(&format!("{ENDPOINT}&concurrency=3")),
+                ));
                 assert_eq!(
                     drain_hours(&forecast),
                     (expected, expected),
@@ -822,7 +852,9 @@ fn queue_follows_the_drains_dispatch_order() {
                 );
             }
             let server = fixture.server(false);
-            let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1")));
+            let forecast = initial_work_forecast_baseline(json_ok(
+                server.get(&format!("{ENDPOINT}&concurrency=1")),
+            ));
             let order: Vec<&str> = forecast["forecast"]["task_predictions"]
                 .as_array()
                 .unwrap()
@@ -864,7 +896,9 @@ fn unschedulable_dependency_withholds_full_totals_and_reports_a_subset() {
             let downstream = backlog_task(&fixture, "Downstream", &["file:b.rs"], &[], &[&blocked]);
             backlog_task(&fixture, "Free", &["file:c.rs"], &[], &[]);
             let server = fixture.server(false);
-            let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=2")));
+            let forecast = initial_work_forecast_baseline(json_ok(
+                server.get(&format!("{ENDPOINT}&concurrency=2")),
+            ));
             let totals = &forecast["forecast"];
             assert!(totals["time_to_drain_hours"]["p50"].is_null(), "{totals}");
             assert!(totals["usd"]["p90"].is_null());
@@ -922,7 +956,9 @@ fn lock_blocked_critical_work_reserves_its_surface() {
                 .to_string();
             let low = backlog_task(&fixture, "Low on y", &["file:y.rs"], &[], &[]);
             let server = fixture.server(false);
-            let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=3")));
+            let forecast = initial_work_forecast_baseline(json_ok(
+                server.get(&format!("{ENDPOINT}&concurrency=3")),
+            ));
             // Without the reservation the low task would take y at once and
             // the critical task would wait for it too.
             assert_eq!(

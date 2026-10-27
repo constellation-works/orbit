@@ -8,7 +8,8 @@ use orbit_types::task::{TaskComplexity, TaskEventRowV2, TaskStatus};
 use serde_json::{Value, json};
 
 use super::backlog_forecast::{
-    ENDPOINT, backlog_task, completed, drain_hours, one_hour_history, prediction,
+    ENDPOINT, backlog_task, completed, drain_hours, initial_work_forecast_baseline,
+    one_hour_history, prediction,
 };
 use super::support::{Fixture, isolated, json_ok};
 
@@ -125,11 +126,11 @@ fn attempt_history(fixture: &Fixture, blocking: bool) {
 }
 
 fn forecast(fixture: &Fixture) -> Value {
-    json_ok(
+    initial_work_forecast_baseline(json_ok(
         fixture
             .server(false)
             .get(&format!("{ENDPOINT}&concurrency=1")),
-    )
+    ))
 }
 
 #[test]
@@ -444,7 +445,7 @@ fn subsecond_and_immediate_returns_stay_drawable() {
                 block_that_returned(&fixture, delay);
                 let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
                 let forecast = forecast(&fixture);
-                assert_eq!(forecast["model_version"], 8);
+                assert_eq!(forecast["model_version"], 9);
                 assert_eq!(
                     forecast["inputs"]["outcomes"]["episodes"],
                     json!({"blocked": 1, "delivered": 1})
@@ -532,7 +533,7 @@ fn forecast_queued_against(
     dated_task(&fixture, status, steps);
     let id = backlog_task(&fixture, label, &["file:queued.rs"], &[], &[]);
     let forecast = forecast(&fixture);
-    assert_eq!(forecast["model_version"], 8, "{label}");
+    assert_eq!(forecast["model_version"], 9, "{label}");
     assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{label}");
     assert_eq!(forecast["forecast"]["tasks"], 1, "{label}");
     assert_eq!(

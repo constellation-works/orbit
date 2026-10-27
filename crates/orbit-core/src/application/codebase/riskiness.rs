@@ -250,6 +250,30 @@ impl OrbitRuntime {
 }
 
 impl TaskRiskinessModel {
+    /// A supported prior for forecast work lacking a footprint estimate.
+    /// This does not turn the task's UI estimate into a number.
+    pub(crate) fn forecast_regression_prior(&self, task: &Task) -> (Option<f64>, &'static str) {
+        let n = self.regressed.len();
+        if n < self.min_support {
+            return (None, "unsupported");
+        }
+        let r = self.regressed.iter().filter(|flag| **flag).count();
+        let p0 = (r as f64 + 1.0) / (n as f64 + 2.0);
+        if let (Some(crew), Some(complexity)) = (
+            task.crew.as_ref().or(task.implemented_by.as_ref()),
+            task.complexity.filter(|c| c.is_assessed()),
+        ) && let Some(group) = self.groups.get(&(crew.clone(), complexity.as_str().into()))
+            && group.tasks >= self.min_support
+        {
+            let m = self.min_support as f64;
+            return (
+                Some((group.regressed as f64 + m * p0) / (group.tasks as f64 + m)),
+                "crew_complexity",
+            );
+        }
+        (Some(p0), "workspace")
+    }
+
     fn build(
         facts: &CodebaseFacts,
         since: DateTime<Utc>,

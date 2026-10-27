@@ -16,15 +16,20 @@
 //! finish. A blocked task stays pending. Earlier versions keep their
 //! original exclusions.
 //!
+//! From model 9 [ORB-18691] a forecast's regression rework is matched by
+//! `regression_from` links to its original cohort, and its whole totals
+//! stay provisional until the 90-day observation cutoff. Earlier versions
+//! score without rework.
+//!
 //! Hits are kept per model version: a version's quantiles mean something
 //! different from another's, so the top-level hit rates describe the
 //! current version alone and `by_model_version` holds every version's own.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::StoredBacklogForecast;
-use orbit_types::task::{Task, TaskStatus, complexity_bucket};
+use orbit_types::task::{Task, TaskRelationType, TaskStatus, complexity_bucket};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -111,6 +116,7 @@ struct VersionHits {
     /// Settled forecasts, and those of them that never drained.
     settled: u64,
     not_drained: u64,
+    rework: [Hits; 4],
 }
 
 impl VersionHits {
@@ -142,6 +148,7 @@ pub(super) fn score_backlog_forecasts(
     done_at: &HashMap<String, DateTime<Utc>>,
     runs: &HashMap<String, Vec<ForecastRun>>,
     current_version: u32,
+    now: DateTime<Utc>,
 ) -> Value {
     let mut versions: BTreeMap<u32, VersionHits> = BTreeMap::new();
     let mut all_excluded = Excluded::default();
@@ -187,7 +194,12 @@ pub(super) fn score_backlog_forecasts(
                 usd_total = usd_total.zip(used.usd).map(|(sum, one)| sum + one);
                 continue;
             }
-            if task.status != TaskStatus::Done {
+            if task.status != TaskStatus::Done
+                || (forecast.model_version >= 9
+                    && !done_at
+                        .get(&stored_task.id)
+                        .is_some_and(|at| *at <= forecast.forecast_at + Duration::days(90)))
+            {
                 pending += 1;
                 continue;
             }
@@ -211,10 +223,10 @@ pub(super) fn score_backlog_forecasts(
                 }
             }
         }
-        let settled = pending == 0 && done + abandoned > 0;
-        let whole = settled && excluded.total() == 0;
-        let drained = abandoned == 0;
-        let actual = settled.then(|| {
+        let mut settled = pending == 0 && done + abandoned > 0;
+        let mut whole = settled && excluded.total() == 0;
+        let mut drained = abandoned == 0;
+        let mut actual = settled.then(|| {
             let drain = last_done
                 .filter(|_| drained)
                 .map(|at| round((at - forecast.forecast_at).num_seconds().max(0) as f64 / 3600.0));
@@ -225,6 +237,26 @@ pub(super) fn score_backlog_forecasts(
                 "usd": usd_total.map(round),
             })
         });
+        let cutoff = forecast.forecast_at + Duration::days(90);
+        let provisional = forecast.model_version >= 9 && now < cutoff;
+        if forecast.model_version >= 9 {
+            settled = !provisional;
+            whole = settled && excluded.total() == 0 && !stored_tasks.is_empty();
+            actual = settled.then(|| rework_actuals(forecast, &stored_tasks, tasks, done_at, runs));
+            drained = actual
+                .as_ref()
+                .is_some_and(|value| value["drained"] == true);
+            if whole && let Some(actual) = &actual {
+                for (index, metric) in ["followups", "work_hours", "tokens", "usd"]
+                    .iter()
+                    .enumerate()
+                {
+                    if let Some(value) = actual["regression_rework"][metric].as_f64() {
+                        hits.rework[index].add(value, &result["regression_rework"][metric]);
+                    }
+                }
+            }
+        }
         if whole {
             hits.settled += 1;
             hits.not_drained += u64::from(!drained);
@@ -249,6 +281,8 @@ pub(super) fn score_backlog_forecasts(
             "abandoned": abandoned,
             "excluded": excluded.to_json(),
             "settled": settled,
+            "provisional": provisional,
+            "observation_cutoff": (forecast.model_version >= 9).then(|| cutoff.to_rfc3339()),
             "scored_whole": whole,
             "forecast": {
                 "time_to_drain_hours": result["time_to_drain_hours"],
@@ -270,16 +304,95 @@ pub(super) fn score_backlog_forecasts(
                 "forecasts": hits.forecasts,
                 "task_level": hits.task_level(),
                 "forecast_level": hits.forecast_level(),
+                "regression_rework": {"followups": hits.rework[0].to_json(), "work_hours": hits.rework[1].to_json(), "tokens": hits.rework[2].to_json(), "usd": hits.rework[3].to_json()},
             })
         })
         .collect();
     by_model_version.sort_by_key(|row| std::cmp::Reverse(row["model_version"].as_u64()));
     json!({
         "model_version": current_version,
+        "horizon_days": 90,
+        "mature_forecasts": stored.iter().filter(|row| row.model_version >= 9 && row.forecast_at + Duration::days(90) <= now).count(),
         "forecasts": forecasts,
         "task_level": current.task_level(),
         "forecast_level": current.forecast_level(),
         "by_model_version": by_model_version,
         "excluded": all_excluded.to_json(),
+    })
+}
+
+/// One generation of actually filed fixes, including filings after the
+/// original queue went empty. Initial fixes are never charged twice.
+fn rework_actuals(
+    forecast: &StoredBacklogForecast,
+    initial: &[StoredTask],
+    tasks: &HashMap<String, Task>,
+    done_at: &HashMap<String, DateTime<Utc>>,
+    runs: &HashMap<String, Vec<ForecastRun>>,
+) -> Value {
+    let cutoff = forecast.forecast_at + Duration::days(90);
+    let ids: BTreeSet<&str> = initial.iter().map(|task| task.id.as_str()).collect();
+    let fixes: Vec<&Task> = tasks
+        .values()
+        .filter(|task| {
+            !ids.contains(task.id.as_str())
+                && task.created_at >= forecast.forecast_at
+                && task.created_at <= cutoff
+                && task.relations.iter().any(|link| {
+                    link.relation_type == TaskRelationType::RegressionFrom
+                        && ids.contains(link.target.as_str())
+                })
+        })
+        .collect();
+    let mut total = super::model::Draw::ZERO;
+    let mut rework = super::model::Draw::ZERO;
+    let mut drained = true;
+    let mut last = forecast.forecast_at;
+    for (id, is_fix) in initial
+        .iter()
+        .map(|task| (task.id.as_str(), false))
+        .chain(fixes.iter().map(|task| (task.id.as_str(), true)))
+    {
+        if let Some(done) = done_at.get(id).filter(|done| **done <= cutoff) {
+            last = last.max(*done);
+        } else {
+            drained = false;
+        }
+        let bounded: Vec<ForecastRun> = runs
+            .get(id)
+            .into_iter()
+            .flatten()
+            .filter(|run| run.start < cutoff)
+            .map(|run| ForecastRun {
+                start: run.start,
+                end: run.end.min(cutoff),
+                tokens: (run.end <= cutoff).then_some(run.tokens).flatten(),
+                usd: (run.end <= cutoff).then_some(run.usd).flatten(),
+            })
+            .collect();
+        let used = super::forecast_usage(&bounded, Some(forecast.forecast_at));
+        let draw = if used.invocations == 0
+            && tasks
+                .get(id)
+                .is_some_and(|task| task.status == TaskStatus::Done)
+        {
+            super::model::Draw::MISSING
+        } else {
+            super::model::Draw {
+                hours: Some(used.hours),
+                tokens: used.tokens,
+                usd: used.usd,
+            }
+        };
+        total.add(&draw);
+        if is_fix {
+            rework.add(&draw);
+        }
+    }
+    json!({
+        "drained": drained,
+        "time_to_drain_hours": drained.then(|| round((last - forecast.forecast_at).num_seconds().max(0) as f64 / 3600.0)),
+        "tokens": total.tokens.map(round), "usd": total.usd.map(round),
+        "regression_rework": {"followups": fixes.len(), "work_hours": rework.hours.map(round), "tokens": rework.tokens.map(round), "usd": rework.usd.map(round)},
     })
 }

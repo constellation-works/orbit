@@ -42,8 +42,10 @@ mod model;
 mod outcomes;
 mod resource_fit;
 mod review_modes;
+mod rework;
 mod schedule;
 mod scoring;
+mod simulation;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -53,12 +55,12 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{BacklogForecastStoreBackend as _, StoredBacklogForecast};
 use orbit_types::task::{
-    Task, TaskHistoryEntry, TaskReferenceIndex, TaskStatus, UNSET_BUCKET, auto_task_template,
-    complexity_bucket,
+    Task, TaskHistoryEntry, TaskReferenceIndex, TaskRelationType, TaskStatus, UNSET_BUCKET,
+    auto_task_template, complexity_bucket,
 };
 use serde_json::{Value, json};
 
-use model::{Arrivals, Basis, Delivery, Item, Resolved, Spent};
+use model::{Basis, Delivery, Item, Resolved, Spent};
 use outcomes::{AwayWait, Episode, EpisodeOutcome, RETURN_HORIZON_HOURS, TaskEpisodes};
 use review_modes::{ReviewHistory, ReviewMode};
 
@@ -283,6 +285,7 @@ fn calculate_backlog_forecast(
     options: &Options,
     now: DateTime<Utc>,
 ) -> Result<Value, OrbitError> {
+    let preparation_started = std::time::Instant::now();
     let lookback_start = now - Duration::days(options.lookback_days);
     let arrival_start = now - Duration::days(ARRIVAL_DAYS);
     let tasks: HashMap<String, Task> = runtime
@@ -290,7 +293,23 @@ fn calculate_backlog_forecast(
         .into_iter()
         .map(|task| (task.id.to_string(), task))
         .collect();
-    let stored = runtime.backlog_forecasts(SCORED_FORECASTS)?;
+    let recent = runtime.backlog_forecasts(SCORED_FORECASTS)?;
+    let mature = runtime.sqlite_store()?.mature_backlog_forecasts(
+        &runtime.workspace_id()?,
+        now - Duration::days(90),
+        9,
+        SCORED_FORECASTS,
+    )?;
+    let mut stored = recent;
+    for row in mature {
+        if !stored
+            .iter()
+            .any(|existing| existing.forecast_at == row.forecast_at)
+        {
+            stored.push(row);
+        }
+    }
+    stored.sort_by_key(|row| std::cmp::Reverse(row.forecast_at));
     let oldest_forecast = stored.iter().map(|forecast| forecast.forecast_at).min();
     let transitions_since = [Some(lookback_start), Some(arrival_start), oldest_forecast]
         .into_iter()
@@ -345,6 +364,23 @@ fn calculate_backlog_forecast(
     for id in episode_ids {
         if let Some(history) = cached_history(runtime, &mut histories, id) {
             task_episodes.insert(id.clone(), TaskEpisodes::read(history));
+        }
+    }
+    // A fix in the lookback can name an origin completed much earlier.
+    // Read that origin's durable completion for the detection lag too.
+    for task in tasks.values() {
+        for link in &task.relations {
+            if link.relation_type == TaskRelationType::RegressionFrom
+                && !done_at.contains_key(link.target.as_str())
+                && let Some(history) = cached_history(runtime, &mut histories, &link.target)
+                && let Some(at) = history
+                    .iter()
+                    .rev()
+                    .find(|entry| entry.to_status == Some(TaskStatus::Done))
+                    .map(|entry| entry.at)
+            {
+                done_at.insert(link.target.to_string(), at);
+            }
         }
     }
     drop(histories);
@@ -421,6 +457,7 @@ fn calculate_backlog_forecast(
             continue;
         }
         history.push(Delivery {
+            task_id: row.task_id.clone(),
             complexity: row.complexity.clone(),
             crew: tasks.get(&row.task_id).and_then(|task| task.crew.clone()),
             review_mode: reviews.delivery_mode(&row.task_id),
@@ -568,6 +605,43 @@ fn calculate_backlog_forecast(
         .map(|item| model::resolve_forecast_item(item, &history, &episodes, &waits))
         .collect();
 
+    let risk_model = runtime.task_riskiness_model()?;
+    let mut rework = rework::RegressionRework {
+        donors: rework::collect_forecast_donors(&tasks, &history, &episodes, &waits),
+        bundles: Vec::new(),
+        pools: Vec::new(),
+        pool_basis: Vec::new(),
+        probabilities: Vec::new(),
+        prior_basis: Vec::new(),
+        risks: Vec::new(),
+        known_origins: BTreeMap::new(),
+        missing_fix_history: 0,
+    };
+    for task in &queued {
+        let risk = risk_model.estimate(task);
+        let (probability, basis) = match risk.probability {
+            Some(p) => (Some(p), "estimate"),
+            None => risk_model.forecast_regression_prior(task),
+        };
+        rework.probabilities.push(probability);
+        rework.prior_basis.push(basis);
+        rework.risks.push(json!(risk));
+    }
+    rework.missing_fix_history = tasks
+        .values()
+        .filter(|task| {
+            done_at
+                .get(task.id.as_str())
+                .is_some_and(|at| *at >= lookback_start)
+                && task
+                    .relations
+                    .iter()
+                    .any(|link| link.relation_type == TaskRelationType::RegressionFrom)
+                && !rework.donors.iter().any(|donor| donor.task.id == task.id)
+        })
+        .count();
+    rework.build_regression_bundles(&tasks, &done_at, &items);
+
     let (concurrency, concurrency_source) = match options.concurrency {
         Some(requested) => (u64::from(requested), "requested"),
         None => runtime.drain_concurrency_ceiling()?,
@@ -583,14 +657,25 @@ fn calculate_backlog_forecast(
         *arrivals_by_source.entry(arrival_source(task)).or_default() += 1;
     }
     let arrived: u64 = arrivals_by_source.values().sum();
+    let mut adjusted_arrivals = arrivals_by_source.clone();
+    for task in tasks.values().filter(|task| {
+        task.created_at >= arrival_start
+            && task
+                .relations
+                .iter()
+                .any(|link| link.relation_type == TaskRelationType::RegressionFrom)
+    }) {
+        if let Some(count) = adjusted_arrivals.get_mut(arrival_source(task)) {
+            *count = count.saturating_sub(1);
+        }
+    }
+    let arrival_rates: BTreeMap<&'static str, f64> = adjusted_arrivals
+        .iter()
+        .map(|(source, count)| (*source, *count as f64 / ARRIVAL_DAYS as f64))
+        .collect();
     let source_count = |source: &str| arrivals_by_source.get(source).copied().unwrap_or(0);
     let per_day = |count: u64| (count as f64 / ARRIVAL_DAYS as f64 * 100.0).round() / 100.0;
     let done_recently = done_at.values().filter(|at| **at >= arrival_start).count() as u64;
-    let arrival_rate = arrived as f64 / ARRIVAL_DAYS as f64;
-    let arrivals = options.arrivals.then_some(Arrivals {
-        per_day: arrival_rate,
-        history: &history,
-    });
 
     let status_by_id = runtime.dependency_status_index(queued.iter().copied())?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
@@ -625,6 +710,10 @@ fn calculate_backlog_forecast(
                 },
                 _ => (*task).clone(),
             })
+            .chain(rework.donors.iter().map(|donor| Task {
+                status: TaskStatus::Backlog,
+                ..donor.task.clone()
+            }))
             .collect(),
         &workspace,
         now,
@@ -632,7 +721,9 @@ fn calculate_backlog_forecast(
     if let Some(evidence) = resource_fit.evidence {
         admission.fit_resources(evidence);
     }
-    let forecast = model::simulate_backlog_forecast(
+    let preparation_ms = preparation_started.elapsed().as_secs_f64() * 1000.0;
+    let simulation_started = std::time::Instant::now();
+    let mut forecast = simulation::simulate_backlog_forecast(
         &items,
         &resolved,
         &history,
@@ -640,12 +731,34 @@ fn calculate_backlog_forecast(
         &admission,
         &plan,
         slots,
-        arrivals.as_ref(),
+        &rework,
+        options.arrivals.then_some(&arrival_rates),
     );
 
+    let simulation_ms = simulation_started.elapsed().as_secs_f64() * 1000.0;
+    for scenario in std::iter::once(&mut forecast.backlog).chain(forecast.if_approved.iter_mut()) {
+        if let Some(predictions) = scenario["task_predictions"].as_array_mut() {
+            for prediction in predictions {
+                if let Some(index) = items
+                    .iter()
+                    .position(|item| prediction["id"] == item.task_id)
+                {
+                    prediction["riskiness"] = rework.risks[index].clone();
+                    prediction["regression_probability"] = json!(rework.probabilities[index]);
+                    prediction["regression_probability_basis"] = json!(rework.prior_basis[index]);
+                    prediction["regression_bundle_samples"] = json!(rework.pools[index].len());
+                    prediction["regression_bundle_basis"] = json!(rework.pool_basis[index]);
+                }
+            }
+        }
+    }
     let coverage = |proposed: bool| {
         let mut counts = BTreeMap::from([
             ("tasks", 0u64),
+            ("risk_prior_fallbacks", 0),
+            ("risk_unestimated", 0),
+            ("regression_history_missing", 0),
+            ("regression_history_thin", 0),
             ("unassessed", 0),
             ("thin_cell_fallbacks", 0),
             ("fallback_complexity", 0),
@@ -686,6 +799,16 @@ fn calculate_backlog_forecast(
                 continue;
             }
             bump("tasks");
+            if rework.probabilities[index].is_none() {
+                bump("risk_unestimated");
+            } else if rework.prior_basis[index] != "estimate" {
+                bump("risk_prior_fallbacks");
+            }
+            if rework.pools[index].is_empty() || rework.missing_fix_history > 0 {
+                bump("regression_history_missing");
+            } else if rework.pools[index].len() < model::MIN_CELL_SAMPLES {
+                bump("regression_history_thin");
+            }
             match reasons[index] {
                 Some("return_unsupported") => bump("return_unsupported"),
                 Some(reason) => {
@@ -773,6 +896,7 @@ fn calculate_backlog_forecast(
         "concurrency_source": concurrency_source,
         "auto_concurrency_mode": runtime.auto_concurrency_settings().mode,
         "resource_fit": resource_fit.report,
+        "regression_rework": rework.regression_history_report(),
         "arrivals": options.arrivals,
         "iterations": model::ITERATIONS,
         "horizon_hours": schedule::HORIZON_HOURS,
@@ -839,6 +963,11 @@ fn calculate_backlog_forecast(
                     "setback_probability": resolved.setback_probability(&episodes),
                     "return_basis": resolved.return_basis.key(),
                     "return_probability": resolved.returns.return_probability(),
+                    "riskiness": rework.risks[index],
+                    "regression_probability": rework.probabilities[index],
+                    "regression_probability_basis": rework.prior_basis[index],
+                    "regression_bundle_samples": rework.pools[index].len(),
+                    "regression_bundle_basis": rework.pool_basis[index],
                     "cell_samples": resolved.cell_samples,
                     "review_mode": item.review_mode,
                     "review_mode_source": item.review_mode_source,
@@ -875,17 +1004,30 @@ fn calculate_backlog_forecast(
             Err(error) => tracing::warn!(%error, "backlog forecast: not stored"),
         }
     }
-    let stored = if stored_now == Some(true) {
-        runtime.backlog_forecasts(SCORED_FORECASTS)?
-    } else {
-        stored
-    };
-    let calibration =
-        scoring::score_backlog_forecasts(&stored, &tasks, &done_at, &runs, model::MODEL_VERSION);
+    if stored_now == Some(true) {
+        for row in runtime.backlog_forecasts(SCORED_FORECASTS)? {
+            if !stored
+                .iter()
+                .any(|existing| existing.forecast_at == row.forecast_at)
+            {
+                stored.push(row);
+            }
+        }
+        stored.sort_by_key(|row| std::cmp::Reverse(row.forecast_at));
+    }
+    let calibration = scoring::score_backlog_forecasts(
+        &stored,
+        &tasks,
+        &done_at,
+        &runs,
+        model::MODEL_VERSION,
+        now,
+    );
 
     Ok(json!({
         "model_version": model::MODEL_VERSION,
         "generated_at": now.to_rfc3339(),
+        "timing": {"preparation_ms": preparation_ms, "simulation_ms": simulation_ms},
         "inputs": inputs,
         "assumptions": {
             "arrivals": if options.arrivals { "recent_rate" } else { "none" },
@@ -896,14 +1038,16 @@ fn calculate_backlog_forecast(
             "attempt_outcomes": "sampled_episodes",
             "arrival_missing_metrics": "propagate_null",
             // Admission factors the simulation does not model yet: review
-            // locks are counted in coverage, arrivals take a slot but hold
-            // no lock, and static eligibility gates are not replayed.
+            // locks are counted in coverage and static eligibility gates
+            // are not replayed. Synthetic work uses historical donor locks.
             "review_lock_holders": "not_modelled",
-            "arrival_conflicts": "slot_only",
+            "arrival_conflicts": "historical_footprint_donors",
+            "regression_rework": "one_generation_detection_bundles",
+            "risk_prior": "supported_crew_complexity_else_workspace",
             // Gap fit judges initial tasks only where `inputs.resource_fit`
-            // says it applied; arrivals take a slot without a profile.
+            // says it applied; synthetic work uses its donor profile.
             "resource_fit": "enforce_mode_gap_fit",
-            "arrival_resources": "not_modelled",
+            "arrival_resources": "donor_profile",
             "static_eligibility": "not_modelled",
         },
         "backlog": {
@@ -923,6 +1067,9 @@ fn calculate_backlog_forecast(
             // Initial-task coverage above describes a different sampling pool.
             "coverage": {
                 "deliveries": history.len(),
+                "conflict_donors": rework.donors.len(),
+                "arrival_conflict_unknown": options.arrivals && adjusted_arrivals.values().sum::<u64>() > 0 && rework.donors.is_empty(),
+                "source_class_fallbacks": arrival_rates.iter().filter(|(source, rate)| **rate > 0.0 && rework.donors.iter().filter(|d| arrival_source(&d.task) == **source).count() < model::MIN_CELL_SAMPLES).count(),
                 "missing_tokens": history.iter().filter(|d| d.tokens.is_none()).count(),
                 "missing_usd": history.iter().filter(|d| d.usd.is_none()).count(),
             },
@@ -932,6 +1079,8 @@ fn calculate_backlog_forecast(
                 "sweep": per_day(source_count("sweep")),
                 "filing": per_day(source_count("filing")),
             },
+            "adjusted_per_day": per_day(adjusted_arrivals.values().sum()),
+            "excluded_regression_filings": arrived - adjusted_arrivals.values().sum::<u64>(),
             "done_per_day": per_day(done_recently),
         },
         "stored": {

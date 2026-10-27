@@ -23,6 +23,7 @@
 //! Nothing here reads a store after [`OrbitRuntime::forecast_admission`]
 //! returns.
 
+mod generated;
 mod resource_fit;
 
 use std::cell::OnceCell;

@@ -35,6 +35,7 @@ pub(crate) const RESOURCE_RECHECK_HOURS: f64 = 5.0 / 60.0;
 
 /// What the forecast captured of the execution host, and the gap-fit
 /// settings its drain admits under.
+#[derive(Clone)]
 pub(crate) struct ForecastHostEvidence {
     pub(crate) host: SimulatedHost,
     pub(crate) profiles: Arc<ProfileSet>,
@@ -54,6 +55,16 @@ pub(super) struct ResourceFit {
 }
 
 impl ResourceFit {
+    pub(super) fn with_forecast_generated_nodes(&self, templates: &[usize]) -> Self {
+        Self {
+            evidence: self.evidence.clone(),
+            priced: templates
+                .iter()
+                .map(|index| self.priced[*index].clone())
+                .collect(),
+        }
+    }
+
     pub(super) fn new(evidence: ForecastHostEvidence, tasks: &[Task]) -> Self {
         let priced = tasks
             .iter()

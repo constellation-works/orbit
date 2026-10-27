@@ -5,16 +5,13 @@
 //! runtime access, so the same inputs always give the same quantiles (the
 //! generator is seeded with a constant).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use orbit_types::task::UNSET_BUCKET;
 use serde_json::{Value, json};
 
-use super::dependencies::DependencyPlan;
 use super::outcomes::{AwayWait, Episode, EpisodeOutcome, Follow, MAX_ATTEMPTS, ReturnCurve};
 use super::review_modes::ReviewMode;
-use super::schedule::{self, HORIZON_HOURS, Scenario, ScheduleState};
-use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 
 /// Bumped whenever the sampling or simulation changes what a stored
 /// forecast means, so calibration can tell versions apart. 4: review-mode
@@ -24,8 +21,9 @@ use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 /// [ORB-18689]. 7: sub-second and same-instant returns stay drawable for
 /// a fresh blocked attempt [ORB-18853]. 8: a censored blocked wait is
 /// summed through the horizon, and absorption stops at its own event
-/// [ORB-18856].
-pub(super) const MODEL_VERSION: u32 = 8;
+/// [ORB-18856]. 9: one-generation regression bundles, donor admission and
+/// horizon-mature calibration [ORB-18691].
+pub(super) const MODEL_VERSION: u32 = 9;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
@@ -33,19 +31,20 @@ pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
     ("review_modes", Some(1)),
     ("outcomes", Some(1)),
     ("resource_fit", Some(1)),
-    ("regression_rework", None),
+    ("regression_rework", Some(1)),
 ];
 /// Simulated drains per forecast.
 pub(super) const ITERATIONS: usize = 1_000;
 /// Each mode-preserving pool requires this many completed deliveries.
 pub(super) const MIN_CELL_SAMPLES: usize = 5;
-const SEED: u64 = 0x0b17_f0ec_a57d_2026;
+pub(super) const FORECAST_SEED: u64 = 0x0b17_f0ec_a57d_2026;
 
 /// One completed delivery: a done task with linked invocations since its
 /// last attempt that did not deliver, as the history sample a task's
 /// delivering attempt draws.
 #[derive(Clone)]
 pub(super) struct Delivery {
+    pub(super) task_id: String,
     pub(super) complexity: String,
     pub(super) crew: Option<String>,
     pub(super) review_mode: ReviewMode,
@@ -307,7 +306,7 @@ fn round_share(value: f64) -> f64 {
 }
 
 /// splitmix64: small, seedable and good enough for resampling.
-pub(super) struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -383,6 +382,7 @@ pub(super) struct Step {
 /// A task's attempts for one iteration: the wait before its first (a
 /// blocked task's return), then attempts until one delivers or no return
 /// follows.
+#[derive(Clone)]
 pub(super) struct Script {
     pub(super) initial: Follow,
     pub(super) steps: Vec<Step>,
@@ -428,7 +428,7 @@ impl Script {
 /// episode's hours and is followed by an immediate requeue (failed), a
 /// sampled return (blocked) or nothing (abandoned). A delivering attempt
 /// takes `delivery`. Without episodes the first attempt delivers.
-fn script_attempts(
+pub(super) fn draw_forecast_attempts(
     rng: &mut Rng,
     item: &Item,
     resolved: &Resolved,
@@ -511,7 +511,11 @@ fn script_attempts(
     }
 }
 
-fn draw(rng: &mut Rng, resolved: &Resolved, history: &[Delivery]) -> Draw {
+pub(super) fn draw_forecast_delivery(
+    rng: &mut Rng,
+    resolved: &Resolved,
+    history: &[Delivery],
+) -> Draw {
     if resolved.samples.is_empty() {
         return Draw::MISSING;
     }
@@ -534,16 +538,9 @@ fn draw(rng: &mut Rng, resolved: &Resolved, history: &[Delivery]) -> Draw {
     }
 }
 
-/// The opt-in arrivals: `per_day` new tasks a day, each drawn from the
-/// whole history.
-pub(super) struct Arrivals<'a> {
-    pub(super) per_day: f64,
-    pub(super) history: &'a [Delivery],
-}
-
 /// p50 and p90 of `values` by nearest rank; `None` entries (beyond the
 /// horizon, or not computable) sort last.
-pub(super) fn quantiles(values: &mut [Option<f64>]) -> Value {
+pub(super) fn forecast_quantiles(values: &mut [Option<f64>]) -> Value {
     if values.is_empty() {
         return json!({ "p50": null, "p90": null });
     }
@@ -565,12 +562,12 @@ fn round(value: f64) -> f64 {
 }
 
 /// Quantiles of a plain sample set (a task's own history).
-pub(super) fn sample_quantiles(mut values: Vec<f64>, less: f64) -> Value {
+fn sample_quantiles(mut values: Vec<f64>, less: f64) -> Value {
     let mut values: Vec<Option<f64>> = values
         .drain(..)
         .map(|value| Some((value - less).max(0.0)))
         .collect();
-    quantiles(&mut values)
+    forecast_quantiles(&mut values)
 }
 
 impl Resolved {
@@ -588,383 +585,5 @@ impl Resolved {
             "tokens": sample_quantiles(pick(&self.token_samples, &|d| d.tokens), spent.tokens),
             "usd": sample_quantiles(pick(&self.cost_samples, &|d| d.usd), spent.usd),
         })
-    }
-}
-
-fn probability(count: u64, of: u64) -> Option<f64> {
-    (of > 0).then(|| (count as f64 / of as f64 * 1000.0).round() / 1000.0)
-}
-
-/// The simulated totals and schedules for one scenario.
-struct Outcome {
-    drain: Vec<Option<f64>>,
-    tokens: Vec<Option<f64>>,
-    usd: Vec<Option<f64>>,
-    critical_path: Vec<Option<f64>>,
-    parallelism: Vec<Option<f64>>,
-    /// Per [`ForecastWait::ALL`] reason: summed task wait hours.
-    waits: [Vec<Option<f64>>; schedule::WAITS],
-    /// Summed task-hours waiting to return after leaving the queue.
-    return_waits: Vec<Option<f64>>,
-    /// Over available iterations: attempts started that were blocked,
-    /// failed or abandoned; tasks left without a return; iterations in
-    /// which a task hit [`MAX_ATTEMPTS`].
-    setbacks: [u64; 3],
-    no_return: u64,
-    attempt_limited: u64,
-    /// Iterations with hours to schedule; of those, the ones that drained
-    /// and the ones that finished every scheduled initial task.
-    available: u64,
-    drained: u64,
-    complete: u64,
-    unfinished: u64,
-    truncated: u64,
-    /// Per task: first start hour and rank per available iteration, and
-    /// how many of them it finished in.
-    starts: Vec<Vec<Option<f64>>>,
-    ranks: Vec<Vec<Option<f64>>>,
-    finished: Vec<u64>,
-    /// Per complexity: summed slot-hours, tokens and USD per iteration.
-    by_complexity: BTreeMap<String, [Vec<Option<f64>>; 3]>,
-}
-
-impl Outcome {
-    fn new(tasks: usize) -> Self {
-        Self {
-            drain: Vec::new(),
-            tokens: Vec::new(),
-            usd: Vec::new(),
-            critical_path: Vec::new(),
-            parallelism: Vec::new(),
-            waits: Default::default(),
-            return_waits: Vec::new(),
-            setbacks: [0; 3],
-            no_return: 0,
-            attempt_limited: 0,
-            available: 0,
-            drained: 0,
-            complete: 0,
-            unfinished: 0,
-            truncated: 0,
-            starts: vec![Vec::new(); tasks],
-            ranks: vec![Vec::new(); tasks],
-            finished: vec![0; tasks],
-            by_complexity: BTreeMap::new(),
-        }
-    }
-
-    fn record(
-        &mut self,
-        scenario: &Scenario<'_>,
-        run: &schedule::Run,
-        state: &ScheduleState,
-        totals: Draw,
-    ) {
-        self.drain.push(run.drained);
-        self.tokens.push(totals.tokens);
-        self.usd.push(totals.usd);
-        self.critical_path.push(run.critical_path);
-        self.parallelism.push(run.parallelism);
-        for (slot, values) in self.waits.iter_mut().enumerate() {
-            values.push(run.waits.map(|waits| waits[slot]));
-        }
-        self.return_waits.push(run.return_wait);
-        self.truncated += u64::from(run.truncated);
-        if run.waits.is_none() {
-            return;
-        }
-        self.available += 1;
-        for (total, count) in self.setbacks.iter_mut().zip(run.setbacks) {
-            *total += count;
-        }
-        self.no_return += run.no_return as u64;
-        self.drained += u64::from(run.drained.is_some());
-        self.complete += u64::from(run.unfinished == 0);
-        self.unfinished += run.unfinished as u64;
-        for (index, included) in scenario.included.iter().enumerate() {
-            if !included {
-                continue;
-            }
-            self.starts[index].push(state.start[index]);
-            self.ranks[index].push(state.rank[index]);
-            self.finished[index] += u64::from(state.finished[index]);
-        }
-    }
-
-    fn into_json(
-        mut self,
-        items: &[Item],
-        resolved: &[Resolved],
-        scenario: &Scenario<'_>,
-        members: &[usize],
-        reasons: &[Option<&'static str>],
-    ) -> Value {
-        let included: Vec<usize> = members
-            .iter()
-            .copied()
-            .filter(|index| scenario.included[*index])
-            .collect();
-        let full = included.len() == members.len();
-        let mut counts: BTreeMap<&str, (u64, BTreeMap<&str, u64>)> = BTreeMap::new();
-        for index in &included {
-            let entry = counts.entry(items[*index].complexity.as_str()).or_default();
-            entry.0 += 1;
-            *entry.1.entry(resolved[*index].basis.key()).or_default() += 1;
-        }
-        let mut by_complexity: Vec<(String, [Vec<Option<f64>>; 3])> =
-            std::mem::take(&mut self.by_complexity)
-                .into_iter()
-                .collect();
-        by_complexity.sort_by(|(left, _), (right, _)| {
-            orbit_types::task::complexity_bucket_ord(left)
-                .cmp(&orbit_types::task::complexity_bucket_ord(right))
-        });
-        let by_complexity: Vec<Value> = by_complexity
-            .into_iter()
-            .map(|(complexity, [mut hours, mut tokens, mut usd])| {
-                let (tasks, basis) = counts.remove(complexity.as_str()).unwrap_or_default();
-                json!({
-                    "complexity": complexity,
-                    "tasks": tasks,
-                    "basis": basis,
-                    "work_hours": quantiles(&mut hours),
-                    "tokens": quantiles(&mut tokens),
-                    "usd": quantiles(&mut usd),
-                })
-            })
-            .collect();
-        let drain = quantiles(&mut self.drain);
-        let tokens = quantiles(&mut self.tokens);
-        let usd = quantiles(&mut self.usd);
-        let unknown = json!({ "p50": null, "p90": null });
-        let mut waits = serde_json::Map::new();
-        waits.insert("basis".into(), json!("summed_task_hours"));
-        for (wait, values) in ForecastWait::ALL.iter().zip(self.waits.iter_mut()) {
-            waits.insert(wait.key().into(), quantiles(values));
-        }
-        waits.insert("return".into(), quantiles(&mut self.return_waits));
-        let available = self.available;
-        let mean = |count: u64| {
-            (available > 0).then(|| (count as f64 / available as f64 * 100.0).round() / 100.0)
-        };
-        // Probabilities describe the whole scenario, so they are unknown
-        // while any task cannot be scheduled.
-        let whole = |count: u64| full.then(|| probability(count, available)).flatten();
-        let mut predicted: Vec<usize> = members
-            .iter()
-            .copied()
-            .filter(|index| items[*index].in_progress)
-            .collect();
-        predicted.extend(
-            scenario
-                .admission
-                .dispatch_order()
-                .iter()
-                .copied()
-                .filter(|index| members.contains(index) && !items[*index].in_progress),
-        );
-        let task_predictions: Vec<Value> = predicted
-            .into_iter()
-            .map(|index| {
-                let item = &items[index];
-                let scheduled = scenario.included[index];
-                let started = self.starts[index].iter().filter(|at| at.is_some()).count() as u64;
-                json!({
-                    "id": item.task_id,
-                    "title": item.title,
-                    "status": if item.in_progress {
-                        "in-progress"
-                    } else if item.proposed {
-                        "proposed"
-                    } else if item.blocked {
-                        "blocked"
-                    } else {
-                        "backlog"
-                    },
-                    "basis": resolved[index].basis.key(),
-                    "outcome_basis": resolved[index].outcome_basis.key(),
-                    "return_basis": resolved[index].return_basis.key(),
-                    "return_support": {
-                        "waits": resolved[index].returns.support,
-                        "censored": resolved[index].returns.censored,
-                        "tail_unsupported": resolved[index].returns.tail_unsupported,
-                    },
-                    "review_mode": item.review_mode,
-                    "review_mode_source": item.review_mode_source,
-                    "review_mode_fallback": resolved[index].review_mode_fallback,
-                    "cell_samples": resolved[index].cell_samples,
-                    "unforecastable": reasons[index],
-                    "profile_source": scenario
-                        .admission
-                        .profile_source(index)
-                        .map(|source| source.as_str()),
-                    "predicted_start_hours": quantiles(&mut self.starts[index]),
-                    "predicted_start_rank": quantiles(&mut self.ranks[index]),
-                    "started_probability": scheduled.then(|| probability(started, available)).flatten(),
-                    "completion_probability": scheduled
-                        .then(|| probability(self.finished[index], available))
-                        .flatten(),
-                })
-            })
-            .collect();
-        json!({
-            "tasks": members.len(),
-            "time_to_drain_hours": if full { drain.clone() } else { unknown.clone() },
-            "tokens": if full { tokens.clone() } else { unknown.clone() },
-            "usd": if full { usd.clone() } else { unknown },
-            "schedulable_subset": (!full).then(|| json!({
-                "tasks": included.len(),
-                "of": members.len(),
-                "time_to_drain_hours": drain,
-                "tokens": tokens,
-                "usd": usd,
-            })),
-            "effective_parallelism": quantiles(&mut self.parallelism),
-            "critical_path_hours": quantiles(&mut self.critical_path),
-            "wait_hours": waits,
-            "completion_probability": whole(self.complete),
-            "drain_probability": whole(self.drained),
-            "not_expected_to_drain": full.then(|| mean(self.unfinished)).flatten(),
-            // Means per simulated drain, over the scheduled tasks.
-            "outcomes": {
-                "blocked_attempts": mean(self.setbacks[0]),
-                "failed_attempts": mean(self.setbacks[1]),
-                "abandoned_attempts": mean(self.setbacks[2]),
-                "no_return": mean(self.no_return),
-                "attempt_limited": self.attempt_limited,
-                "max_attempts": MAX_ATTEMPTS,
-            },
-            "horizon_hours": HORIZON_HOURS,
-            "simulation_truncated": self.truncated,
-            "by_complexity": by_complexity,
-            "task_predictions": task_predictions,
-        })
-    }
-}
-
-/// The forecast for `items` (backlog, then `if_approved` with proposed).
-pub(super) struct Forecast {
-    pub(super) backlog: Value,
-    pub(super) if_approved: Option<Value>,
-}
-
-/// Simulate [`ITERATIONS`] drains of `items` on `slots`, each admitted as
-/// the drain would admit it under `admission`, whose task `i` is
-/// `items[i]`. Proposed items count only toward `if_approved`; tasks
-/// `plan` cannot schedule are left out of each scenario's simulation.
-#[allow(clippy::too_many_arguments)]
-pub(super) fn simulate_backlog_forecast(
-    items: &[Item],
-    resolved: &[Resolved],
-    history: &[Delivery],
-    episodes: &[Episode],
-    admission: &ForecastAdmission,
-    plan: &DependencyPlan,
-    slots: usize,
-    arrivals: Option<&Arrivals<'_>>,
-) -> Forecast {
-    let mut rng = Rng(SEED);
-    let has_proposed = items.iter().any(|item| item.proposed);
-    let in_progress: Vec<bool> = items.iter().map(|item| item.in_progress).collect();
-    let age_hours: Vec<f64> = items.iter().map(|item| item.age_hours).collect();
-    let members = |include_proposed: bool| -> Vec<usize> {
-        (0..items.len())
-            .filter(|index| include_proposed || !items[*index].proposed)
-            .collect()
-    };
-    let scenario = |include_proposed: bool, reasons: &[Option<&'static str>]| {
-        let included = (0..items.len())
-            .map(|index| (include_proposed || !items[index].proposed) && reasons[index].is_none())
-            .collect();
-        Scenario::new(
-            admission,
-            &plan.edges,
-            included,
-            &in_progress,
-            &age_hours,
-            slots,
-        )
-    };
-    let backlog_scenario = scenario(false, &plan.backlog);
-    let approved_scenario = has_proposed.then(|| scenario(true, &plan.approved));
-    let mut outcomes = [Outcome::new(items.len()), Outcome::new(items.len())];
-    let mut state = ScheduleState::new(admission);
-    let mut hours = vec![None; items.len()];
-    let mut scripts: Vec<Script> = (0..items.len()).map(|_| Script::default()).collect();
-    for _ in 0..ITERATIONS {
-        // Both scenarios replay the same attempts.
-        for (index, item) in items.iter().enumerate() {
-            let delivery = draw(&mut rng, &resolved[index], history);
-            hours[index] = delivery.hours;
-            script_attempts(
-                &mut rng,
-                item,
-                &resolved[index],
-                episodes,
-                delivery,
-                &mut scripts[index],
-            );
-        }
-        let scenarios = [Some(&backlog_scenario), approved_scenario.as_ref()];
-        for (scenario, outcome) in scenarios.into_iter().zip(outcomes.iter_mut()) {
-            let Some(scenario) = scenario else {
-                continue;
-            };
-            let mut totals = Draw::ZERO;
-            let run = schedule::simulate_drain(
-                scenario,
-                &hours,
-                &scripts,
-                arrivals,
-                &mut rng,
-                &mut totals,
-                &mut state,
-            );
-            // Spend is what the attempts started by the horizon used.
-            let mut complexity: BTreeMap<&str, Draw> = BTreeMap::new();
-            for (index, item) in items.iter().enumerate() {
-                if !scenario.included[index] {
-                    continue;
-                }
-                let cell = complexity
-                    .entry(item.complexity.as_str())
-                    .or_insert(Draw::ZERO);
-                if run.waits.is_some() {
-                    cell.add(&state.charged[index]);
-                } else {
-                    *cell = Draw::MISSING;
-                }
-            }
-            if run.waits.is_none() {
-                totals = Draw::MISSING;
-            }
-            outcome.record(scenario, &run, &state, totals);
-            outcome.attempt_limited += u64::from(
-                run.waits.is_some()
-                    && (0..items.len())
-                        .any(|index| scenario.included[index] && scripts[index].limited),
-            );
-            for (key, cell) in complexity {
-                let entry = outcome.by_complexity.entry(key.to_string()).or_default();
-                entry[0].push(cell.hours);
-                entry[1].push(cell.tokens);
-                entry[2].push(cell.usd);
-            }
-        }
-    }
-    let [backlog_outcome, approved_outcome] = outcomes;
-    let backlog = backlog_outcome.into_json(
-        items,
-        resolved,
-        &backlog_scenario,
-        &members(false),
-        &plan.backlog,
-    );
-    let if_approved = approved_scenario.as_ref().map(|scenario| {
-        approved_outcome.into_json(items, resolved, scenario, &members(true), &plan.approved)
-    });
-    Forecast {
-        backlog,
-        if_approved,
     }
 }

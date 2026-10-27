@@ -21,6 +21,18 @@ pub struct StoredBacklogForecast {
 }
 
 pub trait BacklogForecastStoreBackend: Send + Sync {
+    /// The newest mature forecasts per model version, bounded by
+    /// `limit_per_version`; keeps horizon calibration independent of the
+    /// recent hourly snapshot window. Versions below `min_model_version`
+    /// are excluded.
+    fn mature_backlog_forecasts(
+        &self,
+        workspace_id: &str,
+        cutoff: DateTime<Utc>,
+        min_model_version: u32,
+        limit_per_version: usize,
+    ) -> Result<Vec<StoredBacklogForecast>, OrbitError>;
+
     /// Insert `row` unless the workspace already holds a forecast newer than
     /// `row.forecast_at - min_interval`. `true` when this call wrote it.
     fn record_backlog_forecast(
