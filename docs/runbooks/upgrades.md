@@ -661,6 +661,12 @@ signed release)`.
 
 Two ledgers guard `.orbit/` state and auto-apply on workspace open:
 
+At the implementation level, the store-schema ledger applies inside
+`Store::open`, while the workspace-layout registry applies during runtime
+pre-flight. Opening a runtime therefore applies pending entries in both
+ledgers. The `orbit migrate` inspection path avoids opening the runtime so it
+can report pending entries before `--confirm` applies them.
+
 - **Workspace layout:** `.orbit/state/layout.version` plus an ordered migration registry in
   `crates/orbit-store/src/workflow/layout/`. A missing marker means a pre-versioning workspace and is adopted
   as v1. Upgraders serialize on `state/layout.lock`.
