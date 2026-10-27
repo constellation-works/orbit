@@ -1,6 +1,6 @@
 //! Passes 2 to 4: cluster rows by run scope and signature, collapse
 //! in-run cascades, then fold cited-run cascades; and the report built on
-//! top.
+//! top. Root metadata comes from the earliest row by timestamp, then event ID.
 
 use super::cause::{CauseInput, cause_for};
 use super::classify::{classify, has_tool_identity, surface_of};
@@ -96,6 +96,7 @@ pub(super) struct Cluster {
     activity_id: Option<String>,
     message: Option<String>,
     event_count: u64,
+    root_rank: Option<(DateTime<Utc>, i64)>,
     first_ts: DateTime<Utc>,
     last_ts: DateTime<Utc>,
     run_ids: Vec<String>,
@@ -110,10 +111,10 @@ impl Cluster {
         self.event_count += 1;
         self.first_ts = self.first_ts.min(event.timestamp);
         self.last_ts = self.last_ts.max(event.timestamp);
-        if self.activity_id.is_none() {
+        let rank = (event.timestamp, event.id);
+        if self.root_rank.is_none_or(|root| rank < root) {
+            self.root_rank = Some(rank);
             self.activity_id.clone_from(&event.activity_id);
-        }
-        if self.message.is_none() {
             self.message.clone_from(&event.error_message);
         }
         push_unique(&mut self.run_ids, event.job_run_id.as_deref());
@@ -210,6 +211,7 @@ fn group_run_cascades(failures: &[AuditEvent]) -> Vec<FailureIncident> {
                     activity_id: None,
                     message: None,
                     event_count: 0,
+                    root_rank: None,
                     first_ts: event.timestamp,
                     last_ts: event.timestamp,
                     run_ids: Vec::new(),

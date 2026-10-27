@@ -206,8 +206,13 @@ impl TaskV2Store {
         residual: TaskResidualFilter<'_>,
     ) -> Result<TaskPage, OrbitError> {
         let filter = filter.normalized();
+        let selection_filter = if residual.is_some() {
+            filter.without_cursor()
+        } else {
+            filter.clone()
+        };
         let candidates = self.task_candidates(
-            &filter,
+            &selection_filter,
             if residual.is_some() {
                 usize::MAX
             } else {
@@ -223,6 +228,10 @@ impl TaskV2Store {
             // a bundle: a lock, seven file reads and their parses. Each
             // hydrated task is checked again below, which is the authority.
             selected.retain(|candidate| matches(&Self::metadata_task(candidate), &status_by_id));
+        }
+        let residual_total_without_cursor = selected.len();
+        if residual.is_some() && filter.scan_before.is_some() {
+            selected.retain(|candidate| filter.matches_cursor(candidate));
         }
         let selected_total = selected.len();
         let mut items = Vec::with_capacity(selected_total.min(limit));
@@ -249,7 +258,7 @@ impl TaskV2Store {
             candidates.total
         };
         let total_without_cursor = if residual.is_some() {
-            total
+            residual_total_without_cursor
         } else {
             candidates.total_without_cursor
         };
