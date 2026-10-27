@@ -190,6 +190,83 @@ fn redact_all_scrubs_key_query_params_case_insensitively() {
 }
 
 #[test]
+fn redact_all_masks_same_line_api_key_assignments_and_keeps_key_names() {
+    const VALUE: &str = "q7Lx2Rv9Kp4Nm8Zs3Tw6";
+    for (key, separator) in [
+        ("HTTPAPIKey", "="),
+        ("SERVICEAPIKey", ": "),
+        ("api_key", "="),
+        ("serviceApiKey", "="),
+        ("api-key", ": "),
+        ("x-api-key", "="),
+        ("my_api_key", " = "),
+        ("APIKEY", "="),
+        ("serviceAPIKey", "="),
+        ("HTTPApiKey", "="),
+        ("apiKey", "="),
+        ("apikey", "="),
+        ("API_KEY", ": "),
+    ] {
+        for prefix in ["", "2026-10-26T14:42:00.0000000Z "] {
+            let raw = format!("{prefix}{key}{separator}{VALUE}");
+            let redacted = redact_all(&raw);
+            assert!(
+                !redacted.contains(VALUE),
+                "{key} value leaked for prefix {prefix:?}: {redacted}"
+            );
+            assert!(
+                redacted.contains(key),
+                "key name must stay for {key}: {redacted}"
+            );
+            assert!(
+                redacted.contains("[REDACTED_AUTH]"),
+                "marker style for {key}: {redacted}"
+            );
+            // Redacting an already-redacted line is idempotent.
+            assert_eq!(redact_all(&redacted), redacted, "idempotent: {key}");
+        }
+    }
+
+    // A value ends at whitespace; following prose stays readable.
+    assert_eq!(
+        redact_all(&format!("api_key={VALUE} after")),
+        "api_key=[REDACTED_AUTH] after"
+    );
+
+    // Quoted assignments keep their quotes and mask only the value.
+    let quoted = redact_all(&format!("api_key=\"{VALUE}\""));
+    assert_eq!(quoted, "api_key=\"[REDACTED_AUTH]\"");
+
+    // Text that is not a credential stays unchanged.
+    for raw in [
+        "the api_key setting is documented here",
+        "apikey",
+        "api_key=",
+        "api_key:",
+        "api_keyboard=ordinarybuildvalue",
+        "serviceApiKeyboard=ordinarybuildvalue",
+        "capiKey=ordinarybuildvalue",
+        "build_id=ordinarybuildvalue",
+    ] {
+        assert_eq!(redact_all(raw), raw, "non-credential changed: {raw}");
+    }
+
+    // Existing Bearer / Authorization behaviour is unchanged.
+    assert_eq!(
+        redact_all(&format!("Bearer {VALUE}")),
+        "Bearer [REDACTED_AUTH]"
+    );
+    assert_eq!(
+        redact_all(&format!("Authorization: Bearer {VALUE}")),
+        "Authorization: [REDACTED_AUTH]"
+    );
+    assert_eq!(
+        redact_all(&format!("Authorization: {VALUE}")),
+        "Authorization: [REDACTED_AUTH]"
+    );
+}
+
+#[test]
 fn redact_all_scrubs_provider_scm_cloud_tokens_and_connection_passwords() {
     let google = format!("AIza{}", "A".repeat(35));
     let gitlab = format!("glpat-{}", "B".repeat(20));

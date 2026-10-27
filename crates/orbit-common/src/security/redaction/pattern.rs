@@ -53,6 +53,40 @@ impl PatternRedactor {
                 Regex::new(r#"(?i)"api[_-]?key"\s*:\s*"[^"]*""#).expect("valid regex"),
                 r#""api_key":"[REDACTED_AUTH]""#,
             ),
+            // Same-line API-key assignments (`key=value` / `key: value`),
+            // wherever they appear on the line, not only at line start.
+            // The key must end in an `api key` segment at a separator,
+            // camel-case or all-caps `API` boundary (mirroring the log
+            // window classifier), so `capiKey` and `api_keyboard` stay
+            // readable. An empty value has nothing to mask.
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?\s*[:=]\s*["'])(?:\[REDACTED[A-Z_]+\]|[^"'\r\n]+)(["'])"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${4}",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?\s*[:=]\s*["'])(?:\[REDACTED[A-Z_]+\]|[^"'\r\n]+)(["'])"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${3}",
+            ),
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?\s*[:=]\s*)(?:\[REDACTED[A-Z_]+\]|[^\s"',;\]\)}]+)"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?\s*[:=]\s*)(?:\[REDACTED[A-Z_]+\]|[^\s"',;\]\)}]+)"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]",
+            ),
             (
                 Regex::new(r#"(?i)bearer\s+[A-Za-z0-9._\-+/=]+"#).expect("valid regex"),
                 "Bearer [REDACTED_AUTH]",
