@@ -508,10 +508,15 @@ filing honors exact-key operator `covered_by` relations and timed archive/reject
 suppression (`ci_failure.operator_suppression_hours`, default 6; see
 [recovery](../../orbit-orchestrate/references/recovery.md)). Equal normalized
 failing-test signatures consolidate across jobs with every job retained.
-Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then a rejected
-exact-key task whose comment names one still-open covering owner, then a
-high-confidence material match (generated workflow/job/step labels, or a
-specific error together with the failing command or the same run and job).
+Otherwise filing first reuses a still-open `ci-failure:<key>` owner, then follows
+a rejected exact-key task's inbound `Supersedes` relation to its covering owner,
+preferring a still-open owner and then the lowest task ID if several supersede
+the source. Any inbound relation suppresses the legacy comment reader, even
+when its superseder is terminal; a terminal superseder does not fall through to
+a legacy comment. Covering-task comments are read only when no inbound
+`Supersedes` relation exists. Filing then tries a high-confidence material
+match (generated workflow/job/step labels, or a specific error together with
+the failing command or the same run and job).
 That is not fuzzy title similarity: a shared workflow, generic npx/cargo
 exit, or the same affected file is not enough, and completion alone
 does not suppress a later recurrence. Completed owners can cover an exact pre-fix
