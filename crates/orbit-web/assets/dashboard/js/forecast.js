@@ -411,7 +411,7 @@ function drainOdds(forecast) {
   const horizon = formatForecastHours(forecast.horizon_hours ?? 2160);
   const parts = [`Drains within ${horizon} in ${fmtShare(forecast.drain_probability)} of runs`, `the initial tasks all finish in ${fmtShare(forecast.completion_probability)}`];
   const unfinished = num(forecast.not_expected_to_drain);
-  if (unfinished) parts.push(`${unfinished} task${unfinished === 1 ? "" : "s"} unfinished on average`);
+  if (unfinished) parts.push(`${unfinished.toFixed(2)} tasks unfinished on average`);
   const text = `${parts.join("; ")}.`;
   return forecast.simulation_truncated ? `${text} Some runs hit the event limit.` : text;
 }
