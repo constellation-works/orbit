@@ -1,9 +1,10 @@
 //! Shared deterministic duplicate-task assessment for finding sweep actions.
 //!
 //! Exact generated-key tags remain the authoritative fast path. When that
-//! path misses, rejected exact-key tasks may name one still-open covering
-//! owner in a duplicate comment. Otherwise a candidate is compared with
-//! every still-open task using caller-supplied, high-confidence fingerprints.
+//! path misses, rejected exact-key tasks may have a still-open covering
+//! owner through an inbound Supersedes relation, with duplicate comments read
+//! only for legacy records without that relation. Otherwise a candidate is
+//! compared with every still-open task using caller-supplied, high-confidence fingerprints.
 //! A fingerprint must match in full; individual keywords never carry a
 //! duplicate decision.
 //!
@@ -21,7 +22,7 @@ use std::rc::Rc;
 
 use orbit_common::security::redaction::redact_all;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::{Task, TaskComment, TaskStatus, is_valid_orb_task_id};
+use orbit_types::task::{Task, TaskComment, TaskRelationType, TaskStatus, is_valid_orb_task_id};
 use serde_json::{Value, json};
 
 /// `match_kind` of a match that is a rejected owner, not an open one.
@@ -29,15 +30,6 @@ pub(crate) const MATCH_REJECTED_OWNER: &str = "rejected_owner";
 
 const MAX_EVIDENCE_FIELDS: usize = 6;
 const MAX_EVIDENCE_CHARS: usize = 160;
-
-const COVERING_OWNER_MARKERS: &[&str] = &[
-    "duplicate of",
-    "covering implementation",
-    "covering task",
-    "covering repair",
-    "covering work",
-    "covered by",
-];
 
 pub(crate) trait DuplicateTaskLookup {
     fn list_tasks_by_tags(&self, tags: &[String]) -> Result<Vec<Task>, OrbitError>;
@@ -75,7 +67,7 @@ impl DuplicateTaskLookup for crate::OrbitRuntime {
 /// once per candidate. An action that assesses many candidates — one per
 /// cluster and one per legacy key in the CI sweep — would otherwise
 /// re-hydrate the whole workspace for each of them. The snapshot fills
-/// lazily, so the exact-key fast path still never lists broadly, and it is
+/// lazily, so the open exact-key fast path still never lists broadly, and it is
 /// dropped with the action, so nothing it caches can outlive the reads it
 /// was taken from. Tag queries and direct task reads pass through: they are
 /// indexed or single-bundle reads and happen only on a hit.
@@ -221,8 +213,9 @@ pub(crate) struct DuplicateTaskMatch {
 /// exact generated key is deterministic and sufficient by itself, so a broad
 /// lookup is neither needed nor allowed to override it. Rejected exact-key
 /// tasks are not coverage on their own; they may point at one still-open
-/// owner through an explicit duplicate comment, or suppress the candidate when
-/// it opted into a rejected-owner fingerprint that still matches.
+/// owner through an inbound Supersedes relation (or a legacy duplicate comment),
+/// or suppress the candidate when it opted into a rejected-owner fingerprint
+/// that still matches.
 pub(crate) fn find_covering_task<L>(
     lookup: &L,
     candidate: &DuplicateCandidate,
@@ -242,7 +235,8 @@ where
         }));
     }
 
-    if let Some(confirmed) = confirmed_duplicate_match(lookup, candidate, &exact_tasks)? {
+    let rejected = resolve_rejected_task_ownership(lookup, &exact_tasks)?;
+    if let Some(confirmed) = confirmed_duplicate_match(lookup, candidate, &rejected)? {
         return Ok(Some(confirmed));
     }
 
@@ -274,13 +268,69 @@ where
         }
     }
 
-    rejected_owner_match(lookup, candidate, &exact_tasks)
+    rejected_owner_match(lookup, candidate, &rejected)
+}
+
+enum RejectedTaskOwnership {
+    SupersededBy(String),
+    LegacyCoveredBy(String),
+    OwnRejection,
+}
+
+struct RejectedTaskOwner<'a> {
+    task: &'a Task,
+    ownership: RejectedTaskOwnership,
+}
+
+fn resolve_rejected_task_ownership<'a, L>(
+    lookup: &L,
+    exact_tasks: &'a [Task],
+) -> Result<Vec<RejectedTaskOwner<'a>>, OrbitError>
+where
+    L: DuplicateTaskLookup + ?Sized,
+{
+    let mut rejected = exact_tasks
+        .iter()
+        .filter(|task| task.status == TaskStatus::Rejected)
+        .collect::<Vec<_>>();
+    if rejected.is_empty() {
+        return Ok(Vec::new());
+    }
+    rejected.sort_by(|left, right| left.id.cmp(&right.id));
+    let all_tasks = lookup.list_tasks()?;
+    rejected
+        .into_iter()
+        .map(|task| {
+            let superseding = all_tasks
+                .iter()
+                .filter(|owner| {
+                    owner.relations.iter().any(|relation| {
+                        matches!(relation.relation_type, TaskRelationType::Supersedes)
+                            && relation.target == task.id
+                    })
+                })
+                // Prefer a live owner, then use stable task order if several
+                // replacements supersede the same source. Even a terminal
+                // relation prevents fallback to misleading legacy prose.
+                .min_by_key(|owner| (owner.status.is_terminal(), &owner.id));
+            let ownership = if let Some(owner) = superseding {
+                RejectedTaskOwnership::SupersededBy(owner.id.clone())
+            } else {
+                let comments = lookup.get_task_comments(&task.id)?;
+                legacy_covering_owner_from_comments(&task.id, &comments).map_or(
+                    RejectedTaskOwnership::OwnRejection,
+                    RejectedTaskOwnership::LegacyCoveredBy,
+                )
+            };
+            Ok(RejectedTaskOwner { task, ownership })
+        })
+        .collect()
 }
 
 fn rejected_owner_match<L>(
     lookup: &L,
     candidate: &DuplicateCandidate,
-    exact_tasks: &[Task],
+    rejected: &[RejectedTaskOwner<'_>],
 ) -> Result<Option<DuplicateTaskMatch>, OrbitError>
 where
     L: DuplicateTaskLookup + ?Sized,
@@ -288,17 +338,12 @@ where
     let Some(fingerprint) = &candidate.rejected_owner_fingerprint else {
         return Ok(None);
     };
-    let mut rejected = exact_tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::Rejected)
-        .collect::<Vec<_>>();
-    rejected.sort_by(|left, right| left.id.cmp(&right.id));
-
-    for task in rejected {
-        let comments = lookup.get_task_comments(&task.id)?;
-        if covering_owner_from_comments(&task.id, &comments).is_some() {
+    for owner in rejected {
+        if !matches!(owner.ownership, RejectedTaskOwnership::OwnRejection) {
             continue;
         }
+        let task = owner.task;
+        let comments = lookup.get_task_comments(&task.id)?;
         if !rejected_owner_fingerprint_matches(task, &comments, fingerprint) {
             continue;
         }
@@ -316,32 +361,25 @@ where
 fn confirmed_duplicate_match<L>(
     lookup: &L,
     candidate: &DuplicateCandidate,
-    exact_tasks: &[Task],
+    rejected: &[RejectedTaskOwner<'_>],
 ) -> Result<Option<DuplicateTaskMatch>, OrbitError>
 where
     L: DuplicateTaskLookup + ?Sized,
 {
-    let mut rejected = exact_tasks
-        .iter()
-        .filter(|task| task.status == TaskStatus::Rejected)
-        .collect::<Vec<_>>();
-    if rejected.is_empty() {
-        return Ok(None);
-    }
-    rejected.sort_by(|left, right| left.id.cmp(&right.id));
-
-    for task in rejected {
-        let comments = lookup.get_task_comments(&task.id)?;
-        let Some(owner_id) = covering_owner_from_comments(&task.id, &comments) else {
-            continue;
+    for rejected_owner in rejected {
+        let task = rejected_owner.task;
+        let (owner_id, evidence_name) = match &rejected_owner.ownership {
+            RejectedTaskOwnership::SupersededBy(id) => (id, "rejected_duplicate_relation"),
+            RejectedTaskOwnership::LegacyCoveredBy(id) => (id, "rejected_duplicate_comment"),
+            RejectedTaskOwnership::OwnRejection => continue,
         };
-        match lookup.get_task(&owner_id) {
+        match lookup.get_task(owner_id) {
             Ok(owner) if !owner.status.is_terminal() => {
                 return Ok(Some(DuplicateTaskMatch {
                     task_id: owner.id.clone(),
                     match_kind: "confirmed_duplicate",
                     evidence: bounded_evidence(
-                        "rejected_duplicate_comment",
+                        evidence_name,
                         &[
                             CoverageAnchor::new("rejected_task_id", task.id.as_str()),
                             CoverageAnchor::new("covering_task_id", owner.id.as_str()),
@@ -358,10 +396,16 @@ where
     Ok(None)
 }
 
-fn covering_owner_from_comments(rejected_id: &str, comments: &[TaskComment]) -> Option<String> {
+/// LEGACY READER — comment-only duplicate verdicts written before typed
+/// ownership, including operator comments. Never called when an inbound
+/// Supersedes relation exists, even if its owner has become terminal.
+fn legacy_covering_owner_from_comments(
+    rejected_id: &str,
+    comments: &[TaskComment],
+) -> Option<String> {
     let mut owner = None;
     for comment in comments {
-        if let Some(found) = covering_owner_from_message(rejected_id, &comment.message) {
+        if let Some(found) = legacy_covering_owner_from_message(rejected_id, &comment.message) {
             owner = Some(found);
         }
     }
@@ -369,7 +413,15 @@ fn covering_owner_from_comments(rejected_id: &str, comments: &[TaskComment]) -> 
 }
 
 // Private to this module; exercised through the crate-root runtime tests.
-fn covering_owner_from_message(rejected_id: &str, message: &str) -> Option<String> {
+fn legacy_covering_owner_from_message(rejected_id: &str, message: &str) -> Option<String> {
+    const COVERING_OWNER_MARKERS: &[&str] = &[
+        "duplicate of",
+        "covering implementation",
+        "covering task",
+        "covering repair",
+        "covering work",
+        "covered by",
+    ];
     let lowered = message.to_ascii_lowercase();
     let mut owner = None;
     for marker in COVERING_OWNER_MARKERS {
