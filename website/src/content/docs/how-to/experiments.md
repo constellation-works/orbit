@@ -125,7 +125,7 @@ refused everywhere.
 
 | Field | Shape | Effect |
 |---|---|---|
-| `instructions` | Map of role to a repository file path, or `false` | Replace that role's instructions with the file, or suppress the shipped default for that role. Roles are `implement`, `review`, and `recovery`. Paths must be relative to the repository root, with no `..` and no surrounding whitespace. |
+| `instructions` | Map of role to a repository file path, or `false` | Append the file's text after the selected tag instructions for that role. Set `false` to suppress Orbit's shipped default instructions for that role; file text does not replace the base activity instructions or selected tag instructions. Roles are `implement`, `review`, and `recovery`. Paths must be relative to the repository root, with no `..` and no surrounding whitespace. |
 | `skills` | `{"replace": {skill name: bundle directory}, "roles": [...]}` | Replace each named skill with the bundle at that repository directory. `replace` must name at least one skill. |
 | `tools` | `{"add": [...], "remove": [...], "roles": [...]}` | Add or remove tools for the listed roles. It must add or remove at least one tool, and no tool may be in both lists. |
 | `crew` | `{"pool": [{"crew": name, "weight": n}]}` | Draw the implementing crew from this weighted pool instead of the usual draw. The pool must name at least one crew, no crew twice, each with a positive weight. |
