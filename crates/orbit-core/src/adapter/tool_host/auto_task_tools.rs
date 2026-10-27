@@ -18,7 +18,9 @@ use orbit_common::governance::operation::{OperationInput, OperationVerb};
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::WaiveBatchRequest;
 use orbit_types::workflow::automation::recovery::{RecoveryRequest, ResetRequest};
-use orbit_types::workflow::{AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
+use orbit_types::workflow::{
+    AutoTaskCursor, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
+};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -88,14 +90,50 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         .rows
         .iter()
         .map(|row| {
-            listed_json(
+            let mut listed = listed_json(
                 &row.listed,
                 row.effective_enabled,
                 row.skipped_reason.as_deref(),
-            )
+            )?;
+            listed["last_fire"] = last_fire_json(runtime, row.cursor.as_ref())?;
+            Ok(listed)
         })
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<Vec<Value>, OrbitError>>()?;
     Ok(Value::Array(array))
+}
+
+/// Project only the latest scheduler fire or recorded precondition skip.
+fn last_fire_json(
+    runtime: &OrbitRuntime,
+    cursor: Option<&AutoTaskCursor>,
+) -> Result<Value, OrbitError> {
+    let Some(cursor) = cursor else {
+        return Ok(Value::Null);
+    };
+    if let Some(skip) = &cursor.last_skip {
+        return Ok(json!({
+            "kind": "skipped",
+            "at": skip.at,
+            "skip_reason": skip.reason,
+        }));
+    }
+    let Some(at) = &cursor.last_fired_at else {
+        return Ok(Value::Null);
+    };
+    let task_status = match cursor.last_task_id.as_deref() {
+        Some(task_id) => match runtime.get_task(task_id) {
+            Ok(task) => Some(task.status),
+            Err(OrbitError::NotFound { .. }) => None,
+            Err(error) => return Err(error),
+        },
+        None => None,
+    };
+    Ok(json!({
+        "kind": "fired",
+        "at": at,
+        "task_id": cursor.last_task_id,
+        "task_status": task_status,
+    }))
 }
 
 /// The canonical definition record, plus the inactive-plugin marker when its
