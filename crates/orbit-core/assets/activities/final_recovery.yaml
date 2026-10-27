@@ -73,8 +73,14 @@ spec:
       # The rendered input of the failed step; evidence, not authority.
       failed_step_input:
         type: object
-      # Every step-recovery attempt for this run, oldest first: activity,
-      # outcome, error, and whatever output it reported.
+      # Run-local recovery and post-recovery records, oldest first, unchanged
+      # within the evidence budget. On overflow, a leading summary counts
+      # omitted detailed records and identifies this run's full audit trail;
+      # the remaining records are the newest contiguous attempts. Grouped
+      # failure signatures retain step, activity, phase, outcome, failure phase
+      # and a bounded error, with SHA-256 identity and occurrence counts. If
+      # needed, signatures reduce to hashes/counts; further omissions are
+      # counted and referenced in the audit trail. The whole array is bounded.
       step_recovery_attempts:
         type: array
         items:
