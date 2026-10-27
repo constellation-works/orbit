@@ -486,6 +486,47 @@ fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
             runtime.get_task_comments(owner).unwrap().len(),
             comments.len()
         );
+        // A task written by an older version has the comment but no receipt.
+        let legacy_run = failure(&second_log, 2, &commits[1]);
+        let legacy_message = format!(
+            "CI compiler observation: run `12` {}; checkout `{}`; exact failure key `ci-failure:{}`.",
+            legacy_run["url"].as_str().unwrap(),
+            commits[1],
+            matched["failure_key"].as_str().unwrap()
+        );
+        runtime
+            .update_task_as_human(
+                owner,
+                TaskUpdateParams {
+                    comment: Some(legacy_message.clone()),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+        let before_legacy = runtime.get_task_comments(owner).unwrap();
+        let artifacts_before = runtime.get_task_artifacts(owner).unwrap();
+        let legacy_result = file(&runtime, vec![legacy_run.clone()]);
+        assert_eq!(legacy_result["filed_count"], 0);
+        assert_eq!(runtime.get_task_comments(owner).unwrap(), before_legacy);
+        let artifacts = runtime.get_task_artifacts(owner).unwrap();
+        assert_eq!(artifacts.len(), artifacts_before.len() + 1);
+        let receipt = artifacts
+            .iter()
+            .find(|artifact| {
+                artifact.path.starts_with("ci-compiler-observations/")
+                    && serde_json::from_slice::<Value>(&artifact.content).unwrap()["run_id"] == "12"
+            })
+            .unwrap();
+        let content: Value = serde_json::from_slice(&receipt.content).unwrap();
+        assert_eq!(
+            content,
+            json!({"run_id": "12", "run_url": legacy_run["url"],
+            "checkout": commits[1], "failure_key": matched["failure_key"]})
+        );
+        file(&runtime, vec![legacy_run]);
+        assert_eq!(runtime.get_task_comments(owner).unwrap(), before_legacy);
+        assert_eq!(runtime.get_task_artifacts(owner).unwrap(), artifacts);
         assert_eq!(runtime.list_tasks().unwrap().len(), 1);
     }
     // The first newly filed owner also covers a later cluster in this snapshot.
