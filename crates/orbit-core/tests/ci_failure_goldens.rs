@@ -141,26 +141,40 @@ fn deferred_rows(runtime: &OrbitRuntime) -> Vec<DeferredBranchObservation> {
         .collect()
 }
 
-fn strip_open_identity(runtime: &OrbitRuntime, owner: &str) {
-    let description = runtime.get_task(owner).unwrap().description;
-    runtime
-        .update_task_as_human(
-            owner,
-            TaskUpdateParams {
-                description: Some(
-                    description
-                        .lines()
-                        .filter(|line| {
-                            !line.starts_with("- Open compiler diagnostic set identity:")
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n"),
-                ),
-                ..Default::default()
-            },
-            "human:fixture".into(),
-        )
+fn description_only_owner(runtime: &OrbitRuntime, owner: &str) -> String {
+    let task = runtime.get_task(owner).unwrap();
+    // Recreate a persisted task in the old shape through the public boundary,
+    // rather than editing the creation history of a newly filed task.
+    let legacy = runtime
+        .add_task(TaskAddParams {
+            title: task.title,
+            description: task
+                .description
+                .lines()
+                .filter(|line| !line.starts_with("- Open compiler diagnostic set identity:"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+            tags: task.tags,
+            plan: task.plan,
+            system_created: true,
+            ..Default::default()
+        })
         .unwrap();
+    set_status(runtime, owner, TaskStatus::Done);
+    let reopened =
+        OrbitRuntime::from_roots(&runtime.global_root(), &runtime.shared_root()).unwrap();
+    assert_eq!(
+        reopened.get_task(&legacy.id).unwrap().description,
+        legacy.description
+    );
+    assert!(
+        reopened
+            .get_task_history(&legacy.id)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.decision.is_none())
+    );
+    legacy.id
 }
 
 /// Archived and rejected owners suppress until the configured clock boundary.
@@ -414,6 +428,67 @@ fn ci_persisted_compiler_owner_keys_keep_first_substring_diagnostic() {
     }
 }
 #[test]
+fn ci_failure_identity_survives_description_rewrite() {
+    if !isolated("ci_failure_identity_survives_description_rewrite") {
+        return;
+    }
+    for archived in [false, true] {
+        let (_root, runtime, commits) = operator_fixture("");
+        let first = file(
+            &runtime,
+            vec![failure(&sandbox_at(277, 25), 0, &commits[0])],
+        );
+        let owner = first["filed"][0]["task_id"].as_str().unwrap();
+        let history = runtime.get_task_history(owner).unwrap();
+        let restored: Vec<orbit_types::task::TaskHistoryEntry> =
+            serde_json::from_value(serde_json::to_value(&history).unwrap()).unwrap();
+        let identity = orbit_types::task::CiFailureIdentity::from_history(&restored)
+            .unwrap()
+            .unwrap();
+        assert_eq!(identity.failure_key, first["filed"][0]["failure_key"]);
+        assert!(identity.compiler_cause_digest.is_some());
+        assert!(identity.open_compiler_set.is_some());
+        assert!(identity.signature.is_some());
+        assert_eq!(identity.tested_commit, commits[0]);
+        assert_eq!(
+            identity.sources,
+            vec![orbit_types::task::CiFailureSource {
+                run_id: "10".into(),
+                job_id: "910".into(),
+                checkout: commits[0].clone(),
+            }]
+        );
+        runtime
+            .update_task_as_human(
+                owner,
+                TaskUpdateParams {
+                    description: Some(
+                        "Operator rewrote the brief; the recorded failure still needs repair."
+                            .into(),
+                    ),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap();
+        if archived {
+            archive_owner(&runtime, owner, TaskStatus::Archived, None);
+        }
+        let second = file(
+            &runtime,
+            vec![failure(&sandbox_at(280, 28), 1, &commits[1])],
+        );
+        assert_eq!(second["filed_count"], 0, "archived={archived}: {second}");
+        let matched = if archived {
+            &second["withheld"][0]["owner"]
+        } else {
+            &second["skipped_existing"][0]["task_id"]
+        };
+        assert_eq!(matched, owner);
+    }
+}
+
+#[test]
 fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
     if !isolated("ci_open_compiler_owner_survives_checkout_and_coordinate_changes") {
         return;
@@ -435,6 +510,8 @@ fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
         let (_root, runtime, commits) = operator_fixture("");
         let first = file(&runtime, vec![failure(&first_log, 0, &commits[0])]);
         let owner = first["filed"][0]["task_id"].as_str().unwrap();
+        let legacy_owner = legacy.then(|| description_only_owner(&runtime, owner));
+        let owner = legacy_owner.as_deref().unwrap_or(owner);
         runtime
             .update_task_as_human(
                 owner,
@@ -446,9 +523,6 @@ fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
             )
             .unwrap();
         set_status(&runtime, owner, status);
-        if legacy {
-            strip_open_identity(&runtime, owner);
-        }
         let before = runtime.get_task(owner).unwrap();
         let comments_before = runtime.get_task_comments(owner).unwrap().len();
         let second_run = failure(&second_log, 1, &commits[1]);
@@ -527,7 +601,8 @@ fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
         file(&runtime, vec![legacy_run]);
         assert_eq!(runtime.get_task_comments(owner).unwrap(), before_legacy);
         assert_eq!(runtime.get_task_artifacts(owner).unwrap(), artifacts);
-        assert_eq!(runtime.list_tasks().unwrap().len(), 1);
+        // The legacy case retains the completed typed fixture alongside the old owner.
+        assert_eq!(runtime.list_tasks().unwrap().len(), 1 + usize::from(legacy));
     }
     // The first newly filed owner also covers a later cluster in this snapshot.
     let (_root, runtime, commits) = operator_fixture("");
@@ -550,6 +625,27 @@ fn ci_open_compiler_owner_survives_checkout_and_coordinate_changes() {
             .contains(&commits[1])
     );
 }
+#[test]
+fn ci_landed_compiler_repair_does_not_cover_locationless_diagnostic() {
+    if !isolated("ci_landed_compiler_repair_does_not_cover_locationless_diagnostic") {
+        return;
+    }
+    let (_root, runtime, commits) = operator_commits("", 4);
+    let log = sandbox_at(277, 25);
+    let original = file(&runtime, vec![failure(&log, 0, &commits[0])]);
+    let owner = original["filed"][0]["task_id"].as_str().unwrap();
+    set_status(&runtime, owner, TaskStatus::Done);
+    record_landing(&runtime, owner, &commits[1], &commits[2]);
+    let mut locationless = failure(log.lines().next().unwrap(), 1, &commits[1]);
+    locationless["failed_jobs"][0]["name"] = json!("Coverage");
+    let observed = file(&runtime, vec![locationless]);
+    assert_eq!(
+        observed["filed_count"], 1,
+        "a display-only compiler signature cannot prove a locationless failure repaired: {observed}"
+    );
+    assert_eq!(observed["pending_supersession"], json!([]));
+}
+
 #[test]
 fn ci_done_compiler_owner_does_not_cover_new_checkouts() {
     if !isolated("ci_done_compiler_owner_does_not_cover_new_checkouts") {
@@ -729,7 +825,7 @@ fn ci_compiler_coverage_requires_the_same_complete_diagnostic_set() {
     );
     assert_eq!(second["filed_count"], 0, "{second}");
     assert_eq!(second["skipped_existing"][0]["task_id"], owner);
-    strip_open_identity(&runtime, owner);
+    description_only_owner(&runtime, owner);
     let subset = file(&runtime, vec![failure(&shifted, 2, &commits[2])]);
     assert_eq!(
         subset["filed_count"], 1,
@@ -2075,6 +2171,16 @@ fn ci_failure_predating_a_landed_repair_is_held_not_refiled() {
         .as_str()
         .unwrap()
         .to_string();
+    runtime
+        .update_task_as_human(
+            &repair,
+            TaskUpdateParams {
+                description: Some("Operator replaced the completed repair brief.".into()),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .unwrap();
     set_status(&runtime, &repair, TaskStatus::Done);
     assert_eq!(runtime.get_task(&repair).unwrap().status, TaskStatus::Done);
     record_landing(&runtime, &repair, late, landed);

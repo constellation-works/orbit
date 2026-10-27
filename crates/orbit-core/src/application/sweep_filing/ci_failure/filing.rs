@@ -40,7 +40,8 @@ use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::ci_run_event::is_branch_event;
 use orbit_types::task::{
-    TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id,
+    CiFailureIdentity, TaskArtifact, TaskComplexity, TaskDecision, TaskPriority, TaskStatus,
+    TaskType, is_valid_orb_task_id,
 };
 use orbit_types::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX};
 use serde::{Deserialize, Serialize};
@@ -51,7 +52,7 @@ use crate::application::contracts::CI_FAILURE_TAG;
 use crate::application::sweep_filing::duplicate_tasks::{
     DuplicateTaskLookup, DuplicateTaskMatch, SnapshotDuplicateLookup,
 };
-use crate::application::sweep_filing::{bounded_error, bounded_u64};
+use crate::application::sweep_filing::{bounded_error, bounded_u64, digest, display};
 use crate::application::task::{TaskAddParams, TaskUpdateParams};
 
 use super::branch_observation::{note_branch_retention, retain_branch_observations};
@@ -67,6 +68,7 @@ use super::evidence::{
 };
 use super::fields::value_string;
 use super::grouping::cluster_failures;
+use super::identity::CiTaskIdentities;
 use super::landed_repair::LandedRepairs;
 use super::repair_assessment;
 use super::runner_os;
@@ -457,10 +459,11 @@ where
     // task list is hydrated at most once per filing and each open task's
     // comments are read at most once, however many clusters the run has.
     let lookup = SnapshotDuplicateLookup::new(lookup);
+    let identities = CiTaskIdentities::new(runtime);
     let mut operator_covers = super::operator_cover::OperatorCovers::new(runtime)?;
     let operator_assessments = clusters
         .iter()
-        .map(|cluster| operator_covers.assess(cluster, &lookup))
+        .map(|cluster| operator_covers.assess(cluster, &lookup, &identities))
         .collect::<Result<Vec<_>, _>>()?;
     let mut assessor = repair_assessment::Assessor::new(runtime);
     let mut repair_assessments = Vec::new();
@@ -471,18 +474,21 @@ where
             if operator.withheld.is_some() {
                 return Ok(None);
             }
-            let mut existing = cluster.find_covering_task(&lookup).map_err(|error| {
-                retryable_pipeline_error(
-                    "dedupe_lookup",
-                    &audit,
-                    vec![single_retryable_error(
-                        "registration",
-                        "find_covering_task",
-                        json!({"failure_key": cluster.failure_key}),
-                        &bounded_error(&error.to_string()),
-                    )],
-                )
-            })?;
+            let mut existing =
+                cluster
+                    .find_covering_task(&lookup, &identities)
+                    .map_err(|error| {
+                        retryable_pipeline_error(
+                            "dedupe_lookup",
+                            &audit,
+                            vec![single_retryable_error(
+                                "registration",
+                                "find_covering_task",
+                                json!({"failure_key": cluster.failure_key}),
+                                &bounded_error(&error.to_string()),
+                            )],
+                        )
+                    })?;
             // Only the disproven cover (or its owner) loses coverage. A
             // later completed repair remains a valid duplicate owner.
             if existing.as_ref().is_some_and(|matched| {
@@ -519,18 +525,20 @@ where
             if duplicate_match.is_some() || operator.withheld.is_some() {
                 return Ok(None);
             }
-            landed_repairs.find(cluster, &lookup).map_err(|error| {
-                retryable_pipeline_error(
-                    "dedupe_lookup",
-                    &audit,
-                    vec![single_retryable_error(
-                        "registration",
-                        "find_landed_repair",
-                        json!({"failure_key": cluster.failure_key}),
-                        &bounded_error(&error.to_string()),
-                    )],
-                )
-            })
+            landed_repairs
+                .find(cluster, &lookup, &identities)
+                .map_err(|error| {
+                    retryable_pipeline_error(
+                        "dedupe_lookup",
+                        &audit,
+                        vec![single_retryable_error(
+                            "registration",
+                            "find_landed_repair",
+                            json!({"failure_key": cluster.failure_key}),
+                            &bounded_error(&error.to_string()),
+                        )],
+                    )
+                })
         })
         .collect::<Result<Vec<_>, OrbitError>>()?;
     let duplicate_tasks = duplicate_matches
@@ -670,6 +678,18 @@ where
             }
         }
         let task_id = add_task(TaskAddParams {
+            creation_decision: Some(TaskDecision::CiFailureIdentity(CiFailureIdentity {
+                failure_key: cluster.failure_key.clone(),
+                compiler_cause_digest: cluster
+                    .compiler_cause
+                    .as_ref()
+                    .map(|cause| digest(&[cause])),
+                open_compiler_set: cluster.open_compiler_identity(),
+                signature: (!cluster.signature_is_step_fallback)
+                    .then(|| display(&cluster.signature).to_string()),
+                tested_commit: cluster.tested_commit.clone(),
+                sources: cluster.sources.clone(),
+            })),
             title: cluster.title(),
             description,
             acceptance_criteria: cluster.acceptance_criteria(),
