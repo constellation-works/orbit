@@ -736,7 +736,9 @@ With it on, `task_pr_pipeline` and `task_local_pipeline` gate `commit` ([design]
 
 Steering settings refresh at prompt and gate checkpoints. Enabling with runs in flight leaves missing watermarks absent: their gates treat post-dispatch operator comments as undelivered (or use an inherited candidate/claim baseline when present). Disabling stops recording and gating at the next checkpoint; existing watermarks and steering-round state stay inert, not deleted. Invalid config retains the last successfully resolved settings. Prefer enabling between drains; enabling does not change admission authority or turn steering on in `orbit init`. See [migration](design/mid-run-steering/specs/steering-delivery.md#migration).
 
-### `[workflow.regression_risk]` — regression-prone context files in prompts
+<a id="workflowregression_risk--regression-prone-context-files-in-prompts"></a>
+
+### `[workflow.regression_risk]` — prompt marks and task riskiness scores
 
 ```toml
 [workflow.regression_risk]
@@ -749,11 +751,13 @@ max_files = 3
 
 | Key | Default | What it does |
 |---|---|---|
-| `workflow.regression_risk.enabled` | `true` | Mark a task's regression-prone `file:` context files in its implement and review prompts. |
-| `workflow.regression_risk.window_days` | `30` | **Advanced.** Trailing days of done tasks a mark is computed over (`1`–`365`). |
-| `workflow.regression_risk.min_support` | `5` | **Advanced.** Done tasks in the window whose declared footprint named the file before it can be marked (`1`–`10000`). |
-| `workflow.regression_risk.threshold_percent` | `40` | **Advanced.** Share of those tasks, in percent, that a `regression_from` link names before the file is marked (`1`–`100`). |
-| `workflow.regression_risk.max_files` | `3` | **Advanced.** Most files one prompt marks, highest regression rate first (`1`–`20`). |
+| `workflow.regression_risk.enabled` | `true` | Whether implement and review prompts mark a task's regression-prone `file:` context files. This switch controls marks only; task riskiness scores remain active when it is off. |
+| `workflow.regression_risk.window_days` | `30` | **Advanced.** Trailing days of done tasks used for both task riskiness scores and prompt marks (`1`–`365`). |
+| `workflow.regression_risk.min_support` | `5` | **Advanced.** Minimum task support used for riskiness scores and required before a context file can be marked (`1`–`10000`). |
+| `workflow.regression_risk.threshold_percent` | `40` | **Advanced. Prompt marks only.** Share of a file's touching tasks, in percent, that a `regression_from` link must name before the file is marked (`1`–`100`). |
+| `workflow.regression_risk.max_files` | `3` | **Advanced. Prompt marks only.** Most files one prompt marks, highest regression rate first (`1`–`20`). |
+
+The Tasks row and task detail also show the riskiness score. The row uses a percentage, prefixed with `~` for partial support, or **No estimate** with a reason: **no files** (the task has no context files), **no paths** (its selectors identify no file or directory), **thin history** (too few done tasks touched its paths in the window), or **unavailable** (the estimate could not be computed). The detail shows the same score and its support and path breakdown. `window_days` and `min_support` size this score regardless of `enabled`.
 
 Analytics › Codebase knows which paths regress; these marks tell the agent that edits one, and its reviewer. An activity asks for marks by declaring a `regression_risk_instruction`; the shipped `agent_implement`, `agent_review_repair` and `review_reconciliation_review` do. For each canonical `file:` selector of the task, Orbit counts, among the tasks that became `done` in the trailing window and declared the file, those a `regression_from` link names, the same rate as the Regressions ranking at file grouping. The file is marked when it has at least `min_support` such tasks and at least `threshold_percent` of them regressed, so a file few tasks touched, or a hub every task touches, stays unmarked, and a fixed hotspot drops out once its regressed tasks leave the window. At most `max_files` files are marked, by rate, then regressed count, then path.
 
