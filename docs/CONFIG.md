@@ -1048,7 +1048,7 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 | `delivery_landing_conflict` | Owner landing requires a conflict repair with fresh validation and a new handoff. |
 | `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. |
 | `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; wait for the base's own result before candidate recovery. |
-| `delivery_completion_budget_expired` | The completion budget expired while the pull request was parked; the pull request stays open and the task stays in review. |
+| `delivery_completion_budget_expired` | The completion deadline expired before the pull request merged; the PR stays open and the task stays in review. |
 | `delivery_check_evidence_inconclusive` | An auto-fix stop whose check log could not be read conclusively; no repair agent runs. |
 
 These codes come from typed refusals, never from matching diagnostic wording.
