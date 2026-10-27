@@ -94,6 +94,8 @@ pub(in crate::api) async fn ship_workflow_action(
             // Strict worker containment is a CLI-only flag.
             false,
             body.review,
+            // The schedule override is a CLI-only operator flag.
+            false,
         )?;
         let mut shipped = json!({
             "workflow": "ship",

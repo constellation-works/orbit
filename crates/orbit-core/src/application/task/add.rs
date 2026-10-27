@@ -274,6 +274,7 @@ impl OrbitRuntime {
                     required_tools: normalize_required_tools(params.required_tools.clone()),
                     granted_tools: normalize_required_tools(params.granted_tools.clone()),
                     requires_labels: requires_labels.clone(),
+                    not_before: params.not_before,
                     plan: params.plan.clone(),
                     execution_summary: String::new(),
                     context_files,

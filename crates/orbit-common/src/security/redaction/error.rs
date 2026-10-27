@@ -264,6 +264,13 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
         OrbitError::PrForgeRemoteMissing { remotes } => OrbitError::PrForgeRemoteMissing {
             remotes: redact(&remotes),
         },
+        OrbitError::TaskScheduled {
+            task_id,
+            not_before,
+        } => OrbitError::TaskScheduled {
+            task_id: redact(&task_id),
+            not_before,
+        },
         OrbitError::PullRequestMergeabilityUnknown { number } => {
             OrbitError::PullRequestMergeabilityUnknown { number }
         }

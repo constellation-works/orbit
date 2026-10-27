@@ -161,5 +161,6 @@ fn envelope(
         implemented_by: None,
         created_at: now,
         updated_at: now,
+        not_before: None,
     }
 }

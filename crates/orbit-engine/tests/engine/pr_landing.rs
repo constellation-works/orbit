@@ -5083,6 +5083,7 @@ fn task(status: TaskStatus) -> Task {
         origin: None,
         created_at: now,
         updated_at: now,
+        not_before: None,
     }
 }
 /// The task store and review-landing record the delivery actions write through, kept in memory. The provider boundary is left to the engine.

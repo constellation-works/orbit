@@ -100,6 +100,7 @@ mod rebased_landing;
 mod recovery;
 mod regression_attribution;
 mod requeue;
+mod scheduled;
 mod settlement;
 mod settlement_review;
 mod single_pass;

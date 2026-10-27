@@ -261,6 +261,15 @@ pub enum OrbitError {
          the task `delivery:task_local_pipeline` to deliver it locally"
     )]
     PrForgeRemoteMissing { remotes: String },
+    /// An explicit dispatch named a `backlog` task whose `not_before` is still
+    /// ahead. Raised by the shared workflow-entry check, so every surface
+    /// refuses it identically; `not_before` is the RFC 3339 UTC time.
+    #[error(
+        "task '{task_id}' is scheduled: not before {not_before}; it starts on the first \
+         admission pass after that time. An operator can start it now with \
+         `orbit run ship {task_id} --ignore-schedule`"
+    )]
+    TaskScheduled { task_id: String, not_before: String },
     /// GitHub has not finished calculating whether an open pull request can
     /// merge. Callers should defer that pull request without treating the
     /// answer as a forge failure.

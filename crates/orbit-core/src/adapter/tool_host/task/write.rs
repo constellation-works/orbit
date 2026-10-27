@@ -30,8 +30,8 @@ use crate::application::task::{
 use super::super::dispatch::ToolCaller;
 use super::super::input::{
     empty_string_to_none, optional_bool_alias, parse_artifacts, parse_assessed_task_complexity,
-    parse_optional_task_origin, parse_relations, parse_task_priority, parse_task_status,
-    parse_task_type,
+    parse_optional_not_before, parse_optional_task_origin, parse_relations, parse_task_priority,
+    parse_task_status, parse_task_type,
 };
 
 /// The CLI-only options `orbit task add` sends.
@@ -145,6 +145,7 @@ pub(super) fn add(
                 .unwrap_or_default(),
             requires_labels: optional_csv_or_string_list_alias(input, &["requires_labels"])?
                 .unwrap_or_default(),
+            not_before: parse_optional_not_before(input)?.flatten(),
             plan: optional_raw_string(options, "plan")?.unwrap_or_default(),
             crew_source: None,
             comment: filed_by.map(|binding| {
@@ -525,6 +526,7 @@ fn task_update_params_from_input(
         tags: optional_csv_or_string_list_alias(input, &["tags"])?,
         granted_tools: optional_csv_or_string_list_alias(input, &["granted_tools"])?,
         requires_labels: optional_csv_or_string_list_alias(input, &["requires_labels"])?,
+        not_before: parse_optional_not_before(input)?,
         plan: optional_plan(input)?,
         execution_summary: optional_raw_string(input, "execution_summary")?,
         comment: optional_string(input, "comment")?,

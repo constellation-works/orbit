@@ -98,6 +98,8 @@ fn ship(
         // Strict worker containment is a CLI-only flag.
         false,
         review,
+        // The schedule override is a CLI-only operator flag.
+        false,
     )?;
     let mut shipped = json!({
         "workflow": "ship",

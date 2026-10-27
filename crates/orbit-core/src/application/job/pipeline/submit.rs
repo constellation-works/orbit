@@ -175,6 +175,7 @@ impl OrbitRuntime {
             trigger,
             false,
             None,
+            false,
         )
     }
 
@@ -187,6 +188,14 @@ impl OrbitRuntime {
     /// refused here, before any run exists, on the local route, against the
     /// other workspace layer, or without a reviewer crew; the layer workspace
     /// policy already applies is accepted unchanged.
+    ///
+    /// A named `backlog` task whose `not_before` is still ahead is refused
+    /// with [`OrbitError::TaskScheduled`]. `ignore_schedule` is the CLI-only
+    /// operator override (`orbit run ship --ignore-schedule`): once every
+    /// other check passes, it records a `schedule_overridden` history event
+    /// for each such task before the run is submitted, which lifts the hold
+    /// on every admission route for that scheduled time. The tool and
+    /// dashboard surfaces always pass `false`.
     #[allow(clippy::too_many_arguments)]
     pub fn submit_ship_run_with_containment(
         &self,
@@ -200,7 +209,14 @@ impl OrbitRuntime {
         trigger: JobRunTrigger,
         strict_containment: bool,
         review: Option<orbit_types::workflow::ReviewLayer>,
+        ignore_schedule: bool,
     ) -> Result<PipelineInvokeResult, OrbitError> {
+        if ignore_schedule && task_ids.is_empty() {
+            return Err(OrbitError::InvalidInput(
+                "`--ignore-schedule` starts named scheduled tasks; pass the task ids to ship"
+                    .to_string(),
+            ));
+        }
         self.validate_strict_worker_containment(strict_containment)?;
         self.require_workspace_claim("orbit.workflow.ship", claim_token)?;
         // [ORB-12500] Explicit shipment converges on the same admission
@@ -239,16 +255,22 @@ impl OrbitRuntime {
         // pipeline record. Auto mode intentionally carries no task ids: the
         // worker discovers eligible backlog tasks after it starts.
         let forge = crate::application::job::delivery::PrForgeCheck::default();
+        let mut overridden = Vec::new();
         for task_id in task_ids {
             // A task the pipeline cannot start from (`blocked`, `review`,
             // `done`, `proposed`, ...) would only be discovered after the
             // run was accepted, reported `submitted`, and then failed or
             // no-oped at the gate. Refuse it here, naming the status and the
-            // way back into the backlog.
-            let task = self.ensure_task_can_enter_workflow_as_system(
+            // way back into the backlog. A task scheduled ahead is refused
+            // the same way unless the operator overrides its schedule.
+            let task = self.ensure_task_can_enter_workflow_honouring_schedule(
                 task_id,
                 crate::application::workflow::SHIP_WORKFLOW_ALIAS,
+                !ignore_schedule,
             )?;
+            if ignore_schedule && let Some(hold) = self.schedule_hold(&task)? {
+                overridden.push((task.id.clone(), hold.not_before));
+            }
             // A task whose effective OS requirement this host cannot satisfy is
             // never started here; it would only fail on a platform it cannot
             // run on. Check its tags and assigned crew, and the actual
@@ -306,6 +328,12 @@ impl OrbitRuntime {
         }
         if let Some(conflict) = self.in_flight_ship_run_for_tasks(task_ids)? {
             return Err(conflict);
+        }
+        // The worker starts as soon as the run is submitted, so the override
+        // is on record before then.
+        let overrider = actor.unwrap_or(&self.actor().label).to_string();
+        for (task_id, not_before) in &overridden {
+            self.record_schedule_override(task_id, *not_before, &overrider)?;
         }
         self.submit_pipeline_run_with_trigger(workflow.job_id, input, None, actor, trigger)
     }

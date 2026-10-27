@@ -62,6 +62,10 @@ pub struct ShipCommand {
     /// Treats machine.worker_containment as strict for this invocation.
     #[arg(long)]
     pub strict_worker_containment: bool,
+    /// Start the named tasks now even if their scheduled start (`not_before`)
+    /// is still ahead. Records a `schedule_overridden` history event.
+    #[arg(long, requires = "task_ids")]
+    pub ignore_schedule: bool,
     /// Token for this workspace's exclusive claim, when another operator holds
     /// one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.
     #[arg(long)]
@@ -95,6 +99,7 @@ impl Execute for ShipCommand {
             orbit_types::workflow::JobRunTrigger::cli(),
             self.strict_worker_containment,
             self.review,
+            self.ignore_schedule,
         )?;
         let run = WorkflowDispatchResult {
             workflow_alias: SHIP_WORKFLOW,

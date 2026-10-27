@@ -31,6 +31,12 @@ Options:
       --requires-labels <LABEL>
           Replacement capability labels a host must carry, all of them, to run the task (empty string clears). Repeat or comma-separate for multiple labels
 
+      --not-before <TIME>
+          Earliest time a dispatcher may start the task: an RFC 3339 instant (`2026-11-06T09:00:00Z`) or a local `YYYY-MM-DDTHH:MM` in this host's time zone. Until then a backlog task waits, reported `scheduled`
+
+      --clear-not-before
+          Clear the task's scheduled start, so dispatchers may start it at their next admission pass
+
       --plan <PLAN>
           New task plan (empty string clears)
 

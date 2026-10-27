@@ -1505,6 +1505,10 @@
           ],
           "description": "Optional capability labels a host must carry, all of them, to run the task, as a string or array of strings. A host carries its `machine.labels` plus its OS (`linux`, `macos` or `windows`). Refused when no registered serving host carries them together with the task's `os:` tags"
         },
+        "not_before": {
+          "type": "string",
+          "description": "Optional scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC. No dispatcher starts the task from the backlog before it; the hold lifts by itself on the first admission pass after it. A malformed time is refused"
+        },
         "context_files": {
           "anyOf": [
             {
@@ -2200,6 +2204,10 @@
             }
           ],
           "description": "Replacement capability labels a host must carry, all of them, to run the task from its next admission, as a string or array of strings; an empty array clears it. A host carries its `machine.labels` plus its OS. Refused when no registered serving host carries them together with the task's `os:` tags"
+        },
+        "not_before": {
+          "type": "string",
+          "description": "Replacement scheduled start: an RFC 3339 instant with an offset, such as `2026-11-06T09:00:00Z`, stored in UTC; an empty string clears it (null, like any omitted field, leaves it unchanged). No dispatcher starts a backlog task before it, and the hold lifts by itself on the first admission pass after it. A malformed time is refused"
         },
         "allow_drop_system_tags": {
           "type": "boolean",

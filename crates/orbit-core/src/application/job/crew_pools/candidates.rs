@@ -422,6 +422,7 @@ impl OrbitRuntime {
             origin: None,
             created_at: now,
             updated_at: now,
+            not_before: None,
         };
         let Some(redraw) = self.usage_pressure_redraw_view(&view)? else {
             return Ok(None);

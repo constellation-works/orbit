@@ -180,6 +180,7 @@ spec:
                 - local_route_before_pr
                 - provider_backoff
                 - provider_limit
+                - scheduled
                 - surface_reserved
                 - unassessed_complexity
                 - pilot_duplicate

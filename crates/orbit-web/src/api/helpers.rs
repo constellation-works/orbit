@@ -306,6 +306,15 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
             })),
         )
             .into_response(),
+        // A scheduled task waits for its time; the dashboard has no override.
+        error @ orbit_core::OrbitError::TaskScheduled { .. } => (
+            StatusCode::CONFLICT,
+            Json(json!({
+                "error": error.to_string(),
+                "code": "task_scheduled",
+            })),
+        )
+            .into_response(),
         // [ORB-10709] Another operator holds this workspace's claim. A 409 for
         // the same reason a duplicate dispatch is one: the request is
         // well-formed, and the caller can retry once the claim lapses or is

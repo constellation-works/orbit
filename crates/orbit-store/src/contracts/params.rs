@@ -31,6 +31,9 @@ pub struct TaskCreateParams {
     /// Capability labels a host must all carry to run the task.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires_labels: Vec<String>,
+    /// The instant before which no dispatcher starts the task.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not_before: Option<DateTime<Utc>>,
     pub plan: String,
     pub execution_summary: String,
     pub context_files: Vec<String>,
@@ -92,6 +95,8 @@ pub struct TaskDocumentUpdateParams {
     pub granted_tools: Option<Vec<String>>,
     /// Replacement capability labels; an empty list clears the requirement.
     pub requires_labels: Option<Vec<String>>,
+    /// Replacement scheduled start; `Some(None)` clears it.
+    pub not_before: Option<Option<DateTime<Utc>>>,
     pub plan: Option<String>,
     pub execution_summary: Option<String>,
     pub context_files: Option<Vec<String>>,

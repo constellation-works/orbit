@@ -50,6 +50,8 @@ mod records;
 mod requeue;
 mod resolves;
 mod retained_candidate;
+mod schedule;
+pub(crate) use schedule::schedule_hold_in;
 mod review_port;
 pub(crate) use retained_candidate::RetainedCandidate;
 mod screened;

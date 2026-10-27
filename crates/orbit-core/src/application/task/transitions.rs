@@ -569,6 +569,19 @@ impl OrbitRuntime {
         id: &str,
         workflow: &str,
     ) -> Result<Task, OrbitError> {
+        self.ensure_task_can_enter_workflow_honouring_schedule(id, workflow, true)
+    }
+
+    /// [`Self::ensure_task_can_enter_workflow_as_system`], skipping the
+    /// scheduled hold when `honour_schedule` is false: only the explicit
+    /// ship's operator override passes false, and it records the override
+    /// before its run starts.
+    pub(crate) fn ensure_task_can_enter_workflow_honouring_schedule(
+        &self,
+        id: &str,
+        workflow: &str,
+        honour_schedule: bool,
+    ) -> Result<Task, OrbitError> {
         let task = self.get_task(id)?;
         if matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress) {
             match self.pilot_admission_hold(id)? {
@@ -600,6 +613,13 @@ impl OrbitRuntime {
                 }
                 _ => {}
             }
+        }
+        // A `backlog` task scheduled ahead is started by no dispatcher until
+        // its time, unless an operator's `--ignore-schedule` override names
+        // that time. This one check covers explicit ship, the gate's dispatch
+        // re-check and worktree admission.
+        if honour_schedule && let Some(hold) = self.schedule_hold(&task)? {
+            return Err(hold.refusal(id));
         }
         if Self::workflow_admissible_statuses().contains(&task.status) {
             return Ok(task);

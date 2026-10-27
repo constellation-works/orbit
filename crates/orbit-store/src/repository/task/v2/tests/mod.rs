@@ -96,6 +96,7 @@ pub(super) fn create_params(title: &str, status: TaskStatus) -> TaskCreateParams
         }],
         context_creation: Vec::new(),
         creation_decision: None,
+        not_before: None,
     }
 }
 

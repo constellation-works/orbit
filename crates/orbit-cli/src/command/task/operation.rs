@@ -92,6 +92,7 @@ fn prepare(
                     options.insert(option.to_string(), value);
                 }
             }
+            super::support::shape_not_before_flags(input)?;
             input.insert(TASK_CLI_OPTIONS_PARAM.to_string(), Value::Object(options));
             input.insert("workspace".to_string(), json!(runtime.paths().repo_root));
             insert_env_model(input);
@@ -109,6 +110,7 @@ fn prepare(
             if let Some(artifacts) = input.shift_remove("artifacts") {
                 options.insert("artifacts".to_string(), artifact_entries(&artifacts)?);
             }
+            super::support::shape_not_before_flags(input)?;
             if options.is_empty()
                 && input
                     .keys()
@@ -263,6 +265,7 @@ pub(crate) fn remote_update_input(
         .filter(|(field, _)| !matches!(field.as_str(), "host" | "model"))
         .map(|(field, value)| (field.clone(), value.clone()))
         .collect::<Map<_, _>>();
+    super::support::shape_not_before_flags(&mut remote)?;
     if remote.len() == 1 {
         return Err(OrbitError::InvalidInput(
             "nothing to update: pass at least one field flag, e.g. `--status` or `--title` (see `orbit task update --help`)"
@@ -347,6 +350,11 @@ fn render(
     match verb {
         TaskVerb::Add => {
             let (document, task) = super::output::task_write_json(runtime, &value)?;
+            // Stdout stays the bare id scripts capture; the schedule echo
+            // goes beside the write's other notices.
+            if let Some(line) = super::support::not_before_line(&task) {
+                eprintln!("{line}");
+            }
             Ok(Payload::detail(document, task.id).into())
         }
         TaskVerb::Update => {
@@ -355,11 +363,14 @@ fn render(
                 .get(TASK_CLI_OPTIONS_PARAM)
                 .and_then(|options| options.get("approve"))
                 == Some(&Value::Bool(true));
-            let text = if approved {
+            let mut text = if approved {
                 format!("Approved task '{}' -> {}", task.id, task.status)
             } else {
                 format!("Updated task '{}'", task.id)
             };
+            if let Some(line) = super::support::not_before_line(&task) {
+                text = format!("{text}\n{line}");
+            }
             Ok(Payload::detail(document, text).into())
         }
         TaskVerb::ArtifactPut => {

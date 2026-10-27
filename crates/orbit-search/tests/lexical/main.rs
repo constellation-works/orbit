@@ -38,6 +38,7 @@ fn task(id: &str, title: &str) -> Task {
         origin: None,
         created_at: at,
         updated_at: at,
+        not_before: None,
     }
 }
 

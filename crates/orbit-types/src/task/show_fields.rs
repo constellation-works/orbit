@@ -25,7 +25,7 @@ use crate::task::{
 #[macro_export]
 macro_rules! task_show_projection_fields_csv {
     () => {
-        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts"
+        "id, parent_id, title, description, acceptance_criteria, dependencies, resolved_dependencies, tags, required_tools, granted_tools, requires_labels, not_before, plan, execution_summary, context_files, created_by, planned_by, implemented_by, status, terminal, priority, complexity, type, pr_status, external_refs, relations, source_task_id, job_run_id, job_run_machine, crew, resolved_crew, crew_model, crew_unresolved, os_requirement, placement_wait, experiments, readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model, orchestrator_model_source, origin, created_at, updated_at, comments, history, artifacts"
     };
 }
 
@@ -42,6 +42,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
     "required_tools",
     "granted_tools",
     "requires_labels",
+    "not_before",
     "plan",
     "execution_summary",
     "context_files",
@@ -83,7 +84,7 @@ pub const TASK_SHOW_PROJECTION_FIELDS: &[&str] = &[
 /// Stable top-level keys of the base task JSON, in output order.
 ///
 /// [`task_base_json`] emits exactly these keys, plus the conditional
-/// `granted_tools`, `requires_labels`, `os_requirement` and `readiness` keys. Sidecars are deliberately
+/// `granted_tools`, `requires_labels`, `not_before`, `os_requirement` and `readiness` keys. Sidecars are deliberately
 /// absent because each surface attaches them after the base is built, but
 /// remain projectable through the vocabulary above.
 pub const TASK_SHOW_PUBLIC_DTO_FIELDS: &[&str] = &[
@@ -186,6 +187,7 @@ pub fn task_show_record_field_json(task: &Task, field: &str) -> Option<Value> {
         "required_tools" => Some(json!(task.required_tools)),
         "granted_tools" => Some(json!(task.granted_tools)),
         "requires_labels" => Some(json!(task.requires_labels)),
+        "not_before" => Some(json!(task.not_before.map(crate::task::format_not_before))),
         "plan" => Some(json!(task.plan)),
         "execution_summary" => Some(json!(task.execution_summary)),
         "context_files" => Some(json!(task.context_files)),
@@ -249,8 +251,8 @@ pub fn task_dependency_labels(
 ///
 /// It carries [`TASK_SHOW_PUBLIC_DTO_FIELDS`] in that order, each with the
 /// value its `--fields` projection answers, then `granted_tools`,
-/// `requires_labels`, `os_requirement` and `readiness` when the task has
-/// them. A surface adds its own sidecars and extras to the returned object; a
+/// `requires_labels`, `not_before`, `os_requirement` and `readiness` when the
+/// task has them. A surface adds its own sidecars and extras to the returned object; a
 /// host specializes `os_requirement` with the stored crew executor constraint.
 pub fn task_base_json(
     task: &Task,
@@ -273,6 +275,12 @@ pub fn task_base_json(
     }
     if !task.requires_labels.is_empty() {
         object.insert("requires_labels".to_string(), json!(task.requires_labels));
+    }
+    if let Some(not_before) = task.not_before {
+        object.insert(
+            "not_before".to_string(),
+            json!(crate::task::format_not_before(not_before)),
+        );
     }
     if let Some(requirement) = task_os_requirement_json(task) {
         object.insert("os_requirement".to_string(), requirement);

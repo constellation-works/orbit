@@ -98,6 +98,7 @@ mod review_record_ids;
 mod review_report_revisions;
 mod review_run_option;
 mod sandbox_off;
+mod scheduled_tasks;
 mod search_hydration;
 mod security_alert_sweep;
 mod session_events;

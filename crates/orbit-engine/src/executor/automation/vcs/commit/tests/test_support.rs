@@ -37,5 +37,6 @@ pub fn task_with_file(id: &str, title: &str, path: &str, implemented_by: &str) -
         origin: None,
         created_at: now,
         updated_at: now,
+        not_before: None,
     }
 }

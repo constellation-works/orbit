@@ -59,6 +59,7 @@ fn make_bundle(id: &str, title: &str, relations: Vec<TaskRelation>) -> TaskBundl
             implemented_by: None,
             created_at: now,
             updated_at: now,
+            not_before: None,
         },
         description: format!("description for {id}"),
         acceptance: "- [ ] done".to_string(),

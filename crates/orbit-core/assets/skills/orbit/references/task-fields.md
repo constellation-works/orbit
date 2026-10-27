@@ -49,8 +49,8 @@ as a string or array of field names, or `field` as a single-field alias.
 ```text
 id, parent_id, title, description, acceptance_criteria,
 dependencies, resolved_dependencies, tags, required_tools, granted_tools,
-requires_labels, plan, execution_summary, context_files, created_by,
-planned_by, implemented_by, status, terminal, priority,
+requires_labels, not_before, plan, execution_summary, context_files,
+created_by, planned_by, implemented_by, status, terminal, priority,
 complexity, type, pr_status, external_refs, relations,
 source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
 crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
@@ -215,6 +215,21 @@ on the operator-only `orbit.workflow.run.show`.
   (`host_labels_missing`), and while no live host carries them task show/list
   and `orbit run readiness` name the wait in `placement_wait`. Use it for a
   real capability (a GPU, a signed toolchain), not to pin a hostname.
+- `not_before: "<RFC 3339 instant>"` — the earliest time a dispatcher may
+  start the task, stored in UTC and shown only when set. Give an instant with
+  an offset (`2026-11-06T09:00:00Z`); the CLI's `--not-before` also takes a
+  local `YYYY-MM-DDTHH:MM` in the host's zone and echoes UTC and local time.
+  A malformed time is refused naming it. On `orbit.task.update` an empty
+  string (CLI `--clear-not-before`) clears it; `null` leaves it unchanged, as
+  for any field. Until then a `backlog` task waits `scheduled`, with the time
+  in `detail`, in drain listings, `orbit run readiness` and `run show`. No
+  local or pull drain starts it, and `orbit run ship <id>` and
+  `orbit.workflow.ship` refuse it with `task_scheduled`. The hold lifts by
+  itself on the first admission pass after that time, which can be later
+  than the time itself. Only an operator's
+  `orbit run ship <id> --ignore-schedule` starts it early, recording a
+  `schedule_overridden` history event; changing `not_before` reinstates the
+  hold. Other statuses ignore it.
 - `origin` records why the task was filed, from a closed set:
   `operator_request` (a human operator asked for the work),
   `orchestrator_initiative` (the orchestrator judged it necessary on its own)

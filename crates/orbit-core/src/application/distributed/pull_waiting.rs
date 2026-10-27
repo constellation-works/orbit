@@ -22,6 +22,9 @@ pub(crate) const HOST_LABELS_MISSING: &str = "host_labels_missing";
 pub(crate) const CREW_UNAVAILABLE: &str = "crew_unavailable";
 pub(crate) const CAPACITY_UNAVAILABLE: &str = "capacity_unavailable";
 pub(crate) const OWNER_HOLD: &str = "owner_hold";
+/// The owner holds a `backlog` task until its `not_before`; a local drain's
+/// classifier uses the same code.
+pub(crate) const SCHEDULED: &str = "scheduled";
 pub(crate) const INVALID_CANDIDATE: &str = "invalid_candidate";
 
 /// How many tasks each of `deferred` and `excluded` lists; the full counts
@@ -70,10 +73,15 @@ impl PullWaiting {
             .deferred_conflicts
             .iter()
             .map(|diagnostic| {
-                let code = if diagnostic.blocked_by.is_empty() {
-                    OWNER_HOLD
-                } else {
+                let code = if !diagnostic.blocked_by.is_empty() {
                     FOOTPRINT_HELD
+                } else if diagnostic
+                    .reason
+                    .starts_with(orbit_types::task::SCHEDULED_HOLD_PREFIX)
+                {
+                    SCHEDULED
+                } else {
+                    OWNER_HOLD
                 };
                 count(code);
                 waiting_task(diagnostic, code)
