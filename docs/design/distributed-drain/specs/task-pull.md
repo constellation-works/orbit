@@ -23,8 +23,9 @@ though tombstone compaction is not yet written, and [ORB-12495] exposed the owne
 surfaces. [ORB-13625] registered the executor's mutating half — `orbit.task.pull`,
 `orbit.drain.claim.bind` and `orbit.drain.claim.settle` — and opened the one named gate
 (`orbit-core`'s `application::distributed`) that every mutating entry point still names, so the
-feature is closed again only by a source change. Approval, revocation and recovery are not
-registered tools.
+feature is closed again only by a source change. Handoff approval is not a registered
+tool. Revocation and recovery are the operator-only `orbit.task.revoke_handoff` and
+`orbit.task.recover_claim` tools, which managed runs cannot call.
 
 ## Why This Exists
 
