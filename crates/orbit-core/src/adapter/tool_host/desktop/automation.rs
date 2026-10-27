@@ -32,7 +32,11 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("paused_at", RoutineField::PausedAt),
     (
         "last_fire",
-        RoutineField::LastFire(&[("state", FireField::State), ("at", FireField::UpdatedAt)]),
+        RoutineField::LastFire(&[
+            ("run_id", FireField::RunId),
+            ("state", FireField::State),
+            ("at", FireField::UpdatedAt),
+        ]),
     ),
 ];
 

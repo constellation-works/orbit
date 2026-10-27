@@ -7,6 +7,8 @@ mod shell;
 mod task_update;
 pub(crate) mod vcs;
 
+pub(crate) use shell::dispatch_local_shell;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 

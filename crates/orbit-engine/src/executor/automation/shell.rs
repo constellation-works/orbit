@@ -29,12 +29,14 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
+use orbit_common::security::redaction::redact_all;
 use orbit_exec::spawn_owned_supervised_cancellable;
 use serde_json::{Value, json};
 
 use crate::activity_job::cli_runner::spawn::{
     prepare_sandbox_for_dispatch, spawn_child_with_optional_sandbox,
 };
+use crate::activity_job::dispatcher::DispatchError;
 use crate::context::RuntimeHost;
 
 use super::StateExecutionContext;
@@ -84,6 +86,42 @@ pub(super) fn local_shell<H: RuntimeHost + Sync + ?Sized>(
     input: &Value,
     state_context: Option<&StateExecutionContext>,
 ) -> Result<Value, OrbitError> {
+    let (output, failure) = execute_local_shell(host, config, input, state_context)?;
+    match failure {
+        Some(message) => Err(OrbitError::Execution(message)),
+        None => Ok(output),
+    }
+}
+
+/// Preserve a failed command's summary without turning it into a success.
+pub(crate) fn dispatch_local_shell<H: RuntimeHost + Sync + ?Sized>(
+    host: &H,
+    config: &Value,
+    input: &Value,
+    state_context: Option<&StateExecutionContext>,
+) -> Result<Value, DispatchError> {
+    let (output, failure) = execute_local_shell(host, config, input, state_context)
+        .map_err(|error| DispatchError::action_failed("local_shell", error.to_string()))?;
+    if let Some(message) = failure {
+        let diagnostic = json!({
+            "success":output["success"], "exit_code":output["exit_code"],
+            "duration_ms":output["duration_ms"], "timed_out":output["timed_out"],
+            "log_tail":output["log_tail"], "log_tail_truncated":output["log_tail_truncated"],
+        });
+        return Err(DispatchError::LocalShellFailed {
+            message,
+            output: Box::new(diagnostic),
+        });
+    }
+    Ok(output)
+}
+
+fn execute_local_shell<H: RuntimeHost + Sync + ?Sized>(
+    host: &H,
+    config: &Value,
+    input: &Value,
+    state_context: Option<&StateExecutionContext>,
+) -> Result<(Value, Option<String>), OrbitError> {
     let config = parse_shell_config(config)?;
     let executor = host
         .resolve_local_shell_executor(&config.executor)
@@ -145,6 +183,7 @@ pub(super) fn local_shell<H: RuntimeHost + Sync + ?Sized>(
         None,
     )?;
     let result = outcome.result;
+    let (log_tail, log_tail_truncated) = command_log_tail(&result.stdout, &result.stderr);
 
     let mut argv = Vec::with_capacity(args.len() + 1);
     argv.push(program.clone());
@@ -154,6 +193,8 @@ pub(super) fn local_shell<H: RuntimeHost + Sync + ?Sized>(
         "exit_code": result.exit_code,
         "stdout": result.stdout,
         "stderr": result.stderr,
+        "log_tail": log_tail,
+        "log_tail_truncated": log_tail_truncated,
         "duration_ms": result.duration_ms,
         "timed_out": outcome.timed_out,
         "timeout_ms": timeout_ms,
@@ -163,16 +204,30 @@ pub(super) fn local_shell<H: RuntimeHost + Sync + ?Sized>(
     });
 
     if result.success || config.allow_nonzero_exit {
-        return Ok(output);
+        return Ok((output, None));
     }
-    Err(OrbitError::Execution(failure_message(
-        &program,
-        &cwd,
-        result.exit_code,
-        outcome.timed_out,
-        timeout_ms,
-        &result.stderr,
-    )))
+    Ok((
+        output,
+        Some(failure_message(
+            &program,
+            &cwd,
+            result.exit_code,
+            outcome.timed_out,
+            timeout_ms,
+            &command_log_tail("", &result.stderr).0,
+        )),
+    ))
+}
+
+/// Streams are captured separately; append stderr to stdout, redact the whole
+/// capture before taking its final 4 KiB, and keep a valid UTF-8 boundary.
+fn command_log_tail(stdout: &str, stderr: &str) -> (String, bool) {
+    let text = redact_all(&format!("{stdout}{stderr}"));
+    let mut start = text.len().saturating_sub(4096);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    (text[start..].to_string(), start > 0)
 }
 
 fn failure_message(
