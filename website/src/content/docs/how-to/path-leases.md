@@ -185,11 +185,15 @@ TTL, which counts from the original request. Grants follow the lease
 operations that free paths at once, and every owner clock tick otherwise.
 
 The queue orders by priority, then age. A waiter older than
-`lease.aging_minutes` (default 30) moves up one priority level, so a broad
-request is not starved by narrower, higher-priority ones. A new request also
-waits behind queued requests ranked at or above it that want an overlapping
-path; those are listed in `queued_ahead`. Release a queued lease to leave the
-queue.
+`lease.aging_minutes` (default 30) moves up one priority level, to at most
+`high`. Aging does not outrank newer higher-priority requests: a `low` waiter
+that has aged to `normal` still yields to a newer `high` request that wants an
+overlapping path, so a steady stream of those can hold it until its TTL
+expires. An aged `normal`
+waiter ranks with `high` requests and stays ahead of newer ones. A new request
+also waits behind queued requests ranked at or above it that want an
+overlapping path; those are listed in `queued_ahead`. Release a queued lease to
+leave the queue.
 
 ## Expand a lease
 

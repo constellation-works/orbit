@@ -129,8 +129,9 @@ after path policy:
 
 An overlapping hard request **waits** in the lease queue unless it asked `wait = false`, which
 returns today's denial with the holders named. The queue orders by priority, then by age; a
-request older than `lease.aging_minutes` moves up one priority level, so a broad refactor is not
-starved by a stream of narrow requests.
+request older than `lease.aging_minutes` moves up one priority level, capped at `high`. Aging does
+not outrank newer higher-priority requests, so a stream of overlapping `high` requests can hold an
+aged `low` request until its TTL expires.
 
 **Precedence with drains.** Drain admission treats a granted hard lease exactly like a held task
 context lock: an overlapping candidate is deferred and the denial names the lease. A queued lease
