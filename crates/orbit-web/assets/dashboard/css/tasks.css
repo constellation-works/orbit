@@ -414,6 +414,11 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
 .run-host { color: var(--fg-soft); font-family: var(--font-mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .run-host.none { color: var(--fg-mute); font-family: var(--font-sans); font-size: 12.5px; }
 .run-sub { color: var(--fg-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Regression risk on the ID line: a muted number, amber when it is well above
+   the workspace base rate, and dimmer words for a task with no estimate. */
+.risk-part { color: var(--fg-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.risk-part.risk-elevated { color: var(--warn-fg); }
+.risk-part.risk-none { color: var(--fg-disabled); }
 .status-cell {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);

@@ -9,9 +9,10 @@
 //! `/api/diagnostics/friction` (keyed by month and row limit), and
 //! `/api/cost` (keyed by the canonical window), and the codebase
 //! analytics scan behind `/api/codebase/analytics` and the agent scorecard
-//! scan behind `/api/agents/*`, which cache typed facts rather than a response
-//! body. The agent and codebase analytics scans are served stale while one
-//! background refresh replaces them. `/api/routines` uses a host namespace keyed by
+//! scan behind `/api/agents/*` and the task riskiness model behind the task list
+//! and detail, which cache typed facts rather than a response body. The agent
+//! and codebase analytics scans and the riskiness model are served stale while
+//! one background refresh replaces them. `/api/routines` uses a host namespace keyed by
 //! definition, config and database stamps instead of a selected runtime. Every
 //! payload served from a memo reports its age in an `Age` header.
 
@@ -45,6 +46,15 @@ pub(crate) const CODEBASE_ANALYTICS_TTL: Duration = Duration::from_secs(300);
 /// left idle overnight; past it, a request waits for a scan rather than read
 /// rankings that old.
 pub(crate) const CODEBASE_ANALYTICS_STALE_LIMIT: Duration = Duration::from_secs(24 * 3600);
+
+/// Freshness bound for the task riskiness model. A miss reads every task's
+/// envelope and the history of tasks done in the regression window; the
+/// regression rates it holds move over days, so the 30 s task poll reuses it.
+pub(crate) const TASK_RISKINESS_TTL: Duration = Duration::from_secs(300);
+
+/// How long past [`TASK_RISKINESS_TTL`] the riskiness model is still served
+/// while one background refresh replaces it.
+pub(crate) const TASK_RISKINESS_STALE_LIMIT: Duration = Duration::from_secs(24 * 3600);
 
 /// Freshness bound for the agent scorecard scan. A miss reads the history
 /// and comments of every task active in the last 90 days, and the rankings

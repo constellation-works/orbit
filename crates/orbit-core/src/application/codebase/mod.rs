@@ -33,6 +33,7 @@ mod pilot;
 mod regression;
 mod related;
 mod risk;
+mod riskiness;
 mod sections;
 mod stored;
 
@@ -55,6 +56,11 @@ pub(in crate::application) use pilot::{
     Contest, HeldWait, PilotEvidence, PilotRun, PilotRuns, pilot_evidence,
 };
 pub use regression::RegressionFilter;
+pub use riskiness::{
+    AdjustmentState, RiskinessAdjustment, RiskinessAnchor, RiskinessBase, RiskinessGroup,
+    RiskinessState, SupportState, TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskiness,
+    TaskRiskinessModel,
+};
 use sections::{Params, ROW_LIMIT, Rollup};
 
 const DEFAULT_WINDOW: &str = "90d";

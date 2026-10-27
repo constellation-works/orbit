@@ -79,6 +79,9 @@ pub(super) struct StateInner {
     /// Per-server cache of the codebase analytics scan, one per workspace
     /// runtime: history-only analytics or related delivery facts per window.
     codebase: RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts>,
+    /// Per-server cache of the task riskiness model, one per workspace
+    /// runtime; task list rows and task detail estimate from it.
+    riskiness: RuntimeMemo<(), orbit_core::application::codebase::TaskRiskinessModel>,
     /// Per-server cache of the agent scorecard scan, one per workspace
     /// runtime. Every role, window, detail and the attribution strip slice it.
     agents: RuntimeMemo<(), orbit_core::application::agents::AgentFacts>,
@@ -542,6 +545,7 @@ impl DashboardState {
                 diagnostics_errors: RuntimeMemo::new("diagnostics errors aggregation"),
                 diagnostics_friction: RuntimeMemo::new("diagnostics friction aggregation"),
                 codebase: RuntimeMemo::new("codebase analytics scan"),
+                riskiness: RuntimeMemo::new("task riskiness model"),
                 agents: RuntimeMemo::new("agent scorecard scan"),
                 doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
@@ -658,6 +662,13 @@ impl DashboardState {
         &self,
     ) -> &RuntimeMemo<Option<String>, orbit_core::application::codebase::CodebaseFacts> {
         &self.inner.codebase
+    }
+
+    /// Process-local task riskiness model cache for this server instance.
+    pub(crate) fn riskiness_memo(
+        &self,
+    ) -> &RuntimeMemo<(), orbit_core::application::codebase::TaskRiskinessModel> {
+        &self.inner.riskiness
     }
 
     /// Process-local agent scorecard scan cache for this server instance.

@@ -1944,3 +1944,87 @@ analytics_test!(
         }
     }
 );
+
+// [ORB-18690] Task list rows and the detail serve the same riskiness object
+// from the regression facts; a task with no footprint or thin history gets
+// an explicit no-estimate state rather than a low probability.
+analytics_test!(
+    task_riskiness_estimates_from_footprint_regressions_and_names_no_estimate_states,
+    |fixture| {
+        for index in 0..6 {
+            let risky = done(&fixture, &format!("risky {index}"), &["src/risky.rs"]);
+            if index < 3 {
+                add(
+                    &fixture,
+                    &format!("fix {index}"),
+                    &["src/fix.rs"],
+                    regression_from(&risky),
+                );
+            }
+            done(&fixture, &format!("calm {index}"), &["src/calm.rs"]);
+        }
+        let estimated = add(
+            &fixture,
+            "touches risky",
+            &["src/risky.rs", "src/new.rs"],
+            vec![],
+        );
+        let unfootprinted = add(&fixture, "no footprint", &[], vec![]);
+        let thin = add(&fixture, "new file only", &["src/new.rs"], vec![]);
+
+        let server = fixture.server(false);
+        let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
+        let riskiness = |id: &str| {
+            rows["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id)
+                .map(|row| row["riskiness"].clone())
+                .unwrap()
+        };
+
+        // N = 12 done tasks, R = 3: p0 = 4/14. src/risky.rs has 3 of 6
+        // regressed, shrunk with min_support 5 toward p0.
+        let base = 4.0 / 14.0;
+        let risky = riskiness(&estimated);
+        assert_eq!(risky["state"], "estimated", "{risky}");
+        assert_eq!(
+            risky["support_state"], "partial",
+            "src/new.rs has no history"
+        );
+        let expected = (3.0 + 5.0 * base) / (6.0 + 5.0);
+        let probability = risky["probability"].as_f64().unwrap();
+        assert!((probability - expected).abs() < 1e-9, "{risky}");
+        assert_eq!(risky["workspace"]["tasks"], 12);
+        assert_eq!(risky["workspace"]["regressed"], 3);
+        assert_eq!(risky["supporting_tasks"], 6);
+        assert_eq!(risky["uncovered_anchors"], 1);
+        assert_eq!(
+            risky["driving_files"],
+            json!([{
+                "path": "src/risky.rs",
+                "probability": expected,
+                "support": 6,
+                "regressed": 3,
+            }])
+        );
+        assert_eq!(
+            risky["adjustment"]["state"], "omitted",
+            "12 observations cannot support a crew/complexity group: {risky}"
+        );
+
+        let none = riskiness(&unfootprinted);
+        assert_eq!(none["state"], "no_footprint");
+        assert_eq!(none["probability"], Value::Null);
+        let thin = riskiness(&thin);
+        assert_eq!(thin["state"], "insufficient_history");
+        assert_eq!(thin["probability"], Value::Null);
+
+        let detail = json_ok(server.get(&format!("/api/tasks/{estimated}?{WS}")));
+        assert_eq!(
+            detail["riskiness"], risky,
+            "list and detail share one estimate"
+        );
+    }
+);

@@ -245,6 +245,8 @@ pub(super) struct RegressionRow<'a> {
     pub(super) tally: Tally,
     /// The regressed tasks: the numerator.
     pub(super) regressed: Vec<&'a TaskFacts>,
+    /// Every task the row counts: the denominator.
+    pub(super) touching: Vec<&'a TaskFacts>,
     by_crew: BTreeMap<String, Tally>,
 }
 
@@ -273,6 +275,7 @@ pub(super) fn regression_rows<'a>(
         for key in params.rollup.keys(&task.footprint) {
             let row = rows.entry(key).or_default();
             row.tally.denominator += 1;
+            row.touching.push(task);
             let crew_tally = row.by_crew.entry(crew.clone()).or_default();
             crew_tally.denominator += 1;
             if regressed {

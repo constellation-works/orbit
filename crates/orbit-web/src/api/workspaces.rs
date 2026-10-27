@@ -21,7 +21,7 @@ use serde_json::{Value, json};
 use super::jobs::{FAILED_RUN_STATES, JobRunScope, resolve_job_run_scope};
 use super::pagination::TaskPageQuery;
 use super::{HISTORY_DEFAULT_LIMIT, bad_request, blocking, bounded_limit, server_error};
-use crate::projections::TaskListProjection;
+use crate::projections::{TaskListProjection, cached_riskiness_model};
 use crate::state::{DashboardState, Pinned};
 
 /// `GET /api/workspaces` — list every workspace the dashboard can serve, with
@@ -279,7 +279,7 @@ pub(super) async fn list_all_tasks(
         query
             .bind_cursor(&scope)
             .map_err(orbit_core::OrbitError::InvalidInput)?;
-        Ok(all_tasks_json(&pinned, &query, &scope))
+        Ok(all_tasks_json(&state, &pinned, &query, &scope))
     })
     .await
     {
@@ -539,6 +539,7 @@ fn run_timestamp(run: &JobRun) -> DateTime<Utc> {
 }
 
 fn all_tasks_json(
+    state: &DashboardState,
     pinned: &Pinned,
     query: &TaskPageQuery,
     scope: &str,
@@ -662,12 +663,19 @@ fn all_tasks_json(
     let mut values = Vec::with_capacity(rows.len());
     for (row, runtime, entry) in rows {
         let projection = projections.entry(entry.id.as_str()).or_insert_with(|| {
-            TaskListProjection::new(&runtime).with_delivery_attention(
-                attention_by_workspace
-                    .get(&entry.id)
-                    .cloned()
-                    .unwrap_or_default(),
-            )
+            TaskListProjection::new(&runtime)
+                .with_delivery_attention(
+                    attention_by_workspace
+                        .get(&entry.id)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+                .with_riskiness(
+                    // On the blocking pool: wait for this workspace's model
+                    // as the per-workspace list does.
+                    tokio::runtime::Handle::current()
+                        .block_on(cached_riskiness_model(state, &runtime)),
+                )
         });
         let mut value = projection.row_to_json(&runtime, &row, &statuses)?;
         if let Value::Object(map) = &mut value {
