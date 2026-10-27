@@ -90,7 +90,7 @@ struct GcRun {
 }
 
 fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
-    let fixture = Fixture::new();
+    let (fixture, host) = Fixture::hosted();
     let runs = [
         GcRun {
             run_id: "jrun-gc-blocked",
@@ -149,7 +149,6 @@ fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
         },
     ];
 
-    let host = LifecycleHost::new(&fixture.repo);
     let mut checkouts = Vec::new();
     for run in &runs {
         let task_ids: Vec<&str> = run.tasks.iter().map(|(id, _)| *id).collect();
@@ -197,8 +196,7 @@ fn worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones() {
 /// apart and each carries its reason; a directory Git does not list as a
 /// worktree is kept with its remedy.
 fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
+    let (fixture, host) = Fixture::hosted();
     let setup = |run_id: &str, task_id: &str| gc_checkout(&host, run_id, task_id, None);
 
     // The owner would not answer about this task; its settled claim
@@ -286,8 +284,7 @@ fn replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest() 
 /// One failed owner route must not suppress lookups to another owner in the
 /// same worktree GC sweep.
 fn replica_worktree_gc_fences_unreachable_owners_by_route() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
+    let (_fixture, host) = Fixture::hosted();
     let left = gc_checkout(&host, "jrun-owner-a", "T-OWNER-A", None);
     let right = gc_checkout(&host, "jrun-owner-b", "T-OWNER-B", None);
     // The checkout GC visits first is the one whose owner is down.
@@ -331,8 +328,7 @@ fn replica_worktree_gc_fences_unreachable_owners_by_route() {
 /// it names, and an unscoped call classifies every other worktree while the
 /// bad runs show up as failed report entries.
 fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
+    let (_fixture, host) = Fixture::hosted();
     let in_progress = Some(TaskStatus::InProgress);
     let kept = gc_checkout(&host, "jrun-gc-kept", "T-GC-KEPT", in_progress);
     let done = Some(TaskStatus::Done);
@@ -383,8 +379,7 @@ fn worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty() {
 /// [ORB-17621] Non-string target_run_id is rejected with InvalidInput naming
 /// target_run_id before any deletion, leaving checkouts untouched.
 fn worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
+    let (_fixture, host) = Fixture::hosted();
     let done = Some(TaskStatus::Done);
     let settled = gc_checkout(&host, "jrun-gc-num-settled", "T-GC-NUM-SETTLED", done);
     let other = gc_checkout(&host, "jrun-gc-num-other", "T-GC-NUM-OTHER", done);
@@ -438,8 +433,7 @@ fn worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing() {
 /// branch ref and becomes one directory component, including when
 /// `ORBIT_WORKTREE_ROOT` relocates the root. GC still matches that checkout.
 fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
+    let (fixture, host) = Fixture::hosted();
     let prefixed = |prefix: &str, run_id: &str, task_id: &str| {
         host.add_task(task_id, TaskStatus::Backlog);
         let mut input = setup_input(&[task_id], run_id);
@@ -532,8 +526,7 @@ fn worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root() {
 // ---------------------------------------------------------------------------
 
 fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
+    let (fixture, host) = Fixture::hosted();
     let (first, checkout) = setup_checkout(&host, "T-STALE", "jrun-stale");
     let input = setup_input(&["T-STALE"], "jrun-stale");
     let first_base = first["base_sha"].as_str().unwrap().to_string();
@@ -576,8 +569,7 @@ fn worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched() {
 /// even once only the orphaned branch remains, and a name the task's values
 /// make unsafe is refused before any ref is created.
 fn worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
+    let (fixture, host) = Fixture::hosted();
     let template = "feature/{{task_id}}/{{hash}}";
     host.pr_config.lock().unwrap().conventions.branch_name =
         ConventionTemplate::parse_branch("branch.name_template", template).unwrap();
@@ -627,9 +619,7 @@ fn worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render()
 /// cannot report its status, so setup cannot tell dirty from clean. The edits
 /// in it are unrecoverable once the checkout is force-removed.
 fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
-    let (_, checkout) = setup_checkout(&host, "T-CORRUPT", "jrun-corrupt");
+    let (_fixture, host, checkout) = Fixture::with_checkout("T-CORRUPT", "jrun-corrupt");
     let input = setup_input(&["T-CORRUPT"], "jrun-corrupt");
     fs::write(checkout.path.join("uncommitted.txt"), "agent edit\n").unwrap();
     let admin_head = git_path(&checkout.path, "HEAD");
@@ -663,13 +653,12 @@ fn worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits(
 /// and `merge_batch_worktree_into_base` both inspect the linked checkout that
 /// holds it, including when the primary checkout is a different dirty tree.
 fn local_landing_precheck_uses_the_normalized_base_checkout() {
-    let fixture = Fixture::new();
+    let (fixture, host) = Fixture::hosted();
     git(&fixture.repo, &["branch", "main"]);
     let requested = fixture.root.path().join("landing");
     let add = ["worktree", "add", path_str(&requested), "main"];
     git(&fixture.repo, &add);
     let landing = checkout_holding(&fixture.repo, "main");
-    let host = LifecycleHost::new(&fixture.repo);
     host.add_task("T-LAND", TaskStatus::Backlog);
     let checkouts_before = registered_worktrees(&fixture.repo);
 
@@ -737,7 +726,7 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
 
 fn local_landing_preserves_unrelated_untracked_files() {
     for linked in [false, true] {
-        let fixture = Fixture::new();
+        let (fixture, host) = Fixture::hosted();
         git(&fixture.repo, &["branch", "main"]);
         if linked {
             let landing = fixture.root.path().join("landing");
@@ -747,7 +736,6 @@ fn local_landing_preserves_unrelated_untracked_files() {
             git(&fixture.repo, &["checkout", "main"]);
         }
         let landing = checkout_holding(&fixture.repo, "main");
-        let host = LifecycleHost::new(&fixture.repo);
         let notes = ["on-call-goal.md", "operations/research/notes\n\".md"];
         let bytes = b"operator notes\n\0\xff\r\n";
         for note in notes {
@@ -786,8 +774,7 @@ fn local_landing_names_only_untracked_paths_conflicting_with_the_candidate() {
         ("folder", "folder/child.txt", false, false),
         ("late.txt", "late.txt", false, true),
     ] {
-        let fixture = Fixture::new();
-        let host = LifecycleHost::new(&fixture.repo);
+        let (fixture, host) = Fixture::hosted();
         let operator_path = fixture.repo.join(untracked);
         let operator_bytes = b"operator-owned\0\xff\n";
         let write_operator = || {
@@ -834,8 +821,7 @@ fn local_landing_names_only_untracked_paths_conflicting_with_the_candidate() {
 
 fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
     for dirty_kind in ["unstaged", "staged", "unmerged"] {
-        let fixture = Fixture::new();
-        let host = LifecycleHost::new(&fixture.repo);
+        let (fixture, host) = Fixture::hosted();
         let run_id = "jrun-tracked-work";
         // Set up on a clean base.
         let checkout = landing_checkout(&host, BASE, run_id);
@@ -903,7 +889,7 @@ fn local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge() {
 /// the resume-to-final-gate path, excluding compilation and fixture setup.
 #[allow(clippy::print_stderr)]
 fn a_validated_candidate_is_resumed_on_the_new_base_without_implementation() {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     let base = preserved.advance_base();
     let trace = preserved.fixture.root.path().join("gate-trace");
     let probes = [
@@ -1004,7 +990,7 @@ fn a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run() {
 /// The task's next run resumes a candidate whose failed run's handoff at
 /// `failed_step_id` recorded `decision`, as carried work.
 fn assert_held_candidate_resumes_carried(failed_step_id: &str, decision: &str) {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     preserved.preserve_decision(failed_step_id, decision);
     preserved.require(&["test -f feature.txt"]);
     let (_, resumed) = preserved.resumed();
@@ -1122,7 +1108,7 @@ fn a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implement
 /// implementer even when owner validation would pass, and when no command
 /// is configured. A failure at `commit` still resumes as carried.
 fn an_implementation_failure_handoff_is_requeued_for_the_implementer() {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     // Passing checks are the case that used to skip the implementer.
     preserved.require(&["test -s feature.txt"]);
     // Empty required commands used to accept unfinished work
@@ -1178,7 +1164,7 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
         ("replay-partial", "", true, 3, false),
         ("selection-mismatch", "", true, 3, false),
     ] {
-        let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+        let preserved = PreservedCandidate::feature();
         let mismatch_selection = if case == "selection-mismatch" {
             "if [ -n \"$ORBIT_VALIDATION_SELECTION\" ]; then \
              selection='{\"packages\":[\"other\"],\"failing_tests\":[\"fixture\"]}'; fi; "
@@ -1259,17 +1245,13 @@ fn resumed_known_red_candidates_must_complete_host_and_replay_coverage() {
 /// since that run began, forces a fresh implementation with the reason, and
 /// leaves the checkout untouched. A discard older than the run does not.
 fn a_changed_spec_or_an_operator_discard_implements_fresh() {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     let base = preserved.advance_base();
     let setup = preserved.next_setup();
-    let checkout = workspace(&setup);
     let fresh = |case: &str, reason: &str| {
-        let resumed = preserved.resume(&setup).expect("candidate_resume");
-        assert_eq!(resumed["outcome"], "fresh", "{case}: {resumed}");
+        let resumed = preserved.assert_fresh(&setup, &base, case);
         let why = resumed["reason"].as_str().unwrap();
         assert!(why.contains(reason), "{case}: {resumed}");
-        assert_eq!(head(&checkout), base, "{case}");
-        assert!(status(&checkout).is_empty(), "{case}");
         assert_resume_recorded(&preserved, "fresh");
         resumed
     };
@@ -1302,7 +1284,7 @@ fn a_changed_spec_or_an_operator_discard_implements_fresh() {
 /// task-pilot or operator edit to them after a failure preserved the
 /// candidate keeps it, while a description or criteria edit still does not.
 fn a_selector_only_edit_keeps_the_preserved_candidate() {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     let selectors = ["file:feature.txt", "dir:docs"];
     preserved.host.set_context_files(RESUME_TASK, &selectors);
     let (_, resumed) = preserved.resumed();
@@ -1326,7 +1308,7 @@ fn a_selector_only_edit_keeps_the_preserved_candidate() {
 /// pipeline's own validation and the fresh review judge it. A selector edit
 /// since the hold does not retire it.
 fn an_evidence_receipt_resumes_the_held_candidate_without_the_implementer() {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     preserved.hold(&preserved.candidate);
     let selectors = ["file:feature.txt", "dir:docs"];
     preserved.host.set_context_files(RESUME_TASK, &selectors);
@@ -1349,16 +1331,13 @@ fn an_evidence_receipt_resumes_the_held_candidate_without_the_implementer() {
 /// operator discarded it, the description changed, or the receipt is not
 /// the task's latest decision.
 fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason() {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     let base = preserved.advance_base();
     let setup = preserved.next_setup();
-    let checkout = workspace(&setup);
     let fresh = |code: &str| {
-        let resumed = preserved.resume(&setup).expect("candidate_resume");
-        assert_resumed(code, &resumed, "fresh", true);
+        let resumed = preserved.assert_fresh(&setup, &base, code);
+        assert_eq!(resumed["implement"], true, "{code}: {resumed}");
         assert_eq!(resumed["reason_code"], code, "{resumed}");
-        assert_eq!(head(&checkout), base, "{code}");
-        assert!(status(&checkout).is_empty(), "{code}");
     };
 
     let missing = "0123456789abcdef0123456789abcdef01234567";
@@ -1395,7 +1374,7 @@ fn a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason
 /// written to a task history that lives on the owner. Without one, or when
 /// its changes conflict with the base, the usual outcomes apply.
 fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     let base = preserved.advance_base();
     // Would refuse the candidate if validation ran here.
     preserved.require(&["exit 99"]);
@@ -1448,7 +1427,7 @@ fn a_claimed_leaf_continues_the_candidate_its_owner_kept() {
 /// candidate kept from that leaf's claim, naming the claim and machine in the
 /// task's history. A candidate kept from some other run is not resurrected.
 fn a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept() {
-    let preserved = PreservedCandidate::new("feature.txt", "feature\n");
+    let preserved = PreservedCandidate::feature();
     let base = preserved.advance_base();
     preserved.host.run_states.lock().unwrap().remove(FAILED_RUN);
     *preserved.host.machine.lock().unwrap() = Some("hm_local".to_string());
@@ -1523,7 +1502,7 @@ fn a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer() {
     let message = "a claimed leaf records nothing on a task it does not own";
     assert_eq!(recorded, history, "{message}");
 
-    let clean = PreservedCandidate::new("feature.txt", "feature\n");
+    let clean = PreservedCandidate::feature();
     clean.advance_base();
     let setup = clean.next_setup();
     let resumed = clean.resume_claim_repair(&setup, &clean.candidate);
@@ -1573,9 +1552,21 @@ struct PreservedCandidate {
 }
 
 impl PreservedCandidate {
+    fn assert_fresh(&self, setup: &Value, base: &str, case: &str) -> Value {
+        let resumed = self.resume(setup).expect("candidate_resume");
+        assert_eq!(resumed["outcome"], "fresh", "{case}: {resumed}");
+        let checkout = workspace(setup);
+        assert_eq!(head(&checkout), base, "{case}");
+        assert!(status(&checkout).is_empty(), "{case}");
+        resumed
+    }
+
+    fn feature() -> Self {
+        Self::new("feature.txt", "feature\n")
+    }
+
     fn new(file: &str, contents: &str) -> Self {
-        let fixture = Fixture::new();
-        let host = LifecycleHost::new(&fixture.repo);
+        let (fixture, host) = Fixture::hosted();
         let (_, checkout) = setup_checkout(&host, RESUME_TASK, FAILED_RUN);
         let candidate = commit_file(&checkout.path, file, contents);
         let input = json!({ "task_ids": [RESUME_TASK] });
@@ -1595,7 +1586,7 @@ impl PreservedCandidate {
     /// required `command` and committed by the next run, with that run's
     /// setup and resume.
     fn committed(command: &str) -> (Self, Value, Value) {
-        let preserved = Self::new("feature.txt", "feature\n");
+        let preserved = Self::feature();
         preserved.advance_base();
         preserved.require(&[command]);
         let (setup, resumed) = preserved.resumed();
@@ -2433,16 +2424,14 @@ fn agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits() {
     .enumerate()
     {
         let run_id = format!("jrun-widen-{index}");
-        let fixture = Fixture::new();
+        let (fixture, host) = Fixture::hosted();
         fs::write(fixture.repo.join(".gitignore"), ".orbit/\ntarget/\n").unwrap();
         git(&fixture.repo, &["commit", "-am", "ignore build output"]);
-        let host = LifecycleHost::new(&fixture.repo);
         let (_, checkout) = setup_checkout(&host, "T-WIDEN", &run_id);
-        let provider = install_provider(
-            fixture.root.path(),
+        let host = fixture.with_provider(
+            &host,
             "printf 'edited\\n' > README.md\nmkdir -p tests .orbit/tmp target\nprintf 'new\\n' > tests/new_case.rs\nprintf 'scratch\\n' > .orbit/tmp/log\nprintf 'built\\n' > target/out",
         );
-        let host = host.with_provider(&provider);
 
         let outcome = dispatch_linked_activity(&host, activity, &run_id, "T-WIDEN", &checkout.path)
             .unwrap_or_else(|error| panic!("{activity} may change any path: {error}"));
@@ -2466,20 +2455,17 @@ fn agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits() {
 /// overlap with the candidate is not what makes the edit fatal.
 #[cfg(unix)]
 fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
-    let (_, checkout) = setup_checkout(&host, "T-ESCAPE", "jrun-primary-escape");
+    let (fixture, host, checkout) = Fixture::with_checkout("T-ESCAPE", "jrun-primary-escape");
     let primary_head = head(&fixture.repo);
     let assigned_head = head(&checkout.path);
 
     let primary = fixture.repo.display().to_string();
-    let provider = install_provider(
-        fixture.root.path(),
+    let host = fixture.with_provider(
+        &host,
         &format!(
             "printf 'assigned stays\\n' > assigned-stays.txt\nprintf 'primary readme\\n' > '{primary}/README.md'\nprintf 'escaped\\n' > '{primary}/escaped.txt'\ngit -C '{primary}' add -- README.md escaped.txt",
         ),
     );
-    let host = host.with_provider(&provider);
     let error = dispatch_linked_provider(&host, "jrun-primary-escape", "T-ESCAPE", &checkout.path)
         .expect_err("a primary source edit is a worktree-boundary failure");
 
@@ -2526,22 +2512,20 @@ fn provider_primary_source_edit_fails_closed_and_preserves_both_checkouts() {
 /// or change the fingerprints and patches needed to detect and recover it.
 #[cfg(unix)]
 fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
-    let (_, checkout) = setup_checkout(&host, "T-DIFF-CONFIG", "jrun-diff-config-setup");
+    let (fixture, host, checkout) =
+        Fixture::with_checkout("T-DIFF-CONFIG", "jrun-diff-config-setup");
     let restore = fixture.root.path().join("restore");
     git(
         &fixture.repo,
         &["worktree", "add", "--detach", path_str(&restore), "HEAD"],
     );
-    let provider = install_provider(
-        fixture.root.path(),
+    let host = fixture.with_provider(
+        &host,
         &format!(
             "printf 'candidate output\\n' > README.md\nprintf 'provider primary output\\n' > '{}/README.md'",
             fixture.repo.display(),
         ),
     );
-    let host = host.with_provider(&provider);
     let global_config = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".gitconfig");
     let cases: &[&[(&str, &str)]] = &[
         &[],
@@ -2630,21 +2614,19 @@ fn user_git_diff_config_preserves_dirty_fingerprints_and_recovery() {
 /// `.orbit/` prefix alone must not excuse an intersection with the candidate.
 #[cfg(unix)]
 fn stationary_record_store_dirt_overlapping_the_run_fails_closed() {
-    let fixture = Fixture::new();
+    let (fixture, host) = Fixture::hosted();
     let record = ".orbit/auto_tasks/nightly.yaml";
     commit_tracked_record(&fixture.repo, record, "name: nightly\n");
-    let host = LifecycleHost::new(&fixture.repo);
     let (_, checkout) = setup_checkout(&host, "T-OVERLAP", "jrun-record-overlap");
     let primary_head = head(&fixture.repo);
 
     let primary = fixture.repo.display().to_string();
-    let provider = install_provider(
-        fixture.root.path(),
+    let host = fixture.with_provider(
+        &host,
         &format!(
             "mkdir -p .orbit/auto_tasks\nprintf 'name: from-run\\n' > '{record}'\nprintf 'name: from-primary\\n' > '{primary}/{record}'",
         ),
     );
-    let host = host.with_provider(&provider);
     let error = dispatch_linked_provider(&host, "jrun-record-overlap", "T-OVERLAP", &checkout.path)
         .expect_err("record-store dirt on a run path is a boundary failure");
 
@@ -2660,10 +2642,9 @@ fn stationary_record_store_dirt_overlapping_the_run_fails_closed() {
 /// the assigned checkout.
 #[cfg(unix)]
 fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
-    let fixture = Fixture::new();
+    let (fixture, host) = Fixture::hosted();
     let record = ".orbit/auto_tasks/nightly.yaml";
     commit_tracked_record(&fixture.repo, record, "name: nightly\n");
-    let host = LifecycleHost::new(&fixture.repo);
     let (_, checkout) = setup_checkout(&host, "T-RECORD", "jrun-record-dirt");
     let primary_head = head(&fixture.repo);
     let ready = fixture.root.path().join("record-ready");
@@ -2671,15 +2652,14 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
     orbit_common::test_env::create_fixture_fifo(&go).unwrap();
     let primary_record = fixture.repo.join(record);
 
-    let provider = install_provider(
-        fixture.root.path(),
+    let host = fixture.with_provider(
+        &host,
         &format!(
             ": > '{}'\nread -r _ < '{}'\nprintf 'candidate\\n' > candidate.txt",
             ready.display(),
             go.display(),
         ),
     );
-    let host = host.with_provider(&provider);
     let curator = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(20);
         while !ready.exists() {
@@ -2715,12 +2695,9 @@ fn stationary_record_store_dirt_disjoint_from_the_run_stays_benign() {
 /// notice them.
 #[cfg(unix)]
 fn primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift() {
-    let fixture = Fixture::new();
-    let host = LifecycleHost::new(&fixture.repo);
-    let (_, checkout) = setup_checkout(&host, "T-REDISPATCH", "jrun-redispatch");
+    let (fixture, host, checkout) = Fixture::with_checkout("T-REDISPATCH", "jrun-redispatch");
 
-    let provider = install_provider(fixture.root.path(), "printf 'candidate\\n' > candidate.txt");
-    let host = host.with_provider(&provider);
+    let host = fixture.with_provider(&host, "printf 'candidate\\n' > candidate.txt");
 
     let first = dispatch_linked_provider(&host, "jrun-redispatch", "T-REDISPATCH", &checkout.path)
         .expect("first dispatch");
@@ -2789,11 +2766,10 @@ fn untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree() {
         )
     }
 
-    let fixture = Fixture::new();
+    let (fixture, host) = Fixture::hosted();
     fs::write(fixture.repo.join("notes.txt"), "note\n").unwrap();
     let primary_head = commit_nested(&fixture.repo, "vendor/somelib", "lib\n");
     seed_unborn(&fixture.repo, "vendor/unborn");
-    let host = LifecycleHost::new(&fixture.repo);
     let (_, checkout) = setup_checkout(&host, "T-NESTED", "jrun-nested-setup");
     let assigned_head = commit_nested(&checkout.path, "vendor/otherlib", "other\n");
 
@@ -2949,7 +2925,7 @@ fn repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts
     let earlier = Fixture::new();
     fs::write(earlier.repo.join("README.md"), "earlier row\n").unwrap();
     git(&earlier.repo, &["config", "user.name", "Earlier Row"]);
-    let fixture = Fixture::new();
+    let (fixture, host) = Fixture::hosted();
     let events: Vec<Value> = read(&events)
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
@@ -2989,14 +2965,12 @@ fn repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts
     git(&fixture.repo, &["cat-file", "-e", "HEAD"]);
     git(&fixture.repo, &["fsck", "--strict"]);
     drop(earlier);
-    let host = LifecycleHost::new(&fixture.repo);
     let (_, checkout) = setup_checkout(&host, "T-REPEAT", "jrun-repeat-setup");
     let primary = fixture.repo.display().to_string();
-    let provider = install_provider(
-        fixture.root.path(),
+    let host = fixture.with_provider(
+        &host,
         &format!("printf 'primary drift\\n' > '{primary}/README.md'\n"),
     );
-    let host = host.with_provider(&provider);
 
     let mut roots = Vec::new();
     for failure in 1..=FAILURES {
@@ -3187,6 +3161,23 @@ struct Fixture {
 }
 
 impl Fixture {
+    #[cfg(unix)]
+    fn with_provider(&self, host: &LifecycleHost, body: &str) -> LifecycleHost {
+        host.with_provider(&install_provider(self.root.path(), body))
+    }
+
+    fn hosted() -> (Self, LifecycleHost) {
+        let fixture = Self::new();
+        let host = LifecycleHost::new(&fixture.repo);
+        (fixture, host)
+    }
+
+    fn with_checkout(task_id: &str, run_id: &str) -> (Self, LifecycleHost, Checkout) {
+        let (fixture, host) = Self::hosted();
+        let (_, checkout) = setup_checkout(&host, task_id, run_id);
+        (fixture, host, checkout)
+    }
+
     fn new() -> Self {
         thread_local! {
             static TEMPLATE: std::cell::RefCell<Option<Fixture>> = const { std::cell::RefCell::new(None) };
@@ -3357,8 +3348,7 @@ impl PreparedRebase {
     /// the checkout.
     #[cfg(unix)]
     fn with_provider(&self, body: &str) -> LifecycleHost {
-        let provider = install_provider(self.fixture.root.path(), body);
-        self.host.with_provider(&provider)
+        self.fixture.with_provider(&self.host, body)
     }
 
     /// Run conflict recovery on `host` for this fixture's stopped rebase.
@@ -3554,6 +3544,16 @@ struct LifecycleHost {
 type Widening = (String, ContextWideningStep, String, Vec<String>);
 type PreparationHook = Box<dyn FnMut(&Value) + Send>;
 
+/// Insert one fixture record under its durable identity.
+fn store_record<T>(store: &Mutex<BTreeMap<String, T>>, id: &str, value: T) {
+    store.lock().unwrap().insert(id.to_string(), value);
+}
+
+/// Read one fixture record without retaining a lock across engine dispatch.
+fn stored_record<T: Clone>(store: &Mutex<BTreeMap<String, T>>, id: &str) -> Option<T> {
+    store.lock().unwrap().get(id).cloned()
+}
+
 impl LifecycleHost {
     pub(super) fn stub(&self, action: &str, reply: Result<Value, String>) {
         self.stubs.lock().unwrap().insert(
@@ -3599,10 +3599,7 @@ impl LifecycleHost {
     }
 
     fn add_task(&self, id: &str, status: TaskStatus) {
-        self.tasks
-            .lock()
-            .unwrap()
-            .insert(id.to_string(), task(id, status));
+        store_record(&self.tasks, id, task(id, status));
     }
 
     fn edit_task(&self, id: &str, edit: impl FnOnce(&mut Task)) {
@@ -3622,24 +3619,15 @@ impl LifecycleHost {
     }
 
     fn answer(&self, task_id: &str, lookup: WorktreeGcTaskLookup) {
-        self.owner_answers
-            .lock()
-            .unwrap()
-            .insert(task_id.to_string(), lookup);
+        store_record(&self.owner_answers, task_id, lookup);
     }
 
     fn settle_claim(&self, run_id: &str, settlement: &str) {
-        self.settled_claims
-            .lock()
-            .unwrap()
-            .insert(run_id.to_string(), settlement.to_string());
+        store_record(&self.settled_claims, run_id, settlement.to_string());
     }
 
     fn set_lookup_scope(&self, run_id: &str, scope: &str) {
-        self.lookup_scopes
-            .lock()
-            .unwrap()
-            .insert(run_id.to_string(), scope.to_string());
+        store_record(&self.lookup_scopes, run_id, scope.to_string());
     }
 
     fn admitted(&self) -> Vec<String> {
@@ -3719,10 +3707,7 @@ impl LifecycleHost {
             failed_step_id: failed_step_id.to_string(),
             output,
         });
-        self.run_states
-            .lock()
-            .unwrap()
-            .insert(run_id.to_string(), state);
+        store_record(&self.run_states, run_id, state);
     }
 
     fn record_history(&self, task_id: &str, entry: TaskHistoryEntry) {
@@ -3739,12 +3724,7 @@ impl LifecycleHost {
     }
 
     fn history(&self, task_id: &str) -> Vec<TaskHistoryEntry> {
-        self.history
-            .lock()
-            .unwrap()
-            .get(task_id)
-            .cloned()
-            .unwrap_or_default()
+        stored_record(&self.history, task_id).unwrap_or_default()
     }
 }
 
@@ -3804,11 +3784,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         Ok(())
     }
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
-        self.tasks
-            .lock()
-            .unwrap()
-            .get(task_id)
-            .cloned()
+        stored_record(&self.tasks, task_id)
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, task_id.to_string()))
     }
 
@@ -3895,13 +3871,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     }
 
     fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError> {
-        Ok(self
-            .artifacts
-            .lock()
-            .unwrap()
-            .get(task_id)
-            .cloned()
-            .unwrap_or_default())
+        Ok(stored_record(&self.artifacts, task_id).unwrap_or_default())
     }
 
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
@@ -3915,7 +3885,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     }
 
     fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
-        Ok(self.run_states.lock().unwrap().get(run_id).cloned())
+        Ok(stored_record(&self.run_states, run_id))
     }
 
     fn required_validation_commands(&self) -> Vec<String> {
@@ -3949,10 +3919,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     }
 
     fn record_validated_tree(&self, tree: &orbit_engine::ValidatedTree) -> Result<(), OrbitError> {
-        self.validated_trees
-            .lock()
-            .unwrap()
-            .insert(tree.run_id.clone(), tree.clone());
+        store_record(&self.validated_trees, &tree.run_id, tree.clone());
         Ok(())
     }
 
@@ -3960,7 +3927,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         &self,
         run_id: &str,
     ) -> Result<Option<orbit_engine::ValidatedTree>, OrbitError> {
-        Ok(self.validated_trees.lock().unwrap().get(run_id).cloned())
+        Ok(stored_record(&self.validated_trees, run_id))
     }
 
     fn register_worker_process(&self, _pid: u32) -> Result<(), OrbitError> {
@@ -4065,18 +4032,11 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     }
 
     fn worktree_gc_task_lookup_scope(&self, run_id: &str) -> Option<String> {
-        Some(
-            self.lookup_scopes
-                .lock()
-                .unwrap()
-                .get(run_id)
-                .cloned()
-                .unwrap_or_else(|| "local".to_string()),
-        )
+        Some(stored_record(&self.lookup_scopes, run_id).unwrap_or_else(|| "local".to_string()))
     }
 
     fn settled_claim_for_worktree_gc(&self, run_id: &str) -> Option<String> {
-        self.settled_claims.lock().unwrap().get(run_id).cloned()
+        stored_record(&self.settled_claims, run_id)
     }
 
     fn widen_task_context_files(
@@ -4200,7 +4160,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         input: &Value,
         _tool_context: orbit_tools::ToolContext,
     ) -> Result<Value, DispatchError> {
-        let Some(reply) = self.stubs.lock().unwrap().get(action).cloned() else {
+        let Some(reply) = stored_record(&self.stubs, action) else {
             return Err(DispatchError::DeterministicActionNotRegistered(
                 action.to_string(),
             ));
@@ -4372,22 +4332,12 @@ fn assert_stale_refusal(error: &OrbitError, branch: &str, tip: &str, base: &str)
         matches!(error, OrbitError::Execution(_)),
         "expected an execution refusal, got {error:?}"
     );
-    assert!(
-        message.contains("refusing stale branch"),
-        "expected a stale-branch refusal, got {message}"
-    );
-    assert!(
-        message.contains(&format!("'{branch}'")),
-        "names {branch}: {message}"
-    );
-    assert!(
-        message.contains(tip),
-        "names the retained tip {tip}: {message}"
-    );
-    assert!(
-        message.contains(base),
-        "names the requested base {base}: {message}"
-    );
+    for fragment in ["refusing stale branch", &format!("'{branch}'"), tip, base] {
+        assert!(
+            message.contains(fragment),
+            "stale refusal must name {fragment}: {message}"
+        );
+    }
 }
 
 fn commit_file(repo: &Path, file: &str, contents: &str) -> String {
@@ -4581,147 +4531,95 @@ impl Drop for ReapOnDrop {
     }
 }
 
-/// `run_scenarios` rows named by their scenario function, keeping each
-/// row's `cfg` gate.
-macro_rules! scenarios {
-    ($($(#[$gate:meta])* $scenario:ident),* $(,)?) => {
-        &[$($(#[$gate])* (stringify!($scenario), $scenario as fn())),*]
+/// Each family retains its own bounded child and every row's name and cfg.
+macro_rules! worktree_families {
+    ($($family:ident: [$($(#[$gate:meta])* $scenario:ident),* $(,)?]),* $(,)?) => {
+        $(
+            #[test]
+            fn $family() {
+                isolated(stringify!($family), || {
+                    crate::git_fixture::run_scenarios(&[
+                        $($(#[$gate])* (stringify!($scenario), $scenario as fn())),*
+                    ]);
+                });
+            }
+        )*
     };
 }
 
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_1() {
-    isolated("worktree_contracts_1", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones,
-            replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest,
-            replica_worktree_gc_fences_unreachable_owners_by_route,
-            worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty,
-            worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root,
-            worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing,
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_2() {
-    isolated("worktree_contracts_2", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched,
-            worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render,
-            worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits,
-            local_landing_precheck_uses_the_normalized_base_checkout,
-            local_landing_preserves_unrelated_untracked_files,
-            local_landing_names_only_untracked_paths_conflicting_with_the_candidate,
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_3() {
-    isolated("worktree_contracts_3", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge,
-            a_validated_candidate_is_resumed_on_the_new_base_without_implementation,
-            a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run,
-            a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run,
-            a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict,
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_4() {
-    isolated("worktree_contracts_4", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output,
-            a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer,
-            an_implementation_failure_handoff_is_requeued_for_the_implementer,
-            resumed_known_red_candidates_must_complete_host_and_replay_coverage,
-            a_changed_spec_or_an_operator_discard_implements_fresh,
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_5() {
-    isolated("worktree_contracts_5", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            a_selector_only_edit_keeps_the_preserved_candidate,
-            an_evidence_receipt_resumes_the_held_candidate_without_the_implementer,
-            a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason,
-            a_claimed_leaf_continues_the_candidate_its_owner_kept,
-            a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept,
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_6() {
-    isolated("worktree_contracts_6", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer,
-            git_rebase_decision_follows_the_checkout_state,
-            git_rebase_rename_delete_conflicts_remain_for_recovery,
-            #[cfg(unix)]
-            conflict_recovery_leaf_completes_only_its_checkpointed_rebase,
-            #[cfg(unix)]
-            a_resumed_run_recovers_the_same_step_again_as_a_new_attempt,
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_7() {
-    isolated("worktree_contracts_7", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            #[cfg(unix)]
-            conflict_recovery_commits_companion_edits_with_the_resolution,
-            #[cfg(unix)]
-            conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase,
-            #[cfg(unix)]
-            conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits,
-            #[cfg(unix)]
-            agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits,
-            #[cfg(unix)]
-            provider_primary_source_edit_fails_closed_and_preserves_both_checkouts,
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_8() {
-    isolated("worktree_contracts_8", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            #[cfg(unix)]
-            user_git_diff_config_preserves_dirty_fingerprints_and_recovery,
-            #[cfg(unix)]
-            stationary_record_store_dirt_overlapping_the_run_fails_closed,
-            #[cfg(unix)]
-            stationary_record_store_dirt_disjoint_from_the_run_stays_benign,
-            #[cfg(unix)]
-            primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift,
-            #[cfg(unix)]
-            untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree,
-        ]);
-    });
-}
-
-/// Behavior-distinct rows share one bounded family process.
-#[test]
-fn worktree_contracts_9() {
-    isolated("worktree_contracts_9", || {
-        crate::git_fixture::run_scenarios(scenarios![
-            #[cfg(unix)]
-            repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts,
-        ]);
-    });
+worktree_families! {
+    worktree_contracts_1: [
+        worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones,
+        replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest,
+        replica_worktree_gc_fences_unreachable_owners_by_route,
+        worktree_gc_classifies_other_worktrees_when_a_run_id_sanitizes_empty,
+        worktree_setup_keeps_a_branch_prefix_checkout_under_the_worktree_root,
+        worktree_gc_rejects_non_string_target_run_id_and_deletes_nothing,
+    ],
+    worktree_contracts_2: [
+        worktree_setup_refuses_a_stale_checkout_and_leaves_it_untouched,
+        worktree_setup_names_a_templated_branch_stably_and_refuses_an_unsafe_render,
+        worktree_setup_refuses_a_checkout_with_unreadable_status_and_keeps_its_edits,
+        local_landing_precheck_uses_the_normalized_base_checkout,
+        local_landing_preserves_unrelated_untracked_files,
+        local_landing_names_only_untracked_paths_conflicting_with_the_candidate,
+    ],
+    worktree_contracts_3: [
+        local_landing_still_refuses_tracked_and_unmerged_work_at_setup_and_merge,
+        a_validated_candidate_is_resumed_on_the_new_base_without_implementation,
+        a_candidate_held_for_an_upgrade_refusal_is_resumed_by_the_next_run,
+        a_candidate_held_for_a_wait_timeout_is_resumed_by_the_next_run,
+        a_conflicting_candidate_is_handed_to_the_implementer_with_its_conflict,
+    ],
+    worktree_contracts_4: [
+        a_candidate_failing_validation_is_handed_to_the_implementer_with_the_output,
+        a_candidate_failing_validation_its_base_shares_is_not_handed_to_the_implementer,
+        an_implementation_failure_handoff_is_requeued_for_the_implementer,
+        resumed_known_red_candidates_must_complete_host_and_replay_coverage,
+        a_changed_spec_or_an_operator_discard_implements_fresh,
+    ],
+    worktree_contracts_5: [
+        a_selector_only_edit_keeps_the_preserved_candidate,
+        an_evidence_receipt_resumes_the_held_candidate_without_the_implementer,
+        a_held_candidate_that_is_gone_or_retired_implements_fresh_with_a_typed_reason,
+        a_claimed_leaf_continues_the_candidate_its_owner_kept,
+        a_local_claim_leaf_falls_back_to_the_candidate_its_claim_kept,
+    ],
+    worktree_contracts_6: [
+        a_repair_claim_resumes_its_stopped_landing_candidate_for_the_implementer,
+        git_rebase_decision_follows_the_checkout_state,
+        git_rebase_rename_delete_conflicts_remain_for_recovery,
+        #[cfg(unix)]
+        conflict_recovery_leaf_completes_only_its_checkpointed_rebase,
+        #[cfg(unix)]
+        a_resumed_run_recovers_the_same_step_again_as_a_new_attempt,
+    ],
+    worktree_contracts_7: [
+        #[cfg(unix)]
+        conflict_recovery_commits_companion_edits_with_the_resolution,
+        #[cfg(unix)]
+        conflict_recovery_resolves_each_stop_of_a_multi_commit_rebase,
+        #[cfg(unix)]
+        conflict_recovery_still_refuses_unresolved_conflicts_beside_companion_edits,
+        #[cfg(unix)]
+        agent_changed_paths_widen_selectors_with_their_step_as_the_agent_exits,
+        #[cfg(unix)]
+        provider_primary_source_edit_fails_closed_and_preserves_both_checkouts,
+    ],
+    worktree_contracts_8: [
+        #[cfg(unix)]
+        user_git_diff_config_preserves_dirty_fingerprints_and_recovery,
+        #[cfg(unix)]
+        stationary_record_store_dirt_overlapping_the_run_fails_closed,
+        #[cfg(unix)]
+        stationary_record_store_dirt_disjoint_from_the_run_stays_benign,
+        #[cfg(unix)]
+        primary_dirtied_between_dispatches_of_one_run_is_not_provider_drift,
+        #[cfg(unix)]
+        untracked_nested_repository_fingerprints_in_primary_and_assigned_worktree,
+    ],
+    worktree_contracts_9: [
+        #[cfg(unix)]
+        repeated_dirty_integrity_failures_keep_current_content_and_prune_old_attempts,
+    ],
 }

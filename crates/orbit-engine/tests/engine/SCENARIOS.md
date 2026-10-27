@@ -835,7 +835,7 @@ remain pipeline-owned; full CI is separately run on the PR.
 
 ## Worktree lifecycle shared setup
 
-All 42 `v2_worktree_lifecycle::worktree_contracts_N` rows keep their scenario
+All 43 `v2_worktree_lifecycle::worktree_contracts_N` rows keep their scenario
 functions, names, `cfg(unix)` gates and assertions. The rows now share the
 fixture steps they used to repeat: checkout setup (`setup_checkout`,
 `gc_checkout`, `landing_checkout`), GC reports, Git queries (`head`, `status`,
@@ -843,7 +843,19 @@ fixture steps they used to repeat: checkout setup (`setup_checkout`,
 `PreparedRebase::with_provider`), conflict fields and recovery input, the
 agent-loop spec and audit sink, and the preserved-candidate requeue and
 resume steps. The two held-candidate rows share one body
-(`assert_held_candidate_resumes_carried`). The `scenarios!` macro builds each
+(`assert_held_candidate_resumes_carried`). The `worktree_families!` macro builds each
 family's rows from the function names, so the reported row names are
 unchanged. Scenarios no longer wrap themselves in `isolated`, because the
 family test already runs them in an isolated child under the same deadline.
+
+The family declarations use `worktree_families!` to share the isolation and
+scenario runner while retaining all nine test names and their original row
+partitions. `Fixture::hosted` and `Fixture::with_checkout` build independent
+repositories and hosts; `Fixture::with_provider` installs the substitute CLI
+before applying the existing host-copy rules. The nested-repository scenario
+keeps its explicit provider path because it replaces the script between
+stages. `PreservedCandidate::feature` names the common candidate contents;
+`assert_fresh` shares the unchanged outcome, base-head and clean-tree checks
+between spec/discard and held-candidate retirement cases. Typed fixture record
+helpers share in-memory map reads and writes without sharing stores between
+scenarios or retaining a lock during dispatch. No scenario is retired.
