@@ -1795,6 +1795,22 @@ const historyForecast = {
   task_titles: { 'ORB-18901': 'Back in backlog', 'ORB-18918': 'Guarded head' },
   task_statuses: { 'ORB-18908': 'done', 'ORB-18901': 'done', 'ORB-18918': 'backlog' },
 };
+const renderDrainForecastScenario = async scenario => {
+  const terminal = scenario === 'terminal';
+  drainPhase = terminal ? 'idle' : 'draining';
+  drainRunId = terminal ? null : 'jrun-forecast-live';
+  pullDrainRunId = null;
+  pullDrainStopped = false;
+  drainTasksOverride = terminal
+    ? [{ task_id: 'ORB-18901', status: 'backlog', eligible: false, reason: 'gap_fit' }]
+    : null;
+  const forecast = terminal ? historyForecast : { ...enforceForecast, drain_live: true };
+  drainCapacityOverride = terminal
+    ? { admission_forecast: forecast, last_admission_forecast: forecast }
+    : { admission_forecast: forecast };
+  await fetchAndRenderAutoDrainPane();
+};
+globalThis.setDrainForecastScenarioForScreenshot = renderDrainForecastScenario;
 const historyStatus = (root, id) => root.querySelector(`a[href*="${id}"]`)?.closest('li')?.querySelector('.drain-forecast-task-status')?.textContent;
 drainTasksOverride = [{ task_id: 'ORB-18901', status: 'backlog', eligible: false, reason: 'gap_fit' }];
 drainCapacityOverride = { last_admission_forecast: historyForecast };
@@ -1805,6 +1821,33 @@ assert(ended?.querySelector('.drain-forecast-ended')?.textContent === 'window en
 assert(endedText.includes('Admitted at 03:59 UTC') && endedText.includes('Held at 03:59 UTC') && endedText.includes('Starvation guard protected at 03:59 UTC'), `retained decisions name when they were made (ORB-18957): ${endedText}`);
 assert(!/\bAdmitted (?!at )/.test(endedText) && !/\bHeld (?!at )/.test(endedText) && !endedText.includes('Starvation guard protects'), `a retained forecast has no present-tense admission line (ORB-18957): ${endedText}`);
 assert(historyStatus(ended, 'ORB-18908') === ' · done' && historyStatus(ended, 'ORB-18901') === ' · backlog' && historyStatus(ended, 'ORB-18918') === ' · backlog', `each retained task shows its current status (ORB-18957): done=${historyStatus(ended, 'ORB-18908')} held=${historyStatus(ended, 'ORB-18901')} guard=${historyStatus(ended, 'ORB-18918')}`);
+// A terminal pass that built its forecast is the same history, even while
+// readiness returns it in both the current-pass and last-built fields.
+const previousDrainState = { drainPhase, drainRunId, pullDrainRunId, pullDrainStopped };
+await renderDrainForecastScenario('terminal');
+const finalPassBuilt = forecastCard();
+const finalPassBuiltText = finalPassBuilt?.textContent || '';
+const finalPassBuiltHistory = finalPassBuilt?.querySelector('.drain-forecast-retained');
+assert(finalPassBuilt?.dataset.forecastState === 'retained' && !finalPassBuilt.querySelector('.drain-forecast-state'), `a terminal built pass renders as retained history without a no-forecast line: ${finalPassBuiltText}`);
+assert(finalPassBuilt.querySelectorAll('.drain-forecast-retained').length === 1, `the terminal current forecast supersedes its duplicate last forecast: ${finalPassBuiltText}`);
+assert(finalPassBuiltHistory?.querySelector('.drain-forecast-ended')?.textContent === 'window ended · nothing running', `a terminal built pass says its window ended: ${finalPassBuiltText}`);
+assert(finalPassBuiltText.includes('Admitted at 03:59 UTC') && finalPassBuiltText.includes('Held at 03:59 UTC') && finalPassBuiltText.includes('Starvation guard protected at 03:59 UTC'), `terminal decisions name when they were made: ${finalPassBuiltText}`);
+assert(!/\bAdmitted (?!at )/.test(finalPassBuiltText) && !/\bHeld (?!at )/.test(finalPassBuiltText) && !finalPassBuiltText.includes('Starvation guard protects'), `a terminal built pass has no present-tense decisions: ${finalPassBuiltText}`);
+assert(historyStatus(finalPassBuiltHistory, 'ORB-18908') === ' · done' && historyStatus(finalPassBuiltHistory, 'ORB-18901') === ' · backlog' && historyStatus(finalPassBuiltHistory, 'ORB-18918') === ' · backlog', `a terminal built pass shows each current task status: done=${historyStatus(finalPassBuiltHistory, 'ORB-18908')} held=${historyStatus(finalPassBuiltHistory, 'ORB-18901')} guard=${historyStatus(finalPassBuiltHistory, 'ORB-18918')}`);
+drainPhase = previousDrainState.drainPhase;
+drainRunId = previousDrainState.drainRunId;
+pullDrainRunId = previousDrainState.pullDrainRunId;
+pullDrainStopped = previousDrainState.pullDrainStopped;
+drainCapacityOverride = { admission_forecast: { ...enforceForecast, drain_live: true } };
+await fetchAndRenderAutoDrainPane();
+forecast = forecastCard();
+forecastText = forecast?.textContent || '';
+assert(forecast?.dataset.forecastState === 'built' && forecastText.includes('Admitted') && forecastText.includes('Held') && forecastText.includes('Starvation guard protects') && !forecastText.includes('Admitted at'), `a drain_live true enforce forecast keeps present-tense wording: ${forecastText}`);
+drainCapacityOverride = { admission_forecast: { ...enforceForecast, mode: 'shadow', drain_live: true } };
+await fetchAndRenderAutoDrainPane();
+forecast = forecastCard();
+forecastText = forecast?.textContent || '';
+assert(forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Would have'), `a drain_live true shadow forecast keeps hypothetical wording: ${forecastText}`);
 drainPhase = 'draining';
 drainCapacityOverride = { last_admission_forecast: { ...historyForecast, drain_live: true } };
 await fetchAndRenderAutoDrainPane();
