@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.35.0 — 2026-10-27
+
+### Breaking Changes
+
+- **Lease queue migration**: opening a workspace applies SQLite v67 (`task_reservation_lease_queue`). The migration is additive (three nullable columns older binaries never read) but changes persisted storage; upgrade hosts together. ([ORB-18553])
+- **Hard leases queue by default**: an overlapping hard `orbit.lease.request` now waits in the lease queue (`granted=false`, `queued=true`, holding nothing) instead of being refused, and `orbit.lease.list` includes queued leases.
+  Immediate refusal → pass `wait=false` (CLI `--no-wait`). ([ORB-18553])
+
+### Highlights
+
+- **Path lease queue and listener**: hard leases queue in priority-then-age order with aging, `orbit.lease.expand` adds paths with deadlock refusal, and the lease listener streams notices over SSE, terminates TLS natively and rate-limits every request. The dashboard gains a Leases view. ([ORB-18553])
+- **Backlog forecast v2**: the forecast simulates the drain's real admission, including dependencies, file locks, dispatch order, CPU and memory fit, blocked, failed and retried runs, review modes and expected regression rework. The drain card shows it on one line. ([ORB-18686])
+- **Task riskiness**: each task shows a regression riskiness score from its files' regression history, with the top driving files, on Tasks rows and in task detail. ([ORB-18690])
+- **Claim recovery and bulk settling**: `orbit task recover-claim` and `orbit.task.recover_claim` return a live follower claim to blocked or backlog, and the dashboard's Settle merged PRs button settles every task whose delivery PR merged. ([ORB-19071])
+- **Auto-task last fire**: `orbit.auto_task.list` reports each auto-task's last fire time, minted task and outcome, and routine retrieval exposes the last-fire run id and step outputs. ([ORB-19112])
+- **Held, not failed**: agent-declared task blocks, fail-closed `pr_complete` stops and required commands that fail identically on the base are recorded as held, so they no longer count as failed runs. ([ORB-18850])
+
 ## 0.34.0 — 2026-10-26
 
 ### Breaking Changes

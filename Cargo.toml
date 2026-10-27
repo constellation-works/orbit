@@ -34,7 +34,7 @@ codegen-units = 1
 strip = "symbols"
 
 [workspace.package]
-version = "0.34.0"
+version = "0.35.0"
 edition = "2024"
 license = "MIT"
 # MSRV [ORB-10010]: edition 2024 requires >= 1.85; the highest `rust-version`
