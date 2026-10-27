@@ -461,7 +461,7 @@ fn admit(
                     CiSweepAdmission::Superseded(outcome) => CheckedAdmission::Superseded(outcome),
                 })
         }
-        PromotionAuthority::Drain(drain) => drain_promotion::assess(
+        PromotionAuthority::Drain(drain) => drain_promotion::assess_drain_admission(
             context.action,
             task_id,
             snapshot,

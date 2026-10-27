@@ -25,11 +25,15 @@ use orbit_types::task::{
     TaskDecision, TaskHistoryEntry, TaskStatus, readiness_gaps,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::legacy_decisions;
-use crate::application::task::{PILOT_VERIFIED_NO_DIFF, UNVERIFIED_REVIEW_FINDING, VerifiedNoDiff};
+use crate::application::task::{
+    AdmissionClosure, PILOT_VERIFIED_NO_DIFF, PromotionDecision, UNVERIFIED_REVIEW_FINDING,
+    VerifiedNoDiff,
+};
 
 use super::apply::admission::{PreparedTaskSnapshot, ValidatedTask};
 use super::persist::{assessed_material_drift, with_task_locks};
@@ -154,10 +158,24 @@ impl DrainAuthority {
     }
 }
 
+/// A drain admission record, with approval and closure appended in persisted order.
+#[derive(Serialize)]
+pub(super) struct DrainAdmissionDecision {
+    pub(super) task_id: String,
+    pub(super) decision: PromotionDecision,
+    pub(super) classification: String,
+    pub(super) drain_run_id: String,
+    pub(super) evidence: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) approved: Option<bool>,
+    #[serde(flatten)]
+    pub(super) closure: AdmissionClosure,
+}
+
 /// Decide one task under drain authority. Pilot output that is malformed
 /// fails the task; every well-formed finding becomes a classified hold.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn assess(
+pub(super) fn assess_drain_admission(
     action: &str,
     task_id: &str,
     snapshot: &PreparedTaskSnapshot,
@@ -168,7 +186,7 @@ pub(super) fn assess(
     authority: &DrainAuthority,
     dependencies: &[String],
     is_done: &dyn Fn(&str) -> bool,
-) -> Result<Value, DispatchError> {
+) -> Result<Box<DrainAdmissionDecision>, DispatchError> {
     let disposition = assessment
         .get("disposition")
         .and_then(Value::as_str)
@@ -188,60 +206,88 @@ pub(super) fn assess(
 
     let (decision, classification, evidence) = if current.status != TaskStatus::Proposed {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             "not_proposed",
             json!(format!("task is {}", current.status)),
         )
     } else if auto_approval_opted_out(&current.tags) {
-        ("withhold", NO_AUTO_APPROVE_TAG, Value::Null)
+        (
+            PromotionDecision::Withhold,
+            NO_AUTO_APPROVE_TAG,
+            Value::Null,
+        )
     } else if let Some(finding) = &verified_no_diff {
-        ("withhold", PILOT_VERIFIED_NO_DIFF, finding.to_json())
+        (
+            PromotionDecision::Withhold,
+            PILOT_VERIFIED_NO_DIFF,
+            finding.to_json(),
+        )
     } else if let Some(reason) =
         approval_disqualification(&snapshot.tags, &snapshot.context_files, snapshot.complexity)
     {
-        ("withhold", reason, Value::Null)
+        (PromotionDecision::Withhold, reason, Value::Null)
     } else if !already_landed.is_null() {
-        ("withhold", "already_landed", already_landed.clone())
+        (
+            PromotionDecision::Withhold,
+            "already_landed",
+            already_landed.clone(),
+        )
     } else if !duplicate_of.is_null() {
-        ("withhold", "duplicate", duplicate_of.clone())
+        (
+            PromotionDecision::Withhold,
+            "duplicate",
+            duplicate_of.clone(),
+        )
     } else if let Some(finding) = release_action {
-        ("withhold", "release_action_required", finding.clone())
+        (
+            PromotionDecision::Withhold,
+            "release_action_required",
+            finding.clone(),
+        )
     } else if !warnings.is_empty() {
-        ("withhold", "warnings", json!(warnings))
+        (PromotionDecision::Withhold, "warnings", json!(warnings))
     } else if !no_diff && (disposition != "selectors" || selectors.is_empty()) {
         (
-            "withhold",
+            PromotionDecision::Withhold,
             "no_actionable_selectors",
             assessment.get("evidence").cloned().unwrap_or(Value::Null),
         )
     } else if !no_diff && !complexity.is_assessed() {
-        ("withhold", "unassessed_complexity", Value::Null)
+        (
+            PromotionDecision::Withhold,
+            "unassessed_complexity",
+            Value::Null,
+        )
     } else {
         (
-            "promote",
+            PromotionDecision::Promote,
             "verified_ready",
             json!(
                 "pilot validated the task with no duplicate, already-landed, conflict, or warning finding"
             ),
         )
     };
-    Ok(json!({
-        "task_id": task_id,
-        "decision": decision,
-        "classification": classification,
-        "drain_run_id": authority.run_id,
-        "evidence": evidence,
+    Ok(Box::new(DrainAdmissionDecision {
+        task_id: task_id.to_string(),
+        decision,
+        classification: classification.to_string(),
+        drain_run_id: authority.run_id.clone(),
+        evidence,
+        approved: None,
+        closure: Default::default(),
     }))
 }
 
 /// The typed decision a hold records on the pilot's own history entry.
-pub(super) fn hold_decision(admission: &Value) -> Option<TaskDecision> {
-    (admission["decision"] == "withhold")
-        .then(|| admission["classification"].as_str())
-        .flatten()
-        .map(|classification| TaskDecision::DrainApprovalHeld {
-            classification: classification.to_string(),
-        })
+pub(super) fn drain_admission_hold_decision(
+    admission: &DrainAdmissionDecision,
+) -> Option<TaskDecision> {
+    match admission.decision {
+        PromotionDecision::Withhold => Some(TaskDecision::DrainApprovalHeld {
+            classification: admission.classification.clone(),
+        }),
+        PromotionDecision::Promote => None,
+    }
 }
 
 /// What the drain's approve step did with a promoted task.

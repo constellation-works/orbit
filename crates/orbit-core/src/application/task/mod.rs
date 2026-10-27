@@ -144,8 +144,10 @@ pub use record_json::{task_record_json, task_show_field_json, task_show_json};
 pub(crate) use records::TaskRecords;
 pub(in crate::application) use review_port::TaskReviewPort;
 pub use screened::{ScreenedTaskWrite, TaskUpdateAuthority, TaskWriteScreen};
-pub(crate) use sweep_filing_port::CiSweepAdmission;
 pub(in crate::application) use sweep_filing_port::TaskSweepFilingPort;
+pub(crate) use sweep_filing_port::{
+    AdmissionClosure, CiSweepAdmission, CiSweepAdmissionDecision, PromotionDecision,
+};
 pub use transient_infra::TransientInfraBlockedTask;
 pub(crate) use validation_tools::positive_validation_tools;
 pub(in crate::application) use workspace_auto_port::TaskWorkspaceAutoPort;

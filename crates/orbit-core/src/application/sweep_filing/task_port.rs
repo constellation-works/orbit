@@ -21,7 +21,7 @@ impl TaskSweepFilingPort for OrbitRuntime {
         dependencies: &[String],
         is_done: &dyn Fn(&str) -> bool,
     ) -> Result<CiSweepAdmission, DispatchError> {
-        admission::assess(
+        admission::assess_ci_sweep_admission(
             action,
             task_id,
             task,
