@@ -20,8 +20,8 @@ This document proposes how path leases work. The lease row of §2, the advisory/
 of §3, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
 runtime operations, CLI, MCP and loopback REST surfaces (see §6). Phase 3 durable notices,
 including poll and SSE replay on Orbit Web and the lease listener, owner-clock lifetime
-handling and the phase-4 hard-lease queue with aging and expansion are implemented; preemption
-and the dashboard Leases view remain later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
+handling, the phase-4 hard-lease queue with aging and expansion, and the dashboard Leases view
+are implemented; preemption remains later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
 [conflict-budget](../conflict-budget/1_scope.md), and open directions to
 [3_vision.md](./3_vision.md).
 
@@ -298,7 +298,9 @@ changing state. It is what an editor hook calls: a Claude Code `PreToolUse` hook
 asks for an `expand` or warns. Enforcement stays advisory unless the hook is configured to deny.
 
 The dashboard gains a Leases view: active and queued leases per path, holders, and recent
-landing notices. `orbit task locks list` and the denial log show leases beside reservations.
+landing notices. **Implemented:** `#leases` reads `GET /api/leases` and pages
+`GET /api/leases/notices` through Orbit Web, with no operator session or lease token, and is
+read-only ([user-interface design §9b](../user-interface/2_design.md#9b-leases)). `orbit task locks list` and the denial log show leases beside reservations.
 
 ## 7. Authority and authentication
 

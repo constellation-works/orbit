@@ -281,6 +281,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         JS,
         include_bytes!("../assets/dashboard/js/plugins.js"),
     ),
+    (
+        "/static/js/leases.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/leases.js"),
+    ),
 ];
 pub(super) const DASHBOARD_CSP: &str = concat!(
     "default-src 'self'; ",

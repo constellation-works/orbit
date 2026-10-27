@@ -28,6 +28,7 @@ import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-run
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
+import { fetchAndRenderLeaseLandings, fetchAndRenderLeases } from './js/leases.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
@@ -1576,6 +1577,14 @@ function activeRefreshJobs() {
 
   if (activeTab === "operations") {
     add(subpanel("operations-subtabs", activeOperationsSubtab), fetchAndRenderOperations());
+    return jobs;
+  }
+
+  if (activeTab === "leases") {
+    // Path leases by path and the recent landing notices, each its own panel
+    // so a refused notice read (a replica checkout) leaves the leases shown.
+    add("Leases", fetchAndRenderLeases());
+    add("Leases › Landings", fetchAndRenderLeaseLandings());
     return jobs;
   }
 
