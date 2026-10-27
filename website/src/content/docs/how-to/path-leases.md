@@ -59,6 +59,104 @@ call is refused with a `400` asking you to pass `?workspace=<id>`. The
 examples use the conventional loopback address `http://127.0.0.1:7878`;
 substitute your server's port.
 
+## Network listener and scoped tokens
+
+Use the lease listener when people or agents need to coordinate paths over a
+network without access to the dashboard or the operator's Orbit store. On a
+Unix host, the separate listener serves only `/healthz` and lease routes; it
+forwards authenticated operations to Orbit Web over a Unix intake socket.
+The loopback dashboard examples on this page use a different authorization
+model and do not use listener tokens.
+
+An operator must provision the boundary before issuing tokens:
+
+1. Create a dedicated listener OS user with a protected Orbit home and an
+   initially empty `lease-tokens.db`, and a protected Orbit executable. The
+   operator and listener must be different users. Keep credentials and
+   workspaces out of the listener home. Access to that user must require
+   fresh operator authorization that agents cannot reuse.
+2. In the operator's global config set `lease.intake.peer_user` to the listener
+   user, then restart Orbit Web to create the intake socket. The operator must
+   belong to the listener user's primary group; the listener user needs search
+   permission on every directory leading to the socket.
+3. In the listener user's `~/.orbit/config.toml`, set `lease.listener.bind`
+   and the absolute `lease.listener.intake_socket` path printed by Orbit Web.
+   Run `orbit lease listen` as that user, normally as a service. Enable leases
+   in each workspace as described above.
+
+For provisioning and protecting the accounts, socket and service, consult the
+installed `orbit-setup` skill's `references/remote-access.md` resource. An
+agent should ask the operator to perform administrative steps; it should not
+attempt to become the listener user.
+
+For example, the listener user's global configuration can use native TLS:
+
+```toml
+[lease.listener]
+bind = "0.0.0.0:7480"
+intake_socket = "/home/operator/.orbit/run/lease-intake.sock"
+tls = { cert = "/var/lib/orbit-lease/tls/fullchain.pem", key = "/var/lib/orbit-lease/tls/key.pem" }
+```
+
+The PEM key must be unencrypted and private to its owner (mode `0600`); the
+certificate and key must match. Restart the listener after certificate rotation.
+Alternatively, use a TLS-terminating proxy, set `behind_proxy = true` and
+list its addresses or CIDRs in `trusted_proxy`. Restrict access so clients
+cannot bypass the proxy. The listener trusts `X-Forwarded-For` only from those
+proxies. Use TLS or another trusted encrypted network even on a specific
+non-loopback bind: bearer secrets need protection in transit. An all-interface
+bind requires TLS or the configured proxy.
+
+The operator runs token commands as the listener user, using that user's home:
+
+```bash
+orbit --workspace my-workspace lease token create --principal alice/agent \
+  --class agent --verbs lease --max-priority normal --hard never --expires 7d
+orbit lease token list
+orbit lease token revoke <token-id>
+```
+
+Creation prints the secret once; store and deliver it securely. The store
+keeps only its hash, and listing shows scope and state, never the secret.
+`--workspace` is required and accepts comma-separated workspaces. Give each
+person and agent a separate principal and token. `read` permits reads only;
+`lease` also permits lease writes. Defaults are class `human`, verbs `lease`,
+priority ceiling `high` for humans or `normal` for agents, hard leases allowed,
+and expiry after 30 days (maximum 365 days). Workspace ceilings also apply;
+the stricter limit wins. Expired or revoked tokens are refused on next use.
+Token commands are refused in an agent context.
+
+With a token scoped to `my-workspace`, send a bearer secret to the listener,
+not the dashboard. The listener supplies the token's principal and class:
+
+```bash
+curl -sS 'https://leases.example.com/api/leases?workspace=my-workspace' \
+  -H "Authorization: Bearer $LEASE_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"selectors":["file:src/api.ts"],"mode":"advisory"}'
+
+curl -sS 'https://leases.example.com/api/leases/notices?workspace=my-workspace&lease_id=LEASE_ID&after=0' \
+  -H "Authorization: Bearer $LEASE_TOKEN"
+
+curl -sSN 'https://leases.example.com/api/leases/events?workspace=my-workspace&lease_id=LEASE_ID' \
+  -H "Authorization: Bearer $LEASE_TOKEN" -H 'Last-Event-ID: 12'
+```
+
+Replace the host, workspace and lease ID with your own values. Poll again with
+the last notice sequence as `after`, or reconnect the SSE stream with its last
+`id` in `Last-Event-ID` (which takes precedence over `after`). A malformed
+cursor is refused. A read-only token cannot request a lease; an out-of-scope
+workspace or operation is refused. Invalid credentials receive `401`, and
+scope refusals receive `403`. Rate and concurrency limits can return `429` or
+`503`; oversized bodies return `413`. Defaults include 10 failed authentications
+per address per 300 seconds, 120 requests per address per minute, 60 reads and
+20 writes per token per minute, and two streams per token. See the
+[configuration reference](../../reference/config/) for all listener limits.
+
+The listener refuses startup as root or the intake socket's owner, when its
+executable or Orbit home is writable by another user, when bind or intake socket
+is unset, or when a proxy is declared without trusted proxy addresses. Invalid
+TLS material also refuses startup. An unavailable intake returns `503`.
+
 ## Advisory and hard leases
 
 | Mode | Granted | Blocks |
@@ -93,11 +191,12 @@ instead: the answer carries `"downgraded": true` and a `notice` saying so.
   for example `"dana"` or `"dana-laptop-agent"`. Send it in the JSON body or
   as `?principal=`; if you send both, they must match or the call is refused
   with a `400`. The name is attribution — it says who holds the paths.
-- **Principal class** is decided by the server process, not by the name you
-  send: `agent` when the calling process declares an agent or a managed run,
+- **Principal class** for the loopback dashboard API is decided by the server
+  process, not by the name you send: `agent` when the calling process declares an agent or a managed run,
   otherwise `human`. The class selects which `lease.hard.*` and
   `lease.max_priority.*` settings apply to the request. Treat the class and
-  its ceilings as a guard, not a security boundary.
+  its ceilings as a guard, not a security boundary. The network listener
+  instead uses the class in the authenticated token.
 - **`priority`**: `low`, `normal` or `high`. A request that names none gets
   `normal`, or the class ceiling when that is lower. Asking above the ceiling
   (`lease.max_priority.human` defaults to `high`,

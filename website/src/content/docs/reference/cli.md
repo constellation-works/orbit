@@ -164,6 +164,18 @@ keeps running leaves. `orbit run show` reports the claim stages.
 | `orbit run profiles` | This host's delivery resource profiles, one row per workspace, work class and complexity (`auto-task:<template>` profiles have none): completed deliveries, horizon, peak CPU and memory with the minute each occurs, the nearest-rank p50 and p90 of each delivery's own single-minute peak CPU and memory (these stay high when peaks fall in different minutes, and a sparse profile still shows them), and how much deliveries spread around them. Flags no-diff work that used more than 1 core for 2 minutes and names those deliveries; templates that build by design, such as `qa-sweep`, are exempt. `--json` adds the full per-minute series and those quantiles (`delivery_peak_cpu`, `delivery_peak_memory_bytes`). `--accuracy` instead compares the forecasts drains in `shadow` or `enforce` recorded over the last 30 days with the host's measured CPU and memory at +5, +10, +20 and +30 minutes (mean error, how often the forecast was under, worst miss), and counts per drain the tasks shadow would have held or added plus the tasks enforce admitted, the tasks gap fit held and the enforce pull requests held; with `--json` it adds the raw pairs and the held task ids. |
 | `orbit run settlements` | On an owner, the failure and release settlements that claimed leaves on follower hosts sent it, newest first, with each one's evidence class. Those leaves never appear in the owner's `run history`. `--since <time\|duration>`, `--json`, `--no-reconcile`. |
 
+### Leases
+
+| Command | Purpose |
+|---|---|
+| `orbit lease request` / `renew` / `expand` / `release` | Request or manage a workspace path lease. |
+| `orbit lease list` / `show` / `check` / `notices` | Inspect leases, conflicts and notices. |
+| `orbit lease token create` / `list` / `revoke` | Manage scoped listener tokens as the listener user. |
+| `orbit lease listen` | Run the token-only network listener as the listener user. |
+
+See [Hold paths with leases](../../how-to/path-leases/) for setup, scope,
+listener authentication and examples.
+
 ### Maintenance
 
 | Command | Purpose |
