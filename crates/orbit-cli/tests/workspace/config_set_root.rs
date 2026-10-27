@@ -248,6 +248,81 @@ fn config_set_preserves_bytes_and_confirmations_in_each_mode() {
 }
 
 #[test]
+fn config_set_rejects_supplied_type_without_blaming_the_saved_file() {
+    if crate::isolated_test::run_in_child(
+        "config_set_root::config_set_rejects_supplied_type_without_blaming_the_saved_file",
+    ) {
+        return;
+    }
+    let fixture = Fixture::layered();
+    let root = fixture.root.to_string_lossy().into_owned();
+    let workspace = fixture.repo.join(".orbit/config.toml");
+    for global in [true, false] {
+        let before = (
+            fs::read(fixture.global_config()).unwrap(),
+            fs::read(&workspace).unwrap(),
+        );
+        let mut args = if global {
+            vec!["--root", &root, "config", "set", "--global"]
+        } else {
+            vec!["config", "set"]
+        };
+        args.extend(["review.minutes", "abc", "--json"]);
+        let output = fixture.orbit(&args).failure().get_output().clone();
+        let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+        assert_eq!(error["code"], "invalid_input");
+        let message = error["error"].as_str().unwrap();
+        for fact in ["supplied", "review.minutes", "abc", "integer", "not saved"] {
+            assert!(message.contains(fact), "missing {fact:?}: {message}");
+        }
+        assert!(
+            !message.contains("invalid runtime config"),
+            "a rejected supplied value must not blame the saved file: {message}"
+        );
+        assert_eq!(
+            (
+                fs::read(fixture.global_config()).unwrap(),
+                fs::read(&workspace).unwrap(),
+            ),
+            before,
+            "refused edits leave both layers byte-identical"
+        );
+        let value_index = args.len() - 2;
+        args[value_index] = "30";
+        fixture.orbit(&args).success();
+        let path = if global {
+            fixture.global_config()
+        } else {
+            workspace.clone()
+        };
+        let document: toml::Value = toml::from_str(&fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(document["review"]["minutes"].as_integer(), Some(30));
+    }
+
+    // A bad value actually saved in a file still needs a load-time file diagnosis.
+    let mut document = fs::read_to_string(fixture.global_config())
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    document["review"]["minutes"] = toml_edit::value("abc");
+    fs::write(fixture.global_config(), document.to_string()).unwrap();
+    let output = fixture
+        .orbit(&["--root", &root, "config", "show", "--json"])
+        .failure()
+        .get_output()
+        .clone();
+    let error: serde_json::Value = serde_json::from_slice(&output.stderr).unwrap();
+    let message = error["error"].as_str().unwrap();
+    assert!(message.contains("invalid runtime config"), "{message}");
+    let file_label = PathBuf::from("~").join(".orbit/config.toml");
+    assert!(
+        message.contains(&*file_label.to_string_lossy()),
+        "{message}"
+    );
+    assert!(message.contains("review.minutes"), "{message}");
+}
+
+#[test]
 fn config_set_refusals_match_shared_admission_without_writes() {
     if crate::isolated_test::run_in_child(
         "config_set_root::config_set_refusals_match_shared_admission_without_writes",
