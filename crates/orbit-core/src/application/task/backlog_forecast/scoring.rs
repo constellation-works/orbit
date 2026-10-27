@@ -59,7 +59,7 @@ const METRICS: [&str; 3] = ["hours", "tokens", "usd"];
 const ABANDONED_OUTCOME_VERSION: u32 = 5;
 /// The first model version whose stored task forecast covers every
 /// simulated attempt, under `work_hours` rather than `hours`.
-const ATTEMPT_USAGE_VERSION: u32 = 10;
+pub(super) const ATTEMPT_USAGE_VERSION: u32 = 10;
 const TOTALS: [&str; 3] = ["time_to_drain_hours", "tokens", "usd"];
 
 /// What a stored task's hour quantiles measure in `version`.

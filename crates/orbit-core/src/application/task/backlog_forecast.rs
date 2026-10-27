@@ -215,6 +215,26 @@ fn window_spend(
         })
 }
 
+/// Task ids on stored model-10 forecasts. Their retry-inclusive actual is
+/// read from status episodes even after they leave the return window.
+fn attempt_cohort_ids(stored: &[StoredBacklogForecast]) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    for forecast in stored {
+        if forecast.model_version < scoring::ATTEMPT_USAGE_VERSION {
+            continue;
+        }
+        let Ok(rows) = serde_json::from_str::<Vec<Value>>(&forecast.tasks_json) else {
+            continue;
+        };
+        for row in rows {
+            if let Some(id) = row.get("id").and_then(Value::as_str) {
+                ids.insert(id.to_string());
+            }
+        }
+    }
+    ids
+}
+
 /// Read `id`'s status history once per forecast; `None` when unreadable.
 fn cached_history<'a>(
     runtime: &OrbitRuntime,
@@ -350,18 +370,28 @@ fn calculate_backlog_forecast(
     // a 90-day tail on its own. `updated_at` only narrows the candidates: a
     // transition cannot be newer than its task's last update. Running and
     // blocked tasks are always read, for their elapsed age.
+    //
+    // Model 10 scores a stored cohort's retry-inclusive work from the same
+    // episodes. A retained snapshot can outlive this window while the task's
+    // `updated_at` stays at completion, so every stored model-10 member with
+    // a current record is read too. Outcome and return samples below still
+    // admit only events inside their own windows.
     let return_start = lookback_start - Duration::days(outcomes::RETURN_WINDOW_DAYS);
-    let mut task_episodes: HashMap<String, TaskEpisodes> = HashMap::new();
-    let mut episode_ids: Vec<&String> = tasks
+    let mut episode_ids: BTreeSet<String> = tasks
         .iter()
         .filter(|(_, task)| {
             task.updated_at >= return_start
                 || matches!(task.status, TaskStatus::InProgress | TaskStatus::Blocked)
         })
-        .map(|(id, _)| id)
+        .map(|(id, _)| id.clone())
         .collect();
-    episode_ids.sort();
-    for id in episode_ids {
+    episode_ids.extend(
+        attempt_cohort_ids(&stored)
+            .into_iter()
+            .filter(|id| tasks.contains_key(id)),
+    );
+    let mut task_episodes: HashMap<String, TaskEpisodes> = HashMap::new();
+    for id in &episode_ids {
         if let Some(history) = cached_history(runtime, &mut histories, id) {
             task_episodes.insert(id.clone(), TaskEpisodes::read(history));
         }
