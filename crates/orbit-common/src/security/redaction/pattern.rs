@@ -60,45 +60,47 @@ impl PatternRedactor {
             // The key must end in an `api key` segment at a separator,
             // camel-case or all-caps `API` boundary (mirroring the log
             // window classifier), so `capiKey` and `api_keyboard` stay
-            // readable. An empty value has nothing to mask.
+            // readable. An empty value has nothing to mask. Separator
+            // whitespace is horizontal-only so an empty assignment never
+            // consumes a value from the following line.
             (
                 Regex::new(
-                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?\s*[:=]\s*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?[ \t]*[:=][ \t]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]${4}",
             ),
             (
                 Regex::new(
-                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?\s*[:=]\s*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?[ \t]*[:=][ \t]*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]${4}",
             ),
             (
                 Regex::new(
-                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?\s*[:=]\s*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]${3}",
             ),
             (
                 Regex::new(
-                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?\s*[:=]\s*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]${3}",
             ),
             (
                 Regex::new(
-                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?\s*[:=]\s*)(?:\[REDACTED[A-Z_]+\]|[^\s"',;\]\)}]+)"#,
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?[ \t]*[:=][ \t]*)(?:\[REDACTED[A-Z_]+\]|[^\s"',;\]\)}]+)"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]",
             ),
             (
                 Regex::new(
-                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?\s*[:=]\s*)(?:\[REDACTED[A-Z_]+\]|[^\s"',;\]\)}]+)"#,
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*)(?:\[REDACTED[A-Z_]+\]|[^\s"',;\]\)}]+)"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]",
