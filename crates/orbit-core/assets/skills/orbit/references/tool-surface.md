@@ -449,8 +449,8 @@ it returns a new linked run; preserve both IDs.
 
 ## Path leases
 
-`orbit.lease.request`, `.renew`, `.release`, `.show`, `.list` and `.check`
-are active tools on MCP (advertised as `orbit_lease_request`, etc.) and
+`orbit.lease.request`, `.renew`, `.expand`, `.release`, `.show`, `.list`,
+`.check` and `.notices` are active tools on MCP (advertised as `orbit_lease_request`, etc.) and
 `orbit tool run`. They all answer for the owner's coordination store and
 require an identified agent, operator or runner. Federated calls must target
 the owner; replicas refuse the `control_plane` class, including lease reads.
@@ -458,26 +458,36 @@ Enable `lease.enabled` in the workspace first.
 
 Request takes `principal`, `selectors` (`file:...` or `dir:...`), optional
 `mode` (`advisory` or `hard`), `priority` (`low`, `normal`, `high`),
-`ttl_seconds` (1–14400; default 1800), tags and branch/machine attribution.
-It returns `granted` and a `lease` with `lease_id`, mode, principal, priority
-and expiry, or `granted: false` with conflicting holders. Advisory never blocks;
-hard requests honor task locks, reservations and other hard leases. Workspace
+`ttl_seconds` (1–14400; default 1800), `wait` (default true), tags and
+branch/machine attribution. It returns `granted` and a `lease` with `lease_id`,
+mode, principal, priority and expiry. Advisory never blocks; a hard request
+overlapping task locks, reservations or other hard leases returns
+`granted: false, queued: true` with the holders and `queue_position`, and its
+lease (state `queued`) holds nothing until a `granted` notice; `wait: false`
+returns `queued: false` and the holders instead. The queue orders by priority,
+then age, and `lease.aging_minutes` lifts a long waiter one level. A lease
+never preempts an in-progress or review task. Workspace
 policy may downgrade hard to advisory or refuse priority above the caller's
 ceiling. Over SSH, principal/class policy is attribution and a guard.
 
 Renew, release and show take `lease_id`; renew optionally takes `ttl_seconds`.
-List returns active leases. Check takes `paths` and optional `lease_id` and
+Expand takes `lease_id` and `selectors`: free paths are `added` at once, and
+on a hard lease blocked ones are `queued` while the lease keeps what it holds.
+A mutual expansion wait refuses the younger, lower-priority expansion with a
+`deadlock` notice (`deadlock` is set in that caller's answer).
+List returns active leases, queued ones included. Check takes `paths` and optional `lease_id` and
 reports coverage, unlocked policy and overlapping holders without mutations.
 Show and list expire stale leases and can write expiry audit events.
 
 The CLI is `orbit lease request <selector>... --principal <name>
-[--mode advisory|hard | --hard] [--priority low|normal|high] [--ttl 30m]`,
-`renew <lease-id> [--ttl 30m]`, `release <lease-id>`, `show <lease-id>`,
-`list`, and `check <path>... [--lease-id <lease-id>]`. All support `--json`.
-A refused request exits 3. `orbit task locks list` shows leases alongside
+[--mode advisory|hard | --hard] [--priority low|normal|high] [--ttl 30m]
+[--no-wait]`, `renew <lease-id> [--ttl 30m]`, `expand <lease-id> <selector>...`,
+`release <lease-id>`, `show <lease-id>`, `list`, and
+`check <path>... [--lease-id <lease-id>]`. All support `--json`.
+A refused or queued request, and a deadlock-refused expansion, exit 3. `orbit task locks list` shows leases alongside
 reservations with mode and principal; task/reservation counts retain their
-existing meaning, with `by_lease` and `total_leases` added separately.
-Notices, hooks, queueing and automatic release on landing belong to later phases.
+existing meaning, with `by_lease` and `total_leases` added separately; a queued request holds
+nothing and is not listed there. Preemption belongs to a later phase.
 
 ## Missing operations
 

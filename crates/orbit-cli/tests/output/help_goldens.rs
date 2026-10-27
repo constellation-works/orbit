@@ -72,6 +72,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["lease"], "lease/root.txt"),
     (&["lease", "request"], "lease/request.txt"),
     (&["lease", "renew"], "lease/renew.txt"),
+    (&["lease", "expand"], "lease/expand.txt"),
     (&["lease", "release"], "lease/release.txt"),
     (&["lease", "show"], "lease/show.txt"),
     (&["lease", "list"], "lease/list.txt"),

@@ -529,6 +529,13 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<String>| resolve_choice(raw, "normal", "lease.max_priority.agent", &["low", "normal", "high"]),
     },
+    lease_aging_minutes: u32 => u32 {
+        key: "lease.aging_minutes", value_type: "integer",
+        description: "Minutes a queued hard-lease request or expansion waits before it moves up one priority level.",
+        section: ConfigSection::Housekeeping, order: 166,
+        tier: ConfigKeyTier::Advanced,
+        resolve: |raw: Option<u32>| resolve_bounded_count(raw, 30, 10_080, "lease.aging_minutes"),
+    },
     lease_intake_peer_user: Option<String> => String {
         key: "lease.intake.peer_user", value_type: "string",
         description: "OS user Orbit Web accepts lease operations from over its intake socket; unset serves no socket.",

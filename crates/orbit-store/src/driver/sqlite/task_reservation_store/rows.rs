@@ -19,9 +19,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static ROW_ID_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// `files`-scope rows that hold their paths: every task reservation and every
-/// hard lease. An advisory lease blocks nothing, so no overlap reader sees it.
+/// granted hard lease. An advisory lease blocks nothing and a queued lease
+/// request holds nothing, so no overlap reader or listing sees either.
 /// Written as "not advisory" so a mode this binary does not know still blocks.
-pub(super) const HOLDS_PATHS: &str = "mode != 'advisory'";
+pub(super) const HOLDS_PATHS: &str =
+    "mode != 'advisory' AND (queue_kind IS NULL OR queue_kind != 'request')";
 
 /// `files`-scope rows taken for tasks, as opposed to path leases.
 pub(super) const TASK_RESERVATION_ROWS: &str = "kind = 'task_reservation'";

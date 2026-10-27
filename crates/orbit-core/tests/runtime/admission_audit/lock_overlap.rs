@@ -86,6 +86,9 @@ fn task_scope_reserve_is_refused_by_a_hard_lease_and_granted_past_an_advisory_on
                 actor: "alice".into(),
                 ttl_seconds: 600,
                 token_id: None,
+                wait: false,
+                task_conflicts: Vec::new(),
+                aging_minutes: 30,
             })
             .expect("insert lease")
             .lease

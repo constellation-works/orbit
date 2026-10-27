@@ -1,4 +1,6 @@
 //! Owner-clock lifetime maintenance; forge failures never prevent TTL expiry.
+//! Each tick ends with a queue pass, so a hard lease waiting on a task that
+//! settled or a reservation that ended is granted within one tick.
 
 use std::time::Instant;
 
@@ -12,8 +14,9 @@ use super::super::audit::{emit_expired_lease_events, record_lease_audit_event};
 use super::super::commands::{workspace_orbit_dir, workspace_task_reservation_id};
 use crate::RuntimeKernel;
 
-/// Expire leases and warn at 80% of the current TTL, then release bound work
-/// proven landed. Called only by the owner's clock; dry runs do not call it.
+/// Expire leases and warn at 80% of the current TTL, release bound work
+/// proven landed, then grant queued leases whose paths are free. Called only
+/// by the owner's clock; dry runs do not call it.
 /// Errors checking one landing leave that lease to its TTL and do not stop
 /// checks for other leases. The shared tick deadline bounds new forge work.
 pub fn sweep_lease_lifetimes(runtime: &RuntimeKernel, deadline: Instant) -> Result<(), OrbitError> {
@@ -56,6 +59,7 @@ pub fn sweep_lease_lifetimes(runtime: &RuntimeKernel, deadline: Instant) -> Resu
             )?;
         }
     }
+    super::queue::grant_queued(runtime, "orbit.clock.tick")?;
     Ok(())
 }
 

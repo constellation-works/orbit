@@ -1,0 +1,21 @@
+Add selectors to a granted lease
+
+Usage: orbit lease expand [OPTIONS] <LEASE_ID> <SELECTORS>...
+
+Arguments:
+  <LEASE_ID>
+          Lease identifier returned by request
+
+  <SELECTORS>...
+          File or directory selectors to add
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

@@ -6,7 +6,8 @@ use orbit_types::tool::StoredTool;
 
 use crate::contracts::{AuditEventFilter, AuditEventInsertParams};
 use crate::contracts::{
-    AuditEventStoreBackend, LeaseInsertParams, LeaseInsertResult, LeaseListResult, LeaseMode,
+    AuditEventStoreBackend, LeaseExpandParams, LeaseExpandResult, LeaseInsertParams,
+    LeaseInsertResult, LeaseListResult, LeaseMode, LeaseQueueGrantParams, LeaseQueueGrantResult,
     LeaseRecord, LeaseReleaseParams, LeaseReleaseResult, LeaseRenewParams, LeaseRenewResult,
     PluginStoreBackend, TaskReservationCheckParams, TaskReservationCheckResult,
     TaskReservationListResult, TaskReservationOwnedConflictsParams,
@@ -326,23 +327,50 @@ impl TaskReservationStoreBackend for SqliteTaskReservationStoreBackend {
         self.in_boundary(|| self.store.list_owned_task_reservation_conflicts(&params))
     }
 
-    fn insert_lease(&self, params: LeaseInsertParams) -> Result<LeaseInsertResult, OrbitError> {
+    fn insert_lease(&self, mut params: LeaseInsertParams) -> Result<LeaseInsertResult, OrbitError> {
         // A hard lease must not land between an admission's readiness read
-        // and its commit, and must not overlap a frozen claim footprint.
+        // and its commit, and must not overlap a frozen claim footprint: a
+        // claimed task holds its paths like a running one, so the lease
+        // waits for it.
         self.in_boundary(|| {
             if params.mode == LeaseMode::Hard {
-                let conflicts = self
-                    .coordination
-                    .frozen_claim_conflicts(&params.selectors)?;
-                if !conflicts.is_empty() {
-                    return Ok(LeaseInsertResult {
-                        lease: None,
-                        conflicts,
-                        expired_leases: Vec::new(),
-                    });
-                }
+                params.task_conflicts.extend(
+                    self.coordination
+                        .frozen_claim_conflicts(&params.selectors)?,
+                );
             }
             self.store.insert_lease(&params)
+        })
+    }
+
+    fn expand_lease(&self, mut params: LeaseExpandParams) -> Result<LeaseExpandResult, OrbitError> {
+        self.in_boundary(|| {
+            params.task_conflicts.extend(
+                self.coordination
+                    .frozen_claim_conflicts(&params.selectors)?,
+            );
+            self.store.expand_lease(&params)
+        })
+    }
+
+    fn grant_queued_leases(
+        &self,
+        mut params: LeaseQueueGrantParams,
+    ) -> Result<LeaseQueueGrantResult, OrbitError> {
+        self.in_boundary(|| {
+            let waiting = self.store.inspect_active_leases(
+                &params.workspace_orbit_dir,
+                params.workspace_id.as_deref(),
+            )?;
+            for lease in waiting {
+                if let Some(conflicts) = params.task_conflicts.get_mut(&lease.lease_id) {
+                    conflicts.extend(
+                        self.coordination
+                            .frozen_claim_conflicts(&lease.queued_selectors)?,
+                    );
+                }
+            }
+            self.store.grant_queued_leases(&params)
         })
     }
 

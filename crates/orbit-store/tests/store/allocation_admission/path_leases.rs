@@ -25,6 +25,9 @@ fn lease_params(owner: &Coordinated, selector: &str, mode: LeaseMode) -> LeaseIn
         actor: "alice".into(),
         ttl_seconds: 600,
         token_id: None,
+        wait: false,
+        task_conflicts: Vec::new(),
+        aging_minutes: 30,
     }
 }
 

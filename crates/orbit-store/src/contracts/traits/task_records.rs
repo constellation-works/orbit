@@ -113,9 +113,19 @@ pub trait TaskReservationStoreBackend: Send + Sync {
         params: TaskReservationOwnedConflictsParams,
     ) -> Result<TaskReservationOwnedConflictsResult, OrbitError>;
 
-    /// Record a path lease, or report the task reservations and hard leases
-    /// that refuse a hard one.
+    /// Record a path lease, granted or queued, or report the holders that
+    /// refuse a hard one asked not to wait.
     fn insert_lease(&self, params: LeaseInsertParams) -> Result<LeaseInsertResult, OrbitError>;
+
+    /// Add selectors to a granted lease; blocked ones on a hard lease queue.
+    fn expand_lease(&self, params: LeaseExpandParams) -> Result<LeaseExpandResult, OrbitError>;
+
+    /// Grant waiting requests and expansions, in queue order, whose paths
+    /// are free.
+    fn grant_queued_leases(
+        &self,
+        params: LeaseQueueGrantParams,
+    ) -> Result<LeaseQueueGrantResult, OrbitError>;
 
     /// Move an active lease's `expires_at` forward.
     fn renew_lease(&self, params: LeaseRenewParams) -> Result<LeaseRenewResult, OrbitError>;

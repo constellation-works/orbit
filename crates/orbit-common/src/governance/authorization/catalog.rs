@@ -415,6 +415,16 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
     },
     GovernedOperation {
+        id: "orbit.lease.expand",
+        surface: OperationSurface::Tool,
+        allowed: &[
+            McpCapability::Agent,
+            McpCapability::Operator,
+            McpCapability::Runner,
+        ],
+        rationale: "path leases answer for the owner's coordination state, so the caller must be identified",
+    },
+    GovernedOperation {
         id: "orbit.lease.release",
         surface: OperationSurface::Tool,
         allowed: &[

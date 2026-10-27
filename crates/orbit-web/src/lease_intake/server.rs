@@ -507,10 +507,8 @@ fn run_operation(
             lease::renew_with_token(runtime, input, &grant)
         }
         LeaseIntakeOperation::Expand => {
-            return Err(LeaseIntakeError::new(
-                "not_available_in_this_phase",
-                "lease expansion is not available in this phase",
-            ));
+            ensure_principal_holds(runtime, &input, &scope.principal)?;
+            lease::expand_with_token(runtime, input, &grant)
         }
         LeaseIntakeOperation::Release => {
             ensure_principal_holds(runtime, &input, &scope.principal)?;

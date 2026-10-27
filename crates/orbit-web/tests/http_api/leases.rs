@@ -108,6 +108,7 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
             )
             .unwrap();
             std::fs::write(fixture.work.parent().unwrap().join("held.txt"), "held\n").unwrap();
+            std::fs::write(fixture.work.parent().unwrap().join("other.txt"), "other\n").unwrap();
             let runtime =
                 orbit_core::OrbitRuntime::from_roots(&fixture.global, &fixture.work).unwrap();
             let operator = fixture.server(true);
@@ -135,14 +136,15 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
             let refused = json_ok(operator.send(
                 "POST",
                 "/api/leases",
-                json!({"principal": "bob", "selectors": ["file:held.txt"], "mode": "hard"}),
+                json!({"principal": "bob", "selectors": ["file:held.txt"], "mode": "hard", "wait": false}),
             ));
             assert_eq!(refused["granted"], false);
+            assert_eq!(refused["queued"], false);
             assert_eq!(
                 refused,
                 lease::request(
                     &runtime,
-                    json!({"principal": "bob", "selectors": ["file:held.txt"], "mode": "hard"}),
+                    json!({"principal": "bob", "selectors": ["file:held.txt"], "mode": "hard", "wait": false}),
                     None,
                     None
                 )
@@ -191,19 +193,23 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
                 renewed["lease"],
                 lease::show(&runtime, json!({"lease_id": id})).unwrap()["lease"]
             );
-            error_code(
-                operator.send("POST", &format!("/api/leases/{id}/expand"), json!({})),
-                501,
-                "not_available_in_this_phase",
-            );
-            error_code(
+            assert_eq!(
                 operator
-                    .request("POST", &format!("/api/leases/{id}/expand"))
-                    .header("origin", &operator.origin)
-                    .send()
-                    .unwrap(),
-                501,
-                "not_available_in_this_phase",
+                    .send("POST", &format!("/api/leases/{id}/expand"), json!({}))
+                    .status(),
+                400,
+                "expand names the selectors to add"
+            );
+            let expanded = json_ok(operator.send(
+                "POST",
+                &format!("/api/leases/{id}/expand"),
+                json!({"selectors": ["file:other.txt"]}),
+            ));
+            assert_eq!(expanded["added"], json!(["file:other.txt"]), "{expanded}");
+            assert_eq!(expanded["queued"], json!([]), "{expanded}");
+            assert_eq!(
+                expanded["lease"],
+                lease::show(&runtime, json!({"lease_id": id})).unwrap()["lease"]
             );
             let default_renewal = json_ok(
                 operator
@@ -223,16 +229,6 @@ fn lease_routes_share_runtime_state_and_gate_writes() {
             );
             assert_eq!(empty_json_renewal["renewed"], true);
             assert_eq!(empty_json_renewal["lease"]["lease_id"], id);
-            error_code(
-                operator
-                    .request("POST", &format!("/api/leases/{id}/expand"))
-                    .header("origin", &operator.origin)
-                    .header("content-type", "application/json")
-                    .send()
-                    .unwrap(),
-                501,
-                "not_available_in_this_phase",
-            );
             for path in [
                 format!("/api/leases/{id}/renew"),
                 format!("/api/leases/{id}/expand"),

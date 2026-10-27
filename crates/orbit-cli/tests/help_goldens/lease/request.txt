@@ -35,6 +35,9 @@ Options:
       --branch <BRANCH>
           Working branch or #<pull-request-number> binding
 
+      --no-wait
+          Refuse an overlapping hard request instead of queueing it
+
       --ttl <TTL>
           Lifetime from now, e.g. 45m or 2h (default: 30m, maximum: 4h)
 
