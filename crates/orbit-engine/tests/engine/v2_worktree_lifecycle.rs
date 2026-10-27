@@ -3539,6 +3539,10 @@ struct LifecycleHost {
     pr_config: Mutex<orbit_engine::PrConfig>,
     /// Scripted `pr.status` answer for `pr_complete`.
     pr_status: Mutex<Option<Value>>,
+    /// When set, the agent envelope carries this host's task id, status and
+    /// write-refusal flag. Recovery tests use it for the leaf's terminal stop;
+    /// other fixtures leave it unset and keep an empty task context.
+    publish_task_context: bool,
 }
 
 type Widening = (String, ContextWideningStep, String, Vec<String>);
@@ -3590,6 +3594,7 @@ impl LifecycleHost {
             pr_status: Mutex::new(self.pr_status.lock().unwrap().clone()),
             unlocked_validation: Mutex::new(self.unlocked_validation.lock().unwrap().clone()),
             generated_paths: Mutex::new(self.generated_paths.lock().unwrap().clone()),
+            publish_task_context: self.publish_task_context,
             ..Self::default()
         }
     }
@@ -3764,6 +3769,28 @@ fn deterministic_activity(name: &str) -> ActivityV2 {
 impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
     fn pr_config(&self) -> orbit_engine::PrConfig {
         self.pr_config.lock().unwrap().clone()
+    }
+
+    fn task_context_for_agent_input(
+        &self,
+        _run_id: &str,
+        _step_id: &str,
+        input: &Value,
+    ) -> Result<Option<Value>, DispatchError> {
+        if !self.publish_task_context {
+            return Ok(None);
+        }
+        let Some(task_id) = input.get("task_id").and_then(Value::as_str) else {
+            return Ok(None);
+        };
+        let Some(task) = self.tasks.lock().unwrap().get(task_id).cloned() else {
+            return Ok(None);
+        };
+        Ok(Some(json!({
+            "id": task.id,
+            "status": task.status.cli_name(),
+            "terminal": orbit_types::task::refuses_implementer_writes(task.status),
+        })))
     }
 
     fn validation_subprocess_environment(&self) -> orbit_exec::ValidationEnvironment {

@@ -173,7 +173,14 @@ spec:
 
     1. Check identity before editing. Stop and return failed when:
        - the task refuses writes (terminal, or `orbit.task.update` rejects);
-       - the checked-out branch is not `failed_step_input.head`;
+       - when HEAD is attached, the checked-out branch is not
+         `failed_step_input.head`. If HEAD is detached during a stopped rebase,
+         use the retained rebase `head-name` (`refs/heads/<head>`) as the branch
+         identity only for the host-admitted rebase. Stop if it is missing or
+         differs from `failed_step_input.head`; detached HEAD, a live branch or
+         remote alone never establishes ownership. The host independently
+         authenticates the retained branch, original head, target and publication
+         chain and alone admits and continues the rebase;
        - `git rev-parse ORIG_HEAD` is not
          `failed_step_input.authenticated_published_head_sha`. Compare only that
          pin, never `head_sha`, `published_head_sha`, the live branch or the
