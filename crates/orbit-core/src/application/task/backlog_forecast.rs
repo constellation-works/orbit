@@ -27,6 +27,10 @@
 //!   admission module's forecast adapter). A task whose dependency the
 //!   forecast cannot schedule leaves the full-backlog totals unknown and is
 //!   reported with a schedulable subset (`dependencies.rs`).
+//! - Where the drain enforces gap fit, each simulated pass also fits
+//!   candidates against the host's CPU and memory, from this host's profiles,
+//!   size and baseline [ORB-18689] (`resource_fit.rs`). The ceiling stays the
+//!   upper bound; gap fit only holds work below it.
 //!
 //! The canonical forecast (default lookback, the live ceiling, no arrivals)
 //! is stored at most once per workspace per [`STORE_INTERVAL_MINUTES`], and
@@ -36,6 +40,7 @@
 mod dependencies;
 mod model;
 mod outcomes;
+mod resource_fit;
 mod review_modes;
 mod schedule;
 mod scoring;
@@ -43,6 +48,7 @@ mod scoring;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::OrbitRuntime;
+use crate::runtime::host_resource::profile::ProfileSource;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{BacklogForecastStoreBackend as _, StoredBacklogForecast};
@@ -606,9 +612,10 @@ fn calculate_backlog_forecast(
         .iter()
         .map(|(id, task)| (id.clone(), task.clone()))
         .collect();
+    let resource_fit = resource_fit::resource_fit_inputs(runtime, concurrency_source, now)?;
     // A blocked task re-enters the queue as backlog, with its own priority
     // and footprint.
-    let admission = runtime.forecast_admission(
+    let mut admission = runtime.forecast_admission(
         queued
             .iter()
             .map(|task| match task.status {
@@ -622,6 +629,9 @@ fn calculate_backlog_forecast(
         &workspace,
         now,
     );
+    if let Some(evidence) = resource_fit.evidence {
+        admission.fit_resources(evidence);
+    }
     let forecast = model::simulate_backlog_forecast(
         &items,
         &resolved,
@@ -654,6 +664,8 @@ fn calculate_backlog_forecast(
             ("return_unsupported", 0),
             ("return_tail_unsupported", 0),
             ("phase_age_unknown", 0),
+            ("resource_profile_fallbacks", 0),
+            ("resource_profile_missing", 0),
             (
                 "history_review_mode_unknown",
                 history
@@ -702,6 +714,11 @@ fn calculate_backlog_forecast(
             }
             if admission.overlaps_review_lock(index) {
                 bump("review_lock_overlaps");
+            }
+            match admission.profile_source(index) {
+                Some(ProfileSource::None) => bump("resource_profile_missing"),
+                Some(ProfileSource::Exact) | None => {}
+                Some(_) => bump("resource_profile_fallbacks"),
             }
             for _ in 0..plan.unverifiable[index] {
                 bump("unverifiable_dependencies");
@@ -755,6 +772,7 @@ fn calculate_backlog_forecast(
         "concurrency": concurrency,
         "concurrency_source": concurrency_source,
         "auto_concurrency_mode": runtime.auto_concurrency_settings().mode,
+        "resource_fit": resource_fit.report,
         "arrivals": options.arrivals,
         "iterations": model::ITERATIONS,
         "horizon_hours": schedule::HORIZON_HOURS,
@@ -831,6 +849,7 @@ fn calculate_backlog_forecast(
                         .map(|dep| items[*dep].task_id.as_str())
                         .collect::<Vec<_>>(),
                     "footprint": admission.surface_hash(index),
+                    "profile_source": admission.profile_source(index).map(|source| source.as_str()),
                     "unforecastable": plan.backlog[index],
                     "predicted_start_hours": field("predicted_start_hours"),
                     "predicted_start_rank": field("predicted_start_rank"),
@@ -881,6 +900,10 @@ fn calculate_backlog_forecast(
             // no lock, and static eligibility gates are not replayed.
             "review_lock_holders": "not_modelled",
             "arrival_conflicts": "slot_only",
+            // Gap fit judges initial tasks only where `inputs.resource_fit`
+            // says it applied; arrivals take a slot without a profile.
+            "resource_fit": "enforce_mode_gap_fit",
+            "arrival_resources": "not_modelled",
             "static_eligibility": "not_modelled",
         },
         "backlog": {

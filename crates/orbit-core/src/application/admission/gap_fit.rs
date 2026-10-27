@@ -43,7 +43,7 @@ use crate::runtime::host_resource::delivery::work_class;
 use crate::runtime::host_resource::forecast::{
     AdmissionReservationRequest, ForecastGap, GapMiss, GapResource, HostLoadForecast,
 };
-use crate::runtime::host_resource::profile::{ProfileLookup, ResourceProfile};
+use crate::runtime::host_resource::profile::{ProfileLookup, ProfileMatch, ResourceProfile};
 
 /// How far, in percentage points, a head's miss must fall below the one its
 /// stall is measured against to count as an improvement. Smaller moves are
@@ -221,6 +221,20 @@ impl<'a> GapFit<'a> {
     pub(crate) fn admits(&mut self, task: &Task) -> bool {
         let lookup = task_lookup(self.workspace_id, task);
         let found = self.forecast.profiles.lookup(&lookup);
+        if !self.admits_priced(task, &found) {
+            return false;
+        }
+        self.reservations.push(AdmissionReservationRequest {
+            task_id: task.id.clone(),
+            lookup,
+        });
+        true
+    }
+
+    /// [`Self::admits`] for a candidate already priced by `found`, reserving
+    /// nothing: the backlog forecast's simulated passes [ORB-18689], which
+    /// price each task once per forecast.
+    pub(crate) fn admits_priced(&mut self, task: &Task, found: &ProfileMatch) -> bool {
         let profile_source = found.source.as_str().to_string();
         if let Some(head) = self.head.as_ref().filter(|head| head.protected) {
             self.skipped.push(GapFitSkip {
@@ -268,10 +282,6 @@ impl<'a> GapFit<'a> {
             task_id: task.id.clone(),
             profile_source,
             idle_host: idle_host.map(|admission| admission.describe()),
-        });
-        self.reservations.push(AdmissionReservationRequest {
-            task_id: task.id.clone(),
-            lookup,
         });
         true
     }

@@ -196,7 +196,12 @@ fn unrecorded_start(load: &AdmissionLoad, delivery: &RunningDelivery) -> Option<
 }
 
 /// `P_i(a_i + t) · alive_i(a_i + t) / alive_i(a_i)` for each `t`.
-fn add_running(profile: &ResourceProfile, age: usize, cpu: &mut [f64], memory: &mut [MemoryTerms]) {
+pub(super) fn add_running(
+    profile: &ResourceProfile,
+    age: usize,
+    cpu: &mut [f64],
+    memory: &mut [MemoryTerms],
+) {
     let alive_now = profile.series[age].alive;
     for (t, minute) in profile.series[age..].iter().take(cpu.len()).enumerate() {
         let still_running = minute.alive / alive_now;
@@ -206,7 +211,7 @@ fn add_running(profile: &ResourceProfile, age: usize, cpu: &mut [f64], memory: &
 }
 
 /// The series of `minutes`, which already count `baseline`.
-fn series(baseline: Option<f64>, minutes: Vec<f64>) -> ForecastSeries {
+pub(super) fn series(baseline: Option<f64>, minutes: Vec<f64>) -> ForecastSeries {
     let peak = minutes.iter().enumerate().fold(
         ProfilePeak {
             minute: 0,

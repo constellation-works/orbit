@@ -20,14 +20,16 @@ use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 /// forecast means, so calibration can tell versions apart. 4: review-mode
 /// sampling and explicit mode-pooled fallback [ORB-18687]. 5: blocked,
 /// failed and abandoned attempts, returns and blocked tasks [ORB-18688].
-pub(super) const MODEL_VERSION: u32 = 5;
+/// 6: gap fit holds work below the ceiling where the drain enforces it
+/// [ORB-18689].
+pub(super) const MODEL_VERSION: u32 = 6;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
     ("admission", Some(1)),
     ("review_modes", Some(1)),
     ("outcomes", Some(1)),
-    ("resource_fit", None),
+    ("resource_fit", Some(1)),
     ("regression_rework", None),
 ];
 /// Simulated drains per forecast.
@@ -598,7 +600,7 @@ struct Outcome {
     critical_path: Vec<Option<f64>>,
     parallelism: Vec<Option<f64>>,
     /// Per [`ForecastWait::ALL`] reason: summed task wait hours.
-    waits: [Vec<Option<f64>>; 5],
+    waits: [Vec<Option<f64>>; schedule::WAITS],
     /// Summed task-hours waiting to return after leaving the queue.
     return_waits: Vec<Option<f64>>,
     /// Over available iterations: attempts started that were blocked,
@@ -789,6 +791,10 @@ impl Outcome {
                     "review_mode_fallback": resolved[index].review_mode_fallback,
                     "cell_samples": resolved[index].cell_samples,
                     "unforecastable": reasons[index],
+                    "profile_source": scenario
+                        .admission
+                        .profile_source(index)
+                        .map(|source| source.as_str()),
                     "predicted_start_hours": quantiles(&mut self.starts[index]),
                     "predicted_start_rank": quantiles(&mut self.ranks[index]),
                     "started_probability": scheduled.then(|| probability(started, available)).flatten(),
@@ -857,6 +863,7 @@ pub(super) fn simulate_backlog_forecast(
     let mut rng = Rng(SEED);
     let has_proposed = items.iter().any(|item| item.proposed);
     let in_progress: Vec<bool> = items.iter().map(|item| item.in_progress).collect();
+    let age_hours: Vec<f64> = items.iter().map(|item| item.age_hours).collect();
     let members = |include_proposed: bool| -> Vec<usize> {
         (0..items.len())
             .filter(|index| include_proposed || !items[*index].proposed)
@@ -866,7 +873,14 @@ pub(super) fn simulate_backlog_forecast(
         let included = (0..items.len())
             .map(|index| (include_proposed || !items[index].proposed) && reasons[index].is_none())
             .collect();
-        Scenario::new(admission, &plan.edges, included, &in_progress, slots)
+        Scenario::new(
+            admission,
+            &plan.edges,
+            included,
+            &in_progress,
+            &age_hours,
+            slots,
+        )
     };
     let backlog_scenario = scenario(false, &plan.backlog);
     let approved_scenario = has_proposed.then(|| scenario(true, &plan.approved));

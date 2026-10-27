@@ -59,12 +59,14 @@ mod fit;
 mod host_load;
 mod memory;
 mod record;
+mod simulated;
 
 pub(crate) use build::build_forecast;
 pub use fit::{ForecastGap, GapMiss, GapResource, IdleHostAdmission};
 pub(crate) use host_load::HostLoadProbe;
 pub(crate) use memory::MemoryTerms;
 pub use record::{ACCURACY_OFFSETS, ForecastPoints};
+pub use simulated::{SimulatedDelivery, SimulatedHost, simulated_forecast};
 
 /// Minutes after which a reservation whose run never appeared leaves the
 /// forecast.
