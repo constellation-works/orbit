@@ -77,6 +77,17 @@ macro_rules! lifecycle_methods {
         fn get_task_artifacts(&self, task_id: &str) -> Result<Vec<TaskArtifact>, OrbitError>;
         fn get_task_comments(&self, task_id: &str) -> Result<Vec<TaskComment>, OrbitError>;
         fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError>;
+        /// A dependency's body read through its registered owner, as
+        /// `resolved_dependencies` resolves it. `None` when no workspace
+        /// registered on this machine owns it (dangling or foreign), never a
+        /// `not_found` error for that case.
+        fn get_dependency_task(&self, task_id: &str) -> Result<Option<Task>, OrbitError>;
+        /// A dependency's history through its registered owner. `None` when
+        /// no workspace registered on this machine owns it.
+        fn get_dependency_history(
+            &self,
+            task_id: &str,
+        ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError>;
         fn list_tasks_filtered(
             &self,
             status: Option<TaskStatus>,
