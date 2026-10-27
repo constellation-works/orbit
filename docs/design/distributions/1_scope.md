@@ -135,8 +135,11 @@ config:                     # only keys `orbit config set` accepts
 `orbit workspace init --preset <file>` applies it to a new or an existing workspace:
 
 1. **Validated before any write.** Unknown fields are refused, and so is any `config` key
-   that `orbit config set` refuses. A preset has no field that grants a permission, enables
-   a plugin or names a crew pool, so it cannot ask for one.
+   that `orbit config set` refuses, including `seeding.*`, which belongs in `[seeding]`. An
+   `[enable]` name that an enabled plugin has already seeded must have its seeded file present
+   and loadable, as the plugin asset manifest records it, and a stale name refuses the whole
+   preset. The file is capped at 256 KiB. A preset has no field that grants a permission,
+   enables a plugin or names a crew pool, so it cannot ask for one.
 2. **Recorded.** The workspace records the preset's `name` and the digest of its bytes,
    beside the seeding policy it wrote. Applying the same file again is a no-op. Applying a
    changed file is an update, and it follows the policy rules above.

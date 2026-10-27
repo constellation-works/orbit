@@ -10,16 +10,19 @@
 //! plugin still seeds its own definitions disabled.
 //!
 //! Everything is validated before anything is written: an unknown field, a
-//! grant or plugin-enable request, a key `orbit config set` refuses, and a
-//! definition no plugin seeded here all fail the whole preset. The applied
-//! preset's name and the SHA-256 of its bytes are recorded under
-//! `.orbit/state/` for provenance.
+//! grant or plugin-enable request, a key `orbit config set` refuses, a
+//! definition no plugin seeded here, and a seeded definition whose file is
+//! missing or does not load all fail the whole preset. The applied preset's
+//! name and the SHA-256 of its bytes are recorded under `.orbit/state/` for
+//! provenance.
 
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
-use orbit_automation::auto_tasks::loader::AUTO_TASKS_DIR;
-use orbit_automation::routines::loader::ROUTINES_DIR;
+use orbit_automation::auto_tasks::loader::{AUTO_TASKS_DIR, collect_auto_tasks};
+use orbit_automation::routines::loader::{
+    ROUTINES_DIR, RoutineCatalogLookup, RoutineSource, collect_routines_with_skips,
+};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_common::security::release::sha256_hex;
@@ -178,18 +181,22 @@ impl WorkspacePreset {
     /// Check, without writing, that every config key this preset sets is
     /// admitted for the workspace at `workspace_orbit_root` exactly as
     /// `orbit config set` would admit it, and that every definition it
-    /// enables is one a plugin seeded there.
+    /// enables is one a plugin seeded there whose file still loads.
     pub fn validate_for_workspace(
         &self,
         global_root: &Path,
         workspace_orbit_root: &Path,
     ) -> Result<(), OrbitError> {
+        // Loadability is decided before the config store is staged, so a
+        // missing or unloadable definition refuses the preset with no write.
+        self.require_plugin_seeded(workspace_orbit_root)?;
+        self.require_seeded_definitions_load(workspace_orbit_root)?;
         if self.sets_config() {
             let path = workspace_orbit_root.join("config.toml");
             let store = self.staged_store(global_root, &path, WorkspaceInitMode::SeedFromGlobal)?;
             drop(store);
         }
-        self.require_plugin_seeded(workspace_orbit_root)
+        Ok(())
     }
 
     /// Write the preset's config keys into the workspace `config.toml`, in one
@@ -278,6 +285,87 @@ impl WorkspacePreset {
         Ok(())
     }
 
+    /// Refuse an `[enable]` name whose seeded file is missing or does not
+    /// load. Catalog membership is resolved again when the preset is enabled,
+    /// after bootstrap has seeded jobs and loaded plugins; replaying that
+    /// lookup before registration would reject a definition the enable step
+    /// can still load. A callback that accepts every parsed target still
+    /// drops a missing file, a parse failure and an invalid trigger.
+    fn require_seeded_definitions_load(
+        &self,
+        workspace_orbit_root: &Path,
+    ) -> Result<(), OrbitError> {
+        self.require_routines_load(workspace_orbit_root)?;
+        self.require_auto_tasks_load(workspace_orbit_root)
+    }
+
+    fn require_routines_load(&self, workspace_orbit_root: &Path) -> Result<(), OrbitError> {
+        if self.enable_routines.is_empty() {
+            return Ok(());
+        }
+        let source = RoutineSource {
+            workspace: "workspace".to_string(),
+            orbit_dir: workspace_orbit_root.to_path_buf(),
+        };
+        let collection = collect_routines_with_skips(
+            &[source],
+            &|_root, _job| RoutineCatalogLookup {
+                resolves: true,
+                error: None,
+            },
+            &|_path, _definition| None,
+        );
+        let dir = workspace_orbit_root.join(ROUTINES_DIR);
+        for name in &self.enable_routines {
+            if collection.routines.iter().any(|loaded| {
+                seeded_file_matches(&dir, name, &loaded.path, &loaded.definition.name)
+            }) {
+                continue;
+            }
+            let detail = collection.errors.iter().find_map(|error| {
+                error
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| file_stem_is(path, name))
+                    .then_some(error.message.as_str())
+            });
+            return Err(unloadable_definition(
+                &self.name, "routine", name, &dir, detail,
+            ));
+        }
+        Ok(())
+    }
+
+    fn require_auto_tasks_load(&self, workspace_orbit_root: &Path) -> Result<(), OrbitError> {
+        if self.enable_auto_tasks.is_empty() {
+            return Ok(());
+        }
+        let collection = collect_auto_tasks(workspace_orbit_root);
+        let dir = workspace_orbit_root.join(AUTO_TASKS_DIR);
+        for name in &self.enable_auto_tasks {
+            if collection.definitions.iter().any(|loaded| {
+                seeded_file_matches(&dir, name, &loaded.path, &loaded.definition.name)
+            }) {
+                continue;
+            }
+            let detail = collection.errors.iter().find_map(|error| {
+                error
+                    .path
+                    .as_ref()
+                    .is_some_and(|path| file_stem_is(path, name))
+                    .then_some(error.message.as_str())
+            });
+            return Err(unloadable_definition(
+                &self.name,
+                "auto-task",
+                name,
+                &dir,
+                detail,
+            ));
+        }
+        Ok(())
+    }
+
     /// Record this preset as the one last applied to the workspace.
     pub fn record_applied(&self, workspace_orbit_root: &Path) -> Result<(), OrbitError> {
         let record = AppliedWorkspacePreset {
@@ -336,6 +424,40 @@ pub fn applied_workspace_preset(
 
 fn applied_preset_path(workspace_orbit_root: &Path) -> PathBuf {
     workspace_orbit_root.join(APPLIED_PRESET_FILE)
+}
+
+fn file_stem_is(path: &Path, name: &str) -> bool {
+    path.file_stem().and_then(|stem| stem.to_str()) == Some(name)
+}
+
+fn seeded_file_matches(dir: &Path, name: &str, loaded_path: &Path, loaded_name: &str) -> bool {
+    loaded_name == name
+        && std::fs::canonicalize(dir.join(format!("{name}.yaml")))
+            .ok()
+            .zip(std::fs::canonicalize(loaded_path).ok())
+            .is_some_and(|(seeded, loaded)| seeded == loaded)
+}
+
+/// Refusal for one `[enable]` name, naming that definition.
+fn unloadable_definition(
+    preset: &str,
+    kind: &str,
+    name: &str,
+    dir: &Path,
+    detail: Option<&str>,
+) -> OrbitError {
+    let path = dir.join(format!("{name}.yaml"));
+    let because = if !path.is_file() {
+        "the seeded file is missing".to_string()
+    } else if let Some(detail) = detail.filter(|detail| !detail.is_empty()) {
+        detail.to_string()
+    } else {
+        "the seeded file does not load".to_string()
+    };
+    OrbitError::InvalidInput(format!(
+        "preset '{preset}' enables {kind} '{name}', which a plugin seeded into this workspace \
+         but which does not load: {because}"
+    ))
 }
 
 fn refuse_plugin_consent(document: &toml::Table) -> Result<(), String> {
