@@ -112,9 +112,21 @@ fn clock_records_canonical_forecasts_without_endpoint_reads() {
                 .unwrap()
                 .remove("lookback_start");
             assert_eq!(read_inputs, stored_inputs);
+            // Per-task predictions are stored with each task, not twice.
+            let mut read_forecast = read["forecast"].clone();
+            let predictions = read_forecast
+                .as_object_mut()
+                .unwrap()
+                .remove("task_predictions")
+                .unwrap();
             assert_eq!(
-                read["forecast"],
+                read_forecast,
                 serde_json::from_str::<Value>(&rows[0].result_json).unwrap()
+            );
+            let stored_tasks: Value = serde_json::from_str(&rows[0].tasks_json).unwrap();
+            assert_eq!(
+                stored_tasks[0]["predicted_start_hours"],
+                predictions[0]["predicted_start_hours"]
             );
             forecast_tick(&fixture, now + Duration::minutes(59), false);
             assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
@@ -414,8 +426,13 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
                 1.0
             );
             assert_eq!(calibration["forecasts"][0]["scored_whole"], true);
+            // A model-1 forecast is scored under its own version, never
+            // blended into the current model's hit rates.
+            assert_eq!(calibration["model_version"], before["model_version"]);
+            assert_eq!(calibration["forecast_level"]["time_to_drain_hours"]["n"], 0);
+            assert_eq!(calibration["by_model_version"][0]["model_version"], 1);
             assert_eq!(
-                calibration["forecast_level"]["time_to_drain_hours"],
+                calibration["by_model_version"][0]["forecast_level"]["time_to_drain_hours"],
                 json!({"n": 1, "under_p50": 1.0, "under_p90": 1.0})
             );
 
@@ -564,6 +581,301 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
                 assert_eq!(on["arrivals"]["coverage"], coverage);
                 assert_eq!(off["arrivals"]["coverage"], coverage);
             }
+        },
+    );
+}
+
+/// Five identical one-hour medium deliveries, so every draw is one hour.
+fn one_hour_history(fixture: &Fixture) {
+    for _ in 0..5 {
+        completed(fixture, Utc::now() - Duration::days(1));
+    }
+}
+
+fn backlog_task(
+    fixture: &Fixture,
+    title: &str,
+    context_files: &[&str],
+    tags: &[&str],
+    dependencies: &[&str],
+) -> String {
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: title.into(),
+            complexity: TaskComplexity::Medium,
+            status: Some(TaskStatus::Backlog),
+            context_files: context_files.iter().map(|path| path.to_string()).collect(),
+            tags: tags.iter().map(|tag| tag.to_string()).collect(),
+            dependencies: dependencies.iter().map(|id| id.to_string()).collect(),
+            ..Default::default()
+        })
+        .unwrap()
+        .id
+        .to_string()
+}
+
+fn drain_hours(forecast: &Value) -> (f64, f64) {
+    let hours = &forecast["forecast"]["time_to_drain_hours"];
+    (
+        hours["p50"].as_f64().unwrap(),
+        hours["p90"].as_f64().unwrap(),
+    )
+}
+
+fn prediction<'a>(forecast: &'a Value, id: &str) -> &'a Value {
+    forecast["forecast"]["task_predictions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap()
+}
+
+#[test]
+fn dependency_chain_runs_in_sequence_despite_free_slots() {
+    isolated(
+        "backlog_forecast::dependency_chain_runs_in_sequence_despite_free_slots",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let a = backlog_task(&fixture, "Chain A", &["file:a.rs"], &[], &[]);
+            let b = backlog_task(&fixture, "Chain B", &["file:b.rs"], &[], &[&a]);
+            let c = backlog_task(&fixture, "Chain C", &["file:c.rs"], &[], &[&b]);
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=4")));
+            assert_eq!(forecast["model_version"], 3);
+            // Every draw is one hour, so every iteration drains in exactly the
+            // chain's three hours: never in the one hour three free slots give.
+            assert_eq!(
+                drain_hours(&forecast),
+                (3.0, 3.0),
+                "{}",
+                forecast["forecast"]
+            );
+            let parallelism = &forecast["forecast"]["effective_parallelism"];
+            assert_eq!(parallelism["p50"], 1.0);
+            assert_eq!(forecast["forecast"]["critical_path_hours"]["p90"], 3.0);
+            for (id, start) in [(&a, 0.0), (&b, 1.0), (&c, 2.0)] {
+                assert_eq!(
+                    prediction(&forecast, id)["predicted_start_hours"]["p50"],
+                    start
+                );
+            }
+            assert_eq!(
+                forecast["forecast"]["wait_hours"]["dependency"]["p50"], 3.0,
+                "B waits one hour and C two on their dependencies"
+            );
+            assert_eq!(forecast["forecast"]["completion_probability"], 1.0);
+        },
+    );
+}
+
+#[test]
+fn overlapping_locks_serialize_and_unknown_footprints_run_alone() {
+    isolated(
+        "backlog_forecast::overlapping_locks_serialize_and_unknown_footprints_run_alone",
+        || {
+            for (case, tasks, expected) in [
+                // Overlapping editing surfaces never run side by side.
+                (
+                    "overlap",
+                    vec![(vec!["file:src/lib.rs"], vec![]), (vec!["dir:src"], vec![])],
+                    2.0,
+                ),
+                (
+                    "disjoint",
+                    vec![
+                        (vec!["file:src/a.rs"], vec![]),
+                        (vec!["file:src/b.rs"], vec![]),
+                    ],
+                    1.0,
+                ),
+                // No-diff work holds no lock, so overlapping no-diff tasks run
+                // together.
+                (
+                    "no-diff",
+                    vec![
+                        (vec!["file:src/lib.rs"], vec!["no-diff-expected"]),
+                        (vec!["file:src/lib.rs"], vec!["no-diff-expected"]),
+                    ],
+                    1.0,
+                ),
+                // Editing work with no footprint holds the whole tree.
+                (
+                    "no-footprint",
+                    vec![
+                        (vec![], vec![]),
+                        (vec!["file:src/a.rs"], vec![]),
+                        (vec!["file:src/b.rs"], vec![]),
+                    ],
+                    2.0,
+                ),
+            ] {
+                let fixture = Fixture::new();
+                one_hour_history(&fixture);
+                for (index, (files, tags)) in tasks.iter().enumerate() {
+                    backlog_task(&fixture, &format!("{case} {index}"), files, tags, &[]);
+                }
+                let server = fixture.server(false);
+                let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=3")));
+                assert_eq!(
+                    drain_hours(&forecast),
+                    (expected, expected),
+                    "{case}: {}",
+                    forecast["forecast"]
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn queue_follows_the_drains_dispatch_order() {
+    isolated(
+        "backlog_forecast::queue_follows_the_drains_dispatch_order",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let mut ids = Vec::new();
+            for (title, priority) in [
+                ("Oldest low", orbit_types::task::TaskPriority::Low),
+                ("Medium", orbit_types::task::TaskPriority::Medium),
+                ("Newest critical", orbit_types::task::TaskPriority::Critical),
+                ("Newest high", orbit_types::task::TaskPriority::High),
+            ] {
+                ids.push(
+                    fixture
+                        .runtime
+                        .add_task(TaskAddParams {
+                            title: title.into(),
+                            complexity: TaskComplexity::Medium,
+                            status: Some(TaskStatus::Backlog),
+                            context_files: vec![format!("file:{title}.rs")],
+                            priority,
+                            ..Default::default()
+                        })
+                        .unwrap()
+                        .id
+                        .to_string(),
+                );
+            }
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=1")));
+            let order: Vec<&str> = forecast["forecast"]["task_predictions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| row["id"].as_str().unwrap())
+                .collect();
+            let expected = [&ids[2], &ids[3], &ids[1], &ids[0]];
+            assert_eq!(order, expected, "critical, high, then medium and low");
+            for (rank, id) in expected.iter().enumerate() {
+                assert_eq!(
+                    prediction(&forecast, id)["predicted_start_rank"]["p90"],
+                    rank as f64 + 1.0
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn unschedulable_dependency_withholds_full_totals_and_reports_a_subset() {
+    isolated(
+        "backlog_forecast::unschedulable_dependency_withholds_full_totals_and_reports_a_subset",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let in_review = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Waiting for review".into(),
+                    complexity: TaskComplexity::Medium,
+                    status: Some(TaskStatus::Review),
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+            let blocked =
+                backlog_task(&fixture, "After review", &["file:a.rs"], &[], &[&in_review]);
+            let downstream = backlog_task(&fixture, "Downstream", &["file:b.rs"], &[], &[&blocked]);
+            backlog_task(&fixture, "Free", &["file:c.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=2")));
+            let totals = &forecast["forecast"];
+            assert!(totals["time_to_drain_hours"]["p50"].is_null(), "{totals}");
+            assert!(totals["usd"]["p90"].is_null());
+            assert!(totals["completion_probability"].is_null());
+            assert_eq!(totals["schedulable_subset"]["tasks"], 1);
+            assert_eq!(totals["schedulable_subset"]["of"], 3);
+            assert_eq!(
+                totals["schedulable_subset"]["time_to_drain_hours"]["p50"],
+                1.0
+            );
+            let coverage = &forecast["coverage"];
+            assert_eq!(coverage["dependency_unforecastable"], 2);
+            assert_eq!(
+                coverage["dependency_unforecastable_reasons"],
+                json!({"review": 1, "upstream": 1})
+            );
+            assert_eq!(
+                prediction(&forecast, &downstream)["unforecastable"],
+                "upstream"
+            );
+            assert!(prediction(&forecast, &downstream)["predicted_start_hours"]["p50"].is_null());
+        },
+    );
+}
+
+#[test]
+fn lock_blocked_critical_work_reserves_its_surface() {
+    isolated(
+        "backlog_forecast::lock_blocked_critical_work_reserves_its_surface",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Running holder".into(),
+                    complexity: TaskComplexity::Medium,
+                    status: Some(TaskStatus::InProgress),
+                    context_files: vec!["file:x.rs".into()],
+                    ..Default::default()
+                })
+                .unwrap();
+            let critical = fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Critical on x and y".into(),
+                    complexity: TaskComplexity::Medium,
+                    status: Some(TaskStatus::Backlog),
+                    context_files: vec!["file:x.rs".into(), "file:y.rs".into()],
+                    priority: orbit_types::task::TaskPriority::Critical,
+                    ..Default::default()
+                })
+                .unwrap()
+                .id
+                .to_string();
+            let low = backlog_task(&fixture, "Low on y", &["file:y.rs"], &[], &[]);
+            let server = fixture.server(false);
+            let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=3")));
+            // Without the reservation the low task would take y at once and
+            // the critical task would wait for it too.
+            assert_eq!(
+                prediction(&forecast, &critical)["predicted_start_hours"]["p50"],
+                1.0
+            );
+            assert_eq!(
+                prediction(&forecast, &low)["predicted_start_hours"]["p50"],
+                2.0
+            );
+            assert_eq!(
+                forecast["forecast"]["wait_hours"]["reservation"]["p50"],
+                1.0
+            );
         },
     );
 }

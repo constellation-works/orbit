@@ -5,7 +5,7 @@ last_updated: 2026-10-26
 last_validated: 2026-10-26
 status: Draft
 stage: building
-next: "Implement shared admission simulation [ORB-18686], then the remaining v2 factors."
+next: "Implement the remaining v2 factors: review modes [ORB-18687], outcomes [ORB-18688], resource fit [ORB-18689] and rework [ORB-18691]."
 feature: backlog-forecast
 doc_role: scope
 type: design
@@ -15,9 +15,23 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 # Scope: backlog forecast v2 from drain admission
 
-Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690]; every other v2 rule and field in this document is planned until its task lands. “v2” names the feature revision; the current numeric `MODEL_VERSION` is already **2**, so implementations must increment from the value they find, not reset it to 2.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], and [ORB-18686] shipped the admission factor as `MODEL_VERSION` **3** (see [Shipped so far](#shipped-so-far)); the remaining v2 rules and fields are planned until their tasks land. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/task/backlog_forecast.rs`, with simulation in `backlog_forecast/model.rs` and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
+
+## Shipped so far
+
+[ORB-18686] (`MODEL_VERSION` 3, `inputs.admission_factors` `admission: 1`, the other four factors `null`) replaced v1's list scheduling with an event-driven drain:
+
+- **Adapter.** `admission/forecast.rs` freezes the drain's inputs once per forecast: dispatch order from `owner_dispatch_order` over the live executor host limits with `sort_tasks_for_automatic_dispatch` and the expiring batches; pairwise conflict bitsets from `active_task_lock_holders`, `lock_holder_index`, `task_lock_overlaps` and `lock_context_files_for_task` (what each task holds once running, with `no-diff-expected` holding nothing, and its declared surface); root groups from `task_root_id`; and pilot deadlines from `footprint_waits`. Its pass runs the drain's gates in order: a held-lock conflict excludes the task's root group, at most `MAX_SURFACE_RESERVATIONS` lock-blocked `reserves_surface` tasks withhold lower-ranked overlapping work through `withhold_reserved_by` (the reservation body `withhold_reserved_surfaces` now delegates to, with its overlap lookup as a parameter), then `FootprintWave` decides unknown-footprint work through `defers`, the rule body `check` now delegates to, then capacity and same-wave conflicts. The drain passes again at the same instant while a pass admits something.
+- **Dependencies.** `backlog_forecast/dependencies.rs` resolves each `blocked_by` edge through `dependency_status_index` and `TaskReferenceIndex` once: an edge inside the scenario is simulated, `done` is satisfied, an unverifiable reference keeps the drain's permissive treatment and is counted, and any other target (review, blocked, someday, unapproved proposed, rejected, archived, another workspace's open work, missing) or a cycle makes the dependent unforecastable, along with everything behind it. Review and blocked support phases arrive with [ORB-18688].
+- **Simulation.** `backlog_forecast/schedule.rs` seeds the in-progress tasks at t=0, then advances to the next completion, pilot deadline or arrival up to the 90-day horizon (100,000 events; past that the run counts as `simulation_truncated`). Each event walks the pending queue in dispatch order through the adapter's pass.
+- **Response.** `forecast` (and `if_approved`) add `effective_parallelism`, `critical_path_hours`, `wait_hours` (summed task-hours, `basis: "summed_task_hours"`, by first failing gate: `dependency`, `lock`, `reservation`, `footprint`, `capacity`), `completion_probability`, `drain_probability`, `not_expected_to_drain`, `horizon_hours`, `simulation_truncated`, `schedulable_subset` and `task_predictions` (start hours and rank, started and completion probability, `unforecastable` reason). An unforecastable task nulls the full totals; `schedulable_subset` carries the rest with its numerator and denominator. `coverage` adds `dependency_unforecastable` (with `dependency_unforecastable_reasons`), `unverifiable_dependencies` and `review_lock_overlaps`. Stored snapshots add each task's dependencies, footprint hash, unforecastable reason, start quantiles and completion probability; `task_predictions` is response-only.
+- **Scoring.** The top-level hit rates are the current model version's; `calibration.by_model_version` holds each version's own. With one factor revision per version, `by_factor_revision` is not added yet.
+- **Analytics › Forecast** shows the parallelism and critical-path tiles, drain and completion probabilities, the schedulable-subset note, a wait table, the predicted schedule in dispatch order (task titles linking to the task) and per-version calibration.
+- **Latency.** On dk-server-1, release build, a 200-task backlog (10% without context files, 10% directory selectors, every fifth depending on an earlier task, mixed priorities, 5 slots, 40 history deliveries) at 1000 iterations: HTTP p50 0.280 s, p95 0.310 s; simulation about 0.27 s and preparation about 6 ms; peak RSS +12.8 MB. At 400 tasks p95 is 1.21 s (pairwise passes grow quadratically), so 200 is the measured limit for the 1-second target.
+
+Interim limits until the remaining factors land: review lock holders are counted in coverage, not simulated (`assumptions.review_lock_holders: "not_modelled"`); arrivals take a slot but hold no lock (`arrival_conflicts: "slot_only"`, conflict donors arrive with [ORB-18691]); static eligibility (complexity, pilot, route, crew, OS and label gates), published resumes and leaf-occupancy lineage are not replayed (`static_eligibility: "not_modelled"`), and the census and expiry inputs are frozen at forecast time.
 
 ## Problem
 

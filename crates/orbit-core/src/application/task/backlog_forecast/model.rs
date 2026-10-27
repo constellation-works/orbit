@@ -1,4 +1,5 @@
-//! The forecast model: per-task history cells and the Monte Carlo drain.
+//! The forecast model: per-task history cells and the Monte Carlo drain,
+//! each iteration scheduled as the drain admits work (`schedule.rs`).
 //!
 //! Pure computation over values the forecast service has already read; no store or
 //! runtime access, so the same inputs always give the same quantiles (the
@@ -9,17 +10,29 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_types::task::UNSET_BUCKET;
 use serde_json::{Value, json};
 
+use super::dependencies::DependencyPlan;
+use super::schedule::{self, HORIZON_HOURS, Scenario, ScheduleState};
+use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
+
 /// Bumped whenever the sampling or simulation changes what a stored
-/// forecast means, so calibration can tell versions apart.
-pub(super) const MODEL_VERSION: u32 = 2;
+/// forecast means, so calibration can tell versions apart. 3: the drain's
+/// dependency, lock, unknown-footprint, reservation and dispatch-order
+/// admission [ORB-18686].
+pub(super) const MODEL_VERSION: u32 = 3;
+/// The revision of each backlog-forecast-v2 factor this model applies;
+/// `None` for one not yet modelled.
+pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
+    ("admission", Some(1)),
+    ("review_modes", None),
+    ("outcomes", None),
+    ("resource_fit", None),
+    ("regression_rework", None),
+];
 /// Simulated drains per forecast.
 pub(super) const ITERATIONS: usize = 1_000;
 /// A complexity × crew-pool cell with fewer completed deliveries than this
 /// falls back to the complexity's whole history.
 pub(super) const MIN_CELL_SAMPLES: usize = 5;
-/// With arrivals on, a simulated drain that has not emptied the queue by
-/// this many hours stops and counts as beyond the horizon.
-pub(super) const ARRIVALS_HORIZON_HOURS: f64 = 90.0 * 24.0;
 const SEED: u64 = 0x0b17_f0ec_a57d_2026;
 
 /// One completed delivery: a done task with linked invocations, as the
@@ -47,6 +60,7 @@ pub(super) struct Spent {
 /// One task the forecast covers.
 pub(super) struct Item {
     pub(super) task_id: String,
+    pub(super) title: String,
     /// Complexity bucket; [`UNSET_BUCKET`] when unassessed.
     pub(super) complexity: String,
     /// The crews it will draw: its own crew, else its complexity pool.
@@ -147,7 +161,7 @@ pub(super) fn resolve_forecast_item(item: &Item, history: &[Delivery]) -> Resolv
 }
 
 /// splitmix64: small, seedable and good enough for resampling.
-struct Rng(u64);
+pub(super) struct Rng(u64);
 
 impl Rng {
     fn next(&mut self) -> u64 {
@@ -158,12 +172,12 @@ impl Rng {
         z ^ (z >> 31)
     }
 
-    fn index(&mut self, len: usize) -> usize {
+    pub(super) fn index(&mut self, len: usize) -> usize {
         (self.next() % len as u64) as usize
     }
 
     /// Uniform in (0, 1].
-    fn unit(&mut self) -> f64 {
+    pub(super) fn unit(&mut self) -> f64 {
         ((self.next() >> 11) as f64 + 1.0) / (1u64 << 53) as f64
     }
 }
@@ -172,10 +186,10 @@ impl Rng {
 /// value (no history, or no priced or costed delivery to draw from) makes
 /// every sum it joins missing, so a total never silently undercounts.
 #[derive(Clone, Copy)]
-struct Draw {
-    hours: Option<f64>,
-    tokens: Option<f64>,
-    usd: Option<f64>,
+pub(super) struct Draw {
+    pub(super) hours: Option<f64>,
+    pub(super) tokens: Option<f64>,
+    pub(super) usd: Option<f64>,
 }
 
 impl Draw {
@@ -190,7 +204,7 @@ impl Draw {
         usd: None,
     };
 
-    fn add(&mut self, other: &Draw) {
+    pub(super) fn add(&mut self, other: &Draw) {
         let sum = |total: Option<f64>, one: Option<f64>| total.zip(one).map(|(a, b)| a + b);
         self.hours = sum(self.hours, other.hours);
         self.tokens = sum(self.tokens, other.tokens);
@@ -221,36 +235,6 @@ fn draw(rng: &mut Rng, resolved: &Resolved, history: &[Delivery], spent: Spent) 
     }
 }
 
-/// List scheduling: each task, in order, starts on the slot that frees
-/// first, no earlier than it is available.
-struct Slots {
-    free: Vec<f64>,
-    end: f64,
-}
-
-impl Slots {
-    fn new(slots: usize) -> Self {
-        Self {
-            free: vec![0.0; slots.max(1)],
-            end: 0.0,
-        }
-    }
-
-    /// Place one task; returns when the last placed task ends.
-    fn place(&mut self, available: f64, hours: f64) -> f64 {
-        let mut slot = 0;
-        for (index, at) in self.free.iter().enumerate() {
-            if *at < self.free[slot] {
-                slot = index;
-            }
-        }
-        let finish = self.free[slot].max(available) + hours;
-        self.free[slot] = finish;
-        self.end = self.end.max(finish);
-        self.end
-    }
-}
-
 /// The opt-in arrivals: `per_day` new tasks a day, each drawn from the
 /// whole history.
 pub(super) struct Arrivals<'a> {
@@ -258,50 +242,9 @@ pub(super) struct Arrivals<'a> {
     pub(super) history: &'a [Delivery],
 }
 
-/// One simulated drain of `backlog` on `slots`. With arrivals, new tasks
-/// keep landing until the queue empties; `None` when it has not emptied by
-/// [`ARRIVALS_HORIZON_HOURS`], or when a task has no history to draw its
-/// hours from. Arrived work propagates missing tokens and cost into `totals`
-/// independently, without invalidating duration.
-fn drain(
-    rng: &mut Rng,
-    slots: usize,
-    backlog: &[Draw],
-    arrivals: Option<&Arrivals<'_>>,
-    totals: &mut Draw,
-) -> Option<f64> {
-    let mut schedule = Slots::new(slots);
-    let mut current = 0.0;
-    for job in backlog {
-        current = schedule.place(0.0, job.hours?);
-    }
-    let Some(arrivals) = arrivals.filter(|a| a.per_day > 0.0 && !a.history.is_empty()) else {
-        return Some(current);
-    };
-    let rate_per_hour = arrivals.per_day / 24.0;
-    let mut at = 0.0;
-    loop {
-        at += -rng.unit().ln() / rate_per_hour;
-        // The queue emptied before this arrival: the drain is done.
-        if at >= current {
-            return Some(current);
-        }
-        let delivery = &arrivals.history[rng.index(arrivals.history.len())];
-        totals.add(&Draw {
-            hours: Some(delivery.hours),
-            tokens: delivery.tokens,
-            usd: delivery.usd,
-        });
-        current = schedule.place(at, delivery.hours);
-        if current > ARRIVALS_HORIZON_HOURS {
-            return None;
-        }
-    }
-}
-
 /// p50 and p90 of `values` by nearest rank; `None` entries (beyond the
 /// horizon, or not computable) sort last.
-fn quantiles(values: &mut [Option<f64>]) -> Value {
+pub(super) fn quantiles(values: &mut [Option<f64>]) -> Value {
     if values.is_empty() {
         return json!({ "p50": null, "p90": null });
     }
@@ -349,23 +292,108 @@ impl Resolved {
     }
 }
 
-/// The simulated totals for one set of tasks.
-#[derive(Default)]
+fn probability(count: u64, of: u64) -> Option<f64> {
+    (of > 0).then(|| (count as f64 / of as f64 * 1000.0).round() / 1000.0)
+}
+
+/// The simulated totals and schedules for one scenario.
 struct Outcome {
     drain: Vec<Option<f64>>,
     tokens: Vec<Option<f64>>,
     usd: Vec<Option<f64>>,
+    critical_path: Vec<Option<f64>>,
+    parallelism: Vec<Option<f64>>,
+    /// Per [`ForecastWait::ALL`] reason: summed task wait hours.
+    waits: [Vec<Option<f64>>; 5],
+    /// Iterations with hours to schedule; of those, the ones that drained
+    /// and the ones that finished every scheduled initial task.
+    available: u64,
+    drained: u64,
+    complete: u64,
+    unfinished: u64,
+    truncated: u64,
+    /// Per task: first start hour and rank per available iteration, and
+    /// how many of them it finished in.
+    starts: Vec<Vec<Option<f64>>>,
+    ranks: Vec<Vec<Option<f64>>>,
+    finished: Vec<u64>,
     /// Per complexity: summed slot-hours, tokens and USD per iteration.
     by_complexity: BTreeMap<String, [Vec<Option<f64>>; 3]>,
 }
 
 impl Outcome {
-    fn into_json(mut self, items: &[&Item], resolved: &[&Resolved]) -> Value {
+    fn new(tasks: usize) -> Self {
+        Self {
+            drain: Vec::new(),
+            tokens: Vec::new(),
+            usd: Vec::new(),
+            critical_path: Vec::new(),
+            parallelism: Vec::new(),
+            waits: Default::default(),
+            available: 0,
+            drained: 0,
+            complete: 0,
+            unfinished: 0,
+            truncated: 0,
+            starts: vec![Vec::new(); tasks],
+            ranks: vec![Vec::new(); tasks],
+            finished: vec![0; tasks],
+            by_complexity: BTreeMap::new(),
+        }
+    }
+
+    fn record(
+        &mut self,
+        scenario: &Scenario<'_>,
+        run: &schedule::Run,
+        state: &ScheduleState,
+        totals: Draw,
+    ) {
+        self.drain.push(run.drained);
+        self.tokens.push(totals.tokens);
+        self.usd.push(totals.usd);
+        self.critical_path.push(run.critical_path);
+        self.parallelism.push(run.parallelism);
+        for (slot, values) in self.waits.iter_mut().enumerate() {
+            values.push(run.waits.map(|waits| waits[slot]));
+        }
+        self.truncated += u64::from(run.truncated);
+        if run.waits.is_none() {
+            return;
+        }
+        self.available += 1;
+        self.drained += u64::from(run.drained.is_some());
+        self.complete += u64::from(run.unfinished == 0);
+        self.unfinished += run.unfinished as u64;
+        for (index, included) in scenario.included.iter().enumerate() {
+            if !included {
+                continue;
+            }
+            self.starts[index].push(state.start[index]);
+            self.ranks[index].push(state.rank[index]);
+            self.finished[index] += u64::from(state.finished[index]);
+        }
+    }
+
+    fn into_json(
+        mut self,
+        items: &[Item],
+        resolved: &[Resolved],
+        scenario: &Scenario<'_>,
+        members: &[usize],
+        reasons: &[Option<&'static str>],
+    ) -> Value {
+        let included: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|index| scenario.included[*index])
+            .collect();
+        let full = included.len() == members.len();
         let mut counts: BTreeMap<&str, (u64, BTreeMap<&str, u64>)> = BTreeMap::new();
-        for (item, resolved) in items.iter().zip(resolved) {
-            let entry = counts.entry(item.complexity.as_str()).or_default();
+        for index in &included {
+            let entry = counts.entry(items[*index].complexity.as_str()).or_default();
             entry.0 += 1;
-            *entry.1.entry(resolved.basis.key()).or_default() += 1;
+            *entry.1.entry(resolved[*index].basis.key()).or_default() += 1;
         }
         let mut by_complexity: Vec<(String, [Vec<Option<f64>>; 3])> =
             std::mem::take(&mut self.by_complexity)
@@ -389,12 +417,85 @@ impl Outcome {
                 })
             })
             .collect();
+        let drain = quantiles(&mut self.drain);
+        let tokens = quantiles(&mut self.tokens);
+        let usd = quantiles(&mut self.usd);
+        let unknown = json!({ "p50": null, "p90": null });
+        let mut waits = serde_json::Map::new();
+        waits.insert("basis".into(), json!("summed_task_hours"));
+        for (wait, values) in ForecastWait::ALL.iter().zip(self.waits.iter_mut()) {
+            waits.insert(wait.key().into(), quantiles(values));
+        }
+        let available = self.available;
+        // Probabilities describe the whole scenario, so they are unknown
+        // while any task cannot be scheduled.
+        let whole = |count: u64| full.then(|| probability(count, available)).flatten();
+        let mut predicted: Vec<usize> = members
+            .iter()
+            .copied()
+            .filter(|index| items[*index].in_progress)
+            .collect();
+        predicted.extend(
+            scenario
+                .admission
+                .dispatch_order()
+                .iter()
+                .copied()
+                .filter(|index| members.contains(index) && !items[*index].in_progress),
+        );
+        let task_predictions: Vec<Value> = predicted
+            .into_iter()
+            .map(|index| {
+                let item = &items[index];
+                let scheduled = scenario.included[index];
+                let started = self.starts[index].iter().filter(|at| at.is_some()).count() as u64;
+                json!({
+                    "id": item.task_id,
+                    "title": item.title,
+                    "status": if item.in_progress {
+                        "in-progress"
+                    } else if item.proposed {
+                        "proposed"
+                    } else {
+                        "backlog"
+                    },
+                    "basis": resolved[index].basis.key(),
+                    "unforecastable": reasons[index],
+                    "predicted_start_hours": quantiles(&mut self.starts[index]),
+                    "predicted_start_rank": quantiles(&mut self.ranks[index]),
+                    "started_probability": scheduled.then(|| probability(started, available)).flatten(),
+                    "completion_probability": scheduled
+                        .then(|| probability(self.finished[index], available))
+                        .flatten(),
+                })
+            })
+            .collect();
         json!({
-            "tasks": items.len(),
-            "time_to_drain_hours": quantiles(&mut self.drain),
-            "tokens": quantiles(&mut self.tokens),
-            "usd": quantiles(&mut self.usd),
+            "tasks": members.len(),
+            "time_to_drain_hours": if full { drain.clone() } else { unknown.clone() },
+            "tokens": if full { tokens.clone() } else { unknown.clone() },
+            "usd": if full { usd.clone() } else { unknown },
+            "schedulable_subset": (!full).then(|| json!({
+                "tasks": included.len(),
+                "of": members.len(),
+                "time_to_drain_hours": drain,
+                "tokens": tokens,
+                "usd": usd,
+            })),
+            "effective_parallelism": quantiles(&mut self.parallelism),
+            "critical_path_hours": quantiles(&mut self.critical_path),
+            "wait_hours": waits,
+            "completion_probability": whole(self.complete),
+            "drain_probability": whole(self.drained),
+            "not_expected_to_drain": full
+                .then(|| (available > 0).then(|| {
+                    (self.unfinished as f64 / available as f64 * 100.0).round() / 100.0
+                }))
+                .flatten(),
+            "horizon_hours": HORIZON_HOURS,
+            "simulation_truncated": self.truncated,
             "by_complexity": by_complexity,
+            "task_predictions": task_predictions,
         })
     }
 }
@@ -405,48 +506,70 @@ pub(super) struct Forecast {
     pub(super) if_approved: Option<Value>,
 }
 
-/// Simulate [`ITERATIONS`] drains of `items` on `slots`. Items are in
-/// dispatch order with in-progress ones first; proposed ones count only
-/// toward `if_approved`.
+/// Simulate [`ITERATIONS`] drains of `items` on `slots`, each admitted as
+/// the drain would admit it under `admission`, whose task `i` is
+/// `items[i]`. Proposed items count only toward `if_approved`; tasks
+/// `plan` cannot schedule are left out of each scenario's simulation.
 pub(super) fn simulate_backlog_forecast(
     items: &[Item],
     resolved: &[Resolved],
     history: &[Delivery],
+    admission: &ForecastAdmission,
+    plan: &DependencyPlan,
     slots: usize,
     arrivals: Option<&Arrivals<'_>>,
 ) -> Forecast {
     let mut rng = Rng(SEED);
     let has_proposed = items.iter().any(|item| item.proposed);
-    let mut backlog = Outcome::default();
-    let mut approved = Outcome::default();
+    let in_progress: Vec<bool> = items.iter().map(|item| item.in_progress).collect();
+    let members = |include_proposed: bool| -> Vec<usize> {
+        (0..items.len())
+            .filter(|index| include_proposed || !items[*index].proposed)
+            .collect()
+    };
+    let scenario = |include_proposed: bool, reasons: &[Option<&'static str>]| {
+        let included = (0..items.len())
+            .map(|index| (include_proposed || !items[index].proposed) && reasons[index].is_none())
+            .collect();
+        Scenario::new(admission, &plan.edges, included, &in_progress, slots)
+    };
+    let backlog_scenario = scenario(false, &plan.backlog);
+    let approved_scenario = has_proposed.then(|| scenario(true, &plan.approved));
+    let mut outcomes = [Outcome::new(items.len()), Outcome::new(items.len())];
+    let mut state = ScheduleState::new(admission);
     let mut draws = vec![Draw::MISSING; items.len()];
+    let mut hours = vec![None; items.len()];
     for _ in 0..ITERATIONS {
         for (index, item) in items.iter().enumerate() {
             draws[index] = draw(&mut rng, &resolved[index], history, item.spent);
+            hours[index] = draws[index].hours;
         }
-        for (outcome, include_proposed) in [(&mut backlog, false), (&mut approved, true)] {
-            if include_proposed && !has_proposed {
+        let scenarios = [Some(&backlog_scenario), approved_scenario.as_ref()];
+        for (scenario, outcome) in scenarios.into_iter().zip(outcomes.iter_mut()) {
+            let Some(scenario) = scenario else {
                 continue;
-            }
-            let chosen: Vec<(usize, &Draw)> = draws
-                .iter()
-                .enumerate()
-                .filter(|(index, _)| include_proposed || !items[*index].proposed)
-                .collect();
+            };
             let mut totals = Draw::ZERO;
             let mut complexity: BTreeMap<&str, Draw> = BTreeMap::new();
-            for (index, one) in &chosen {
+            for (index, one) in draws.iter().enumerate() {
+                if !scenario.included[index] {
+                    continue;
+                }
                 totals.add(one);
                 complexity
-                    .entry(items[*index].complexity.as_str())
+                    .entry(items[index].complexity.as_str())
                     .or_insert(Draw::ZERO)
                     .add(one);
             }
-            let jobs: Vec<Draw> = chosen.iter().map(|(_, one)| **one).collect();
-            let drained = drain(&mut rng, slots, &jobs, arrivals, &mut totals);
-            outcome.drain.push(drained);
-            outcome.tokens.push(totals.tokens);
-            outcome.usd.push(totals.usd);
+            let run = schedule::simulate_drain(
+                scenario,
+                &hours,
+                arrivals,
+                &mut rng,
+                &mut totals,
+                &mut state,
+            );
+            outcome.record(scenario, &run, &state, totals);
             for (key, cell) in complexity {
                 let entry = outcome.by_complexity.entry(key.to_string()).or_default();
                 entry[0].push(cell.hours);
@@ -455,18 +578,16 @@ pub(super) fn simulate_backlog_forecast(
             }
         }
     }
-    let pick = |include_proposed: bool| -> (Vec<&Item>, Vec<&Resolved>) {
-        items
-            .iter()
-            .zip(resolved)
-            .filter(|(item, _)| include_proposed || !item.proposed)
-            .unzip()
-    };
-    let (backlog_items, backlog_resolved) = pick(false);
-    let backlog = backlog.into_json(&backlog_items, &backlog_resolved);
-    let if_approved = has_proposed.then(|| {
-        let (all_items, all_resolved) = pick(true);
-        approved.into_json(&all_items, &all_resolved)
+    let [backlog_outcome, approved_outcome] = outcomes;
+    let backlog = backlog_outcome.into_json(
+        items,
+        resolved,
+        &backlog_scenario,
+        &members(false),
+        &plan.backlog,
+    );
+    let if_approved = approved_scenario.as_ref().map(|scenario| {
+        approved_outcome.into_json(items, resolved, scenario, &members(true), &plan.approved)
     });
     Forecast {
         backlog,

@@ -128,6 +128,16 @@ pub(crate) fn whole_tree_holder(
         .map(|task| task.id.clone())
 }
 
+/// Which footprint rule keeps a candidate out of a free slot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FootprintDeferral {
+    /// Something already holds the whole tree.
+    WholeTree,
+    /// It runs only alone, and leaves are in flight; it now reserves the
+    /// tree.
+    ExclusiveSlot,
+}
+
 /// The guard applied candidate by candidate across one wave, in dispatch
 /// order. [`Self::awaiting`] runs before the capacity check (a pilot wait is
 /// worth reporting even when no slot is free); [`Self::check`] after it;
@@ -162,6 +172,15 @@ impl<'a> FootprintWave<'a> {
             .flatten()
     }
 
+    /// Whether a candidate is still waiting for its pilot: [`Self::awaiting`]
+    /// without building its deferral, for the backlog forecast.
+    pub(crate) fn is_awaiting(&self, task: &Task) -> bool {
+        matches!(
+            self.wait(task),
+            Some(FootprintWait::AwaitingFootprint { .. })
+        )
+    }
+
     /// The deferral of a candidate still waiting for its pilot.
     pub(crate) fn awaiting(&self, task: &Task) -> Option<DeferredAdmission> {
         let wait @ FootprintWait::AwaitingFootprint { .. } = self.wait(task)? else {
@@ -179,37 +198,54 @@ impl<'a> FootprintWave<'a> {
     /// or `None` to judge it by the ordinary lock rules. `edits` is whether
     /// its own footprint is non-empty.
     pub(crate) fn check(&mut self, task: &Task, edits: bool) -> Option<DeferredAdmission> {
+        match self.defers(task, edits)? {
+            FootprintDeferral::WholeTree => {
+                let (holder, provenance) = self.whole_tree.as_ref()?;
+                Some(DeferredAdmission {
+                    task_id: task.id.clone(),
+                    reason: DeferralReason::Conflict,
+                    conflicts: vec![AdmissionConflict {
+                        requested_selector: WHOLE_TREE_SELECTOR.to_string(),
+                        blocking_selector: WHOLE_TREE_SELECTOR.to_string(),
+                        blocking_task_id: holder.clone(),
+                        provenance: *provenance,
+                    }],
+                    detail: None,
+                })
+            }
+            FootprintDeferral::ExclusiveSlot => Some(DeferredAdmission {
+                task_id: task.id.clone(),
+                reason: DeferralReason::AwaitingExclusiveSlot,
+                conflicts: Vec::new(),
+                detail: Some(FootprintWait::Exclusive.detail()),
+            }),
+        }
+    }
+
+    /// The footprint rule [`Self::check`] applies, without building the
+    /// deferral: the backlog forecast asks it of every simulated candidate
+    /// [ORB-18686]. A [`FootprintDeferral::ExclusiveSlot`] answer reserves the
+    /// tree exactly as `check` does.
+    pub(crate) fn defers(&mut self, task: &Task, edits: bool) -> Option<FootprintDeferral> {
         if !self.guard.enabled {
             return None;
         }
         let wait = self.guard.waits.get(&task.id);
-        if (edits || wait.is_some())
-            && let Some((holder, provenance)) = &self.whole_tree
-        {
-            return Some(DeferredAdmission {
-                task_id: task.id.clone(),
-                reason: DeferralReason::Conflict,
-                conflicts: vec![AdmissionConflict {
-                    requested_selector: WHOLE_TREE_SELECTOR.to_string(),
-                    blocking_selector: WHOLE_TREE_SELECTOR.to_string(),
-                    blocking_task_id: holder.clone(),
-                    provenance: *provenance,
-                }],
-                detail: None,
-            });
+        if (edits || wait.is_some()) && self.whole_tree.is_some() {
+            return Some(FootprintDeferral::WholeTree);
         }
         if wait == Some(&FootprintWait::Exclusive) && self.busy {
             // The first waiter reserves the tree, or a busy drain would never
             // run it.
             self.whole_tree = Some((task.id.clone(), ConflictProvenance::ExclusiveReservation));
-            return Some(DeferredAdmission {
-                task_id: task.id.clone(),
-                reason: DeferralReason::AwaitingExclusiveSlot,
-                conflicts: Vec::new(),
-                detail: Some(FootprintWait::Exclusive.detail()),
-            });
+            return Some(FootprintDeferral::ExclusiveSlot);
         }
         None
+    }
+
+    /// Whether anything holds the whole tree in this wave.
+    pub(crate) fn holds_tree(&self) -> bool {
+        self.whole_tree.is_some()
     }
 
     /// Record that `task` took a slot.

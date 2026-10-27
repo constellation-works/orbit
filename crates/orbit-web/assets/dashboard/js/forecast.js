@@ -14,7 +14,7 @@
 import {
   el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint,
-  scopedHashHref,
+  scopedHashHref, bindTaskLink,
 } from './common.js';
 
 const $ = (id) => document.getElementById(id);
@@ -22,7 +22,7 @@ const $ = (id) => document.getElementById(id);
 // `el` from common.js, also applying the table and focus attributes it leaves out.
 function el(tag, opts = {}, children = []) {
   const node = makeEl(tag, opts, children);
-  for (const name of ["scope", "tabindex"]) {
+  for (const name of ["scope", "tabindex", "colspan"]) {
     if (opts[name] != null) node.setAttribute(name, String(opts[name]));
   }
   return node;
@@ -37,6 +37,23 @@ const COMPLEXITY_LABELS = {
   low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unassessed: "Unassessed",
 };
 const BASIS_LABELS = { cell: "cell", complexity: "complexity", workspace: "workspace", none: "no history" };
+// Why a task has no simulated start: its dependency is work the drain will
+// not start on its own, or sits behind such work or a cycle.
+const UNFORECASTABLE_LABELS = {
+  review: "waits on work in review", blocked: "waits on blocked work", someday: "waits on someday work",
+  proposed: "waits on unapproved work", rejected: "waits on rejected work", archived: "waits on archived work",
+  external_work: "waits on another workspace", missing: "waits on a missing task", cycle: "dependency cycle",
+  upstream: "behind unforecastable work",
+};
+const WAITS = [
+  ["dependency", "Dependencies", "Waiting for an earlier task in this forecast to finish."],
+  ["lock", "File locks", "Its files overlap a running task's locked files."],
+  ["reservation", "Surface reservations", "Higher-priority lock-blocked work reserved an overlapping surface."],
+  ["footprint", "Unknown footprint", "An editing task without context files runs alone, or waits for the tree to be free."],
+  ["capacity", "Capacity", "Ready and unblocked, but every slot is taken."],
+];
+// The schedule table lists this many tasks in dispatch order.
+const SCHEDULE_ROWS = 50;
 
 const view = { lookback: 30, arrivals: "off" };
 let lastPayload = null;
@@ -104,7 +121,7 @@ export function renderForecast() {
   const forecast = lastPayload.forecast || {};
   const count = $(COUNT);
   if (count) count.textContent = `${forecast.tasks ?? 0} task${forecast.tasks === 1 ? "" : "s"} · ${lastPayload.inputs?.concurrency ?? "?"} slots`;
-  const nodes = [forecastCard(), byComplexityCard(), coverageCard(), calibrationCard()];
+  const nodes = [forecastCard(), waitsCard(), scheduleCard(), byComplexityCard(), coverageCard(), calibrationCard()];
   const root = el("div", { class: "fc-view" }, nodes);
   root.dataset.key = "forecast-view";
   root.dataset.hash = JSON.stringify([view, lastPayload]);
@@ -149,6 +166,16 @@ export function formatForecastUsd(value) {
 function fmtRate(value) {
   const n = num(value);
   return n == null ? "—" : `${n >= 10 ? Math.round(n) : n.toFixed(1)}/day`;
+}
+
+function fmtParallelism(value) {
+  const n = num(value);
+  return n == null ? "—" : `${n.toFixed(1)}×`;
+}
+
+function fmtRank(value) {
+  const n = num(value);
+  return n == null ? "—" : `#${Math.round(n)}`;
 }
 
 function fmtShare(value) {
@@ -252,8 +279,12 @@ function kpi(label, quantiles, fmt, foot) {
   ]);
 }
 
+// Unforecastable dependencies withhold every full total, whatever the history.
+const SUBSET_FOOT = "not every task can be scheduled";
+
 function metricFoot(quantiles, metric) {
   if (quantiles?.p90 != null) return metric === "tokens" ? "normalized" : null;
+  if (lastPayload.forecast?.schedulable_subset) return SUBSET_FOOT;
   const missing = lastPayload.arrivals?.coverage?.[`missing_${metric}`];
   if (lastPayload.inputs?.arrivals && missing) return "incomplete history or arrival telemetry";
   return metric === "tokens" ? "not enough priced history" : "not enough costed history";
@@ -261,6 +292,7 @@ function metricFoot(quantiles, metric) {
 
 function drainFoot(quantiles) {
   if (quantiles?.p90 != null) return null;
+  if (lastPayload.forecast?.schedulable_subset) return SUBSET_FOOT;
   if (quantiles?.p50 != null) return "p90 beyond the 90-day horizon";
   return lastPayload.coverage?.no_history ? "some tasks have no history" : "beyond the 90-day horizon";
 }
@@ -309,7 +341,8 @@ function forecastCard() {
     ]),
     el("p", { class: "mx-blurb" }, [
       `${meta}. Simulated ${inputs.iterations ?? 0} times on ${capacityText(inputs)}. `,
-      infoHint("Each task draws a completed delivery's wall time, tokens and cost from tasks of the same complexity and crew pool, falling back to its complexity, then to all deliveries, when there are too few. Review, blocked and someday tasks are left out; in-progress tasks count only their remaining work."),
+      infoHint("Each task draws a completed delivery's wall time, tokens and cost from tasks of the same complexity and crew pool, falling back to its complexity, then to all deliveries, when there are too few. Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Review, blocked and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet."),
+      lastPayload.model_version != null ? el("span", { class: "fc-model mx-muted", text: ` Model v${lastPayload.model_version}.` }) : null,
     ]),
   ];
   if (!forecast.tasks) {
@@ -327,7 +360,12 @@ function forecastCard() {
       kpi("Time to drain", forecast.time_to_drain_hours, formatForecastHours, drainFoot(forecast.time_to_drain_hours)),
       kpi("Cost", forecast.usd, formatForecastUsd, metricFoot(forecast.usd, "usd")),
       kpi("Tokens", forecast.tokens, formatForecastTokens, metricFoot(forecast.tokens, "tokens")),
+      kpi("Effective parallelism", forecast.effective_parallelism, fmtParallelism, `of ${inputs.concurrency ?? "?"} slots, averaged over the drain`),
+      kpi("Critical path", forecast.critical_path_hours, formatForecastHours, "longest dependency chain"),
     ]));
+    const subset = subsetNote(forecast);
+    if (subset) children.push(subset);
+    children.push(el("p", { class: "fc-approved fc-odds" }, [drainOdds(forecast)]));
   }
   children.push(arrivalsLine());
   const approved = lastPayload.if_approved;
@@ -337,6 +375,26 @@ function forecastCard() {
     ]));
   }
   return el("section", { class: "mx-card", "aria-label": "Backlog forecast" }, children);
+}
+
+// Unforecastable dependencies withhold the full totals; the schedulable
+// subset is what the simulation could still drain.
+function subsetNote(forecast) {
+  const subset = forecast.schedulable_subset;
+  if (!subset) return null;
+  const left = (subset.of ?? 0) - (subset.tasks ?? 0);
+  return el("div", { class: "fc-assume fc-subset", role: "note" }, [
+    el("span", { class: "fc-assume-head", text: `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start.` }),
+    el("span", { class: "fc-assume-rate", text: `The other ${subset.tasks} of ${subset.of}: drain ${formatForecastQuantileRange(subset.time_to_drain_hours, formatForecastHours)}, cost ${formatForecastQuantileRange(subset.usd, formatForecastUsd)}, tokens ${formatForecastQuantileRange(subset.tokens, formatForecastTokens)} (p50 – p90).` }),
+  ]);
+}
+
+function drainOdds(forecast) {
+  const horizon = formatForecastHours(forecast.horizon_hours ?? 2160);
+  const parts = [`Drains within ${horizon} in ${fmtShare(forecast.drain_probability)} of runs`, `the initial tasks all finish in ${fmtShare(forecast.completion_probability)}`];
+  if (num(forecast.not_expected_to_drain)) parts.push(`${fmtShare(forecast.not_expected_to_drain)} of them unfinished on average`);
+  const text = `${parts.join("; ")}.`;
+  return forecast.simulation_truncated ? `${text} Some runs hit the event limit.` : text;
 }
 
 function card(title, meta, children, className = "") {
@@ -356,6 +414,43 @@ function table(label, head, rows, caption) {
       el("thead", {}, [el("tr", {}, head.map(([text, numeric]) => el("th", { scope: "col", class: numeric ? "num" : null, text })))]),
       el("tbody", {}, rows),
     ]),
+  ]);
+}
+
+function waitsCard() {
+  const waits = lastPayload.forecast?.wait_hours;
+  if (!waits || !lastPayload.forecast?.tasks) return null;
+  const rows = WAITS.map(([key, label, hint]) => el("tr", {}, [
+    el("th", { scope: "row" }, [label, " ", infoHint(hint)]),
+    el("td", { class: "num", text: formatForecastQuantileRange(waits[key], formatForecastHours) }),
+  ]));
+  return card("Why work waits", "task-hours, p50 – p90", [
+    table("Waiting by reason", [["Held back by"], ["Waiting", true]], rows, "Summed over every waiting task, so hours add up across tasks and exceed the time to drain. A task counts under the first gate it fails."),
+  ]);
+}
+
+function taskCell(row) {
+  const link = el("a", { class: "fc-task", text: row.title || "Untitled task" });
+  bindTaskLink(link, row.id);
+  return el("th", { scope: "row" }, [link]);
+}
+
+function scheduleCard() {
+  const predictions = lastPayload.forecast?.task_predictions || [];
+  if (!predictions.length) return null;
+  const shown = predictions.slice(0, SCHEDULE_ROWS);
+  const rows = shown.map((row) => el("tr", {}, [
+    taskCell(row),
+    el("td", { class: "fc-state", text: row.status }),
+    row.unforecastable
+      ? el("td", { class: "fc-unforecastable", colspan: "3", text: UNFORECASTABLE_LABELS[row.unforecastable] || row.unforecastable })
+      : el("td", { class: "num", text: row.status === "in-progress" ? "running" : formatForecastQuantileRange(row.predicted_start_hours, formatForecastHours) }),
+    row.unforecastable ? null : el("td", { class: "num", text: row.status === "in-progress" ? "—" : formatForecastQuantileRange(row.predicted_start_rank, fmtRank) }),
+    row.unforecastable ? null : el("td", { class: "num", text: fmtShare(row.completion_probability) }),
+  ]));
+  const meta = predictions.length > shown.length ? `first ${shown.length} of ${predictions.length}` : `${predictions.length} task${predictions.length === 1 ? "" : "s"}`;
+  return card("Predicted schedule", meta, [
+    table("Predicted schedule", [["Task"], ["Status"], ["Starts in", true], ["Start order", true], ["Finishes", true]], rows, "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; finishes is the share of runs in which the task finishes within the horizon."),
   ]);
 }
 
@@ -390,6 +485,9 @@ function coverageCard() {
     ["Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
     ["Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
     ["No history", coverage.no_history, "Nothing to sample at all."],
+    ["Unforecastable dependency", coverage.dependency_unforecastable, "Depends on work the drain will not start (in review, blocked, someday, unapproved, elsewhere or missing), sits behind such work, or is on a dependency cycle. Left out of the full totals."],
+    ["Unverifiable dependencies", coverage.unverifiable_dependencies, "Dependencies this workspace cannot verify. The drain treats them as satisfied, and so does the forecast."],
+    ["Review lock overlaps", coverage.review_lock_overlaps, "Overlaps files a task in review still locks. The forecast does not model when review releases them."],
     ["Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens in the pool used by recent arrivals."],
     ["Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost in the pool used by recent arrivals."],
   ];
@@ -421,6 +519,10 @@ function excludedText(excluded) {
   return parts.length ? parts.join(" · ") : "—";
 }
 
+function versionHits(hits) {
+  return hits?.n ? `${fmtShare(hits.under_p50)} · ${fmtShare(hits.under_p90)} (${hits.n})` : "—";
+}
+
 function versus(forecast, actual, fmt) {
   return `${formatForecastQuantileRange(forecast, fmt)} → ${actual == null ? "—" : fmt(actual)}`;
 }
@@ -440,6 +542,8 @@ function calibrationCard() {
       el("div", { class: "mx-empty-detail", text: "Calibration appears once a stored forecast's tasks start finishing." }),
     ])]);
   }
+  const versions = calibration.by_model_version || [];
+  const current = calibration.model_version;
   const taskLevel = calibration.task_level || {};
   const forecastLevel = calibration.forecast_level || {};
   const summary = table("Calibration summary", [["Measure"], ["Scored", true], ["Under p50", true], ["Under p90", true], ["Target"]], [
@@ -449,9 +553,17 @@ function calibrationCard() {
     hitRow("Time to drain", forecastLevel.time_to_drain_hours, "50% · 90%"),
     hitRow("Backlog cost", forecastLevel.usd, "50% · 90%"),
     hitRow("Backlog tokens", forecastLevel.tokens, "50% · 90%"),
-  ]);
+  ], current != null ? `Model v${current}, the current model. Each version is scored on its own forecasts.` : null);
+  const older = versions.filter((row) => row.model_version !== current);
+  const byVersion = older.length ? table("Calibration by model version", [["Model"], ["Forecasts", true], ["Task hours", true], ["Time to drain", true]], older.map((row) => el("tr", {}, [
+    el("th", { scope: "row", text: `v${row.model_version}` }),
+    el("td", { class: "num", text: String(row.forecasts ?? 0) }),
+    el("td", { class: "num", text: versionHits(row.task_level?.hours) }),
+    el("td", { class: "num", text: versionHits(row.forecast_level?.time_to_drain_hours) }),
+  ])), "Earlier models, under p50 · under p90 (scored).") : null;
   const rows = forecasts.map((row) => el("tr", {}, [
     el("th", { scope: "row", text: formatDateTime(row.forecast_at) }),
+    el("td", { class: "num", text: row.model_version != null ? `v${row.model_version}` : "—" }),
     el("td", { class: "num", text: `${row.done}/${row.tasks}` }),
     el("td", { text: excludedText(row.excluded) }),
     el("td", { class: "num", text: versus(row.forecast?.time_to_drain_hours, row.actual?.time_to_drain_hours, formatForecastHours) }),
@@ -460,10 +572,11 @@ function calibrationCard() {
     el("td", { class: "fc-state", text: row.scored_whole ? "scored" : row.settled ? "settled, not scored" : `${row.pending} pending` }),
   ]));
   const excluded = calibration.excluded || {};
-  const history = table("Stored forecasts", [["Recorded"], ["Done", true], ["Left out"], ["Drain p50 – p90 → actual", true], ["Cost", true], ["Tokens", true], ["State"]], rows);
+  const history = table("Stored forecasts", [["Recorded"], ["Model", true], ["Done", true], ["Left out"], ["Drain p50 – p90 → actual", true], ["Cost", true], ["Tokens", true], ["State"]], rows);
   return card("Calibration", meta, [
     blurb,
     summary,
+    byVersion,
     el("p", { class: "mx-blurb", text: `Left out across stored forecasts: ${excludedText(excluded)}.` }),
     history,
   ]);
