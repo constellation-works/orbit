@@ -1,4 +1,6 @@
-//! Test capability checks; production dispatch keeps its fail-closed spawn path.
+//! Capability checks for tests and for `orbit plugin test`, which defers its
+//! cases rather than spawn a backend where the apply is refused; production
+//! dispatch keeps its fail-closed spawn path.
 
 use std::io::Write;
 use std::sync::OnceLock;

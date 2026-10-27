@@ -122,12 +122,39 @@ pub const VALIDATION_ENVIRONMENT_ERROR_CODE: &str = "validation_environment";
 /// The bracketed marker form of [`VALIDATION_ENVIRONMENT_ERROR_CODE`].
 pub const VALIDATION_ENVIRONMENT_MARKER: &str = "[validation_environment]";
 
-/// Whether a step failure says required validation lacked a tool.
+/// Whether a step failure says required validation lacked a tool, or could
+/// not run where the step ran ([`is_validation_route_unavailable`]).
 #[must_use]
 pub fn is_validation_environment_failure(error_code: Option<&str>, message: Option<&str>) -> bool {
     error_code == Some(VALIDATION_ENVIRONMENT_ERROR_CODE)
         || message.is_some_and(|message| {
             failure_classification_text(message).contains(VALIDATION_ENVIRONMENT_MARKER)
+        })
+        || is_validation_route_unavailable(error_code, message)
+}
+
+/// Token a step failure carries when a required check cannot run in the
+/// lane that tried it and was not handed to the route that can run it: an
+/// `orbit plugin test` inside a macOS worker, whose Seatbelt profile refuses
+/// the plugin backend's own, run without a validation summary to defer
+/// through [ORB-19224]. `orbit plugin test` prints the bracketed marker in
+/// that refusal, and an agent that declares this code gets it stamped.
+///
+/// It is a kind of [`VALIDATION_ENVIRONMENT_ERROR_CODE`]: no repair of the
+/// candidate changes the lane's sandbox, so step and final recovery skip it,
+/// the failure handoff keeps the candidate, and a pull drain releases the
+/// claim as an `environment` failure instead of blocking the task.
+pub const VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE: &str = "validation_route_unavailable";
+
+/// The bracketed marker form of [`VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE`].
+pub const VALIDATION_ROUTE_UNAVAILABLE_MARKER: &str = "[validation_route_unavailable]";
+
+/// Whether a step failure says a required check could not run in its lane.
+#[must_use]
+pub fn is_validation_route_unavailable(error_code: Option<&str>, message: Option<&str>) -> bool {
+    error_code == Some(VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE)
+        || message.is_some_and(|message| {
+            failure_classification_text(message).contains(VALIDATION_ROUTE_UNAVAILABLE_MARKER)
         })
 }
 

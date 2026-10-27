@@ -3,7 +3,7 @@ summary: "Policy & Sandboxing — Design"
 type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
-last_updated: 2026-10-18
+last_updated: 2026-10-27
 last_validated: 2026-10-21
 status: Draft
 feature: policy-sandbox
@@ -149,6 +149,8 @@ A plugin backend has no Bubblewrap wrapper: the operator granted concrete paths 
 - **`network: none` is held at the kernel.** `ACCESS_NET_BIND_TCP | ACCESS_NET_CONNECT_TCP` are handled with no rule, refusing every TCP endpoint. That needs ABI 4; an older kernel fails closed rather than running the backend with the network open. Landlock has no address filter, so `loopback` and `any` both leave TCP open and the filesystem grants remain the boundary the design claims.
 
 A backend the host spawns on an agent's behalf ([plugins agent call broker §5](../plugins/2_agent_call_broker.md#5-confinement-of-a-brokered-backend)) also carries the agent's read exclusions (`LandlockBoundary::read_exclusions`). The plugin boundary carves these out beneath every read root: their directory stays listable, and a read root at or beneath one gets no grant. The host trees in `read_denies` keep no granted ancestor at all. Write roots the agent may not write never reach the boundary, because the profile is compiled down before spawn. A write root that remains includes read rights, except over a `read_denies` entry or a caller read exclusion at or beneath it: that subtree stays writable (a read deny is not a modify deny) but the write rule carries no read right, and no readable ancestor is granted over it. A name created inside that subtree after spawn stays unreadable.
+
+**`orbit plugin test` inside a macOS worker.** A conformance run spawns its backend directly, not through the broker, so inside a macOS worker the backend's `sandbox-exec` would be a second Seatbelt profile, which Darwin refuses (exit 71, `sandbox_apply: Operation not permitted`). Running the backend under the worker's profile instead would be weaker containment than the plugin declared, so the run never starts a confined backend there. It probes `sandbox-exec` once before any case and, on that refusal, either defers or refuses. A run given `ORBIT_VALIDATION_SUMMARY` (with `ORBIT_VALIDATION_GATE` and `ORBIT_VALIDATION_BASE`) defers every case: it prints one `SKIP: sandbox-exec cannot apply a profile: <plugin>/<case>: <reason>` line per case, exits 0, certifies nothing and writes the gate summary. The implementer hands that summary off as a deferred sandbox validation, and the claim host replays the gate outside the worker sandbox, where each case runs under the plugin's own profile. That replay is the validation evidence, and a replay that still defers holds the candidate ([development guide](../../DEVELOPMENT.md#test-process-environment)). Any other run, or one with `ORBIT_REQUIRE_SANDBOX_EXEC=1`, fails with the typed `[validation_route_unavailable]` marker. Recovery reads that marker as a validation-environment failure, so the failure handoff keeps the candidate and a claimed leaf releases its claim instead of escalating to a human. An agent that declares `validation_route_unavailable` gets the same marker. A `backend.sandbox: none` backend and Linux, where Landlock nests inside the worker's sandbox, are unaffected. A macOS worker therefore needs no host-only entry for `orbit plugin test`. [ORB-19224]
 
 Granted write roots are created before the child spawns, because a rule binds to an inode: a grant naming a directory that does not exist yet would otherwise silently grant nothing. `/dev/null` and the other write-side character devices are always granted, so an ordinary `>/dev/null` in a backend script is not a denial. The full manifest-to-profile mapping, including the macOS half, is in [plugins §4.3](../plugins/1_scope.md#43-sandboxing). [ORB-12736]
 
@@ -595,5 +597,6 @@ database/lock and asserts 100 collision-free dense IDs per artifact kind ([ORB-1
 - **[ORB-10596]** — Add a narrow managed-worktree mount for executor-authored Proposed ADRs and a collision-free shared ID allocator; the ADR tools and mount are since retired.
 - **[ORB-11376]** — Remove checkout-local runtime identity from the managed-agent write exception so absent identities cannot be published as empty anchors.
 - **[ORB-14017]** — Run a confined worker's read-only `github.*` tools on the host through the run's plugin broker, so the credential mask no longer breaks them.
+- **[ORB-19224]** — Defer `orbit plugin test` inside a macOS worker to the claim host's replay instead of failing every case on the nested Seatbelt refusal, and type the refusal `validation_route_unavailable`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

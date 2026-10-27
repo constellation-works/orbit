@@ -29,6 +29,10 @@
 //! Certification is written only when this host has the same plugin
 //! installed at the same manifest digest: a directory that differs from the
 //! installed tree says nothing about the tree the host would run.
+//!
+//! Inside a sandbox that refuses the backend's own (a macOS worker), no case
+//! runs: the run defers to a host replay or refuses, typed
+//! ([`super::conformance_gate`]). A deferred run certifies nothing.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -50,6 +54,9 @@ use orbit_types::plugin::{
 };
 use serde_json::Value;
 
+use super::conformance_gate::{
+    PluginTestValidationGate, seatbelt_deferral, write_validation_summary,
+};
 use crate::OrbitRuntime;
 use crate::runtime::plugin::backend::build_plugin_backend;
 use crate::runtime::plugin::config::plugin_config_section;
@@ -62,6 +69,9 @@ pub struct PluginTestOutcome {
     /// Canonical tool name the case called.
     pub tool: String,
     pub passed: bool,
+    /// Whether the case was deferred to a host replay without running
+    /// ([`PluginTestReport::deferral`]). A deferred case has not passed.
+    pub deferred: bool,
     /// Whether `--update-goldens` replaced this case's expected output.
     pub updated: bool,
     /// Why it failed, or empty when it passed.
@@ -85,11 +95,30 @@ pub struct PluginTestReport {
     /// The manifest's requested grant set, in the same spelling the refusal
     /// prints. `none` when the manifest requests nothing.
     pub requested_grants: String,
+    /// Set when no case ran because this lane's sandbox refuses the
+    /// backend's, and the run deferred every case to a host replay.
+    pub deferral: Option<PluginTestDeferral>,
+}
+
+/// A run deferred to the host because `sandbox-exec` cannot apply the
+/// backend's profile where it ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginTestDeferral {
+    /// The Seatbelt apply probe's refusal.
+    pub reason: String,
+    /// One `SKIP: sandbox-exec cannot apply a profile:` line per case.
+    pub notices: Vec<String>,
 }
 
 impl PluginTestReport {
     pub fn passed(&self) -> bool {
         !self.results.is_empty() && self.results.iter().all(|result| result.passed)
+    }
+
+    /// The gate's exit status: 0 when every case passed or the whole run
+    /// was deferred to a host replay, 1 otherwise.
+    pub fn exit_code(&self) -> i32 {
+        i32::from(!self.passed() && self.deferral.is_none())
     }
 
     /// Names of the failing cases, for a one-line summary.
@@ -117,6 +146,12 @@ pub struct PluginTestOptions {
     pub case: Option<String>,
     /// Replace mismatched output expectations with the actual output.
     pub update_goldens: bool,
+    /// Set when a validation gate runs the suite and wants its summary.
+    /// Only such a run may defer to a host replay.
+    pub validation_gate: Option<PluginTestValidationGate>,
+    /// `ORBIT_REQUIRE_SANDBOX_EXEC=1`: refuse rather than defer when the
+    /// backend's sandbox cannot apply here.
+    pub require_sandbox_exec: bool,
 }
 
 /// Run a plugin source's conformance goldens. `dir` is a checkout holding
@@ -218,6 +253,9 @@ pub fn test_plugin_dir(
         &external_writes,
         &requested_grants,
     )?;
+    if let Some(reason) = seatbelt_deferral(&profile, options, plugin.namespace())? {
+        return deferred_report(&plugin, &case_locations, reason, requested_grants, options);
+    }
     let mut results = Vec::with_capacity(case_locations.len());
     let mut changed_files = std::collections::BTreeSet::new();
     for (file_index, case_index) in case_locations {
@@ -258,6 +296,7 @@ pub fn test_plugin_dir(
         certified: false,
         certification_note: String::new(),
         requested_grants,
+        deferral: None,
     };
     let (certified, note) = if options.case.is_some() {
         (
@@ -269,6 +308,57 @@ pub fn test_plugin_dir(
     };
     report.certified = certified;
     report.certification_note = note;
+    if let Some(gate) = &options.validation_gate {
+        write_validation_summary(gate, &report)?;
+    }
+    Ok(report)
+}
+
+/// The report of a run whose every selected case was deferred to a host
+/// replay: no backend started, nothing certified.
+fn deferred_report(
+    plugin: &LoadedPlugin,
+    case_locations: &[(usize, usize)],
+    reason: String,
+    requested_grants: String,
+    options: &PluginTestOptions,
+) -> Result<PluginTestReport, OrbitError> {
+    let first_party = plugin.manifest.claims_first_party_namespace();
+    let mut notices = Vec::with_capacity(case_locations.len());
+    let results = case_locations
+        .iter()
+        .map(|&(file_index, case_index)| {
+            let case = &plugin.tests[file_index].file.tests[case_index];
+            let notice = orbit_exec::seatbelt_deferral_notice(
+                &format!("{}/{}", plugin.namespace(), case.name),
+                &reason,
+            );
+            notices.push(notice.clone());
+            PluginTestOutcome {
+                name: case.name.clone(),
+                tool: plugin_tool_name(plugin.namespace(), &case.tool, first_party),
+                passed: false,
+                deferred: true,
+                updated: false,
+                detail: notice,
+            }
+        })
+        .collect();
+    let report = PluginTestReport {
+        name: plugin.namespace().to_string(),
+        version: plugin.manifest.metadata.version.clone(),
+        root: plugin.root.to_string_lossy().into_owned(),
+        manifest_digest: plugin.manifest_digest.clone(),
+        orbit_version: host_version().to_string(),
+        results,
+        certified: false,
+        certification_note: "not recorded: every case was deferred to a host replay".to_string(),
+        requested_grants,
+        deferral: Some(PluginTestDeferral { reason, notices }),
+    };
+    if let Some(gate) = &options.validation_gate {
+        write_validation_summary(gate, &report)?;
+    }
     Ok(report)
 }
 
@@ -383,6 +473,7 @@ fn run_case(
                 name: case.name.clone(),
                 tool: name,
                 passed: false,
+                deferred: false,
                 updated: false,
                 detail: format!("the manifest declares no tool '{}'", case.tool),
             },
@@ -447,6 +538,7 @@ fn run_case(
                     name: case.name.clone(),
                     tool: name,
                     passed,
+                    deferred: false,
                     updated: false,
                     detail: detail.unwrap_or_default(),
                 },
@@ -492,6 +584,7 @@ fn run_case(
                     name: case.name.clone(),
                     tool: name,
                     passed,
+                    deferred: false,
                     updated: false,
                     detail,
                 },

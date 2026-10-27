@@ -362,6 +362,10 @@ spec:
       be deferred.
     - In the execution summary, record the gate, summary path and notices,
       and mark that coverage `not_run`, never passed.
+    A required `orbit plugin test` gate defers this way inside a macOS
+    worker: also set `ORBIT_VALIDATION_GATE` to the gate exactly as
+    configured and `ORBIT_VALIDATION_BASE` to `input.base_sha`. Without
+    them it fails `validation_route_unavailable` and runs no case.
     Nothing else is deferrable: a nonzero exit, any other `SKIP:` or
     `skipping` notice, a gate that ran or selected no tests, notices of a
     kind this lane's sandbox does not refuse, `DEFERRED: ps denied:` outside

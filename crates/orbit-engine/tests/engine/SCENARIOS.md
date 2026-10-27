@@ -335,6 +335,7 @@ certifies the repaired head as both the original head and publication lease.
 
 - `a_content_filter_refusal_skips_recovery_and_keeps_the_candidate`
 - `a_declared_owner_route_failure_skips_recovery`
+- `a_declared_validation_route_failure_skips_recovery`
 - `other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt`
 
 ### `provider_capacity::provider_failure_contracts_3`
