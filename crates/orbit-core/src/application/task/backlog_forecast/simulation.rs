@@ -43,6 +43,9 @@ struct Outcome {
     starts: Vec<Vec<Option<f64>>>,
     ranks: Vec<Vec<Option<f64>>>,
     finished: Vec<u64>,
+    /// Per task: the slot-hours, tokens and USD its started attempts used,
+    /// failed, blocked and abandoned ones included, per iteration.
+    usage: Vec<[Vec<Option<f64>>; 3]>,
     /// Per complexity: summed slot-hours, tokens and USD per iteration.
     by_complexity: BTreeMap<String, [Vec<Option<f64>>; 3]>,
     rework: [Vec<Option<f64>>; 3],
@@ -72,6 +75,7 @@ impl Outcome {
             starts: vec![Vec::new(); tasks],
             ranks: vec![Vec::new(); tasks],
             finished: vec![0; tasks],
+            usage: (0..tasks).map(|_| Default::default()).collect(),
             by_complexity: BTreeMap::new(),
             rework: Default::default(),
             arrival_work: Default::default(),
@@ -107,6 +111,24 @@ impl Outcome {
         }
         self.return_waits.push(run.return_wait);
         self.truncated += u64::from(run.truncated);
+        for (index, included) in scenario.included.iter().take(self.usage.len()).enumerate() {
+            if !included {
+                continue;
+            }
+            // Spend is missing wherever the scenario's totals are.
+            let used = if run.waits.is_some() {
+                state.charged[index]
+            } else {
+                Draw::MISSING
+            };
+            for (values, metric) in
+                self.usage[index]
+                    .iter_mut()
+                    .zip([used.hours, used.tokens, used.usd])
+            {
+                values.push(metric);
+            }
+        }
         if run.waits.is_none() {
             return;
         }
@@ -213,6 +235,7 @@ impl Outcome {
                 let item = &items[index];
                 let scheduled = scenario.included[index];
                 let started = self.starts[index].iter().filter(|at| at.is_some()).count() as u64;
+                let [hours, tokens, usd] = &mut self.usage[index];
                 json!({
                     "id": item.task_id,
                     "title": item.title,
@@ -248,6 +271,11 @@ impl Outcome {
                     "completion_probability": scheduled
                         .then(|| probability(self.finished[index], available))
                         .flatten(),
+                    // Every attempt it starts by the horizon, as the
+                    // scenario totals charge them: stored for scoring.
+                    "work_hours": model::forecast_quantiles(hours),
+                    "tokens": model::forecast_quantiles(tokens),
+                    "usd": model::forecast_quantiles(usd),
                 })
             })
             .collect();

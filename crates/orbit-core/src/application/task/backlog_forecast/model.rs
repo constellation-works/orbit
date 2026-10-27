@@ -22,8 +22,10 @@ use super::review_modes::ReviewMode;
 /// a fresh blocked attempt [ORB-18853]. 8: a censored blocked wait is
 /// summed through the horizon, and absorption stops at its own event
 /// [ORB-18856]. 9: one-generation regression bundles, donor admission and
-/// horizon-mature calibration [ORB-18691].
-pub(super) const MODEL_VERSION: u32 = 9;
+/// horizon-mature calibration [ORB-18691]. 10: stored per-task work hours,
+/// tokens and USD cover every simulated attempt, not one delivery draw, and
+/// are scored against the same retry-inclusive measure [ORB-18859].
+pub(super) const MODEL_VERSION: u32 = 10;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
@@ -559,31 +561,4 @@ pub(super) fn forecast_quantiles(values: &mut [Option<f64>]) -> Value {
 
 fn round(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
-}
-
-/// Quantiles of a plain sample set (a task's own history).
-fn sample_quantiles(mut values: Vec<f64>, less: f64) -> Value {
-    let mut values: Vec<Option<f64>> = values
-        .drain(..)
-        .map(|value| Some((value - less).max(0.0)))
-        .collect();
-    forecast_quantiles(&mut values)
-}
-
-impl Resolved {
-    /// This task's own p50/p90 of hours, tokens and USD, as stored for
-    /// per-task scoring.
-    pub(super) fn marginals(&self, history: &[Delivery], spent: Spent) -> Value {
-        let pick = |indices: &[usize], value: &dyn Fn(&Delivery) -> Option<f64>| {
-            indices
-                .iter()
-                .filter_map(|index| value(&history[*index]))
-                .collect::<Vec<_>>()
-        };
-        json!({
-            "hours": sample_quantiles(pick(&self.samples, &|d| Some(d.hours)), spent.hours),
-            "tokens": sample_quantiles(pick(&self.token_samples, &|d| d.tokens), spent.tokens),
-            "usd": sample_quantiles(pick(&self.cost_samples, &|d| d.usd), spent.usd),
-        })
-    }
 }

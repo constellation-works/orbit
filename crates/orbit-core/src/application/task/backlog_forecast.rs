@@ -972,7 +972,13 @@ fn calculate_backlog_forecast(
                     "review_mode": item.review_mode,
                     "review_mode_source": item.review_mode_source,
                     "review_mode_fallback": resolved.review_mode_fallback,
-                    "forecast": resolved.marginals(&history, item.spent),
+                    // Every simulated attempt's use, not one delivery
+                    // draw [ORB-18859]: unknown when it was not scheduled.
+                    "forecast": {
+                        "work_hours": field("work_hours"),
+                        "tokens": field("tokens"),
+                        "usd": field("usd"),
+                    },
                     "dependencies": plan.edges[index]
                         .iter()
                         .map(|dep| items[*dep].task_id.as_str())
@@ -1020,6 +1026,7 @@ fn calculate_backlog_forecast(
         &tasks,
         &done_at,
         &runs,
+        &task_episodes,
         model::MODEL_VERSION,
         now,
     );

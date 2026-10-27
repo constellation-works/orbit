@@ -21,6 +21,15 @@
 //! stay provisional until the 90-day observation cutoff. Earlier versions
 //! score without rework.
 //!
+//! From model 10 [ORB-18859] a stored task's forecast is the work hours,
+//! tokens and USD of every attempt the simulation started, failed, blocked
+//! and abandoned ones included. Its actual is the same measure: tokens and
+//! USD of every invocation after the forecast, and work hours as the slot
+//! hold of each attempt that settled without delivering after it, plus the
+//! delivery's invocation hours since the last of them. Elapsed time spent
+//! waiting to return is not work. Earlier versions stored one delivery draw
+//! and keep their original measure (`task_hours_measure`).
+//!
 //! Hits are kept per model version: a version's quantiles mean something
 //! different from another's, so the top-level hit rates describe the
 //! current version alone and `by_model_version` holds every version's own.
@@ -34,6 +43,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::ForecastRun;
+use super::outcomes::{self, EpisodeOutcome, TaskEpisodes};
 
 /// One task as a stored forecast recorded it.
 #[derive(Deserialize)]
@@ -47,7 +57,49 @@ struct StoredTask {
 const METRICS: [&str; 3] = ["hours", "tokens", "usd"];
 /// The first model version that samples abandoned work.
 const ABANDONED_OUTCOME_VERSION: u32 = 5;
+/// The first model version whose stored task forecast covers every
+/// simulated attempt, under `work_hours` rather than `hours`.
+const ATTEMPT_USAGE_VERSION: u32 = 10;
 const TOTALS: [&str; 3] = ["time_to_drain_hours", "tokens", "usd"];
+
+/// What a stored task's hour quantiles measure in `version`.
+fn task_hours_measure(version: u32) -> &'static str {
+    if version >= ATTEMPT_USAGE_VERSION {
+        "attempt_work_hours"
+    } else {
+        "delivery_hours"
+    }
+}
+
+/// A done task's slot work after `after`, as model 10 simulates it: each
+/// attempt that settled without delivering holds its slot from admission
+/// (or `after`) to settlement, and the delivery counts its invocation hours
+/// since the last such settlement. Without readable status history every
+/// post-forecast invocation counts as the delivery.
+fn attempt_work_hours(
+    runs: &[ForecastRun],
+    episodes: Option<&TaskEpisodes>,
+    after: DateTime<Utc>,
+    done: Option<DateTime<Utc>>,
+) -> f64 {
+    let Some(episodes) = episodes else {
+        return super::forecast_usage(runs, Some(after)).hours;
+    };
+    let setbacks: f64 = episodes
+        .settled
+        .iter()
+        .filter(|(_, settled, outcome)| {
+            *outcome != EpisodeOutcome::Delivered
+                && *settled > after
+                && done.is_none_or(|done| *settled <= done)
+        })
+        .map(|(admitted, settled, _)| outcomes::hours_between((*admitted).max(after), *settled))
+        .sum();
+    let since = episodes
+        .last_setback(done)
+        .map_or(after, |setback| setback.max(after));
+    setbacks + super::forecast_usage(runs, Some(since)).hours
+}
 
 /// How many actuals fell at or under p50 and p90.
 #[derive(Default, Clone, Copy)]
@@ -147,6 +199,7 @@ pub(super) fn score_backlog_forecasts(
     tasks: &HashMap<String, Task>,
     done_at: &HashMap<String, DateTime<Utc>>,
     runs: &HashMap<String, Vec<ForecastRun>>,
+    episodes: &HashMap<String, TaskEpisodes>,
     current_version: u32,
     now: DateTime<Utc>,
 ) -> Value {
@@ -164,6 +217,7 @@ pub(super) fn score_backlog_forecasts(
         let mut done = 0u64;
         let mut abandoned = 0u64;
         let samples_abandoned = forecast.model_version >= ABANDONED_OUTCOME_VERSION;
+        let attempt_usage = forecast.model_version >= ATTEMPT_USAGE_VERSION;
         let mut last_done: Option<DateTime<Utc>> = None;
         let mut tokens_total = Some(0.0);
         let mut usd_total = Some(0.0);
@@ -203,10 +257,8 @@ pub(super) fn score_backlog_forecasts(
                 pending += 1;
                 continue;
             }
-            let used = super::forecast_usage(
-                runs.get(&stored_task.id).map_or(&[][..], Vec::as_slice),
-                Some(forecast.forecast_at),
-            );
+            let task_runs = runs.get(&stored_task.id).map_or(&[][..], Vec::as_slice);
+            let used = super::forecast_usage(task_runs, Some(forecast.forecast_at));
             if used.invocations == 0 {
                 excluded.no_delivery += 1;
                 continue;
@@ -216,10 +268,22 @@ pub(super) fn score_backlog_forecasts(
             last_done = last_done.max(finished);
             tokens_total = tokens_total.zip(used.tokens).map(|(sum, one)| sum + one);
             usd_total = usd_total.zip(used.usd).map(|(sum, one)| sum + one);
-            let actuals = [Some(used.hours), used.tokens, used.usd];
-            for (index, metric) in METRICS.iter().enumerate() {
+            let (hours, hours_key) = if attempt_usage {
+                let work = attempt_work_hours(
+                    task_runs,
+                    episodes.get(&stored_task.id),
+                    forecast.forecast_at,
+                    done_at.get(&stored_task.id).copied(),
+                );
+                (work, "work_hours")
+            } else {
+                (used.hours, "hours")
+            };
+            let actuals = [Some(hours), used.tokens, used.usd];
+            let keys = [hours_key, METRICS[1], METRICS[2]];
+            for (index, key) in keys.iter().enumerate() {
                 if let Some(actual) = actuals[index] {
-                    hits.task[index].add(actual, &stored_task.forecast[*metric]);
+                    hits.task[index].add(actual, &stored_task.forecast[*key]);
                 }
             }
         }
@@ -302,6 +366,7 @@ pub(super) fn score_backlog_forecasts(
             json!({
                 "model_version": version,
                 "forecasts": hits.forecasts,
+                "task_hours_measure": task_hours_measure(version),
                 "task_level": hits.task_level(),
                 "forecast_level": hits.forecast_level(),
                 "regression_rework": {"followups": hits.rework[0].to_json(), "work_hours": hits.rework[1].to_json(), "tokens": hits.rework[2].to_json(), "usd": hits.rework[3].to_json()},
@@ -314,6 +379,7 @@ pub(super) fn score_backlog_forecasts(
         "horizon_days": 90,
         "mature_forecasts": stored.iter().filter(|row| row.model_version >= 9 && row.forecast_at + Duration::days(90) <= now).count(),
         "forecasts": forecasts,
+        "task_hours_measure": task_hours_measure(current_version),
         "task_level": current.task_level(),
         "forecast_level": current.forecast_level(),
         "by_model_version": by_model_version,
