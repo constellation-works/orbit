@@ -2,7 +2,7 @@
 title: Finding Verification — Design
 owner: claude
 last_updated: 2026-10-24
-last_validated: 2026-10-19
+last_validated: 2026-10-26
 status: Accepted
 feature: finding-verification
 doc_role: design
