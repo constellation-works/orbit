@@ -976,11 +976,15 @@ impl OrbitRuntime {
         }) {
             return Ok(());
         }
-        if !self
-            .list_task_metadata()?
-            .iter()
-            .any(|task| matches!(task.status, TaskStatus::Backlog | TaskStatus::InProgress))
-        {
+        // The canonical store keeps every non-proposed forecast item, so the
+        // scheduled admission must match that base cohort: proposed-only
+        // work stores nothing and stays skipped here, as before.
+        if !self.list_task_metadata()?.iter().any(|task| {
+            matches!(
+                task.status,
+                TaskStatus::Backlog | TaskStatus::InProgress | TaskStatus::Blocked
+            )
+        }) {
             return Ok(());
         }
         let options = parse_options(None, None, None)?;
