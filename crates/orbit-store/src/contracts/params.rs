@@ -656,6 +656,14 @@ pub struct LeaseExpandParams {
     /// waiting selectors plus the new ones would exceed this. Lease-token
     /// expansions set it; `None` is unlimited.
     pub max_selectors: Option<u32>,
+    /// Maximum serialized size of this expansion's `deadlock` answer value.
+    /// The runtime sets it to four bytes (JSON `null` in the fixed answer)
+    /// plus the bytes left for `conflicts` after that answer and the
+    /// transport margin. `None` (SSH and the dashboard) does not bound it.
+    /// When this lease is the victim and the complete cycle is larger, the
+    /// transaction writes nothing. When it fits, the cycle is kept whole and
+    /// `conflicts` keeps only the prefix that still fits beside it.
+    pub deadlock_budget_bytes: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

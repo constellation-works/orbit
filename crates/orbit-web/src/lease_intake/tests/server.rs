@@ -1406,3 +1406,226 @@ fn a_listener_of_another_protocol_version_is_refused_naming_both_versions() {
         );
     }
 }
+
+fn lease_record(runtime: &OrbitRuntime, lease_id: &str) -> Value {
+    lease::show(runtime, json!({"lease_id": lease_id})).expect("show lease")["lease"].clone()
+}
+
+fn preflight_needed_bytes(message: &str) -> usize {
+    const MARKER: &str = "would need about ";
+    let start = message
+        .find(MARKER)
+        .unwrap_or_else(|| panic!("expected a fixed-answer preflight refusal, got {message}"))
+        + MARKER.len();
+    let rest = &message[start..];
+    let end = rest
+        .find(" bytes")
+        .unwrap_or_else(|| panic!("expected a byte count in {message}"));
+    rest[..end]
+        .parse()
+        .unwrap_or_else(|_| panic!("expected a byte count in {message}"))
+}
+
+/// A token expansion that closes a multi-lease deadlock returns the whole
+/// cycle when the answer fits. The same cycle, on a lease whose record
+/// already fills the frame, is refused before that expansion writes a notice
+/// or changes any queued surface. The fixed answer is sized with
+/// `deadlock: null`; only the completed cycle pushes it over the frame.
+#[test]
+fn token_expansion_accounts_for_a_near_limit_deadlock_cycle() {
+    if !enter_isolated_child(
+        module_path!(),
+        "token_expansion_accounts_for_a_near_limit_deadlock_cycle",
+    ) {
+        return;
+    }
+    const FRAME: usize = 16 * 1024;
+    /// Room left under the frame after the fixed answer and the transport
+    /// margin. A few bytes of lease-id difference from the probe fit here;
+    /// a 32-member cycle does not.
+    const SLACK: usize = 128;
+    const CYCLE: usize = 32;
+    let fixture = FrameLimitFixture::start_with(IntakeLimits {
+        max_frame_bytes: FRAME as u32,
+        ..IntakeLimits::default()
+    });
+    let repo = fixture._tmp.path().join("ws_frame_limit");
+    let touch = |relative: &str| {
+        let path = repo.join(relative);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).expect("create selector directory");
+        }
+        std::fs::write(&path, "").expect("create selector file");
+    };
+    let request = |selector: &str, priority: &str, tag: Option<&str>| -> String {
+        let mut input = json!({
+            "principal": "alice",
+            "selectors": [selector],
+            "mode": "hard",
+            "priority": priority,
+        });
+        if let Some(tag) = tag {
+            input["tags"] = json!([tag]);
+        }
+        let granted = lease::request(&fixture.runtime, input, None, None).expect("seed hard lease");
+        assert_eq!(granted["granted"], true, "{granted}");
+        assert_eq!(granted["lease"]["mode"], "hard", "{granted}");
+        granted["lease"]["lease_id"]
+            .as_str()
+            .expect("lease id")
+            .to_string()
+    };
+    let expand_operator = |lease_id: &str, selector: &str| {
+        lease::expand(
+            &fixture.runtime,
+            json!({"lease_id": lease_id, "selectors": [selector]}),
+            None,
+            None,
+        )
+        .expect("operator expand")
+    };
+
+    // A small cycle still returns the full deadlock and keeps the older waiter.
+    for index in 0..3 {
+        touch(&format!("fit/{index}.rs"));
+    }
+    let fit: Vec<String> = (0..3)
+        .map(|index| {
+            let priority = if index == 2 { "low" } else { "normal" };
+            request(&format!("file:fit/{index}.rs"), priority, None)
+        })
+        .collect();
+    expand_operator(&fit[0], "file:fit/1.rs");
+    expand_operator(&fit[1], "file:fit/2.rs");
+    let mut client = fixture.connect();
+    let fitting = call(
+        &mut client,
+        "alice",
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": fit[2], "selectors": ["file:fit/0.rs"]}),
+    );
+    let fitting_size = serde_json::to_vec(&fitting).expect("encode").len();
+    assert!(
+        fitting_size <= FRAME,
+        "a deadlock that fits must be delivered, not refused: {fitting_size} bytes"
+    );
+    let fitting = ok(fitting);
+    assert_eq!(fitting["deadlock"]["lease_id"], fit[2], "{fitting}");
+    let cycle = fitting["deadlock"]["cycle"]
+        .as_array()
+        .expect("deadlock cycle");
+    assert_eq!(cycle.len(), 3, "{fitting}");
+    for id in &fit {
+        assert!(
+            cycle.iter().any(|member| member == &json!(id)),
+            "the cycle names every lease: {fitting}"
+        );
+    }
+    assert_eq!(
+        fitting["deadlock"]["selectors"],
+        json!(["file:fit/0.rs"]),
+        "{fitting}"
+    );
+    assert_eq!(fitting["lease"]["queued_selectors"], json!([]), "{fitting}");
+    assert_eq!(
+        fitting["lease"]["selectors"],
+        json!(["file:fit/2.rs"]),
+        "{fitting}"
+    );
+    assert_eq!(
+        lease_record(&fixture.runtime, &fit[0])["queued_selectors"],
+        json!(["file:fit/1.rs"]),
+        "the older expansion keeps waiting"
+    );
+    let deadlock_notices: Vec<_> = all_notices(&fixture.runtime)
+        .into_iter()
+        .filter(|notice| notice["lease_id"] == fit[2] && notice["kind"] == "deadlock")
+        .collect();
+    assert_eq!(deadlock_notices.len(), 1, "{deadlock_notices:?}");
+    assert_eq!(
+        deadlock_notices[0]["payload"]["cycle"], fitting["deadlock"]["cycle"],
+        "{deadlock_notices:?}"
+    );
+    assert_eq!(
+        deadlock_notices[0]["payload"]["selectors"],
+        json!(["file:fit/0.rs"]),
+        "{deadlock_notices:?}"
+    );
+
+    // Size a victim tag from a fixed-answer refusal, then close a longer cycle
+    // with that record. The probe is not part of the cycle.
+    for index in 0..CYCLE {
+        touch(&format!("near/{index:02}.rs"));
+    }
+    touch("near/pp.rs");
+    let probe = request("file:near/pp.rs", "low", Some(&"x".repeat(FRAME)));
+    let probe_error = refusal(call(
+        &mut client,
+        "alice",
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": probe, "selectors": ["file:near/00.rs"]}),
+    ));
+    assert_eq!(probe_error.code, "invalid_input", "{probe_error:?}");
+    let needed = preflight_needed_bytes(&probe_error.message);
+    let tag_len = (2 * FRAME)
+        .checked_sub(SLACK + needed)
+        .unwrap_or_else(|| panic!("probe needed {needed} bytes, over the frame"));
+    assert!(
+        (1..FRAME).contains(&tag_len),
+        "tag length {tag_len} from a probe that needed {needed} bytes"
+    );
+    assert_eq!(
+        lease_record(&fixture.runtime, &probe)["queued_selectors"],
+        json!([]),
+        "the sizing probe must not queue"
+    );
+
+    let holders: Vec<String> = (0..CYCLE - 1)
+        .map(|index| request(&format!("file:near/{index:02}.rs"), "normal", None))
+        .collect();
+    let victim = request(
+        &format!("file:near/{:02}.rs", CYCLE - 1),
+        "low",
+        Some(&"y".repeat(tag_len)),
+    );
+    for (index, holder) in holders.iter().enumerate() {
+        let next = format!("file:near/{:02}.rs", index + 1);
+        let expanded = expand_operator(holder, &next);
+        assert_eq!(expanded["queued"], json!([next]), "{expanded}");
+        assert!(expanded["deadlock"].is_null(), "{expanded}");
+    }
+
+    let watched = holders
+        .iter()
+        .chain(std::iter::once(&victim))
+        .chain(std::iter::once(&probe));
+    let records_before: Vec<Value> = watched
+        .clone()
+        .map(|id| lease_record(&fixture.runtime, id))
+        .collect();
+    let notices_before = all_notices(&fixture.runtime);
+    let error = refusal(call(
+        &mut client,
+        "alice",
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": victim, "selectors": ["file:near/00.rs"]}),
+    ));
+    assert_eq!(error.code, "invalid_input", "{error:?}");
+    assert!(
+        error.message.contains("deadlock cycle"),
+        "a near-limit cycle must be refused on the deadlock budget, not the fixed-answer \
+         preflight or a frame error after the write: {error:?}"
+    );
+    let records_after: Vec<Value> = watched
+        .map(|id| lease_record(&fixture.runtime, id))
+        .collect();
+    assert_eq!(
+        records_after, records_before,
+        "a refused expansion must not change the cycle's leases"
+    );
+    assert_eq!(
+        all_notices(&fixture.runtime),
+        notices_before,
+        "a refused expansion must not write a queued or deadlock notice"
+    );
+}

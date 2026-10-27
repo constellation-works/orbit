@@ -394,19 +394,91 @@ fn break_deadlocks(
             LeaseQueueKind::Expansion,
             "",
         )?;
-        notices::append_lease_notice(
-            tx,
-            &victim.lease_id,
-            "deadlock",
-            &json!({"selectors": victim.queued_selectors, "cycle": members}),
-            &format!("deadlock:{}", unique_row_id("")),
-        )?;
         refused.push(LeaseDeadlock {
             lease_id: victim.lease_id.clone(),
             selectors: victim.queued_selectors.clone(),
             cycle: members,
         });
     }
+}
+
+/// JSON `null`, the fixed token answer's `deadlock` value. A real cycle
+/// replaces those four bytes and spends the rest of the expansion's
+/// `deadlock_budget_bytes`.
+const ABSENT_DEADLOCK_BYTES: usize = 4;
+
+fn serialized_len(value: &impl serde::Serialize) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX / 2, |encoded| encoded.len())
+}
+
+/// The prefix of `conflicts` whose JSON, plus one separating byte each, fits
+/// in `bytes`. Dropping any entry reports truncation.
+fn conflict_prefix(
+    conflicts: Vec<TaskLockConflict>,
+    bytes: usize,
+) -> (Vec<TaskLockConflict>, bool) {
+    let mut kept = Vec::new();
+    let mut remaining = bytes;
+    for conflict in conflicts {
+        let size = serialized_len(&conflict) + 1;
+        if size > remaining {
+            return (kept, true);
+        }
+        remaining -= size;
+        kept.push(conflict);
+    }
+    (kept, false)
+}
+
+/// Refuse when this expansion's complete deadlock cycle cannot fit the token
+/// answer. Otherwise keep that cycle whole and shorten `conflicts` by what
+/// the cycle spent of the holder slack.
+fn bound_deadlock_answer(
+    params: &LeaseExpandParams,
+    deadlocks: &[LeaseDeadlock],
+    conflicts: Vec<TaskLockConflict>,
+    holders_truncated: bool,
+) -> Result<(Vec<TaskLockConflict>, bool), OrbitError> {
+    let Some(limit) = params.deadlock_budget_bytes else {
+        return Ok((conflicts, holders_truncated));
+    };
+    let Some(deadlock) = deadlocks
+        .iter()
+        .find(|deadlock| deadlock.lease_id == params.lease_id)
+    else {
+        return Ok((conflicts, holders_truncated));
+    };
+    let size = serialized_len(deadlock);
+    let slack = params.holder_list_bytes.unwrap_or(0);
+    let growth = size.saturating_sub(ABSENT_DEADLOCK_BYTES);
+    if size > limit || growth > slack {
+        return Err(OrbitError::InvalidInput(format!(
+            "the answer to this lease expansion would include a {size}-byte deadlock cycle, over \
+             the {limit}-byte budget the lease token transport leaves for it; the expansion is \
+             unchanged"
+        )));
+    }
+    if params.holder_list_bytes.is_none() {
+        return Ok((conflicts, holders_truncated));
+    }
+    let (conflicts, trimmed) = conflict_prefix(conflicts, slack - growth);
+    Ok((conflicts, holders_truncated || trimmed))
+}
+
+fn append_deadlock_notices(
+    tx: &StoreTx<'_>,
+    deadlocks: &[LeaseDeadlock],
+) -> Result<(), OrbitError> {
+    for deadlock in deadlocks {
+        notices::append_lease_notice(
+            tx,
+            &deadlock.lease_id,
+            "deadlock",
+            &json!({"selectors": deadlock.selectors, "cycle": deadlock.cycle}),
+            &format!("deadlock:{}", unique_row_id("")),
+        )?;
+    }
+    Ok(())
 }
 
 impl Store {
@@ -479,6 +551,7 @@ impl Store {
                 }
             }
             let deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
+            append_deadlock_notices(tx, &deadlocks)?;
             Ok(LeaseQueueGrantResult {
                 granted,
                 deadlocks,
@@ -586,16 +659,23 @@ impl Store {
                     &waiting,
                 )?;
             }
+            let mut holders_truncated = shown.truncated();
+            let mut conflicts = conflicts;
             if !queued.is_empty() {
+                // Position while this expansion is still queued. Breaking a
+                // deadlock clears the victim before the answer is built.
                 let position =
                     queue_position(tx, dir, workspace_id, params.aging_minutes, &lease.lease_id)?;
+                let deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
+                (conflicts, holders_truncated) =
+                    bound_deadlock_answer(params, &deadlocks, conflicts, holders_truncated)?;
                 let mut payload = json!({
                     "selectors": queued,
                     "expansion": true,
                     "holders": conflicts,
                     "position": position,
                 });
-                if shown.truncated() {
+                if holders_truncated {
                     payload["truncated"] = json!(true);
                 }
                 notices::append_lease_notice(
@@ -605,7 +685,8 @@ impl Store {
                     &payload,
                     &format!("queued:expansion:{}", unique_row_id("")),
                 )?;
-                result.deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
+                append_deadlock_notices(tx, &deadlocks)?;
+                result.deadlocks = deadlocks;
             }
             result.queue_position =
                 queue_position(tx, dir, workspace_id, params.aging_minutes, &lease.lease_id)?;
@@ -613,7 +694,7 @@ impl Store {
             result.added = added;
             result.queued = queued;
             result.conflicts = conflicts;
-            result.holders_truncated = shown.truncated();
+            result.holders_truncated = holders_truncated;
             Ok(result)
         })
     }

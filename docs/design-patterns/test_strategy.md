@@ -895,6 +895,15 @@ selector without changing the lease. The test stays in the in-crate fixture
 because `LeaseIntakeSocket::for_test_listener` is crate-private; an external
 integration target cannot start the same socket without widening that seam.
 
+`crates/orbit-web/src/lease_intake/tests/server.rs::token_expansion_accounts_for_a_near_limit_deadlock_cycle`
+is admitted as the public token-intake regression for an expansion whose
+deadlock cycle exceeds the frame (ORB-19007). The fixed answer is sized with
+`deadlock` null, and committing the cycle made intake return `frame_too_large`
+after the queue and notices had changed. The test drives the real intake
+socket: a three-lease cycle that fits is delivered whole, and a 32-lease cycle
+on a near-limit record is refused with `invalid_input` before any queue change
+or notice. It stays beside the selector-bound case for the same private listener.
+
 Two SSH decisions are corrected under criteria 2 and 4. The delayed-bind control
 injects a 500 ms attach budget and a 2 s bind delay; host forwarding fixes that budget
 at 5 s and also negotiates identity. The oversized-status case directly observes the

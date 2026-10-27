@@ -601,6 +601,7 @@
         "lease_intake/tests/server.rs::oversized_read_responses_are_bounded_errors_and_other_connections_still_work",
         "lease_intake/tests/server.rs::oversized_token_request_is_refused_before_any_grant_or_notice",
         "lease_intake/tests/server.rs::token_active_leases_are_bounded_per_principal_across_restart_and_tokens",
+        "lease_intake/tests/server.rs::token_expansion_accounts_for_a_near_limit_deadlock_cycle",
         "lease_intake/tests/server.rs::token_grant_answers_fit_the_frame_without_compensating_release",
         "lease_intake/tests/server.rs::token_hard_holder_lists_are_bounded_while_every_holder_still_blocks",
         "lease_intake/tests/server.rs::token_queued_selector_expansion_retries_do_not_double_count",
