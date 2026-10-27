@@ -2,6 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_types::task::{ArtifactManifestFileV2, Task};
+use orbit_types::workflow::ReviewAdmission;
 use orbit_types::workflow::handoff::AcceptedHandoff;
 use serde_json::Value;
 
@@ -10,6 +11,10 @@ use crate::OrbitRuntime;
 use crate::application::task::{HandoffPullRequest, TaskReviewPort};
 
 impl TaskReviewPort for OrbitRuntime {
+    fn forecast_review_admission(&self) -> Result<ReviewAdmission, OrbitError> {
+        super::admission::snapshot(self)
+    }
+
     fn task_review_evidence(
         &self,
         task: &Task,

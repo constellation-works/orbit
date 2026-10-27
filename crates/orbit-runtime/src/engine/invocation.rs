@@ -410,6 +410,8 @@ impl RuntimeKernel {
         Ok(facts
             .iter()
             .map(|fact| InvocationSpend {
+                job_run_id: fact.job_run_id.clone(),
+                activity_id: fact.activity_id.clone(),
                 ts: fact.ts,
                 task_ids: fact.task_ids.clone(),
                 provider_cost_usd: fact.provider_cost_usd.filter(|cost| valid_cost(*cost)),

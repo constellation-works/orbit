@@ -107,6 +107,9 @@ pub struct InvocationAccountingQuery {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InvocationAccountingFact {
     pub id: i64,
+    /// Run identity within the queried workspace; absent on old serialized facts.
+    #[serde(default)]
+    pub job_run_id: String,
     pub ts: DateTime<Utc>,
     pub model: Option<String>,
     pub input_tokens: u64,

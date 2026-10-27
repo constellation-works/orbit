@@ -20,6 +20,36 @@ use crate::application::contracts::{
 use crate::application::task::TaskJobPort;
 
 impl TaskJobPort for OrbitRuntime {
+    fn is_forecast_delivery_run(&self, run: &JobRun) -> bool {
+        !matches!(
+            run.job_id.as_str(),
+            "task_auto_pipeline"
+                | "task_gate_pipeline"
+                | "workspace_auto_pipeline"
+                | "workspace_pull_pipeline"
+        ) && (matches!(
+            run.job_id.as_str(),
+            "task_pr_pipeline" | "task_local_pipeline"
+        ) || super::claimed::CLAIMED_LEAF_JOBS.contains(&run.job_id.as_str())
+            || run
+                .input
+                .as_ref()
+                .and_then(|input| input.get("review"))
+                .is_some())
+    }
+
+    fn forecast_task_delivery_mode(&self, task: &Task) -> Result<Option<ShipMode>, OrbitError> {
+        let route = self.resolve_delivery_route(
+            std::slice::from_ref(task),
+            self.automatic_delivery_ship_mode(),
+        )?;
+        Ok(match route.job_name.as_str() {
+            "task_pr_pipeline" => Some(ShipMode::Pr),
+            "task_local_pipeline" => Some(ShipMode::Local),
+            _ => None,
+        })
+    }
+
     fn task_tool_availability_refusal(
         &self,
         tool_name: &str,

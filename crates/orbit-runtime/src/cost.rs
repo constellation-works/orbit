@@ -160,6 +160,12 @@ pub struct TaskTokenTotals {
 /// reads it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InvocationSpend {
+    /// Run identity scoped to the runtime's workspace.
+    #[serde(default)]
+    pub job_run_id: String,
+    /// Activity that produced this spend, when recorded.
+    #[serde(default)]
+    pub activity_id: Option<String>,
     pub ts: DateTime<Utc>,
     pub task_ids: Vec<String>,
     /// The provider-reported cost; `None` when the invocation recorded none

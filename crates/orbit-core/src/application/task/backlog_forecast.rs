@@ -11,10 +11,9 @@
 //!   of those invocations' run intervals, bridging gaps shorter than
 //!   [`GAP_BRIDGE_HOURS`]; its tokens and USD are their normalized token
 //!   and provider cost sums.
-//! - Each backlog task draws from its complexity × crew-pool cell, falling
-//!   back to its complexity's whole history below
-//!   [`model::MIN_CELL_SAMPLES`], and to every delivery when it is
-//!   unassessed or its complexity has none.
+//! - Each task draws from its complexity × crew-pool × review-mode cell.
+//!   Thin cells drop crew, then complexity, preserving mode at five samples;
+//!   only then use the mode-pooled cell, complexity and workspace history.
 //! - The drain is simulated on the drain's leaf-run ceiling
 //!   ([`OrbitRuntime::drain_concurrency_ceiling`]), with no new arrivals
 //!   unless `arrivals=on`. Each iteration admits work as the drain would
@@ -32,6 +31,7 @@
 
 mod dependencies;
 mod model;
+mod review_modes;
 mod schedule;
 mod scoring;
 
@@ -47,6 +47,7 @@ use orbit_types::task::{
 use serde_json::{Value, json};
 
 use model::{Arrivals, Basis, Delivery, Item, Resolved, Spent};
+use review_modes::{ReviewHistory, ReviewMode};
 
 /// Default history lookback, in days.
 const DEFAULT_LOOKBACK_DAYS: i64 = 30;
@@ -303,8 +304,18 @@ fn calculate_backlog_forecast(
         .min()
         .map(|oldest| oldest - SPEND_READ_SLACK);
     let mut runs: HashMap<String, Vec<ForecastRun>> = HashMap::new();
+    let spends = if spend_since.is_some() {
+        runtime.invocation_spend(spend_since)?
+    } else {
+        Vec::new()
+    };
+    let review_task_ids = history_rows
+        .iter()
+        .map(|row| row.task_id.as_str())
+        .collect();
+    let reviews = ReviewHistory::collect(runtime, &spends, &review_task_ids)?;
     if spend_since.is_some() {
-        for spend in runtime.invocation_spend(spend_since)? {
+        for spend in spends {
             let end = spend.ts;
             let start = end - Duration::milliseconds(i64::try_from(spend.duration_ms).unwrap_or(0));
             for task_id in &spend.task_ids {
@@ -333,6 +344,7 @@ fn calculate_backlog_forecast(
         history.push(Delivery {
             complexity: row.complexity.clone(),
             crew: tasks.get(&row.task_id).and_then(|task| task.crew.clone()),
+            review_mode: reviews.delivery_mode(&row.task_id),
             hours: used.hours,
             tokens: used.tokens,
             usd: used.usd,
@@ -372,17 +384,20 @@ fn calculate_backlog_forecast(
             } else {
                 Spent::default()
             };
-            Item {
+            let (review_mode, review_mode_source) = reviews.assumed_mode(runtime, task)?;
+            Ok(Item {
                 task_id: id,
                 title: task.title.clone(),
                 complexity,
                 crews,
+                review_mode,
+                review_mode_source,
                 in_progress,
                 proposed: task.status == TaskStatus::Proposed,
                 spent,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, OrbitError>>()?;
     let resolved: Vec<Resolved> = items
         .iter()
         .map(|item| model::resolve_forecast_item(item, &history))
@@ -447,6 +462,15 @@ fn calculate_backlog_forecast(
             ("dependency_unforecastable", 0),
             ("unverifiable_dependencies", 0),
             ("review_lock_overlaps", 0),
+            ("review_mode_fallbacks", 0),
+            ("review_mode_unknown", 0),
+            (
+                "history_review_mode_unknown",
+                history
+                    .iter()
+                    .filter(|delivery| delivery.review_mode == ReviewMode::Unknown)
+                    .count() as u64,
+            ),
         ]);
         let reasons = if proposed {
             &plan.approved
@@ -473,13 +497,20 @@ fn calculate_backlog_forecast(
             if item.complexity == UNSET_BUCKET {
                 bump("unassessed");
             }
+            if resolved.review_mode_fallback {
+                bump("review_mode_fallbacks");
+            }
+            if item.review_mode == ReviewMode::Unknown {
+                bump("review_mode_unknown");
+            }
             match resolved.basis {
                 Basis::Cell => {}
-                Basis::Complexity => {
+                Basis::ModePooledCell => bump("thin_cell_fallbacks"),
+                Basis::Complexity | Basis::ReviewComplexity => {
                     bump("thin_cell_fallbacks");
                     bump("fallback_complexity");
                 }
-                Basis::Workspace => {
+                Basis::Workspace | Basis::ReviewWorkspace => {
                     if item.complexity != UNSET_BUCKET {
                         bump("thin_cell_fallbacks");
                     }
@@ -523,6 +554,10 @@ fn calculate_backlog_forecast(
         "gap_bridge_hours": GAP_BRIDGE_HOURS,
         "history_deliveries": history.len(),
         "history_without_invocations": without_invocations,
+        "history_review_modes": history.iter().fold(BTreeMap::<String, u64>::new(), |mut counts, delivery| {
+            *counts.entry(delivery.review_mode.key().into()).or_default() += 1;
+            counts
+        }),
     });
 
     let mut stored_now = None;
@@ -548,6 +583,9 @@ fn calculate_backlog_forecast(
                     "in_progress": item.in_progress,
                     "basis": resolved.basis.key(),
                     "cell_samples": resolved.cell_samples,
+                    "review_mode": item.review_mode,
+                    "review_mode_source": item.review_mode_source,
+                    "review_mode_fallback": resolved.review_mode_fallback,
                     "forecast": resolved.marginals(&history, item.spent),
                     "dependencies": plan.edges[index]
                         .iter()

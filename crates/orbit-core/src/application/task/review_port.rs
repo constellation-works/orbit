@@ -10,6 +10,7 @@
 
 use orbit_common::OrbitError;
 use orbit_types::task::{ArtifactManifestFileV2, Task};
+use orbit_types::workflow::ReviewAdmission;
 use orbit_types::workflow::handoff::AcceptedHandoff;
 use serde_json::Value;
 
@@ -17,6 +18,9 @@ use super::HandoffPullRequest;
 
 /// The review-evidence operations task code calls, implemented by `review`.
 pub(in crate::application) trait TaskReviewPort {
+    /// The current effective review admission, before any per-run request.
+    fn forecast_review_admission(&self) -> Result<ReviewAdmission, OrbitError>;
+
     /// The review gate evidence for `task`, read from the certificate its
     /// `artifacts` list; `None` when no gate ever settled it.
     fn task_review_evidence(

@@ -11,27 +11,26 @@ use orbit_types::task::UNSET_BUCKET;
 use serde_json::{Value, json};
 
 use super::dependencies::DependencyPlan;
+use super::review_modes::ReviewMode;
 use super::schedule::{self, HORIZON_HOURS, Scenario, ScheduleState};
 use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 
 /// Bumped whenever the sampling or simulation changes what a stored
-/// forecast means, so calibration can tell versions apart. 3: the drain's
-/// dependency, lock, unknown-footprint, reservation and dispatch-order
-/// admission [ORB-18686].
-pub(super) const MODEL_VERSION: u32 = 3;
+/// forecast means, so calibration can tell versions apart. 4: review-mode
+/// sampling and explicit mode-pooled fallback [ORB-18687].
+pub(super) const MODEL_VERSION: u32 = 4;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
     ("admission", Some(1)),
-    ("review_modes", None),
+    ("review_modes", Some(1)),
     ("outcomes", None),
     ("resource_fit", None),
     ("regression_rework", None),
 ];
 /// Simulated drains per forecast.
 pub(super) const ITERATIONS: usize = 1_000;
-/// A complexity × crew-pool cell with fewer completed deliveries than this
-/// falls back to the complexity's whole history.
+/// Each mode-preserving pool requires this many completed deliveries.
 pub(super) const MIN_CELL_SAMPLES: usize = 5;
 const SEED: u64 = 0x0b17_f0ec_a57d_2026;
 
@@ -41,6 +40,7 @@ const SEED: u64 = 0x0b17_f0ec_a57d_2026;
 pub(super) struct Delivery {
     pub(super) complexity: String,
     pub(super) crew: Option<String>,
+    pub(super) review_mode: ReviewMode,
     pub(super) hours: f64,
     /// `None` when an invocation ran a model the token normalization does
     /// not cover.
@@ -65,6 +65,8 @@ pub(super) struct Item {
     pub(super) complexity: String,
     /// The crews it will draw: its own crew, else its complexity pool.
     pub(super) crews: BTreeSet<String>,
+    pub(super) review_mode: ReviewMode,
+    pub(super) review_mode_source: String,
     pub(super) in_progress: bool,
     pub(super) proposed: bool,
     pub(super) spent: Spent,
@@ -73,8 +75,14 @@ pub(super) struct Item {
 /// Which history a task's draws come from.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Basis {
-    /// Its complexity × crew-pool cell.
+    /// Its complexity × crew-pool × review-mode cell.
     Cell,
+    /// Drop crew while preserving complexity and review mode.
+    ReviewComplexity,
+    /// Drop complexity too, preserving review mode.
+    ReviewWorkspace,
+    /// Review support was thin: the mode-pooled complexity × crew cell.
+    ModePooledCell,
     /// The cell was thin: every delivery of its complexity.
     Complexity,
     /// Unassessed, or its complexity has no history: every delivery.
@@ -87,6 +95,9 @@ impl Basis {
     pub(super) fn key(self) -> &'static str {
         match self {
             Self::Cell => "cell",
+            Self::ReviewComplexity => "review_complexity",
+            Self::ReviewWorkspace => "review_workspace",
+            Self::ModePooledCell => "mode_pooled_cell",
             Self::Complexity => "complexity",
             Self::Workspace => "workspace",
             Self::None => "none",
@@ -99,6 +110,8 @@ pub(super) struct Resolved {
     pub(super) basis: Basis,
     /// Size of its own cell, before any fallback.
     pub(super) cell_samples: usize,
+    /// The resolved pool does not preserve the assumed review mode.
+    pub(super) review_mode_fallback: bool,
     samples: Vec<usize>,
     token_samples: Vec<usize>,
     cost_samples: Vec<usize>,
@@ -121,7 +134,7 @@ pub(super) fn resolve_forecast_item(item: &Item, history: &[Delivery]) -> Resolv
     let of_complexity: Vec<usize> = (0..history.len())
         .filter(|index| assessed && history[*index].complexity == item.complexity)
         .collect();
-    let cell: Vec<usize> = of_complexity
+    let pooled_cell: Vec<usize> = of_complexity
         .iter()
         .copied()
         .filter(|index| {
@@ -131,9 +144,22 @@ pub(super) fn resolve_forecast_item(item: &Item, history: &[Delivery]) -> Resolv
                 .is_some_and(|crew| item.crews.contains(crew))
         })
         .collect();
+    // Unknown is missing evidence, never a measured policy choice.
+    let matches_mode = |index: &usize| {
+        item.review_mode != ReviewMode::Unknown && history[*index].review_mode == item.review_mode
+    };
+    let cell: Vec<usize> = pooled_cell.iter().copied().filter(matches_mode).collect();
+    let mode_complexity: Vec<usize> = of_complexity.iter().copied().filter(matches_mode).collect();
+    let mode_workspace: Vec<usize> = (0..history.len()).filter(matches_mode).collect();
     let cell_samples = cell.len();
     let (basis, samples) = if cell.len() >= MIN_CELL_SAMPLES {
         (Basis::Cell, cell)
+    } else if mode_complexity.len() >= MIN_CELL_SAMPLES {
+        (Basis::ReviewComplexity, mode_complexity)
+    } else if mode_workspace.len() >= MIN_CELL_SAMPLES {
+        (Basis::ReviewWorkspace, mode_workspace)
+    } else if pooled_cell.len() >= MIN_CELL_SAMPLES {
+        (Basis::ModePooledCell, pooled_cell)
     } else if !of_complexity.is_empty() {
         (Basis::Complexity, of_complexity)
     } else if !history.is_empty() {
@@ -154,6 +180,10 @@ pub(super) fn resolve_forecast_item(item: &Item, history: &[Delivery]) -> Resolv
     Resolved {
         basis,
         cell_samples,
+        review_mode_fallback: !matches!(
+            basis,
+            Basis::Cell | Basis::ReviewComplexity | Basis::ReviewWorkspace
+        ),
         samples,
         token_samples,
         cost_samples,
@@ -460,6 +490,10 @@ impl Outcome {
                         "backlog"
                     },
                     "basis": resolved[index].basis.key(),
+                    "review_mode": item.review_mode,
+                    "review_mode_source": item.review_mode_source,
+                    "review_mode_fallback": resolved[index].review_mode_fallback,
+                    "cell_samples": resolved[index].cell_samples,
                     "unforecastable": reasons[index],
                     "predicted_start_hours": quantiles(&mut self.starts[index]),
                     "predicted_start_rank": quantiles(&mut self.ranks[index]),
