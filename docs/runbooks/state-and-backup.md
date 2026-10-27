@@ -85,7 +85,10 @@ Another registered workspace keeps its own window. `orbit gc runs --apply` drops
 state for terminal runs past the run window, including those unregistered ids, while
 keeping their run and step rows, and prunes the per-minute run and host resource history
 (`run_resource_minutes`, `host_resource_minutes`) and the admission forecasts checked
-against it (`admission_forecasts`) older than 30 days. `orbit gc journal --apply` deletes
+against it (`admission_forecasts`) older than 30 days, except rows kept at any age by
+count: the newest `max(200, machine.auto_concurrency.profile_window)` deliveries per
+workspace, work class and complexity, the newest 10,000 forecasts, and host minutes
+from the oldest kept forecast onward. `orbit gc journal --apply` deletes
 applied rows of the task commit journal (`task_commit_journal`) older than
 `retention.journal_days` (default 14), for this workspace and unregistered ids. Recovery
 replays only prepared and committed rows, so those, aborted rows and each task's newest
@@ -108,9 +111,10 @@ The cost of each retention setting:
   summaries and commit outcomes stay, so implement_one duration with outcome=succeeded
   still includes committed candidates and excludes runs that did not commit. Upgrade
   backfills outcomes from existing state before pruning. Already-pruned state cannot
-  supply an unknown outcome. Resource minutes and admission forecasts have a separate
-  fixed 30-day window, so older raw samples disappear; auto-concurrency profiles and
-  forecast accuracy keep working within that supported window.
+  supply an unknown outcome. Resource minutes and admission forecasts older than 30
+  days are pruned except rows kept at any age by count, so older raw samples outside
+  those counts disappear; auto-concurrency profiles and forecast accuracy keep working
+  on the rows the counts keep.
 - `retention.journal_days`: older applied transition diagnostics disappear, while
   published task history and recovery inputs stay.
 - `retention.store_warn_bytes`: only controls a doctor warning; it prunes nothing.
