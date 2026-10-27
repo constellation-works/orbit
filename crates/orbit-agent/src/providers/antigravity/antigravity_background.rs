@@ -210,7 +210,7 @@ fn status_before(segment: &str) -> Option<bool> {
         .map(|(_, running)| running)
 }
 
-/// Whole-word status matches as `(position, is_running)`.
+/// Status matches at non-alphanumeric boundaries as `(position, is_running)`.
 fn status_words(segment: &str) -> impl Iterator<Item = (usize, bool)> + '_ {
     let running = RUNNING_WORDS.iter().map(|word| (*word, true));
     let finished = FINISHED_WORDS.iter().map(|word| (*word, false));
