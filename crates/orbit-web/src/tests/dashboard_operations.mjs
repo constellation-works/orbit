@@ -1752,7 +1752,7 @@ assert(forecastText.includes('Held') && forecastText.includes('Heavy candidate')
 assert(forecastText.includes('Small candidate') && forecastText.includes('waiting for the protected queue head to fit') && forecastText.includes('profile heaviest_on_host'), `a starvation hold names the guard, not a stored sentence: ${forecastText}`);
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Stuck head') && forecastText.includes('change/medium via exact') && forecastText.includes('3 protected passes'), `protected and stuck head: ${forecastText}`);
 assert(!forecastText.includes('ORB-LEAKED') && !forecastText.includes('FR-LEAKED'), `stored ids stay off the card: ${forecastText}`);
-assert(!forecast.querySelector('.drain-forecast-task-status') && !forecastText.includes('window ended · nothing running') && !forecastText.includes('Admitted at'), `a live enforce forecast stays present tense (ORB-18957): ${forecastText}`);
+assert(!forecastText.includes('window ended · nothing running') && !forecastText.includes('Admitted at'), `a live enforce forecast stays present tense (ORB-18957): ${forecastText}`);
 // A record written before the series was kept still draws its peaks as bars.
 assert(forecast.querySelectorAll('.drain-forecast-meter').length === 2 && !forecast.querySelector('.drain-forecast-spark'), 'a record without a series keeps the peak bars');
 drainCapacityOverride = { admission_forecast: { ...enforceForecast, mode: 'shadow' } };
@@ -1760,7 +1760,7 @@ await fetchAndRenderAutoDrainPane();
 forecast = forecastCard();
 forecastText = forecast?.textContent || '';
 assert(forecastText.includes('shadow · hypothetical') && forecastText.includes('Would admit') && forecastText.includes('Would hold') && forecastText.includes('Starvation guard would protect') && !forecastText.includes('Held'), `shadow decisions stay hypothetical: ${forecastText}`);
-assert(!forecast.querySelector('.drain-forecast-task-status') && !forecastText.includes('window ended') && !forecastText.includes('Would have'), `a live shadow forecast stays hypothetical present (ORB-18957): ${forecastText}`);
+assert(!forecastText.includes('window ended') && !forecastText.includes('Would have'), `a live shadow forecast stays hypothetical present (ORB-18957): ${forecastText}`);
 
 // With the recorded first hour each peak is a sparkline: 13 five-minute
 // points over 0-60 minutes, the admit threshold as a dashed line, and a dot on
@@ -1831,13 +1831,14 @@ assert(forecast?.dataset.forecastState === 'retained' && forecast.querySelector(
 assert(forecastText.includes('Starvation guard protects') && forecastText.includes('Heavy candidate'), `this pass still shows a protected head: ${forecastText}`);
 const retained = forecast.querySelector('.drain-forecast-retained');
 const retainedText = retained?.textContent || '';
-assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-17 05:00') && retainedText.includes('50.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && retainedText.includes('Fitting candidate') && retainedText.includes('profile exact'), `retained forecast: ${retainedText}`);
+const retainedHasNoTaskDecisions = root => root?.querySelector('.drain-forecast-tasks') == null
+  && !/(?:Admitted at|Held at|Starvation guard protected at|Was a stuck head at|Would have admitted at|Would have held at|Starvation guard would have protected at)/.test(root?.textContent || '');
+assert(retainedText.includes('Last forecast') && retainedText.includes('2026-10-17 05:00') && retainedText.includes('50.0%') && retainedText.includes('20.0%') && retainedText.includes('admit 89%') && retainedText.includes('headroom 39.0') && retained.querySelectorAll('.drain-forecast-peak').length === 2, `retained header and CPU/Memory peaks: ${retainedText}`);
+assert(retainedHasNoTaskDecisions(retained) && !retainedText.includes('Fitting candidate'), `a retained forecast omits its per-task decision list: ${retainedText}`);
 assert([...retained.querySelectorAll('.drain-forecast-spark-label')].map(label => label.textContent).join() === '+4m,+1m', `the Last forecast panel draws its series: ${retainedText}`);
 assert(!retained.querySelector('.drain-forecast-ended'), `a retained forecast that does not say its drain ended stays unlabelled (ORB-18957): ${retainedText}`);
-// [ORB-18957] After the window ends, Last forecast must read as history:
-// past decisions anchored to the forecast time, each task's current status,
-// and a line that nothing is running. A loaded task row wins over the
-// recorded map; a done task absent from that list still shows `done`.
+// [ORB-18957] After the window ends, Last forecast keeps its resource peaks
+// and says the window ended without repeating its per-task decisions.
 const historyAt = '2026-10-27T03:59:00Z';
 const historyForecast = {
   mode: 'enforce',
@@ -1847,7 +1848,6 @@ const historyForecast = {
   skipped: [{ task_id: 'ORB-18901', profile_source: 'exact', resource: 'cpu', minute: 6, percent: 94, detail: 'protects ORB-LEAKED' }],
   head: { task_id: 'ORB-18918', failing_since: historyAt, protected: true },
   task_titles: { 'ORB-18901': 'Back in backlog', 'ORB-18918': 'Guarded head' },
-  task_statuses: { 'ORB-18908': 'done', 'ORB-18901': 'done', 'ORB-18918': 'backlog' },
 };
 // Shared occupancy readiness reports beside an ended window: an empty pool, an
 // independent delivery holding two slots, and a count the host cannot read.
@@ -1870,16 +1870,13 @@ const renderDrainForecastScenario = async scenario => {
   await fetchAndRenderAutoDrainPane();
 };
 globalThis.setDrainForecastScenarioForScreenshot = renderDrainForecastScenario;
-const historyStatus = (root, id) => root.querySelector(`a[href*="${id}"]`)?.closest('li')?.querySelector('.drain-forecast-task-status')?.textContent;
 drainTasksOverride = [{ task_id: 'ORB-18901', status: 'backlog', eligible: false, reason: 'gap_fit' }];
 drainCapacityOverride = { ...emptyPool, last_admission_forecast: historyForecast };
 await fetchAndRenderAutoDrainPane();
 const ended = forecastCard().querySelector('.drain-forecast-retained');
 const endedText = ended?.textContent || '';
 assert(ended?.querySelector('.drain-forecast-ended')?.textContent === 'window ended · nothing running', `an ended window says nothing is running (ORB-18957): ${endedText}`);
-assert(endedText.includes('Admitted at 03:59 UTC') && endedText.includes('Held at 03:59 UTC') && endedText.includes('Starvation guard protected at 03:59 UTC'), `retained decisions name when they were made (ORB-18957): ${endedText}`);
-assert(!/\bAdmitted (?!at )/.test(endedText) && !/\bHeld (?!at )/.test(endedText) && !endedText.includes('Starvation guard protects'), `a retained forecast has no present-tense admission line (ORB-18957): ${endedText}`);
-assert(historyStatus(ended, 'ORB-18908') === ' · done' && historyStatus(ended, 'ORB-18901') === ' · backlog' && historyStatus(ended, 'ORB-18918') === ' · backlog', `each retained task shows its current status (ORB-18957): done=${historyStatus(ended, 'ORB-18908')} held=${historyStatus(ended, 'ORB-18901')} guard=${historyStatus(ended, 'ORB-18918')}`);
+assert(retainedHasNoTaskDecisions(ended), `an ended retained forecast omits per-task decisions (ORB-18957): ${endedText}`);
 // [ORB-19042] The ended window names the shared occupancy readiness reports beside
 // it. An independent delivery holding a slot is other work, so its payload must
 // not read as an empty ended window. A count that cannot be read says only that
@@ -1915,9 +1912,7 @@ const finalPassBuiltHistory = finalPassBuilt?.querySelector('.drain-forecast-ret
 assert(finalPassBuilt?.dataset.forecastState === 'retained' && !finalPassBuilt.querySelector('.drain-forecast-state'), `a terminal built pass renders as retained history without a no-forecast line: ${finalPassBuiltText}`);
 assert(finalPassBuilt.querySelectorAll('.drain-forecast-retained').length === 1, `the terminal current forecast supersedes its duplicate last forecast: ${finalPassBuiltText}`);
 assert(finalPassBuiltHistory?.querySelector('.drain-forecast-ended')?.textContent === 'window ended · nothing running', `a terminal built pass says its window ended: ${finalPassBuiltText}`);
-assert(finalPassBuiltText.includes('Admitted at 03:59 UTC') && finalPassBuiltText.includes('Held at 03:59 UTC') && finalPassBuiltText.includes('Starvation guard protected at 03:59 UTC'), `terminal decisions name when they were made: ${finalPassBuiltText}`);
-assert(!/\bAdmitted (?!at )/.test(finalPassBuiltText) && !/\bHeld (?!at )/.test(finalPassBuiltText) && !finalPassBuiltText.includes('Starvation guard protects'), `a terminal built pass has no present-tense decisions: ${finalPassBuiltText}`);
-assert(historyStatus(finalPassBuiltHistory, 'ORB-18908') === ' · done' && historyStatus(finalPassBuiltHistory, 'ORB-18901') === ' · backlog' && historyStatus(finalPassBuiltHistory, 'ORB-18918') === ' · backlog', `a terminal built pass shows each current task status: done=${historyStatus(finalPassBuiltHistory, 'ORB-18908')} held=${historyStatus(finalPassBuiltHistory, 'ORB-18901')} guard=${historyStatus(finalPassBuiltHistory, 'ORB-18918')}`);
+assert(retainedHasNoTaskDecisions(finalPassBuiltHistory), `a terminal built pass omits per-task decisions: ${finalPassBuiltText}`);
 drainPhase = previousDrainState.drainPhase;
 drainRunId = previousDrainState.drainRunId;
 pullDrainRunId = previousDrainState.pullDrainRunId;
@@ -1937,15 +1932,14 @@ drainCapacityOverride = { last_admission_forecast: { ...historyForecast, drain_l
 await fetchAndRenderAutoDrainPane();
 const liveRetained = forecastCard().querySelector('.drain-forecast-retained');
 const liveRetainedText = liveRetained?.textContent || '';
-assert(!liveRetained.querySelector('.drain-forecast-ended') && liveRetainedText.includes('Admitted at 03:59 UTC') && !/\bAdmitted (?!at )/.test(liveRetainedText), `a live drain keeps a retained forecast in the past without saying the window ended (ORB-18957): ${liveRetainedText}`);
+assert(!liveRetained.querySelector('.drain-forecast-ended') && retainedHasNoTaskDecisions(liveRetained), `a live drain keeps its retained forecast without repeating past decisions (ORB-18957): ${liveRetainedText}`);
 drainPhase = 'idle';
 drainTasksOverride = null;
 drainCapacityOverride = { ...emptyPool, last_admission_forecast: { ...historyForecast, mode: 'shadow' } };
 await fetchAndRenderAutoDrainPane();
 const shadowRetained = forecastCard().querySelector('.drain-forecast-retained');
 const shadowRetainedText = shadowRetained?.textContent || '';
-assert(shadowRetainedText.includes('Would have admitted at 03:59 UTC') && shadowRetainedText.includes('Would have held at 03:59 UTC') && shadowRetainedText.includes('Starvation guard would have protected at 03:59 UTC') && shadowRetained.querySelector('.drain-forecast-ended')?.textContent === 'window ended · nothing running', `a retained shadow forecast is past hypothetical (ORB-18957): ${shadowRetainedText}`);
-assert(!shadowRetainedText.includes('Would admit') && !/\bHeld\b/.test(shadowRetainedText) && !shadowRetainedText.includes('Starvation guard protects') && !shadowRetainedText.includes('Starvation guard would protect '), `a retained shadow forecast does not use the live shadow verbs (ORB-18957): ${shadowRetainedText}`);
+assert(shadowRetained.querySelector('.drain-forecast-ended')?.textContent === 'window ended · nothing running' && retainedHasNoTaskDecisions(shadowRetained), `a retained shadow forecast omits past hypothetical decisions (ORB-18957): ${shadowRetainedText}`);
 drainPhase = 'idle';
 drainTasksOverride = null;
 drainCapacityOverride = {};
