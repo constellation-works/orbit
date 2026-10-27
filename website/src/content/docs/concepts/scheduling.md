@@ -27,7 +27,8 @@ and auto-tasks file recurring chores as ordinary tasks.
 :::tip[Let your agent set it up]
 Ask your agent to **schedule a weekly QA sweep** or **ship the backlog every
 30 minutes**. The `orbit-setup` skill installs the clock, then enables the
-routine or auto-task you asked for. Everything ships disabled until then.
+routine or auto-task you asked for. Most ship disabled; the hourly crew-performance
+refresh is enabled but does no scan while crew performance is off.
 :::
 
 ## The host scheduler clock
@@ -107,8 +108,10 @@ that is due. A new chore is a new definition, never new code.
 - **Mint now to try one.** `orbit auto-task mint`, or **Mint now** in the
   dashboard, files a task immediately and leaves the schedule untouched.
 - **Seeded disabled.** The built-in catalog covers QA sweeps, code and
-  security reviews, friction curation, backlog hygiene, doc duties, and
-  run-failure patterns, all off until you enable them.
+  security reviews, friction curation, backlog hygiene, doc duties,
+  run-failure patterns, and maintenance sweeps for code health, architecture,
+  structure, dependency freshness, flaky tests and CI budgets, all off until
+  you enable them.
 
 ## Which to use
 

@@ -197,7 +197,15 @@ reported as `skipped:owner_unreachable` (transport failure),
 |---|---|
 | `orbit experiment create <name>` \| `update <id>` \| `clone <id> --name <name>` | Define a draft experiment: `--arms` (a JSON array of `{name, control, weight, overlay}` with exactly one control), `--hypothesis`, `--population`, `--primary-metric`, `--guardrails`, `--min-sample`, `--max-days` and `--mode shadow\|live`. Only a draft can be edited; `clone` copies a definition into a new draft. |
 | `orbit experiment start` \| `pause` \| `resume` \| `reweight` \| `conclude` \| `abandon <id>` | Move an experiment through its lifecycle. `start` needs `experiments.enabled` and a free `experiments.max_running` slot; `reweight --weights '{"arm":2}'` or `--retire <arm>` opens a new segment. `conclude --arm <arm>` records the chosen arm, stores the readout at that moment and files one proposed task naming the experiment, arm, verdict and overlay; omitting `--arm` records no winner and files nothing. Concluding changes no configuration or repository file. `pause`, `reweight`, `conclude` and `abandon` require `--reason`. Only an operator may run these. |
-| `orbit experiment show <id>` \| `list` | Show one experiment with its arms and every event in order, with actor, time and reason, or list the workspace's experiments (`--status` filters). Agents may call `orbit.experiment.show` and `orbit.experiment.list`. |
+| `orbit experiment assign <id> --task <TASK_ID> --arm <ARM>` | Force a task into one arm of a shadow experiment. |
+| `orbit experiment show <id>` \| `list` \| `readout <id>` | Show one experiment with its arms and every event in order, with actor, time and reason, or list the workspace's experiments (`--status` filters). `readout` shows per-arm outcomes, intervals and the verdict; `--metric <METRIC>` reports only that metric. Agents may call `orbit.experiment.show` and `orbit.experiment.list`. |
+
+### Path leases
+
+| Command | Purpose |
+|---|---|
+| `orbit lease request` \| `renew` \| `expand` \| `release` \| `show` \| `list` \| `check` \| `notices` | Coordinate advisory or hard path leases for interactive work. See [Path leases](../../how-to/path-leases/). |
+| `orbit lease token` \| `listen` | Manage the lease listener as its dedicated user. `token` mints, lists and revokes listener tokens; `listen` serves the lease routes to those holders. |
 
 ## Observe
 
@@ -239,6 +247,7 @@ See [Schedule Recurring Work](../../how-to/recurring-work/).
 | `orbit mcp serve` | Serve the MCP tool surface over stdio, or act as a client with `--mode remote <SSH_HOST>` or `--mode federated`. `--operator` serves operator authority; in a client mode it is also the operator statement for every SSH destination opened. `--orchestrator <crew>` sets the orchestrator recorded on tasks the session creates and grants nothing. |
 | `orbit mcp listen [ADDR]` | Serve the same surface on a TCP socket. Binds `127.0.0.1:7879` unless you pass `--allow-non-loopback`. `--workspace <selector>` binds each accepted session to that workspace by default. |
 | `orbit web serve` | Serve the Orbit dashboard for the registry under the resolved root, so `orbit --root <ROOT> web serve` shows only `<ROOT>`'s workspaces. `--workspace <SELECTOR>` preselects one. `--operator` enables Operations controls without a TTY or `ORBIT_OPERATOR`. |
+| `orbit web open` | Open a running dashboard with a fresh browser-session URL. `--no-open` prints the private URL without launching a browser; treat that URL as a credential. |
 | `orbit web connect` | Open a remote workspace's dashboard over an SSH tunnel. `--workspace <SELECTOR>` preselects the remote workspace; `--root` is refused. The remote server starts with `--operator` unless you pass `--no-operator`, which keeps Operations read-only. |
 
 See [Use the Dashboard](../../how-to/dashboard/) for connection, workspace
