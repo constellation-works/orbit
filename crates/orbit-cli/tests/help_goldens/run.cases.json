@@ -1,0 +1,13 @@
+[
+  {"argv": ["run"], "golden": "run/root.txt"},
+  {"argv": ["run", "auto"], "golden": "run/auto.txt"},
+  {"argv": ["run", "readiness"], "golden": "run/readiness.txt"},
+  {"argv": ["run", "history"], "golden": "run/history.txt"},
+  {"argv": ["run", "show"], "golden": "run/show.txt"},
+  {"argv": ["run", "cancel"], "golden": "run/cancel.txt"},
+  {"argv": ["run", "agent"], "golden": "run/agent.txt"},
+  {"argv": ["run", "job"], "golden": "run/job.txt"},
+  {"argv": ["run", "task-pilot"], "golden": "run/task-pilot.txt"},
+  {"argv": ["run", "logs"], "golden": "run/logs.txt"},
+  {"argv": ["run", "profiles"], "golden": "run/profiles.txt"}
+]

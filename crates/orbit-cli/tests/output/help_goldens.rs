@@ -1,4 +1,6 @@
-//! `help_goldens/**/*.txt` freeze the shipped `--help` contract of the
+//! Family-owned `help_goldens/**/*.cases.json` bind explicit argv to `.txt`
+//! goldens (paths relative to `help_goldens/`); discovery needs no Rust registration.
+//! The text goldens freeze the shipped `--help` contract of the
 //! `orbit` binary. Drift is a consumer-visible CLI surface change. If the new
 //! help is intentional, regenerate with `ORBIT_UPDATE_HELP_GOLDENS=1 cargo test
 //! -p orbit-cli --test output help_goldens::` (or `make goldens UPDATE=1`) and review
@@ -6,8 +8,9 @@
 #![allow(missing_docs)]
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
@@ -15,152 +18,109 @@ use tempfile::tempdir;
 
 const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 
-/// Each argv (after `orbit`) whose `--help` is pinned, and its golden path
-/// under `tests/help_goldens/`.
-const CASES: &[(&[&str], &str)] = &[
-    (&[], "root.txt"),
-    (&["run"], "run/root.txt"),
-    (&["run", "auto"], "run/auto.txt"),
-    (&["run", "readiness"], "run/readiness.txt"),
-    (&["init"], "init.txt"),
-    (&["host", "add"], "host/add.txt"),
-    (&["host", "remove"], "host/remove.txt"),
-    (&["doctor"], "doctor.txt"),
-    (&["config", "show"], "config-show.txt"),
-    (&["search"], "search.txt"),
-    (&["search", "reindex"], "search-reindex.txt"),
-    (&["codebase"], "codebase/root.txt"),
-    (&["codebase", "analytics"], "codebase/analytics.txt"),
-    (&["codebase", "show"], "codebase/show.txt"),
-    (&["codebase", "related"], "codebase/related.txt"),
-    (&["experiment"], "experiment/root.txt"),
-    (&["experiment", "create"], "experiment/create.txt"),
-    (&["experiment", "update"], "experiment/update.txt"),
-    (&["experiment", "clone"], "experiment/clone.txt"),
-    (&["experiment", "start"], "experiment/start.txt"),
-    (&["experiment", "pause"], "experiment/pause.txt"),
-    (&["experiment", "resume"], "experiment/resume.txt"),
-    (&["experiment", "reweight"], "experiment/reweight.txt"),
-    (&["experiment", "assign"], "experiment/assign.txt"),
-    (&["experiment", "conclude"], "experiment/conclude.txt"),
-    (&["experiment", "abandon"], "experiment/abandon.txt"),
-    (&["experiment", "show"], "experiment/show.txt"),
-    (&["experiment", "list"], "experiment/list.txt"),
-    (&["experiment", "readout"], "experiment/readout.txt"),
-    (&["agents"], "agents/root.txt"),
-    (&["agents", "scorecard"], "agents/scorecard.txt"),
-    (&["agents", "show"], "agents/show.txt"),
-    (&["orchestrator"], "orchestrator/root.txt"),
-    (&["orchestrator", "scorecard"], "orchestrator/scorecard.txt"),
-    (&["orchestrator", "show"], "orchestrator/show.txt"),
-    (&["gc"], "gc/root.txt"),
-    (&["gc", "audit"], "gc/audit.txt"),
-    (&["gc", "deployments"], "gc/deployments.txt"),
-    (&["gc", "journal"], "gc/journal.txt"),
-    (&["gc", "runs"], "gc/runs.txt"),
-    (&["gc", "tmp"], "gc/tmp.txt"),
-    (&["gc", "worktrees"], "gc/worktrees.txt"),
-    (&["run", "history"], "run/history.txt"),
-    (&["run", "show"], "run/show.txt"),
-    (&["run", "cancel"], "run/cancel.txt"),
-    (&["run", "agent"], "run/agent.txt"),
-    (&["run", "job"], "run/job.txt"),
-    (&["run", "task-pilot"], "run/task-pilot.txt"),
-    (&["job", "resume"], "job/resume.txt"),
-    (&["run", "logs"], "run/logs.txt"),
-    (&["run", "profiles"], "run/profiles.txt"),
-    (&["lease"], "lease/root.txt"),
-    (&["lease", "request"], "lease/request.txt"),
-    (&["lease", "renew"], "lease/renew.txt"),
-    (&["lease", "expand"], "lease/expand.txt"),
-    (&["lease", "release"], "lease/release.txt"),
-    (&["lease", "show"], "lease/show.txt"),
-    (&["lease", "list"], "lease/list.txt"),
-    (&["lease", "check"], "lease/check.txt"),
-    (&["lease", "token"], "lease/token.txt"),
-    (&["lease", "token", "create"], "lease/token-create.txt"),
-    (&["lease", "token", "list"], "lease/token-list.txt"),
-    (&["lease", "token", "revoke"], "lease/token-revoke.txt"),
-    (&["lease", "listen"], "lease/listen.txt"),
-    (&["lease", "notices"], "lease/notices.txt"),
-    (&["friction"], "friction/root.txt"),
-    (&["friction", "add"], "friction/add.txt"),
-    (&["friction", "list"], "friction/list.txt"),
-    (&["friction", "show"], "friction/show.txt"),
-    (&["friction", "stats"], "friction/stats.txt"),
-    (&["friction", "tags"], "friction/tags.txt"),
-    (&["friction", "update"], "friction/update.txt"),
-    (&["friction", "resolve"], "friction/resolve.txt"),
-    (&["friction", "rehome"], "friction/rehome.txt"),
-    (&["auto-task"], "auto-task/root.txt"),
-    (&["auto-task", "add"], "auto-task/add.txt"),
-    (&["auto-task", "list"], "auto-task/list.txt"),
-    (&["auto-task", "show"], "auto-task/show.txt"),
-    (&["auto-task", "update"], "auto-task/update.txt"),
-    (&["auto-task", "toggle"], "auto-task/toggle.txt"),
-    (&["auto-task", "delete"], "auto-task/delete.txt"),
-    (&["auto-task", "restore"], "auto-task/restore.txt"),
-    (&["auto-task", "mint"], "auto-task/mint.txt"),
-    (&["auto-task", "recover"], "auto-task/recover.txt"),
-    (&["auto-task", "reset"], "auto-task/reset.txt"),
-    (&["task"], "task/root.txt"),
-    (&["task", "add"], "task/add.txt"),
-    (&["task", "update"], "task/update.txt"),
-    (&["task", "list"], "task/list.txt"),
-    (&["task", "eligible"], "task/eligible.txt"),
-    (&["task", "show"], "task/show.txt"),
-    (&["task", "lint"], "task/lint.txt"),
-    (&["task", "artifact"], "task/artifact.txt"),
-    (&["task", "artifact", "put"], "task/artifact-put.txt"),
-    (&["task", "artifact", "get"], "task/artifact-get.txt"),
-    (&["task", "locks"], "task/locks.txt"),
-    (&["task", "locks", "list"], "task/locks-list.txt"),
-    (
-        &["task", "locks", "contention"],
-        "task/locks-contention.txt",
-    ),
-    (&["task", "locks", "reserve"], "task/locks-reserve.txt"),
-    (&["task", "locks", "release"], "task/locks-release.txt"),
-    (&["task", "review-reset"], "task/review-reset.txt"),
-    (&["task", "requeue"], "task/requeue.txt"),
-    (&["task", "retry-handoff"], "task/retry-handoff.txt"),
-    (&["task", "settle-merged"], "task/settle-merged.txt"),
-    (&["task", "reconcile-review"], "task/reconcile-review.txt"),
-    (
-        &["task", "reconcile-review", "inspect"],
-        "task/reconcile-review-inspect.txt",
-    ),
-    (
-        &["task", "reconcile-review", "submit"],
-        "task/reconcile-review-submit.txt",
-    ),
-    (
-        &["task", "reconcile-review", "status"],
-        "task/reconcile-review-status.txt",
-    ),
-    (
-        &["task", "reconcile-review", "accept-baseline"],
-        "task/reconcile-review-accept-baseline.txt",
-    ),
-    (&["plugin"], "plugin/root.txt"),
-    (&["plugin", "upgrade"], "plugin/upgrade.txt"),
-    (&["plugin", "remove"], "plugin/remove.txt"),
-    (&["plugin", "validate"], "plugin/validate.txt"),
-    (&["plugin", "scaffold"], "plugin/scaffold.txt"),
-    (&["plugin", "test"], "plugin/test.txt"),
-    (&["mcp", "init"], "mcp/init.txt"),
-    (&["mcp", "listen"], "mcp/listen.txt"),
-    (&["tool", "run"], "tool/run.txt"),
-    (&["web"], "web.txt"),
-    (&["web", "open"], "web/open.txt"),
-    (&["web", "serve"], "web/serve.txt"),
-    (&["web", "connect"], "web/connect.txt"),
-];
+/// Explicit argv and a path relative to `tests/help_goldens/`, owned by the
+/// command family's `*.cases.json` fixture rather than a shared Rust index.
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelpGoldenCase {
+    argv: Vec<String>,
+    golden: String,
+}
 
-fn golden_path(relative: &str) -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/help_goldens")
-        .join(relative)
+fn collect_help_fixture_files(directory: &Path, files: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(directory)
+        .unwrap_or_else(|err| panic!("list help fixtures {}: {err}", directory.display()))
+    {
+        let entry = entry.expect("read help fixture entry");
+        let path = entry.path();
+        let kind = entry.file_type().expect("help fixture file type");
+        if kind.is_dir() {
+            collect_help_fixture_files(&path, files);
+        } else {
+            assert!(
+                kind.is_file(),
+                "help fixture must be a regular file: {}",
+                path.display()
+            );
+            files.push(path);
+        }
+    }
+}
+
+fn discover_help_golden_cases(root: &Path) -> Vec<HelpGoldenCase> {
+    let mut files = Vec::new();
+    collect_help_fixture_files(root, &mut files);
+    files.sort();
+    let mut cases = Vec::new();
+    let mut argv_sources = BTreeMap::new();
+    let mut golden_sources = BTreeMap::new();
+    for fixture in &files {
+        if !fixture.to_string_lossy().ends_with(".cases.json") {
+            continue;
+        }
+        let contents = fs::read_to_string(fixture)
+            .unwrap_or_else(|err| panic!("read help bindings {}: {err}", fixture.display()));
+        let bindings: Vec<HelpGoldenCase> = serde_json::from_str(&contents)
+            .unwrap_or_else(|err| panic!("invalid help bindings {}: {err}", fixture.display()));
+        assert!(
+            !bindings.is_empty(),
+            "empty help bindings: {}",
+            fixture.display()
+        );
+        for case in bindings {
+            assert!(
+                case.argv.iter().all(|arg| !arg.is_empty()
+                    && !arg.starts_with('-')
+                    && !arg.chars().any(char::is_whitespace)),
+                "invalid help argv {:?} in {}: use command tokens without flags",
+                case.argv,
+                fixture.display()
+            );
+            let relative = Path::new(&case.golden);
+            assert!(
+                relative.extension().is_some_and(|ext| ext == "txt")
+                    && relative
+                        .components()
+                        .all(|part| matches!(part, Component::Normal(_))),
+                "invalid help golden path {:?} in {}: expected a relative .txt path without traversal",
+                case.golden,
+                fixture.display()
+            );
+            if let Some(previous) = argv_sources.insert(case.argv.clone(), fixture) {
+                panic!(
+                    "duplicate help argv {:?} in {} and {}",
+                    case.argv,
+                    previous.display(),
+                    fixture.display()
+                );
+            }
+            if let Some(previous) = golden_sources.insert(root.join(relative), fixture) {
+                panic!(
+                    "duplicate help golden {:?} in {} and {}",
+                    case.golden,
+                    previous.display(),
+                    fixture.display()
+                );
+            }
+            cases.push(case);
+        }
+    }
+    assert!(
+        !cases.is_empty(),
+        "no help bindings found under {}",
+        root.display()
+    );
+    for file in files
+        .iter()
+        .filter(|path| path.extension().is_some_and(|ext| ext == "txt"))
+    {
+        assert!(
+            golden_sources.contains_key(file),
+            "unreferenced help golden: {}",
+            file.display()
+        );
+    }
+    cases
 }
 
 fn read_help(args: &[&str], home: &Path, work: &Path) -> String {
@@ -250,9 +210,12 @@ fn help_matches_the_shipped_surface() {
     fs::create_dir_all(&work).expect("fixture work");
     let update = std::env::var(UPDATE_HELP_GOLDENS_ENV).as_deref() == Ok("1");
 
-    for (args, relative) in CASES {
-        let actual = read_help(args, &home, &work).replace(env!("CARGO_PKG_VERSION"), "<VERSION>");
-        let path = golden_path(relative);
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/help_goldens");
+    for case in discover_help_golden_cases(&root) {
+        let args: Vec<_> = case.argv.iter().map(String::as_str).collect();
+        let relative = &case.golden;
+        let actual = read_help(&args, &home, &work).replace(env!("CARGO_PKG_VERSION"), "<VERSION>");
+        let path = root.join(relative);
         if update {
             fs::write(&path, &actual)
                 .unwrap_or_else(|err| panic!("write help golden {}: {err}", path.display()));
@@ -265,7 +228,7 @@ fn help_matches_the_shipped_surface() {
             expected,
             "`orbit {} --help` drifted from {relative}. If the new help is intentional, \
              regenerate with `{UPDATE_HELP_GOLDENS_ENV}=1 cargo test -p orbit-cli --test \
-             help_goldens` or `make goldens UPDATE=1`, then review the diff.",
+             output help_goldens::` or `make goldens UPDATE=1`, then review the diff.",
             args.join(" ")
         );
     }
