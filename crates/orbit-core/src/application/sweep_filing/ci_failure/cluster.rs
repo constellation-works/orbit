@@ -3,7 +3,7 @@
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
-use orbit_types::task::Task;
+use orbit_types::task::CiFailureSource;
 use serde_json::{Value, json};
 
 use super::fields::{truncate_bytes, value_string};
@@ -11,9 +11,10 @@ use super::filing::{
     CI_FAILURE_KEY_TAG_PREFIX, CI_FAILURE_SWEEP_TITLE_PREFIX, DESCRIPTION_LOG_BYTES,
     MAX_LISTED_RUNS,
 };
-use super::grouping::{failure_test_names, legacy_source_matches, tested_commit};
+use super::grouping::{failure_test_names, tested_commit};
+use super::identity::CiTaskIdentities;
 use super::log_signature::{
-    FailedStepExcerpt, compiler_cause, compiler_diagnostic_set, relevant_log_query_errors,
+    FailedStepExcerpt, compiler_diagnostic_set, relevant_log_query_errors,
     render_failed_step_excerpt, specific_command_from_log, specific_error_anchors,
 };
 use crate::application::contracts::CI_FAILURE_TAG;
@@ -23,11 +24,10 @@ use crate::application::sweep_filing::duplicate_tasks::{
 };
 use crate::application::sweep_filing::{digest, display, is_open_ci_owner_status, truncate_chars};
 
-/// Description line naming a compiler-cause identity. Completed repairs are
-/// matched on it, so the rendering and the reader share the prefix.
+/// Legacy description labels shared only by rendering and the legacy reader.
 pub(super) const COMPILER_CAUSE_LINE: &str = "- Compiler cause identity: `";
 /// Complete location-free set, retained independently of the bounded excerpt.
-const OPEN_COMPILER_SET_LINE: &str = "- Open compiler diagnostic set identity: `";
+pub(super) const OPEN_COMPILER_SET_LINE: &str = "- Open compiler diagnostic set identity: `";
 /// Description line naming a concrete normalized error signature (never the
 /// step-name fallback, which is no diagnostic).
 pub(super) const SIGNATURE_LINE: &str =
@@ -63,25 +63,33 @@ pub(super) struct FailureCluster {
     /// so rather than presenting it as a failed-step quote.
     pub(super) log_source_job: Option<String>,
     pub(super) runs: Vec<Value>,
+    pub(super) sources: Vec<CiFailureSource>,
 }
 
 impl FailureCluster {
     pub(super) fn find_covering_task<L: DuplicateTaskLookup + ?Sized>(
         &self,
         lookup: &L,
+        identities: &CiTaskIdentities<'_>,
     ) -> Result<Option<DuplicateTaskMatch>, OrbitError> {
         if let Some(found) = find_covering_task(lookup, &self.duplicate_candidate())? {
             return Ok(Some(found));
         }
         if let Some(identity) = self.open_compiler_identity() {
             let tasks = lookup.list_tasks()?;
-            if let Some(owner) = tasks
-                .iter()
-                .filter(|task| {
-                    is_open_ci_owner_status(task.status)
-                        && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
-                        && task_open_compiler_identity(task).as_ref() == Some(&identity)
-                })
+            let mut owners = Vec::new();
+            for task in tasks.iter().filter(|task| {
+                is_open_ci_owner_status(task.status)
+                    && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
+            }) {
+                if identities.for_task(task)?.is_some_and(|record| {
+                    record.identity.open_compiler_set.as_ref() == Some(&identity)
+                }) {
+                    owners.push(task);
+                }
+            }
+            if let Some(owner) = owners
+                .into_iter()
                 .min_by(|left, right| left.id.cmp(&right.id))
             {
                 return Ok(Some(DuplicateTaskMatch {
@@ -121,18 +129,27 @@ impl FailureCluster {
                     .unwrap_or(&found.task_id);
                 let source = lookup.get_task(source_id)?;
                 let owner = lookup.get_task(&found.task_id)?;
-                let prior_cause = compiler_cause(&source.description)
-                    .or_else(|| compiler_cause(&owner.description));
-                if prior_cause.is_some() && prior_cause != self.compiler_cause {
+                let source_identity = identities.for_task(&source)?;
+                let owner_identity = identities.for_task(&owner)?;
+                let prior_cause = source_identity
+                    .as_ref()
+                    .and_then(|record| record.prior_compiler_cause_digest.as_ref())
+                    .or_else(|| {
+                        owner_identity
+                            .as_ref()
+                            .and_then(|record| record.prior_compiler_cause_digest.as_ref())
+                    });
+                let current_cause = self.compiler_cause.as_ref().map(|cause| digest(&[cause]));
+                if prior_cause.is_some() && prior_cause != current_cause.as_ref() {
                     continue;
                 }
                 // An old chatter-based key can recur for a different compiler
                 // cause. Only immutable supplying evidence justifies migration.
-                if self
-                    .runs
-                    .iter()
-                    .any(|run| legacy_source_matches(&source.description, run))
-                {
+                if source_identity.as_ref().is_some_and(|record| {
+                    self.sources
+                        .iter()
+                        .any(|source| record.matches_source(source))
+                }) {
                     return Ok(Some(found));
                 }
             }
@@ -284,17 +301,6 @@ impl FailureCluster {
             }
         }
         fingerprints
-    }
-
-    /// The root-cause identity a completed repair's description must repeat:
-    /// the compiler cause, else a concrete signature. A step-name fallback has
-    /// none, so only its exact failure key can match.
-    pub(super) fn signature_line(&self) -> Option<String> {
-        match &self.compiler_cause {
-            Some(cause) => Some(format!("{COMPILER_CAUSE_LINE}{}`", digest(&[cause]))),
-            None if self.signature_is_step_fallback => None,
-            None => Some(format!("{SIGNATURE_LINE}{}`", display(&self.signature))),
-        }
     }
 
     pub(super) fn run_urls(&self) -> Vec<String> {
@@ -663,25 +669,6 @@ impl FailureCluster {
             })
             .unwrap_or_default()
     }
-}
-
-/// Old descriptions carry only the exact-cause digest. Verify that their
-/// retained excerpt contains that entire cause before deriving a weaker set;
-/// a truncated subset must never claim coverage of another diagnostic set.
-pub(super) fn task_open_compiler_identity(task: &Task) -> Option<String> {
-    let identity_line = |prefix| {
-        task.description
-            .lines()
-            .find_map(|line| line.strip_prefix(prefix)?.strip_suffix('`'))
-    };
-    if let Some(identity) = identity_line(OPEN_COMPILER_SET_LINE) {
-        return Some(identity.to_string());
-    }
-    let cause = compiler_cause(&task.description)?;
-    if identity_line(COMPILER_CAUSE_LINE) != Some(digest(&[&cause]).as_str()) {
-        return None;
-    }
-    compiler_diagnostic_set(&task.description).map(|set| digest(&[&set]))
 }
 
 /// The `Runner OS` line: what each distinct runner was, where that came

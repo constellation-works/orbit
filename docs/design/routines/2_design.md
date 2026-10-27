@@ -488,7 +488,14 @@ jobs a workflow concurrency group cancelled, and a run-scoped retryable error re
 three distinct consecutive workflow sweeps is reported as persistent instead of failing every
 sweep. A retry of the same workflow run counts once. The pipeline
 dedupes against still-open owners by failure key, and pilots each candidate through the
-existing task-pilot job. The all-join lets independently valid pilots apply even when a
+existing task-pilot job. CI sweep tasks retain their failure key, complete compiler-cause
+and coordinate-free diagnostic-set digests, concrete normalized signature (absent for a
+step fallback), tested commit and every supplying run/job/checkout in the
+`TaskDecision::CiFailureIdentity` decision on their creation history. Filing reads each
+task's creation identity once; description edits do not replace it. Only tasks without
+a creation decision use the single legacy description reader, including its completeness
+check for older compiler excerpts. A different creation decision never falls back to prose.
+The human-readable description and existing failure-key tags retain their formats. The all-join lets independently valid pilots apply even when a
 sibling is stale or fails. Within a returned partition, deterministic apply also commits
 valid tasks independently, then sends only invalid assessments through one targeted repair
 attempt at the original pinned revision; material edits require fresh preparation.

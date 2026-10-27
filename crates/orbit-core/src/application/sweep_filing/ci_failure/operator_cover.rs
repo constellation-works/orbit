@@ -8,8 +8,9 @@ use orbit_common::OrbitError;
 use orbit_types::task::{TaskRelationType, TaskStatus, is_valid_orb_task_id};
 use serde_json::{Value, json};
 
-use super::cluster::{FailureCluster, task_open_compiler_identity};
+use super::cluster::FailureCluster;
 use super::filing::CI_FAILURE_KEY_TAG_PREFIX;
+use super::identity::CiTaskIdentities;
 use crate::OrbitRuntime;
 use crate::application::automation::source::Source;
 use crate::application::contracts::CI_FAILURE_TAG;
@@ -61,6 +62,7 @@ impl<'a> OperatorCovers<'a> {
         &mut self,
         cluster: &FailureCluster,
         lookup: &L,
+        identities: &CiTaskIdentities<'_>,
     ) -> Result<OperatorAssessment, OrbitError> {
         let mut owners = BTreeMap::new();
         for key in std::iter::once(&cluster.failure_key).chain(&cluster.legacy_keys) {
@@ -72,8 +74,11 @@ impl<'a> OperatorCovers<'a> {
                     // same supplying-evidence requirement as open-owner lookup.
                     if cluster.compiler_cause.is_some()
                         && key != &cluster.failure_key
-                        && !cluster.runs.iter().any(|run| {
-                            super::grouping::legacy_source_matches(&task.description, run)
+                        && !identities.for_task(&task)?.is_some_and(|record| {
+                            cluster
+                                .sources
+                                .iter()
+                                .any(|source| record.matches_source(source))
                         })
                     {
                         continue;
@@ -90,7 +95,9 @@ impl<'a> OperatorCovers<'a> {
             for task in lookup.list_tasks()?.iter() {
                 if matches!(task.status, TaskStatus::Archived | TaskStatus::Rejected)
                     && task.tags.iter().any(|tag| tag == CI_FAILURE_TAG)
-                    && task_open_compiler_identity(task).as_ref() == Some(&identity)
+                    && identities.for_task(task)?.is_some_and(|record| {
+                        record.identity.open_compiler_set.as_ref() == Some(&identity)
+                    })
                 {
                     owners
                         .entry(task.id.clone())
