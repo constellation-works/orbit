@@ -117,6 +117,10 @@ fn expand_as(
                 .iter()
                 .any(|held| selector_covers(held, selector))
         })
+        // The store also removes exact queued duplicates before enforcing its
+        // token limit. Mirror that here so retries do not inflate the early
+        // held + queued + incoming count.
+        .filter(|selector| token.is_none() || !current.queued_selectors.contains(selector))
         .collect::<Vec<_>>();
     let mut budget = match token {
         None => ResponseBudget::unbounded(),

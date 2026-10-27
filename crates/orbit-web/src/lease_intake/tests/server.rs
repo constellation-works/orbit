@@ -352,6 +352,198 @@ fn oversized_token_request_is_refused_before_any_grant_or_notice() {
     assert_eq!(all_notices(&fixture.runtime), notices_before);
 }
 
+/// Retrying selectors already queued by a hard token lease is a no-op within
+/// the token's 64-selector surface (ORB-18776 regression).
+#[test]
+fn token_queued_selector_expansion_retries_do_not_double_count() {
+    if !enter_isolated_child(
+        module_path!(),
+        "token_queued_selector_expansion_retries_do_not_double_count",
+    ) {
+        return;
+    }
+    let fixture = FrameLimitFixture::start();
+    let blocked_dir = fixture._tmp.path().join("ws_frame_limit/blocked");
+    std::fs::create_dir_all(&blocked_dir).expect("create blocked selector directory");
+    for index in 0..64 {
+        std::fs::write(blocked_dir.join(format!("{index:02}.rs")), "")
+            .expect("create blocked selector file");
+    }
+    std::fs::create_dir_all(fixture._tmp.path().join("ws_frame_limit/free"))
+        .expect("create free selector directory");
+    std::fs::write(fixture._tmp.path().join("ws_frame_limit/free/own.rs"), "")
+        .expect("create free selector file");
+    std::fs::write(fixture._tmp.path().join("ws_frame_limit/free/carol.rs"), "")
+        .expect("create Carol selector file");
+
+    lease::request(
+        &fixture.runtime,
+        json!({"principal": "alice", "selectors": ["dir:blocked"], "mode": "hard"}),
+        None,
+        None,
+    )
+    .expect("Alice holds the blocked directory");
+    let mut client = fixture.connect();
+    let bob = ok(call_scoped(
+        &mut client,
+        "bob",
+        "tok-bob-hard",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:free/own.rs"], "mode": "hard"}),
+    ));
+    let bob_lease_id = bob["lease"]["lease_id"]
+        .as_str()
+        .expect("Bob lease id")
+        .to_string();
+    let bob_held = bob["lease"]["selectors"].clone();
+    let bob_queued: Vec<String> = (0..63)
+        .map(|index| format!("file:blocked/{index:02}.rs"))
+        .collect();
+    let expanded = ok(call_scoped(
+        &mut client,
+        "bob",
+        "tok-bob-hard",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": bob_lease_id, "selectors": bob_queued.clone()}),
+    ));
+    assert_eq!(expanded["queued"], json!(bob_queued));
+    assert_eq!(
+        expanded["queued"].as_array().unwrap().len(),
+        63,
+        "{expanded}"
+    );
+    assert_eq!(expanded["lease"]["selectors"], bob_held);
+    let bob_queued_surface = expanded["lease"]["queued_selectors"].clone();
+    assert_eq!(
+        bob_queued_surface.as_array().unwrap().len(),
+        63,
+        "{expanded}"
+    );
+
+    let retry_one = ok(call_scoped(
+        &mut client,
+        "bob",
+        "tok-bob-hard",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": bob_lease_id, "selectors": ["file:blocked/00.rs"]}),
+    ));
+    assert_eq!(retry_one["added"], json!([]));
+    assert_eq!(retry_one["queued"], json!([]));
+    assert_eq!(retry_one["lease"]["selectors"], bob_held);
+    assert_eq!(retry_one["lease"]["queued_selectors"], bob_queued_surface);
+
+    let retry_batch = ok(call_scoped(
+        &mut client,
+        "bob",
+        "tok-bob-hard",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Expand,
+        json!({
+            "lease_id": bob_lease_id,
+            "selectors": (0..63)
+                .map(|index| format!("file:blocked/{index:02}.rs"))
+                .collect::<Vec<_>>(),
+        }),
+    ));
+    assert_eq!(retry_batch["added"], json!([]));
+    assert_eq!(retry_batch["queued"], json!([]));
+    assert_eq!(retry_batch["lease"]["selectors"], bob_held);
+    assert_eq!(retry_batch["lease"]["queued_selectors"], bob_queued_surface);
+
+    let before_new_selector = retry_batch["lease"].clone();
+    let notices_before_new_selector = all_notices(&fixture.runtime);
+    let too_many = refusal(call_scoped(
+        &mut client,
+        "bob",
+        "tok-bob-hard",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": bob_lease_id, "selectors": ["file:blocked/63.rs"]}),
+    ));
+    assert_eq!(too_many.code, "invalid_input", "{too_many:?}");
+    let bob_after_refusal =
+        lease::show(&fixture.runtime, json!({"lease_id": bob_lease_id})).expect("show Bob lease");
+    assert_eq!(bob_after_refusal["lease"], before_new_selector);
+    assert_eq!(all_notices(&fixture.runtime), notices_before_new_selector);
+
+    let carol = ok(call_scoped(
+        &mut client,
+        "carol",
+        "tok-carol-hard",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:free/carol.rs"], "mode": "hard"}),
+    ));
+    let carol_lease_id = carol["lease"]["lease_id"].as_str().expect("Carol lease id");
+    let carol_queued: Vec<String> = (0..60)
+        .map(|index| format!("file:blocked/{index:02}.rs"))
+        .collect();
+    let carol_expanded = ok(call_scoped(
+        &mut client,
+        "carol",
+        "tok-carol-hard",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": carol_lease_id, "selectors": carol_queued.clone()}),
+    ));
+    assert_eq!(carol_expanded["queued"], json!(carol_queued));
+    assert_eq!(carol_expanded["queued"].as_array().unwrap().len(), 60);
+
+    let mut mixed = vec![
+        "file:blocked/00.rs".to_string(),
+        "file:blocked/01.rs".to_string(),
+        "file:blocked/02.rs".to_string(),
+    ];
+    mixed.extend((60..63).map(|index| format!("file:blocked/{index:02}.rs")));
+    let mixed_result = ok(call_scoped(
+        &mut client,
+        "carol",
+        "tok-carol-hard",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": carol_lease_id, "selectors": mixed}),
+    ));
+    let newly_queued = mixed_result["queued"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|selector| selector.as_str().unwrap().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        newly_queued,
+        (60..63)
+            .map(|index| format!("file:blocked/{index:02}.rs"))
+            .collect()
+    );
+    assert_eq!(
+        mixed_result["lease"]["selectors"],
+        json!(["file:free/carol.rs"])
+    );
+    let final_carol_queued = mixed_result["lease"]["queued_selectors"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|selector| selector.as_str().unwrap().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        final_carol_queued,
+        (0..63)
+            .map(|index| format!("file:blocked/{index:02}.rs"))
+            .collect()
+    );
+}
+
 /// With a frame too small for every overlap, a token grant answers with the
 /// prefix that fits and `truncated: true` instead of being granted, notified
 /// and then released (ORB-18776). Every overlapped holder's notice names a
