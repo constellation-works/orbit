@@ -17,10 +17,10 @@ related_artifacts: [ORB-12488, ORB-12516, ORB-12582, ORB-12616, ORB-12968, ORB-1
 # Distributed Drain — Design
 
 > **Status: Draft, live.** Live on the owner: the claim/admission substrate, owner-local
-> claimed leaves, handoff acceptance and approval, the landing consumer, the probe and claim
-> listing, dashboard actions, shared capacity and entry-point admission, and — since [ORB-13625]
-> — the registered `orbit.task.pull`, `orbit.drain.claim.bind` and `orbit.drain.claim.settle`
-> tools. Live on a replica: the routed follower peer and `orbit run auto --pull`
+> claimed leaves, handoff acceptance and approval, the landing consumer, the runtime-owned
+> drain protocol, operator CLI diagnostics and claim inspection, dashboard actions, shared
+> capacity and entry-point admission. Live on a replica: the routed follower peer and
+> `orbit run auto --pull`
 > (`workspace_pull_pipeline`). `application::distributed::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
 > is `true`; it remains the one source switch every mutating entry point names.
 
@@ -1167,15 +1167,20 @@ the probe reports the first refusal admission would raise by running the same or
   names both fingerprints.
   Matching crate versions alone are insufficient on development branches. This is not the
   scoreboard's `ORCHESTRATION_SCHEMA_VERSION`, and MCP initialization metadata is insufficient.
-- The owner's read-only surface is `orbit.drain.probe`, `orbit.drain.receipt.lookup` and the
-  operator-only `orbit.drain.claims` listing ([§3.1](#31-attempt-ownership-and-recovery)), plus
-  `orbit run settlements`, which lists only settled claims' failure and release settlements and
-  needs no operator capability ([ORB-14439]); its
-  executor lifecycle is `orbit.task.pull`, `orbit.drain.claim.bind` and `orbit.drain.claim.settle`
-  ([ORB-13625]). MCP and `orbit tool run` reach them through one registry and
-  `application::distributed`. All six are `control_plane`, so a replica refuses them. Handoff
-  approval is dashboard-only; operators can also recover claims and revoke handoffs through the
-  `orbit task recover-claim` and `orbit task revoke-handoff` CLI commands and matching MCP tools.
+- The five distributed-drain protocol operations are `orbit.drain.probe`,
+  `orbit.drain.receipt.lookup`, `orbit.task.pull`, `orbit.drain.claim.bind` and
+  `orbit.drain.claim.settle` ([ORB-12495], [ORB-13625]). The owner serves them over its
+  deterministic internal runtime route; a follower uses that route, with no public MCP
+  fallback. The MCP adapter omits all five from ordinary discovery and refuses public calls
+  under both their dotted names and underscore aliases, including in an operator session.
+  Their handlers remain active in the CLI/runtime tool registry. Owner-side diagnostic calls
+  use `orbit tool run`: probe and receipt lookup are read-only, while the separate
+  `orbit.drain.claims` listing is operator-only ([§3.1](#31-attempt-ownership-and-recovery))
+  and is not a public MCP tool or one of the five protocol operations. `orbit run settlements`
+  lists only settled claims' failure and release settlements and needs no operator capability
+  ([ORB-14439]). Handoff approval is dashboard-only; operators can also recover claims and
+  revoke handoffs through the `orbit task recover-claim` and `orbit task revoke-handoff` CLI
+  commands and matching operator MCP tools.
 - Each settlement reports the crew and model its leaf run resolved, for attribution only
   ([ORB-17292]): a failure or release in its evidence's `crew` and `crew_model`, and every
   settlement, a typed handoff included, as the same two optional fields on the
