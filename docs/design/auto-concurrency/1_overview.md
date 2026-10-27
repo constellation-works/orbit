@@ -1,8 +1,8 @@
 ---
 title: Auto-concurrency — Overview
 owner: claude
-last_updated: 2026-10-20
-last_validated: 2026-10-24
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Draft
 stage: shipped
 next: "Operator decides when admission moves from shadow to forecast mode"
@@ -143,19 +143,6 @@ alongside the original implementation work; source links follow the current
 | Protected-head starvation signal and friction | [admission/gap_fit.rs](../../../crates/orbit-core/src/application/admission/gap_fit.rs), [admission/stuck_head.rs](../../../crates/orbit-core/src/application/admission/stuck_head.rs) | ORB-15894 |
 | Threshold-one retry deduplication repair | [admission/stuck_head.rs](../../../crates/orbit-core/src/application/admission/stuck_head.rs), [workspace_auto/classify/](../../../crates/orbit-core/src/application/workspace_auto/classify/mod.rs) | ORB-16014 |
 
-## Task References
-
-- [ORB-15757] — authored the original proposal.
-- ORB-15768–ORB-15776 — delivered the original implementation steps; see the
-  table for each task's source.
-- ORB-15980 and ORB-15994 — completed native macOS measurement repairs.
-- ORB-15894 and ORB-16014 — delivered and repaired the protected-head
-  starvation signal.
-
-The links above point to the source in the current tree. Task records carry
-the delivery and native operational evidence; the Mac pair reported on 2026-10-13
-does not demonstrate forecast accuracy or enforcement readiness.
-
 ## Per-drain control
 
 Local drains inherit the configured host mode on each admission pass, or use an
@@ -166,3 +153,33 @@ Local and pull drains reload host thresholds and effective provider-limit
 policy on the next pass, caching unchanged configuration by mtime; invalid
 configuration warns and retains the previous policies. Pull drains inherit
 executor host mode and reject explicit per-drain overrides. See [surfaces and configuration](2_design.md#7-surfaces-and-configuration).
+
+## Task References
+
+- [ORB-15757] — authored the original proposal.
+- [ORB-15768] — recorded per-task CPU and memory minutes from the worker
+  scope.
+- [ORB-15769] — added the host-level `[machine.auto_concurrency]` settings.
+- [ORB-15770] — built resource profiles and the `orbit run profiles` report.
+- [ORB-15771] — forecast host load and serialized admissions with
+  reservations.
+- [ORB-15772] — built gap-fit admission in local drains.
+- [ORB-15773] — showed forecast admission reasons in `orbit run show` and
+  readiness.
+- [ORB-15774] — built gap-fit admission for pull drains.
+- [ORB-15775] — recorded forecasts and reported their accuracy against
+  measured host load.
+- [ORB-15776] — sampled macOS workers from their process tree.
+- [ORB-15894] — delivered the protected-head starvation signal.
+- [ORB-15980] — measured native macOS host load for shadow forecasts.
+- [ORB-15994] — calibrated native macOS worker CPU-unit accounting.
+- [ORB-16014] — repaired threshold-one retry deduplication for the stuck
+  head.
+- [ORB-16616] — charted delivery resource profiles in the dashboard's
+  Analytics tab.
+
+The links above point to the source in the current tree. Task records carry
+the delivery and native operational evidence; the Mac pair reported on 2026-10-13
+does not demonstrate forecast accuracy or enforcement readiness.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

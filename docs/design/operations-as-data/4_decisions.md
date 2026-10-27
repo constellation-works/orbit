@@ -1,7 +1,7 @@
 ---
 title: Operations as Data — Decisions
 owner: claude
-last_updated: 2026-10-26
+last_updated: 2026-10-27
 last_validated: 2026-10-12
 status: Accepted
 feature: operations-as-data
@@ -912,5 +912,30 @@ different contracts; a future equivalent surface can use this shape.
   owner-workspace list with MCP instead of keeping their own.
 - [ORB-18473] — added the experiment noun with operator-only, advertised
   writes.
+- [ORB-10453] — recorded that destructive-operation authorization had no
+  chokepoint outside the MCP surface.
+- [ORB-10478] — reconciled MCP tool advertisement with capability
+  enforcement for operator-only tools.
+- [ORB-10534] — exposed the workflow execution surface as operator-only
+  MCP tools.
+- [ORB-10711] — added claim-gated remote command execution.
+- [ORB-10736] — removed the native project-learning subsystem from Orbit.
+- [ORB-10927] — fixed governed tools being permanently unreachable over
+  MCP because no session was ever granted.
+- [ORB-12495] — exposed key-bound claim lifecycle APIs with read-only
+  preflight for distributed drain.
+- [ORB-12563] — made dashboard `web connect` grant operator capability by
+  default.
+- [ORB-12581] — recorded that `orbit.drain.claims` was unreachable from
+  every surface.
+- [ORB-12582] — recorded that the drain read-only surface refused every
+  `orbit tool run` call.
+- [ORB-13625] — enabled follower pull with owner mutation tools and the
+  routed PullPeer for distributed drain.
+- [ORB-13832] — retired orbit-tools unit tests to the keep list.
+- [ORB-15943] — verified the authorization golden still catches tool
+  placement and permission drift.
+- [ORB-18448] — stopped advertising operator-only tools to agent MCP
+  sessions that can never call them.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

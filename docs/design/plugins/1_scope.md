@@ -1,9 +1,14 @@
 ---
+title: "Scope: Orbit plugin standard"
+owner: claude
+status: Implemented
+feature: plugins
+doc_role: scope
 type: design
 summary: "Scope: a plugin standard and contract for extending Orbit with tools, CLI groups, dashboard panels, routines, auto-tasks, activities, jobs and skills from one manifest"
 tags: [plugins, tools, routines, auto-tasks, dashboard, cli]
-last_updated: 2026-10-21
-last_validated: 2026-10-21
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 stage: shipped
 next: "—"
 ---
@@ -1180,7 +1185,7 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
    migration is pending in that repository.
 2. **Grants, sandboxed execution, `mcp` backend** (§4.1–§4.3) — landed [ORB-12736].
 3. **Definitions, skills, config** (§4.5) — landed [ORB-12737].
-4. **Derived CLI, dashboard panels, `plugin test`/`scaffold`** (§4.6, §4.7, §5) — landed.
+4. **Derived CLI, dashboard panels, `plugin test`/`scaffold`** (§4.6, §4.7, §5) — landed [ORB-12738].
 5. **Provider plugins** — deferred: open `ProviderRegistry` and collapse the four provider
    vocabularies only when a second external provider exists.
 
@@ -1206,3 +1211,37 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
    vendoring (§3).
 4. **Claude Code mirror.** `plugin/` stays the first-party mirror synced from
    `crates/orbit-core/assets`; it is not generated from installed plugins.
+
+## Task References
+
+- [ORB-12724] — measured the first-party surface cost this standard removes.
+- [ORB-12735] — phase 1: built the `plugin.yaml` v2 manifest, the
+  `orbit plugin` lifecycle, and plugin tools reaching MCP `tools/list`.
+- [ORB-12736] — phase 2: built grant enforcement and the sandboxed exec
+  backend with the versioned envelope.
+- [ORB-12737] — phase 3: built plugin definitions, skills and
+  `[plugins.<ns>]` config.
+- [ORB-12738] — phase 4: built the schema-derived `orbit <ns> <verb>` CLI,
+  dashboard plugin panels and links, and `orbit plugin test`/`scaffold`.
+- [ORB-12777] — confined the `orbit_tools` sandbox to named paths.
+- [ORB-12778] — stopped a plugin escalating its own grants by writing its
+  grant record.
+- [ORB-12785] — bound the grant witness to the install a tampered
+  `plugins` row would run.
+- [ORB-12789] — repaired the plugin callback gate's allowed-tools source.
+- [ORB-12798] — kept callback session identity after a backend descendant
+  changed directory.
+- [ORB-12799] — closed missing `fs.write` tails below symlinks bypassing
+  the protected-global-root check.
+- [ORB-12801] — bound callback sessions to the caller's effective tool
+  ceiling.
+- [ORB-12820] — fixed the MCP plugin backend's session key and
+  `tools/call` routing.
+- [ORB-12872] — settled the plugin write-root materialization rule.
+- [ORB-12876] — stopped plain CLI reads from a plugin child bypassing
+  `permissions.orbit_tools`.
+- [ORB-12879] — repaired the callback schema v2 bump's tests and v1
+  leftovers.
+- [ORB-13115] — added task and run identity to the plugin call context.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
