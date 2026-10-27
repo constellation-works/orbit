@@ -37,9 +37,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use orbit_common::security::release::sha256_hex;
 use orbit_engine::ci_run_event::is_branch_event;
-use orbit_types::task::{TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id};
+use orbit_types::task::{
+    TaskArtifact, TaskComplexity, TaskPriority, TaskStatus, TaskType, is_valid_orb_task_id,
+};
 use orbit_types::workflow::{ConventionTemplate, DEFAULT_BRANCH_PREFIX};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -780,32 +784,56 @@ fn task_branch_owner(branch_template: &ConventionTemplate, failure: &Value) -> O
     branch_template.branch_task_id(branch, DEFAULT_BRANCH_PREFIX, &is_valid_orb_task_id)
 }
 
-/// Re-read comments on each append so retries and repeated sources within one
-/// snapshot retain one comment per observation without mutating the exact tag.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct CiCompilerObservation {
+    run_id: String,
+    run_url: String,
+    checkout: String,
+    failure_key: String,
+}
+
+/// Retain a typed receipt with each comment, backfilling legacy comments.
 fn retain_compiler_observations(
     runtime: &OrbitRuntime,
     owner: &str,
     cluster: &FailureCluster,
 ) -> Result<(), OrbitError> {
     for run in &cluster.runs {
-        let message = format!(
-            "CI compiler observation: run `{}` {}; checkout `{}`; exact failure key `{CI_FAILURE_KEY_TAG_PREFIX}{}`.",
-            value_string(run, "run_id"),
-            value_string(run, "url"),
-            cluster.tested_commit,
-            cluster.failure_key,
+        let observation = CiCompilerObservation {
+            run_id: value_string(run, "run_id"),
+            run_url: value_string(run, "url"),
+            checkout: cluster.tested_commit.clone(),
+            failure_key: cluster.failure_key.clone(),
+        };
+        let content = serde_json::to_string(&observation)
+            .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+        let path = format!(
+            "ci-compiler-observations/{}.json",
+            sha256_hex(content.as_bytes())
         );
-        if runtime
-            .get_task_comments(owner)?
-            .iter()
-            .any(|comment| comment.message == message)
-        {
+        if let Some(artifact) = runtime.get_task_artifact(owner, &path)? {
+            let stored: CiCompilerObservation = serde_json::from_slice(&artifact.content)
+                .map_err(|error| OrbitError::InvalidInput(error.to_string()))?;
+            if stored != observation {
+                return Err(OrbitError::InvalidInput(
+                    "compiler observation receipt does not match its identity".into(),
+                ));
+            }
             continue;
         }
+        let message = format!(
+            "CI compiler observation: run `{}` {}; checkout `{}`; exact failure key `{CI_FAILURE_KEY_TAG_PREFIX}{}`.",
+            observation.run_id, observation.run_url, observation.checkout, observation.failure_key,
+        );
+        let already_commented = runtime
+            .get_task_comments(owner)?
+            .iter()
+            .any(|comment| comment.message == message);
         runtime.update_task(
             owner,
             TaskUpdateParams {
-                comment: Some(message),
+                comment: (!already_commented).then_some(message),
+                upsert_artifacts: vec![TaskArtifact::from_text(path, content)],
                 ..Default::default()
             },
         )?;
