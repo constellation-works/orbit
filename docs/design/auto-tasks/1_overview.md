@@ -109,7 +109,8 @@ becomes just the first definition.
 ## Embedded default catalog
 
 These twenty-three YAML files live under `crates/orbit-core/assets/auto_tasks/` and are
-registered in `DEFAULT_AUTO_TASK_FILES`. `orbit workspace init` materializes a
+registered in `DEFAULT_AUTO_TASK_FILES`. The directory also holds the retired
+`blocked-task-triage.yaml`, which `RETIRED_AUTO_TASK_FILES` registers instead. `orbit workspace init` materializes a
 missing file as `enabled: false`; re-init does not overwrite a workspace-authored
 definition of the same name.
 
