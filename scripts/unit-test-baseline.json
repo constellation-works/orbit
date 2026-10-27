@@ -602,6 +602,7 @@
         "lease_intake/tests/server.rs::oversized_token_request_is_refused_before_any_grant_or_notice",
         "lease_intake/tests/server.rs::token_active_leases_are_bounded_per_principal_across_restart_and_tokens",
         "lease_intake/tests/server.rs::token_grant_answers_fit_the_frame_without_compensating_release",
+        "lease_intake/tests/server.rs::token_hard_holder_lists_are_bounded_while_every_holder_still_blocks",
         "lease_intake/tests/server.rs::token_queued_selector_expansion_retries_do_not_double_count",
         "lease_intake/tests/server.rs::token_renewal_obeys_current_scope_and_workspace_policy",
         "lease_intake/tests/server.rs::token_renews_and_releases_only_its_own_principals_leases",

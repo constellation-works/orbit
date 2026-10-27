@@ -257,9 +257,37 @@ pub(super) fn find_reservation_conflicts(
     now: &str,
     requested_files: &[String],
 ) -> Result<Vec<TaskLockConflict>, OrbitError> {
+    let mut conflicts = Vec::new();
+    visit_reservation_conflicts(
+        tx,
+        workspace_orbit_dir,
+        workspace_id,
+        now,
+        requested_files,
+        &mut |conflict| conflicts.push(conflict),
+    )?;
+    conflicts.sort_by(|left, right| {
+        left.file
+            .cmp(&right.file)
+            .then(left.held_by_id.cmp(&right.held_by_id))
+    });
+    Ok(conflicts)
+}
+
+/// Hand each task reservation and hard lease blocking `requested_files` to
+/// `visit`, oldest holder first, without collecting them: a lease answer keeps
+/// only the prefix it can show.
+pub(super) fn visit_reservation_conflicts(
+    tx: &mut crate::StoreTx<'_>,
+    workspace_orbit_dir: &str,
+    workspace_id: Option<&str>,
+    now: &str,
+    requested_files: &[String],
+    visit: &mut dyn FnMut(TaskLockConflict),
+) -> Result<(), OrbitError> {
     let requested_files: BTreeSet<String> = requested_files.iter().cloned().collect();
     if requested_files.is_empty() {
-        return Ok(Vec::new());
+        return Ok(());
     }
 
     let sql = format!(
@@ -284,7 +312,6 @@ pub(super) fn find_reservation_conflicts(
         })
         .map_err(sqlite_store_error)?;
 
-    let mut conflicts = Vec::new();
     for row in rows {
         let (reservation_id, files_json, kind) = row.map_err(sqlite_store_error)?;
         let held_by = match TaskReservationKind::parse(&kind) {
@@ -297,7 +324,7 @@ pub(super) fn find_reservation_conflicts(
                 .iter()
                 .any(|held_file| lock_modes.selectors_block(requested_file, held_file))
             {
-                conflicts.push(TaskLockConflict {
+                visit(TaskLockConflict {
                     file: requested_file.clone(),
                     held_by,
                     held_by_id: reservation_id.clone(),
@@ -305,13 +332,7 @@ pub(super) fn find_reservation_conflicts(
             }
         }
     }
-
-    conflicts.sort_by(|left, right| {
-        left.file
-            .cmp(&right.file)
-            .then(left.held_by_id.cmp(&right.held_by_id))
-    });
-    Ok(conflicts)
+    Ok(())
 }
 
 /// The workspace predicate, narrowed to one coordination dimension.

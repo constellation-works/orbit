@@ -376,49 +376,104 @@ pub fn task_lock_conflicts_indexed(
     requested_files: &[String],
     workspace_root: &Path,
 ) -> Vec<TaskLockConflict> {
-    let bundle_ids = bundle_task_ids.iter().cloned().collect::<BTreeSet<_>>();
-    let requested_files = requested_files.iter().cloned().collect::<BTreeSet<_>>();
-    if requested_files.is_empty() {
-        return Vec::new();
-    }
-
-    let mut tasks: Vec<&TaskEnvelopeV2> = index
-        .tasks()
-        .filter(|task| {
-            holds_context_lock(task.status, &task.tags) && !bundle_ids.contains(&task.id)
-        })
-        .collect();
-    tasks.sort_by_key(|task| {
-        (
-            task_lock_status_rank(task.status),
-            task.created_at,
-            task.id.clone(),
-        )
-    });
-
     let mut conflicts = Vec::new();
-    for task in tasks {
-        let held_files = index.lock_context_files(task, workspace_root);
-        for requested_file in &requested_files {
-            if held_files
-                .iter()
-                .any(|held_file| index.lock_modes.selectors_block(requested_file, held_file))
-            {
-                conflicts.push(TaskLockConflict {
-                    file: requested_file.clone(),
-                    held_by: TaskLockHolder::Task,
-                    held_by_id: task.id.clone(),
-                });
-            }
-        }
-    }
-
+    visit_task_lock_conflicts(
+        index,
+        bundle_task_ids,
+        requested_files,
+        workspace_root,
+        &mut |file, task_id| {
+            conflicts.push(TaskLockConflict {
+                file: file.to_string(),
+                held_by: TaskLockHolder::Task,
+                held_by_id: task_id.to_string(),
+            });
+        },
+    );
     conflicts.sort_by(|left, right| {
         left.file
             .cmp(&right.file)
             .then(left.held_by_id.cmp(&right.held_by_id))
     });
     conflicts
+}
+
+/// [`task_lock_conflicts_indexed`] for an answer that can show at most
+/// `shown` conflicts: the first `shown` in (selector, task id) order plus
+/// the first task on every other blocked selector, so each blocked selector
+/// stays blocked without holding every selector-by-task pair. `None` is
+/// every conflict.
+pub(crate) fn task_lock_conflicts_bounded(
+    index: &TaskLockIndex,
+    requested_files: &[String],
+    workspace_root: &Path,
+    shown: Option<usize>,
+) -> Vec<TaskLockConflict> {
+    let Some(shown) = shown else {
+        return task_lock_conflicts_indexed(index, &[], requested_files, workspace_root);
+    };
+    let mut first = BTreeSet::<(String, String)>::new();
+    let mut first_per_file = BTreeMap::<String, String>::new();
+    visit_task_lock_conflicts(
+        index,
+        &[],
+        requested_files,
+        workspace_root,
+        &mut |file, task_id| {
+            first_per_file
+                .entry(file.to_string())
+                .and_modify(|held_by| {
+                    if task_id < held_by.as_str() {
+                        *held_by = task_id.to_string();
+                    }
+                })
+                .or_insert_with(|| task_id.to_string());
+            first.insert((file.to_string(), task_id.to_string()));
+            if first.len() > shown {
+                first.pop_last();
+            }
+        },
+    );
+    first
+        .into_iter()
+        .chain(first_per_file)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|(file, held_by_id)| TaskLockConflict {
+            file,
+            held_by: TaskLockHolder::Task,
+            held_by_id,
+        })
+        .collect()
+}
+
+/// Hand `visit` each (requested selector, task id) pair where a task outside
+/// `bundle_task_ids` holds a context lock blocking that selector.
+fn visit_task_lock_conflicts(
+    index: &TaskLockIndex,
+    bundle_task_ids: &[String],
+    requested_files: &[String],
+    workspace_root: &Path,
+    visit: &mut dyn FnMut(&str, &str),
+) {
+    let bundle_ids = bundle_task_ids.iter().cloned().collect::<BTreeSet<_>>();
+    let requested_files = requested_files.iter().cloned().collect::<BTreeSet<_>>();
+    if requested_files.is_empty() {
+        return;
+    }
+    for task in index.tasks().filter(|task| {
+        holds_context_lock(task.status, &task.tags) && !bundle_ids.contains(&task.id)
+    }) {
+        let held_files = index.lock_context_files(task, workspace_root);
+        for requested_file in &requested_files {
+            if held_files
+                .iter()
+                .any(|held_file| index.lock_modes.selectors_block(requested_file, held_file))
+            {
+                visit(requested_file, &task.id);
+            }
+        }
+    }
 }
 
 pub fn merge_task_lock_conflicts(

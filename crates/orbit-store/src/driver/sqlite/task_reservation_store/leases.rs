@@ -14,10 +14,12 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
+use super::holder_list::HolderList;
 use super::lease_queue;
 use super::notices::{self, LeaseOverlapNotice};
 use super::rows::{
-    LEASE_ROWS, expire_leases, find_reservation_conflicts, parse_string_list, serialize_string_list,
+    LEASE_ROWS, expire_leases, parse_string_list, serialize_string_list,
+    visit_reservation_conflicts,
 };
 use super::{reservation_scope_clause, unique_row_id};
 use crate::Store;
@@ -59,30 +61,49 @@ impl Store {
                         queue_position: None,
                         expired_leases,
                         active_lease_limit_reached: Some(active),
+                        holders_truncated: false,
                     });
                 }
             }
+            // Blocked is decided from every holder; the answer and the
+            // queued notice show only the prefix `holder_list_bytes` fits.
+            let mut blocked = false;
+            let mut shown = HolderList::new(params.holder_list_bytes);
             let mut conflicts = Vec::new();
             let mut queued_ahead = Vec::new();
             if params.mode == LeaseMode::Hard {
-                conflicts.extend(params.task_conflicts.iter().cloned());
-                conflicts.extend(find_reservation_conflicts(
+                for conflict in &params.task_conflicts {
+                    blocked = true;
+                    shown.offer(conflict.clone());
+                }
+                visit_reservation_conflicts(
                     tx,
                     &params.workspace_orbit_dir,
                     workspace_id,
                     &now,
                     &params.selectors,
-                )?);
-                queued_ahead = lease_queue::queued_ahead_of_request(
+                    &mut |conflict| {
+                        blocked = true;
+                        shown.offer(conflict);
+                    },
+                )?;
+                conflicts = shown.take_conflicts();
+                lease_queue::visit_queued_ahead_of_request(
                     tx,
                     &params.workspace_orbit_dir,
                     workspace_id,
                     params.aging_minutes,
                     params.priority,
                     &params.selectors,
+                    &mut |lease_id| {
+                        blocked = true;
+                        if shown.admit(&lease_id) {
+                            queued_ahead.push(lease_id);
+                        }
+                    },
                 )?;
             }
-            let blocked = !conflicts.is_empty() || !queued_ahead.is_empty();
+            let holders_truncated = shown.truncated();
             if blocked && !params.wait {
                 return Ok(LeaseInsertResult {
                     lease: None,
@@ -91,6 +112,7 @@ impl Store {
                     queue_position: None,
                     expired_leases,
                     active_lease_limit_reached: None,
+                    holders_truncated,
                 });
             }
 
@@ -149,19 +171,17 @@ impl Store {
                     params.aging_minutes,
                     &lease_id,
                 )?;
-                notices::append_lease_notice(
-                    tx,
-                    &lease_id,
-                    "queued",
-                    &json!({
-                        "selectors": params.selectors,
-                        "priority": params.priority,
-                        "holders": conflicts,
-                        "queued_ahead": queued_ahead,
-                        "position": position,
-                    }),
-                    "queued",
-                )?;
+                let mut payload = json!({
+                    "selectors": params.selectors,
+                    "priority": params.priority,
+                    "holders": conflicts,
+                    "queued_ahead": queued_ahead,
+                    "position": position,
+                });
+                if holders_truncated {
+                    payload["truncated"] = json!(true);
+                }
+                notices::append_lease_notice(tx, &lease_id, "queued", &payload, "queued")?;
                 queue_position = position;
             } else {
                 notices::append_lease_notice(tx, &lease_id, "granted", &json!({
@@ -182,6 +202,7 @@ impl Store {
                 queue_position,
                 expired_leases,
                 active_lease_limit_reached: None,
+                holders_truncated,
             })
         })
     }

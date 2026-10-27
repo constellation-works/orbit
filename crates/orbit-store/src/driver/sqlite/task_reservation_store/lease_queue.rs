@@ -14,6 +14,7 @@
 //! one by refusing the expansion ranked last in the cycle.
 
 use std::cmp::Ordering;
+use std::collections::BTreeSet;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
@@ -21,9 +22,10 @@ use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{TransactionBehavior, params};
 use serde_json::json;
 
+use super::holder_list::HolderList;
 use super::leases::{LEASE_COLUMNS, lease_row, load_lease};
 use super::notices::{self, LeaseOverlapNotice};
-use super::rows::{LEASE_ROWS, expire_leases, find_reservation_conflicts, serialize_string_list};
+use super::rows::{LEASE_ROWS, expire_leases, serialize_string_list, visit_reservation_conflicts};
 use super::{reservation_scope_clause, unique_row_id};
 use crate::contracts::{
     LeaseDeadlock, LeaseExpandParams, LeaseExpandResult, LeaseMode, LeasePriority, LeaseQueueGrant,
@@ -128,29 +130,29 @@ fn load_queue(
     Ok(queue)
 }
 
-/// The waiting entries a new request at `priority` would queue behind that
-/// want any of its `selectors`. Every waiting entry is older than a new
-/// request, so an equal rank is ahead of it.
-pub(super) fn queued_ahead_of_request(
+/// Hand `visit` each waiting entry, in queue order, that a new request at
+/// `priority` would queue behind and that wants any of its `selectors`.
+/// Every waiting entry is older than a new request, so an equal rank is ahead
+/// of it.
+pub(super) fn visit_queued_ahead_of_request(
     tx: &StoreTx<'_>,
     workspace_orbit_dir: &str,
     workspace_id: Option<&str>,
     aging_minutes: u32,
     priority: LeasePriority,
     selectors: &[String],
-) -> Result<Vec<String>, OrbitError> {
+    visit: &mut dyn FnMut(String),
+) -> Result<(), OrbitError> {
     let rank = priority_rank(priority);
     let lock_modes = tx.lock_modes.clone();
-    Ok(
-        load_queue(tx, workspace_orbit_dir, workspace_id, aging_minutes)?
-            .into_iter()
-            .filter(|entry| {
-                entry.rank >= rank
-                    && lock_modes.footprints_block(selectors, &entry.record.queued_selectors)
-            })
-            .map(|entry| entry.record.lease_id)
-            .collect(),
-    )
+    for entry in load_queue(tx, workspace_orbit_dir, workspace_id, aging_minutes)? {
+        if entry.rank >= rank
+            && lock_modes.footprints_block(selectors, &entry.record.queued_selectors)
+        {
+            visit(entry.record.lease_id);
+        }
+    }
+    Ok(())
 }
 
 /// A waiting lease's 1-based position in the queue.
@@ -169,21 +171,28 @@ pub(super) fn queue_position(
     )
 }
 
-/// Task reservations and hard leases, other than `lease_id` itself, holding
-/// any of `selectors`.
-fn holder_conflicts(
+/// Hand `visit` each task reservation and hard lease, other than `lease_id`
+/// itself, holding any of `selectors`.
+fn visit_holder_conflicts(
     tx: &mut StoreTx<'_>,
     workspace_orbit_dir: &str,
     workspace_id: Option<&str>,
     selectors: &[String],
     lease_id: &str,
-) -> Result<Vec<TaskLockConflict>, OrbitError> {
+    visit: &mut dyn FnMut(TaskLockConflict),
+) -> Result<(), OrbitError> {
     let now = crate::now_string();
-    Ok(
-        find_reservation_conflicts(tx, workspace_orbit_dir, workspace_id, &now, selectors)?
-            .into_iter()
-            .filter(|conflict| conflict.held_by_id != lease_id)
-            .collect(),
+    visit_reservation_conflicts(
+        tx,
+        workspace_orbit_dir,
+        workspace_id,
+        &now,
+        selectors,
+        &mut |conflict| {
+            if conflict.held_by_id != lease_id {
+                visit(conflict);
+            }
+        },
     )
 }
 
@@ -425,11 +434,14 @@ impl Store {
                     waiting.push(wanted.clone());
                     continue;
                 };
-                let holders = holder_conflicts(tx, dir, workspace_id, wanted, &lease.lease_id)?;
+                let mut held = BTreeSet::new();
+                visit_holder_conflicts(tx, dir, workspace_id, wanted, &lease.lease_id, &mut |c| {
+                    held.insert(c.file);
+                })?;
                 let (free, rest): (Vec<String>, Vec<String>) = match entry.kind {
                     LeaseQueueKind::Request => {
                         let blocked = !tasks.is_empty()
-                            || !holders.is_empty()
+                            || !held.is_empty()
                             || waiting
                                 .iter()
                                 .any(|ahead| lock_modes.footprints_block(wanted, ahead));
@@ -440,10 +452,8 @@ impl Store {
                         }
                     }
                     LeaseQueueKind::Expansion => wanted.iter().cloned().partition(|selector| {
-                        !tasks
-                            .iter()
-                            .chain(&holders)
-                            .any(|conflict| &conflict.file == selector)
+                        !held.contains(selector)
+                            && !tasks.iter().any(|conflict| &conflict.file == selector)
                     }),
                 };
                 if !free.is_empty() {
@@ -498,6 +508,7 @@ impl Store {
                 deadlocks: Vec::new(),
                 expired_leases,
                 selector_limit_exceeded: false,
+                holders_truncated: false,
             };
             let Some(lease) =
                 load_lease(tx, dir, workspace_id, &params.lease_id)?.filter(|lease| {
@@ -524,19 +535,33 @@ impl Store {
                 result.selector_limit_exceeded = true;
                 return Ok(result);
             }
+            // Which selectors wait is decided from every holder; the answer
+            // and the queued notice show only the prefix
+            // `holder_list_bytes` fits.
+            let mut shown = HolderList::new(params.holder_list_bytes);
             let (added, queued, conflicts) = if lease.mode == LeaseMode::Hard {
-                let holders = holder_conflicts(tx, dir, workspace_id, &selectors, &lease.lease_id)?;
-                let conflicts = params
-                    .task_conflicts
-                    .iter()
-                    .chain(&holders)
-                    .filter(|conflict| selectors.contains(&conflict.file))
-                    .cloned()
-                    .collect::<Vec<_>>();
+                let mut blocked = BTreeSet::new();
+                for conflict in &params.task_conflicts {
+                    if selectors.contains(&conflict.file) {
+                        blocked.insert(conflict.file.clone());
+                        shown.offer(conflict.clone());
+                    }
+                }
+                visit_holder_conflicts(
+                    tx,
+                    dir,
+                    workspace_id,
+                    &selectors,
+                    &lease.lease_id,
+                    &mut |conflict| {
+                        blocked.insert(conflict.file.clone());
+                        shown.offer(conflict);
+                    },
+                )?;
                 let (added, queued): (Vec<String>, Vec<String>) = selectors
                     .into_iter()
-                    .partition(|selector| !conflicts.iter().any(|c| &c.file == selector));
-                (added, queued, conflicts)
+                    .partition(|selector| !blocked.contains(selector));
+                (added, queued, shown.take_conflicts())
             } else {
                 (selectors, Vec::new(), Vec::new())
             };
@@ -564,16 +589,20 @@ impl Store {
             if !queued.is_empty() {
                 let position =
                     queue_position(tx, dir, workspace_id, params.aging_minutes, &lease.lease_id)?;
+                let mut payload = json!({
+                    "selectors": queued,
+                    "expansion": true,
+                    "holders": conflicts,
+                    "position": position,
+                });
+                if shown.truncated() {
+                    payload["truncated"] = json!(true);
+                }
                 notices::append_lease_notice(
                     tx,
                     &lease.lease_id,
                     "queued",
-                    &json!({
-                        "selectors": queued,
-                        "expansion": true,
-                        "holders": conflicts,
-                        "position": position,
-                    }),
+                    &payload,
                     &format!("queued:expansion:{}", unique_row_id("")),
                 )?;
                 result.deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
@@ -584,6 +613,7 @@ impl Store {
             result.added = added;
             result.queued = queued;
             result.conflicts = conflicts;
+            result.holders_truncated = shown.truncated();
             Ok(result)
         })
     }

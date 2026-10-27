@@ -24,7 +24,9 @@ use super::super::audit::{emit_expired_lease_events, record_lease_audit_event};
 use super::super::commands::{
     reservation_actor_label, workspace_orbit_dir, workspace_task_reservation_id,
 };
-use super::super::index::{TaskLockIndex, merge_task_lock_conflicts, task_lock_conflicts_indexed};
+use super::super::index::{
+    TaskLockIndex, task_lock_conflicts_bounded, task_lock_conflicts_indexed,
+};
 use super::{
     LEASE_INTAKE_ACTOR, LeaseTokenGrant, PathHolders, ResponseBudget, TOKEN_MAX_LEASE_SELECTORS,
     ensure_token_covers_lease, ensure_token_selector_count, lease_active, lease_json,
@@ -151,7 +153,7 @@ fn expand_as(
     let index = TaskLockIndex::load(runtime, &[])?;
     let task_conflicts = if current.mode == LeaseMode::Hard && !surface.is_empty() {
         runtime.reconcile_stale_owned_reservations_for_files(&surface, 32)?;
-        task_lock_conflicts_indexed(&index, &[], &surface, repo_root)
+        task_lock_conflicts_bounded(&index, &surface, repo_root, budget.conflicts_shown())
     } else {
         Vec::new()
     };
@@ -162,6 +164,7 @@ fn expand_as(
         selectors: surface,
         task_conflicts,
         aging_minutes: runtime.lease_policy().aging_minutes,
+        holder_list_bytes: budget.holder_list_bytes(),
         max_selectors: token.map(|_| TOKEN_MAX_LEASE_SELECTORS as u32),
     })?;
     emit_expired_lease_events(runtime, EXPAND_TOOL, &result.expired_leases)?;
@@ -177,7 +180,8 @@ fn expand_as(
         )));
     }
     let lease = result.lease.ok_or_else(not_active)?;
-    let conflicts = budget.take(merge_task_lock_conflicts(result.conflicts, Vec::new()));
+    let conflicts = budget.take(result.conflicts);
+    budget.truncated |= result.holders_truncated;
     let deadlock = result
         .deadlocks
         .iter()

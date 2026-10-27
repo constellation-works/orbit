@@ -30,7 +30,8 @@ use orbit_common::protocol::tool_input::{
 };
 use orbit_store::contracts::{
     LeaseInsertParams, LeaseMode, LeaseQueueKind, LeaseRecord, LeaseReleaseParams,
-    LeaseRenewParams, TaskLockConflict, TaskReservationKind, TaskReservationReleaseReason,
+    LeaseRenewParams, TaskLockConflict, TaskLockHolder, TaskReservationKind,
+    TaskReservationReleaseReason,
 };
 pub use orbit_store::contracts::{LeasePrincipalClass, LeasePriority};
 use orbit_types::telemetry::AuditEventStatus;
@@ -43,8 +44,7 @@ use super::commands::{
     reservation_actor_label, workspace_orbit_dir, workspace_task_reservation_id,
 };
 use super::index::{
-    TaskLockIndex, holds_context_lock, merge_task_lock_conflicts, task_lock_conflicts_indexed,
-    task_lock_status_rank,
+    TaskLockIndex, holds_context_lock, task_lock_conflicts_bounded, task_lock_status_rank,
 };
 use crate::RuntimeKernel;
 
@@ -418,7 +418,12 @@ fn request_as(
     let index = TaskLockIndex::load(runtime, &[])?;
     let task_conflicts = if mode == LeaseMode::Hard {
         runtime.reconcile_stale_owned_reservations_for_files(&stored_selectors, 32)?;
-        task_lock_conflicts_indexed(&index, &[], &stored_selectors, repo_root)
+        task_lock_conflicts_bounded(
+            &index,
+            &stored_selectors,
+            repo_root,
+            budget.conflicts_shown(),
+        )
     } else {
         Vec::new()
     };
@@ -444,6 +449,7 @@ fn request_as(
             wait,
             task_conflicts,
             aging_minutes: policy.aging_minutes,
+            holder_list_bytes: budget.holder_list_bytes(),
             active_lease_limit: token.map(|_| TOKEN_MAX_ACTIVE_LEASES),
         })?;
     emit_expired_lease_events(runtime, REQUEST_TOOL, &result.expired_leases)?;
@@ -453,8 +459,9 @@ fn request_as(
     if let Some(active) = result.active_lease_limit_reached {
         return refuse_over_active_limit(runtime, audit_request, active);
     }
-    let conflicts = budget.take(merge_task_lock_conflicts(result.conflicts, Vec::new()));
+    let conflicts = budget.take(result.conflicts);
     let queued_ahead = budget.take(result.queued_ahead);
+    budget.truncated |= result.holders_truncated;
     let Some(lease) = result.lease else {
         return refuse(
             runtime,
@@ -635,8 +642,9 @@ const PLACEHOLDER_TIMESTAMP: &str = "0000-00-00T00:00:00.000000000+00:00";
 
 /// What remains of a lease-token answer's size limit for its holder lists
 /// (`overlaps`, `conflicts`, `queued_ahead`), measured as serialized JSON.
-/// The lists are cut to a prefix that fits, and `truncated` says so; every
-/// holder still gets its notice. SSH and dashboard callers are unbounded.
+/// The lists are built only to a prefix that fits, and `truncated` says so;
+/// every holder still decides grants and queueing and gets its notice. SSH
+/// and dashboard callers are unbounded.
 struct ResponseBudget {
     remaining: Option<usize>,
     truncated: bool,
@@ -682,6 +690,24 @@ impl ResponseBudget {
         }
         *remaining -= size;
         true
+    }
+
+    /// The bytes left for the store to fill `conflicts` and `queued_ahead`
+    /// with; `None` when unbounded.
+    fn holder_list_bytes(&self) -> Option<usize> {
+        self.remaining
+            .map(|remaining| if self.truncated { 0 } else { remaining })
+    }
+
+    /// The most conflicts the rest of the budget could show, each costing at
+    /// least an empty one; `None` when unbounded.
+    fn conflicts_shown(&self) -> Option<usize> {
+        let smallest = serialized_len(&TaskLockConflict {
+            file: String::new(),
+            held_by: TaskLockHolder::Task,
+            held_by_id: String::new(),
+        }) + 1;
+        self.holder_list_bytes().map(|bytes| bytes / smallest)
     }
 
     fn take<T: Serialize>(&mut self, items: Vec<T>) -> Vec<T> {
