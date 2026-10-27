@@ -264,6 +264,65 @@ the frictions it names when it reaches `done`:
 - A friction ID that matches no record is not refused. Orbit records a dangling-relation
   event, and the task still reaches `done`.
 
+## Task tool grants
+
+An operator can grant a task a tool that the implementing activity's deny
+list would otherwise exclude. Use a grant when the task needs a reviewed
+operation, not to give an agent operator authority. `required_tools` is a
+separate, immutable list of tools the task needs in its activity baseline;
+it does not override a deny list. See [Agent tool lists](../../reference/activity-job-yaml/#agent-tool-lists).
+
+In an operator session on the owner host, inspect the task and the tool's
+schema first. For example, a grant for a reviewed auto-task update can be set
+before dispatch:
+
+```bash
+orbit tool show orbit.auto_task.update
+orbit task update "$TASK_ID" --granted-tools orbit.auto_task.update
+orbit task show "$TASK_ID"
+```
+
+`orbit task add` also accepts `--granted-tools`. Supply exact canonical,
+registered, enabled, agent-facing names; wildcards, disabled tools and
+operator-only tools are refused. An update replaces the whole grant list;
+`--granted-tools ""` clears it. Only an operator may supply the field, even
+to clear it. Changes are allowed while the task is `proposed`, `backlog` or
+`someday`, with no live run, protecting claim or worktree. A preserved
+candidate's worktree keeps the grant frozen after its run stops; requeue and
+remove that worktree before changing the grant for a new attempt. The write
+that starts a task cannot also change its grant. Task history records changes.
+
+Only `agent_implement` reads grants; reviewers, recovery and other activities
+do not. A grant can lift an exact deny entry only for a tool classified
+read/repeat-safe; a covering wildcard still refuses admission. All tools in
+the shipped implementer's deny list are currently classified mutating, and
+unclassified tools default to mutating. A mutating grant stays denied for
+live calls. Adding the same denied mutation to `required_tools` still
+refuses implementer admission. Grants do not bypass capability, field-level,
+filesystem, process or other runtime checks. A task with any grant runs on
+the owner host; if its required labels or OS exclude that host, it waits
+even if a follower has the right labels.
+
+For a grantable mutation, the implementer attaches a JSON task artifact at
+`mutation-proposals/<name>.json` using `orbit.task.artifact.put`. Its content
+names the granted tool, exact input and a nonempty rationale:
+
+```json
+{"tool": "orbit.auto_task.update", "input": {"name": "<auto-task>", "description": "<updated description>"}, "rationale": "Explain why this change is needed."}
+```
+
+Use the tool schema to choose valid input for the intended change. Orbit
+refuses a proposal unless the task grants a grantable mutation and an agent
+session can make that exact call. It derives an idempotency key from the
+task, tool and input. The review gate presents the proposal alongside the
+diff; after approval the pipeline rechecks and applies the reviewed input,
+then writes a system-owned `mutation-receipts/<key>.json` receipt. An applied
+key is not applied twice; changed input needs a new review. A failed or
+unreviewed proposal stops delivery, and an interrupted pending receipt needs
+operator reconciliation. A task cannot complete with an unapplied proposal.
+If the agent needs the change during its run, arrange an operator action or
+prerequisite task instead.
+
 ## File reservations
 
 Orbit locks files for you while tasks run. A task holds the files its selectors
