@@ -178,8 +178,8 @@ pub(crate) fn final_recovery_comment(comment: &TaskComment) -> Option<FinalRecov
 
 /// The outcome a legacy decision comment for `run_id` records: its header's
 /// `outcome=` (and a completion's `status=`), with the detail lines below it.
-/// A comment the applier did not write as expected reads as an escalation,
-/// which never settles the task twice.
+/// Only system-authored comments are trusted; a malformed trusted comment
+/// reads as an escalation, which never settles the task twice.
 pub(crate) fn final_recovery_outcome(
     comments: &[TaskComment],
     run_id: &str,
@@ -187,7 +187,7 @@ pub(crate) fn final_recovery_outcome(
     let marker = format!("{FINAL_RECOVERY_PREFIX}{run_id} decision=");
     let message = &comments
         .iter()
-        .find(|comment| comment.message.starts_with(&marker))?
+        .find(|comment| comment.by == SYSTEM_ACTOR_LABEL && comment.message.starts_with(&marker))?
         .message;
     let header = message.lines().next().unwrap_or_default();
     let field = |key: &str| {
