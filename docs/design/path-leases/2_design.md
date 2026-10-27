@@ -430,8 +430,11 @@ address and outcome. A token renews and releases only leases whose principal is 
 other lease, like an unknown one, is refused with `lease_not_held`, which names no holder,
 because a token authorizes leases and nothing else (`4_decisions.md`). Renewal is refused without
 changing the lease when its mode or priority exceeds the renewing token or the workspace class
-policy admitted by the running service; release remains allowed to the same principal. Restart the
-service to admit changed workspace policy. Show, list and check read
+policy (`lease.hard`, `lease.max_priority`) admitted from the current global or workspace
+`config.toml`; release remains allowed to the same principal. `orbit web serve` applies the
+`LeasePolicy` admitted from that file on the next intake operation after either file's mtime or
+length changes, without a process restart; a same-length edit inside one mtime tick can still be
+missed. Show, list and check read
 every lease in the token's workspace. The operator-session REST routes keep full authority over
 every lease.
 
