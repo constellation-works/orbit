@@ -102,7 +102,7 @@ pub struct OffsetAccuracy {
     /// In bytes.
     pub memory: ErrorSummary,
     /// Raw pairs with resolvable attribution metadata (legacy rows and
-    /// unresolved reservation cohorts excluded).
+    /// unresolved reservation cohorts and missing worker evidence excluded).
     pub attributed_paired: u64,
     /// Forecast minus (baseline-at-forecast plus covered deliveries' measured load).
     pub attributed_cpu: ErrorSummary,
@@ -150,7 +150,7 @@ pub struct ForecastPair {
     pub measured_memory_bytes: u64,
     /// Baseline-at-forecast plus only the covered deliveries' measured load.
     /// Absent when the forecast predates attribution recording or includes an
-    /// unresolved pending reservation.
+    /// unresolved pending reservation, or lacks covered worker evidence.
     pub attributed_cpu_cores: Option<f64>,
     pub attributed_memory_bytes: Option<f64>,
 }
