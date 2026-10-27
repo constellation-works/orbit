@@ -108,8 +108,12 @@ fn write_manifest(dir: &Path, names: &[&str]) {
 }
 
 fn routine_yaml(name: &str) -> String {
+    routine_yaml_with_target(name, "task_pilot_pipeline")
+}
+
+fn routine_yaml_with_target(name: &str, target_job: &str) -> String {
     format!(
-        "schemaVersion: 1\nname: {name}\ndescription: Probe routine.\nenabled: false\ntrigger:\n  cron: \"0 3 * * *\"\ntarget: job:task_pilot_pipeline\n"
+        "schemaVersion: 1\nname: {name}\ndescription: Probe routine.\nenabled: false\ntrigger:\n  cron: \"0 3 * * *\"\ntarget: job:{target_job}\n"
     )
 }
 
@@ -228,6 +232,39 @@ fn preset_with_one_valid_and_one_missing_definition_enables_neither() {
     assert!(
         routine.contains("enabled: false"),
         "the valid definition must stay disabled when its preset also names a missing one:\n{routine}"
+    );
+}
+
+#[test]
+fn preset_refuses_routine_with_unresolved_job_target_before_init_writes() {
+    let machine = Machine::new();
+    let work = machine.repo("unresolved-target");
+    let routines = work.join(".orbit/routines");
+    let tasks = work.join(".orbit/auto_tasks");
+    write_manifest(&routines, &["probe-routine"]);
+    write_manifest(&tasks, &["probe-task"]);
+    fs::write(
+        routines.join("probe-routine.yaml"),
+        routine_yaml_with_target("probe-routine", "no_such_review_job"),
+    )
+    .expect("routine");
+    fs::write(tasks.join("probe-task.yaml"), auto_task_yaml("probe-task")).expect("auto-task");
+    let preset = machine.repos.join("unresolved-target.toml");
+    fs::write(
+        &preset,
+        "name = \"unresolved-target\"\n\n[seeding]\nroutines = \"none\"\nauto_tasks = \"none\"\n\n[enable]\nroutines = [\"probe-routine\"]\nauto_tasks = [\"probe-task\"]\n\n[config]\n\"review.minutes\" = 33\n",
+    )
+    .expect("write preset");
+    assert_refused_before_writes(&machine, &work, &preset, "probe-routine");
+    let routine = fs::read_to_string(routines.join("probe-routine.yaml")).expect("routine bytes");
+    let task = fs::read_to_string(tasks.join("probe-task.yaml")).expect("auto-task bytes");
+    assert!(
+        routine.contains("enabled: false"),
+        "the unresolved routine must stay disabled:\n{routine}"
+    );
+    assert!(
+        task.contains("enabled: false"),
+        "the valid auto-task in the same preset must stay disabled:\n{task}"
     );
 }
 
