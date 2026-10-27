@@ -8,9 +8,11 @@
 //! blocking, and a reviewer that skips or claims it cannot ship the candidate
 //! unverified. Once the owner's run of the check arrives, the owner's next run
 //! resumes the held candidate and settles the held review without
-//! re-implementing or re-reviewing it.
+//! re-implementing or re-reviewing it. A before-landing hold does the same
+//! on the landing gate: matching evidence admits `evidence_received` and
+//! settlement reuses the held certificate.
 
-use super::claimed_review::ReviewedLeaf;
+use super::claimed_review::{REVIEW_CREW, ReviewedLeaf};
 use super::*;
 
 use orbit_types::task::HostOs;
@@ -807,6 +809,21 @@ pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &Re
     let [required] = hold.requirements.as_slice() else {
         panic!("one owed check: {hold:?}");
     };
+    attach_passed_command(leaf, owner, hold, &required.command);
+}
+
+/// Operator attachment of a passed result for `hold`'s one requirement,
+/// recording `command` instead of the owed command when they differ.
+#[cfg(unix)]
+fn attach_passed_command(
+    leaf: &ReviewedLeaf,
+    owner: &OrbitRuntime,
+    hold: &ReviewEvidenceHold,
+    command: &str,
+) {
+    let [required] = hold.requirements.as_slice() else {
+        panic!("one owed check: {hold:?}");
+    };
     let log_artifact = format!("{}.log.json", required.artifact.trim_end_matches(".json"));
     let log_artifact = log_artifact.as_str();
     let result = orbit_types::workflow::ReviewExternalEvidence {
@@ -815,7 +832,7 @@ pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &Re
         candidate: hold.candidate.clone(),
         kind: required.kind,
         name: required.name.clone(),
-        command: required.command.clone(),
+        command: command.into(),
         outcome: ValidationOutcome::Passed,
         log_artifact: log_artifact.into(),
         os: required.os,
@@ -847,6 +864,133 @@ pub(super) fn attach_result(leaf: &ReviewedLeaf, owner: &OrbitRuntime, hold: &Re
             None,
         )
         .unwrap();
+}
+
+/// A Mac before-landing review holds for the Linux CodeQL run its owner's
+/// rule owes. A result for a different command leaves that hold. The matching
+/// result lets the owner's next run resume the unchanged candidate, and the
+/// landing gate admits `evidence_received` and settles the held certificate
+/// without a reviewer. The fresh admission, before any evidence, is
+/// `admitted`, which is the decision that still starts a reviewer.
+#[cfg(unix)]
+#[test]
+fn a_before_landing_evidence_hold_settles_once_matching_evidence_arrives() {
+    if !isolated(
+        module_path!(),
+        "a_before_landing_evidence_hold_settles_once_matching_evidence_arrives",
+    ) {
+        return;
+    }
+
+    let mut leaf = ReviewedLeaf::admit_from(
+        &format!(
+            "[review]\nbefore_landing = true\n\n[operation]\nreview_crew = \"{REVIEW_CREW}\"\n{}",
+            codeql_rule("**/*.rs")
+        ),
+        "",
+    );
+    leaf.bound = leaf.bound.clone().with_host_os(Some(HostOs::Macos));
+    leaf.gate_input["before_landing"] = json!(true);
+    let (_root, origin) = publish_origin(&leaf);
+
+    let admitted = leaf.admit_review();
+    assert_eq!(admitted["timing"], "before-landing", "{admitted}");
+    assert_eq!(
+        admitted["decision"], "admitted",
+        "a fresh before-landing attempt still admits a reviewer: {admitted}"
+    );
+    leaf.put_report(&report(
+        &admitted,
+        ReviewVerdict::Incomplete,
+        Vec::new(),
+        vec![ci_fast()],
+        Some("Rust CodeQL cannot run on macOS"),
+    ));
+    let refused = leaf.settle().expect_err("missing evidence cannot land");
+    assert!(
+        refused.contains("review_awaiting_evidence"),
+        "missing owed evidence must hold: {refused}"
+    );
+    let hold: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT).unwrap();
+    assert_eq!(hold.requirements, vec![owed()]);
+    leaf.leaf_holds(&hold);
+    leaf.pair.pass(&leaf.drain);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "in-progress");
+
+    let owner = leaf.pair.wire.owner.clone();
+    attach_passed_command(&leaf, &owner, &hold, "echo mismatched");
+    assert_eq!(
+        leaf.pair.owner_status(&leaf.task),
+        "in-progress",
+        "a mismatched command must not release the hold"
+    );
+    assert!(
+        owner
+            .get_task_history(&leaf.task)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "review_evidence_received"),
+        "mismatched evidence must not record receipt"
+    );
+    let still_held: ReviewEvidenceHold = artifact(&leaf, REVIEW_EVIDENCE_HOLD_ARTIFACT)
+        .expect("the hold stays until the owed command arrives");
+    assert_eq!(still_held.attempt_id, hold.attempt_id);
+
+    owner_checkout(&leaf, &origin);
+    attach_result(&leaf, &owner, &hold);
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "backlog");
+    let receipt = owner.get_task_history(&leaf.task).unwrap();
+    assert_eq!(
+        receipt.last().unwrap().event,
+        "review_evidence_received",
+        "{receipt:?}"
+    );
+
+    let resumed = owner_resumes(&leaf, ReviewTiming::BeforeLanding);
+    assert_eq!(
+        resumed.output["outcome"], "resumed_held",
+        "{}",
+        resumed.output
+    );
+    assert_eq!(resumed.output["implement"], false, "{}", resumed.output);
+    assert_eq!(resumed.output["source_sha"], hold.candidate.commit.as_str());
+
+    let mut gate_input = json!({
+        "run_id": resumed.run, "job_run_id": resumed.run, "completed_task_ids": [leaf.task],
+        "workspace_path": resumed.worktree, "base": "main", "base_sync": "local",
+        "base_sha": resumed.base_sha, "mode": "pr", "skipped_no_diff_expected": false,
+        "before_landing": true,
+    });
+    let admitted = owner
+        .run_deterministic(
+            "review_gate_admit",
+            &json!({}),
+            &gate_input,
+            ToolContext::default(),
+        )
+        .expect("the landing gate admits the resumed candidate");
+    assert_eq!(admitted["decision"], "evidence_received", "{admitted}");
+    assert_eq!(admitted["applies"], true, "{admitted}");
+    assert_eq!(admitted["timing"], "before-landing", "{admitted}");
+    assert_eq!(admitted["held_attempt_id"], hold.attempt_id.as_str());
+    gate_input["admission"] = admitted;
+    let settled = owner
+        .run_deterministic(
+            "review_gate_settle",
+            &json!({}),
+            &gate_input,
+            ToolContext::default(),
+        )
+        .expect("matching evidence settles the held review without a reviewer");
+    assert_eq!(settled["gate"], "passed", "{settled}");
+    assert_eq!(settled["verdict"], "accept", "{settled}");
+    let certificate: ReviewCertificate = artifact(&leaf, REVIEW_GATE_ARTIFACT).unwrap();
+    assert_eq!(
+        certificate.resumed_hold_attempt.as_deref(),
+        Some(hold.attempt_id.as_str()),
+        "settled on the held certificate, with no new reviewer"
+    );
+    assert_eq!(certificate.final_candidate.tree, hold.candidate.tree);
 }
 
 // Related boundary scenarios share the isolated table fixture.

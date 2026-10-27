@@ -38,7 +38,11 @@
 # - ORB-14849: with `review.timing = before_landing` captured instead, the pre-push
 #   gate does not apply and the PR opens at once; the `landing_review*` steps
 #   then review the published head while hosted CI runs on it, and
-#   completion merges only the head they settled. Any outcome but an approve
+#   completion merges only the head they settled. When that admission decides
+#   `evidence_received` — the held review's owed evidence arrived for the
+#   unchanged candidate — `landing_review` is skipped and settlement reuses
+#   the held certificate. A fresh `admitted` or `resumed` decision still
+#   starts the reviewer. Any outcome but an approve
 #   leaves the PR open and unmerged and the task in review with the failed
 #   step's typed reason; no outcome closes the PR.
 # - A reviewed PR that conflicts at completion is rebased (conflict recovery
@@ -491,8 +495,10 @@ spec:
         skipped_no_diff_expected: "{{ steps.commit.output.skipped_no_diff_expected }}"
         before_landing: true
 
+    # Same exclusion as `review`: an owed hold whose evidence arrived settles
+    # on the held certificate and must not start another reviewer.
     - id: landing_review
-      when: "{{ steps.landing_review_gate_admit.output.applies }} == true"
+      when: "{{ steps.landing_review_gate_admit.output.applies }} == true && {{ steps.landing_review_gate_admit.output.decision }} != evidence_received"
       retry:
         max_attempts: 2
         initial_backoff_ms: 5000
