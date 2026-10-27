@@ -252,6 +252,9 @@ pub fn validate_task_relations_for_source(
                 relation.relation_type, relation.target
             )));
         }
+        if let Some(regression) = &relation.regression {
+            regression.validate_sites().map_err(TaskError::Invalid)?;
+        }
         if relation.target == source_id {
             return Err(TaskError::Invalid(format!(
                 "task relation from '{source_id}' must not target itself"

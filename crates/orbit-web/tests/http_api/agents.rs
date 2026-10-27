@@ -81,7 +81,11 @@ pub(super) fn regression(
             relations: vec![TaskRelation {
                 relation_type: TaskRelationType::RegressionFrom,
                 target: culprit.parse().unwrap(),
-                regression: Some(RegressionClassification { nature, escape }),
+                regression: Some(RegressionClassification {
+                    nature,
+                    escape,
+                    sites: Vec::new(),
+                }),
             }],
         },
     )

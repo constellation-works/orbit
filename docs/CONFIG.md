@@ -766,15 +766,17 @@ window_days = 30
 min_support = 5
 threshold_percent = 40
 max_files = 3
+record_sites = false
 ```
 
 | Key | Default | What it does |
 |---|---|---|
-| `workflow.regression_risk.enabled` | `true` | Whether implement and review prompts mark a task's regression-prone `file:` context files. This switch controls marks only; task riskiness scores remain active when it is off. |
+| `workflow.regression_risk.enabled` | `true` | Whether implement and review prompts mark a task's regression-prone context files (the files of its `file:` and `symbol:` selectors). This switch controls marks only; task riskiness scores remain active when it is off. |
 | `workflow.regression_risk.window_days` | `30` | **Advanced.** Trailing days of done tasks used for both task riskiness scores and prompt marks (`1`–`365`). |
 | `workflow.regression_risk.min_support` | `5` | **Advanced.** Minimum task support used for riskiness scores and required before a context file can be marked (`1`–`10000`). |
 | `workflow.regression_risk.threshold_percent` | `40` | **Advanced. Prompt marks only.** Share of a file's touching tasks, in percent, that a `regression_from` link must name before the file is marked (`1`–`100`). |
 | `workflow.regression_risk.max_files` | `3` | **Advanced. Prompt marks only.** Most files one prompt marks, highest regression rate first (`1`–`20`). |
+| `workflow.regression_risk.record_sites` | `false` | **Advanced.** Whether `regression_from` links keep `regression.sites`, the `symbol:`/`file:` selectors of where a defect lives. While off, task writes drop sites with a warning. Builds that predate the field read a task carrying it as damaged, so turn it on only once every host that reads this workspace's tasks runs a build that knows it. |
 
 The Tasks row and task detail also show the riskiness score. The row uses a percentage, prefixed with `~` for partial support, or **No estimate** with a reason: **no files** (the task has no context files), **no paths** (its selectors identify no file or directory), **thin history** (too few done tasks touched its paths in the window), or **unavailable** (the estimate could not be computed). The detail shows the same score and its support and path breakdown. `window_days` and `min_support` size this score regardless of `enabled`.
 

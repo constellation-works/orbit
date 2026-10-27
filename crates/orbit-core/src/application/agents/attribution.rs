@@ -422,7 +422,7 @@ fn review_charge(task: &TaskFacts, review: &Review) -> Option<Charge> {
 
 /// The owner of a regression: its escape names the safeguard that failed.
 fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
-    let classification = link.classification;
+    let classification = &link.classification;
     let draft = Draft {
         task,
         problem: Problem::Regression,

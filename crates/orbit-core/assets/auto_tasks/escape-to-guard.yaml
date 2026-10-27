@@ -110,7 +110,7 @@ template:
     write: read the regression task's current `relations`, then send
     the full replacement list, preserving every existing relation and
     adding `"regression":{"nature":"<nature>","escape":"<escape>"}` to
-    its `regression_from` entry, with
+    its `regression_from` entry, keeping any `sites` it already lists, with
     `orbit tool run orbit.task.update --input '{"id":"<regression task ID>","relations":[{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"model":"<agent-family>"}'`
     (the payload shows the one classified entry; send every existing
     relation, not only that entry). Read the task back and confirm the

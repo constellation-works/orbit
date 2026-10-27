@@ -1553,7 +1553,7 @@
         },
         "relations": {
           "type": "array",
-          "description": "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified"
+          "description": "Optional typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape, sites?}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified; optional `sites` lists up to 8 `symbol:` or `file:` selectors of where the defect lives"
         },
         "crew": {
           "type": [
@@ -2161,7 +2161,7 @@
         },
         "relations": {
           "type": "array",
-          "description": "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified"
+          "description": "Replacement typed task relations as an array of {type, target} objects. A `regression_from` relation may add `regression: {nature, escape, sites?}`: nature is broke_existing, defect_in_new, incomplete, merge_reintroduced, contract_drift or unclassified; escape is no_test, test_not_selected, platform_only, review_missed, spec_ambiguous, nondeterministic or unclassified; optional `sites` lists up to 8 `symbol:` or `file:` selectors of where the defect lives"
         },
         "tags": {
           "anyOf": [
