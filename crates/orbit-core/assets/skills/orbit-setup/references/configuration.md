@@ -144,6 +144,33 @@ them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` an
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
 
+## Host capability labels
+
+`machine.labels` declares the capabilities available on a host. Set it in the
+global configuration file under `[machine]`:
+
+```toml
+[machine]
+labels = ["gpu", "cuda-12"]
+```
+
+Each host also carries its operating system as an implicit label: `linux`,
+`macos` or `windows`. You do not need to add the OS label to `machine.labels`.
+Orbit does not detect capabilities; it uses the labels you configure and the
+host's OS.
+
+Run `orbit doctor` to verify the host's effective labels in the `host-labels`
+row. The row reports `machine.labels` together with the implicit OS label.
+
+A task's `requires_labels` lists every label a host must carry to start it. A
+host must match **all** of those labels. If no live host carries them, task
+show (`Placement:`), task list and `orbit run readiness` report a placement
+wait such as:
+
+> waits for a host labelled `gpu` (requires_labels): no registered serving host carries them
+
+The task stays in the backlog while it waits.
+
 ## Explore briefs
 
 An explore brief is the task pilot's bounded map of code a task may change,
