@@ -638,7 +638,8 @@ fn token_grant_answers_fit_the_frame_without_compensating_release() {
 
 /// A hard token request or expansion blocked by more holders than its frame
 /// can name answers, and writes its `queued` notice with, only the prefix that
-/// fits (ORB-19006), while every holder, shown or not, still keeps it waiting.
+/// fits (ORB-19006, ORB-19048), while every holder, shown or not, still keeps
+/// it waiting.
 #[test]
 fn token_hard_holder_lists_are_bounded_while_every_holder_still_blocks() {
     if !enter_isolated_child(
@@ -648,6 +649,9 @@ fn token_hard_holder_lists_are_bounded_while_every_holder_still_blocks() {
         return;
     }
     const FRAME: usize = 4 * 1024;
+    // Past the frame's conflict count bound as well as its byte budget, so a
+    // count overflow must not hide the prefix that the bytes still fit.
+    const HOLDERS: usize = 100;
     let fixture = FrameLimitFixture::start_with(IntakeLimits {
         max_frame_bytes: FRAME as u32,
         ..IntakeLimits::default()
@@ -655,7 +659,7 @@ fn token_hard_holder_lists_are_bounded_while_every_holder_still_blocks() {
     let repo = fixture._tmp.path().join("ws_frame_limit");
     std::fs::create_dir_all(repo.join("own")).expect("create own directory");
     std::fs::write(repo.join("own/carol.rs"), "").expect("create Carol's file");
-    let mut held: Vec<String> = (0..40)
+    let mut held: Vec<String> = (0..HOLDERS)
         .map(|index| {
             let granted = lease::request(
                 &fixture.runtime,
