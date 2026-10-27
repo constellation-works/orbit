@@ -418,7 +418,7 @@ main.tasks-layout.task-page-mode .pinned-external { display: none; }
    the workspace base rate, and dimmer words for a task with no estimate. */
 .risk-part { color: var(--fg-mute); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .risk-part.risk-elevated { color: var(--warn-fg); }
-.risk-part.risk-none { color: var(--fg-disabled); }
+.risk-part.risk-none { color: var(--fg-mute); }
 .status-cell {
   display: grid;
   grid-template-columns: 8px minmax(0, 1fr);
