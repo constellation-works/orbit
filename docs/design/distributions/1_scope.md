@@ -131,20 +131,25 @@ auto_tasks = []
 
 `orbit workspace init --preset <file>` applies it to a new or an existing workspace:
 
-1. **Validated before any write.** Unknown fields are refused, and so is any `config` key
-   that `orbit config set` refuses, including `seeding.*`, which belongs in `[seeding]`. An
-   `[enable]` name that an enabled plugin has already seeded must have its seeded file present
-   and loadable, as the plugin asset manifest records it, and a stale name refuses the whole
-   preset. The file is capped at 256 KiB. A preset has no field that grants a permission,
-   enables a plugin or names a crew pool, so it cannot ask for one.
-2. **Recorded.** The workspace records the preset's `name` and the digest of its bytes,
-   beside the seeding policy it wrote. Applying the same file again is a no-op. Applying a
-   changed file is an update, and it follows the policy rules above.
-3. **Enabling is deferred to seeding.** Workspace init runs before the user enables the
-   plugins, because `orbit plugin enable` needs a workspace. So when a plugin seeds its
-   definitions into a workspace, it seeds the ones the recorded preset names
-   `enabled: true` and the rest `enabled: false`. The operator's preset is the operator
-   act the plugin standard requires; a plugin still never enables its own schedules.
+1. **Validated before any write.** `name` is required; unknown fields and `[config]` keys
+   refused by `orbit config set` are refused. Presets have one placement rule of their own:
+   seeding policies belong in `[seeding]`, so `seeding.*` is refused under `[config]` even
+   though those keys are settable with `orbit config set`. `[enable]` names must already be
+   seeded by an enabled plugin, and their files must be present and loadable; a missing,
+   unloadable or stale name refuses the whole preset. The file is capped at 256 KiB. A preset
+   refuses fields that request plugin permissions or plugin enablement; that consent belongs
+   to `orbit plugin enable`. It can set other settable workspace config, including
+   `workflow.low_complexity_crews`.
+2. **Recorded.** The workspace keeps one record of the last applied preset's `name`, the
+   digest of its bytes and `applied_at`. Applying the same file again runs initialization and
+   preset application again: it rewrites `applied_at` and enables the requested definitions
+   again, including ones an operator disabled after the earlier application. A changed file
+   replaces the record and applies its policies.
+3. **Enabling follows plugin seeding.** Bootstrap the workspace, enable plugins whose
+   definitions the preset names, then apply the preset. Its `[enable]` entries switch on
+   those already-seeded definitions as part of preset application. Plugin seeding itself
+   leaves routines and auto-tasks disabled; carrying enable requests forward to a later plugin
+   seeding event is not implemented.
 4. **No layering.** A workspace has at most one recorded preset. A later
    `--preset` replaces it.
 
