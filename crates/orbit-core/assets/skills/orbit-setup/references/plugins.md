@@ -402,6 +402,23 @@ is, and how held work raises one, is described in
 this section covers only the channel side: registering, listing, revoking
 and rotating a channel, and the plugin-only submit path.
 
+The channel is off until the workspace enables it. `decision_channel.enabled`
+is a boolean, default `false`, that turns decision requests on for held work in
+the workspace. With it `false`, the digest raises nothing and writes nothing,
+and a submit from an allowed caller is refused `decision_channel_disabled`
+before the channel is looked up, so nothing is applied. Enable it, then
+register a channel:
+
+```bash
+orbit config set decision_channel.enabled true
+```
+
+`orbit config set` writes the workspace config file unless `--global` is given,
+and ordinary settings inherit per key, so a workspace value overrides a global
+one. Setting the key back to `false` turns the channel off again. Enabling it
+registers nothing: `register` below is still required, and until a channel is
+registered a submit is refused `channel_not_registered`.
+
 Channel management is an operator job on this host. `orbit decision channel
 register`, `list`, `revoke` and `rotate-key` are operator CLI commands; the
 matching tools (`orbit.decision.channel_register`, `orbit.decision.channel_list`,
@@ -528,10 +545,15 @@ that answers several digest items stay the plugin's.
 
 Verify a channel without spending a real answer:
 
-1. `orbit decision channel list` shows the channel with the expected human,
+1. `orbit config get decision_channel.enabled` prints `true`. Confirm this
+   first: while the key is `false`, the refusal in step 3 is
+   `decision_channel_disabled` for any channel name, not the channel codes
+   below. `orbit config show --all` lists the key with the file or default it
+   came from.
+2. `orbit decision channel list` shows the channel with the expected human,
    bound plugin, key epoch and fingerprint, and (when set) the allowed
    senders. A revoked channel reads revoked here.
-2. Exercise the refusal path with a bad submit — for example a channel name
+3. Exercise the refusal path with a bad submit — for example a channel name
    that is not registered, or a revoked channel — and confirm the matching
    refusal code above. Because every refusal applies nothing, the open
    request is untouched; re-list the request to confirm it is still open
