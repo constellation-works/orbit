@@ -59,9 +59,10 @@ pub(in crate::executor::automation::vcs) fn is_transient(error: &OrbitError) -> 
         .is_some_and(|failure| failure.class.is_transient())
 }
 
-/// `wrapper`, an Orbit diagnostic that reports `cause`, keeping the class of
-/// the private VCS failure `cause` carries. Any other wrapper is returned
-/// unchanged: an Orbit refusal is never a transient provider failure.
+/// `wrapper`, an Orbit diagnostic that reports `cause`, preserving a typed
+/// delivery refusal or the class of a private VCS failure. Any other wrapper
+/// is returned unchanged: an Orbit refusal is never a transient provider
+/// failure.
 pub(in crate::executor::automation::vcs) fn carry_class(
     cause: &OrbitError,
     wrapper: OrbitError,
@@ -74,6 +75,13 @@ pub(in crate::executor::automation::vcs) fn carry_class(
                 message,
             }))
         }
+        (_, OrbitError::Execution(message)) => match cause {
+            OrbitError::DeliveryRefused { refusal, .. } => OrbitError::DeliveryRefused {
+                refusal: *refusal,
+                message,
+            },
+            _ => OrbitError::Execution(message),
+        },
         (_, wrapper) => wrapper,
     }
 }
