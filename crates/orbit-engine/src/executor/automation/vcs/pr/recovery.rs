@@ -71,7 +71,7 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
             &required,
         ) {
             HeadCheckEvidence::Repair { evidence, .. } => evidence,
-            HeadCheckEvidence::Stop(reason) => reason,
+            HeadCheckEvidence::Stop(reason) | HeadCheckEvidence::Inconclusive(reason) => reason,
             HeadCheckEvidence::WaitForBase(reason) => {
                 return Ok(CompletionRecoveryChecks::Wait(reason));
             }

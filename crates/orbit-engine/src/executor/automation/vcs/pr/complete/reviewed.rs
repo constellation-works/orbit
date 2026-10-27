@@ -1,6 +1,7 @@
 //! Merge wait timeouts and reviewed-head checks.
 
 use orbit_common::OrbitError;
+use orbit_types::workflow::DeliveryRefusal;
 use serde_json::Value;
 
 use super::super::super::super::input::input_string_field;
@@ -18,11 +19,14 @@ pub(super) fn merge_wait_timeout(
         .map(|race| format!(" after {race}"))
         .unwrap_or_default();
     let unreported = unreported.timeout_note();
-    OrbitError::Execution(format!(
-        "pr_complete: timed out after {waited_seconds}s waiting for pull request \
-         #{pr_number} to merge (budget {max_wait_seconds}s){base_race}{unreported}; the task \
-         stays in review"
-    ))
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::CompletionBudgetExpired,
+        message: format!(
+            "pr_complete: timed out after {waited_seconds}s waiting for pull request \
+             #{pr_number} to merge (budget {max_wait_seconds}s){base_race}{unreported}; the task \
+             stays in review"
+        ),
+    }
 }
 
 /// SHA the synchronous provider mutation must match.

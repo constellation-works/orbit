@@ -329,6 +329,16 @@ fn post_recovery_attempt(
         {
             PostRecovery::RecoverAgain(handoff)
         }
+        Err(DispatchError::DeliveryRefused {
+            action,
+            refusal,
+            message,
+        }) => PostRecovery::Settled(Err(DispatchError::DeliveryRefused {
+            action,
+            refusal,
+            message: format!("{message}; original error before recovery: {original}"),
+        })),
+        Err(hold @ DispatchError::ForgeUnavailableHold(_)) => PostRecovery::Settled(Err(hold)),
         Err(DispatchError::CandidateAbsorbed { candidate, .. }) => {
             PostRecovery::Settled(Err(DispatchError::CandidateAbsorbed {
                 candidate,
