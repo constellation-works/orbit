@@ -4,8 +4,8 @@ mod resolve;
 mod snapshot;
 mod table;
 
-pub use lease_listener::LeaseListenerSettings;
 pub(crate) use lease_listener::admit_lease_listener_settings;
+pub use lease_listener::{LeaseListenerSettings, LeaseListenerTlsSettings};
 pub use machine::{
     AutoConcurrencySettings, MachineSettings, ResourceThrottleSettings, WorkerContainmentSettings,
 };

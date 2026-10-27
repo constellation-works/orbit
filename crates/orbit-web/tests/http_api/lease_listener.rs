@@ -68,6 +68,7 @@ fn mint(
 fn config(intake_socket: PathBuf, client_address: LeaseClientAddressPolicy) -> LeaseListenerConfig {
     LeaseListenerConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
+        tls: None,
         client_address,
         intake_socket,
         failed_auth_limit: 1000,

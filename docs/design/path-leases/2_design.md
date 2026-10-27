@@ -482,9 +482,12 @@ the peer check, the home mode and the root-owned binary then accept the caller.
 user. Before binding it runs `orbit-auth`'s execution-environment check, refuses when the running
 user owns the intake socket at `lease.listener.intake_socket` (or, before Orbit Web has created
 it, its directory), validates `lease.listener.*` from the running user's global `config.toml`
-(bind required; an unspecified address only with `behind_proxy`; `behind_proxy` only with a
-non-empty `trusted_proxy`; `tls` in any form refused until native TLS), and opens only the token
-store. It never opens Orbit's main store and pins no executable generation. The router is
+(bind required; an unspecified address only with native `tls` or `behind_proxy`; `behind_proxy`
+only with a non-empty `trusted_proxy`; native `tls = { cert, key }` checked before binding), and opens only the token
+store. Native TLS uses rustls with ring, supports TLS 1.2 and 1.3 with no plaintext fallback,
+and loads the PEM chain and matching private key at startup; Unix group/other key permissions
+are refused. Certificate rotation requires a restart, not SIGHUP. It never opens Orbit's main
+store and pins no executable generation. The router is
 `/healthz` (unauthenticated liveness) plus `lease_router` nested at `/api` behind a route layer,
 so unmatched paths are 404 without authentication. The layer resolves the client address through
 `orbit_auth::client_address`, applies `orbit_auth::limiter`, reads `Authorization: Bearer`, and

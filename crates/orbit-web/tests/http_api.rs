@@ -60,6 +60,9 @@ mod job_run_lists;
 #[path = "http_api/lease_listener.rs"]
 #[cfg(unix)]
 mod lease_listener;
+#[path = "http_api/lease_listener_tls.rs"]
+#[cfg(unix)]
+mod lease_listener_tls;
 #[path = "http_api/leases.rs"]
 mod leases;
 #[path = "http_api/log.rs"]

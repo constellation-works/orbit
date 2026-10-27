@@ -16,7 +16,8 @@ use super::super::{
     ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH, SECURITY_ALERT_SEVERITIES,
 };
 use super::lease_listener::{
-    resolve_lease_listener_failed_auth, resolve_lease_listener_failed_auth_window,
+    LeaseListenerTlsSettings, resolve_lease_listener_failed_auth,
+    resolve_lease_listener_failed_auth_window, resolve_lease_listener_tls,
     resolve_lease_listener_trusted_proxy,
 };
 use super::resolve::{
