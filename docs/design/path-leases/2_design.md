@@ -19,9 +19,9 @@ related_artifacts: []
 This document proposes how path leases work. The lease row of §2, the advisory/hard grant rules
 of §3, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
 runtime operations, CLI, MCP and loopback REST surfaces (see §6). Phase 3 durable notices,
-including Web poll and SSE replay, owner-clock lifetime handling and the phase-4 hard-lease
-queue with aging and expansion are implemented; preemption, the dashboard Leases view and
-listener streaming remain later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
+including poll and SSE replay on Orbit Web and the lease listener, owner-clock lifetime
+handling and the phase-4 hard-lease queue with aging and expansion are implemented; preemption
+and the dashboard Leases view remain later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
 [conflict-budget](../conflict-budget/1_scope.md), and open directions to
 [3_vision.md](./3_vision.md).
 
@@ -226,8 +226,11 @@ paths and delivering task. Both sides of renames count. Tasks receive no notices
 or the input cursor on an empty page. Repeated reads acknowledge nothing and do not expire
 leases. `orbit lease notices --follow` drains pages then polls, with JSONL in JSON modes.
 Web events emit each notice as JSON with its `seq` as the SSE ID, using `Last-Event-ID`
-in preference to `after`. Invalid cursors are refused. Streams are bounded to eight
-concurrent clients and close on disconnect or server shutdown.
+in preference to `after`, and a `: keep-alive` comment for each empty page (about one a
+second while idle). Invalid cursors are refused. Orbit Web's own streams are bounded to eight
+concurrent clients; the listener's count toward its limits (§7.3). Streams close on
+disconnect or server shutdown. Both servers serve these routes from `lease_router`, framing
+the same pages, and the listener's pages are read on the owner by the same page loop.
 
 ## 6. Surfaces
 
@@ -267,7 +270,7 @@ and check, plus notices polling and SSE replay, through the same runtime operati
 hard request returns `granted: false` with the runtime's typed `conflicts`, naming each holder
 by kind and ID, and `queued: true` with its `queue_position` unless it asked `wait: false`.
 Expansion returns `added`, `queued`, `conflicts`, `queue_position`, `deadlock` and the lease;
-notices and events are implemented on Orbit Web (listener streaming is separate). Select a workspace with `?workspace=<id>` or use the server's
+notices and events are implemented on Orbit Web and the lease listener. Select a workspace with `?workspace=<id>` or use the server's
 default. Request and check bodies are the corresponding operation's JSON input; renew accepts
 its TTL fields and permits an omitted body to use the default TTL. Expansion requires
 `selectors` in its body. For show, renew and release the URL supplies `lease_id`, overriding a body ID.
@@ -281,7 +284,9 @@ even though its HTTP method is POST; its Origin check still applies.
 Its public `LeaseBackend` receives `LeaseCaller` (workspace and declared principal) separately
 from the operation JSON and executes on the blocking pool. The dashboard adapter selects its
 runtime from a pinned workspace snapshot and enforces operator write authority. Other servers
-supply their own backend and authentication/Origin policy. A server that authenticates puts a
+supply their own backend and authentication/Origin policy. The router also serves
+`GET /leases/notices` and `GET /leases/events`; a backend reads one notice page and opens a
+stream of pages, admitting its own streams. A server that authenticates puts a
 `LeaseCallerToken` in the request's extensions; the router then takes the principal from it and
 ignores declared ones. The lease listener (§7.3) is that server.
 
@@ -447,7 +452,13 @@ listener will call. `lease.intake.peer_user` is read only from the global `confi
 `run/` directory (`0750`) and the socket (`0660`) belong to the operator and the peer user's
 primary group, which the operator's user must be a member of. Frames are a 4-byte big-endian
 length and a JSON body of at most 64 KiB; each must arrive within 10 seconds, and 16 connections
-are served at once. Both sides send `{"protocol_version": 1}` first and refuse a mismatch. A
+are served at once. Both sides send `{"protocol_version": 2}` first and refuse a mismatch,
+naming both versions; version 2 added `notices` (one page) and `events`. Any change to the
+frames or operations changes the version. `events` is audited once, when it opens, and then
+streams one response per page on its connection until either side closes it or Orbit Web
+shuts down; it holds one of the 16 connections meanwhile. A notice page whose response would
+exceed 64 KiB is shortened to a prefix whose cursor is its last notice, so a client resuming
+from the cursor misses nothing; a single notice over the limit is `frame_too_large`. A
 request's token scope must name its workspace (a registered id or name) and the operation's
 verb. The runtime grants the lower of the token's and the class's priority ceilings, and hard
 only when both allow it. The lease row stores the token id (store migration 66), and every
@@ -555,8 +566,14 @@ The shared HTTP/1 transport bounds connections before TLS, caps headers at 64 fi
 One additional bounded refusal lane can negotiate TLS and send 503; if that lane is occupied,
 further saturated TLS connections close immediately and plain HTTP gets a best-effort 503.
 A rate refusal returns 429 with a rounded-up `Retry-After`, naming only the limit.
-Listener SSE remains phase 3: the token allowance API already reserves its own stream counter,
-and the body wrapper keeps both token and global in-flight allowances until the stream closes.
+The listener serves notice polling and SSE through the intake socket's `notices` and
+`events` operations, with the token's workspace and the `read` verb. Opening a stream spends a
+token read. An open stream holds its connection, one global and one token in-flight allowance,
+a token stream allowance and an intake allowance until it closes, so `max_streams_per_token`,
+`max_in_flight_per_token`, `max_in_flight_requests` and `max_connections` all count it, and
+their refusals are the 429 or 503 of every other route. The handler timeout bounds opening a
+stream, not its life. A stream ends when the client goes, when Orbit closes it, after 30
+seconds without a page from Orbit, or at listener shutdown, without waiting out the drain.
 
 Refusals that never reach Orbit are aggregated in the listener user's own token store,
 `lease_listener_limit_audit` (schema v3), by canonical key, limit/reason and window, with count

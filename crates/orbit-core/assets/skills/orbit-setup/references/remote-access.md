@@ -341,8 +341,9 @@ On macOS the same checks apply; create the user with your usual tooling.
 
 ### Run the lease listener
 
-The listener serves `/healthz` and the lease routes under `/api/leases`, and
-nothing else, to token holders. It runs as `orbit-lease` and hands each
+The listener serves `/healthz` and the lease routes under `/api/leases`,
+including notice polling and the SSE event stream, and nothing else, to token
+holders. It runs as `orbit-lease` and hands each
 authenticated operation to Orbit Web over the lease intake socket, so it never
 opens your Orbit store. Your dashboard stays loopback-only. Leave all of this
 unset unless the sudo prerequisite above holds on this host.
@@ -414,9 +415,10 @@ unset unless the sudo prerequisite above holds on this host.
    Connections close after their response; headers allow at most 64 fields
    and a 16 KiB parsing buffer. One extra bounded refusal lane can complete
    TLS and return 503; further saturated TLS connections close immediately
-   (plain HTTP gets a best-effort 503). Open response bodies retain global
-   and token concurrency; the separate stream counter is ready for future
-   listener SSE routes, which are not yet exposed.
+   (plain HTTP gets a best-effort 503). An open SSE notice stream
+   (`/api/leases/events`) holds its connection and global and token
+   concurrency, and counts toward `max_streams_per_token`, until it closes;
+   it closes at listener shutdown.
 
    Refusals never reach the owner's store. The listener coalesces them by
    canonical key, limit/reason and window in `lease_listener_limit_audit` in
@@ -473,6 +475,9 @@ unset unless the sudo prerequisite above holds on this host.
    curl -s http://100.64.0.5:7480/healthz          # {"status":"ok"}
    curl -s -H "Authorization: Bearer orbl_…" \
      "http://100.64.0.5:7480/api/leases?workspace=ws_example"
+   # Follow notices; a reconnecting client sends Last-Event-ID instead of after.
+   curl -sN -H "Authorization: Bearer orbl_…" \
+     "http://100.64.0.5:7480/api/leases/events?workspace=ws_example&after=0"
    ```
 
    It runs the root-owned `/usr/local/bin/orbit`. After `orbit update`,

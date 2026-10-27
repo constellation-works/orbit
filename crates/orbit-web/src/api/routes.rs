@@ -20,8 +20,6 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             get(session::session_identity).post(session::exchange_session),
         )
         .merge(leases::lease_router(leases::RuntimeLeaseBackend { state }).with_state(()))
-        .route("/leases/notices", get(lease_notices::get_lease_notices))
-        .route("/leases/events", get(lease_notices::stream_lease_notices))
         .route("/host/resources", get(host::resources))
         // Settings › Hosts [ORB-14451]: the serving host's host file, through
         // the same operations as `orbit host`.

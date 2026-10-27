@@ -56,13 +56,27 @@ impl LeaseIntakeClient {
         Ok(client)
     }
 
-    /// Send one operation and read its answer.
+    /// Send one operation and read its answer. For `events`, that is the
+    /// first page; read the rest with [`Self::next_response`].
     pub fn call(
         &mut self,
         request: &LeaseIntakeRequest,
     ) -> Result<LeaseIntakeResponse, OrbitError> {
         self.send(request)?;
         self.receive()
+    }
+
+    /// Read the next answer of a streaming operation (`events`).
+    pub fn next_response(&mut self) -> Result<LeaseIntakeResponse, OrbitError> {
+        self.receive()
+    }
+
+    /// Replace the read bound set by [`Self::connect`], such as for a stream
+    /// whose frames arrive about once a second however long it stays open.
+    pub fn set_read_timeout(&mut self, timeout: Duration) -> Result<(), OrbitError> {
+        self.stream
+            .set_read_timeout(Some(timeout))
+            .map_err(|error| OrbitError::Io(format!("lease intake socket: {error}")))
     }
 
     fn send(&mut self, frame: &impl Serialize) -> Result<(), OrbitError> {
