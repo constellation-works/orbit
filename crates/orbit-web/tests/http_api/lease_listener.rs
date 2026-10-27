@@ -25,7 +25,7 @@ use orbit_web::lease_listener::{LeaseListenerConfig, lease_listener_router};
 
 const PEER: &str = "192.0.2.10:50000";
 
-fn provisioned_store(home: &Path) -> LeaseTokenStore {
+pub(super) fn provisioned_store(home: &Path) -> LeaseTokenStore {
     std::fs::create_dir_all(home).unwrap();
     std::fs::set_permissions(home, std::fs::Permissions::from_mode(0o700)).unwrap();
     let store = home.join("lease-tokens.db");
@@ -34,7 +34,7 @@ fn provisioned_store(home: &Path) -> LeaseTokenStore {
     LeaseTokenStore::open_in_orbit_home(home).expect("open token store")
 }
 
-fn mint(
+pub(super) fn mint(
     store: &mut LeaseTokenStore,
     principal: &str,
     class: PrincipalClass,
@@ -65,7 +65,10 @@ fn mint(
     )
 }
 
-fn config(intake_socket: PathBuf, client_address: LeaseClientAddressPolicy) -> LeaseListenerConfig {
+pub(super) fn config(
+    intake_socket: PathBuf,
+    client_address: LeaseClientAddressPolicy,
+) -> LeaseListenerConfig {
     LeaseListenerConfig {
         bind: "127.0.0.1:0".parse().unwrap(),
         tls: None,
@@ -73,10 +76,11 @@ fn config(intake_socket: PathBuf, client_address: LeaseClientAddressPolicy) -> L
         intake_socket,
         failed_auth_limit: 1000,
         failed_auth_window: Duration::from_secs(300),
+        limits: Default::default(),
     }
 }
 
-async fn send(
+pub(super) async fn send(
     router: &Router,
     method: &str,
     uri: &str,
@@ -109,36 +113,60 @@ async fn send(
     (status, headers, value)
 }
 
-/// `(event, reason, remote_address, route, token_id)` for every audit row.
-fn audit_rows(home: &Path) -> Vec<(String, String, String, String, Option<String>)> {
+#[derive(Debug)]
+pub(super) struct RefusalAudit {
+    pub(super) key: String,
+    pub(super) reason: String,
+    pub(super) count: u64,
+}
+
+pub(super) fn audit_rows(home: &Path) -> Vec<RefusalAudit> {
     let connection = rusqlite::Connection::open(home.join("lease-tokens.db")).unwrap();
-    let mut statement = connection
-        .prepare(
-            "SELECT event, reason, remote_address, route, token_id FROM lease_token_audit \
-             WHERE event != 'mint' AND event != 'revoke' ORDER BY audit_id",
-        )
-        .unwrap();
+    let mut statement = connection.prepare(
+        "SELECT limit_key, limit_name, count FROM lease_listener_limit_audit ORDER BY first_at, limit_key"
+    ).unwrap();
     statement
         .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
+            Ok(RefusalAudit {
+                key: row.get(0)?,
+                reason: row.get(1)?,
+                count: row.get(2)?,
+            })
         })
         .unwrap()
         .map(Result::unwrap)
         .collect()
 }
 
-fn bearer(secret: &str) -> String {
+pub(super) fn bearer(secret: &str) -> String {
     format!("Bearer {secret}")
 }
 
 const UNKNOWN_SECRET: &str =
     "orbl_0000000000000000000000000000000000000000000000000000000000000000";
+
+#[tokio::test]
+async fn health_and_unknown_routes_cannot_bypass_address_limits() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("orbit-lease");
+    let store = provisioned_store(&home);
+    let router = lease_listener_router(
+        &config(
+            tmp.path().join("no-intake.sock"),
+            LeaseClientAddressPolicy::Direct,
+        ),
+        store,
+    );
+    for _ in 0..120 {
+        assert_eq!(
+            send(&router, "GET", "/healthz", PEER, &[], None).await.0,
+            StatusCode::OK
+        );
+    }
+    let (status, headers, _) = send(&router, "GET", "/unknown", PEER, &[], None).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(headers.contains_key(header::RETRY_AFTER));
+}
 
 /// The lease-only router is the boundary that keeps a token away from
 /// tasks, runs, config and operator routes (`4_decisions.md`, "A lease
@@ -270,19 +298,28 @@ async fn serves_only_lease_routes_and_refuses_missing_bad_or_out_of_scope_tokens
     );
 
     let rows = audit_rows(&home);
-    let reasons: Vec<&str> = rows.iter().map(|row| row.1.as_str()).collect();
-    let mut expected = vec!["missing_token"; lease_routes.len()];
-    expected.extend([
-        "unknown",
+    let reasons: Vec<&str> = rows.iter().map(|row| row.reason.as_str()).collect();
+    let expected = [
+        "missing_token",
         "unknown",
         "revoked",
         "verb_not_granted",
         "wrong_workspace",
-    ]);
+    ];
     assert_eq!(reasons, expected, "{rows:?}");
-    assert!(rows.iter().all(|row| row.2 == "192.0.2.10"), "{rows:?}");
-    assert_eq!(rows[1].3, "POST /api/leases");
-    assert_eq!(rows[9].4.as_deref(), Some(revoked_id.as_str()));
+    assert!(
+        rows.iter().all(|row| row.key == "address:192.0.2.10"),
+        "{rows:?}"
+    );
+    assert_eq!(
+        rows[0].count,
+        lease_routes.len() as u64,
+        "missing-token refusals coalesce across routes"
+    );
+    assert_eq!(
+        rows[1].count, 2,
+        "unknown-token refusals share one address/window row"
+    );
     let stored = std::fs::read(home.join("lease-tokens.db")).unwrap();
     for secret in [&lease_secret, &read_secret, &revoked_secret] {
         assert!(
@@ -353,14 +390,9 @@ async fn a_token_sent_in_the_query_or_path_never_reaches_an_audit_row() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 
     let rows = audit_rows(&home);
-    let reasons: Vec<&str> = rows.iter().map(|row| row.1.as_str()).collect();
-    assert_eq!(
-        reasons,
-        ["wrong_workspace", "missing_token", "missing_token"],
-        "{rows:?}"
-    );
-    assert_eq!(rows[1].3, "GET /api/leases/[redacted]", "{rows:?}");
-    assert_eq!(rows[2].3, "GET /api/leases/[redacted]", "{rows:?}");
+    let reasons: Vec<&str> = rows.iter().map(|row| row.reason.as_str()).collect();
+    assert_eq!(reasons, ["wrong_workspace", "missing_token"], "{rows:?}");
+
     let stored = std::fs::read(home.join("lease-tokens.db")).unwrap();
     assert!(
         !stored
@@ -397,7 +429,7 @@ async fn client_address_comes_from_the_peer_or_the_rightmost_untrusted_forwarded
         None,
     )
     .await;
-    assert_eq!(audit_rows(&direct_home)[0].2, "192.0.2.10");
+    assert_eq!(audit_rows(&direct_home)[0].key, "address:192.0.2.10");
 
     let proxied_home = tmp.path().join("proxied");
     let trusted = TrustedProxies::parse(&["10.0.0.0/8"]).unwrap();
@@ -461,7 +493,7 @@ async fn client_address_comes_from_the_peer_or_the_rightmost_untrusted_forwarded
     }
     let audited: Vec<(String, String)> = audit_rows(&proxied_home)
         .into_iter()
-        .map(|row| (row.2, row.1))
+        .map(|row| (row.key, row.reason))
         .collect();
     let expected = [
         ("198.51.100.7", "unknown"),
@@ -471,7 +503,7 @@ async fn client_address_comes_from_the_peer_or_the_rightmost_untrusted_forwarded
         ("10.0.0.1", "malformed_forwarded_for"),
         ("10.0.0.1", "no_untrusted_forwarded_for"),
     ]
-    .map(|(address, reason)| (address.to_string(), reason.to_string()));
+    .map(|(address, reason)| (format!("address:{address}"), reason.to_string()));
     assert_eq!(audited, expected);
 }
 
@@ -557,16 +589,13 @@ async fn repeated_failed_authentication_gets_429_until_the_window_ends() {
         StatusCode::SERVICE_UNAVAILABLE,
         "after the window the valid token is admitted and reaches the (absent) intake socket"
     );
-    let reasons: Vec<String> = audit_rows(&home).into_iter().map(|row| row.1).collect();
+    let reasons: Vec<String> = audit_rows(&home)
+        .into_iter()
+        .map(|row| row.reason)
+        .collect();
     assert_eq!(
         reasons,
-        [
-            "unknown",
-            "unknown",
-            "rate_limited",
-            "unknown",
-            "intake_unavailable"
-        ],
-        "one rate_limited row per window"
+        ["unknown", "failed_auth", "unknown", "intake_unavailable"],
+        "one failed_auth row per window"
     );
 }

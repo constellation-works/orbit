@@ -13,53 +13,51 @@
 //! Refusals that never reach Orbit (an unresolvable client address, a rate
 //! limit, a missing, unknown, revoked or out-of-scope token, a request
 //! rejected after authentication) are audited in the listener user's token
-//! store with the remote address, route and reason, never a secret. Orbit
-//! audits every operation it receives.
+//! store as bounded aggregates by canonical key, limit/reason and window,
+//! without secrets, principals, routes or queries. Orbit audits every
+//! operation it receives.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use axum::Router;
-use axum::extract::{ConnectInfo, Query, Request, State};
 use axum::http::{HeaderMap, HeaderValue, Method, StatusCode, header};
-use axum::middleware::{self, Next};
+use axum::middleware;
 use axum::response::{IntoResponse, Json, Response};
 use axum::routing::get;
-use chrono::Utc;
-use orbit_auth::client_address::{
-    LeaseClientAddressPolicy, TrustedProxies, resolve_lease_client_address,
-};
+use orbit_auth::client_address::{LeaseClientAddressPolicy, TrustedProxies};
 use orbit_auth::environment::{LISTENER_USER, check_listener_execution_environment};
-use orbit_auth::limiter::{FailedAuthAdmission, FailedAuthLimiter};
-use orbit_auth::scope::{LeaseTokenRefusal, LeaseTokenVerb};
-use orbit_auth::store::{
-    LeaseListenerRefusal, LeaseRequestOrigin, LeaseTokenDecision, LeaseTokenStore,
-};
+use orbit_auth::limiter::KeyedLimiter;
+use orbit_auth::scope::LeaseTokenVerb;
+use orbit_auth::store::LeaseTokenStore;
 use orbit_config::LeaseListenerSettings;
 use orbit_core::OrbitError;
 use serde_json::{Value, json};
 
-use crate::api::leases::{
-    LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseCallerToken, lease_router,
-};
+use crate::api::leases::{LeaseBackend, LeaseBackendResult, LeaseCaller, lease_router};
 use crate::lease_intake::{
     LeaseIntakeAuthority, LeaseIntakeClient, LeaseIntakeError, LeaseIntakeOperation,
     LeaseIntakeRequest, LeaseIntakeResponse,
 };
 
+mod admission;
+mod limits;
+use admission::{
+    AuditedByOrbit, ListenerGate, ListenerRefusalReason, lease_listener_gate, listener_address_gate,
+};
 mod tls;
+mod transport;
+
+pub use limits::LeaseListenerLimits;
+use tokio::sync::Semaphore;
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::timeout::TimeoutLayer;
 
 /// How long the listener waits for each intake frame.
 const INTAKE_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Client addresses the failed-authentication limiter tracks at once.
-const FAILED_AUTH_TRACKED_ADDRESSES: usize = 4096;
-
-/// Longest route recorded in an audit row.
-const AUDIT_ROUTE_MAX_BYTES: usize = 256;
 
 /// The listener's validated configuration.
 #[derive(Debug, Clone)]
@@ -76,6 +74,8 @@ pub struct LeaseListenerConfig {
     pub failed_auth_limit: u32,
     /// The window those failures are counted over.
     pub failed_auth_window: Duration,
+    /// Request, transport and concurrency bounds.
+    pub limits: LeaseListenerLimits,
 }
 
 impl LeaseListenerConfig {
@@ -137,6 +137,7 @@ impl LeaseListenerConfig {
             intake_socket,
             failed_auth_limit: settings.failed_auth_limit,
             failed_auth_window: Duration::from_secs(u64::from(settings.failed_auth_window_seconds)),
+            limits: LeaseListenerLimits::from_settings(settings),
         })
     }
 }
@@ -236,319 +237,75 @@ pub async fn serve_lease_listener_on(
     store: LeaseTokenStore,
     shutdown: impl std::future::Future<Output = ()> + Send + 'static,
 ) -> Result<(), OrbitError> {
-    let app = lease_listener_router(&config, store);
-    let result = if let Some(tls) = config.tls {
-        tls::serve_tls_listener(listener, tls, app, shutdown).await
-    } else {
-        axum::serve(
-            listener,
-            app.into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .with_graceful_shutdown(shutdown)
+    let (app, gate) = build_listener_router(&config, store);
+    transport::serve_bounded_listener(listener, config, app, gate, shutdown)
         .await
-    };
-    result.map_err(|error| OrbitError::Io(format!("lease listener: {error}")))
+        .map_err(|error| OrbitError::Io(format!("lease listener: {error}")))
 }
 
-/// The listener's whole router: `/healthz`, and the lease routes under
-/// `/api` behind token authentication. Every other path is 404. Serve it
-/// with [`ConnectInfo<SocketAddr>`](ConnectInfo); without a peer address a
-/// lease request is refused.
+/// The listener's whole router, with address admission on every route and
+/// token admission on lease routes. Supply [`ConnectInfo`](axum::extract::ConnectInfo).
+/// Use [`serve_lease_listener_on`] for connection bounds and periodic audit flushes.
 pub fn lease_listener_router(config: &LeaseListenerConfig, store: LeaseTokenStore) -> Router {
+    build_listener_router(config, store).0
+}
+
+fn build_listener_router(
+    config: &LeaseListenerConfig,
+    store: LeaseTokenStore,
+) -> (Router, Arc<ListenerGate>) {
+    let in_flight = Arc::new(Semaphore::new(
+        config.limits.max_in_flight_requests as usize,
+    ));
+    let intake_in_flight = Arc::new(Semaphore::new(
+        config.limits.max_in_flight_requests as usize,
+    ));
     let gate = Arc::new(ListenerGate {
         client_address: config.client_address.clone(),
         store: Arc::new(Mutex::new(store)),
-        limiter: Mutex::new(FailedAuthLimiter::new(
-            config.failed_auth_limit,
-            config.failed_auth_window,
-            FAILED_AUTH_TRACKED_ADDRESSES,
-        )),
+        limiter: Arc::new(Mutex::new(KeyedLimiter::new(
+            config.limits.max_tracked_keys as usize,
+            config.limits.ipv6_prefix_len as u8,
+            tokio::time::Instant::now().into_std(),
+        ))),
+        limits: config.limits.clone(),
+        failed_auth_limit: config.failed_auth_limit,
+        failed_auth_window: config.failed_auth_window,
+        in_flight,
+        flush_lock: Arc::new(tokio::sync::Mutex::new(())),
     });
     let backend = IntakeLeaseBackend {
         intake_socket: config.intake_socket.clone(),
+        intake_in_flight,
+        timeout: Duration::from_secs(u64::from(config.limits.request_timeout_seconds))
+            .min(INTAKE_TIMEOUT),
     };
-    Router::new().route("/healthz", get(listener_healthz)).nest(
-        "/api",
-        lease_router(backend)
-            .route_layer(middleware::from_fn_with_state(gate, lease_listener_gate)),
-    )
+    let app = Router::new()
+        .route("/healthz", get(listener_healthz))
+        .nest(
+            "/api",
+            lease_router(backend).route_layer(middleware::from_fn_with_state(
+                Arc::clone(&gate),
+                lease_listener_gate,
+            )),
+        )
+        .layer(RequestBodyLimitLayer::new(
+            config.limits.max_body_bytes as usize,
+        ))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::REQUEST_TIMEOUT,
+            Duration::from_secs(u64::from(config.limits.request_timeout_seconds)),
+        ))
+        .layer(middleware::from_fn_with_state(
+            Arc::clone(&gate),
+            listener_address_gate,
+        ));
+    (app, gate)
 }
 
 /// Liveness only: no version, workspace or token detail.
 async fn listener_healthz() -> Json<Value> {
     Json(json!({"status": "ok"}))
-}
-
-struct ListenerGate {
-    client_address: LeaseClientAddressPolicy,
-    store: Arc<Mutex<LeaseTokenStore>>,
-    limiter: Mutex<FailedAuthLimiter>,
-}
-
-/// A refusal to audit, owned so it can move to the blocking pool.
-struct PendingRefusal {
-    origin: LeaseRequestOrigin,
-    reason: &'static str,
-    token_id: Option<String>,
-    principal: Option<String>,
-    workspace: Option<String>,
-    verb: Option<LeaseTokenVerb>,
-}
-
-impl PendingRefusal {
-    fn anonymous(origin: LeaseRequestOrigin, reason: &'static str) -> Self {
-        Self {
-            origin,
-            reason,
-            token_id: None,
-            principal: None,
-            workspace: None,
-            verb: None,
-        }
-    }
-}
-
-impl ListenerGate {
-    async fn audit(&self, pending: PendingRefusal) {
-        let store = Arc::clone(&self.store);
-        let written = tokio::task::spawn_blocking(move || {
-            let mut store = store
-                .lock()
-                .map_err(|_| OrbitError::Execution("lease token store lock poisoned".into()))?;
-            store.record_listener_refusal(&LeaseListenerRefusal {
-                at: Utc::now(),
-                origin: &pending.origin,
-                reason: pending.reason,
-                token_id: pending.token_id.as_deref(),
-                principal: pending.principal.as_deref(),
-                workspace: pending.workspace.as_deref(),
-                verb: pending.verb,
-            })
-        })
-        .await;
-        match written {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => tracing::error!(%error, "lease listener could not audit a refusal"),
-            Err(error) => tracing::error!(%error, "lease listener audit task failed"),
-        }
-    }
-
-    async fn verify(
-        &self,
-        secret: String,
-        workspace: Option<String>,
-        verb: LeaseTokenVerb,
-        origin: LeaseRequestOrigin,
-    ) -> Result<LeaseTokenDecision, OrbitError> {
-        let store = Arc::clone(&self.store);
-        tokio::task::spawn_blocking(move || {
-            let mut store = store
-                .lock()
-                .map_err(|_| OrbitError::Execution("lease token store lock poisoned".into()))?;
-            store.verify_listener_request(&secret, workspace.as_deref(), verb, Utc::now(), &origin)
-        })
-        .await
-        .map_err(|error| OrbitError::Execution(format!("lease token check failed: {error}")))?
-    }
-
-    fn admission(&self, client: IpAddr) -> FailedAuthAdmission {
-        match self.limiter.lock() {
-            Ok(mut limiter) => limiter.check(client, Instant::now()),
-            Err(_) => FailedAuthAdmission::Admit,
-        }
-    }
-
-    fn record_failure(&self, client: IpAddr) {
-        if let Ok(mut limiter) = self.limiter.lock() {
-            limiter.record_failure(client, Instant::now());
-        }
-    }
-}
-
-/// Marks a response that Orbit produced and audited itself.
-#[derive(Clone, Copy)]
-struct AuditedByOrbit;
-
-/// The audit reason for a refusal the backend produced without reaching
-/// Orbit.
-#[derive(Clone, Copy)]
-struct ListenerRefusalReason(&'static str);
-
-/// Resolve the client address, apply the failed-authentication limit,
-/// authenticate the bearer token for the route's verb and workspace, and
-/// hand the authenticated caller to the lease router.
-async fn lease_listener_gate(
-    State(gate): State<Arc<ListenerGate>>,
-    mut request: Request,
-    next: Next,
-) -> Response {
-    let route = audit_route(&request);
-    let Some(peer) = request
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map(|info| info.0.ip())
-    else {
-        tracing::error!("lease listener request without a peer address");
-        return listener_refusal(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
-    };
-    let resolved = {
-        let forwarded: Vec<&[u8]> = request
-            .headers()
-            .get_all("x-forwarded-for")
-            .iter()
-            .map(HeaderValue::as_bytes)
-            .collect();
-        resolve_lease_client_address(&gate.client_address, peer, &forwarded)
-    };
-    let client = match resolved {
-        Ok(client) => client,
-        Err(refusal) => {
-            tracing::warn!(%peer, %refusal, "lease listener refused an unresolvable client address");
-            let origin = LeaseRequestOrigin {
-                remote_address: peer.to_canonical().to_string(),
-                route,
-            };
-            gate.audit(PendingRefusal::anonymous(origin, refusal.as_str()))
-                .await;
-            return listener_refusal(StatusCode::BAD_REQUEST, "bad request");
-        }
-    };
-    let origin = LeaseRequestOrigin {
-        remote_address: client.to_string(),
-        route,
-    };
-    if let FailedAuthAdmission::Limited {
-        retry_after,
-        first_in_window,
-    } = gate.admission(client)
-    {
-        if first_in_window {
-            gate.audit(PendingRefusal::anonymous(origin, "rate_limited"))
-                .await;
-        }
-        let mut response = listener_refusal(
-            StatusCode::TOO_MANY_REQUESTS,
-            "too many failed authentication attempts; retry later",
-        );
-        let seconds = retry_after.as_secs() + u64::from(retry_after.subsec_nanos() > 0);
-        if let Ok(value) = HeaderValue::from_str(&seconds.max(1).to_string()) {
-            response.headers_mut().insert(header::RETRY_AFTER, value);
-        }
-        return response;
-    }
-    let verb = route_verb(request.method(), request.uri().path());
-    let workspace = Query::<LeaseCaller>::try_from_uri(request.uri())
-        .ok()
-        .and_then(|Query(caller)| caller.workspace)
-        .filter(|workspace| !workspace.is_empty());
-    let Some(secret) = bearer_secret(request.headers()) else {
-        gate.record_failure(client);
-        let mut pending = PendingRefusal::anonymous(origin, "missing_token");
-        pending.workspace = workspace;
-        pending.verb = Some(verb);
-        gate.audit(pending).await;
-        return unauthorized();
-    };
-    let record = match gate
-        .verify(secret, workspace.clone(), verb, origin.clone())
-        .await
-    {
-        Ok(LeaseTokenDecision::Allow(record)) => record,
-        Ok(LeaseTokenDecision::Deny(refusal)) => {
-            return match refusal {
-                LeaseTokenRefusal::Unknown
-                | LeaseTokenRefusal::Revoked
-                | LeaseTokenRefusal::Expired => {
-                    gate.record_failure(client);
-                    unauthorized()
-                }
-                LeaseTokenRefusal::WrongWorkspace | LeaseTokenRefusal::VerbNotGranted => {
-                    gate.record_failure(client);
-                    listener_refusal(StatusCode::FORBIDDEN, "forbidden")
-                }
-                LeaseTokenRefusal::WorkspaceUnnamed => listener_refusal(
-                    StatusCode::BAD_REQUEST,
-                    "this token names several workspaces; choose one with ?workspace=<id>",
-                ),
-            };
-        }
-        Err(error) => {
-            tracing::error!(%error, "lease listener could not check a token");
-            return listener_refusal(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
-        }
-    };
-    let Some(workspace) = workspace.or_else(|| record.scope.workspaces.first().cloned()) else {
-        return listener_refusal(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
-    };
-    request.extensions_mut().insert(LeaseCallerToken {
-        token_id: record.token_id.clone(),
-        scope: record.scope.clone(),
-        workspace: workspace.clone(),
-        client_address: client.to_string(),
-    });
-    let response = next.run(request).await;
-    if !response.status().is_success() && response.extensions().get::<AuditedByOrbit>().is_none() {
-        let reason = response
-            .extensions()
-            .get::<ListenerRefusalReason>()
-            .map_or("request_rejected", |reason| reason.0);
-        gate.audit(PendingRefusal {
-            origin,
-            reason,
-            token_id: Some(record.token_id),
-            principal: Some(record.scope.principal),
-            workspace: Some(workspace),
-            verb: Some(verb),
-        })
-        .await;
-    }
-    response
-}
-
-/// `METHOD /api/…` as received, bounded for the audit row. The gate sits
-/// on the router nested at `/api`, which sees the path without that prefix.
-/// The path is decoded first, so a token sent with percent-escapes is the
-/// token the audit store redacts.
-fn audit_route(request: &Request) -> String {
-    let path = percent_decoded(request.uri().path());
-    let mut route = if path.starts_with("/api/") {
-        format!("{} {path}", request.method())
-    } else {
-        format!("{} /api{path}", request.method())
-    };
-    if route.len() > AUDIT_ROUTE_MAX_BYTES {
-        let mut end = AUDIT_ROUTE_MAX_BYTES;
-        while !route.is_char_boundary(end) {
-            end -= 1;
-        }
-        route.truncate(end);
-    }
-    route
-}
-
-/// `path` with every `%XX` escape replaced by its byte. An escape that is not
-/// two hex digits is kept as written.
-fn percent_decoded(path: &str) -> String {
-    let mut decoded = Vec::with_capacity(path.len());
-    let mut rest = path.as_bytes();
-    while let Some((&byte, after)) = rest.split_first() {
-        let escape = match (byte, after) {
-            (b'%', [high, low, tail @ ..]) => {
-                percent_escape_byte(*high, *low).map(|escaped| (escaped, tail))
-            }
-            _ => None,
-        };
-        let (next_byte, next_rest) = escape.unwrap_or((byte, after));
-        decoded.push(next_byte);
-        rest = next_rest;
-    }
-    String::from_utf8_lossy(&decoded).into_owned()
-}
-
-/// The byte that two hex digits name, if both are hex digits.
-fn percent_escape_byte(high: u8, low: u8) -> Option<u8> {
-    let value = char::from(high).to_digit(16)? * 16 + char::from(low).to_digit(16)?;
-    u8::try_from(value).ok()
 }
 
 /// The verb a lease route needs: reads (`GET`, and `POST …/check`, which
@@ -585,6 +342,8 @@ fn unauthorized() -> Response {
 /// over the intake socket.
 struct IntakeLeaseBackend {
     intake_socket: PathBuf,
+    intake_in_flight: Arc<Semaphore>,
+    timeout: Duration,
 }
 
 impl IntakeLeaseBackend {
@@ -606,6 +365,15 @@ impl IntakeLeaseBackend {
         if let Value::Object(map) = &mut input {
             map.remove("principal");
         }
+        // A handler timeout cannot cancel blocking socket I/O. Keep a separate
+        // allowance in this blocking operation until its socket really closes.
+        let Ok(_permit) = Arc::clone(&self.intake_in_flight).try_acquire_owned() else {
+            return Err(Box::new(backend_refusal(
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!({"error": "in_flight_requests"}),
+                "in_flight_requests",
+            )));
+        };
         let request = LeaseIntakeRequest {
             operation,
             workspace: token.workspace.clone(),
@@ -616,7 +384,7 @@ impl IntakeLeaseBackend {
             },
             input,
         };
-        let answer = LeaseIntakeClient::connect(&self.intake_socket, INTAKE_TIMEOUT)
+        let answer = LeaseIntakeClient::connect(&self.intake_socket, self.timeout)
             .and_then(|mut client| client.call(&request));
         match answer {
             Ok(LeaseIntakeResponse::Ok { result }) => Ok(result),

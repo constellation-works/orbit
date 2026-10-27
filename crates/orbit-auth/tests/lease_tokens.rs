@@ -250,3 +250,40 @@ fn a_missing_or_shared_store_is_refused_and_never_created() {
         .to_string();
     assert!(shared_home.contains("750"), "{shared_home}");
 }
+
+#[test]
+fn listener_rejection_snapshots_upsert_one_row_per_key_limit_and_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = provisioned_home(dir.path());
+    let mut store = LeaseTokenStore::open_in_orbit_home(&home).unwrap();
+    let now = Utc::now();
+    let mut row = orbit_auth::limiter::LimitAudit {
+        key: "address:192.0.2.1".into(),
+        limit: "address_requests",
+        first_at: now,
+        last_at: now,
+        count: 1,
+    };
+    store.record_limit_audits(&[row.clone()]).unwrap();
+    row.count = 10_000;
+    row.last_at = now + Duration::seconds(30);
+    store.record_limit_audits(&[row.clone()]).unwrap();
+    // A delayed older snapshot must never decrease a newer count or last time.
+    row.count = 2;
+    row.last_at = now + Duration::seconds(1);
+    store.record_limit_audits(&[row]).unwrap();
+    let connection = rusqlite::Connection::open(home.join(LEASE_TOKEN_STORE_FILE)).unwrap();
+    let (rows, count, first_at, last_at): (u64, u64, String, String) = connection
+        .query_row(
+            "SELECT count(*), sum(count), first_at, last_at FROM lease_listener_limit_audit",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .unwrap();
+    assert_eq!((rows, count), (1, 10_000));
+    assert_eq!(DateTime::parse_from_rfc3339(&first_at).unwrap(), now);
+    assert_eq!(
+        DateTime::parse_from_rfc3339(&last_at).unwrap(),
+        now + Duration::seconds(30)
+    );
+}

@@ -470,7 +470,7 @@ the peer check, the home mode and the root-owned binary then accept the caller.
 - **Limits.** Per client address before any token lookup (IPv6 counted per /64 by default), with
   a stricter limit on failed authentication; per token for reads and, lower, for writes; and
   for the whole listener, connections, requests in flight, body size, and header and handler
-  timeouts. A rejection answers 429 (with `Retry-After`), 413 or 503, and is audited once per key
+  timeouts. A rejection answers 429 (with `Retry-After`), 413, 408 or 503, and is audited once per key
   and window so a flood cannot fill the audit store. Limiter state is in memory and bounded.
 - **No browser sessions.** The listener has no cookie or Origin-based session, so it has no
   CSRF surface; the dashboard's Leases view reads through Orbit Web as today.
@@ -499,20 +499,41 @@ over the intake socket, one connection per operation; intake codes map to HTTP (
 403, `lease_not_held` and `unknown_workspace` 404, `invalid_input` 400, expansion 501,
 `operation_failed` 500 with the detail logged, an unreachable socket 503).
 
-The listener audits each refusal that does not reach Orbit in the token store's
-`lease_token_audit` (schema v2 adds `remote_address` and `route`): `verify_refused` rows from the
-token decision and `listener_refused` rows for `missing_token`, `rate_limited`,
-`malformed_forwarded_for`, `no_untrusted_forwarded_for`, `intake_unavailable`, `intake_refused`
-and `request_rejected` (a 4xx or 5xx after authentication that Orbit did not produce). Rows are
-written per refusal, not aggregated: 401 and 403 answers count against the failed-authentication
-limit (`lease.listener.limits.failed_auth` per `failed_auth_window_seconds`, a fixed window from
-an address's first failure, IPv6 per /64, at most 4096 addresses), so each address writes at most
-that many rows plus one `rate_limited` row per window. The broader per-address, per-token and
-whole-listener limits, body and timeout bounds, and the aggregation of other refusals are the
-later limits slice. Client-address rule as implemented: `X-Forwarded-For` values are read only
-from a peer in `trusted_proxy`, joined in header order, split on commas and walked from the right;
-IPv4-mapped IPv6 addresses compare as IPv4; a non-UTF-8 value, a malformed entry or an all-trusted
-chain (including no header) is 400.
+The listener now applies the complete limits slice. `orbit_auth::limiter::KeyedLimiter`
+provides bounded fixed windows, configurable IPv6 prefix keys, separate token read/write
+budgets, token in-flight and stream allowances, conservative overflow buckets and coalesced
+rejection snapshots. Address admission surrounds the whole router (including health, 404 and
+method errors), before token lookup. Failed authentication uses the same limiter. A valid token
+is then checked against its address-independent budget. The client-address rule above is the
+only reader of forwarding headers; malformed chains use the TCP peer for rejection admission.
+
+`lease.listener.limits.*` defaults are 120 address requests/minute; 10 failed authentications
+per 300 seconds; IPv6 /64; 60 token reads and 20 token writes/minute; 2 streams and 8 in-flight
+requests/token; 64 connections; 16 in-flight requests globally; 65536 body bytes; 5 seconds
+for headers/TLS handshake and 10 seconds for the handler/body read; 4096 tracked keys including
+two reserved overflow identities. Configured ranges and settings are in [CONFIG](../../CONFIG.md#lease-listener).
+Live budgets are never evicted at capacity; new addresses and new tokens share distinct
+conservative overflow keys. Idle keys are reclaimed during periodic maintenance.
+
+Tower HTTP layers bound bodies and handlers (413 and 408); response-lifetime allowances bound
+request concurrency (503), including open streams. Blocking intake operations retain a
+separate allowance until socket I/O really finishes, even if their HTTP handler timed out.
+The shared HTTP/1 transport bounds connections before TLS, caps headers at 64 fields and a
+16 KiB buffer, times out stalled headers and closes each connection after its response.
+One additional bounded refusal lane can negotiate TLS and send 503; if that lane is occupied,
+further saturated TLS connections close immediately and plain HTTP gets a best-effort 503.
+A rate refusal returns 429 with a rounded-up `Retry-After`, naming only the limit.
+Listener SSE remains phase 3: the token allowance API already reserves its own stream counter,
+and the body wrapper keeps both token and global in-flight allowances until the stream closes.
+
+Refusals that never reach Orbit are aggregated in the listener user's own token store,
+`lease_listener_limit_audit` (schema v3), by canonical key, limit/reason and window, with count
+and first/last rejection times. These rows carry no principal, secret, query or route. Token
+keys use public ids only after authentication; failed authentication uses address keys.
+First snapshots persist promptly; subsequent counts are batched every second and at graceful
+shutdown, upserting the same row. Abrupt exit may lose unflushed counts. Token administration
+retains its existing `lease_token_audit` trail. Orbit retains its per-operation intake audit.
+These bounds are listener-only; Orbit Web on loopback is unchanged.
 
 ### 7.4 The `orbit-auth` crate
 

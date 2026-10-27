@@ -6,7 +6,7 @@
 //! allow-or-deny decision ([`scope`]); the listener user's token store
 //! ([`store`]); the execution-environment check every listener-user
 //! command runs first ([`environment`]); the listener's client-address rule
-//! ([`client_address`]); and its failed-authentication limiter
+//! ([`client_address`]); and its keyed request limiter and coalesced rejection audits
 //! ([`limiter`]). It has no HTTP framework, runtime handle or Orbit store;
 //! surfaces wrap it.
 
