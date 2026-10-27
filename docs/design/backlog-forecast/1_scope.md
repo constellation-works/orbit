@@ -1,130 +1,256 @@
 ---
-title: "Scope: backlog forecast from delivery history"
+title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
 last_updated: 2026-10-26
 last_validated: 2026-10-26
 status: Draft
-stage: shipped
-next: "—"
+stage: building
+next: "Implement shared admission simulation [ORB-18686], then the remaining v2 factors."
 feature: backlog-forecast
 doc_role: scope
 type: design
-summary: "Scope: forecast backlog time to drain, USD and normalized tokens as p50/p90 by resampling completed deliveries, store the forecast hourly and score it against actuals"
-tags: [backlog-forecast, analytics-metrics]
+summary: "Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness and score each forecast model version separately"
+tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 ---
 
-# Scope: backlog forecast from delivery history
+# Scope: backlog forecast v2 from drain admission
 
-Status: phase 1 shipped [ORB-18385].
-Bearing: Orbit already records, for every managed invocation, its wall duration, tokens by kind, provider cost and the tasks it served ([auditability](../auditability/2_design.md)); normalizes tokens across models as `GET /api/cost` does; knows each task's complexity, crew and status history; and admits leaf runs under a drain ceiling (`max_active_leaf_runs`, adjustable live through run control, [auto-concurrency](../auto-concurrency/2_design.md)). Analytics shows what delivery cost in the past (Cost, Metrics › Tokens per task, Delivery friction); nothing says what the open backlog will take.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. All v2 rules and fields in this document are planned until their task lands. “v2” names the feature revision; the current numeric `MODEL_VERSION` is already **2**, so implementations must increment from the value they find, not reset it to 2.
+
+Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/task/backlog_forecast.rs`, with simulation in `backlog_forecast/model.rs` and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
 ## Problem
 
-An operator looking at 40 backlog tasks cannot say whether they drain overnight or over a week, or whether they cost $50 or $500. Per-complexity averages mislead: delivery time and cost are long-tailed (one recovery loop or rework doubles a task), so a mean is neither likely nor safe, and the sum of means hides that the backlog runs on a few parallel slots. The history to answer it exists, but nothing resamples it, and nothing checks whether any estimate was right.
+V1 draws a completed delivery per task and list-schedules independent work on N slots. A dependency chain can run side by side, overlapping lock surfaces consume separate slots, and resource-heavy work always fills the ceiling. Its priority/age sort differs from the drain's order. Mixing reviewed and unreviewed deliveries, omitting failed attempts and ignoring regression fixes further understates time and spend. An operator cannot tell whether 40 tasks drain overnight or over a week, or why a forecast missed.
 
 ## Goal
 
-A read-only forecast for the selected workspace's dispatchable backlog: time to drain, USD and normalized tokens, each as p50 and p90, overall and by complexity, with counts of the tasks it could not forecast well. Forecasts are stored and later scored against what their tasks actually did, so calibration is observed rather than assumed. Nothing about dispatch, admission or task state changes.
+A read-only, admission-faithful forecast: p50/p90 elapsed time to drain, USD and normalized tokens, overall and by complexity, with completion probabilities, coverage and explanations of constrained parallelism. A reusable per-task riskiness estimate is also shown on task rows and task detail. Store canonical forecasts hourly and score their versions separately. Forecasts never dispatch, reserve real locks, change task state or change admission policy.
 
 ## Shape
 
-### Sampling unit
+### Retained contracts and changed measures
 
-One **completed delivery**: a task that reached `done` inside the lookback (default 30 days, 7–180 by `lookback_days`), together with every managed invocation linked to it, at any time. Recoveries, auto-fixes, reviews and reworks are part of the delivery, so their cost is in the sample. A done task with no linked invocation (hand-closed, or delivered before invocations were linked) is not a sample; the response counts it as `history_without_invocations`.
+Keep the endpoint, 30-day default history (`lookback_days` 7–180), seeded 1000 iterations, nearest-rank p50/p90, no point estimate for time/cost/tokens, `if_approved`, and explicit missing-metric coverage. Normalize tokens with the versioned pricing used by `GET /api/cost`; provider USD remains null if an included invocation lacks valid provider cost. Never substitute derived USD for provider cost.
 
-Completion is dated by the last event in the task's durable history whose `to_status` is `done`, including creation in that status. The generated index's `updated_at` only narrows candidate reads; later comments and artifacts cannot move a completion into the lookback. A done task without a recorded done event is omitted from sampling and the seven-day done rate rather than dated by its last metadata write. Each request reads the event log once for each indexed done candidate since the earliest of the lookback, the seven-day rate window and the oldest stored forecast; the maximum lookback is 180 days.
+V1's sampling unit was a task that reached `done` in the lookback, with all its linked invocations, recoveries and reviews included. It measured the union of invocation intervals, bridging gaps shorter than two hours. V2 keeps that measure only for interpreting old snapshots. New forecasts distinguish **slot work hours**, **queue/return wait hours**, **review completion delay** and total **elapsed hours**. A two-hour gap is no longer a boundary between attempts: durable run lineage and admission/settlement timestamps are. This counts long waits without pretending they occupy a leaf slot.
 
-For each delivery:
+History membership and scoring use durable status/run events, never mutable `updated_at`. Read the needed history once per snapshot, bounded by the lookback, the return model's additional 90-day observation window below, and the oldest forecast being scored. A done task without invocations remains `history_without_invocations`; missing run lineage/timestamps are separate coverage gaps, never inferred successes. All new probabilistic totals describe work/spend **from forecast time through completion or the 90-day horizon**, whichever comes first.
 
-```
-start_i  = ts_i - duration_ms_i        (an invocation's ts is recorded when it ends)
-hours    = |union of [start_i, ts_i]|, bridging gaps < 2 h between consecutive intervals
-tokens   = Σ normalized tokens_i       (null when any invocation's model has no price row)
-usd      = Σ provider_cost_usd_i       (null when any invocation lacks a provider cost)
-```
+### Population and dependency decisions
 
-Bridging short gaps counts CI, review and gate waits inside one attempt as delivery time; a longer gap is the task waiting in the backlog between attempts and is not counted. Hours are wall time a slot is busy with the task, not CPU time.
+The initial forecast cohort is workspace `backlog`, `in-progress`, `review` and `blocked` tasks. Review and blocked tasks become explicit residual phases rather than disappearing. `someday`, `rejected`, `archived` and `done` are not new work; `proposed` enters only the separate `if_approved` scenario. Coverage denominators include every initial cohort task, including those that cannot be forecast. The approved scenario interleaves proposed work in real dispatch order; it does not append it after backlog.
 
-### Cells and fallback
+Build one dependency graph, resolving identifiers through the same registry-global status projection and `TaskReferenceIndex` used by `task_dependencies_ready_with_index` in `crates/orbit-types/src/task/model/task.rs` and `admission/backlog_exclusion/snapshot.rs`. After each simulated transition update that projection and call the shared readiness predicate. Only `done` satisfies a verified edge; review is not approval.
 
-Each forecast task samples from the deliveries of its **cell**: its complexity bucket × its crew pool (the task's crew, else the crews the [automatic crew pools](../../CONFIG.md#automatic-crew-pools-by-complexity) route its complexity to). Below `MIN_CELL_SAMPLES` (5) deliveries the task falls back to its complexity's whole history, and when it is unassessed, or its complexity has no deliveries, to every delivery in the lookback. With no history at all it has no forecast. Each fallback is counted:
-
-| Count | Meaning |
+| Dependency outside the scheduled set | Decision |
 |---|---|
-| `unassessed` | No complexity; sampled from every delivery. |
-| `thin_cell_fallbacks` | Assessed, but its cell had fewer than 5 deliveries (`fallback_complexity` + assessed `fallback_workspace`). |
-| `uncovered_model` | No sampled delivery has every invocation priced for normalization, so the task has no token forecast. |
-| `uncosted` | No sampled delivery has every invocation's provider cost, so the task has no USD forecast. |
-| `no_history` | Nothing to sample. |
+| `done` | Already satisfied; zero delay and no future spend. |
+| `review` | A support node samples remaining review-to-done delay, conditional on elapsed review age, and retains its lock until release. It does not acquire a leaf slot merely because its status is review. If no usable residual history exists, mark the dependent unforecastable. |
+| `blocked` | A support node uses the age-conditioned return model below, then its remaining work. A no-return draw leaves its dependents incomplete. A workspace blocked task is already in the initial cohort, so do not add or charge it twice. |
+| `someday`, or unapproved `proposed` | No authorized start time: dependent is unforecastable, counted as `dependency_unforecastable`. Proposed dependencies enter normally in `if_approved`. |
+| `rejected`, `archived`, missing known-registry ID, dependency cycle | Unsatisfied and unforecastable; count and name the reason. Do not silently drop the edge. |
+| Other out-of-workspace backlog/in-progress work | Model only if its remaining-phase history and execution location are available; otherwise unforecastable. Never simulate dispatching remote work on the selected host. |
+| Reference the shared index declares unverifiable here | Preserve the drain predicate's permissive treatment; count `unverifiable_dependencies` and disclose it. Do not invent a stricter local rule. |
 
-For initial backlog and proposed tasks, a delivery is drawn whole; a missing token or USD value is redrawn from deliveries of the resolved pool that recorded that metric. Hours use all deliveries. A total is null in an iteration when any task in it has no draw for that metric, so a quantile is never a silent undercount.
+Shared support nodes are deduplicated. External work delays the workspace cohort and contributes any known lock/resource contention, but its own spend is not charged to workspace totals. Its uncertainty propagates to dependents. An unforecastable initial task makes the full-cohort time/cost/token totals unavailable; a separately labelled `schedulable_subset` may show a partial estimate with numerator and denominator, never masquerading as the full backlog.
 
-### Simulation
+### One shared admission pass
 
-The forecast set is the workspace's `backlog` and `in-progress` tasks. `review`, `blocked` and `someday` are left out (review is mostly done; blocked and someday are not dispatchable). `proposed` tasks are simulated separately and reported as `if_approved`.
+At t=0 seed actual running phases, claims/reservations and lock holders. Thereafter advance an event heap to the next completion, lock release, return, arrival, footprint deadline, resource-profile minute or head-wait deadline. At each event process simultaneous transitions together, then walk the pending queue in the drain's order. An empty runnable queue does not mean drained while blocked/returning work, dependencies or locks remain. The horizon is 90 days for every scenario, including arrivals off.
 
-Each of 1000 iterations (seeded, so a refresh does not jitter) draws one delivery per task and list-schedules the draws on `N` slots: in-progress tasks first, each with its draw minus the hours, tokens and USD its invocations have already used (floored at zero); then the backlog by priority and creation time; then, for `if_approved` only, proposed tasks. Time to drain is the makespan; tokens and USD are sums. The response reports nearest-rank p50 and p90 of each, and per complexity the p50/p90 of summed work hours, tokens and USD. No point estimate is reported anywhere.
+Reuse the following rules, rather than implementing forecast-specific copies:
 
-**Capacity.** `N` is the leaf-run ceiling the drain admits under: the live local drain's effective `max_active_leaf_runs` (a run-control adjustment, else its submitted value), else the live pull drain's, else the job default (5), the same value `GET /api/workflows/auto/readiness` reports without a requested concurrency. `concurrency` (1–64) overrides it for a what-if. `inputs.concurrency_source` and `inputs.auto_concurrency_mode` say which applied.
+| Decision | Existing authority and v2 use |
+|---|---|
+| Eligibility and dependencies | `admission/backlog_exclusion/snapshot.rs`: consume its observed, read-only population/exclusion inputs, including complexity, pilot, route, crew, OS/browser and label restrictions. Dynamic dependency/lock exclusions are recomputed on simulated state, not frozen forever. Unsupported static eligibility remains visible in coverage. |
+| Dispatch | `owner_dispatch_order` / `DispatchOrder::sort` in `admission/census.rs`, delegating to `census_dispatch_order` in `crates/orbit-store/src/contracts/task/coordination/census.rs`. Preserve critical, corrective/expiring, priority, expiry, age and ID rules, plus the configured executor-affinity reach. Freeze census/crew inputs; evaluate known expiry deadlines at simulated time. For a follower use that requester's same census comparator, including declared usage pressure. |
+| Lock conflicts | `lock_context_files_for_task`, `active_task_lock_holders` and `task_lock_overlaps` in `crates/orbit-runtime/src/task/locks/index.rs`. Preserve canonical selectors, directory/symbol overlap, `workflow.lock_modes`, `unlocked_context_paths` and its docs-only fallback. Parents never inherit child locks. `in-progress` and `review` hold their declared surfaces; `no-diff-expected` holds none, but still waits on dependencies and others' locks. |
+| Unknown footprint | `footprint_waits`, `whole_tree_holder` and `FootprintWave` in `admission/unknown_footprint.rs`. In a multi-slot automatic drain a real task with no selectors and no `no-diff-expected` tag waits for its pilot until the captured deadline, then runs exclusively if still unknown. Preserve first-waiter tree reservation and the no-diff exception, including which work may coexist. Single-slot and explicitly selected ship exemptions remain the shared rule. Do not invent pilot-produced selectors; absent an observed footprint update, keep the conservative exclusive result. |
+| Surface reservations | `reserves_surface`, `MAX_SURFACE_RESERVATIONS` and `withhold_reserved_surfaces` in `admission/surface_reservation.rs`: at most two critical/high tasks blocked **only** by held locks reserve per pass. Only lower-ranked overlapping work is withheld; withheld tasks never reserve in turn; published resumes keep their exemption. Recompute each pass, using that helper's comparator, even where it differs from census affinity order. |
+| Slot occupancy | `admission/leaf_occupancy.rs` and the store's `DrainLeafOccupancy`: a wrapper/descendant lineage consumes one slot, and unsettled admissions count once. A task in review can hold a lock after it stops occupying a leaf. Preserve observed occupants at t=0; if already above a reduced N, admit nothing until occupancy drops below N. |
+| Resource fit | `admission/gap_fit.rs` and runtime `host_resource/forecast/fit.rs`, detailed below. Fit only candidates that passed every preceding gate. |
 
-**Arrivals.** The default assumes **no new arrivals**: the backlog only drains. The response always reports the arrival rate over the last 7 days, split into auto-task filings (`auto-task:` tags), sweep filings (CI-failure, QA, code-review, security-review, delivery-review, friction-curation and baseline-red-repair tags) and other filings, beside the done rate over the same days. `arrivals=on` adds a Poisson stream of tasks at the measured rate, each drawing from every delivery (preserving its token and USD values, including nulls), and the drain ends when the queue first empties; a drain that has not emptied within 90 days counts as beyond the horizon, so its quantile can be null.
+Paths beginning `admission/` above are under `crates/orbit-core/src/application/`.
 
-A sampled arrival with missing tokens or USD makes that iteration's **total** null for that metric, for both `forecast` and `if_approved`; it is never counted as free or imputed. Duration and the other metric remain independent. As with other missing iteration values, null totals sort after numeric totals for nearest-rank quantiles: a rank that lands on null is null, rather than a quantile computed after discarding incomplete iterations. Fully covered arrival histories retain numeric cost and token quantiles. Per-complexity rows describe initial tasks only and exclude arrivals.
+**Reuse boundary.** Add a narrow `pub(crate)` forecast adapter in the admission module, exposing frozen inputs and pass decisions to `application/task`. It calls the existing `pub(super)` reservation and footprint helpers inside their current parent boundary; do not widen those helper visibilities or extract another reservation implementation. Where helpers currently expand selectors internally, parameterize their overlap input so the drain supplies live conflict lookups and the simulator supplies precomputed rows; keep the policy conditional bodies shared. Wrap the existing gap-fit logic the same way. This bounded adapter belongs to the admission implementation task; a broader refactor would require separate scope. Collection may read stores; the iteration loop has no store, network, filesystem, clock or mutation calls. Use simulated time explicitly and exercise parity through public admission/forecast boundaries.
 
-`coverage` and `proposed_coverage` count initial tasks only. `arrivals.coverage` describes the shared arrival sampling pool, even with arrivals off: `deliveries` is its size, `missing_tokens` counts deliveries without normalized tokens and `missing_usd` counts deliveries without complete provider cost. These are history-delivery counts, not counts of simulated arrivals. `assumptions.arrival_missing_metrics = "propagate_null"` identifies this policy. The panel shows the gaps and explains unavailable totals; with arrivals off these gaps do not affect initial-task draws.
+### Review-mode cells
 
-### Storage
+The cell becomes **complexity × effective crew pool × actual enforced review mode**, with modes `none`, `before_pr`, `before_landing`, `mixed` and `unknown`. `mixed` means attempts in one delivery used different enforced modes; it is history, not a pending policy choice. After-landing `delivery-code-review` tasks are separate work, not a before-landing mode on their originating delivery.
 
-The canonical forecast (default lookback, the live ceiling, no arrivals) is persisted in `backlog_forecasts` (store migration v62, additive): `workspace_id`, `forecast_at`, `model_version`, the inputs, the totals and, per task, its id, complexity, basis and its own p50/p90 of hours, tokens and USD (net of what it had spent). The owner host’s sweep clock attempts a canonical write on each non-dry-run tick, and a canonical endpoint read may also write when the slot is free. Both triggers share the same inputs and immediate transaction: the recent-row check and insert allow at most one row per workspace per 60 minutes, including when a read and a tick race. The clock checks the newest row before reading delivery history or simulating, so ticks within the hour skip that work. Follower replicas never write on the scheduled path. Non-canonical reads, an empty dispatchable backlog or no delivery history never write. A failed write is logged and fails neither the tick nor the read.
+`InvocationRecord` (`crates/orbit-store/src/contracts/invocation.rs`) carries `job_run_id`, `activity_id` and task linkage, but **no review-timing flag**; the current `InvocationSpend` projection even omits run/activity IDs. Read/join the underlying records, scoped by workspace and run, to the run's captured `ReviewAdmission` (`crates/orbit-types/src/workflow/review/admission.rs`) and actual step execution. `agent_review_repair` is used by both the `review` and `landing_review` steps in `assets/jobs/task_pr_pipeline.yaml`; its activity name alone cannot distinguish timing. A linked reviewer invocation plus the captured timing/step evidence classifies the layer actually run. Use verified no-diff/light-delivery exemptions as `none`; absence of an invocation alone proves neither exemption nor no-review. Missing or contradictory joins yield `unknown`, counted in coverage. No new historical flag is assumed.
 
-### Scoring
+For pending work resolve current effective review admission with `crates/orbit-core/src/application/review/admission.rs`, including route, host-specific before-landing policy and applicable exemptions. A running task retains its captured admission even if configuration changed. Returns capture the current snapshot policy for a new attempt; prior spend retains its historical mode. Record the assumed mode and source per task.
 
-Every request scores the newest 60 stored forecasts against the current task records and invocations:
+Use a cell at five samples. If thin, drop crew, then complexity **while preserving mode** (five samples at each step); only then borrow the mode-pooled complexity/crew history with the existing complexity/workspace fallback. Count `review_mode_fallbacks` whenever mode is dropped, and `review_mode_unknown` separately. A mode with zero support must never be presented as a measured reviewed duration; show the fallback. Joint sample rows keep duration, outcome and spend together; missing metric draws use only the same resolved cell/outcome/phase pool. With no usable metric sample the total stays null.
 
-- **Per task.** A stored task now `done` is scored on what it used after `forecast_at` (the same hours, tokens and USD measures as a delivery, cut at the forecast time) against its stored p50 and p90.
-- **Per forecast.** Once none of its tasks is pending, the forecast is *settled*; actual time to drain is the last task's durable done-event time minus `forecast_at`, and actual tokens and USD are the sums. For an older task without a recorded done event, scoring falls back to its last linked invocation's end, never its mutable `updated_at`. It is scored as a whole only when nothing was excluded.
-- **Exclusions.** Tasks since `rejected` or `archived`, tasks no longer in the store, tasks whose complexity changed (re-scoped), and done tasks with no invocation after the forecast are excluded from scoring and counted per forecast and overall.
+### Outcomes, retries and currently blocked work
 
-The response reports, per measure, the number scored and the fraction of actuals at or under p50 and p90. A calibrated forecast lands near 50% and 90%.
+Sample **admission episodes**, not only successful deliveries. An episode groups the local auto/gate/PR run chain or one claimed leaf and its exact retry/recovery lineage until its slot is released. Source evidence is `JobRun`/step start and finish times, terminal run outcomes and retry lineage (`crates/orbit-store/src/contracts/job_run.rs`), task transition history, and claim settlements. `application/codebase/facts/history.rs` and `facts/block_cause.rs` already distinguish blocks, infrastructure failures, manual actions and review holds; reuse those classifications. A successful handoff to review is a review phase, not done. Do not infer attempts by two-hour invocation gaps or count coordinator wrappers as work.
 
-### Surfaces
+Include successful, blocked, failed and cancelled episodes admitted in the lookback, even when their tasks never reached done. Record the joint tuple `(outcome, slot_hold_hours, lock_release_delay, review_to_done_delay, tokens, usd)` and the following observed transition. Use the review/complexity/crew fallback chain above for outcome frequencies and conditional tuples. Live episodes are right-censored, counted as such; old invocations with no episode boundary remain unknown rather than being assigned a success. Weight every admitted episode once, not once per child run or invocation.
 
-- `GET /api/diagnostics/backlog_forecast?workspace=…[&lookback_days=…][&concurrency=…][&arrivals=on]`, read-only apart from the throttled snapshot write.
-- Analytics › Forecast in the dashboard: the quantile tiles, the by-complexity table, coverage counts, the arrival rate beside the no-arrivals assumption, and calibration ([user interface](../user-interface/2_design.md)).
-- The Tasks page auto-drain card shows that same default forecast (30 days, no arrivals) as one line under its admission forecast: time to drain p50 – p90, then cost in whole dollars only when the history is costed. The backlog and in-progress counts, the tokens when the payload has them, and the exact cost are in its tooltip and accessible text. The line links to Analytics › Forecast. An error, a host without the endpoint, or no estimate is one muted line and leaves the rest of the card alone [ORB-18533].
+A blocked/failed/cancelled episode releases its slot at the sampled time. Locks follow the sampled resulting status: blocked releases them; an evidence hold still in progress/review may retain them. Estimate the probability of return within **90 days** and the conditional wait from episode settlement to next admission with a competing-risk cumulative-incidence estimate: return and terminal rejected/archived are competing events, and still-waiting follow-up is right-censored. The return pool includes episodes settled in the lookback-length window ending 90 days before the snapshot, plus younger episodes with their observed censoring. This requires at most `lookback_days + 90` days (270 maximum) of return evidence; it avoids asking a default 30-day recent-only cohort to prove a 90-day tail. Keep the same review/crew/complexity grouping and disclose this older return cohort separately from recent duration samples. This is an operational probability of “no return within horizon,” not a claim about never returning. Do not count young unreturned tasks as permanent failures. If the risk set runs out before a needed age/horizon, the unsupported tail is unknown and is reported, not filled with zero wait or success. Count support and censoring for each resolved pool.
 
-The shared calculation is `crates/orbit-core/src/application/task/backlog_forecast.rs`, with `backlog_forecast/model.rs` simulating and `backlog_forecast/scoring.rs` scoring. The sweep clock and the HTTP adapter at `crates/orbit-web/src/api/diagnostics/backlog_forecast/` use that service over `orbit-store`'s `BacklogForecastStoreBackend`.
+At a return event requeue with original priority/footprint, current dependency state and snapshot review policy, and sample another episode. Return waits occupy no slot. If no return is drawn, that task and its verified dependents remain incomplete. Rejected/archived outcomes absorb; they consume their already incurred spend and do not satisfy dependencies. No-return tasks prevent a full drain even if the active queue empties.
+
+A currently blocked task starts in the waiting phase, conditional on how long it has already been blocked; its sunk usage is excluded. A review task samples age-conditioned remaining review time/spend and preserves any actual live leaf occupancy. For an in-progress task, condition residual episode duration on elapsed age; subtract only that episode's already recorded usage, floored at zero. Missing elapsed/phase evidence is counted, with the disclosed fallback to an unconditional phase draw; never subtract all earlier attempts from one new attempt. Retry wait and review delay are separately visible from slot work.
+
+Report expected initial tasks not done by the horizon, probability that all initial tasks finish, and probability that the full scenario (including synthetic work) drains. A time-to-drain draw is null when it does not drain; nulls sort after finite values for nearest-rank quantiles. USD/tokens still include all observed/simulated attempts through the horizon, including abandoned work. Missing usage is null, not free. A fixture with more blocking history must reveal additional waits/incompletion, rather than an earlier “drain” caused by dropping failures.
+
+### Resource fit and execution host
+
+N remains the **outer leaf ceiling**: the effective live local drain value (run-control adjustment before submitted value), else live pull drain, else job default (5); `concurrency=1..64` remains a what-if override. Record `concurrency_source`. It does not multiply capacity by the number of census rows.
+
+For the selected drain's **execution host**, capture CPU count, total memory, non-delivery baseline, live deliveries/reservations, effective auto-concurrency mode, `admit_cpu_percent`, `admit_memory_percent`, `head_max_wait_minutes` and `head_stuck_passes`. Load its cached `ProfileSet` through `crates/orbit-runtime/src/host_resource/profile/`: host-local, workspace × work class × complexity, template keys without complexity. Reuse `task_lookup` and `ProfileSet::lookup` including without-complexity, template base-class, heaviest-of-class and heaviest-on-host fallbacks. Profiles use their own retained 30-day resource history and configured support/window, independent of the delivery lookback.
+
+In `enforce`, use `GapFit::admits` with simulated `HostLoadForecast`/`ForecastGap::fit` and `add`: per-minute CPU and the shared summed-memory quantile, survival weighting, cumulative same-pass reservations, idle-host exception, head starvation protection and stuck-head reporting. No separate CPU/memory arithmetic or fixed “effective slots” multiplier. Rebuild/advance the curve at resource-minute events even if no task finishes then; evaluate head deadlines in simulated time. In `shadow`, record the counterfactual fit but schedule as `off`; in `off`, do not constrain by profiles. Missing profiles/host size preserve the real rule's permissive admission and expose `resource_profile_missing`/`host_capacity_unknown`, never claim measured resource fit. Keep sampled slot duration and the profile's native minute shape distinct; no arbitrary stretching to fit the sampled duration. Release a simulated delivery's contribution when it ends; profile tails/uncertainty remain a disclosed approximation.
+
+An owner-local forecast uses the owner's execution data. A live pull/follower drain must use **that follower's** capacity, profiles, baseline and requester ordering, not the owner's resources. Use locally available captured host evidence; never poll a follower inside an iteration. The current executor census carries capability, not CPU/memory profiles. If a fresh follower resource snapshot is unavailable, report `resource_fit.status = unavailable_remote_host` and leave the resource-constrained estimate unavailable; an explicitly labelled slot/lock-only subset may still be shown. Multi-host pooled scheduling and transporting new remote telemetry are deferred: current records do not supply a consistent cluster resource snapshot. Existing remote claims still contribute known workspace locks and completion waits. This prevents pretending N owner slots describe extra follower capacity.
+
+### Per-task riskiness estimator
+
+Riskiness is its own task API/UI feature, consumed unchanged by the forecast. It estimates the chance that a completed task is later named by at least one `regression_from` relation. It is an observed, windowed probability, not a causal assessment or a replacement for admission. Reuse `application/codebase/risk.rs`, `regression.rs`, `sections.rs::regression_rows` and their shared `CodebaseFacts`; do not scrape rendered prompt marks or rebuild a competing regression ledger.
+
+Use the configured `workflow.regression_risk.window_days` (default 30) and `min_support` (default 5), not the mark threshold/max-files truncation. Each completed task is one denominator observation, and one numerator observation if any regression link names it, however many fixes/files it has. Retain the existing durable done-time/window semantics. Expose support/window and the observation cutoff: recent deliveries have had less time to reveal defects, and unfiled regressions are invisible.
+
+1. Canonicalize `file:` and `symbol:` selectors to paths using the shared codebase anchor rules; deduplicate. Roll up `dir:` selectors from existing facts under that prefix, counting each historical task once, with no filesystem walk. Nested/duplicate anchors cannot multiply evidence. Unsupported/module-only selectors are reported as uncovered.
+2. Let workspace support be N, regressed tasks R, and base rate `p0 = (R + 1) / (N + 2)`. For each supported anchor f with `n_f >= min_support`, shrink its rate with `p_f = (r_f + min_support * p0) / (n_f + min_support)`.
+3. Combine supported anchors by **maximum** `p_f`. Do not use `1 - product(1 - p_f)`: co-touched files are correlated and that formula inflates broad tasks. The top three anchors by rate/support/path are the driving files. Show uncovered-anchor count and distinct supporting-task count separately; never sum per-file denominators as task support.
+4. Adjust odds using the supported **joint crew × complexity** rate `p_g`, shrunk toward p0 by the same formula: `p = logistic(logit(max_f p_f) + logit(p_g) - logit(p0))`. Require at least `max(20, min_support)` group and workspace observations; otherwise omit the adjustment and report why. This is one adjustment, not multiplied independent crew and complexity effects. For an unassigned crew use the snapshot's positive crew-pool weights to average the supported adjusted probabilities; report missing pool support and use the unadjusted value for those weights. Missing complexity leaves it unadjusted.
+5. Require workspace N >= min_support and at least one supported anchor for a numeric estimate. If selectors exist but support is insufficient, return `state = insufficient_history`, `probability = null`. Partial anchor coverage permits a number with `support_state = partial`; absent crew adjustment is also explicit. A task with **no context_files** returns `state = no_footprint`, `probability = null`, even if a workspace base rate exists. A non-path footprint returns `state = unsupported_footprint`. No-estimate states never display as “low” or as zero.
+
+Task row: percentage plus an uncertainty/partial-support marker, or “No estimate” with its reason. Task detail and the row tooltip: probability, window/cutoff, distinct support, regressed counts, driving files/rates, uncovered anchors, resolved crew/complexity and adjustment/fallback basis. Task list/detail APIs expose the same `riskiness` object and estimator version; it is derived, not a persisted task policy field. Batch/cache shared facts for task lists so scores do not introduce per-row history scans or delay task mutations. Existing hotspot prompt marks keep their own threshold and purpose.
+
+### Regression follow-up work
+
+After a simulated initial task reaches done, draw Bernoulli(p) using its riskiness probability. For a task with no estimate, use the supported crew/complexity regression base rate, else workspace p0 (same minimum support), **only as a forecast prior**, count `risk_prior_fallbacks`, and leave the task UI estimate null. With no supported prior mark regression-adjusted totals unavailable (`risk_unestimated`); a labelled pre-regression baseline may remain. Never assume no footprint means no rework.
+
+On a regression draw, sample a joint follow-up bundle from historical distinct fix tasks carrying `regression_from`: detection lag from original done to fix filing (non-negative), multiplicity of fixes per originating task, fix complexity/crew/review mode, phase/outcome samples, footprint and hours/tokens/USD. Count a fix with several culprit links only once per scenario; known initial fix tasks/relations suppress a second synthetic copy of that same observed work. Prefer matching complexity/crew, then all regression fixes at five samples; below five mark the regression history thin, and with none leave adjusted totals unavailable rather than borrowing ordinary feature work at zero cost.
+
+Queue each synthetic fix at its sampled detection/filing time, after its origin completes, using the donor's corrective priority/tags and latent footprint through the same admission pass. These are forecast-only tasks. For initial task j, expected added work is `p_j * E(bundle slot hours/tokens/USD)`; the simulation draws whole bundles, not deterministic mean delays. Response `regression_rework` reports expected follow-up count, hours and cost/token quantiles separately and includes them in scenario totals. Unknown bundle costs propagate null. A detection lag beyond 90 days is outside the bounded spend forecast and counted, not charged early.
+
+Model one generation of new regressions in v2; do not recursively spawn fixes of synthetic fixes. This explicit deferral bounds cost and avoids unstable branching estimates from sparse history. Real initial tasks that happen to be fixes still receive their normal risk estimate. Report the generation limit with the rework figures.
+
+### Arrivals without invented whole-tree locks
+
+Default remains **no exogenous arrivals**. Always show seven-day filing and done rates, filings split into auto-task, sweep and other. `arrivals=on` generates Poisson filings at the measured rate until the scenario first drains, subject to the 90-day horizon. Regression follow-ups already scheduled by the model are future work: a gap before their detection is not a final drain. Exclude explicitly modelled regression-fix filings from the exogenous rate to avoid counting them twice; report gross and adjusted rates.
+
+An arrival has no known future selectors. Sample its source class and a **latent historical footprint donor**, jointly with work class/complexity/crew, from filings with recorded footprints; precompute each donor's conflict row against initial tasks and other donors with the real lock predicates. This bootstraps the empirical conflict rate and correlated surfaces, rather than assigning every arrival a literal whole-tree lock. No fabricated selectors are persisted. Choose donors with at least five samples per source class, else the workspace donor pool; report the fallback. If no usable footprint donors exist, the arrivals scenario's admission estimate is unavailable and counted as `arrival_conflict_unknown`; do not treat arrivals as conflict-free. Preserve observed no-diff frequency as a separate donor class.
+
+Apply real unknown-footprint exclusivity to **known initial tasks**; synthetic arrivals use the disclosed historical conflict model instead of pretending their missing future metadata is an actual no-footprint admission decision. Regression fixes likewise use their historical fix-footprint donors. Real no-footprint work's pilot/exclusive delays are represented in its episode history, not imposed on every synthetic filing. Duration, outcome and metrics come from the donor's resolved review/complexity/crew pool. Arrival missing tokens/USD continue to propagate null independently; `assumptions.arrival_missing_metrics = "propagate_null"` remains.
+
+`coverage` and `proposed_coverage` count initial tasks only. Retain `arrivals.coverage.deliveries`, `missing_tokens` and `missing_usd` as history-pool counts, including when arrivals are off; add conflict-donor support and fallback separately. Per-complexity rows describe initial tasks only, with synthetic arrivals/rework broken out alongside totals.
+
+### Additive response contract
+
+Retain existing fields and document changed semantics with the new model version. In particular, retain the existing `forecast.tasks` count and `calibration` object; update `assumptions.excluded_statuses` to match the new cohort. Add the following to both base and approved scenarios where applicable (`forecast.*` has an `if_approved.*` counterpart); expose unsupported states explicitly instead of emitting a zero estimate.
+
+| Field | Meaning |
+|---|---|
+| `inputs.admission_factors`, `inputs.execution_host`, `inputs.capacity_as_of` | Enabled factor revisions, stable execution location and evidence age/source. Retain `concurrency_source` and `auto_concurrency_mode`. |
+| `inputs.resource_fit` | Applied/shadow/off/unavailable status, thresholds, profile support/fallbacks, host capacity source; no claim of enforce fit with unknown host data. |
+| `forecast.effective_parallelism` | p50/p90 of integrated occupied leaf slots divided by elapsed simulated scenario time (to drain or horizon). At most N except explicitly recorded initial oversubscription; zero for no work. It is not a new admission setting. |
+| `forecast.critical_path_hours` | p50/p90 of longest dependency-path duration, including sampled return/review waits, ignoring contention between independent paths. A lower bound on elapsed drain time, null for an unresolved path. |
+| `forecast.wait_hours` | p50/p90 by dependency, lock, footprint, reservation, resource, return and review reason. Attribute overlapping gate waits once using admission's first failing gate; distinguish summed task waits from elapsed wall time. |
+| `forecast.completion_probability`, `forecast.drain_probability`, `forecast.not_expected_to_drain` | Initial-cohort completion probability, full-scenario drain probability, and expected initial incomplete count at 90 days; include horizon and censored/unsupported counts. |
+| `forecast.task_predictions[].predicted_start_hours`, `forecast.task_predictions[].predicted_start_rank` | p50/p90 first-start delay and ordinal in simulated dispatches, with p(started by horizon); simultaneous starts break ties by shared dispatch order. Running tasks start at 0/rank 0; tasks that never start contribute null mass. |
+| `forecast.task_predictions[].completion_probability`, `forecast.task_predictions[].basis`, `forecast.task_predictions[].riskiness` | Per-task outcome probability; duration/review/outcome/profile support and fallbacks; the shared riskiness object. Internal task identifiers remain API linkage, never display copy. |
+| `forecast.regression_rework` | Expected new follow-ups, work/cost/token quantiles, generation limit, detection-outside-horizon count and prior/bundle support. |
+| `coverage`, `proposed_coverage` additions | `dependency_unforecastable`, `unverifiable_dependencies`, `review_mode_fallbacks`, `review_mode_unknown`, outcome/censoring/return-tail gaps, profile/host gaps, `risk_prior_fallbacks`, `risk_unestimated` and arrival conflict gaps. Retain v1 coverage keys and their definitions. |
+| `calibration.by_model_version`, `calibration.by_factor_revision` | Coverage/calibration with actual sample counts for comparable versions and factor configurations; never one blended v1/v2 accuracy percentage. |
+
+A null time quantile can mean a non-draining tail, absent history or unavailable inputs: show the explicit reason and completion probability beside it. Probabilities and expected incomplete counts are themselves null when required evidence is unsupported; missing evidence is not a sampled failure. Do not render any as “0 hours.” Expected counts/probabilities are allowed point statistics; duration and spend remain quantiles.
+
+### Storage, version policy and scoring
+
+Retain `backlog_forecasts` (introduced by store migration v62) and `BacklogForecastStoreBackend`. Store canonical snapshots only: default lookback, no concurrency override, exogenous arrivals off, selected live execution-host evidence. Non-canonical reads, empty cohorts or absent history do not write. Owner sweep-clock and canonical reads share the immediate transaction's at-most-one-row/workspace/60-minutes check. Check the latest row before loading history/simulating on repeated ticks. A write failure only logs; follower scheduled replicas never write owner snapshots. Rework is part of the new canonical model, not an exogenous-arrivals toggle.
+
+Persist the additive response inputs and per-task predictions: snapshot status/dependencies/footprint hash, phase/review basis, start distributions, completion probabilities, riskiness estimator version and expected synthetic work. Store the factor manifest alongside numeric `model_version`; old rows lacking these fields remain readable under their original measure. Do not rewrite old predictions with today's risk, policy or task metadata.
+
+**Bump once per landed forecast factor**, in integration order: (1) dependencies/locks/footprint/reservations/dispatch, (2) review-mode cells, (3) outcome/return phases, (4) resource fit, (5) regression rework. The standalone task-riskiness feature versions its estimator independently; when consumed or recalibrated in forecasts it also bumps `model_version`. Record each factor's own revision in `inputs.admission_factors` so reordered implementations remain identifiable. Further changes to sampling, fallback, timing, risk priors or quantile/scoring meaning require another bump, including bug fixes that alter predictions. Display-only changes do not. Never reuse a version for different enabled factors. Sequential hourly snapshots allow factor effects to be compared with support/changed-workload caveats, not claimed as causal ablations.
+
+Keep the newest-60-snapshot read for v1 scoring and recent v2 provisional diagnostics. For v2 horizon metrics also read up to the newest 60 mature snapshots per model version, with `forecast_at` at least 90 days old; otherwise hourly snapshots would age out of a 60-row window before they were ever scoreable. Cache these bounded maturity reads and report their window/counts. Partition calibration by model version/factor manifest and execution-host/mode. Keep v1 scoring unchanged: invocation-union hours and its original exclusions. For v2:
+
+- Per-task work/spend uses post-forecast episode/invocation usage, including failed/abandoned attempts. Score predicted first start/rank from durable admission timestamps, and completion probability as a binary outcome at the 90-day cutoff (Brier score plus observed frequency by probability band). Still-pending young cohorts are censored, not misses or successes.
+- A full drain requires every initial task and attributable synthetic follow-up counterpart to finish. A blocked task is pending; rejected/archived is an absorbing incomplete outcome. Do not call an empty active queue settled/done. Time-to-drain calibration uses completed, fully covered cohorts and also reports non-drain rate at the horizon, so successful cohorts alone cannot conceal survivorship.
+- Match actual follow-ups by `regression_from` to the snapshot's initial task set and sampled generation policy; score aggregate rework count/hours/cost, not fictional synthetic IDs. Include follow-ups filed after the original backlog first went empty. Rework-inclusive drain/spend calibration stays provisional until the 90-day observation cutoff, even if initial work finished early. Do not add a real initial fix twice. Exogenous-arrivals scenarios are not stored/scored canonically.
+- Validate critical-path and effective-parallelism diagnostics only when admission/phase/lock-release evidence suffices; otherwise count `unscorable_schedule`. Attribute observed first-gate waits only when the admission records support them; do not manufacture them from invocation gaps.
+- Report p50/p90 coverage fractions and sample counts for each measure. Exclude deleted/re-scoped tasks with explicit reasons, including material dependency/footprint/complexity changes; missing actual metrics are unscorable. A genuine blocked or rejected outcome is **not** a metadata exclusion. If any initial task is excluded, no whole-cohort time/cost accuracy claim is made. Durable done time (legacy last-invocation-end fallback flagged separately) remains the completion source, never `updated_at`.
+
+### Cost bounds and optional-surface isolation
+
+Collect task/registry/history/run/review/resource/regression facts once, cache by their revisions and host evidence timestamp, and materialize compact sampling pools. Precompute canonical lock surfaces and pairwise conflicts (O(T²) bits for T initial/support tasks, with indexed donor rows); build dependency adjacency/indegrees once. A 200-task matrix needs about 5 KiB of bits. Reservations and occupancy consume these precomputed relationships through the shared adapter, not repeated selector expansion. Reuse deterministic seeds keyed by model/factor/input fingerprint; iteration order, clocks and mutable live reads cannot change a fixed snapshot's result.
+
+Each of 1000 iterations is an event-driven pass over compact data, without polling or full task rescans for every simulated minute: resource checks schedule only relevant minute/deadline events. Bound each iteration to 10,000 generated nodes and 100,000 events plus the 90-day horizon; a limit hit counts `simulation_truncated`, with affected drain-time and spend draws unavailable, never a plausible partial total. Cache donor conflict rows lazily within the snapshot, not per iteration. Record preparation/simulation timing and peak memory for a representative 200-task backlog at 1000 iterations; implementation target is p95 under 1 second on the recorded host, without synthetic host load. Record larger-backlog limits honestly before raising bounds.
+
+Forecast work stays on the blocking compute path, outside task commit-boundary/admission locks. The Tasks drain card loads the optional forecast independently after primary controls/data; no awaiting it in the shared refresh barrier, no retry loop on the controls path. Cache/coalesce identical reads, ignore stale responses after workspace/navigation changes, and leave one muted unavailable line on failure. Riskiness uses a shared facts cache, not per-row scans. Public-boundary verification of optional forecast latency/failure and existing task callers is required in the implementation; this doc-only scope adds no speculative source-text tests.
+
+### Configuration and surfaces
+
+No new admission settings. `lookback_days`, `concurrency` and `arrivals=on` retain their query meanings. Resource and review policy come from the selected drain snapshot; risk uses the existing window/support settings plus a versioned estimator. All assumptions, fallbacks, horizon and host identity are returned.
+
+- `GET /api/diagnostics/backlog_forecast?workspace=…[&lookback_days=…][&concurrency=…][&arrivals=on]`: existing read-only service apart from throttled snapshot writes.
+- Analytics › Forecast: existing time/USD/token tiles, complexity table, arrival and coverage/calibration panels; add effective parallelism, critical path, waits, completion/non-drain probability, rework and version/host labels. Per-task schedule details expose predicted start range/order with support, rather than a deterministic promise.
+- Tasks drain card: retain the p50–p90 line and whole-dollar cost when known, tooltip counts/exact cost/tokens and link to Analytics › Forecast [ORB-18533]. A failed/unavailable forecast leaves primary controls usable. With v2 incomplete/unknown totals, explain the reason instead of presenting a partial backlog as drained.
+- Task rows/detail and their APIs: the shared `riskiness` object and support tooltip described above. Implementers update [user interface](../user-interface/2_design.md) with their shipped UI and capture screenshots then; this scope changes no rendered view.
 
 ## Non-goals
 
-- **Dispatch or admission.** The forecast steers nothing; admission keeps its own resource forecasts.
-- **Per-host capacity.** Followers pulling from the workspace add capacity the forecast does not model.
-- **Queueing on review or CI.** A delivery's sampled hours already contain its waits; the simulation does not model shared reviewer or CI capacity.
+- Dispatching, real reservations, policy changes or automatically changing N based on a forecast.
+- A pooled multi-host cluster simulator or new follower telemetry transport. One execution host is modelled with its own evidence; unavailable remote capacity is explicit.
+- A separate shared reviewer/CI service-capacity queue. Review modes, observed waits and return delays are modelled, but future global CI/provider incidents and human decisions are not independently simulated.
+- Recursive synthetic regression generations, causal crew comparisons or risk as an admission veto.
 
 ## Concerns and honest limitations
 
-- **Admission can admit fewer.** In `enforce` auto-concurrency mode, resource admission may hold leaf runs below the ceiling, so the forecast is optimistic there; `auto_concurrency_mode` is reported for that reason.
-- **Independence.** Draws are independent, but a bad week (a flaky CI, a provider outage) correlates deliveries; p90 understates that tail.
-- **Survivor history.** Only finished work is sampled. Tasks rejected after burning cost are not in the history.
-- **Short history.** A new workspace has few deliveries per cell; most tasks fall back and the counts say so. Calibration needs stored forecasts whose tasks have finished, which takes days.
-- **Clock availability.** Unattended snapshots require the owner host’s sweep clock to run. A stopped clock or exhausted tick budget delays the next snapshot; a canonical read can still fill a free hourly slot.
+- **Snapshot fidelity.** Known dependencies, lock semantics and enforce-mode resource fit replace v1's independence/always-N assumptions. New pilots, selector widening, changed policy, capacity/baseline drift and unrecorded external contention can still invalidate a snapshot. No claim of perfect real-time drain prediction follows from sharing predicates.
+- **Correlated incidents.** Gates impose dependency/lock/resource correlations, and joint episode/donor draws preserve measured associations. Draws between otherwise independent tasks still miss a shared provider outage or flaky-CI week; p90 can understate that tail.
+- **Incomplete evidence.** Failed attempts and long returns are included where lineage exists. Right-censored return tails, missing host evidence and unknown review modes remain visible gaps, not recovered facts. Resource profiles themselves omit resumed/retried/live deliveries; report that limitation rather than interpreting their means as hard bounds.
+- **Risk support.** Regression reporting is delayed/incomplete. Maximum-anchor combination and shrunk crew/complexity odds are a bounded heuristic, not a calibrated causal model. Broad/unsupported footprints and thin fix history weaken or remove the estimate; one generation omits later rework.
+- **Arrivals.** Poisson filings and historical latent footprints approximate future work. Unsupported conflict history makes the scenario unavailable; it does not justify serializing every arrival or assuming none conflict.
+- **Clock and scoring availability.** A stopped/exhausted owner sweep clock delays hourly samples; canonical reads can fill a free slot. Version-separated calibration and 90-day outcomes need enough settled evidence. Sparse version cohorts cannot establish which factor improved accuracy.
 
 ## Phasing
 
-1. **Forecast, storage and scoring.** The endpoint, the v62 table, scoring and Analytics › Forecast [ORB-18385].
+V1 forecast/storage/scoring shipped in [ORB-18385]; the Tasks card shipped in [ORB-18533]. V2 lands as separately versioned factors, keeping absent factors explicit until their implementation ships. The scope itself does not implement or claim measured parity, risk calibration or latency results.
 
 ## Open questions
 
-1. **Arrival classes?** Sweep and auto-task filings are often small; drawing them from their own history rather than every delivery would sharpen `arrivals=on`.
+No unanswered v2 scope decisions. Cluster telemetry/scheduling, shared reviewer/CI queues and recursive rework are explicitly deferred above because present host evidence and sample support do not justify them. Arrival source classes now use class-conditioned donors with a counted workspace fallback, resolving v1's arrival-class question.
 
 ## Acceptance (feature level)
 
-- Given a backlog and delivery history, Orbit reports p50 and p90 time to drain, USD and normalized tokens overall and by complexity, with fallback and coverage counts.
-- Given stored forecasts whose tasks finished, Orbit reports the fraction of actuals under p50 and p90 and counts the excluded tasks.
+- The public forecast for A→B→C cannot finish earlier than its sampled dependency path. Conflicting editing tasks cannot overlap; real unknown-footprint work obeys pilot/exclusive/tree-reservation rules; no-diff work holds no locks. Reservation and dispatch results agree with real admission for identical frozen inputs.
+- Changing review policy selects the corresponding observed mode history or reports its fallback. Raised block/fail history adds waits/incompletion, releases slots at episode end, and retains failed spend. Heavy profiles reduce parallelism in enforce mode at fixed N, with idle-host/head protection intact.
+- Task list/detail APIs and UI show the same supported risk estimate, driving files and no-estimate reasons. High risk adds sampled, separately reported regression work/cost. Synthetic arrivals use measured conflict donors, not whole-tree guesses.
+- Responses/storage expose the fields and model/factor revisions above, with old rows readable. Calibration keeps versions/measures apart and records non-drain outcomes and missing evidence. Optional forecasts and task riskiness do not delay drain controls or refreshes.
+- Each implementation validates its observed behavior through public API/CLI boundaries and records the 200-task/1000-iteration latency where scheduling changes. UI changes attach dark-theme desktop/375px screenshots and update the affected interface docs.
+
+## Tasks
+
+All six implementation tasks carry `backlog-forecast-v2` and depend on this scope. Scheduling tasks sharing the model/service lock footprint serialize; riskiness can proceed separately. Each updates this doc to identify the behavior it actually shipped.
+
+| Task | Deliverable |
+|---|---|
+| [ORB-18686] | Event-driven dependency/lock/footprint/reservation admission, shared adapter/order, dependency coverage, parallelism/critical path/start predictions, versioned scoring and latency evidence. |
+| [ORB-18687] | Invocation/run-derived review-mode cells, pending policy resolution and counted fallbacks. |
+| [ORB-18688] | Episode outcomes, censored/age-conditioned blocked returns, review residual phases, incomplete probabilities and outcome-aware scoring. |
+| [ORB-18689] | Execution-host profile/capacity inputs and shared gap fit, mode/host coverage and resource diagnostics. Remote telemetry transport stays deferred. |
+| [ORB-18690] | Reusable per-task riskiness estimator and task API/list/detail UI, with support and no-footprint states; independent estimator version. |
+| [ORB-18691] | Risk-driven regression bundles, synthetic admission/arrival accounting, expected rework/scoring; also depends on [ORB-18690]. |
 
 ## Task References
 
-- [ORB-18385] — added the backlog forecast, its storage and its scoring pass.
-- [ORB-18533] — shows the default backlog forecast on the Tasks drain card.
+- [ORB-18385] — shipped the original forecast, hourly storage and scoring.
+- [ORB-18533] — added the optional forecast line to the Tasks drain card.
+- [ORB-18685] — scopes v2 before implementation.
+- [ORB-18686] — implements dependencies, locks, dispatch and schedule diagnostics.
+- [ORB-18687] — implements review-mode sampling.
+- [ORB-18688] — implements blocked/failed/retry outcomes.
+- [ORB-18689] — implements resource-fit concurrency.
+- [ORB-18690] — implements task riskiness APIs and UI.
+- [ORB-18691] — implements forecast regression rework.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
