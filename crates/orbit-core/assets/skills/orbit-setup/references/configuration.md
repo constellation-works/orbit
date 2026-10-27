@@ -144,6 +144,52 @@ them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` an
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
 
+## Explore briefs
+
+An explore brief is the task pilot's bounded map of code a task may change,
+including targets, call paths, patterns, covering tests and gotchas. Configure
+whether the pilot makes one and whether an implementer receives it in
+`<workspace>/.orbit/config.toml`:
+
+```toml
+[workflow.explore_brief]
+enabled = true
+tags = ["explore-brief"]
+deliver = true
+```
+
+| Key | Default | Effect |
+|---|---|---|
+| `workflow.explore_brief.enabled` | `false` | Ask the task pilot for a brief for requested tasks. |
+| `workflow.explore_brief.tags` | `[]` | Select tasks by tag; an empty list selects every piloted task. |
+| `workflow.explore_brief.deliver` | `true` | Give a stored brief to the implementer; `false` keeps it in shadow, where it is produced and stored but never delivered. |
+
+Use `orbit config show --all` to inspect the effective values and their
+provenance. With `enabled = true`, tags are read when a task is piloted, so add
+the selected tag before piloting it. A valid brief is stored as the reserved
+task artifact `explore-brief.json`; agents and operators cannot write that
+artifact themselves.
+
+To verify storage, run `orbit task show <task-id>` and inspect the task-pilot
+comment: its `explore_brief` receipt says `written` with a digest and byte count,
+or records a drop reason. To verify an implementation dispatch, run
+`orbit run show <run-id>` and inspect its `Explore brief:` line; JSON carries
+the same records under `tag_instructions.explore_briefs`.
+
+At dispatch, `fresh` means none of the brief's covered files changed since its
+inspection revision. `drifted` means one to three covered files changed by at
+most 200 lines and no `change` target was deleted or renamed; a drifted brief
+can still be delivered, with the changed-file details available to the
+implementer. Changes beyond those limits, or deletion or rename of a `change`
+target, produce `dropped: stale`; an inspection revision that is not an
+ancestor of the run base produces `dropped: revision_unrelated`; and changed
+task material without a new pilot, or material whose fingerprint cannot be
+recomputed, produces `dropped: material_changed`.
+The run's `Explore brief:` line reports these dispatch outcomes. Only a `fresh`
+or `drifted` brief reaches the implementer, and only when both `enabled` and
+`deliver` are on. In shadow mode, the pilot still stores the brief, while the
+dispatch does not pass it to the implementer.
+
 ## Experiments
 
 Experiments compare a control arm with one or more treatments for agent work.
