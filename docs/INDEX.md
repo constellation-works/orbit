@@ -125,12 +125,13 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Path Leases](./design/path-leases/1_overview.md) | Land native TLS and the listener's full rate limits (ORB-18413, ORB-18421) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 1: ORB-18488 browser-session credential (in review); then the terminal routes | claude |
 
-### Designing (2)
+### Designing (3)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
+| [Distributions](./design/distributions/1_scope.md) | Build the seeding policy and presets (ORB-19186); orbit-office adopts them (ORB-19187) | claude |
 
 ### Shipped (33)
 
@@ -199,6 +200,7 @@ a conservative title/status fallback.
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
 | [Crew Performance](./design/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Draft | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
+| [Distributions](./design/distributions/1_scope.md) | Scope: name the role of an app built on Orbit (a distribution), and let it choose which of Orbit's shipped default routines and auto-tasks a workspace carries through a persisted seeding policy and a preset file | Draft | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
 | [Experiments](./design/experiments/1_scope.md) | Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews or allowlisted config on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion | Draft | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Scope: task-pilot leaves a bounded, revision-keyed code map (explore brief) as a task artifact, and the implementer starts from it instead of exploring cold; includes the three-arm trial and the slice breakdown | Draft | claude |
