@@ -7,7 +7,7 @@
 //! are routed to the owner host before reaching this surface, so its
 //! `local_orbit_dir` is the registered checkout the host clock reads.
 //! Direct CLI writes from a linked worktree still use that worktree's root.
-//! Disabling is a `toggle`; removal is the separate audited delete in
+//! Disabling is a [`super::toggle`]; removal is the separate audited delete in
 //! [`super::delete`].
 //!
 //! Reads return the effective definition: the YAML body with its operator
@@ -54,7 +54,7 @@ pub struct AutoTaskAddParams {
 
 /// Present-field patch for updating a definition. Absent fields are unchanged.
 /// A checked `enabled` change goes through
-/// [`OrbitRuntime::auto_task_toggle_checked`] instead.
+/// [`OrbitRuntime::auto_task_toggle_command`] instead.
 #[derive(Debug, Clone, Default)]
 pub struct AutoTaskUpdateParams {
     pub waive_batch: Option<orbit_types::workflow::automation::WaiveBatchRequest>,
@@ -402,36 +402,6 @@ impl OrbitRuntime {
         }
     }
 
-    /// Enable or disable a definition (the kill-switch). Disabling pauses an
-    /// auto-task and preserves the definition; `auto_task_delete` removes it.
-    pub fn auto_task_toggle(
-        &self,
-        name: &str,
-        enabled: bool,
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        self.edit_auto_task(name, |definition| definition.enabled = enabled)
-    }
-
-    /// Compare and change the enabled flag while holding the scheduler cursor lock.
-    pub fn auto_task_toggle_checked(
-        &self,
-        name: &str,
-        expected: bool,
-        enabled: bool,
-    ) -> Result<AutoTaskDefinition, OrbitError> {
-        self.ensure_coordination_task_write_permitted()?;
-        self.try_edit_auto_task(name, |definition| {
-            if definition.enabled != expected {
-                return Err(OrbitError::InvalidInput(
-                    "auto-task state changed; refresh before retrying".into(),
-                ));
-            }
-            definition.enabled = enabled;
-            Ok(())
-        })
-    }
-
     /// Compare and replace the schedule while holding the scheduler cursor
     /// lock: the schedule half of [`Self::auto_task_update`], with the same
     /// coverage and definition validation, for a caller that must not
@@ -648,7 +618,7 @@ impl OrbitRuntime {
         })
     }
 
-    fn try_edit_auto_task(
+    pub(super) fn try_edit_auto_task(
         &self,
         name: &str,
         edit: impl FnOnce(&mut AutoTaskDefinition) -> Result<(), OrbitError>,

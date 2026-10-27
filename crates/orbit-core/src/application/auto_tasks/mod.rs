@@ -20,7 +20,9 @@
 //!   triage's candidate rule (`application::task::triage_candidacy`).
 //! - `retired` — shipped defaults a routine replaced, kept as provenance so
 //!   `orbit workspace sync` retires their seeded copies.
-//! - [`crud`] — the shared add/list/show/update/toggle/mint domain surface.
+//! - [`crud`] — the shared add/list/show/update/mint domain surface.
+//! - [`toggle`] — the one toggle command; the tool, the checked operator
+//!   control and the dashboard are its profiles.
 //! - [`listing`] — whether each listed definition fires here, and when: the
 //!   one decision every list surface renders.
 //! - [`delete`] — audited delete, and restore of a deleted shipped default.
@@ -41,6 +43,7 @@ pub use orbit_automation::auto_tasks::schedule;
 pub mod scheduler;
 pub mod settings;
 pub mod state;
+pub mod toggle;
 
 pub use crud::{AutoTaskAddParams, AutoTaskTemplatePatch, AutoTaskUpdateParams};
 pub use delete::{AutoTaskDeleteParams, AutoTaskDeleteReport};
@@ -56,6 +59,7 @@ pub use scheduler::{
 };
 pub use settings::{AutoTaskBody, AutoTaskLayering};
 pub use state::{AutoTaskCursor, AutoTaskCursorState, cursor_state_path, load_cursor_state};
+pub use toggle::{AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile};
 
 /// Default definitions embedded in the Orbit binary and materialized into a
 /// workspace on initialization. Defaults are deliberately inert: users must

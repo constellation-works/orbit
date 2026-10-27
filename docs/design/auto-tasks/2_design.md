@@ -710,11 +710,11 @@ manual mint when the two ids differ. Grouping, the enabled count, row state
 and the switch follow `effective_enabled`, falling back to the raw `enabled`
 flag when a payload omits it. Enable/disable posts that raw flag as
 `expected_enabled` and the opposite of the effective state as `enabled`.
-Compare-and-swap stays on the raw flag. The handler treats the definition as
-already in the requested state only when that matches the effective switch, so
-Disable on a legacy-enabled consumer (raw flag still false) reaches
-`auto_task_toggle_checked` and the operator stamp clears the legacy
-enablement. The governed dashboard operation is `auto_task.toggle`, with a
+Compare-and-swap stays on the raw flag. The handler runs the observed
+profile of the shared `auto_task_toggle_command`, which treats the definition
+as already in the requested state only when that matches the effective switch,
+so Disable on a legacy-enabled consumer (raw flag still false) reaches the
+write and the operator stamp clears the legacy enablement. The governed dashboard operation is `auto_task.toggle`, with a
 dashboard-operations audit row. `Mint now` calls
 `auto_task_mint` after the operator acknowledges the unconditional warning
 (`acknowledge_unconditional: true`); the request is refused without that

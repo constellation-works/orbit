@@ -9,6 +9,7 @@ use crate::runtime::audit::run_logs::bounded_redacted_text;
 use crate::{
     OrbitRuntime,
     application::{
+        auto_tasks::AutoTaskToggleProfile,
         job::JobCatalogFilter,
         routines::{
             FireField, RoutineField, RoutineToggleOutcome, RoutineTriggerEditOutcome,
@@ -226,11 +227,12 @@ pub(in crate::adapter::tool_host) fn control(
             }
         }
         ("auto_task", "toggle") => {
-            let d = runtime.auto_task_toggle_checked(
-                &name,
-                boolean(&input, "expected_enabled")?,
-                boolean(&input, "enabled")?,
-            )?;
+            let profile = AutoTaskToggleProfile::Checked {
+                expected_enabled: boolean(&input, "expected_enabled")?,
+            };
+            let d = runtime
+                .auto_task_toggle_command(&name, boolean(&input, "enabled")?, profile)?
+                .into_definition(&name)?;
             json!({"enabled":d.enabled,
                 "effective_enabled":runtime.auto_task_enabled(&d)})
         }
