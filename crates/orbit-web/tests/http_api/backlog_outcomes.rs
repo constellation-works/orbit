@@ -14,7 +14,11 @@ use super::support::{Fixture, isolated, json_ok};
 
 /// A medium task now in `status`, whose recorded history is `steps`: each
 /// the status it entered and when, after its creation in backlog.
-fn dated_task(fixture: &Fixture, status: TaskStatus, steps: &[(DateTime<Utc>, TaskStatus)]) {
+fn dated_task(
+    fixture: &Fixture,
+    status: TaskStatus,
+    steps: &[(DateTime<Utc>, TaskStatus)],
+) -> String {
     let id = fixture
         .runtime
         .add_task(TaskAddParams {
@@ -69,6 +73,7 @@ fn dated_task(fixture: &Fixture, status: TaskStatus, steps: &[(DateTime<Utc>, Ta
         .map(|row| serde_json::to_string(row).unwrap() + "\n")
         .collect();
     std::fs::write(events_path, events).unwrap();
+    id
 }
 
 /// Ten clean one-hour deliveries ten days ago and, with `blocking`, ten
@@ -125,6 +130,45 @@ fn forecast(fixture: &Fixture) -> Value {
             .server(false)
             .get(&format!("{ENDPOINT}&concurrency=1")),
     )
+}
+
+#[test]
+fn unresolved_paths_make_critical_path_unknown() {
+    isolated(
+        "backlog_outcomes::unresolved_paths_make_critical_path_unknown",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let blocked = dated_task(
+                &fixture,
+                TaskStatus::Blocked,
+                &[(Utc::now() - Duration::hours(1), TaskStatus::Blocked)],
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            let all_unfinished = forecast(&fixture);
+            assert_eq!(
+                prediction(&all_unfinished, &blocked)["completion_probability"],
+                0.0
+            );
+            assert_eq!(all_unfinished["forecast"]["critical_path_hours"], unknown);
+
+            let finite = backlog_task(&fixture, "Finite", &["file:finite.rs"], &[], &[]);
+            let dependent = backlog_task(
+                &fixture,
+                "Dependent",
+                &["file:dependent.rs"],
+                &[],
+                &[&blocked],
+            );
+            let mixed = forecast(&fixture);
+            assert_eq!(prediction(&mixed, &finite)["completion_probability"], 1.0);
+            assert_eq!(
+                prediction(&mixed, &dependent)["completion_probability"],
+                0.0
+            );
+            assert_eq!(mixed["forecast"]["critical_path_hours"], unknown);
+        },
+    );
 }
 
 #[test]
