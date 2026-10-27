@@ -132,8 +132,8 @@ fn last_fire_json(
 }
 
 /// The latest delivery fire from scheduler-owned records: the active
-/// batch's minted task, or the newest accepted receipt's task once no
-/// batch is active. Only bounded time/task/status fields are projected;
+/// batch's latest minted task, including during retry backoff, or the
+/// newest accepted receipt's task. Only bounded time/task/status fields are projected;
 /// no run ids, logs or step output are read.
 fn delivery_last_fire_json(
     runtime: &OrbitRuntime,
@@ -148,26 +148,49 @@ fn delivery_last_fire_json(
     };
     let store = runtime.automation_store()?;
     let state = store.automation_state(&consumer)?;
-    let active = state
-        .as_ref()
-        .and_then(|state| state.active.as_ref())
-        .and_then(|attempt| {
-            attempt
-                .action_id
-                .as_ref()
-                .map(|task_id| (attempt.batch.created_at, task_id.clone()))
-        });
+    let active = if let Some(attempt) = state.as_ref().and_then(|state| state.active.as_ref()) {
+        let tasks = runtime.stores().tasks();
+        let task_id = if let Some(id) = &attempt.action_id {
+            Some(id.clone())
+        } else if let Some(task) = tasks.automation_task_for_key(&attempt.action_key)? {
+            Some(task.id)
+        } else if attempt.attempt > 1
+            && (attempt.retry_after.is_some() || attempt.reissue.is_some())
+        {
+            let key = format!("automation:{}:{}", attempt.batch.id, attempt.attempt - 1);
+            tasks
+                .automation_task_for_key(&key)?
+                .map(|task| task.id)
+                .or_else(|| {
+                    attempt
+                        .reissue
+                        .as_ref()
+                        .and_then(|reissue| reissue.from_action_id.clone())
+                })
+        } else {
+            None
+        };
+        task_id.map(|id| (attempt.batch.created_at, id))
+    } else {
+        None
+    };
     // Receipts return newest first, so one row bounds the completed case.
     let receipt = store
         .automation_receipts(&consumer, 1)?
         .into_iter()
         .next()
         .map(|receipt| (receipt.accepted_at, receipt.action_id));
-    // The newer record wins: an active batch minted after the last
-    // accepted receipt, otherwise that receipt's task.
+    // Compare the actual fire times when tasks still exist; a receipt may
+    // have been accepted after the newer batch was frozen.
+    let fire_time =
+        |record: &(chrono::DateTime<chrono::Utc>, String)| match runtime.get_task(&record.1) {
+            Ok(task) => Ok(task.created_at),
+            Err(OrbitError::NotFound { .. }) => Ok(record.0),
+            Err(error) => Err(error),
+        };
     let latest = match (active, receipt) {
         (Some(active), Some(receipt)) => {
-            if active.0 >= receipt.0 {
+            if fire_time(&active)? >= fire_time(&receipt)? {
                 Some(active)
             } else {
                 Some(receipt)
