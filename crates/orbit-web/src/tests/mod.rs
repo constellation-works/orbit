@@ -5,6 +5,8 @@ mod dashboard_assets;
 mod host_tunnels;
 #[cfg(unix)]
 mod lease_intake;
+#[cfg(unix)]
+mod lease_listener;
 mod runtime_memo;
 mod serve;
 #[cfg(unix)]

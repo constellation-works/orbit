@@ -1571,6 +1571,7 @@ fn run_detail_exposes_pull_request_holds() {
         admission.leaf_run_id = Some("jrun-refused-leaf".into());
         admission.settlement_refusal = Some(SettlementRefusal {
             reason: "owner validation commands missing".into(),
+            code: None,
             refusals: 2,
             first_refused_at: at(8, 1),
             last_refused_at: at(8, 2),
@@ -1737,6 +1738,7 @@ fn pull_budget_tracks_allocator_through_launch_review_and_settlement() {
             admission.phase = LocalPullPhase::Settling;
             admission.settlement_refusal = Some(SettlementRefusal {
                 reason: "owner evidence missing".into(),
+                code: None,
                 refusals: 1,
                 first_refused_at: at(8, 1),
                 last_refused_at: at(8, 1),

@@ -1286,6 +1286,7 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 "escalation_triage",
                 "why_stuck",
                 "riskiness",
+                "job_run_worktree",
             ] {
                 assert!(stripped.remove(key).is_some(), "dashboard extra `{key}`");
             }
@@ -1302,6 +1303,7 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 "job_run_navigable",
                 "escalation_triage",
                 "why_stuck",
+                "job_run_worktree",
             ] {
                 assert!(
                     shown.get(extra).is_none(),

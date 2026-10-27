@@ -33,8 +33,9 @@ pub(crate) fn settlement_refusal_backoff(refusals: u32) -> std::time::Duration {
 /// A settlement the owner refused while it still holds the claim
 /// [ORB-13979]: the record stays `settling`, its outcome kept, and delivery
 /// backs off rather than asking again on every pass. `orbit run show` lists
-/// these for the drain carrying them, and the drain's passes admit nothing new
-/// while any is held for their owner.
+/// these for the drain carrying them. A pass admits nothing new while a
+/// non-delivery refusal is held for its owner; a delivery-evidence refusal
+/// holds only its own settlement.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RefusedPullSettlement {
     /// The owner's task the settlement is for.
@@ -46,6 +47,9 @@ pub struct RefusedPullSettlement {
     pub drain_run_id: String,
     /// The owner's refusal, as it answered.
     pub reason: String,
+    /// Stable machine-readable refusal code, when the owner answered with one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// Consecutive refused deliveries.
     pub refusals: u32,
     pub first_refused_at: DateTime<Utc>,
@@ -74,12 +78,27 @@ impl RefusedPullSettlement {
             owner: record.destination.selector.clone(),
             drain_run_id: record.request.run_context.run_id.clone(),
             reason: refusal.reason.clone(),
+            code: refusal.code.clone(),
             refusals: refusal.refusals,
             first_refused_at: refusal.first_refused_at,
             last_refused_at: refusal.last_refused_at,
             retry_after: refusal.retry_after,
             remedy: SETTLEMENT_REFUSAL_REMEDY.to_string(),
         })
+    }
+
+    /// Whether this refusal is a delivery-evidence refusal: it holds only
+    /// this settlement, so a pass may still claim other work.
+    #[must_use]
+    pub fn is_delivery_refusal(&self) -> bool {
+        crate::application::distributed::is_delivery_refusal_code(self.code.as_deref())
+    }
+
+    /// Whether this refusal holds new claims for its owner: every refusal
+    /// except a delivery-evidence one.
+    #[must_use]
+    pub fn holds_admission(&self) -> bool {
+        !self.is_delivery_refusal()
     }
 
     /// One line for a terminal report.

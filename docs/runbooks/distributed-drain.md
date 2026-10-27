@@ -1389,6 +1389,8 @@ settlement each leaf sent: its kind, evidence class (`provider_unavailable`,
 `baseline_red`, `forge_unavailable`, `evidence_hold`, `final_recovery`,
 `failure`, or `summary` for an untyped one), typed failure class, crew and the
 model it resolved to (`crew_model`, absent from a follower that predates it),
+the leaf's worktree `branch` and absolute `worktree_path` on the follower (also
+absent from a follower that predates them; the task detail panel shows them),
 failed step and bounded reason. A typed handoff keeps the same record for the
 agent scorecards, but this listing leaves it out. Settled claims carry no in-flight attempt, so this
 listing needs no operator capability; the `run-failure-patterns` auto-task
@@ -2074,8 +2076,11 @@ not a lost delivery, and repeats until an operator changes the owner. The
 follower records the refusal on the admission (`settlement_refusal`), logs it
 once, and keeps the record `settling` with its outcome unchanged; nothing is
 lost. It is not a failed pass, so it does not degrade the drain, but the
-drain requests no new claim while one is held (pass output
-`refusal: settlement_refused: …` and `settlement_refused: <count>`). Drain
+drain requests no new claim while a non-delivery refusal is held (pass output
+`refusal: settlement_refused: …` and `settlement_refused_holding: <count>`).
+A delivery refusal, such as a changed pull request head, holds only its own
+settlement; the pass can still claim other work. `settlement_refused` counts
+both kinds. Drain
 passes, the clock sweep and the leaf's worker deliver it again only after a
 backoff that starts at one minute and doubles to at most 15 minutes, instead
 of on every pass. `orbit run show <drain-run>` lists each one on a
@@ -2417,7 +2422,7 @@ long-lived processes.
 its window was open: the `Requests held:` line, from `admission_refusal` under
 `pipeline_state.drain_last_pass`. Its values are `circuit_open` (the failure breaker is open),
 `circuit_half_open` (it waits for the drain's claims to settle before one probe claim),
-`settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff`
+`settlement_refused`, `delivery_settlement_refused`, `no_runnable_crew`, `host_suppressed`, `owner_busy_backoff`
 (a claimed leaf was released because the owner's store stayed locked; requests resume by
 themselves at the time it names),
 `host_shutdown_scheduled` (a shutdown or reboot inside

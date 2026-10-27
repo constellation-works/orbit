@@ -355,13 +355,15 @@ impl ConfigStore {
         Ok(crew_field_value(&resolved, key)?.unwrap_or(JsonValue::Null))
     }
 
-    /// Set `key` to the TOML-literal-or-string parse of `raw_value`,
-    /// mutating the in-memory document only. Callers must call
+    /// Set `key` to the TOML-literal-or-string parse of `raw_value` in memory,
+    /// checking a fixed registry key's raw type before staging the edit.
+    /// Callers must call
     /// [`Self::validate`] and then [`Self::save`] afterward — `set_value`
     /// never touches disk.
     pub fn set_value(&mut self, key: &str, raw_value: &str) -> Result<(), OrbitError> {
         registry::admit_settable_config_key(key)?;
         self.reject_global_only_key(key)?;
+        ConfigSnapshot::validate_supplied_value(key, &parse_value_literal(raw_value))?;
         self.set_document_value(key, raw_value)
     }
 

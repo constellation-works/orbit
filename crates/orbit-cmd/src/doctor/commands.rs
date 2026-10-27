@@ -245,6 +245,9 @@ pub(crate) const WORKSPACE_PROBES: &[DoctorProbe] = &[
     DoctorProbe::many("artifacts", |runtime, _| {
         doctor_check_definition_artifacts(runtime)
     }),
+    DoctorProbe::many("seeding-policy", |runtime, _| {
+        super::seeding::doctor_check_seeding_policy(runtime)
+    }),
 ];
 
 /// Workspace doctor / health-probe command surface for [`OrbitRuntime`]

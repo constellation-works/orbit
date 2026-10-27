@@ -1,7 +1,89 @@
 # Task fields and validation access
 
-Use this when setting dependencies, relations or additional tool requirements.
+Use this when choosing task projections, editing context selectors, or setting
+dependencies, relations or additional tool requirements.
 The connected tool schema is authoritative for supported fields.
+
+## Context selectors
+
+`orbit.task.update` accepts `context_files` as a comma-separated string or an
+array of strings. The legacy `context` alias accepts a string;
+`context_files` takes precedence when both are supplied.
+
+- Omitting both fields preserves the current list. Supplying either replaces
+  the **whole list**, never appends.
+- To extend the list, first read the durable `context_files` with
+  `orbit.task.show`, then send the deduplicated union of **all existing
+  selectors and the additions**. Re-read afterward to verify none were lost.
+- `context_files: []` clears the list. A comma-only string such as `","`
+  also clears it through either field. An empty string is rejected by the
+  tool; the human CLI's `--context ""` clears it. The string `"[]"` is a
+  selector, not an empty list.
+- Add only files, directories or symbols the task expects to modify or
+  delete, or files it will create as described below. Do not add entries only
+  for background reading. Prefer `file:path`, `dir:path`, or
+  `symbol:path#name:kind`; legacy raw paths are accepted and upgraded.
+- Existence checks verify the filesystem anchor only; a `symbol:` name and
+  kind are not looked up.
+
+Use `allow_missing_context: true` to declare a target before creating its
+file. Missing targets are rejected by default. Each accepted missing selector
+records durable creation intent for that **exact selector**; later writes and
+task preparation honor it. Re-sending a declared selector needs no flag, and a
+replacement list that omits it revokes the intent. Syntax, workspace
+containment and file/directory kind are still checked.
+
+For the read → full-union update → verify command sequence, see
+[Keep context_files current](task-execution.md#step-4--implement-and-validate).
+
+## Task projections and delivery evidence
+
+`orbit.task.show` resolves `id` globally through the host task registry by
+default. Cwd, MCP initialize metadata and linked-worktree runtime identities
+are not filters. Optional `workspace` is an explicit fail-closed filter.
+
+For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, use `fields`
+as a string or array of field names, or `field` as a single-field alias.
+`fields` takes precedence when both are supplied. The projection catalogue is:
+
+```text
+id, parent_id, title, description, acceptance_criteria,
+dependencies, resolved_dependencies, tags, required_tools, granted_tools,
+requires_labels, plan, execution_summary, context_files, created_by,
+planned_by, implemented_by, status, terminal, priority,
+complexity, type, pr_status, external_refs, relations,
+source_task_id, job_run_id, job_run_machine, crew, resolved_crew,
+crew_model, crew_unresolved, os_requirement, placement_wait, experiments,
+readiness, pilot_warnings, open_decisions, orchestrator, orchestrator_model,
+orchestrator_model_source, origin, created_at, updated_at, comments,
+history, artifacts
+```
+
+Show without a projection returns the full task. A projection returns only
+the requested fields as JSON: a single field returns its value, and multiple
+fields return an object keyed by field name. A single derived `terminal`
+selection remains keyed as `{"terminal": ...}`. It is read-only and reports
+whether the task refuses implementer writes.
+
+Write responses without a projection omit the append-heavy `comments` and
+`history`; request those fields explicitly when needed. Write projections
+use the same field catalogue above.
+
+`crew` selects execution; `orchestrator` records separate orchestration
+attribution. The derived, never-persisted `os_requirement` reports the task's
+OS tags intersected with the stored crew executor `host_os`, its source, and
+unresolved/conflict states.
+
+For show only, `field: "delivery"` selects delivery evidence instead of task
+fields. It cannot be combined with other fields. Optional `run_id` chooses
+the delivery run; without it, the newest task-delivery run submitted with
+this task is used. `run_id` requires the delivery selection.
+
+Delivery reports what the run committed and landed for the task: typed status,
+base/head and landed commit SHAs, PR number, timestamps and provenance only,
+from the host's own commit and merge step records. Missing or inconsistent
+evidence is reported as unavailable, never inferred. Full run details remain
+on the operator-only `orbit.workflow.run.show`.
 
 ## Behavior-affecting optional fields
 

@@ -770,6 +770,12 @@
 }
 .property-row.fact .fact-note { color: var(--fg-mute); }
 .property-row.fact .run-value .exec-origin { font-size: 12px; color: var(--fg-dim); }
+/* A worktree path runs long: the copy button wraps anywhere, like the row's
+   other values, rather than overflowing a narrow pane. */
+.property-row.fact .run-worktree-copy {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .detail-tag-row .chip {
   cursor: default;
 }

@@ -132,8 +132,9 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Distributions](./design/distributions/1_scope.md) | Build the seeding policy and presets (ORB-19186); orbit-office adopts them (ORB-19187) | claude |
+| [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Build the field, the admission hold and the ship refusal (ORB-19214); then the list filter and surfaces (ORB-19215) | claude |
 
-### Shipped (33)
+### Shipped (34)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -147,6 +148,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
 | [Crew Performance](./design/crew-performance/1_scope.md) | Operator picks a workflow.crew_performance default from the shadow share report | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | — | claude |
+| [Distributions](./design/distributions/1_scope.md) | Count left-out defaults on the dashboard Automation view; decide whether routines need a per-name delete verb beside the list policy | claude |
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
 | [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
@@ -223,6 +225,7 @@ a conservative title/status fallback.
 | [Remote Access](./design/remote-access/1_overview.md) | Multi-workspace Orbit Web serving and loopback-safe remote access over an SSH local forward. | Accepted | codex |
 | [Review Gate](./design/review-gate/1_overview.md) | Independent automatic code review — before-PR gating or a before-landing review of the open PR, each by a fresh reviewer that fixes its findings as a second commit, after-landing scheduling, one review per candidate, and exact-tree delivery coverage. | Accepted | codex |
 | [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Implemented | claude |
+| [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Scope: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it | Draft | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number. | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority. | Draft | claude |

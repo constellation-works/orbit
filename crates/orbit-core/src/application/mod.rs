@@ -37,6 +37,7 @@ pub(crate) mod pull_drain;
 pub mod review;
 pub mod routines;
 pub(crate) mod search;
+pub mod seeding_policy;
 pub mod skill;
 pub(crate) mod sweep_filing;
 pub(crate) mod tag_instructions;
@@ -45,6 +46,7 @@ pub mod task;
 pub(crate) mod test_support;
 pub(crate) mod workflow;
 pub(crate) mod workspace_auto;
+pub mod workspace_preset;
 pub mod workspace_sync;
 
 #[cfg(test)]

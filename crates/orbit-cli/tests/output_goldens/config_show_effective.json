@@ -728,6 +728,20 @@
       "path": null,
       "shadowed_by": []
     },
+    "seeding.auto_tasks": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
+    "seeding.routines": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "tasks.id_start": {
       "scope": "built-in",
       "state": "unset",

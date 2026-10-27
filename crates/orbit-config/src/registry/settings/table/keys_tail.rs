@@ -689,6 +689,18 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_count(raw, 3, 20, "experiments.max_running"),
     },
+    seeding_routines: crate::SeedingPolicy => crate::seeding::RawSeedingPolicy {
+        key: "seeding.routines", value_type: "string|array<string>",
+        description: "Which shipped default routines this workspace seeds: all, none, or a list of their names.",
+        section: ConfigSection::Housekeeping, order: 170,
+        resolve: |raw: Option<crate::seeding::RawSeedingPolicy>| crate::seeding::admit_routine_seeding(raw),
+    },
+    seeding_auto_tasks: crate::SeedingPolicy => crate::seeding::RawSeedingPolicy {
+        key: "seeding.auto_tasks", value_type: "string|array<string>",
+        description: "Which shipped default auto-tasks this workspace seeds: all, none, or a list of their names.",
+        section: ConfigSection::Housekeeping, order: 171,
+        resolve: |raw: Option<crate::seeding::RawSeedingPolicy>| crate::seeding::admit_auto_task_seeding(raw),
+    },
     experiments_config_keys: Vec<String> => Vec<String> {
         key: "experiments.config_keys", value_type: "array<string>",
         description: "Config keys an experiment arm may override in this workspace.",

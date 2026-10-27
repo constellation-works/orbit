@@ -85,6 +85,37 @@ macro_rules! define_config_settings {
         ];
 
         impl ConfigSnapshot {
+            /// Check only a supplied fixed key's raw type. Full staged-document
+            /// admission still runs afterward, including layered constraints.
+            pub(crate) fn validate_supplied_value(
+                key: &str,
+                value: &toml_edit::Value,
+            ) -> Result<(), OrbitError> {
+                use serde::de::IntoDeserializer;
+
+                match key {
+                    $($key => {
+                        <$raw as serde::Deserialize>::deserialize(value.clone().into_deserializer())
+                            .map(|_| ())
+                            .map_err(|error| {
+                                let hint = if value.is_str() && $value_type == "array<string>" {
+                                    "; use a TOML array, e.g. '[\"A\",\"B\"]' (quote it in the shell)"
+                                } else {
+                                    ""
+                                };
+                                OrbitError::InvalidInput(format!(
+                                    "invalid supplied value {value} for '{key}': expected {} ({}{hint}); \
+                                     correct the value and retry; edit not saved",
+                                    $value_type,
+                                    error.message(),
+                                ))
+                            })
+                    },)+
+                    // Crew and plugin fields keep their own admission paths.
+                    _ => Ok(()),
+                }
+            }
+
             pub(crate) fn admit(
                 document: &toml::Value,
                 config_path: &Path,

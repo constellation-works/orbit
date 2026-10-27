@@ -44,6 +44,14 @@ pub(super) struct WorkspaceInitReport {
     mcp: McpOutcome,
     rules: RulesOutcome,
     browser_kit: BrowserKitOutcome,
+    preset: Option<AppliedPresetOutcome>,
+}
+
+/// The preset `--preset` applied, and the definitions it switched on.
+pub(super) struct AppliedPresetOutcome {
+    pub(super) name: String,
+    pub(super) digest: String,
+    pub(super) enabled: Vec<String>,
 }
 
 enum AllocatorOutcome {
@@ -74,6 +82,7 @@ pub(super) fn collect_init_report(
     mcp: bool,
     inject_rules: bool,
     browser_kit: BrowserKitOutcome,
+    preset: Option<AppliedPresetOutcome>,
 ) -> Result<WorkspaceInitReport, OrbitError> {
     let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
     let mut checkout_files = BTreeSet::new();
@@ -148,6 +157,7 @@ pub(super) fn collect_init_report(
         mcp: mcp_outcome,
         rules: rules_outcome,
         browser_kit,
+        preset,
     })
 }
 
@@ -180,7 +190,7 @@ fn rule_file_outcome(entry: InjectionOutcome) -> RuleFileOutcome {
 }
 
 pub(super) fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
-    json!({
+    let mut document = json!({
         "id": report.id,
         "name": report.name,
         "root": report.root.to_string_lossy(),
@@ -195,7 +205,18 @@ pub(super) fn workspace_init_json(report: &WorkspaceInitReport) -> Value {
         "mcp": mcp_json(&report.mcp),
         "rules": rules_json(&report.rules),
         "browser_kit": browser_kit_json(&report.browser_kit),
-    })
+    });
+    if let (Some(preset), Some(object)) = (&report.preset, document.as_object_mut()) {
+        object.insert(
+            "preset".to_string(),
+            json!({
+                "name": preset.name,
+                "digest": preset.digest,
+                "enabled": preset.enabled,
+            }),
+        );
+    }
+    document
 }
 
 fn allocator_json(outcome: &AllocatorOutcome) -> Value {
@@ -304,6 +325,12 @@ pub(super) fn format_workspace_init(report: &WorkspaceInitReport) -> String {
         } => lines.push(format!(
             "  id_start:  allocator already at {next} (unchanged)"
         )),
+    }
+    if let Some(preset) = &report.preset {
+        lines.push(format!("  preset:    {} ({})", preset.name, preset.digest));
+        if !preset.enabled.is_empty() {
+            lines.push(format!("  enabled:   {}", preset.enabled.join(", ")));
+        }
     }
     match &report.mcp {
         McpOutcome::Skipped => {

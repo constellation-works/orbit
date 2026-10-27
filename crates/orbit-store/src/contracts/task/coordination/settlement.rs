@@ -76,6 +76,14 @@ pub struct ClaimSettlementRecord {
     /// Absent for a follower that predates the report.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_model: Option<String>,
+    /// The leaf's worktree branch, when its follower reported it. Absent for
+    /// a follower that predates the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The leaf's absolute worktree path on its executing machine, when its
+    /// follower reported it. Absent for a follower that predates the report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
     /// The first leaf step that did not complete, when the leaf kept a
     /// candidate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -121,6 +129,8 @@ impl ClaimSettlementRecord {
                         .and_then(|provider| provider.crew.clone())
                 }),
             crew_model: named(&evidence.crew_model).or_else(|| named(&reported.crew_model)),
+            branch: named(&reported.branch),
+            worktree_path: named(&reported.worktree_path),
             failed_step_id: failure
                 .and_then(|failure| failure.candidate.as_ref())
                 .and_then(|candidate| candidate.failed_step_id.clone()),

@@ -16,4 +16,6 @@ pub(crate) use crew_window::OWNER_BUSY_EPISODE_LIMIT;
 pub use crew_window::{OwnerBusyBackoff, PullCrewWindow};
 pub(crate) use entries::settlement_refusal_backoff;
 pub use entries::{PendingPullSettlements, PullLeafClaim, RefusedPullSettlement};
-pub(crate) use runtime::{is_owner_refusal, is_owner_transport_failure};
+pub(crate) use runtime::{
+    is_delivery_refusal_code, is_owner_refusal, is_owner_transport_failure, owner_refusal_code,
+};

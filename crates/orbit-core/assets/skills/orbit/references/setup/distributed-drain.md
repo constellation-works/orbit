@@ -264,8 +264,10 @@ returns.
   receipt for closes as `Refused`; a committed one is carried forward.
 - A settlement the owner refuses while it still holds the claim (for example a
   footprint widening onto a path the owner protects) stays
-  recorded, holds new requests, and is retried with a backoff of at most 15
-  minutes rather than every pass. `orbit run show <drain-run>` prints it once
+  recorded and is retried with a backoff of at most 15 minutes rather than
+  every pass. A non-delivery refusal holds new requests; a delivery refusal,
+  such as a changed PR head, holds only its own settlement and permits
+  unrelated pulls. `orbit run show <drain-run>` prints it once
   as `Settlement refused:` with the owner's reason and remedy; fix the owner,
   and the next due attempt settles it, or `orbit run auto --stop` retries it
   at once.

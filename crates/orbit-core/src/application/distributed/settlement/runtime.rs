@@ -648,23 +648,41 @@ impl crate::OrbitRuntime {
 /// the owner also confirms it holds no receipt for it. A delivery miss, a lost
 /// answer or a store failure says nothing about whether an earlier send of the
 /// same request committed, so the request stays pending and is retried.
+/// The stable refusal code an owner answer carries, when it carries one.
+pub(crate) fn owner_refusal_code(error: &OrbitError) -> Option<String> {
+    match error {
+        OrbitError::DeliveryRefused { refusal, .. } => Some(refusal.error_code().to_string()),
+        OrbitError::RemoteTool { code, .. } => Some(code.as_str().to_string()),
+        OrbitError::ClaimRefused { kind, .. } => Some(kind.message().to_string()),
+        _ => None,
+    }
+}
+
+/// Whether `code` is a delivery-evidence refusal code.
+pub(crate) fn is_delivery_refusal_code(code: Option<&str>) -> bool {
+    code.is_some_and(|code| orbit_types::workflow::DeliveryRefusal::from_error_code(code).is_some())
+}
+
 pub(crate) fn is_owner_refusal(error: &OrbitError) -> bool {
-    matches!(
-        error,
-        OrbitError::RemoteTool {
-            code: RemoteToolCode::ProtocolSkew
-                | RemoteToolCode::InvalidInput
-                | RemoteToolCode::CapabilityRefused
-                | RemoteToolCode::CapabilityDenied
-                | RemoteToolCode::PolicyDenied,
-            ..
-        } | OrbitError::InvalidInput(_)
-            | OrbitError::ClaimRefused { .. }
-            | OrbitError::ProtocolSkew(_)
-            | OrbitError::CapabilityRefused(_)
-            | OrbitError::CapabilityDenied(_)
-            | OrbitError::PolicyDenied(_)
-    )
+    matches!(error, OrbitError::DeliveryRefused { .. })
+        || matches!(error, OrbitError::RemoteTool { code, .. }
+            if orbit_types::workflow::DeliveryRefusal::from_error_code(code.as_str()).is_some())
+        || matches!(
+            error,
+            OrbitError::RemoteTool {
+                code: RemoteToolCode::ProtocolSkew
+                    | RemoteToolCode::InvalidInput
+                    | RemoteToolCode::CapabilityRefused
+                    | RemoteToolCode::CapabilityDenied
+                    | RemoteToolCode::PolicyDenied,
+                ..
+            } | OrbitError::InvalidInput(_)
+                | OrbitError::ClaimRefused { .. }
+                | OrbitError::ProtocolSkew(_)
+                | OrbitError::CapabilityRefused(_)
+                | OrbitError::CapabilityDenied(_)
+                | OrbitError::PolicyDenied(_)
+        )
 }
 
 /// Whether an error says the owner could not be reached or did not answer

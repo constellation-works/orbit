@@ -1081,6 +1081,11 @@ impl PullFailureStreak {
 pub struct SettlementRefusal {
     /// The owner's refusal, as it answered.
     pub reason: String,
+    /// Stable machine-readable refusal code (`delivery_head_changed`,
+    /// `policy_denied`, ...), when the owner answered with one. Durable so
+    /// later passes can classify the refusal without parsing `reason`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
     /// Consecutive refused deliveries.
     pub refusals: u32,
     pub first_refused_at: DateTime<Utc>,

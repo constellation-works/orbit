@@ -1,7 +1,7 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-25
+last_updated: 2026-10-27
 last_validated: 2026-10-21
 status: Draft
 feature: distributed-drain
@@ -1190,6 +1190,10 @@ the probe reports the first refusal admission would raise by running the same or
   scorecards read them. They are not part of the mutation's identity, and nothing that validates
   or decides a settlement reads them. An owner that predates them ignores the evidence fields and
   warns on the call fields; a follower that predates them leaves the record without a model.
+  The same call carries the `branch` and `worktree_path` the leaf's `worktree` step recorded,
+  attribution only and kept on the same record, so the owner's task detail can name where the
+  run executed (`job_run_worktree`); a follower that predates them leaves both unrecorded, and
+  the owner never derives them.
   Handoff settlements are stored separately as immutable
   `distributed-handoff-settlement-v1` rows, committed with handoff authority and projected
   into inspection results. The lifecycle row keeps its released `fail` / `release`

@@ -77,8 +77,8 @@ pub use probe::{
 pub(crate) use pull_waiting::OwnerAnswer;
 pub use serve::TaskPullResponse;
 pub(crate) use settlement::{
-    OWNER_BUSY_EPISODE_LIMIT, is_owner_refusal, is_owner_transport_failure,
-    settlement_refusal_backoff,
+    OWNER_BUSY_EPISODE_LIMIT, is_delivery_refusal_code, is_owner_refusal,
+    is_owner_transport_failure, owner_refusal_code, settlement_refusal_backoff,
 };
 pub use settlement::{
     OwnerBusyBackoff, PendingPullSettlements, PullCrewWindow, PullLeafClaim, RefusedPullSettlement,

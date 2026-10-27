@@ -563,6 +563,3 @@ impl LeaseBackend for IntakeLeaseBackend {
         self.open_notice_stream(caller, input)
     }
 }
-
-#[cfg(test)]
-mod tests;

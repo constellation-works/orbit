@@ -88,6 +88,7 @@ pub(crate) fn leaf_attribution(run: &orbit_types::workflow::JobRun) -> ClaimAttr
     ClaimAttribution {
         crew: named(&run.resolved_crew),
         crew_model: named(&run.crew_model),
+        ..ClaimAttribution::default()
     }
 }
 

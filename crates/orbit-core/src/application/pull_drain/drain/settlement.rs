@@ -8,7 +8,9 @@ use orbit_types::workflow::JobRunState;
 
 use super::failure::{leaf_failure_settlement, release_settlement};
 use super::{Bind, PullDrain, Reconciled, RefusedDelivery, SettleScope};
-use crate::application::distributed::{is_owner_refusal, settlement_refusal_backoff};
+use crate::application::distributed::{
+    is_owner_refusal, owner_refusal_code, settlement_refusal_backoff,
+};
 
 impl PullDrain<'_> {
     /// Carry one admission's settlement as far as it goes without its drain
@@ -422,6 +424,7 @@ impl PullDrain<'_> {
             record,
             LocalPullMutation::DeferSettlement(SettlementRefusal {
                 reason,
+                code: owner_refusal_code(refusal),
                 refusals,
                 first_refused_at: previous.map_or(now, |previous| previous.first_refused_at),
                 last_refused_at: now,

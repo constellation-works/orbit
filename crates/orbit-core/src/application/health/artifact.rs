@@ -72,6 +72,7 @@ use crate::application::managed_assets::{
     load_managed_asset_manifest, preserve_modified_retired_asset, resolve_confined_asset_path,
 };
 use crate::application::routines::seed::DEFAULT_ROUTINE_FILES;
+use crate::application::seeding_policy::SeedingPolicyExclusions;
 use crate::application::skill::{
     DEFAULT_SKILL_FILES, dangling_client_skill_links, inject_skill_template_tokens,
     skill_link_remediation,
@@ -251,8 +252,12 @@ pub(super) struct ManagedCatalog {
     /// never resolves on its own, so content drift is not decidable here (name
     /// retirement and collisions still are).
     pub(super) embedded: Option<BTreeMap<String, String>>,
-    /// Manifest keys this binary ships, always known.
+    /// Manifest keys this binary ships and the workspace seeding policy
+    /// seeds, always known.
     pub(super) shipped: BTreeSet<String>,
+    /// Shipped defaults the workspace seeding policy leaves out. They are
+    /// never missing, and a tracked copy is retired as a dropped default is.
+    pub(super) left_out: BTreeSet<String>,
 }
 
 impl ManagedCatalog {
@@ -268,6 +273,7 @@ impl ManagedCatalog {
             dir,
             embedded: Some(embedded),
             shipped,
+            left_out: BTreeSet::new(),
         }
     }
 
@@ -281,7 +287,19 @@ impl ManagedCatalog {
             dir,
             embedded: None,
             shipped: names.into_iter().collect(),
+            left_out: BTreeSet::new(),
         }
+    }
+
+    /// Drop the defaults a seeding policy leaves out from what this catalog
+    /// counts as shipped.
+    fn leaving_out(mut self, left_out: BTreeSet<String>) -> Self {
+        self.shipped.retain(|name| !left_out.contains(name));
+        if let Some(embedded) = self.embedded.as_mut() {
+            embedded.retain(|name, _| !left_out.contains(name));
+        }
+        self.left_out = left_out;
+        self
     }
 
     pub(super) fn path_of(&self, name: &str) -> PathBuf {
@@ -293,6 +311,12 @@ impl ManagedCatalog {
 fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
     let global_root = runtime.global_root();
     let local_dir = runtime.paths().local_dir.clone();
+    // An unreadable policy is a config fault the config check reports; the
+    // artifact pass judges the catalog as the default policy would.
+    let left_out = runtime
+        .workspace_seeding_policies()
+        .map(|policies| SeedingPolicyExclusions::of(&policies))
+        .unwrap_or_default();
     let owned = |assets: &[(&str, &str)]| -> Vec<(String, String)> {
         assets
             .iter()
@@ -330,7 +354,8 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
                     render_default_auto_task(content, runtime.workspace_base_branch()).into_owned(),
                 )
             }),
-        ),
+        )
+        .leaving_out(left_out.auto_task_set()),
         // Routines are loaded and reconciled from the shared catalog. A linked
         // worktree's `local_dir` is its own `.orbit` and must not hide a fault
         // in the catalog the loader and sweep read. Auto-task writes stay
@@ -341,7 +366,8 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
             DEFAULT_ROUTINE_FILES
                 .iter()
                 .map(|(name, _)| (*name).to_string()),
-        ),
+        )
+        .leaving_out(left_out.routine_set()),
     ]
 }
 
