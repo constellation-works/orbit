@@ -700,3 +700,73 @@ fn censored_blocks_wait_through_the_horizon_without_a_slot() {
         },
     );
 }
+
+/// Delivery-hour samples, five medium failures of `hold_hours` parked in
+/// someday, and two medium backlog tasks. The failures are the only
+/// episodes, so every drawn attempt fails for that long. The someday tasks
+/// stay out of the cohort.
+fn forecast_failed_retries(hold_hours: i64) -> Value {
+    let fixture = Fixture::new();
+    let at = Utc::now() - Duration::days(10);
+    one_hour_history(&fixture);
+    for _ in 0..5 {
+        dated_task(
+            &fixture,
+            TaskStatus::Someday,
+            &[
+                (at, TaskStatus::InProgress),
+                (at + Duration::hours(hold_hours), TaskStatus::Backlog),
+                (
+                    at + Duration::hours(hold_hours) + Duration::minutes(1),
+                    TaskStatus::Someday,
+                ),
+            ],
+        );
+    }
+    backlog_task(&fixture, "First", &["file:cap-a.rs"], &[], &[]);
+    backlog_task(&fixture, "Second", &["file:cap-b.rs"], &[], &[]);
+    let forecast = forecast(&fixture);
+    assert_eq!(forecast["forecast"]["tasks"], 2, "{forecast}");
+    assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{forecast}");
+    assert_eq!(
+        forecast["inputs"]["outcomes"]["episodes"],
+        json!({"failed": 5}),
+        "the duration samples must not dilute the failed pool: {forecast}"
+    );
+    forecast
+}
+
+#[test]
+fn attempt_limit_is_the_mean_of_caps_the_drain_started() {
+    isolated(
+        "backlog_outcomes::attempt_limit_is_the_mean_of_caps_the_drain_started",
+        || {
+            // One-hour failures finish 25 attempts on each task inside the
+            // horizon: 50 starts, and both tasks hit the cap.
+            let short = forecast_failed_retries(1);
+            let short_outcomes = &short["forecast"]["outcomes"];
+            assert_eq!(metric(&short_outcomes["failed_attempts"]), 50.0);
+            assert_eq!(metric(&short_outcomes["blocked_attempts"]), 0.0);
+            assert_eq!(metric(&short_outcomes["abandoned_attempts"]), 0.0);
+            assert_eq!(metric(&short_outcomes["attempt_limited"]), 2.0);
+            assert_eq!(short_outcomes["max_attempts"], 25);
+
+            // 100-hour failures reach the 2160-hour horizon after 22
+            // starts. The second task never runs, so neither task starts
+            // its 25th attempt even though every script has 25 steps.
+            let long = forecast_failed_retries(100);
+            let long_outcomes = &long["forecast"]["outcomes"];
+            assert_eq!(metric(&long_outcomes["failed_attempts"]), 22.0);
+            assert_eq!(metric(&long_outcomes["attempt_limited"]), 0.0);
+            assert_eq!(long_outcomes["max_attempts"], 25);
+            let mut started: Vec<f64> = long["forecast"]["task_predictions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|row| metric(&row["started_probability"]))
+                .collect();
+            started.sort_by(f64::total_cmp);
+            assert_eq!(started, vec![0.0, 1.0], "{long}");
+        },
+    );
+}

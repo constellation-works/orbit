@@ -13,8 +13,10 @@
 //! (blocked), finishes outside the drain, or waits unresolved. A censored
 //! block holds no slot and keeps waiting until the horizon. Absorption
 //! waits only until that event; abandonment and an attempt cap stop with
-//! no return wait. A blocked task starts out waiting. A scenario drains
-//! only once every scheduled task has finished.
+//! no return wait. The cap is a script that is still retrying after
+//! [`MAX_ATTEMPTS`]: it counts only when that attempt starts, not when the
+//! script was generated. A blocked task starts out waiting. A scenario
+//! drains only once every scheduled task has finished.
 //!
 //! Under resource fit [ORB-18689] the pass also asks gap fit, which prices
 //! each running task's profile by the hours since its admission (an
@@ -30,7 +32,7 @@ use crate::application::admission::forecast::{
 };
 
 use super::model::{Draw, Script, Step};
-use super::outcomes::{EpisodeOutcome, Follow};
+use super::outcomes::{EpisodeOutcome, Follow, MAX_ATTEMPTS};
 use super::rework::ForecastGeneratedNode;
 
 /// Every scenario stops at this many simulated hours (90 days); work still
@@ -123,6 +125,9 @@ pub(super) struct Run {
     pub(super) return_wait: Option<f64>,
     /// Attempts started that were blocked, failed or abandoned.
     pub(super) setbacks: [u64; 3],
+    /// Tasks whose [`MAX_ATTEMPTS`]-th attempt started on a script that
+    /// was still retrying. Steps the horizon never starts do not count.
+    pub(super) attempt_limited: u64,
     /// Scheduled tasks left without a return.
     pub(super) no_return: usize,
     /// Scheduled initial tasks that did not finish by the horizon.
@@ -315,6 +320,7 @@ pub(super) fn simulate_drain(
         waits: None,
         return_wait: None,
         setbacks: [0; 3],
+        attempt_limited: 0,
         no_return: 0,
         unfinished: 0,
         truncated: false,
@@ -350,11 +356,18 @@ pub(super) fn simulate_drain(
     let mut left = 0usize;
     let mut setbacks = [0u64; 3];
     let mut no_return = 0usize;
+    let mut attempt_limited = 0u64;
     // Blocked tasks still waiting at the horizon. They hold no slot.
     let mut unresolved = 0usize;
     // Start task `index`'s current attempt at `at`, charging its use.
     let mut begin = |state: &mut ScheduleState, totals: &mut Draw, index: usize, at: f64| {
-        let step: Step = scripts[index].steps[state.attempt[index]];
+        let attempt = state.attempt[index];
+        // A generated script can already hold 25 steps. Only starting the
+        // last one, on a script that would still retry, is a cap hit.
+        if scripts[index].limited && attempt + 1 == MAX_ATTEMPTS {
+            attempt_limited += 1;
+        }
+        let step: Step = scripts[index].steps[attempt];
         state.charged[index].add(&step.spend);
         totals.add(&step.spend);
         if let Some(slot) = setback_slot(step.outcome) {
@@ -561,6 +574,7 @@ pub(super) fn simulate_drain(
         waits: Some(waits),
         return_wait: Some(return_wait),
         setbacks,
+        attempt_limited,
         no_return,
         unfinished: scheduled()
             .filter(|index| *index < scenario.initial && !state.finished[*index])
