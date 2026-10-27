@@ -63,6 +63,13 @@ requirement from the requested list and record a note; it stays out of the
 callable set. The shipped `agent_explore` and `verify_finding` activities use
 the same non-implementer rule.
 
+An operator's task grant is a narrow exception for `agent_implement`: it can
+lift an exact deny entry for a read/repeat-safe tool, but a mutating grant
+remains denied and goes through a reviewed proposal instead. Grants do not
+override wildcard denials or the tool's other authorization checks. See
+[Task tool grants](../../concepts/tasks/#task-tool-grants) for the change
+window, placement and proposal workflow.
+
 An `agent_loop` activity that declares neither list still loads, with a
 deprecation warning. Declare `tools` or `tool_disallow_list`.
 
