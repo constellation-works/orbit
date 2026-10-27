@@ -99,12 +99,7 @@ fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
         let id = format!("jrun-cli-security-{}", source.unwrap_or("historical"));
         let now = chrono::Utc::now().to_rfc3339();
         fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,finished_at,created_at) VALUES (?1,?2,'dependabot_alert_sweep_pipeline',1,'success',?3,?3,?3,?3)", params![id, fixture.workspace_id(), now]).unwrap();
-        let mut state = fixture.write_state(
-            &runtime,
-            &id,
-            "dependabot_alert_sweep_pipeline",
-            serde_json::json!({}),
-        );
+        let mut state = fixture.empty_state(&runtime, &id, "dependabot_alert_sweep_pipeline");
         let mut output = serde_json::json!({"filed_count": 1, "min_severity": "high", "excluded_below_min_severity": [{"family": "dependabot", "number": 71, "severity": "moderate"}, {"family": "code_scanning", "alert_number": 81, "security_severity": "moderate"}]});
         if let Some(source) = source {
             output["min_severity_source"] = serde_json::json!(source);
@@ -125,21 +120,14 @@ fn successful_security_sweep_shows_filing_floor_source_and_excluded_alerts() {
 }
 fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
     let fixture = Fixture::init();
-    for (config, input, floor, source) in [
-        ("", None, "moderate", "built-in"),
-        (
-            "[security_alert_sweep]\nmin_severity = \"high\"\n",
-            Some("min_severity=critical"),
-            "critical",
-            "input",
-        ),
-        (
-            "[security_alert_sweep]\nmin_severity = \"high\"\n",
-            None,
-            "high",
-            "workspace",
-        ),
-    ] {
+    let case_table = serde_json::json!({"cases": [["", null, "moderate", "built-in"], ["[security_alert_sweep]\nmin_severity = \"high\"\n", "min_severity=critical", "critical", "input"], ["[security_alert_sweep]\nmin_severity = \"high\"\n", null, "high", "workspace"]]});
+    for case in case_table["cases"].as_array().unwrap() {
+        let (config, input, floor, source) = (
+            case[0].as_str().unwrap(),
+            case[1].as_str(),
+            case[2].as_str().unwrap(),
+            case[3].as_str().unwrap(),
+        );
         fs::write(fixture.work.join(".orbit/config.toml"), config).unwrap();
         let mut command = fixture.orbit();
         command.args(["run", "job", "dependabot_alert_sweep_pipeline", "--json"]);
@@ -159,15 +147,7 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
         );
         let submitted: Value = serde_json::from_slice(&result.stdout).unwrap();
         if source != "built-in" {
-            let runtime =
-                orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
-                    orbit_core::runtime::OrbitRuntimeRoots {
-                        global_root: fixture.home.join(".orbit"),
-                        shared_root: fixture.work.join(".orbit"),
-                        local_root: fixture.work.join(".orbit"),
-                    },
-                )
-                .expect("registered security fixture runtime");
+            let runtime = fixture.registered_runtime();
             let waited = runtime
                 .wait_pipeline_runs(
                     &[submitted["run_id"]
@@ -191,9 +171,9 @@ fn shipped_security_job_uses_config_unless_run_input_overrides_it() {
             submitted["run_id"].as_str().unwrap(),
             "--json",
         ]);
-        let output = &shown["pipeline_state"]["pipeline"]["file"];
-        assert_eq!(output["min_severity"], floor);
-        assert_eq!(output["min_severity_source"], source);
+        let expected_json =
+            serde_json::json!({"min_severity": floor, "min_severity_source": source});
+        assert_fields(&shown["pipeline_state"]["pipeline"]["file"], expected_json);
         assert_eq!(
             fs::read_to_string(fixture.work.join(".orbit/config.toml")).unwrap(),
             config
@@ -230,16 +210,7 @@ impl Fixture {
             .assert()
             .success();
         fixture_crew::configure_sol(&fixture.home.join(".orbit"));
-        drop(
-            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
-                orbit_core::runtime::OrbitRuntimeRoots {
-                    global_root: fixture.home.join(".orbit"),
-                    shared_root: fixture.work.join(".orbit"),
-                    local_root: fixture.work.join(".orbit"),
-                },
-            )
-            .expect("registered observation fixture runtime"),
-        );
+        drop(fixture.registered_runtime());
         fixture.seed(include_stale_runs);
         fixture
     }
@@ -273,22 +244,15 @@ impl Fixture {
         let orbit_dir = orbit_dir.to_string_lossy();
         let db = self.db();
         if include_stale_runs {
-            for (run_id, state, created_at, started_at, pid) in [
-                (
-                    STALE_RUNNING,
-                    "running",
-                    "2026-09-20T01:00:00+00:00",
-                    Some("2026-09-20T01:00:01+00:00"),
-                    Some(999_999),
-                ),
-                (
-                    STALE_PENDING,
-                    "pending",
-                    "2026-09-20T02:00:00+00:00",
-                    None,
-                    None,
-                ),
-            ] {
+            let stale = serde_json::json!({"rows": [[STALE_RUNNING, "running", "2026-09-20T01:00:00+00:00", "2026-09-20T01:00:01+00:00", 999999], [STALE_PENDING, "pending", "2026-09-20T02:00:00+00:00", null, null]]});
+            for row in stale["rows"].as_array().unwrap() {
+                let (run_id, state, created_at, started_at, pid) = (
+                    row[0].as_str().unwrap(),
+                    row[1].as_str().unwrap(),
+                    row[2].as_str().unwrap(),
+                    row[3].as_str(),
+                    row[4].as_i64(),
+                );
                 db.execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, started_at, created_at, pid) VALUES (?1, ?2, 'fixture_job', 1, ?3, ?4, ?5, ?4, ?6)", params![run_id, workspace_id, state, created_at, started_at, pid]).expect("seed stale run");
                 db.execute("INSERT INTO task_reservations (reservation_id, workspace_orbit_dir, workspace_id, task_ids_json, files_json, actor, created_at, expires_at, owner_run_id) VALUES (?1, ?2, ?3, '[]', ?4, 'fixture', ?5, '2099-01-01T00:00:00+00:00', ?6)", params![format!("reservation-{run_id}"), orbit_dir, workspace_id, format!(r#"["src/{state}.rs"]"#), created_at, run_id]).expect("seed reservation");
             }
@@ -300,13 +264,9 @@ impl Fixture {
         let db = self.db();
         let mut rows = Vec::new();
         for sql in [
-            "SELECT run_id || '|' || state || '|' || IFNULL(finished_at, '-')
-                 || '|' || IFNULL(duration_ms, '-') FROM job_runs ORDER BY run_id",
-            "SELECT run_id || '|' || step_index || '|' || state FROM job_run_steps
-                 ORDER BY run_id, step_index",
-            "SELECT reservation_id || '|' || IFNULL(released_at, 'held') || '|'
-                 || IFNULL(release_reason, '-') FROM task_reservations
-                 ORDER BY reservation_id",
+            "SELECT run_id || '|' || state || '|' || IFNULL(finished_at, '-') || '|' || IFNULL(duration_ms, '-') FROM job_runs ORDER BY run_id",
+            "SELECT run_id || '|' || step_index || '|' || state FROM job_run_steps ORDER BY run_id, step_index",
+            "SELECT reservation_id || '|' || IFNULL(released_at, 'held') || '|' || IFNULL(release_reason, '-') FROM task_reservations ORDER BY reservation_id",
         ] {
             let mut statement = db.prepare(sql).expect("prepare snapshot");
             let values = statement
@@ -330,14 +290,7 @@ impl Fixture {
     fn insert_pending_run(&self, run_id: &str) {
         let workspace_id = self.workspace_id();
         let now = chrono::Utc::now().to_rfc3339();
-        self.db()
-            .execute(
-                "INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state,
-                     scheduled_at, created_at)
-                 VALUES (?1, ?2, 'task_pr_pipeline', 1, 'pending', ?3, ?3)",
-                params![run_id, workspace_id, now],
-            )
-            .expect("insert pending leaf run");
+        self.db().execute("INSERT INTO job_runs (run_id, workspace_id, job_id, attempt, state, scheduled_at, created_at) VALUES (?1, ?2, 'task_pr_pipeline', 1, 'pending', ?3, ?3)", params![run_id, workspace_id, now]).expect("insert pending leaf run");
     }
     fn json(&self, args: &[&str]) -> Value {
         let output = self.orbit().args(args).output().expect("spawn orbit");
@@ -349,15 +302,7 @@ impl Fixture {
             String::from_utf8_lossy(&output.stderr)
         );
         if std::env::var_os("ORBIT_QA_TRACE_CLI").is_some() {
-            writeln!(
-                std::io::stderr(),
-                "QA_CLI {}",
-                serde_json::json!({
-                    "test": std::thread::current().name(), "argv": args,
-                    "exit_code": output.status.code(),
-                })
-            )
-            .expect("write opt-in CLI evidence");
+            writeln!(std::io::stderr(), "QA_CLI {}", serde_json::json!({"test": std::thread::current().name(), "argv": args, "exit_code": output.status.code()})).expect("write opt-in CLI evidence");
         }
         serde_json::from_slice(&output.stdout).expect("json output")
     }
@@ -382,6 +327,33 @@ impl Fixture {
     fn readiness_text(&self) -> String {
         self.text(&["run", "readiness"])
     }
+    fn readiness(&self) -> Value {
+        self.json(&["run", "readiness", "--json"])
+    }
+    fn readiness_pair(&self) -> (Value, String) {
+        (self.readiness(), self.readiness_text())
+    }
+    fn write_job(&self, file: &str, yaml: &str) {
+        let jobs = self.home.join(".orbit/resources/jobs");
+        fs::create_dir_all(&jobs).unwrap();
+        fs::write(jobs.join(file), yaml).unwrap();
+    }
+    fn registered_runtime(&self) -> OrbitRuntime {
+        orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_resolved_roots(
+            orbit_core::runtime::OrbitRuntimeRoots {
+                global_root: self.home.join(".orbit"),
+                shared_root: self.work.join(".orbit"),
+                local_root: self.work.join(".orbit"),
+            },
+        )
+        .expect("registered fixture runtime")
+    }
+    fn store(&self, runtime: &OrbitRuntime, id: &str, state: &PipelineState) {
+        runtime.write_run_state(id, state).unwrap();
+    }
+    fn load_state(&self, runtime: &OrbitRuntime, id: &str) -> PipelineState {
+        runtime.read_run_state(id).unwrap().unwrap()
+    }
     fn doctor_row(&self, check: &str) -> Value {
         let out = self.orbit().args(["doctor", "--json"]).output().unwrap();
         let rows: Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -402,6 +374,12 @@ impl Fixture {
         let state = PipelineState::new(id.into(), job.into(), input);
         runtime.write_run_state(id, &state).unwrap();
         state
+    }
+    fn empty_state(&self, runtime: &OrbitRuntime, id: &str, job: &str) -> PipelineState {
+        self.write_state(runtime, id, job, serde_json::json!({}))
+    }
+    fn assert_snapshot(&self, before: &[String], msg: &str) {
+        assert_eq!(self.snapshot(), before, "{msg}");
     }
     fn seed_running(&self, id: &str, job: &str, input: Value) -> (OrbitRuntime, PipelineState) {
         let runtime = self.runtime();
@@ -473,6 +451,25 @@ impl Fixture {
             .assert()
             .success();
     }
+    fn packed_args<'a>(&self, args: &'a Value) -> Vec<&'a str> {
+        let list = args.get("args").unwrap_or(args);
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect()
+    }
+    fn json_packed(&self, args: Value) -> Value {
+        self.json(&self.packed_args(&args))
+    }
+    fn failure_packed(&self, args: Value) -> Value {
+        self.failure(&self.packed_args(&args))
+    }
+    fn orbit_packed(&self, args: Value) -> Command {
+        let mut command = self.orbit();
+        command.args(self.packed_args(&args));
+        command
+    }
     fn failure(&self, args: &[&str]) -> Value {
         let output = self.orbit().args(args).output().expect("spawn orbit");
         assert!(!output.status.success(), "{args:?} unexpectedly succeeded");
@@ -484,8 +481,8 @@ impl Fixture {
 fn canonical(path: &Path) -> PathBuf {
     fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
-fn pass_at(recorded_at: chrono::DateTime<chrono::Utc>) -> DrainAdmissionPass {
-    serde_json::from_value(serde_json::json!({"recorded_at": recorded_at, "queued": 0})).unwrap()
+fn pass_from(value: Value) -> DrainAdmissionPass {
+    serde_json::from_value(value).unwrap()
 }
 fn waiting(
     task: &str,
@@ -521,6 +518,15 @@ fn run_det(runtime: &OrbitRuntime, name: &str, input: Value) -> Value {
     )
     .unwrap()
 }
+fn submit_fixture_run(
+    runtime: &OrbitRuntime,
+    job: &str,
+    input: Value,
+) -> orbit_core::PipelineInvokeResult {
+    runtime
+        .submit_pipeline_run(job, input, None, Some("fixture"))
+        .unwrap()
+}
 fn task_params(
     title: String,
     description: String,
@@ -541,6 +547,22 @@ fn cap(report: &Value) -> &Value {
 fn contains(text: &str, needle: &str) {
     assert!(text.contains(needle), "missing {needle:?} in:\n{text}");
 }
+fn contains_all(text: &str, needles: &[&str]) {
+    for needle in needles {
+        contains(text, needle);
+    }
+}
+fn assert_fields(value: &Value, expected: Value) {
+    for (key, want) in expected.as_object().unwrap() {
+        let got = value
+            .get(key)
+            .unwrap_or_else(|| panic!("missing field {key} in {value}"));
+        assert_eq!(got, want, "field {key}");
+    }
+}
+fn assert_cap(report: &Value, expected: Value) {
+    assert_fields(cap(report), expected);
+}
 macro_rules! contract {
     ($name:ident, $($f:ident),+ $(,)?) => {
         #[test]
@@ -560,32 +582,20 @@ fn run_rows(rows: &[(&str, fn())]) {
 fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
     let fixture = Fixture::init();
     let before = fixture.snapshot();
-    let report = fixture.json(&[
-        "run",
-        "readiness",
-        "--concurrency",
-        "3",
-        "--limit",
-        "1",
-        "--json",
-    ]);
+    let args_json = serde_json::json!({"args": ["run", "readiness", "--concurrency", "3", "--limit", "1", "--json"]});
+    let report = fixture.json_packed(args_json);
     assert_eq!(cap(&report)["max_active_leaf_runs"], 3);
     assert!(report["tasks"].as_array().unwrap().len() <= 1);
-    assert_eq!(
-        fixture.snapshot(),
-        before,
-        "readiness must not reconcile or reserve at runtime open"
+    fixture.assert_snapshot(
+        &before,
+        "readiness must not reconcile or reserve at runtime open",
     );
     fixture
         .orbit()
         .args(["run", "readiness", "--limit", "0", "--json"])
         .assert()
         .failure();
-    assert_eq!(
-        fixture.snapshot(),
-        before,
-        "invalid readiness must also preserve state"
-    );
+    fixture.assert_snapshot(&before, "invalid readiness must also preserve state");
 }
 #[test]
 fn readiness_snapshot_reports_replica_and_validation_warning() {
@@ -595,22 +605,14 @@ fn readiness_snapshot_reports_replica_and_validation_warning() {
         return;
     }
     let fixture = Fixture::terminal();
-    let idle = fixture.json(&["run", "readiness", "--json"]);
-    assert_eq!(idle["replica"], false);
-    assert!(
-        idle.get("validation_env_warning")
-            .is_some_and(Value::is_null)
-    );
-    for (key, value) in [
-        ("workflow.validation_env.shell_probe", "off"),
-        (
-            "workflow.required_validation_commands",
-            r#"["make ci-fast"]"#,
-        ),
-    ] {
-        fixture.config_set(key, value);
+    let idle = fixture.readiness();
+    let expected_json = serde_json::json!({"replica": false, "validation_env_warning": null});
+    assert_fields(&idle, expected_json);
+    let config_table = serde_json::json!({"rows": [["workflow.validation_env.shell_probe", "off"], ["workflow.required_validation_commands", "[\"make ci-fast\"]"]]});
+    for row in config_table["rows"].as_array().unwrap() {
+        fixture.config_set(row[0].as_str().unwrap(), row[1].as_str().unwrap());
     }
-    let warned = fixture.json(&["run", "readiness", "--json"]);
+    let warned = fixture.readiness();
     let warning = warned["validation_env_warning"]
         .as_str()
         .expect("validation warning");
@@ -625,6 +627,7 @@ fn readiness_reuses_validation_warning_across_processes() {
         return;
     }
     let fixture = Fixture::terminal();
+    let warning_of = || fixture.readiness()["validation_env_warning"].clone();
     let marker = fixture.home.join("login-probes");
     let probes = || fs::read_to_string(&marker).unwrap().lines().count();
     let profile = "printf 'probe\n' >> \"$HOME/login-probes\"\nexport PATH=\"$HOME/login-tools:/usr/bin:/bin\"\n";
@@ -638,22 +641,18 @@ fn readiness_reuses_validation_warning_across_processes() {
         fs::write(&config, format!("[workflow]\nrequired_validation_commands = [\"make check\"]\n[workflow.validation_env]\npath = [\"/usr/bin\", \"/bin\"]\npath_mode = \"{mode}\"\n")).unwrap()
     };
     configure("replace");
-    let first = fixture.json(&["run", "readiness", "--json"]);
-    let first_warning = first["validation_env_warning"].clone();
+    let first_warning = warning_of();
     let warning = first_warning.as_str().expect("missing PATH warning");
     contains(warning, fixture.home.join("login-tools").to_str().unwrap());
     assert_eq!(probes(), 1);
-    assert_eq!(
-        fixture.json(&["run", "readiness", "--json"])["validation_env_warning"],
-        first_warning
-    );
+    assert_eq!(warning_of(), first_warning);
     assert_eq!(
         probes(),
         1,
         "a fresh readiness process must not rerun the login shell within the diagnostic TTL"
     );
     configure("prepend");
-    let kept = fixture.json(&["run", "readiness", "--json"]);
+    let kept = fixture.readiness();
     assert!(kept["validation_env_warning"].is_null());
     assert_eq!(probes(), 2);
     let cache = fixture
@@ -668,25 +667,16 @@ fn readiness_reuses_validation_warning_across_processes() {
         .unwrap()
         .set_times(fs::FileTimes::new().set_modified(expired))
         .unwrap();
-    assert_eq!(
-        fixture.json(&["run", "readiness", "--json"])["validation_env_warning"],
-        kept["validation_env_warning"]
-    );
+    assert_eq!(warning_of(), kept["validation_env_warning"]);
     assert_eq!(probes(), 3);
     configure("replace");
     fs::write(&cache, "incomplete JSON").unwrap();
-    assert_eq!(
-        fixture.json(&["run", "readiness", "--json"])["validation_env_warning"],
-        first_warning
-    );
+    assert_eq!(warning_of(), first_warning);
     assert_eq!(probes(), 4);
     fs::rename(&cache, fixture.home.join("saved-warning.json")).unwrap();
     fs::create_dir(&cache).unwrap();
     for expected in [5, 6] {
-        assert_eq!(
-            fixture.json(&["run", "readiness", "--json"])["validation_env_warning"],
-            first_warning
-        );
+        assert_eq!(warning_of(), first_warning);
         assert_eq!(probes(), expected);
     }
 }
@@ -727,9 +717,7 @@ fn readiness_reports_total_and_notifies_only_when_backlog_is_truncated() {
 }
 fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
     let fixture = Fixture::init();
-    let jobs = fixture.home.join(".orbit/resources/jobs");
-    fs::create_dir_all(&jobs).unwrap();
-    fs::write(jobs.join("fixture_job.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_job\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
+    fixture.write_job("fixture_job.yaml", "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_job\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n");
     let input = serde_json::json!({"seconds": 0, "marker": "persisted-replay-input"});
     fixture
         .db()
@@ -740,13 +728,13 @@ fn job_replay_cli_reexecutes_deterministic_fixture_with_persisted_lineage() {
         .unwrap();
     let source = fixture.show_json(FAILED);
     let replay = fixture.json(&["job", "replay", FAILED, "--json"]);
-    assert_eq!(replay["success"], true);
-    assert_eq!(replay["source_run_id"], FAILED);
+    let expected_json = serde_json::json!({"success": true, "source_run_id": FAILED});
+    assert_fields(&replay, expected_json);
     let id = replay["run_id"].as_str().unwrap();
     assert_ne!(id, FAILED);
     let stored = fixture.show_json(id);
-    assert_eq!(stored["run"]["state"], "success");
-    assert_eq!(stored["run"]["retry_source_run_id"], FAILED);
+    let expected_json = serde_json::json!({"state": "success", "retry_source_run_id": FAILED});
+    assert_fields(&stored["run"], expected_json);
     let persisted: String = fixture
         .db()
         .query_row(
@@ -771,14 +759,8 @@ fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
         before.iter().any(|row| row.ends_with("|held|-")),
         "fixture must start with held reservations: {before:?}"
     );
-    let history = fixture.json(&[
-        "run",
-        "history",
-        "--limit",
-        "50",
-        "--no-reconcile",
-        "--json",
-    ]);
+    let args_json = serde_json::json!({"args": ["run", "history", "--limit", "50", "--no-reconcile", "--json"]});
+    let history = fixture.json_packed(args_json);
     let states: Vec<_> = history["runs"]
         .as_array()
         .expect("runs")
@@ -819,26 +801,19 @@ fn no_reconcile_run_reads_leave_stale_runs_and_reservations_unchanged() {
             "show must report {run_id} as stored"
         );
     }
-    for args in [
-        vec!["run", "logs", FAILED, "--no-reconcile", "--json"],
-        vec![
-            "run",
-            "logs",
-            FAILED,
-            "--step",
-            "implement",
-            "--no-reconcile",
-            "--json",
-        ],
-        vec!["run", "logs", STALE_RUNNING, "--no-reconcile", "--json"],
-        vec!["run", "events", FAILED, "--no-reconcile", "--json"],
-        vec!["run", "events", STALE_PENDING, "--no-reconcile", "--json"],
-        vec!["run", "show", "--no-reconcile", "--json"],
-        vec!["run", "logs", "--no-reconcile", "--json"],
-        vec!["run", "events", "--no-reconcile", "--json"],
-    ] {
-        fixture.json(&args);
+    let check_read = |args: &[&str]| {
+        fixture.json(args);
         assert_eq!(fixture.snapshot(), before, "{args:?} mutated run state");
+    };
+    let reads = serde_json::json!({"reads": [["run", "logs", FAILED, "--no-reconcile", "--json"], ["run", "logs", FAILED, "--step", "implement", "--no-reconcile", "--json"], ["run", "logs", STALE_RUNNING, "--no-reconcile", "--json"], ["run", "events", FAILED, "--no-reconcile", "--json"], ["run", "events", STALE_PENDING, "--no-reconcile", "--json"], ["run", "show", "--no-reconcile", "--json"], ["run", "logs", "--no-reconcile", "--json"], ["run", "events", "--no-reconcile", "--json"]]});
+    for row in reads["reads"].as_array().unwrap() {
+        let args: Vec<&str> = row
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        check_read(&args);
     }
     assert_eq!(fixture.snapshot(), before);
 }
@@ -883,32 +858,43 @@ fn explicit_run_lookup_preserves_store_errors() {
         )
         .expect("corrupt stored run");
     let lookups = |run_id: &'static str| {
-        [
-            vec!["run", "show", run_id, "--no-reconcile", "--json"],
-            vec!["run", "show", run_id, "--json"],
-            vec!["run", "logs", run_id, "--no-reconcile", "--json"],
-            vec!["run", "events", run_id, "--no-reconcile", "--json"],
-            vec!["run", "trace", run_id, "--json"],
-        ]
+        let table = serde_json::json!({"lookups": [["run", "show", run_id, "--no-reconcile", "--json"], ["run", "show", run_id, "--json"], ["run", "logs", run_id, "--no-reconcile", "--json"], ["run", "events", run_id, "--no-reconcile", "--json"], ["run", "trace", run_id, "--json"]]});
+        table["lookups"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                row.as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v.as_str().unwrap().to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
     };
-    for args in lookups(FAILED) {
-        let error = fixture.failure(&args);
-        assert_eq!(error["code"], "store_error", "{args:?} -> {error}");
-        assert!(
-            error["error"]
-                .as_str()
-                .is_some_and(|m| m.contains("corrupt_state")),
-            "{args:?} must keep the store diagnostic: {error}"
-        );
-    }
-    for args in lookups(MISSING) {
-        let error = fixture.failure(&args);
-        assert_eq!(error["code"], "job_run_not_found", "{args:?} -> {error}");
-        assert!(
-            error["error"].as_str().is_some_and(|m| m.contains(MISSING)),
-            "{args:?} must name the missing run: {error}"
-        );
-    }
+    let check_lookup = |run_id: &'static str, code: &str, needle: &str, why: &str| {
+        for args in lookups(run_id) {
+            let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            let error = fixture.failure(&refs);
+            assert_eq!(error["code"], code, "{args:?} -> {error}");
+            assert!(
+                error["error"].as_str().is_some_and(|m| m.contains(needle)),
+                "{args:?} {why}: {error}"
+            );
+        }
+    };
+    check_lookup(
+        FAILED,
+        "store_error",
+        "corrupt_state",
+        "must keep the store diagnostic",
+    );
+    check_lookup(
+        MISSING,
+        "job_run_not_found",
+        MISSING,
+        "must name the missing run",
+    );
 }
 /// `orbit run events` reads the complete trail in its enriched projection:
 /// a step selector resolves by audit id or index, `--type` is exact, a child
@@ -918,30 +904,9 @@ fn run_events_select_resolved_steps_and_add_inherited_step_ids() {
     let fixture = Fixture::init();
     let workspace_id = fixture.workspace_id();
     let db = fixture.db();
-    let rows = [
-        (
-            "e0",
-            r#"{"event_id":"e0","body_kind":"step_started","event_type":"step.started","step_id":"implement"}"#,
-        ),
-        (
-            "e1",
-            r#"{"event_id":"e1","parent_event_id":"e0","body_kind":"cli_invocation_finished","event_type":"cli.invocation.finished"}"#,
-        ),
-        ("bad", "not json"),
-        (
-            "anon",
-            r#"{"body_kind":"activity_progress","event_type":"activity.progress"}"#,
-        ),
-        (
-            "e2",
-            r#"{"event_id":"e2","body_kind":"step_started","event_type":"step.started","step_id":"review"}"#,
-        ),
-        (
-            "e3",
-            r#"{"event_id":"e3","parent_event_id":"e2","body_kind":"cli_invocation_finished","event_type":"cli.invocation.finished"}"#,
-        ),
-    ];
-    for (second, (event_id, payload)) in rows.into_iter().enumerate() {
+    let rows = serde_json::json!({"rows": [["e0", r#"{"event_id":"e0","body_kind":"step_started","event_type":"step.started","step_id":"implement"}"#], ["e1", r#"{"event_id":"e1","parent_event_id":"e0","body_kind":"cli_invocation_finished","event_type":"cli.invocation.finished"}"#], ["bad", "not json"], ["anon", r#"{"body_kind":"activity_progress","event_type":"activity.progress"}"#], ["e2", r#"{"event_id":"e2","body_kind":"step_started","event_type":"step.started","step_id":"review"}"#], ["e3", r#"{"event_id":"e3","parent_event_id":"e2","body_kind":"cli_invocation_finished","event_type":"cli.invocation.finished"}"#]]});
+    for (second, row) in rows["rows"].as_array().unwrap().iter().enumerate() {
+        let (event_id, payload) = (row[0].as_str().unwrap(), row[1].as_str().unwrap());
         let ts = format!("2026-09-20T03:01:{second:02}+00:00");
         db.execute("INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version, event_type, ts, run_id, agent_identity, payload_json) VALUES (?1, ?2, 'v2_envelope', 1, 'fixture', ?3, ?4, 'test', ?5)", params![workspace_id, event_id, ts, FAILED, payload]).expect("seed audit event");
     }
@@ -955,8 +920,8 @@ fn run_events_select_resolved_steps_and_add_inherited_step_ids() {
     };
 
     let all = fixture.json(&["run", "events", FAILED, "--no-reconcile", "--json"]);
-    assert_eq!(all["run_id"], FAILED);
-    assert_eq!(all["job_id"], "fixture_job");
+    let expected_json = serde_json::json!({"run_id": FAILED, "job_id": "fixture_job"});
+    assert_fields(&all, expected_json);
     assert_eq!(
         ids(&all),
         ["e0", "e1", "e2", "e3"],
@@ -967,42 +932,17 @@ fn run_events_select_resolved_steps_and_add_inherited_step_ids() {
         "child event inherits its step: {all}"
     );
 
-    let by_index = fixture.json(&[
-        "run",
-        "events",
-        FAILED,
-        "-s",
-        "1",
-        "--type",
-        "cli.invocation.finished",
-        "--no-reconcile",
-        "--json",
-    ]);
+    let args_json = serde_json::json!({"args": ["run", "events", FAILED, "-s", "1", "--type", "cli.invocation.finished", "--no-reconcile", "--json"]});
+    let by_index = fixture.json_packed(args_json);
     assert_eq!(ids(&by_index), ["e3"], "{by_index}");
     assert_eq!(by_index["events"][0]["step_id"], "review");
 
-    let by_id = fixture.json(&[
-        "run",
-        "events",
-        FAILED,
-        "--step",
-        "implement",
-        "--type",
-        "step.started",
-        "--no-reconcile",
-        "--json",
-    ]);
+    let args_json = serde_json::json!({"args": ["run", "events", FAILED, "--step", "implement", "--type", "step.started", "--no-reconcile", "--json"]});
+    let by_id = fixture.json_packed(args_json);
     assert_eq!(ids(&by_id), ["e0"], "{by_id}");
 
-    let error = fixture.failure(&[
-        "run",
-        "events",
-        FAILED,
-        "-s",
-        "missing",
-        "--no-reconcile",
-        "--json",
-    ]);
+    let args_json = serde_json::json!({"args": ["run", "events", FAILED, "-s", "missing", "--no-reconcile", "--json"]});
+    let error = fixture.failure_packed(args_json);
     assert!(
         error["error"]
             .as_str()
@@ -1012,17 +952,15 @@ fn run_events_select_resolved_steps_and_add_inherited_step_ids() {
 }
 fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
     let fixture = Fixture::init();
-    let jobs = fixture.home.join(".orbit/resources/jobs");
-    fs::create_dir_all(&jobs).unwrap();
-    fs::write(jobs.join("alias_fixture.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: alias_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
+    fixture.write_job("alias_fixture.yaml", "schemaVersion: 2\nkind: Job\nmetadata:\n  name: alias_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 0\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n");
     let completed = fixture.json(&["job", "run", "alias_fixture", "--wait", "--json"]);
-    assert_eq!(completed["state"], "success");
-    assert_eq!(completed["wait_timeout"], false);
+    let expected_json = serde_json::json!({"state": "success", "wait_timeout": false});
+    assert_fields(&completed, expected_json);
     let run_id = completed["run_id"].as_str().unwrap();
     assert_eq!(fixture.show_json(run_id)["run"]["state"], "success");
     let trace = fixture.json(&["run", "trace", run_id, "--json"]);
-    assert_eq!(trace["run_id"], run_id);
-    assert_eq!(trace["job_id"], "alias_fixture");
+    let expected_json = serde_json::json!({"run_id": run_id, "job_id": "alias_fixture"});
+    assert_fields(&trace, expected_json);
     let roots = trace["roots"].as_array().unwrap();
     assert!(
         !roots.is_empty(),
@@ -1046,11 +984,8 @@ fn job_run_alias_produces_a_completed_trace_and_terminal_cancel_is_stable() {
         "trace retains the executed step: {trace}"
     );
     let cancelled = fixture.json(&["run", "cancel", run_id, "--confirm", "--json"]);
-    assert_eq!(cancelled["outcome"], "already_terminal");
-    assert_eq!(cancelled["previous_state"], "success");
-    assert_eq!(cancelled["final_state"], "success");
-    assert_eq!(cancelled["signal_attempted"], false);
-    assert_eq!(cancelled["provider_processes_stopped"], 0);
+    let expected_json = serde_json::json!({"outcome": "already_terminal", "previous_state": "success", "final_state": "success", "signal_attempted": false, "provider_processes_stopped": 0});
+    assert_fields(&cancelled, expected_json);
     assert_eq!(fixture.run_state(run_id), "success");
 }
 fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
@@ -1063,36 +998,11 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
         ("jrun-20261005-0434-2", true, "blocked"),
     ] {
         fixture.insert_pending_run(run_id);
-        let created = fixture.json(&[
-            "task",
-            "add",
-            "--title",
-            "Cancel candidate",
-            "--description",
-            "Keep the candidate when cancelling the leaf",
-            "--plan",
-            "Resume the candidate after cancellation",
-            "--complexity",
-            "low",
-            "--context",
-            "file:src/candidate.rs",
-            "--json",
-        ]);
+        let args_json = serde_json::json!({"args": ["task", "add", "--title", "Cancel candidate", "--description", "Keep the candidate when cancelling the leaf", "--plan", "Resume the candidate after cancellation", "--complexity", "low", "--context", "file:src/candidate.rs", "--json"]});
+        let created = fixture.json_packed(args_json);
         let task_id = created["id"].as_str().expect("task id").to_string();
-        fixture
-            .orbit()
-            .args([
-                "task",
-                "update",
-                &task_id,
-                "--status",
-                "in-progress",
-                "--job-run-id",
-                run_id,
-                "--json",
-            ])
-            .assert()
-            .success();
+        let update_args = serde_json::json!({"args": ["task", "update", &task_id, "--status", "in-progress", "--job-run-id", run_id, "--json"]});
+        fixture.orbit_packed(update_args).assert().success();
         let mut args = vec!["run", "cancel", run_id, "--confirm", "--json"];
         if block {
             args.push("--block");
@@ -1100,18 +1010,17 @@ fn cancel_task_leaf_requeues_by_default_and_block_is_explicit() {
         args.extend(["--reason", "preserve this candidate for later"]);
         assert_eq!(fixture.json(&args)["outcome"], "cancelled");
         let task = fixture.json(&["task", "show", &task_id, "--json"]);
-        assert_eq!(task["status"], expected_status);
-        assert_eq!(task["plan"], "Resume the candidate after cancellation");
+        let expected_json = serde_json::json!({"status": expected_status, "plan": "Resume the candidate after cancellation"});
+        assert_fields(&task, expected_json);
         assert_eq!(task["context_files"][0], "file:src/candidate.rs");
         assert_eq!(
             fs::read_to_string(&candidate).unwrap(),
             "candidate content\n"
         );
         let runtime = fixture.runtime();
-        let policy = runtime
-            .read_run_state(run_id)
-            .expect("run state")
-            .and_then(|s| s.task_cancellation_policy)
+        let policy = fixture
+            .load_state(&runtime, run_id)
+            .task_cancellation_policy
             .expect("durable cancellation policy");
         assert_eq!(policy.block, block);
         let history = runtime.get_task_history(&task_id).expect("task history");
@@ -1285,9 +1194,7 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
         }
     }
     let fixture = Fixture::init();
-    let jobs = fixture.home.join(".orbit/resources/jobs");
-    fs::create_dir_all(&jobs).unwrap();
-    fs::write(jobs.join("cancel_fixture.yaml"), "schemaVersion: 2\nkind: Job\nmetadata:\n  name: cancel_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 60\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n").unwrap();
+    fixture.write_job("cancel_fixture.yaml", "schemaVersion: 2\nkind: Job\nmetadata:\n  name: cancel_fixture\nspec:\n  state: enabled\n  kind: workflow\n  steps:\n    - id: nap\n      default_input:\n        seconds: 60\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n");
     let launcher_log = fixture.work.join("launcher.log");
     let log = fs::File::create(&launcher_log).unwrap();
     let mut launcher = std::process::Command::new(env!("CARGO_BIN_EXE_orbit"));
@@ -1341,10 +1248,8 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
     let worker_pid = libc::pid_t::try_from(worker_pid).unwrap();
     let mut worker = KillWorkerGroup(Some(worker_pid));
     let cancelled = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
-    assert_eq!(cancelled["outcome"], "cancelled");
-    assert_eq!(cancelled["previous_state"], "running");
-    assert_eq!(cancelled["final_state"], "cancelled");
-    assert_eq!(cancelled["signal_attempted"], true);
+    let expected_json = serde_json::json!({"outcome": "cancelled", "previous_state": "running", "final_state": "cancelled", "signal_attempted": true});
+    assert_fields(&cancelled, expected_json);
     assert!(
         cancelled["signal_outcome"]
             .as_str()
@@ -1377,12 +1282,12 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
             .collect::<Result<_, _>>()
             .unwrap()
     };
-    for code in ["worker_terminated", "terminal_outcome_conflict"] {
-        assert!(
-            !step_errors.iter().any(|e| e == code),
-            "a cancelled worker's exit is not recorded as {code}: {step_errors:?}"
-        );
-    }
+    assert!(
+        step_errors
+            .iter()
+            .all(|e| e != "worker_terminated" && e != "terminal_outcome_conflict"),
+        "a cancelled worker's exit is not recorded as worker_terminated or terminal_outcome_conflict: {step_errors:?}"
+    );
     let audit_rows = fixture.json(&["audit", "list", "--limit", "200", "--json"]);
     let audits: Vec<String> = audit_rows
         .as_array()
@@ -1412,13 +1317,12 @@ fn cancelling_a_live_run_keeps_the_signalled_worker_exit_as_its_outcome() {
         .expect("recorded worker exit");
     let exit: Value =
         serde_json::from_str(worker_exit["arguments_json"].as_str().unwrap()).unwrap();
-    assert_eq!(exit["owner_pid"], worker_pid);
-    assert_eq!(exit["signal"], libc::SIGTERM);
+    let expected_json = serde_json::json!({"owner_pid": worker_pid, "signal": libc::SIGTERM});
+    assert_fields(&exit, expected_json);
     assert!(exit["exit_status"].as_str().is_some_and(|s| !s.is_empty()));
     let repeated = fixture.json(&["run", "cancel", &run_id, "--confirm", "--json"]);
-    assert_eq!(repeated["outcome"], "already_terminal");
-    assert_eq!(repeated["final_state"], "cancelled");
-    assert_eq!(repeated["signal_attempted"], false);
+    let expected_json = serde_json::json!({"outcome": "already_terminal", "final_state": "cancelled", "signal_attempted": false});
+    assert_fields(&repeated, expected_json);
     assert_eq!(fixture.run_state(&run_id), "cancelled");
 }
 fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
@@ -1453,56 +1357,44 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
         })
         .collect();
     let sequence = std::cell::Cell::new(0);
-    let seed = |job: &str, status: &str, input: Value, children: &[(&str, &str)]| {
+    let seed = |spec: Value| {
         let index = sequence.get();
         sequence.set(index + 1);
         let id = format!("jrun-inherited-{index}");
         let now = chrono::Utc::now();
+        let (job, status, input) = (
+            spec["job"].as_str().unwrap(),
+            spec["status"].as_str().unwrap(),
+            spec["input"].clone(),
+        );
         fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,?4,?5,?6,?6,?6,?7)", params![id, fixture.workspace_id(), job, status, input.to_string(), now.to_rfc3339(), std::process::id()]).unwrap();
         let mut state = PipelineState::new(id.clone(), job.into(), input);
-        for (child, child_job) in children {
-            dispatch(&mut state, child, child_job, "dispatch", now);
+        for child in spec["children"].as_array().unwrap() {
+            dispatch(
+                &mut state,
+                child[0].as_str().unwrap(),
+                child[1].as_str().unwrap(),
+                "dispatch",
+                now,
+            );
         }
         runtime.write_run_state(&id, &state).unwrap();
         id
     };
-    let old_leaf = seed(
-        "task_local_pipeline",
-        "running",
-        json!({"task_ids": [tasks[0]]}),
-        &[],
-    );
-    let old_wrapper = seed(
-        "task_auto_pipeline",
-        "running",
-        json!({"task_ids": [tasks[0]]}),
-        &[(&old_leaf, "task_local_pipeline")],
-    );
-    let detached_leaf = seed(
-        "task_pr_pipeline",
-        "retrying",
-        json!({"task_ids": [tasks[1]]}),
-        &[],
-    );
-    let finished_wrapper = seed(
-        "task_auto_pipeline",
-        "success",
-        json!({"task_ids": [tasks[1]]}),
-        &[(&detached_leaf, "task_pr_pipeline")],
-    );
-    let old = seed(
-        "workspace_auto_pipeline",
-        "running",
-        json!({"max_active_leaf_runs": 2}),
-        &[
-            (&old_wrapper, "task_auto_pipeline"),
-            (&finished_wrapper, "task_auto_pipeline"),
-        ],
-    );
+    let spec = json!({"job": "task_local_pipeline", "status": "running", "input": {"task_ids": [tasks[0]]}, "children": []});
+    let old_leaf = seed(spec);
+    let spec = json!({"job": "task_auto_pipeline", "status": "running", "input": {"task_ids": [tasks[0]]}, "children": [[old_leaf, "task_local_pipeline"]]});
+    let old_wrapper = seed(spec);
+    let spec = json!({"job": "task_pr_pipeline", "status": "retrying", "input": {"task_ids": [tasks[1]]}, "children": []});
+    let detached_leaf = seed(spec);
+    let spec = json!({"job": "task_auto_pipeline", "status": "success", "input": {"task_ids": [tasks[1]]}, "children": [[detached_leaf, "task_pr_pipeline"]]});
+    let finished_wrapper = seed(spec);
+    let spec = json!({"job": "workspace_auto_pipeline", "status": "running", "input": {"max_active_leaf_runs": 2}, "children": [[old_wrapper, "task_auto_pipeline"], [finished_wrapper, "task_auto_pipeline"]]});
+    let old = seed(spec);
     let stopped = fixture.json(&["run", "auto", "--stop", "--json"]);
     let coordinator = &stopped["coordinators"][0];
-    assert_eq!(coordinator["run_id"], old);
-    assert_eq!(coordinator["job_id"], "workspace_auto_pipeline");
+    let expected_json = serde_json::json!({"run_id": old, "job_id": "workspace_auto_pipeline"});
+    assert_fields(coordinator, expected_json);
     assert_eq!(
         coordinator["forced_runs"],
         json!([]),
@@ -1526,12 +1418,8 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
             .is_some()
     );
     fixture.set_run_state(&old, "success");
-    let replacement = seed(
-        "workspace_auto_pipeline",
-        "running",
-        json!({"max_active_leaf_runs": 3}),
-        &[],
-    );
+    let spec = json!({"job": "workspace_auto_pipeline", "status": "running", "input": {"max_active_leaf_runs": 3}, "children": []});
+    let replacement = seed(spec);
     let classify = || {
         run_det(
             &runtime,
@@ -1563,19 +1451,11 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
     fixture.conc(&replacement, "3", None, None);
     let wave = verify(2, 2, 1, 3);
     let own_task = wave["loose_task_ids"][0].as_str().unwrap();
-    let own_leaf = seed(
-        "task_local_pipeline",
-        "running",
-        json!({"task_ids": [own_task]}),
-        &[],
-    );
-    let own_wrapper = seed(
-        "task_auto_pipeline",
-        "running",
-        json!({"task_ids": [own_task]}),
-        &[(&own_leaf, "task_local_pipeline")],
-    );
-    let mut state = runtime.read_run_state(&replacement).unwrap().unwrap();
+    let spec = json!({"job": "task_local_pipeline", "status": "running", "input": {"task_ids": [own_task]}, "children": []});
+    let own_leaf = seed(spec);
+    let spec = json!({"job": "task_auto_pipeline", "status": "running", "input": {"task_ids": [own_task]}, "children": [[own_leaf, "task_local_pipeline"]]});
+    let own_wrapper = seed(spec);
+    let mut state = fixture.load_state(&runtime, &replacement);
     dispatch(
         &mut state,
         &own_wrapper,
@@ -1594,9 +1474,8 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
     fixture.set_run_state(&detached_leaf, "success");
     verify(1, 0, 2, 3);
     let shown = fixture.show_json(&replacement);
-    assert_eq!(shown["drain_summary"]["admitted"], 1);
-    assert_eq!(shown["drain_summary"]["succeeded"], 1);
-    assert_eq!(shown["drain_summary"]["failed"], 0);
+    let expected_json = serde_json::json!({"admitted": 1, "succeeded": 1, "failed": 0});
+    assert_fields(&shown["drain_summary"], expected_json);
 }
 fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
     let fixture = Fixture::init();
@@ -1604,28 +1483,31 @@ fn run_concurrency_updates_persisted_revision_and_refuses_stale_writes() {
     let input = serde_json::json!({"max_active_leaf_runs": 2});
     let (runtime, _) = fixture.seed_running(id, "workspace_auto_pipeline", input.clone());
     let changed = fixture.conc(id, "3", Some("0"), Some("CLI fixture"));
-    assert_eq!(changed["outcome"], "updated");
-    assert_eq!(changed["previous_concurrency"], 2);
-    assert_eq!(changed["concurrency"], 3);
-    assert_eq!(changed["revision"], 1);
+    let expected_json = serde_json::json!({"outcome": "updated", "previous_concurrency": 2, "concurrency": 3, "revision": 1});
+    assert_fields(&changed, expected_json);
     assert_eq!(fixture.show_json(id)["run"]["state"], "running");
-    let before = runtime.read_run_state(id).unwrap().unwrap();
+    let before = fixture.load_state(&runtime, id);
     let limit = before
         .pull_drain
         .drain_worker_limit
         .as_ref()
         .expect("persisted CLI worker limit");
-    assert_eq!(limit.max_active_leaf_runs, 3);
-    assert_eq!(limit.previous_max_active_leaf_runs, 2);
-    assert_eq!(limit.revision, 1);
-    assert_eq!(limit.actor, "cli");
-    assert_eq!(limit.reason.as_deref(), Some("CLI fixture"));
+    assert_eq!(
+        (
+            limit.max_active_leaf_runs,
+            limit.previous_max_active_leaf_runs,
+            limit.revision,
+            limit.actor.as_str(),
+            limit.reason.as_deref()
+        ),
+        (3, 2, 1, "cli", Some("CLI fixture"))
+    );
     let unchanged = fixture.conc(id, "3", Some("1"), None);
-    assert_eq!(unchanged["outcome"], "unchanged");
-    assert_eq!(unchanged["revision"], 1);
+    let expected_json = serde_json::json!({"outcome": "unchanged", "revision": 1});
+    assert_fields(&unchanged, expected_json);
     let error = fixture.conc_err(id, "4", Some("0"));
     assert!(error["error"].as_str().unwrap().contains("revision"));
-    assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), before);
+    assert_eq!(fixture.load_state(&runtime, id), before);
     assert_eq!(runtime.show_job_run(id).unwrap().input, Some(input));
     assert_eq!(fixture.run_state(id), "running");
 }
@@ -1641,12 +1523,12 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
     state.record_pipeline_output("open_window", serde_json::json!({"deadline": stamped}));
     runtime.write_run_state(id, &state).unwrap();
     let changed = fixture.extend(id, "3h", Some("4"), Some("CLI fixture"));
-    assert_eq!(changed["outcome"], "extended");
-    assert_eq!(changed["previous_deadline"], stamped.as_str());
-    assert_eq!(changed["revision"], 1);
-    assert_eq!(changed["concurrency"]["previous_concurrency"], 2);
-    assert_eq!(changed["concurrency"]["concurrency"], 4);
-    let extended = runtime.read_run_state(id).unwrap().unwrap();
+    let expected_json =
+        serde_json::json!({"outcome": "extended", "previous_deadline": stamped, "revision": 1});
+    assert_fields(&changed, expected_json);
+    let expected_json = serde_json::json!({"previous_concurrency": 2, "concurrency": 4});
+    assert_fields(&changed["concurrency"], expected_json);
+    let extended = fixture.load_state(&runtime, id);
     let extension = extended.pull_drain.drain_window_extension.as_ref().unwrap();
     assert_eq!(
         changed["deadline"],
@@ -1671,9 +1553,8 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
         1
     );
     let unchanged = fixture.extend(id, "5m", None, None);
-    assert_eq!(unchanged["outcome"], "unchanged");
-    assert_eq!(unchanged["deadline"], changed["deadline"]);
-    assert!(unchanged["concurrency"].is_null());
+    let expected_json = serde_json::json!({"outcome": "unchanged", "deadline": changed["deadline"], "concurrency": null});
+    assert_fields(&unchanged, expected_json);
     let error = fixture.extend_err(id, "soon", None);
     assert!(error["error"].as_str().unwrap().contains("duration"));
     let invalid = fixture.extend_err(id, "4h", Some("0"));
@@ -1683,17 +1564,11 @@ fn run_extend_lengthens_a_live_drain_and_a_repeat_start_still_queues() {
             .unwrap()
             .contains("worker ceiling must be at least 1")
     );
-    assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), extended);
-    let successor = runtime
-        .submit_pipeline_run(
-            "workspace_auto_pipeline",
-            serde_json::json!({"for_seconds": 7200}),
-            None,
-            Some("fixture"),
-        )
-        .unwrap();
+    assert_eq!(fixture.load_state(&runtime, id), extended);
+    let submit_input = serde_json::json!({"for_seconds": 7200});
+    let successor = submit_fixture_run(&runtime, "workspace_auto_pipeline", submit_input);
     assert!(successor.queued);
-    assert_eq!(runtime.read_run_state(id).unwrap().unwrap(), extended);
+    assert_eq!(fixture.load_state(&runtime, id), extended);
     assert_eq!(fixture.run_state(id), "running");
 }
 fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
@@ -1704,14 +1579,8 @@ fn a_drain_at_concurrency_twenty_runs_twenty_delivery_wrappers_at_once() {
     for index in 0..19 {
         fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'task_auto_pipeline',1,'running',?3,?3,?3,?4)", params![format!("jrun-cli-wrapper-{index}"), fixture.workspace_id(), now, std::process::id()]).unwrap();
     }
-    let twentieth = runtime
-        .submit_pipeline_run(
-            "task_auto_pipeline",
-            serde_json::json!({"task_ids": []}),
-            None,
-            Some("fixture"),
-        )
-        .unwrap();
+    let submit_input = serde_json::json!({"task_ids": []});
+    let twentieth = submit_fixture_run(&runtime, "task_auto_pipeline", submit_input);
     assert!(!twentieth.queued);
     assert_eq!(twentieth.queue_position, None);
 }
@@ -1721,11 +1590,9 @@ fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
     let input = serde_json::json!({"max_active_leaf_runs": 5});
     let (runtime, _) = fixture.seed_running(id, "workspace_pull_pipeline", input.clone());
     let changed = fixture.conc(id, "24", None, None);
-    assert_eq!(changed["outcome"], "updated");
-    assert_eq!(changed["job_id"], "workspace_pull_pipeline");
-    assert_eq!(changed["previous_concurrency"], 5);
-    assert_eq!(changed["concurrency"], 24);
-    let state = runtime.read_run_state(id).unwrap().unwrap();
+    let expected_json = serde_json::json!({"outcome": "updated", "job_id": "workspace_pull_pipeline", "previous_concurrency": 5, "concurrency": 24});
+    assert_fields(&changed, expected_json);
+    let state = fixture.load_state(&runtime, id);
     assert_eq!(state.effective_max_active_leaf_runs(5), 24);
     assert_eq!(runtime.show_job_run(id).unwrap().input, Some(input));
     let refused = fixture.conc_err(FAILED, "24", None);
@@ -1733,140 +1600,84 @@ fn run_concurrency_retunes_a_pull_drain_past_the_former_leaf_ceiling() {
 }
 fn readiness_uses_a_live_pull_drains_ceiling() {
     let fixture = Fixture::init();
-    let idle = fixture.json(&["run", "readiness", "--json"]);
-    for (key, expected) in [
-        ("max_active_leaf_runs", serde_json::json!(5)),
-        ("active_leaf_runs", serde_json::json!(0)),
-        ("free_slots", serde_json::json!(5)),
-        ("limit_source", serde_json::json!("default")),
-        ("drain_run_id", serde_json::Value::Null),
-        ("pull_drain_run_id", serde_json::Value::Null),
-    ] {
-        assert_eq!(cap(&idle)[&key], expected);
-    }
-    let idle_text = fixture.readiness_text();
+    let (idle, idle_text) = fixture.readiness_pair();
+    let expected_json = serde_json::json!({"max_active_leaf_runs": 5, "active_leaf_runs": 0, "free_slots": 5, "limit_source": "default", "drain_run_id": null, "pull_drain_run_id": null});
+    assert_cap(&idle, expected_json);
     contains(&idle_text, "Active leaf runs: 0/5; free slots: 5.");
     assert!(
         !idle_text.contains("Leaf ceiling:"),
         "idle readiness must not name a pull ceiling: {idle_text}"
     );
     let pull_id = "jrun-cli-pull-ceiling";
-    fixture.seed_running(
-        pull_id,
-        "workspace_pull_pipeline",
-        serde_json::json!({"max_active_leaf_runs": 3}),
-    );
+    let seed_input = serde_json::json!({"max_active_leaf_runs": 3});
+    fixture.seed_running(pull_id, "workspace_pull_pipeline", seed_input);
     let now = chrono::Utc::now().to_rfc3339();
     for index in 0..2 {
         fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,'task_pr_pipeline',1,'running',?3,?3,?3,?4)", params![format!("jrun-cli-leaf-ceiling-{index}"), fixture.workspace_id(), now, std::process::id()]).unwrap();
     }
-    let submitted = fixture.json(&["run", "readiness", "--json"]);
-    for (key, expected) in [
-        ("max_active_leaf_runs", serde_json::json!(3)),
-        ("active_leaf_runs", serde_json::json!(2)),
-        ("free_slots", serde_json::json!(1)),
-        ("limit_source", serde_json::json!("pull_run_input")),
-        ("pull_drain_run_id", serde_json::json!(pull_id)),
-        ("drain_run_id", serde_json::Value::Null),
-    ] {
-        assert_eq!(cap(&submitted)[&key], expected);
-    }
-    let submitted_text = fixture.readiness_text();
-    contains(&submitted_text, "Active leaf runs: 2/3; free slots: 1.");
-    contains(
+    let (submitted, submitted_text) = fixture.readiness_pair();
+    let expected_json = serde_json::json!({"max_active_leaf_runs": 3, "active_leaf_runs": 2, "free_slots": 1, "limit_source": "pull_run_input", "pull_drain_run_id": pull_id, "drain_run_id": null});
+    assert_cap(&submitted, expected_json);
+    contains_all(
         &submitted_text,
-        &format!("Leaf ceiling: {pull_id} (pull_run_input)."),
+        &[
+            "Active leaf runs: 2/3; free slots: 1.",
+            &format!("Leaf ceiling: {pull_id} (pull_run_input)."),
+        ],
     );
     let changed = fixture.conc(pull_id, "4", None, None);
     assert_eq!(changed["outcome"], "updated");
     assert_eq!(changed["concurrency"], 4);
-    let resized = fixture.json(&["run", "readiness", "--json"]);
-    for (key, expected) in [
-        ("max_active_leaf_runs", serde_json::json!(4)),
-        ("active_leaf_runs", serde_json::json!(2)),
-        ("free_slots", serde_json::json!(2)),
-        ("limit_source", serde_json::json!("pull_run_control")),
-    ] {
-        assert_eq!(cap(&resized)[&key], expected);
-    }
-    let resized_text = fixture.readiness_text();
-    contains(&resized_text, "Active leaf runs: 2/4; free slots: 2.");
-    contains(
+    let (resized, resized_text) = fixture.readiness_pair();
+    let expected_json = serde_json::json!({"max_active_leaf_runs": 4, "active_leaf_runs": 2, "free_slots": 2, "limit_source": "pull_run_control"});
+    assert_cap(&resized, expected_json);
+    contains_all(
         &resized_text,
-        &format!("Leaf ceiling: {pull_id} (pull_run_control)."),
+        &[
+            "Active leaf runs: 2/4; free slots: 2.",
+            &format!("Leaf ceiling: {pull_id} (pull_run_control)."),
+        ],
     );
     let requested = fixture.json(&["run", "readiness", "--concurrency", "8", "--json"]);
-    for (key, expected) in [
-        ("max_active_leaf_runs", serde_json::json!(8)),
-        ("free_slots", serde_json::json!(6)),
-        ("limit_source", serde_json::json!("requested")),
-    ] {
-        assert_eq!(cap(&requested)[&key], expected);
-    }
+    let expected_json = serde_json::json!({"max_active_leaf_runs": 8, "free_slots": 6, "limit_source": "requested"});
+    assert_cap(&requested, expected_json);
     let local_id = "jrun-cli-local-ceiling";
-    fixture.seed_running(
-        local_id,
-        "workspace_auto_pipeline",
-        serde_json::json!({"max_active_leaf_runs": 7}),
-    );
-    let local = fixture.json(&["run", "readiness", "--json"]);
+    let seed_input = serde_json::json!({"max_active_leaf_runs": 7});
+    fixture.seed_running(local_id, "workspace_auto_pipeline", seed_input);
+    let (local, local_text) = fixture.readiness_pair();
     assert_eq!(
         cap(&local)["max_active_leaf_runs"],
         7,
         "a live local drain keeps precedence over the pull drain: {local}"
     );
-    for (key, expected) in [
-        ("active_leaf_runs", serde_json::json!(2)),
-        ("free_slots", serde_json::json!(5)),
-        ("limit_source", serde_json::json!("run_input")),
-        ("drain_run_id", serde_json::json!(local_id)),
-        ("pull_drain_run_id", serde_json::json!(pull_id)),
-    ] {
-        assert_eq!(cap(&local)[&key], expected);
-    }
-    let local_text = fixture.readiness_text();
+    let expected_json = serde_json::json!({"active_leaf_runs": 2, "free_slots": 5, "limit_source": "run_input", "drain_run_id": local_id, "pull_drain_run_id": pull_id});
+    assert_cap(&local, expected_json);
     contains(&local_text, "Active leaf runs: 2/7; free slots: 5.");
     assert!(
         !local_text.contains("Leaf ceiling:"),
         "local-drain text must not name the pull ceiling: {local_text}"
     );
-    contains(&local_text, &format!("Running drain: {local_id}."));
-    contains(&local_text, &format!("Running pull drain: {pull_id}."));
+    contains_all(
+        &local_text,
+        &[
+            &format!("Running drain: {local_id}."),
+            &format!("Running pull drain: {pull_id}."),
+        ],
+    );
 }
 fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
     let fixture = Fixture::init();
     let id = "jrun-cli-throttled-pull";
     let now = chrono::Utc::now();
-    let (runtime, mut state) =
-        fixture.seed_running(id, "workspace_pull_pipeline", serde_json::json!({}));
     let since = chrono::DateTime::parse_from_rfc3339("2026-10-04T08:41:00Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let mut pass = pass_at(now);
-    pass.resource_throttle = Some(orbit_types::workflow::ResourceThrottle {
-        resources: vec![
-            orbit_types::workflow::ResourcePressure {
-                resource: "memory".into(),
-                percent: 93.2,
-                high_percent: 90,
-                resume_percent: 80,
-                since,
-            },
-            orbit_types::workflow::ResourcePressure {
-                resource: "cpu".into(),
-                percent: 89.0,
-                high_percent: 90,
-                resume_percent: 75,
-                since,
-            },
-        ],
-    });
-    state.pull_drain.drain_last_pass = Some(pass);
-    runtime.write_run_state(id, &state).unwrap();
+    let pass_json = serde_json::json!({"recorded_at": now, "queued": 0, "resource_throttle": {"resources": [{"resource": "memory", "percent": 93.2, "high_percent": 90, "resume_percent": 80, "since": since}, {"resource": "cpu", "percent": 89.0, "high_percent": 90, "resume_percent": 75, "since": since}]}});
+    fixture.seed_pass(id, "workspace_pull_pipeline", pass_from(pass_json));
     let held = "Admissions throttled: memory 93% (throttled at \u{2265} 90% since 2026-10-04 08:41Z; resumes below 80%); cpu 89% (throttled at \u{2265} 90% since 2026-10-04 08:41Z; resumes below 75%)";
-    let readiness = fixture.json(&["run", "readiness", "--json"]);
-    assert_eq!(cap(&readiness)["resource_cpu_source"], "load");
-    assert_eq!(cap(&readiness)["free_slots"], 0);
+    let readiness = fixture.readiness();
+    let expected_json = serde_json::json!({"resource_cpu_source": "load", "free_slots": 0});
+    assert_cap(&readiness, expected_json);
     assert_eq!(
         cap(&readiness)["resource_throttle"]["resources"][0]["percent"],
         93.2
@@ -1894,7 +1705,7 @@ fn a_live_drains_recorded_throttle_reaches_readiness_run_show_and_ship() {
     ] {
         fixture.config_set(key, value);
     }
-    let configured = fixture.json(&["run", "readiness", "--json"]);
+    let configured = fixture.readiness();
     assert_eq!(cap(&configured)["resource_cpu_source"], "utilization");
     contains(
         &fixture.readiness_text(),
@@ -1911,28 +1722,12 @@ fn run_show_counts_local_deferred_tasks_once() {
     let now = chrono::Utc::now();
     let completed = now - chrono::Duration::minutes(1);
     let lock_error = "record pilot operator handoffs: timed out after 30000ms acquiring task commit boundary (held by pid 4242)";
-    let mut pass = pass_at(now);
-    pass.queued = 3;
-    pass.deferred = (1..=3)
-        .map(|n| {
-            waiting(
-                &format!("ORB-1520{n}"),
-                "context_lock_conflict",
-                &["ORB-15183"],
-                None,
-            )
-        })
-        .collect();
-    pass.deferred_total = 3;
-    pass.waiting_recorded_at = Some(completed);
-    pass.last_pass_error_code = Some("lock_busy".into());
-    pass.last_pass_error = Some(lock_error.into());
-    pass.consecutive_pass_failures = 1;
+    let expected_json = serde_json::json!({"recorded_at": now, "queued": 3, "deferred": (1..=3).map(|n| waiting(&format!("ORB-1520{n}"), "context_lock_conflict", &["ORB-15183"], None)).collect::<Vec<_>>(), "deferred_total": 3, "waiting_recorded_at": completed, "last_pass_error_code": "lock_busy", "last_pass_error": lock_error, "consecutive_pass_failures": 1});
+    let pass = pass_from(expected_json);
     fixture.seed_pass(id, "workspace_auto_pipeline", pass);
     let shown = fixture.show_json(id);
-    let pass = &shown["pipeline_state"]["drain_last_pass"];
-    assert_eq!(pass["queued"], 3);
-    assert_eq!(pass["deferred_total"], 3);
+    let expected_json = serde_json::json!({"queued": 3, "deferred_total": 3});
+    assert_fields(&shown["pipeline_state"]["drain_last_pass"], expected_json);
     let text = fixture.show_text(id);
     contains(
         &text,
@@ -1950,9 +1745,10 @@ fn run_show_counts_local_deferred_tasks_once() {
         text.contains(&dated) && !text.contains("the owner answered"),
         "a local drain's kept lists are dated from its last completed pass: {text}"
     );
-    assert!(text.contains(&format!(
-        "Admission pass deferred: consecutive_failures=1 last_pass_error={lock_error}"
-    )));
+    contains(
+        &text,
+        &format!("Admission pass deferred: consecutive_failures=1 last_pass_error={lock_error}"),
+    );
 }
 fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
     let fixture = Fixture::init();
@@ -1961,63 +1757,31 @@ fn run_show_names_the_tasks_a_pull_drains_owner_kept_off_this_host() {
     let answered = chrono::DateTime::parse_from_rfc3339("2026-10-07T06:44:53Z")
         .unwrap()
         .with_timezone(&chrono::Utc);
-    let mut pass = pass_at(now);
-    pass.queued = 9;
-    pass.deferred = vec![
-        waiting("ORB-101", "context_lock_conflict", &["ORB-900"], None),
-        waiting(
-            "ORB-102",
-            "owner_hold",
-            &[],
-            Some("held for a red base: make ci-lint"),
-        ),
-    ];
-    pass.deferred_total = 2;
-    pass.excluded = [
-        ("ORB-103", "dependency_not_done", &["ORB-901"][..], None),
-        ("ORB-104", "host_os_mismatch", &[][..], Some("waits for a linux host (os:linux); the executor runs macos")),
-        ("ORB-105", "crew_unavailable", &[][..], Some("crew antigravity cannot run on this host")),
-        ("ORB-106", "native_os_required", &[][..], Some("Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`")),
-        ("ORB-107", "browser_kit_missing", &[][..], Some("waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit")),
-    ].into_iter().map(|(task, reason, blocked, detail)| waiting(task, reason, blocked, detail)).collect();
-    pass.excluded_total = 5;
-    pass.waiting_recorded_at = Some(answered);
-    pass.waiting_by_reason = [
-        ("context_lock_conflict", 4),
-        ("owner_hold", 11),
-        ("dependency_not_done", 1),
-        ("host_os_mismatch", 1),
-        ("crew_unavailable", 1),
-        ("native_os_required", 1),
-        ("browser_kit_missing", 1),
-    ]
-    .into_iter()
-    .map(|(r, c)| (r.to_string(), c))
-    .collect();
-    pass.consecutive_idle_passes = 4;
+    let expected_json = serde_json::json!({"recorded_at": now, "queued": 9, "deferred": [waiting("ORB-101", "context_lock_conflict", &["ORB-900"], None), waiting("ORB-102", "owner_hold", &[], Some("held for a red base: make ci-lint"))], "deferred_total": 2, "excluded": [waiting("ORB-103", "dependency_not_done", &["ORB-901"], None), waiting("ORB-104", "host_os_mismatch", &[], Some("waits for a linux host (os:linux); the executor runs macos")), waiting("ORB-105", "crew_unavailable", &[], Some("crew antigravity cannot run on this host")), waiting("ORB-106", "native_os_required", &[], Some("Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`")), waiting("ORB-107", "browser_kit_missing", &[], Some("waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit"))], "excluded_total": 5, "waiting_recorded_at": answered, "waiting_by_reason": {"context_lock_conflict": 4, "owner_hold": 11, "dependency_not_done": 1, "host_os_mismatch": 1, "crew_unavailable": 1, "native_os_required": 1, "browser_kit_missing": 1}, "consecutive_idle_passes": 4});
+    let pass = pass_from(expected_json);
     let (runtime, mut state) = fixture.seed_pass(id, "workspace_pull_pipeline", pass);
     let shown = fixture.show_json(id);
     let pass = &shown["pipeline_state"]["drain_last_pass"];
-    assert_eq!(pass["queued"], 9);
-    assert_eq!(pass["excluded_total"], 5);
+    let expected_json = serde_json::json!({"queued": 9, "excluded_total": 5, "waiting_recorded_at": "2026-10-07T06:44:53Z"});
+    assert_fields(pass, expected_json);
     assert_eq!(pass["deferred"][0]["blocked_by"][0], "ORB-900");
     assert_eq!(pass["excluded"][0]["reason"], "dependency_not_done");
-    assert_eq!(pass["waiting_recorded_at"], "2026-10-07T06:44:53Z");
     let text = fixture.show_text(id);
-    for expected in [
-        "Still waiting: 9 admissible, 2 deferred and 5 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
-        "Task ORB-101: context_lock_conflict blocked-by=ORB-900",
-        "Task ORB-102: owner_hold (held for a red base: make ci-lint)",
-        "Task ORB-103: unmet_dependency waits-on ORB-901",
-        "Task ORB-104: host_os_mismatch (waits for a linux host (os:linux); the executor runs macos)",
-        "Task ORB-105: crew_unavailable (crew antigravity cannot run on this host)",
-        "Task ORB-106: native_os_required (Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`)",
-        "Task ORB-107: browser_kit_missing (waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit)",
-        "idle: 20 backlog task(s) kept off this host for 4 consecutive passes (11 held on the owner, 4 footprint holds,",
-        "1 needing a host with the browser kit",
-    ] {
-        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
-    }
+    contains_all(
+        &text,
+        &[
+            "Still waiting: 9 admissible, 2 deferred and 5 excluded backlog task(s) were never started at the last pass (the owner answered 2026-10-07 06:44:53Z)",
+            "Task ORB-101: context_lock_conflict blocked-by=ORB-900",
+            "Task ORB-102: owner_hold (held for a red base: make ci-lint)",
+            "Task ORB-103: unmet_dependency waits-on ORB-901",
+            "Task ORB-104: host_os_mismatch (waits for a linux host (os:linux); the executor runs macos)",
+            "Task ORB-105: crew_unavailable (crew antigravity cannot run on this host)",
+            "Task ORB-106: native_os_required (Native OS requirement: criterion 2 needs native macos evidence, and the task's tags lack `os:macos`)",
+            "Task ORB-107: browser_kit_missing (waits for a host with the browser kit (ui); run `orbit browser-kit install` on a host that runs workers to give it one; the executor reports no verified kit)",
+            "idle: 20 backlog task(s) kept off this host for 4 consecutive passes (11 held on the owner, 4 footprint holds,",
+            "1 needing a host with the browser kit",
+        ],
+    );
     state
         .pull_drain
         .drain_last_pass
@@ -2033,33 +1797,30 @@ fn run_show_reports_deferred_tasks_beyond_the_listed_ones() {
     let fixture = Fixture::init();
     let id = "jrun-cli-pull-deferred-overflow";
     let now = chrono::Utc::now();
-    let mut pass = pass_at(now);
-    pass.deferred = (0..20)
-        .map(|i| {
-            waiting(
-                &format!("ORB-{}", 200 + i),
-                "owner_hold",
-                &[],
-                Some("held by the owner"),
-            )
-        })
-        .collect();
-    pass.deferred_total = 25;
-    pass.waiting_by_reason = [("owner_hold".to_string(), 25)].into_iter().collect();
-    pass.consecutive_idle_passes = 1;
+    let expected_json = serde_json::json!({"recorded_at": now, "queued": 0, "deferred": (0..20).map(|i| waiting(&format!("ORB-{}", 200 + i), "owner_hold", &[], Some("held by the owner"))).collect::<Vec<_>>(), "deferred_total": 25, "waiting_by_reason": {"owner_hold": 25}, "consecutive_idle_passes": 1});
+    let pass = pass_from(expected_json);
     fixture.seed_pass(id, "workspace_pull_pipeline", pass);
     let shown = fixture.show_json(id);
-    let pass = &shown["pipeline_state"]["drain_last_pass"];
-    assert_eq!(pass["deferred_total"], 25);
-    assert_eq!(pass["deferred"].as_array().unwrap().len(), 20);
+    assert_eq!(
+        shown["pipeline_state"]["drain_last_pass"]["deferred_total"],
+        25
+    );
+    assert_eq!(
+        shown["pipeline_state"]["drain_last_pass"]["deferred"]
+            .as_array()
+            .unwrap()
+            .len(),
+        20
+    );
     let text = fixture.show_text(id);
-    for expected in [
-        "Still waiting: 0 admissible, 25 deferred and 0 excluded backlog task(s) were never started at the last pass",
-        "Task ORB-219: owner_hold",
-        "... and 5 more deferred",
-    ] {
-        assert!(text.contains(expected), "missing {expected:?} in:\n{text}");
-    }
+    contains_all(
+        &text,
+        &[
+            "Still waiting: 0 admissible, 25 deferred and 0 excluded backlog task(s) were never started at the last pass",
+            "Task ORB-219: owner_hold",
+            "... and 5 more deferred",
+        ],
+    );
     assert!(!text.contains("Task ORB-220"));
 }
 fn run_show_names_the_pull_breaker() {
@@ -2069,13 +1830,8 @@ fn run_show_names_the_pull_breaker() {
     let (runtime, mut state) =
         fixture.seed_running(id, "workspace_pull_pipeline", serde_json::json!({}));
     let half_open_at = now + chrono::Duration::minutes(15);
-    state.pull_drain.pull_breaker = Some(orbit_types::workflow::PullBreaker {
-        failures: 3,
-        failure_classes: vec!["candidate".into(), "task_input".into(), "untyped".into()],
-        opened_at: now,
-        half_open_at,
-    });
-    runtime.write_run_state(id, &state).unwrap();
+    state.pull_drain.pull_breaker = Some(serde_json::from_value(serde_json::json!({"failures": 3, "failure_classes": ["candidate", "task_input", "untyped"], "opened_at": now, "half_open_at": half_open_at})).unwrap());
+    fixture.store(&runtime, id, &state);
     let shown = fixture.show_json(id);
     let breaker = &shown["pipeline_state"]["pull_breaker"];
     assert_eq!(breaker["failures"], 3);
@@ -2085,12 +1841,13 @@ fn run_show_names_the_pull_breaker() {
         "half-opens at {} to admit one probe claim",
         half_open_at.format("%Y-%m-%d %H:%M:%SZ")
     );
-    for expected in [
-        "Breaker: open after 3 consecutive failed claims (candidate, task_input, untyped)",
-        half_open.as_str(),
-    ] {
-        assert!(open.contains(expected), "missing {expected:?} in:\n{open}");
-    }
+    contains_all(
+        &open,
+        &[
+            "Breaker: open after 3 consecutive failed claims (candidate, task_input, untyped)",
+            half_open.as_str(),
+        ],
+    );
     state.pull_drain.pull_breaker.as_mut().unwrap().half_open_at =
         now - chrono::Duration::minutes(1);
     runtime.write_run_state(id, &state).unwrap();
@@ -2101,19 +1858,12 @@ fn run_show_exposes_degraded_pull_pass_health() {
     let fixture = Fixture::init();
     let id = "jrun-cli-degraded-pull";
     let now = chrono::Utc::now();
-    let mut pass = pass_at(now);
-    pass.last_pass_error = Some("protocol_mismatch: caller revision 2; owner revision 1".into());
-    pass.consecutive_pass_failures = 3;
-    pass.degraded = true;
+    let expected_json = serde_json::json!({"recorded_at": now, "queued": 0, "last_pass_error": "protocol_mismatch: caller revision 2; owner revision 1", "consecutive_pass_failures": 3, "degraded": true});
+    let pass = pass_from(expected_json);
     let (runtime, mut state) = fixture.seed_pass(id, "workspace_pull_pipeline", pass);
     let shown = fixture.show_json(id);
-    let pass = &shown["pipeline_state"]["drain_last_pass"];
-    assert_eq!(pass["consecutive_pass_failures"], 3);
-    assert_eq!(pass["degraded"], true);
-    assert_eq!(
-        pass["last_pass_error"],
-        "protocol_mismatch: caller revision 2; owner revision 1"
-    );
+    let expected_json = serde_json::json!({"consecutive_pass_failures": 3, "degraded": true, "last_pass_error": "protocol_mismatch: caller revision 2; owner revision 1"});
+    assert_fields(&shown["pipeline_state"]["drain_last_pass"], expected_json);
     let text = fixture.show_text(id);
     contains(&text, "consecutive_failures=3");
     contains(&text, "last_pass_error=protocol_mismatch:");
@@ -2175,12 +1925,7 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
         ] {
             fixture.db().execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,?4,?5,?5,?5,?6)", params![id, fixture.workspace_id(), job, state, now.to_rfc3339(), std::process::id()]).unwrap();
         }
-        let mut state = fixture.write_state(
-            &runtime,
-            drain,
-            "workspace_auto_pipeline",
-            serde_json::json!({}),
-        );
+        let mut state = fixture.empty_state(&runtime, drain, "workspace_auto_pipeline");
         for child in [failed, stopped] {
             dispatch(&mut state, child, "task_auto_pipeline", "dispatch", now);
         }
@@ -2194,9 +1939,8 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
         assert_eq!(output.status.code(), Some(1));
         if as_json {
             let body: Value = serde_json::from_slice(&output.stdout).unwrap();
-            assert_eq!(body["outcome"], "cancelled");
-            assert_eq!(body["final_state"], "cancelled");
-            assert_eq!(body["forced_runs"], serde_json::json!([stopped]));
+            let expected_json = serde_json::json!({"outcome": "cancelled", "final_state": "cancelled", "forced_runs": [stopped]});
+            assert_fields(&body, expected_json);
             assert_eq!(body["unstopped_children"][0]["child_run_id"], failed);
             assert!(
                 body["unstopped_children"][0]["reason"]
@@ -2205,10 +1949,8 @@ fn force_cancel_reports_unstopped_local_children_and_exits_one() {
                     .contains("could not confirm")
             );
         } else {
-            let text = String::from_utf8_lossy(&output.stdout);
-            for value in [drain, stopped, failed, "could not confirm"] {
-                assert!(text.contains(value), "missing {value}: {text}");
-            }
+            let text = String::from_utf8_lossy(&output.stdout).into_owned();
+            contains_all(&text, &[drain, stopped, failed, "could not confirm"]);
         }
         assert_eq!(fixture.run_state(drain), "cancelled");
         assert_eq!(fixture.run_state(stopped), "cancelled");
@@ -2251,21 +1993,19 @@ fn a_surface_reservation_reaches_readiness_and_drain_run_show() {
     );
     let drain = "jrun-cli-surface-reservation";
     fixture.seed_running(drain, "workspace_auto_pipeline", serde_json::json!({}));
-    let wave = run_det(
-        &runtime,
-        "classify_workspace_auto_tasks",
-        serde_json::json!({"run_id": drain, "max_active_leaf_runs": 2}),
-    );
+    let det_input = serde_json::json!({"run_id": drain, "max_active_leaf_runs": 2});
+    let wave = run_det(&runtime, "classify_workspace_auto_tasks", det_input);
     assert_eq!(wave["loose_task_ids"], serde_json::json!([]));
-    let readiness = fixture.json(&["run", "readiness", "--json"]);
+    let readiness = fixture.readiness();
     let entry = readiness["tasks"]
         .as_array()
         .unwrap()
         .iter()
         .find(|task| task["task_id"] == withheld.as_str())
         .expect("withheld task in readiness");
-    assert_eq!(entry["reason"], "surface_reserved");
-    assert_eq!(entry["blocking_task_ids"], serde_json::json!([critical]));
+    let expected_json =
+        serde_json::json!({"reason": "surface_reserved", "blocking_task_ids": [critical]});
+    assert_fields(entry, expected_json);
     contains(
         &fixture.readiness_text(),
         &format!("{withheld}: waiting (surface_reserved) blocked-by={critical}"),
@@ -2353,11 +2093,8 @@ fn run_show_marks_an_agent_blocked_on_a_stopped_descendant() {
     let json = fixture.show_json(BLOCKED);
     let process = &json["provider_processes"][0];
     assert_eq!(process["liveness"], "alive");
-    assert_eq!(process["blocked_on_stopped_descendant"]["pid"], child_pid);
-    assert_eq!(
-        process["blocked_on_stopped_descendant"]["still_stopped"],
-        true
-    );
+    let expected_json = serde_json::json!({"pid": child_pid, "still_stopped": true});
+    assert_fields(&process["blocked_on_stopped_descendant"], expected_json);
     assert_eq!(process["stopped_descendants"][0]["ended"], false);
     let alive = fixture.show_text(ALIVE);
     let line = agent_line(&alive);
@@ -2461,22 +2198,17 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
     let pilot = "jrun-cli-warning-pilot";
     let now = chrono::Utc::now();
     let db = fixture.db();
-    for (run_id, job_id, input) in [
-        (
-            drain,
-            "workspace_auto_pipeline",
-            serde_json::json!({"approve_proposed": true}),
-        ),
-        (
-            pilot,
-            "task_pilot_pipeline",
-            serde_json::json!({"task_ids": [task.id]}),
-        ),
-    ] {
+    let run_table = serde_json::json!({"runs": [[drain, "workspace_auto_pipeline", {"approve_proposed": true}], [pilot, "task_pilot_pipeline", {"task_ids": [task.id]}]]});
+    for row in run_table["runs"].as_array().unwrap() {
+        let (run_id, job_id, input) = (
+            row[0].as_str().unwrap(),
+            row[1].as_str().unwrap(),
+            row[2].clone(),
+        );
         db.execute("INSERT INTO job_runs (run_id,workspace_id,job_id,attempt,state,input_json,scheduled_at,started_at,created_at,pid) VALUES (?1,?2,?3,1,'running',?4,?5,?5,?5,?6)", params![run_id, fixture.workspace_id(), job_id, input.to_string(), now.to_rfc3339(), std::process::id()]).unwrap();
         fixture.write_state(&runtime, run_id, job_id, serde_json::json!({}));
     }
-    let mut state = runtime.read_run_state(drain).unwrap().unwrap();
+    let mut state = fixture.load_state(&runtime, drain);
     dispatch(
         &mut state,
         pilot,
@@ -2484,12 +2216,9 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
         "invoke_detached",
         now,
     );
-    runtime.write_run_state(drain, &state).unwrap();
-    let prepared = run_det(
-        &runtime,
-        "prepare_task_pilot",
-        serde_json::json!({"task_ids": [task.id], "workspace_path": fixture.work, "base_branch": "main"}),
-    );
+    fixture.store(&runtime, drain, &state);
+    let det_input = serde_json::json!({"task_ids": [task.id], "workspace_path": fixture.work, "base_branch": "main"});
+    let prepared = run_det(&runtime, "prepare_task_pilot", det_input);
     let observed_revision = git_repo::run(&fixture.work, &["rev-parse", "HEAD"]);
     let observed_tree = git_repo::run(&fixture.work, &["rev-parse", "HEAD^{tree}"]);
     let first = "The operator should review the proposed approach.";
@@ -2500,8 +2229,13 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
         "apply_task_pilot_results",
         serde_json::json!({"run_id": pilot, "workspace_path": fixture.work, "prepared": prepared, "promotion_authorized": true, "drain_promotion": {"run_id": drain}, "results": [{"partition_index": 0, "observed_revision": observed_revision, "observed_tree": observed_tree, "task_ids": [task.id], "tasks": [{"task_id": task.id, "context_files_before": ["file:README.md"], "context_files_after": ["file:README.md"], "disposition": "selectors", "recommended_crew": "fixture", "recommended_complexity": "low", "confidence": "high", "assessment_rationale": "README.md holds the change.", "validation_approach": "Inspect README.md.", "evidence_gaps": [], "reassessment_triggers": [], "blocked_by": [], "adr_conflicts": [], "utility_warnings": [format!("{first}\n{rest}")], "surface_warnings": [surface], "duplicate_of": null, "already_landed": null}]}]}),
     );
-    assert_eq!(applied["status"], "succeeded");
-    assert_eq!(applied["drain_approval"][0]["classification"], "warnings");
+    assert_eq!(
+        (
+            applied["status"].as_str(),
+            applied["drain_approval"][0]["classification"].as_str()
+        ),
+        (Some("succeeded"), Some("warnings"))
+    );
     assert_eq!(
         runtime.get_task(&task.id).unwrap().status,
         TaskStatus::Proposed
@@ -2522,7 +2256,7 @@ fn warnings_hold_findings_reach_run_show_and_readiness() {
         shown.contains(&format!("{first}\n{rest}")),
         "run show keeps the full multiline finding: {shown}"
     );
-    let readiness = fixture.json(&["run", "readiness", "--json"]);
+    let readiness = fixture.readiness();
     let held = readiness["approvals"]["held"]
         .as_array()
         .and_then(|held| held.iter().find(|e| e["task_id"] == task.id.as_str()))
