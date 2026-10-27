@@ -11,8 +11,10 @@ use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
     DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
 };
-use orbit_core::application::auto_tasks::AutoTaskListingRow;
 use orbit_core::application::auto_tasks::scheduler::open_auto_task_instances_from_tasks;
+use orbit_core::application::auto_tasks::{
+    AutoTaskListingRow, AutoTaskToggleError, AutoTaskToggleOutcome, AutoTaskToggleProfile,
+};
 use orbit_core::{OrbitRuntime, Task};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, auto_task_tag};
 use serde::Deserialize;
@@ -91,9 +93,8 @@ pub(super) async fn list_auto_tasks(
 
 /// `POST /api/auto-tasks/toggle` — set one definition's versioned `enabled` flag.
 ///
-/// Compare-and-set uses the raw flag the client observed. "Already in that
-/// state" follows the effective switch, so Disable on a legacy-enabled
-/// consumer (raw flag still false) reaches the write and stamps the operator.
+/// The observed profile of the shared toggle command decides; this handler
+/// binds the operator, audits an attempted write and renders the outcome.
 pub(super) async fn toggle_auto_task(
     State(state): State<DashboardState>,
     Query(query): Query<OperationsQuery>,
@@ -127,56 +128,50 @@ pub(super) async fn toggle_auto_task(
         }
     };
     let started = Instant::now();
-    let name = body.name.clone();
-    let current = match blocking("auto-task show", {
+    let outcome = match blocking("auto-task toggle", {
         let runtime = runtime.clone();
-        move || runtime.auto_task_show(&name)
+        let name = body.name.clone();
+        let profile = AutoTaskToggleProfile::Observed {
+            expected_enabled: body.expected_enabled,
+        };
+        let enabled = body.enabled;
+        move || Ok(runtime.auto_task_toggle_command(&name, enabled, profile))
     })
     .await
     {
-        Ok(Some(definition)) => definition,
-        Ok(None) => {
+        Ok(outcome) => outcome,
+        Err(response) => return *response,
+    };
+    let updated = match outcome {
+        Ok(AutoTaskToggleOutcome::Written(updated)) => updated,
+        Ok(AutoTaskToggleOutcome::AlreadySet(_)) => {
+            return Json(json!({
+                "name": body.name,
+                "enabled": body.enabled,
+                "changed": false,
+                "message": if body.enabled { "Auto-task already enabled" } else { "Auto-task already disabled" },
+            }))
+            .into_response();
+        }
+        Ok(AutoTaskToggleOutcome::Stale { actual_enabled }) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "auto-task state changed while this action was pending; refresh before retrying",
+                    "code": "stale_auto_task_state",
+                    "actual_enabled": actual_enabled,
+                })),
+            )
+                .into_response();
+        }
+        Ok(AutoTaskToggleOutcome::NotFound) => {
             return named_entity_not_found(
                 "auto_task_not_found",
                 format!("auto-task '{}' was not found", body.name),
             );
         }
-        Err(response) => return *response,
-    };
-    if current.enabled != body.expected_enabled {
-        return (
-            StatusCode::CONFLICT,
-            Json(json!({
-                "error": "auto-task state changed while this action was pending; refresh before retrying",
-                "code": "stale_auto_task_state",
-                "actual_enabled": current.enabled,
-            })),
-        )
-            .into_response();
-    }
-    // A legacy after-landing consumer is on while its raw flag is still
-    // false. Comparing the request to that raw flag would report Disable as
-    // a no-op and leave the consumer running.
-    if runtime.auto_task_enabled(&current) == body.enabled {
-        return Json(json!({
-            "name": body.name,
-            "enabled": body.enabled,
-            "changed": false,
-            "message": if body.enabled { "Auto-task already enabled" } else { "Auto-task already disabled" },
-        }))
-        .into_response();
-    }
-    let updated = match blocking("auto-task toggle", {
-        let runtime = runtime.clone();
-        let name = body.name.clone();
-        let enabled = body.enabled;
-        let expected_enabled = body.expected_enabled;
-        move || Ok(runtime.auto_task_toggle_checked(&name, expected_enabled, enabled))
-    })
-    .await
-    {
-        Ok(Ok(updated)) => updated,
-        Ok(Err(error)) => {
+        Err(AutoTaskToggleError::Read(error)) => return map_runtime_error(error),
+        Err(AutoTaskToggleError::Write(error)) => {
             let error_message = error.to_string();
             record_operation_audit(
                 &runtime,
@@ -193,7 +188,6 @@ pub(super) async fn toggle_auto_task(
             .await;
             return auto_task_control_error(error);
         }
-        Err(response) => return *response,
     };
     record_operation_audit(
         &runtime,
