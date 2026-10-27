@@ -455,9 +455,22 @@ impl TaskCommitBoundary {
                         }
                     }
                 }
-                ClaimMutation::Recover { status, reason } => {
+                ClaimMutation::Recover {
+                    status,
+                    reason,
+                    expected_phase,
+                } => {
                     if !auth.operator {
                         return Err(invalid("operator recovery capability required"));
+                    }
+                    // The phase precondition is checked here, inside the
+                    // transaction, rather than by the caller before the
+                    // mutation: an identical request whose receipt is
+                    // already recorded replays above without reaching this
+                    // arm, while a fresh request against a claim that has
+                    // moved on is refused.
+                    if claim.phase != *expected_phase {
+                        return Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim));
                     }
                     if state.unresolved_merge_intent.is_some() {
                         return Err(OrbitError::claim_refused(

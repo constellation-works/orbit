@@ -383,6 +383,13 @@ pub enum ClaimMutation {
     Recover {
         status: TaskStatus,
         reason: String,
+        /// The phase the operator observed. It is part of the mutation's
+        /// receipt identity, so an identical request replays its recorded
+        /// recovery after the claim has moved to `Revoked`, while reuse of
+        /// the same request key against a different observed phase is a
+        /// mismatched reuse. The transactional application enforces it as
+        /// a precondition of a fresh recovery.
+        expected_phase: ExecutionClaimPhase,
     },
     /// Durable guard for the later external merge consumer. Only operators can record
     /// or reconcile intent; revocation cannot race past an unresolved intent.
