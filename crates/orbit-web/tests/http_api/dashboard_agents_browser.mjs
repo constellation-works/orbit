@@ -320,6 +320,10 @@ try {
   // The retired Analytics › Orchestrators link opens Analytics › Agents › Orchestrators.
   await page.goto(`${origin}#analytics/orchestrators?window=30d`);
   await body.locator('.agents-row').first().waitFor();
+  // The panel opens on its own count window; the 30d tab hands it the shared window.
+  assert.equal(await page.locator('#agents-window-selector .scoreboard-window-seg.on').getAttribute('data-window'), 'last200', 'Agents defaults to the newest 200 delivery attempts');
+  await page.locator('#agents-window-selector [data-window="30d"]').click();
+  await page.waitForFunction(() => /in 30d/.test(document.getElementById('agents-meta').textContent));
   await page.evaluate(async () => { await document.fonts.ready; });
   assert.equal(new URL(page.url()).hash, '#analytics/agents/orchestrators?window=30d');
   assert.equal(await page.locator('.tab-pane.active').getAttribute('data-tab'), 'analytics');

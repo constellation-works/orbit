@@ -43,6 +43,11 @@ pub(crate) const CREW_UNKNOWN: &str = "crew unknown";
 
 const DEFAULT_WINDOW: &str = "30d";
 const DEFAULT_MIN_SUPPORT: usize = 10;
+/// The selectable count windows: name and how many of the newest delivery
+/// attempts in the scan the window reaches back over. They describe the
+/// work, not the calendar, so a break between deliveries never empties them
+/// while the scan still holds the work.
+const COUNT_WINDOWS: &[(&str, usize)] = &[("last50", 50), ("last200", 200), ("last500", 500)];
 /// The selectable windows: requested name, the window served and its hours.
 /// `all` is served as 90 days, the scan's reach.
 const WINDOWS: &[(&str, &str, i64)] = &[
@@ -99,8 +104,17 @@ impl AgentRole {
 pub struct AgentQuery {
     requested: &'static str,
     window: &'static str,
-    hours: i64,
+    span: WindowSpan,
     min_support: usize,
+}
+
+/// How far back a window reaches.
+#[derive(Debug, Clone, Copy)]
+enum WindowSpan {
+    /// This many hours ending now.
+    Hours(i64),
+    /// Back to the start of the newest this many delivery attempts.
+    Attempts(usize),
 }
 
 pub use api::{

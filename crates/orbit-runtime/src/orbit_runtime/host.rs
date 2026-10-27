@@ -18,7 +18,9 @@ use crate::host_resource::forecast::{
     AdmissionReservationRequest, BASELINE_HISTORY_MINUTES, ForecastDecision, HostCapacity,
     HostLoadForecast, HostLoadProbe, RESERVATION_TTL_MINUTES, build_forecast,
 };
-use crate::host_resource::profile::{ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet};
+use crate::host_resource::profile::{
+    ProfileBounds, ProfileLookup, ProfileMatch, ProfileSet, build_uncached,
+};
 use crate::host_resource::{
     HostResourceMonitor, HostResourceProbe, HostResourceStatus, ResourceAdmission,
 };
@@ -299,6 +301,22 @@ impl RuntimeKernel {
         )
     }
 
+    /// [`Self::resource_profiles`] over the last `window` deliveries of each
+    /// key instead of `profile_window`, built fresh and never cached, so a
+    /// reader comparing windows leaves admission's profiles alone.
+    pub fn resource_profiles_over(&self, window: usize) -> Result<Arc<ProfileSet>, OrbitError> {
+        let store = self.sqlite_store()?;
+        let tasks = self.stores().tasks();
+        let mut bounds = ProfileBounds::from(&self.auto_concurrency_settings());
+        bounds.window = window.max(1);
+        Ok(Arc::new(build_uncached(
+            &store,
+            &|task_ids| tasks.task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
+            bounds,
+            Utc::now(),
+        )?))
+    }
+
     /// The host's core count and memory, as admission's forecast reads them:
     /// what `admit_cpu_percent` and `admit_memory_percent` are shares of.
     /// `None` when the host cannot be read.
@@ -328,9 +346,14 @@ impl RuntimeKernel {
     /// joined by the application's `forecast_accuracy_selected`.
     pub fn forecast_accuracy_measured(
         &self,
-        selection: AccuracySelection,
+        mut selection: AccuracySelection,
         report_at: DateTime<Utc>,
     ) -> Result<ForecastAccuracy, OrbitError> {
+        if selection.last == Some(0) {
+            return Err(OrbitError::InvalidInput(
+                "accuracy last must be at least 1".into(),
+            ));
+        }
         if selection.since > report_at {
             return Err(OrbitError::InvalidInput(
                 "accuracy since must not be after report time".into(),
@@ -367,6 +390,15 @@ impl RuntimeKernel {
                     .as_ref()
                     .is_none_or(|mode| mode == &record.mode)
         });
+        if let Some(last) = selection.last {
+            // Oldest first: keep the newest `last`, and say how far back
+            // they reach, so the drains the limiters join match them.
+            records.drain(..records.len().saturating_sub(last));
+            let oldest = records
+                .first()
+                .map_or(report_at, |record| record.forecast_at);
+            selection.since = selection.since.max(oldest);
+        }
         let (minutes, deliveries) = match records.first() {
             Some(first) => {
                 let lower = first.forecast_at - Duration::minutes(1);

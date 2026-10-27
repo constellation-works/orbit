@@ -131,9 +131,34 @@ onWorkspaceChange(() => {
   resetView();
 });
 
-/// Wire the shared window selector on the Agents panel.
+// Scorecards default to a count of recent delivery attempts, so a quiet month
+// still ranks the crews that did the work. A calendar tab hands the panel back
+// to the shared window; the count itself never becomes that window.
+const AGENT_COUNT_WINDOWS = ["last50", "last200", "last500"];
+let countWindow = "last200";
+
+function agentWindow() {
+  return countWindow || getWindow();
+}
+
+function setCountWindow(next) {
+  if (next === countWindow) return false;
+  countWindow = next;
+  const selector = $("agents-window-selector");
+  if (selector) selector.dataset.panelWindow = next || "";
+  return true;
+}
+
+/// Wire the Agents window selector: its count tabs are the panel's own, its
+/// calendar tabs the shared window.
 export function wireAgentControls() {
-  wireWindowSelector("agents-window-selector", { allowAll: true });
+  const selector = $("agents-window-selector");
+  if (selector) selector.dataset.panelWindow = countWindow || "";
+  wireWindowSelector("agents-window-selector", {
+    allowAll: true,
+    panelWindows: AGENT_COUNT_WINDOWS,
+    onPanelWindow: setCountWindow,
+  });
 }
 
 export function fetchAndRenderAgents() {
@@ -142,7 +167,7 @@ export function fetchAndRenderAgents() {
     return Promise.resolve();
   }
   const activeRole = role;
-  const selectedWindow = getWindow();
+  const selectedWindow = agentWindow();
   const revision = getWorkspaceRevision();
   const path = scorecardPath(activeRole, selectedWindow);
   const scope = `${revision}\0${path}`;
@@ -151,7 +176,7 @@ export function fetchAndRenderAgents() {
     resetView();
   }
   refreshRoleCounts(activeRole, selectedWindow, revision);
-  const current = () => role === activeRole && getWorkspaceRevision() === revision && getWindow() === selectedWindow;
+  const current = () => role === activeRole && getWorkspaceRevision() === revision && agentWindow() === selectedWindow;
   return requestPanel(BODY_ID, path, () => Promise.all([fetchJson(path), fetchJson(attributionPath(selectedWindow))]), ([payload, strip]) => {
     if (!current()) return;
     if (!payload || payload.role !== activeRole || payload.requested_window !== selectedWindow) {
@@ -250,7 +275,7 @@ function loadDetail() {
   if (cached) return;
   const request = ++detailRequest;
   const activeRole = role;
-  fetchJson(detailPath(activeRole, getWindow(), row)).then((payload) => {
+  fetchJson(detailPath(activeRole, agentWindow(), row)).then((payload) => {
     detailCache.set(cacheKey, payload);
     if (request !== detailRequest || !detail || detail.cacheKey !== cacheKey) return;
     detail = { ...detail, payload, loading: false };
@@ -292,6 +317,10 @@ function plural(n, one, many = `${one}s`) {
 
 function windowLabel() {
   if (!scorecard) return "";
+  // A count window names how far back its attempts reach.
+  if (scorecard.window_attempts) {
+    return `the last ${scorecard.window_attempts} delivery attempts (since ${formatDateTime(scorecard.since)})`;
+  }
   return scorecard.requested_window === scorecard.window
     ? scorecard.window
     : `${scorecard.window} (${scorecard.requested_window})`;
@@ -347,7 +376,9 @@ function render() {
     nodes.push(stateNode("not-computed", `${ROLE_LABELS[role]} are not computed yet`,
       `This role's scorecard is not computed yet, so it ranks no rows. "How the score works" lists the terms it will be scored on.`));
   } else if (!ranking.length) {
-    nodes.push(stateNode("empty", `No ${scorecard.unit} in the ${windowLabel()} window`,
+    nodes.push(stateNode("empty", scorecard.window_attempts
+      ? `No ${scorecard.unit} in ${windowLabel()}`
+      : `No ${scorecard.unit} in the ${windowLabel()} window`,
       "Widen the window to rank this role."));
   } else {
     nodes.push(rankingNode(ranking));
@@ -428,7 +459,7 @@ function stripNode() {
   if (reasons.length) children.push(el("p", { class: "agents-strip-reasons", text: `Not scored: ${reasons.join(" · ")}.` }));
   const node = el("section", { class: "agents-strip", "aria-label": "Who each problem counts against" }, children);
   node.dataset.key = "strip";
-  node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, getWindow()]);
+  node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, agentWindow()]);
   return node;
 }
 

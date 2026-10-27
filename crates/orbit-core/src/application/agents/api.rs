@@ -116,7 +116,7 @@ pub fn agent_scorecard(
     query: &AgentQuery,
     cache_ttl: Duration,
 ) -> Value {
-    let since = query.since();
+    let since = query.since(facts);
     let spec = roles::spec(role);
     let mut payload = role_header(facts, role, query, since, cache_ttl);
     let (fleet_average, scored) = match spec.rows {
@@ -138,7 +138,7 @@ pub fn agent_by_type_scorecard(
     types: &[orbit_config::CrewPerformanceType],
     cache_ttl: Duration,
 ) -> Value {
-    let since = query.since();
+    let since = query.since(facts);
     let role = AgentRole::Implementers;
     let mut payload = role_header(facts, role, query, since, cache_ttl);
     payload["by_type"] = json!(true);
@@ -166,7 +166,7 @@ pub fn agent_per_task_export(
     types: &[orbit_config::CrewPerformanceType],
     cache_ttl: Duration,
 ) -> Value {
-    let since = query.since();
+    let since = query.since(facts);
     let role = AgentRole::Implementers;
     let mut payload = role_header(facts, role, query, since, cache_ttl);
     payload["per_task"] = json!(true);
@@ -201,7 +201,7 @@ pub fn agent_detail(
         return Err(OrbitError::InvalidInput("crew is required".to_string()));
     }
     let model = model.map(str::trim).filter(|model| !model.is_empty());
-    let since = query.since();
+    let since = query.since(facts);
     let spec = roles::spec(role);
     let (fleet_average, scored) = match spec.rows {
         Some(rows) => score::score(spec.terms, rows(facts, since), query.min_support),
@@ -252,7 +252,7 @@ pub fn agent_detail(
 /// each role's problems by row. Its role totals are the problems behind the
 /// four scorecards.
 pub fn agent_attribution(facts: &AgentFacts, query: &AgentQuery, cache_ttl: Duration) -> Value {
-    let since = query.since();
+    let since = query.since(facts);
     let mut payload = attribution::strip(facts, since);
     payload["window"] = json!(query.window);
     payload["requested_window"] = json!(query.requested);

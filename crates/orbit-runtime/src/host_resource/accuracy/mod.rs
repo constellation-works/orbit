@@ -41,6 +41,6 @@ mod types;
 
 pub(crate) use report::forecast_accuracy;
 pub use types::{
-    AccuracySelection, DrainLimiters, DrainShadowDecisions, ErrorSummary, ForecastAccuracy,
-    ForecastPair, OffsetAccuracy, WorstMiss,
+    ACCURACY_FORECASTS_KEPT, AccuracySelection, DEFAULT_ACCURACY_FORECASTS, DrainLimiters,
+    DrainShadowDecisions, ErrorSummary, ForecastAccuracy, ForecastPair, OffsetAccuracy, WorstMiss,
 };

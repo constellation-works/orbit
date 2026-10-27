@@ -169,7 +169,9 @@ fn pending(runtime: &OrbitRuntime, complexity: TaskComplexity, crew: &str) -> St
 }
 
 fn forecast(runtime: &OrbitRuntime) -> Value {
-    let mut forecast = runtime.backlog_forecast(None, Some(1), None).unwrap();
+    let mut forecast = runtime
+        .backlog_forecast(Default::default(), Some(1), None)
+        .unwrap();
     // This fixture isolates review sampling, without regression-fix history.
     let predictions = forecast["forecast"]["task_predictions"].take();
     forecast["forecast"] = forecast["forecast"]["pre_regression_baseline"].take();
@@ -366,7 +368,9 @@ fn historical_uncertainty_and_running_admission_remain_explicit() {
         "captured:workspace"
     );
     assert_eq!(current["forecast"]["time_to_drain_hours"]["p90"], 1.0);
-    let canonical = runtime.backlog_forecast(None, None, None).unwrap();
+    let canonical = runtime
+        .backlog_forecast(Default::default(), None, None)
+        .unwrap();
     assert_eq!(canonical["stored"]["recorded"], true);
     let stored: Value =
         serde_json::from_str(&runtime.backlog_forecasts(1).unwrap()[0].tasks_json).unwrap();

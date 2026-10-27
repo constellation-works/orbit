@@ -13,7 +13,8 @@ use orbit_types::workflow::{AUTO_TASK_TAG_PREFIX, auto_task_builds_by_design};
 
 use super::{
     BUILD_LIKE_CORES, BUILD_LIKE_MINUTES, BaseClass, BuildLikeDelivery, ProfileDelivery,
-    ProfileKey, ProfileMinute, ProfilePeak, ProfileQuantile, ProfileSet, ResourceProfile,
+    ProfileKey, ProfileMinute, ProfilePeak, ProfileQuantile, ProfileRegime, ProfileSet,
+    ResourceProfile,
 };
 
 /// `alive` below this ends the horizon: the 90th-percentile duration.
@@ -51,6 +52,7 @@ struct Delivery {
     live: bool,
     resumed: bool,
     untrusted_cpu: bool,
+    regime: ProfileRegime,
     run_ids: Vec<String>,
     /// Summed cores and memory per minute since admission.
     cpu: Vec<f64>,
@@ -129,6 +131,7 @@ pub(crate) fn build_profiles(
             }
             None => base_of(&key.work_class),
         };
+        let current = current_regime(deliveries, bounds.min_deliveries);
         by_class
             .entry(ProfileKey {
                 workspace_id: key.workspace_id.clone(),
@@ -136,9 +139,28 @@ pub(crate) fn build_profiles(
                 complexity: None,
             })
             .or_default()
-            .extend(deliveries.iter());
-        let window: Vec<&Delivery> = deliveries.iter().take(bounds.window).collect();
-        profiles.push(Arc::new(profile(key.clone(), base, &window, bounds)));
+            .extend(current.deliveries.iter().copied());
+        let window: Vec<&Delivery> = current
+            .deliveries
+            .iter()
+            .copied()
+            .take(bounds.window)
+            .collect();
+        let regime = RegimeCounts {
+            prior: window
+                .iter()
+                .filter(|delivery| delivery.regime != current.regime)
+                .count(),
+            excluded: current.excluded,
+            regime: current.regime,
+        };
+        profiles.push(Arc::new(profile(
+            key.clone(),
+            base,
+            &window,
+            regime,
+            bounds,
+        )));
     }
     let class_profiles = by_class
         .into_iter()
@@ -150,13 +172,65 @@ pub(crate) fn build_profiles(
             });
             deliveries.truncate(bounds.window);
             let base = base_of(&key.work_class);
-            Arc::new(profile(key, base, &deliveries, bounds))
+            Arc::new(profile(
+                key,
+                base,
+                &deliveries,
+                RegimeCounts::default(),
+                bounds,
+            ))
         })
         .collect();
     ProfileSet {
         built_at: now,
         profiles,
         class_profiles,
+    }
+}
+
+/// A key's deliveries that describe its current regime, newest first.
+struct CurrentRegime<'a> {
+    regime: ProfileRegime,
+    deliveries: Vec<&'a Delivery>,
+    /// Earlier-regime deliveries left out.
+    excluded: usize,
+}
+
+/// What a profile reports about the regime its window follows.
+#[derive(Default)]
+struct RegimeCounts {
+    regime: ProfileRegime,
+    prior: usize,
+    excluded: usize,
+}
+
+/// Every delivery of the newest delivery's regime, then, only while those
+/// are fewer than `min_deliveries`, the newest earlier ones up to that
+/// minimum. `deliveries` is newest first, and so is the answer.
+fn current_regime(deliveries: &[Delivery], min_deliveries: usize) -> CurrentRegime<'_> {
+    let Some(newest) = deliveries.first() else {
+        return CurrentRegime {
+            regime: ProfileRegime::default(),
+            deliveries: Vec::new(),
+            excluded: 0,
+        };
+    };
+    let (mut current, prior): (Vec<&Delivery>, Vec<&Delivery>) = deliveries
+        .iter()
+        .partition(|delivery| delivery.regime == newest.regime);
+    let top_up = min_deliveries
+        .saturating_sub(current.len())
+        .min(prior.len());
+    current.extend(prior.iter().take(top_up).copied());
+    current.sort_by(|a, b| {
+        b.finished()
+            .cmp(&a.finished())
+            .then(b.admitted_at.cmp(&a.admitted_at))
+    });
+    CurrentRegime {
+        regime: newest.regime.clone(),
+        deliveries: current,
+        excluded: prior.len() - top_up,
     }
 }
 
@@ -188,11 +262,20 @@ fn deliveries(runs: Vec<DeliveryRunResources>) -> Vec<Delivery> {
                 live: false,
                 resumed: false,
                 untrusted_cpu: false,
+                regime: ProfileRegime::default(),
                 run_ids: Vec::new(),
                 cpu: Vec::new(),
                 memory: Vec::new(),
             });
         delivery.resumed |= run.resumed;
+        // Not every run of a delivery names a crew model (a gate or PR
+        // pipeline may not), so the first that does names the delivery's.
+        if delivery.regime.crew_model.is_none() {
+            delivery.regime.crew_model = run.crew_model.clone();
+        }
+        if delivery.regime.orbit_version.is_none() {
+            delivery.regime.orbit_version = run.orbit_version.clone();
+        }
         // Exclude the whole delivery, including any good sibling runs: dropping
         // just bad minutes would make a partial series understate its load.
         delivery.untrusted_cpu |=
@@ -261,6 +344,7 @@ fn profile(
     key: ProfileKey,
     base_class: BaseClass,
     window: &[&Delivery],
+    regime: RegimeCounts,
     bounds: ProfileBounds,
 ) -> ResourceProfile {
     let longest = window.iter().map(|d| d.minutes()).max().unwrap_or(0);
@@ -356,6 +440,9 @@ fn profile(
         key,
         base_class,
         delivery_count: count,
+        regime: regime.regime,
+        prior_regime_deliveries: regime.prior,
+        excluded_prior_regime: regime.excluded,
         horizon_minutes: horizon,
         peak_cpu_cores,
         peak_memory_bytes,
@@ -373,6 +460,7 @@ fn profile(
                 finished_at: d.finished(),
                 minutes: u32::try_from(d.minutes()).unwrap_or(u32::MAX),
                 run_ids: d.run_ids.clone(),
+                regime: d.regime.clone(),
             })
             .collect(),
         series,

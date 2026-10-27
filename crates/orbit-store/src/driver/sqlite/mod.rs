@@ -51,7 +51,7 @@ mod codec {
     pub(super) const RUN_MINUTE_COLUMNS: &str =
         "workspace_id, run_id, minute_index, minute_started_at, task_id,
             work_class, complexity, resumed, delivery_admitted_at,
-            cpu_cores, memory_bytes, samples, cpu_accounting";
+            cpu_cores, memory_bytes, samples, cpu_accounting, crew_model, orbit_version";
 
     pub(super) fn run_minute_from_row(row: &Row<'_>) -> rusqlite::Result<RunResourceMinute> {
         Ok(RunResourceMinute {
@@ -71,6 +71,8 @@ mod codec {
             memory_bytes: unsigned(row.get(10)?),
             samples: row.get(11)?,
             cpu_accounting: row.get(12)?,
+            crew_model: row.get(13)?,
+            orbit_version: row.get(14)?,
         })
     }
 

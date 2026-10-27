@@ -104,6 +104,14 @@ pub(super) fn apply_worker_cpu_accounting(conn: &Connection) -> Result<(), Orbit
     super::introspect::add_column_if_missing(conn, "run_resource_minutes", "cpu_accounting", "TEXT")
 }
 
+/// v68: the regime a run minute was sampled under, so profiles can tell
+/// samples from before a crew model or Orbit release change. Two nullable
+/// columns; rows written before them, or by an older binary, have no regime.
+pub(super) fn apply_resource_minute_regime(conn: &Connection) -> Result<(), OrbitError> {
+    super::introspect::add_column_if_missing(conn, "run_resource_minutes", "crew_model", "TEXT")?;
+    super::introspect::add_column_if_missing(conn, "run_resource_minutes", "orbit_version", "TEXT")
+}
+
 /// v53: the forecast's own baseline and delivery cohort. Historical rows and
 /// older writers retain null attribution metadata; no backfill is inferred.
 pub(super) fn apply_forecast_attribution(conn: &Connection) -> Result<(), OrbitError> {

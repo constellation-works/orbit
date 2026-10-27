@@ -43,7 +43,7 @@ struct PoolShares {
 /// The shadow report for `query`. `min_support` is ignored: every recorded
 /// draw in the window counts, including a crew selected once.
 pub(super) fn report(runtime: &OrbitRuntime, query: &AgentQuery) -> Result<Value, OrbitError> {
-    let since = query.since();
+    let since = query.time_since()?;
     let selections = recorded_selections(runtime, since)?;
     let mut recorded: BTreeMap<(String, String), PoolShares> = BTreeMap::new();
     let mut static_pools: BTreeMap<String, PoolShares> = BTreeMap::new();

@@ -110,6 +110,8 @@ fn finished_delivery_of(
                 cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
                 memory_bytes: bytes,
                 samples: 12,
+                crew_model: None,
+                orbit_version: None,
             })
             .unwrap();
     }
@@ -750,6 +752,7 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                     .forecast_accuracy_selected(
                         AccuracySelection {
                             since: Utc::now() - ChronoDuration::minutes(1),
+                            last: None,
                             drain: Some(drain.clone()),
                             mode: None,
                         },
@@ -936,6 +939,8 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                         cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
                         memory_bytes,
                         samples: 12,
+                        crew_model: None,
+                        orbit_version: None,
                     })
                     .unwrap();
             }
@@ -956,6 +961,7 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                 .forecast_accuracy_selected(
                     AccuracySelection {
                         since: record.forecast_at - ChronoDuration::minutes(1),
+                        last: None,
                         drain: Some(record.run_id.clone()),
                         mode: Some("enforce".into()),
                     },

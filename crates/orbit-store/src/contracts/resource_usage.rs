@@ -55,6 +55,12 @@ pub struct RunResourceMinute {
     /// `ri_phys_footprint`.
     pub memory_bytes: u64,
     pub samples: u32,
+    /// The crew model the run executed with; `None` when the run named none
+    /// or an older writer recorded the minute.
+    pub crew_model: Option<String>,
+    /// The Orbit version of the worker that sampled the minute; `None` from
+    /// an older writer.
+    pub orbit_version: Option<String>,
 }
 
 /// A delivery worker's lifetime, from when it started until it finished.
@@ -112,6 +118,12 @@ pub struct DeliveryRunResources {
     pub delivery_admitted_at: DateTime<Utc>,
     /// When the run finished; `None` while it is live or its row is gone.
     pub finished_at: Option<DateTime<Utc>>,
+    /// The run's regime: the crew model and Orbit version of its newest
+    /// minute that recorded them. A minute without a crew model reads the
+    /// one its `job_runs` row names, as the worker may resolve its crew
+    /// after sampling began.
+    pub crew_model: Option<String>,
+    pub orbit_version: Option<String>,
     /// The run's minutes, oldest first.
     pub minutes: Vec<ResourceMinuteLoad>,
 }
@@ -188,7 +200,20 @@ pub struct PullForecastDecision {
     pub forecast_no_headroom: bool,
 }
 
-/// The resource history tables retention prunes on their 30-day window.
+/// What resource history retention keeps whatever its age, so a break in
+/// deliveries never empties the history profiles and the accuracy report
+/// read. Rows past the age cutoff go only when they are outside it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResourceHistoryKeep {
+    /// The newest deliveries, by admission, of each workspace, work class
+    /// and complexity whose run minutes stay.
+    pub deliveries_per_key: usize,
+    /// The newest admission forecasts that stay, with the host minutes from
+    /// the oldest of them on.
+    pub forecasts: usize,
+}
+
+/// The resource history tables retention prunes on their age window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResourceMinutesTable {
     /// `run_resource_minutes`, keyed by `minute_started_at`.
@@ -253,11 +278,13 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         since: DateTime<Utc>,
     ) -> Result<Vec<AdmissionForecastRecord>, OrbitError>;
 
-    /// Rows of `table` from before `cutoff`, across every workspace.
+    /// Rows of `table` from before `cutoff` that `keep` does not hold,
+    /// across every workspace.
     fn resource_minutes_older_than(
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
     ) -> Result<u64, OrbitError>;
 
     /// Delete at most `limit` of the rows [`Self::resource_minutes_older_than`]
@@ -266,6 +293,7 @@ pub trait ResourceUsageStoreBackend: Send + Sync {
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
         limit: usize,
     ) -> Result<usize, OrbitError>;
 }
