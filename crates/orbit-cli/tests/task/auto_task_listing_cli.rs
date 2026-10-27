@@ -6,7 +6,9 @@ use std::fs;
 
 use chrono::{Duration, Utc};
 use orbit_core::AutoTaskAddParams;
+use orbit_core::application::automation::{consumer_key, evaluate_auto_task};
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
+use orbit_types::workflow::automation::{AcceptedCoverage, BatchState};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy};
 use serde_json::{Value, json};
 
@@ -206,8 +208,58 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
         "a delivery definition that has not fired ignores its stale time cursor: {rows}"
     );
 
+    let older_id = land_and_evaluate(&fixture, &runtime, "older delivery\n")
+        .expect("the first delivery mints a review task");
+    let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
+    let key = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
+    let store = runtime.automation_store().unwrap();
+    let state = store.automation_state(&key).unwrap().unwrap();
+    let active = state.active.as_ref().unwrap();
+    let mut next = state.clone();
+    next.generation += 1;
+    next.covered = active.batch.through_inclusive.clone();
+    next.pending_commits.drain(..active.batch.commits.len());
+    next.pending.retain(|delivery| {
+        !delivery
+            .commits
+            .iter()
+            .all(|sha| active.batch.commits.contains(sha))
+    });
+    next.waived.retain(|delivery| {
+        !delivery
+            .commits
+            .iter()
+            .all(|sha| active.batch.commits.contains(sha))
+    });
+    next.excluded.retain(|excluded| {
+        !excluded
+            .delivery
+            .commits
+            .iter()
+            .all(|sha| active.batch.commits.contains(sha))
+    });
+    next.active = None;
+    let evidence = b"fixture evidence".to_vec();
+    let receipt = AcceptedCoverage {
+        batch_id: active.batch.id.clone(),
+        action_id: older_id.clone(),
+        input_digest: active.input_digest.clone(),
+        evidence_digest: orbit_common::security::release::sha256_hex(&evidence),
+        evidence,
+        evidence_reference: "fixture".into(),
+        submitted_by: "fixture".into(),
+        accepted_at: Utc::now() - Duration::hours(1),
+    };
+    assert!(
+        store
+            .automation_commit(&state, &next, Some(&receipt))
+            .unwrap()
+    );
+    fixture.json(&[
+        "task", "update", &older_id, "--status", "rejected", "--force", "--json",
+    ]);
     let minted_id = land_and_evaluate(&fixture, &runtime, "landed delivery\n")
-        .expect("the delivery admission mints a review task");
+        .expect("the next delivery mints a review task");
     assert_ne!(minted_id, stale_task.id.to_string());
     let minted = runtime.get_task(&minted_id).unwrap();
 
@@ -225,6 +277,62 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
         }),
         "the delivery fire reports its minted task and current status: {consumer}"
     );
+    fixture.json(&[
+        "task", "update", &minted_id, "--status", "rejected", "--force", "--json",
+    ]);
+    let now = Utc::now();
+    evaluate_auto_task(&runtime, &definition, false, now).unwrap();
+    let active = store
+        .automation_state(&key)
+        .unwrap()
+        .unwrap()
+        .active
+        .unwrap();
+    assert_eq!(active.state, BatchState::Claimed);
+    assert_eq!(active.attempt, 2);
+    assert!(active.action_id.is_none());
+    let retry_at = active.retry_after.unwrap();
+    assert!(retry_at > now);
+    let closed = runtime.get_task(&minted_id).unwrap();
+    let rows = runtime
+        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .unwrap();
+    assert_eq!(
+        named(&rows, CONSUMER)["last_fire"],
+        json!({
+            "kind": "fired", "at": minted.created_at, "task_id": minted.id,
+            "task_status": closed.status,
+        }),
+        "the closed task remains visible during backoff despite an older receipt"
+    );
+    evaluate_auto_task(
+        &runtime,
+        &definition,
+        false,
+        retry_at + Duration::seconds(1),
+    )
+    .unwrap();
+    let retry_id = store
+        .automation_state(&key)
+        .unwrap()
+        .unwrap()
+        .active
+        .unwrap()
+        .action_id
+        .unwrap();
+    assert_ne!(retry_id, minted_id);
+    let retry = runtime.get_task(&retry_id).unwrap();
+    let rows = runtime
+        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .unwrap();
+    assert_eq!(
+        named(&rows, CONSUMER)["last_fire"],
+        json!({
+            "kind": "fired", "at": retry.created_at, "task_id": retry.id,
+            "task_status": retry.status,
+        })
+    );
+
     let last_fire = consumer["last_fire"].as_object().unwrap();
     assert_eq!(last_fire.len(), 4, "{last_fire:?}");
     for key in ["run_id", "logs", "step_output"] {

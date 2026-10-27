@@ -179,9 +179,9 @@ clears it.
 its ID. It exposes no run ID, logs, step output, or skip comparison metadata.
 
 Delivery schedules never write that cursor, so their `last_fire` reads
-scheduler-owned automation records instead: the active batch's minted task,
-or the newest accepted receipt's task once no batch is active, whichever is
-newer. `at` is the minted task's creation time, falling back to the recorded
+scheduler-owned automation records instead: the active batch's latest minted
+task, including the preceding attempt while a retry waits for admission, or
+the newest accepted receipt's task, whichever was minted later. `at` is the minted task's creation time, falling back to the recorded
 batch or receipt time when the task is gone. A leftover cursor from an
 earlier time schedule never shadows a delivery fire, and a delivery
 definition that has not fired reports `null`.
