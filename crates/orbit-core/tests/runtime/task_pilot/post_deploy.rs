@@ -649,6 +649,52 @@ fn human_force_completion_is_audited_without_fabricating_a_measurement() {
     assert!(history.iter().any(|entry| entry.event == "forced"
         && entry.from_status == Some(TaskStatus::Review)
         && entry.to_status == Some(TaskStatus::Done)));
+
+    // Recovery must record the terminal refusal even though the forced task
+    // still owes the measurement. It must not attempt completion again.
+    let current = workspace.runtime.get_task(&task.id).unwrap();
+    let request = FinalRecoveryRequest {
+        task_id: task.id.clone(),
+        run_id: "jrun-terminal-owed-recovery".into(),
+        observed: workspace.runtime.final_recovery_revision(&current).unwrap(),
+        repo_root: workspace.repo.clone(),
+        base_ref: "main".into(),
+        completion: FinalRecoveryCompletion::Done,
+        requeue_bound: Default::default(),
+    };
+    let decision = json!({
+        "decision": "complete_no_diff",
+        "evidence_commit": workspace.git(&["rev-parse", "HEAD"]),
+        "rationale": "Delivered on base.",
+    });
+    let outcome = workspace
+        .runtime
+        .apply_final_recovery(&request, Some(&decision))
+        .unwrap();
+    assert!(
+        matches!(outcome, FinalRecoveryOutcome::Refused { ref reason } if reason.contains("already done")),
+        "{outcome:?}"
+    );
+    assert_eq!(show(&workspace, &task)["status"], "done");
+    assert_eq!(show(&workspace, &task)["owed_criteria"][0]["state"], "owed");
+    let comments = workspace.runtime.get_task_comments(&task.id).unwrap();
+    assert!(
+        comments
+            .iter()
+            .any(|comment| comment.message.contains(&request.run_id)
+                && comment.message.contains("outcome=refused")
+                && comment.message.contains("already done"))
+    );
+    let history = workspace.runtime.get_task_history(&task.id).unwrap();
+    assert!(history.iter().any(|entry| matches!(&entry.decision,
+        Some(orbit_types::task::TaskDecision::FinalRecovery { run_id, .. }) if run_id == &request.run_id)));
+    assert_eq!(
+        workspace
+            .runtime
+            .apply_final_recovery(&request, Some(&decision))
+            .unwrap(),
+        outcome
+    );
 }
 
 crate::scenario_table!(
