@@ -8,7 +8,7 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-10-26
+last_updated: 2026-10-27
 last_validated: 2026-10-26
 ---
 
@@ -752,4 +752,4 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-18667] — a claimed leaf's read of the evidence findings on the kept candidate it resumes (§3).
 - [ORB-14792] — a claimed review task's `regression_from` findings and `unfiled-findings.json` (§3).
 
-Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

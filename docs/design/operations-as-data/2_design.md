@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Design
 owner: claude
-last_updated: 2026-10-21
-last_validated: 2026-10-21
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Accepted
 feature: operations-as-data
 doc_role: design
@@ -936,7 +936,8 @@ fields start in warn-and-audit mode, as for other migrated reads. The behaviour
 comparison is recorded in [4_decisions.md](./4_decisions.md#migrated-cli-verbs-execute-through-the-tool-path).
 
 After phase 5, the read-only `codebase` and agent scorecard nouns also adopted
-the registry pattern. The `codebase` operations `analytics`, `show`, and
+the registry pattern ([ORB-16787], [ORB-16957]; the deprecated orchestrator
+aliases' score was reworked in [ORB-17118]). The `codebase` operations `analytics`, `show`, and
 `related` are declared by `CodebaseVerb` in
 [governance/codebase.rs](../../../crates/orbit-common/src/governance/codebase.rs),
 rendered by the CLI adapter in
@@ -1034,5 +1035,11 @@ migration phase.
 - [ORB-15942] — phase 5, routine control and search.
 - [ORB-15943] — verifies the authorization golden still catches placement and
   permission drift.
+- [ORB-16787] — declared the read-only codebase noun in the registry after
+  phase 5, with its CLI and MCP surfaces derived from it.
+- [ORB-16957] — declared the agent scorecard registry behind the
+  `orbit agents` CLI and MCP tools, with deprecated orchestrator aliases.
+- [ORB-17118] — reworked the orchestrator score the deprecated aliases
+  return so it measures spec quality.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

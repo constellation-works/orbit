@@ -1022,7 +1022,7 @@ wait. Smarter backfilling is an open question
 **Stuck head.** A protected head can still idle a drain for a long time when
 its miss never improves: a memory profile near the limit on a host whose
 baseline `B` stays high, or a stale `heaviest_*` fallback profile. The drain
-reports such a head; it does not bypass it, and nothing about admission
+reports such a head ([ORB-15894]); it does not bypass it, and nothing about admission
 changes.
 
 - **Miss.** Each pass that judges the head records its miss in
@@ -1425,5 +1425,13 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
 - [ORB-15766] — filed to stop counting build-heavy QA sweeps as CPU-light.
 - [ORB-15774] — gap-fit admission for pull drains (§6).
 - [ORB-15894] — reports a protected head whose miss stops improving (§5.3).
+- [ORB-16379] — scoped provider-unavailable holds to the host whose login
+  failed (§5).
+- [ORB-16608] — stopped pull-drain forecast fit offering an auto-task
+  template the executor has no profile for (§5).
+- [ORB-16778] — evaluated crew/tag profile keys, per-horizon CPU bias
+  correction and phase-aligned profiles (§4.2).
+- [ORB-18010] — recorded the 2026-10-25 CPU bias-correction replay in
+  §4.2.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
