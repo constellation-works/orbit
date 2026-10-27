@@ -78,12 +78,17 @@ impl<'a> Attribution<'a> {
             return None;
         }
         for delivery in deliveries {
-            let Some(runs) = self
+            // Missing worker history cannot establish this cohort's load.
+            let runs = self
                 .tasks
-                .get(&(delivery.workspace_id.as_str(), delivery.task_id.as_str()))
-            else {
-                continue;
-            };
+                .get(&(delivery.workspace_id.as_str(), delivery.task_id.as_str()))?;
+            if delivery
+                .run_ids
+                .iter()
+                .any(|id| !runs.iter().any(|run| &run.run.run_id == id))
+            {
+                return None;
+            }
             // A reservation has no run yet. Resolve its first measured admission
             // once; a later re-admission of the same task is outside this forecast.
             let admitted_at = if delivery.run_ids.is_empty() {
@@ -96,9 +101,10 @@ impl<'a> Attribution<'a> {
                 // captured admission metadata can still contain nanoseconds.
                 Some(delivery.admitted_at)
             };
+            let admitted_at = admitted_at?;
             for run in runs {
                 if (Some(run.run.delivery_admitted_at.timestamp_micros())
-                    == admitted_at.map(|at| at.timestamp_micros())
+                    == Some(admitted_at.timestamp_micros())
                     || delivery.run_ids.contains(&run.run.run_id))
                     && counted.insert((run.run.workspace_id.as_str(), run.run.run_id.as_str()))
                     && let Some(measured) = run.minutes.get(&minute_at)

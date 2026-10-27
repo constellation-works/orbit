@@ -1,10 +1,11 @@
 //! Forecast maturity through the public read-only runtime API at a fixed time.
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, DurationRound, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_store::contracts::{
-    AdmissionForecastPoint, AdmissionForecastRecord, HostResourceMinute, ResourceUsageStoreBackend,
+    AdmissionForecastPoint, AdmissionForecastRecord, ForecastDelivery, HostResourceMinute,
+    ResourceUsageStoreBackend, RunResourceMinute,
 };
 
 #[test]
@@ -247,4 +248,115 @@ fn default_selection_reads_the_newest_forecasts_after_a_break() {
         )
         .unwrap();
     assert_eq!(calendar.forecasts, 0, "a time window still selects by time");
+}
+
+#[test]
+fn gc_retained_forecast_excludes_missing_worker_attribution() {
+    if !super::dispatch_admission::isolated(
+        "forecast_accuracy::gc_retained_forecast_excludes_missing_worker_attribution",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let forecast_at = (Utc::now() - Duration::days(45))
+        .duration_trunc(Duration::minutes(1))
+        .unwrap();
+    let minute = forecast_at + Duration::minutes(5);
+    for index in 0..201 {
+        let admitted = forecast_at + Duration::minutes(index);
+        store
+            .record_run_resource_minute(&RunResourceMinute {
+                workspace_id: "ws_fixture".into(),
+                run_id: format!("jrun-worker-{index}"),
+                minute_index: 0,
+                minute_started_at: if index == 0 { minute } else { admitted },
+                task_id: format!("task-{index}"),
+                work_class: "change".into(),
+                complexity: Some("hard".into()),
+                resumed: false,
+                delivery_admitted_at: Some(admitted),
+                cpu_cores: 4.0,
+                cpu_accounting: None,
+                memory_bytes: 4_000,
+                samples: 12,
+                crew_model: None,
+                orbit_version: None,
+            })
+            .unwrap();
+    }
+    store
+        .record_admission_forecast(&AdmissionForecastRecord {
+            workspace_id: "ws_fixture".into(),
+            run_id: "jrun-forecast".into(),
+            forecast_at,
+            mode: "shadow".into(),
+            cpu_count: Some(16),
+            memory_total_bytes: Some(32_000),
+            baseline_cpu_cores: Some(1.0),
+            baseline_memory_bytes: Some(1_000),
+            covered_deliveries: Some(vec![ForecastDelivery {
+                workspace_id: "ws_fixture".into(),
+                task_id: "task-0".into(),
+                admitted_at: forecast_at,
+                run_ids: vec!["jrun-worker-0".into()],
+            }]),
+            points: vec![AdmissionForecastPoint {
+                offset_minutes: 5,
+                cpu_cores: 5.0,
+                memory_bytes: 5_000,
+            }],
+            admitted: vec![],
+            fit_admitted: vec![],
+            fit_skipped: vec![],
+            pull: None,
+        })
+        .unwrap();
+    store
+        .offer_host_resource_minute(&HostResourceMinute {
+            minute_at: minute,
+            cpu_cores: 6.0,
+            cpu_count: 16,
+            memory_bytes: 6_000,
+            memory_total_bytes: 32_000,
+            samples: 12,
+            recorded_by_run_id: None,
+        })
+        .unwrap();
+    let report = || {
+        runtime
+            .forecast_accuracy_selected(AccuracySelection::latest(), Utc::now())
+            .unwrap()
+    };
+    let before = report();
+    assert_eq!(before.pairs[0].attributed_cpu_cores, Some(5.0));
+    assert_eq!(before.pairs[0].attributed_memory_bytes, Some(5_000.0));
+    runtime.gc_runs(true, Some(30)).unwrap();
+    assert!(
+        !store
+            .delivery_run_resources(forecast_at)
+            .unwrap()
+            .iter()
+            .any(|run| run.run_id == "jrun-worker-0")
+    );
+    let after = report();
+    assert_eq!(after.pairs.len(), 1);
+    assert_eq!(after.pairs[0].measured_cpu_cores, 6.0);
+    assert_eq!(after.pairs[0].measured_memory_bytes, 6_000);
+    assert_eq!(after.pairs[0].attributed_cpu_cores, None);
+    assert_eq!(after.pairs[0].attributed_memory_bytes, None);
+    let offset = after
+        .offsets
+        .iter()
+        .find(|offset| offset.offset_minutes == 5)
+        .unwrap();
+    assert_eq!((offset.paired, offset.attributed_paired), (1, 0));
+    assert_eq!(offset.cpu.mean_error, Some(-1.0));
+    assert!(offset.attributed_cpu.mean_error.is_none());
+    assert!(offset.attributed_memory.mean_error.is_none());
 }
