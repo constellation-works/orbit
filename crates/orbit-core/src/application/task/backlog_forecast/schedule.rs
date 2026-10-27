@@ -23,22 +23,21 @@
 //! clock or filesystem access.
 
 use std::cmp::Ordering;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::BinaryHeap;
 
 use crate::application::admission::forecast::{
     ForecastAdmission, ForecastPassScratch, ForecastTaskSet, ForecastWait,
 };
 
-use super::model::{Arrivals, Draw, Rng, Script, Step};
+use super::model::{Draw, Script, Step};
 use super::outcomes::{EpisodeOutcome, Follow};
+use super::rework::ForecastGeneratedNode;
 
 /// Every scenario stops at this many simulated hours (90 days); work still
 /// pending then has not drained.
 pub(super) const HORIZON_HOURS: f64 = 90.0 * 24.0;
 /// Events one simulated drain may process before it counts as truncated.
 const MAX_EVENTS: usize = 100_000;
-/// The heap key of a running arrival, which is no forecast task.
-const ARRIVAL: usize = usize::MAX;
 /// One summed wait per [`ForecastWait::ALL`] reason.
 pub(super) const WAITS: usize = ForecastWait::ALL.len();
 
@@ -54,6 +53,8 @@ pub(super) struct Scenario<'a> {
     /// Hours since each in-progress task's running attempt was admitted.
     age_hours: &'a [f64],
     pub(super) slots: usize,
+    pub(super) generated: &'a [ForecastGeneratedNode],
+    pub(super) initial: usize,
     /// `included` in dependency order.
     topological: Vec<usize>,
 }
@@ -100,6 +101,8 @@ impl<'a> Scenario<'a> {
             in_progress,
             age_hours,
             slots: slots.max(1),
+            generated: &[],
+            initial: len,
             topological,
         }
     }
@@ -125,6 +128,10 @@ pub(super) struct Run {
     /// Scheduled initial tasks that did not finish by the horizon.
     pub(super) unfinished: usize,
     pub(super) truncated: bool,
+    pub(super) followups: u64,
+    pub(super) outside_horizon: u64,
+    pub(super) rework: Draw,
+    pub(super) arrivals: Draw,
 }
 
 /// A heap entry: the earliest end first, ties by key.
@@ -164,7 +171,10 @@ pub(super) struct ScheduleState {
     ready: Vec<usize>,
     selected: Vec<usize>,
     reason: Vec<ForecastWait>,
-    queued: VecDeque<f64>,
+    filings: BinaryHeap<End>,
+    followups: Vec<Vec<usize>>,
+    outside_horizon: u64,
+    followup_count: u64,
     scratch: ForecastPassScratch,
     /// Waits out of the queue, earliest first. [`ScheduleState::return_kind`]
     /// says whether each ends in a requeue, a resolution or absorption.
@@ -180,6 +190,7 @@ pub(super) struct ScheduleState {
     pub(super) start: Vec<Option<f64>>,
     pub(super) rank: Vec<Option<f64>>,
     pub(super) finished: Vec<bool>,
+    filed: Vec<bool>,
 }
 
 impl ScheduleState {
@@ -203,7 +214,10 @@ impl ScheduleState {
             ready: Vec::with_capacity(len),
             selected: Vec::new(),
             reason: vec![ForecastWait::Capacity; len],
-            queued: VecDeque::new(),
+            filings: BinaryHeap::new(),
+            followups: vec![Vec::new(); len],
+            outside_horizon: 0,
+            followup_count: 0,
             scratch: admission.scratch(),
             returns: BinaryHeap::new(),
             return_kind: vec![ReturnKind::Requeue; len],
@@ -219,6 +233,7 @@ impl ScheduleState {
             start: vec![None; len],
             rank: vec![None; len],
             finished: vec![false; len],
+            filed: vec![false; len],
         }
     }
 }
@@ -233,16 +248,28 @@ fn wait_slot(wait: ForecastWait) -> usize {
 /// The longest dependency path through each task's attempts and return
 /// waits, ignoring contention. A task that never finishes ends its path
 /// unresolved, and so does everything behind it.
-fn critical_path(scenario: &Scenario<'_>, scripts: &[Script]) -> Option<f64> {
+fn critical_path(
+    scenario: &Scenario<'_>,
+    scripts: &[Script],
+    state: &ScheduleState,
+) -> Option<f64> {
     let mut longest: Vec<Option<f64>> = vec![Some(0.0); scripts.len()];
     let mut overall = 0.0f64;
     for &index in &scenario.topological {
+        if index >= scenario.initial && !state.filed[index] {
+            continue;
+        }
         let before = scenario.edges[index]
             .iter()
             .try_fold(0.0f64, |most, dep| Some(most.max(longest[*dep]?)));
-        longest[index] = before
-            .zip(scripts[index].finish_hours())
-            .map(|(a, b)| a + b);
+        longest[index] = before.zip(scripts[index].finish_hours()).map(|(a, b)| {
+            a + b
+                + if index >= scenario.initial {
+                    scenario.generated[index - scenario.initial].lag
+                } else {
+                    0.0
+                }
+        });
         overall = overall.max(longest[index]?);
     }
     Some(overall)
@@ -264,8 +291,6 @@ pub(super) fn simulate_drain(
     scenario: &Scenario<'_>,
     hours: &[Option<f64>],
     scripts: &[Script],
-    arrivals: Option<&Arrivals<'_>>,
-    rng: &mut Rng,
     totals: &mut Draw,
     state: &mut ScheduleState,
 ) -> Run {
@@ -273,6 +298,10 @@ pub(super) fn simulate_drain(
     state.start.fill(None);
     state.rank.fill(None);
     state.finished.fill(false);
+    state.filed.fill(false);
+    for (index, deps) in scenario.edges.iter().enumerate() {
+        state.indegree[index] = deps.len();
+    }
     state.attempt.fill(0);
     state.charged.fill(Draw::ZERO);
     state.returns.clear();
@@ -289,13 +318,33 @@ pub(super) fn simulate_drain(
         no_return: 0,
         unfinished: 0,
         truncated: false,
+        followups: 0,
+        outside_horizon: 0,
+        rework: Draw::MISSING,
+        arrivals: Draw::MISSING,
     };
     if scheduled().any(|index| hours[index].is_none()) {
         return unavailable;
     }
     state.running.clear();
     state.heap.clear();
-    state.queued.clear();
+    state.filings.clear();
+    state.outside_horizon = 0;
+    state.followup_count = 0;
+    for fixes in &mut state.followups {
+        fixes.clear()
+    }
+    for (offset, generated) in scenario.generated.iter().enumerate() {
+        let index = scenario.initial + offset;
+        if !scenario.included[index] {
+            continue;
+        }
+        if let Some(origin) = generated.origin {
+            state.followups[origin].push(index);
+        } else {
+            state.filings.push(End(generated.lag, index));
+        }
+    }
     state.pending.clear();
     let mut running = 0usize;
     let mut left = 0usize;
@@ -315,8 +364,8 @@ pub(super) fn simulate_drain(
         state.admitted_at[index] = at;
         state.heap.push(End(at + step.hours, index));
     };
-    for index in scheduled() {
-        state.indegree[index] = scenario.edges[index].len();
+    for index in scheduled().filter(|index| *index < scenario.initial) {
+        state.filed[index] = true;
         left += 1;
         if scenario.in_progress[index] {
             running += 1;
@@ -335,13 +384,10 @@ pub(super) fn simulate_drain(
         .pending
         .extend(admission.dispatch_order().iter().copied().filter(|index| {
             scenario.included[*index]
+                && *index < scenario.initial
                 && !scenario.in_progress[*index]
                 && scripts[*index].initial == Follow::Requeue(0.0)
         }));
-    let arrivals = arrivals.filter(|a| a.per_day > 0.0 && !a.history.is_empty());
-    let rate_per_hour = arrivals.map_or(0.0, |a| a.per_day / 24.0);
-    let mut next_arrival = arrivals.map(|_| -rng.unit().ln() / rate_per_hour);
-
     let mut at = 0.0f64;
     let mut started = 0.0f64;
     let mut occupied = 0.0f64;
@@ -396,13 +442,7 @@ pub(super) fn simulate_drain(
                 break;
             }
         }
-        while running < scenario.slots
-            && let Some(work) = state.queued.pop_front()
-        {
-            running += 1;
-            state.heap.push(End(at + work, ARRIVAL));
-        }
-        if left == 0 && state.queued.is_empty() && running == 0 {
+        if left == 0 && state.returns.is_empty() && running == 0 {
             break Some(at);
         }
 
@@ -425,7 +465,7 @@ pub(super) fn simulate_drain(
             .min(deadline)
             .min(recheck)
             .min(state.returns.peek().map_or(f64::INFINITY, |end| end.0))
-            .min(next_arrival.unwrap_or(f64::INFINITY));
+            .min(state.filings.peek().map_or(f64::INFINITY, |end| end.0));
         let until = next.min(HORIZON_HOURS);
         let span = (until - at).max(0.0);
         occupied += running as f64 * span;
@@ -450,14 +490,11 @@ pub(super) fn simulate_drain(
                 break;
             };
             running -= 1;
-            if index == ARRIVAL {
-                continue;
-            }
             state.running.remove(index);
             let step = scripts[index].steps[state.attempt[index]];
             if step.outcome == EpisodeOutcome::Delivered {
                 left -= 1;
-                finish(state, scenario, index);
+                left += finish(state, scenario, index, at);
                 continue;
             }
             state.attempt[index] += 1;
@@ -478,7 +515,7 @@ pub(super) fn simulate_drain(
             match state.return_kind[index] {
                 ReturnKind::Resolve => {
                     left -= 1;
-                    finish(state, scenario, index);
+                    left += finish(state, scenario, index, at);
                 }
                 ReturnKind::Requeue => state.requeue(index),
                 // Absorption ends the wait. The task stays unfinished and
@@ -486,30 +523,53 @@ pub(super) fn simulate_drain(
                 ReturnKind::Absorb => {}
             }
         }
-        if let (Some(arrives), Some(arrivals)) = (next_arrival, arrivals)
-            && arrives <= at
-        {
-            let delivery = &arrivals.history[rng.index(arrivals.history.len())];
-            totals.add(&Draw {
-                hours: Some(delivery.hours),
-                tokens: delivery.tokens,
-                usd: delivery.usd,
-            });
-            state.queued.push_back(delivery.hours);
-            next_arrival = Some(at - rng.unit().ln() / rate_per_hour);
+        while state.filings.peek().is_some_and(|end| end.0 <= at) {
+            let Some(End(_, index)) = state.filings.pop() else {
+                break;
+            };
+            if scenario.generated[index - scenario.initial]
+                .origin
+                .is_none()
+            {
+                left += 1;
+            }
+            state.indegree[index] = 0;
+            state.filed[index] = true;
+            state.requeue(index);
         }
     };
     let length = drained.unwrap_or(at);
+    let mut rework = Draw::ZERO;
+    let mut arrivals = Draw::ZERO;
+    for (offset, node) in scenario.generated.iter().enumerate() {
+        if node.origin.is_some() {
+            rework.add(&state.charged[scenario.initial + offset]);
+        } else {
+            arrivals.add(&state.charged[scenario.initial + offset]);
+        }
+    }
+    if truncated {
+        return Run {
+            truncated: true,
+            ..unavailable
+        };
+    }
     Run {
         drained,
-        critical_path: critical_path(scenario, scripts),
+        critical_path: critical_path(scenario, scripts, state),
         parallelism: Some(if length > 0.0 { occupied / length } else { 0.0 }),
         waits: Some(waits),
         return_wait: Some(return_wait),
         setbacks,
         no_return,
-        unfinished: scheduled().filter(|index| !state.finished[*index]).count(),
+        unfinished: scheduled()
+            .filter(|index| *index < scenario.initial && !state.finished[*index])
+            .count(),
         truncated,
+        followups: state.followup_count,
+        outside_horizon: state.outside_horizon,
+        rework,
+        arrivals,
     }
 }
 
@@ -550,9 +610,22 @@ fn schedule_follow(
 }
 
 /// Task `index` finished: its dependents lose one unmet dependency.
-fn finish(state: &mut ScheduleState, scenario: &Scenario<'_>, index: usize) {
+fn finish(state: &mut ScheduleState, scenario: &Scenario<'_>, index: usize, at: f64) -> usize {
     state.finished[index] = true;
     for dependent in &scenario.dependents[index] {
         state.indegree[*dependent] -= 1;
     }
+    let mut added = 0;
+    for &fix in &state.followups[index] {
+        let due = at + scenario.generated[fix - scenario.initial].lag;
+        if due > HORIZON_HOURS {
+            state.outside_horizon += 1;
+        } else {
+            state.followup_count += 1;
+            state.filed[fix] = true;
+            state.filings.push(End(due, fix));
+            added += 1;
+        }
+    }
+    added
 }

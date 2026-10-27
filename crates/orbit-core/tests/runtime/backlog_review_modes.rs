@@ -169,7 +169,12 @@ fn pending(runtime: &OrbitRuntime, complexity: TaskComplexity, crew: &str) -> St
 }
 
 fn forecast(runtime: &OrbitRuntime) -> Value {
-    runtime.backlog_forecast(None, Some(1), None).unwrap()
+    let mut forecast = runtime.backlog_forecast(None, Some(1), None).unwrap();
+    // This fixture isolates review sampling, without regression-fix history.
+    let predictions = forecast["forecast"]["task_predictions"].take();
+    forecast["forecast"] = forecast["forecast"]["pre_regression_baseline"].take();
+    forecast["forecast"]["task_predictions"] = predictions;
+    forecast
 }
 
 fn review_policy_selects_observed_delivery_distribution() {

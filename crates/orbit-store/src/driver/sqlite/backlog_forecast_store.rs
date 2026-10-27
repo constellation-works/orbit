@@ -3,7 +3,7 @@
 //! `forecast_at` is stored as fixed-width UTC RFC3339 text (microseconds,
 //! `Z`), so it compares lexically.
 
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, Row, TransactionBehavior, params};
@@ -17,6 +17,37 @@ const COLUMNS: &str =
     "workspace_id, forecast_at, model_version, inputs_json, result_json, tasks_json";
 
 impl BacklogForecastStoreBackend for Store {
+    fn mature_backlog_forecasts(
+        &self,
+        workspace_id: &str,
+        cutoff: DateTime<Utc>,
+        min_model_version: u32,
+        limit_per_version: usize,
+    ) -> Result<Vec<StoredBacklogForecast>, OrbitError> {
+        let conn = self.read()?;
+        let mut statement = conn
+            .prepare(&format!(
+                "SELECT {COLUMNS} FROM (SELECT {COLUMNS}, \
+             ROW_NUMBER() OVER (PARTITION BY model_version ORDER BY forecast_at DESC) AS rank \
+             FROM backlog_forecasts WHERE workspace_id = ?1 AND forecast_at <= ?2 \
+             AND model_version >= ?3) WHERE rank <= ?4 ORDER BY forecast_at DESC"
+            ))
+            .map_err(sqlite_store_error)?;
+        let rows = statement
+            .query_map(
+                params![
+                    workspace_id,
+                    stamp(cutoff),
+                    min_model_version,
+                    i64::try_from(limit_per_version).unwrap_or(i64::MAX)
+                ],
+                hydrate,
+            )
+            .map_err(sqlite_store_error)?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)
+    }
+
     fn record_backlog_forecast(
         &self,
         row: &StoredBacklogForecast,
