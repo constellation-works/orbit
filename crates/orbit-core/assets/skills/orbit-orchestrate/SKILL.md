@@ -103,6 +103,7 @@ implementation with the old candidate discarded. See
 | Prepare/promote work and supervise progress | [Operating loop](references/loop.md) |
 | Scope completion authority and dispatch windows | [Authorization](references/authorization.md) |
 | Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
+| Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
 | Jobs, activities, run commands and CI sweep | [Workflows](references/workflows.md) |
 | Diagnose a specific failed or stuck run | [Run debugging](references/run-debugging.md) |
 | Find or answer a human decision request on held work | [Decision requests](references/run-debugging.md#decision-requests-on-held-work) |

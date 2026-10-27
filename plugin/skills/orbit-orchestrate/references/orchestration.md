@@ -90,6 +90,30 @@ per-drain choice does not authorize starting work or changing machine settings,
 host thresholds, or the worker ceiling. Settings and limits:
 [configuration.md](../../orbit-setup/references/configuration.md#common-settings).
 
+## Backlog forecast
+
+The drain card's **Backlog forecast** line estimates how long the workspace's
+backlog could take to drain and what it could cost. It resamples delivery
+history and simulates the drain's admission behavior: dependencies, file locks,
+dispatch order, CPU and memory fit, blocked, failed and retried runs, review
+modes, and expected regression rework. The line shows p50–p90 time to drain and
+estimated cost. Open **Analytics › Forecast** for token and exact-cost ranges,
+backlog and in-progress counts, assumptions, and how earlier forecasts scored
+against actual outcomes.
+
+This is separate from the `machine.auto_concurrency` forecast above. That
+admission forecast checks resource fit for the next admission and can affect
+which work proceeds when enforcement is enabled. Backlog Forecast estimates
+the whole drain's time and cost; it does not decide or change live admissions.
+
+To verify the card, use a single-workspace dashboard, open its Tasks drain card,
+then follow the forecast link to **Analytics › Forecast**. The card uses the
+default read: a 30-day history, no new arrivals, and the live drain ceiling.
+The diagnostics read is available at `GET /api/diagnostics/backlog_forecast`;
+`lookback_days`, `concurrency`, and `arrivals=on` can change its assumptions,
+so omit them to compare with the card. The aggregate dashboard has no
+workspace-specific forecast.
+
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
 --set N` (MCP: `orbit_workflow_auto` with `action: "resize"` and `concurrency`;
 omit `id` to target the workspace's one live drain) records a live ceiling on the run
