@@ -26,6 +26,8 @@ mod auto_tasks;
 mod automation;
 #[path = "http_api/backlog_forecast.rs"]
 mod backlog_forecast;
+#[path = "http_api/backlog_outcomes.rs"]
+mod backlog_outcomes;
 #[path = "http_api/brief_accuracy.rs"]
 mod brief_accuracy;
 #[path = "http_api/codebase.rs"]

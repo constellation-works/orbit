@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use super::support::{Fixture, isolated, json_ok};
 
-const ENDPOINT: &str = "/api/diagnostics/backlog_forecast?workspace=ws_http_fixture";
+pub(super) const ENDPOINT: &str = "/api/diagnostics/backlog_forecast?workspace=ws_http_fixture";
 
 struct ForecastWorkspace<'a>(&'a Fixture);
 
@@ -242,7 +242,7 @@ fn history(
 
 /// Import a historical completion and its one-hour delivery, then date its
 /// index projection to match. Later writes use the real bundle writer.
-fn completed(fixture: &Fixture, at: DateTime<Utc>) -> String {
+pub(super) fn completed(fixture: &Fixture, at: DateTime<Utc>) -> String {
     completed_delivery(
         fixture,
         at,
@@ -586,13 +586,13 @@ fn arrivals_preserve_missing_metrics_without_losing_duration() {
 }
 
 /// Five identical one-hour medium deliveries, so every draw is one hour.
-fn one_hour_history(fixture: &Fixture) {
+pub(super) fn one_hour_history(fixture: &Fixture) {
     for _ in 0..5 {
         completed(fixture, Utc::now() - Duration::days(1));
     }
 }
 
-fn backlog_task(
+pub(super) fn backlog_task(
     fixture: &Fixture,
     title: &str,
     context_files: &[&str],
@@ -615,7 +615,7 @@ fn backlog_task(
         .to_string()
 }
 
-fn drain_hours(forecast: &Value) -> (f64, f64) {
+pub(super) fn drain_hours(forecast: &Value) -> (f64, f64) {
     let hours = &forecast["forecast"]["time_to_drain_hours"];
     (
         hours["p50"].as_f64().unwrap(),
@@ -623,7 +623,7 @@ fn drain_hours(forecast: &Value) -> (f64, f64) {
     )
 }
 
-fn prediction<'a>(forecast: &'a Value, id: &str) -> &'a Value {
+pub(super) fn prediction<'a>(forecast: &'a Value, id: &str) -> &'a Value {
     forecast["forecast"]["task_predictions"]
         .as_array()
         .unwrap()
