@@ -985,3 +985,130 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
         },
     );
 }
+
+#[test]
+fn count_windows_exclude_old_attempts_on_recently_commented_tasks() {
+    isolated(
+        "agents::count_windows_exclude_old_attempts_on_recently_commented_tasks",
+        || {
+            for with_recent in [false, true] {
+                let fixture = Fixture::new();
+                let now = Utc::now();
+                let old_start = now - Duration::days(120);
+                let old = add(
+                    &fixture,
+                    Owned {
+                        title: "old work",
+                        orchestrator: None,
+                        origin: None,
+                        complexity: TaskComplexity::Low,
+                        status: TaskStatus::Done,
+                        relations: vec![],
+                    },
+                );
+                let path = bundle_dir(&fixture.path(""), &old)
+                    .unwrap()
+                    .join(orbit_types::task::TASK_ENVELOPE_FILE_NAME);
+                let mut envelope: orbit_types::task::TaskEnvelopeV2 =
+                    serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+                envelope.created_at = old_start - Duration::days(1);
+                envelope.updated_at = old_start;
+                fs::write(&path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+                append(
+                    &fixture,
+                    &old,
+                    old_start,
+                    "started",
+                    None,
+                    Some(TaskStatus::InProgress),
+                );
+                append(
+                    &fixture,
+                    &old,
+                    old_start + Duration::hours(1),
+                    "status_changed",
+                    None,
+                    Some(TaskStatus::Done),
+                );
+                comment(&fixture, &old, "recent comment");
+                let recent_start = now - Duration::days(2);
+                if with_recent {
+                    let recent = add(
+                        &fixture,
+                        Owned {
+                            title: "recent work",
+                            orchestrator: None,
+                            origin: None,
+                            complexity: TaskComplexity::Low,
+                            status: TaskStatus::Done,
+                            relations: vec![],
+                        },
+                    );
+                    implementation_run(
+                        &fixture,
+                        "jrun-recent",
+                        &recent,
+                        "recent",
+                        Some("model"),
+                        recent_start - Duration::seconds(1),
+                        recent_start + Duration::hours(1),
+                    );
+                    append(
+                        &fixture,
+                        &recent,
+                        recent_start,
+                        "started",
+                        None,
+                        Some(TaskStatus::InProgress),
+                    );
+                    append(
+                        &fixture,
+                        &recent,
+                        recent_start + Duration::hours(1),
+                        "status_changed",
+                        None,
+                        Some(TaskStatus::Done),
+                    );
+                }
+                let server = fixture.server(false);
+                for (window, size) in [
+                    ("last50", 50),
+                    ("last200", 200),
+                    ("last500", 500),
+                    ("90d", 0),
+                ] {
+                    let response = json_ok(server.get(&format!(
+                        "/api/agents/implementers/scorecard?{WS}&window={window}&min_support=1"
+                    )));
+                    let since = DateTime::parse_from_rfc3339(response["since"].as_str().unwrap())
+                        .unwrap()
+                        .with_timezone(&Utc);
+                    if size > 0 {
+                        assert_eq!(response["window_attempts"], size);
+                        let expected = if with_recent {
+                            recent_start
+                        } else {
+                            DateTime::parse_from_rfc3339(response["computed_at"].as_str().unwrap())
+                                .unwrap()
+                                .with_timezone(&Utc)
+                                - Duration::days(90)
+                        };
+                        assert_eq!(
+                            since.timestamp(),
+                            expected.timestamp(),
+                            "{window}: {response}"
+                        );
+                    } else {
+                        assert!(response["window_attempts"].is_null());
+                    }
+                    let rows = response["rows"].as_array().unwrap();
+                    assert_eq!(rows.len(), usize::from(with_recent), "{window}: {response}");
+                    if with_recent {
+                        assert_eq!(rows[0]["crew"], "recent");
+                        assert_eq!(rows[0]["units"], 1);
+                    }
+                }
+            }
+        },
+    );
+}
