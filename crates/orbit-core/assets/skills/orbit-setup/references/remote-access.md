@@ -240,6 +240,80 @@ Fetch Metadata protection. Anyone with access to the forwarded port can reach
 mutation endpoints with the server's application authority. Keep access within
 the intended operator boundary.
 
+### Browser sessions
+
+Browser sessions give a browser a cookie-backed credential for this host's
+dashboard. They are separate from the headless browser kit (`orbit browser-kit`),
+which renders UI checks for workers. Two global settings control them:
+
+| Key | Default | Bounds | Effect |
+|---|---|---|---|
+| `machine.web_terminal.enabled` | `false` | `true` or `false` | Enables browser-session credentials for the dashboard at startup. |
+| `machine.web_session.ttl` | `43200` (12 hours) | `1` to `604800` seconds | Lifetime of each browser session. |
+
+Set them in the global config and restart the dashboard. Both are read only at
+startup, so a running dashboard keeps its old values until it restarts:
+
+```bash
+orbit config set --global machine.web_terminal.enabled true
+orbit config set --global machine.web_session.ttl 3600
+orbit config get machine.web_terminal.enabled   # check the effective value
+```
+
+Enabling the setting does not grant operator capability and does not change the
+authorization of existing dashboard routes.
+
+Sessions and the startup key:
+
+- Sessions are held in memory. They end when the dashboard restarts, even if a
+  browser still holds its cookie. The dashboard keeps at most 1024 live
+  sessions; an exchange beyond that fails closed.
+- The host's private startup key is `~/.orbit/run/web-session.secret`, replaced
+  atomically with mode 0600 inside a 0700 directory. Orbit refuses insecure
+  existing permissions or symlinks there. This feature supports Unix hosts only.
+- `~/.orbit` is the machine-global Orbit home. `--root` and a workspace do not
+  relocate it, so the key does not move with a workspace.
+
+One-time dashboard URLs:
+
+```bash
+orbit web open            # print a one-time URL and open it in a browser
+orbit web open --no-open  # print the URL only
+```
+
+- Each URL carries a signed random ticket. A ticket is valid for five minutes
+  and one exchange. Run `orbit web open` again for a fresh URL rather than
+  reusing an old one.
+- The startup key stays on the host; the URL carries only the ticket. Treat the
+  printed URL as a credential: do not paste it into chat, task comments, shared
+  logs or screenshots.
+- The page removes the URL fragment from browser history immediately, then
+  exchanges the ticket at `POST /api/session`. The browser then holds a cookie
+  that is HttpOnly, SameSite=Strict and scoped to `/api`.
+- `orbit web serve` and `orbit web connect` print private URLs only to an
+  interactive terminal, so redirected service logs do not contain them.
+  `web connect` gets its ticket over authenticated SSH and uses the forwarded
+  local port. If ticket retrieval or the private browser launch fails, it warns,
+  keeps the tunnel connected and opens the plain dashboard URL unless
+  `--no-open` is given.
+- Existing dashboard routes remain available. Features that need a browser
+  session need a fresh ticket.
+
+Verify the feature is on:
+
+1. Confirm the setting with `orbit config get machine.web_terminal.enabled`.
+2. Probe the running dashboard on the dashboard host. Replace `<port>` with its
+   port (7878 by default). Only the status code is printed, so no credential is
+   exposed:
+
+   ```bash
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<port>/api/session
+   ```
+
+A dashboard without the setting answers `/api/session` with `404`. The setting is
+read only at startup, so if the config says `true` and the probe still returns
+`404`, restart the dashboard and probe again.
+
 ## TCP MCP
 
 ```bash

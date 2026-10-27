@@ -34,6 +34,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Scheduled execution | [Automation](references/automation.md) |
 | Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
 | MCP clients, SSH federation, remote dashboard or the lease listener user and its tokens | [Remote access](references/remote-access.md) |
+| Dashboard browser sessions: enabling `machine.web_terminal.enabled` or setting `machine.web_session.ttl`, one-time URLs from `orbit web open`, or checking whether the running dashboard serves `/api/session` (not the headless browser kit) | [Remote access — Browser sessions](references/remote-access.md#browser-sessions) |
 | Installing plugins, their `orbit <ns>` commands and dashboard panels, the `.orbit/plugins.yaml` pin file, and decision channels for plugin answer submission | [Plugins](references/plugins.md#decision-channels) |
 | Owner/replica roles and multiple machines | [Multi-host](references/multi-host.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
