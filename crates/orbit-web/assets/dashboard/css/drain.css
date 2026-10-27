@@ -624,6 +624,9 @@ main.drain-layout { height: 100%; grid-template-columns: minmax(0, 1fr); padding
 .fleet-holds { color: var(--warn-fg); }
 .fleet-pilot-warning { margin: 2px 0 0; padding-left: 15px; color: var(--warn-fg); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .fleet-unavailable { color: var(--fg-mute); grid-column: 1 / -1; }
+.fleet-loading { color: var(--fg-mute); }
+.fleet-row[data-phase="loading"] .fleet-phase { color: var(--fg-mute); font-style: italic; }
+.fleet-host-loading { color: var(--fg-mute); font-style: italic; }
 .fleet-host-down { color: var(--warn-fg); }
 .fleet-empty { margin: 0; color: var(--fg-mute); }
 
