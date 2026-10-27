@@ -53,6 +53,10 @@ pub struct BaseCommandResult {
     /// The failures the base run's complete output names [ORB-15375].
     #[serde(default)]
     pub failures: BTreeSet<String>,
+    /// Fingerprint of complete normalized diagnostics. Older caches cannot
+    /// establish identity-less reproduction from their bounded output.
+    #[serde(default)]
+    pub diagnostic_fingerprint: Option<String>,
     pub recorded_at: chrono::DateTime<Utc>,
 }
 
@@ -172,20 +176,33 @@ impl BaselineCheck {
     }
     /// Whether a comparable completed base run confirms every failure the
     /// candidate names. Full replays require the same exit status; exact test
-    /// replays can differ because they run only part of the selection. Missing identities or a
-    /// timeout cannot establish reproduction. A base result that
+    /// replays can differ because they run only part of the selection. Runs
+    /// without identities require equal nonempty diagnostic fingerprints and
+    /// exit status. Timeouts and coverage refusals cannot establish reproduction. A base result that
     /// is itself a missing tool or a network failure was never cached and
     /// never gets here.
     pub(in super::super) fn reproduces(&self, run: &RequiredCommandRun) -> bool {
         run.infrastructure_failure.is_none()
             && !run.timed_out
-            && !run.failures.is_empty()
             && self.not_comparable.is_none()
             && self.result.as_ref().is_ok_and(|base| {
                 !base.passed
                     && !base.timed_out
                     && (self.exact_replay || base.exit_code == run.exit_code)
-                    && run.failures.is_subset(&base.failures)
+                    && if run.failures.is_empty() && base.failures.is_empty() {
+                        !base.host_coverage_refused
+                            && run.host_output_refusal.is_none()
+                            && run.deferred_notice.is_none()
+                            && base.exit_code == run.exit_code
+                            && run
+                                .diagnostic_fingerprint
+                                .as_ref()
+                                .is_some_and(|fingerprint| {
+                                    base.diagnostic_fingerprint.as_ref() == Some(fingerprint)
+                                })
+                    } else {
+                        !run.failures.is_empty() && run.failures.is_subset(&base.failures)
+                    }
             })
     }
 
@@ -253,6 +270,7 @@ impl BaselineCheck {
             "exit_code": self.result.as_ref().ok().map(|base| base.exit_code),
             "timed_out": self.result.as_ref().ok().map(|base| base.timed_out),
             "failures": self.result.as_ref().ok().map(|base| &base.failures),
+            "diagnostic_fingerprint": self.result.as_ref().ok().and_then(|base| base.diagnostic_fingerprint.as_ref()),
             "cached": self.cached,
             "reason": self.result.as_ref().err().or(self.not_comparable.as_ref()),
             "log": log,
@@ -266,7 +284,12 @@ impl BaselineCheck {
         let Ok(base) = &self.result else {
             return BaselineRedFailures::default();
         };
-        hold_failures(base.failures.iter().cloned(), &base.output)
+        let identities = if base.failures.is_empty() {
+            base.diagnostic_fingerprint.iter().cloned().collect()
+        } else {
+            base.failures.clone()
+        };
+        hold_failures(identities, &base.output)
     }
 
     /// The captured base log: identity, result and output.
@@ -286,6 +309,7 @@ impl BaselineCheck {
                 "host_coverage_refused": base.host_coverage_refused,
                 "output": base.output,
                 "failures": base.failures,
+                "diagnostic_fingerprint": base.diagnostic_fingerprint,
                 "validation_env": base.validation_env,
                 "summary": base.summary,
                 "not_comparable": self.not_comparable,
@@ -545,6 +569,7 @@ fn compare_base<H: RuntimeHost + ?Sized>(
                     || run.deferred_notice.is_some(),
                 summary: run.summary,
                 failures: run.failures,
+                diagnostic_fingerprint: run.diagnostic_fingerprint,
                 recorded_at: Utc::now(),
             };
             if let Err(error) = serde_json::to_vec(&result)

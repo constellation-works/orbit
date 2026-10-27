@@ -1939,7 +1939,7 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sa
     assert_eq!(base["command"], log["command"]);
     assert_eq!(base["exit_code"], 0);
     assert_eq!(base["output"], "");
-    // Shared exit status without failure identities proves no shared failure, even when the output looks the same on both sides.
+    // Complete identity-less diagnostics establish reproduction even when capture bounds the logs.
     let output = format!("{}\nbase failure evidence\n", "é evidence\n".repeat(12000));
     fs::write(&output_path, &output).unwrap();
     let command = format!("cat '{}'; exit 3", output_path.display());
@@ -1950,9 +1950,9 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sa
     ] {
         let message = action(&host, action_name, &input).unwrap_err().to_string();
         assert!(message.len() <= 16 * 1024);
-        assert!(!baseline_red(&message), "{message}");
-        assert!(message.contains("failure identities are missing"));
-        assert!(!message.contains("failed identically"), "{message}");
+        assert!(baseline_red(&message), "{message}");
+        let hold = BaselineRedHold::from_text(&message).unwrap();
+        assert!(hold.failures.identities[0].starts_with("diagnostic fingerprint sha256:"));
         assert!(!message.contains(&output));
     }
     host.require_commands(&[
@@ -1973,6 +1973,103 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sa
             "an inconclusive base cannot establish source causation: {message}"
         );
         assert!(!baseline_red(&message), "{message}");
+    }
+}
+/// Identity-less tool failures match only after generic diagnostic normalization.
+fn identityless_diagnostics_hold_only_for_matching_completed_runs(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    let diagnostic = "policy denied widget";
+    let mut fingerprint = None;
+    for (case, candidate, base, candidate_exit, held) in [
+        ("plain", "policy denied widget", diagnostic, 2, true),
+        (
+            "ansi",
+            "\\033[31mpolicy denied widget\\033[0m",
+            diagnostic,
+            2,
+            true,
+        ),
+        (
+            "whitespace",
+            "  policy   denied\\twidget  ",
+            diagnostic,
+            2,
+            true,
+        ),
+        (
+            "paths",
+            "policy denied widget\\n$PWD/src/lib.rs\\n/tmp/candidate-123/log",
+            "policy denied widget\\n$PWD/src/lib.rs\\n/tmp/base-456/log",
+            2,
+            true,
+        ),
+        (
+            "noise",
+            "PATH=/candidate/bin\\npolicy denied widget\\nfinished in 1.23s",
+            "finished in 9.87s\\npolicy denied widget\\nPATH=/base/bin",
+            2,
+            true,
+        ),
+        // Diagnostic shape from the incident's cargo-deny base artifact:
+        // error[vulnerability] and box-drawing locations yield no parsed identities.
+        (
+            "cargo-deny",
+            "advisories FAILED, bans ok, licenses FAILED, sources ok\\nerror[vulnerability]: zip: archive extraction escapes its destination\\n    ┌─ $PWD/Cargo.lock:182:1\\n    ├ ID: RUSTSEC-2026-0368",
+            "advisories FAILED, bans ok, licenses FAILED, sources ok\\nerror[vulnerability]: zip: archive extraction escapes its destination\\n    ┌─ $PWD/Cargo.lock:182:1\\n    ├ ID: RUSTSEC-2026-0368",
+            2,
+            true,
+        ),
+        ("diagnostic", "policy denied gadget", diagnostic, 2, false),
+        ("exit", diagnostic, diagnostic, 3, false),
+        ("empty", "", "", 2, false),
+        (
+            "refusal",
+            "policy denied widget\\nSKIP: host test unavailable",
+            "policy denied widget\\nSKIP: host test unavailable",
+            2,
+            false,
+        ),
+        (
+            "base-refusal",
+            diagnostic,
+            "policy denied widget\\nSKIP: host test unavailable",
+            2,
+            false,
+        ),
+        (
+            "deferral",
+            "DEFERRED: bubblewrap unavailable: denied",
+            "DEFERRED: bubblewrap unavailable: denied",
+            2,
+            false,
+        ),
+    ] {
+        let command = format!(
+            "# {case}\nif test -e src/feature.txt; then printf \"{candidate}\\n\"; exit {candidate_exit}; else printf \"{base}\\n\"; exit 2; fi"
+        );
+        host.require_commands(&[&command]);
+        for (route, input) in [
+            ("candidate_validate", fx.validate_input()),
+            (
+                "claim_validate",
+                json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha}),
+            ),
+        ] {
+            let message = action(&host, route, &input).unwrap_err().to_string();
+            assert_eq!(baseline_red(&message), held, "{route} {case}: {message}");
+            if held {
+                let hold = BaselineRedHold::from_text(&message).unwrap();
+                assert_eq!(hold.failures.identities.len(), 1);
+                let identity = &hold.failures.identities[0];
+                assert!(identity.starts_with("diagnostic fingerprint sha256:"));
+                if matches!(case, "plain" | "ansi" | "whitespace") {
+                    assert_eq!(
+                        fingerprint.get_or_insert_with(|| identity.clone()),
+                        identity
+                    );
+                }
+            }
+        }
     }
 }
 /// A missing validation tool is refused with the full searched PATH, both in the action error and the durable command log [ORB-13963], even when the resolved PATH differs from the launcher or exceeds 1024 bytes.
@@ -2153,8 +2250,9 @@ fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery(san
     assert!(refused.contains("replayed nothing"), "{refused}");
     gate.fails();
     let red = run_implementation(&fx, &host, None).unwrap_err();
-    assert!(!baseline_red(&red), "{red}");
-    assert!(red.contains("failure identities are missing"), "{red}");
+    assert!(baseline_red(&red), "{red}");
+    let hold = BaselineRedHold::from_text(&red).unwrap();
+    assert!(hold.failures.identities[0].starts_with("diagnostic fingerprint sha256:"));
     gate.executes();
     let runs = gate.runs();
     run_implementation(&fx, &host, Some(json!({ "summary": "done" }))).unwrap();
@@ -3007,7 +3105,7 @@ fn a_required_command_red_on_the_base_holds_the_task_without_a_pr(sandbox: &Path
     );
 }
 const RED_TESTS: &str = "make ci-test";
-/// A known-red case: its name, the base's tests, the candidate's tests (`None` fails exactly as the base), and the tests it proceeds with as known red (`None` requires candidate repair).
+/// A known-red case: its name, the base's tests, the candidate's tests (`None` fails exactly as the base), and the tests it proceeds with as known red (`None` requires candidate repair or a base hold).
 type KnownRedCase<'a> = (
     &'a str,
     &'a [&'a str],
@@ -3088,12 +3186,14 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them(sandbox: &
             let message = outcome
                 .expect_err(&format!("{case}: candidate failures need repair"))
                 .to_string();
-            assert!(
-                !baseline_red(&message) && !message.contains("failed identically"),
-                "different or unknown failures cannot hold for a red base: {case}: {message}"
+            let held = case == "both-unknown";
+            assert_eq!(baseline_red(&message), held, "{case}: {message}");
+            assert_eq!(
+                log["failure_kind"],
+                if held { "baseline_red" } else { "candidate" },
+                "{case}"
             );
-            assert_eq!(log["failure_kind"], "candidate", "{case}");
-            assert_eq!(log["baseline_reproduces"], false, "{case}");
+            assert_eq!(log["baseline_reproduces"], held, "{case}");
             assert_eq!(
                 log["failures"],
                 json!(named_tests(candidate_tests.unwrap_or(base))),
@@ -6484,7 +6584,7 @@ test_groups! {
     review_checks_and_delivery => [a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review, passing_checks_merge_the_reviewed_candidate_and_record_its_delivery, required_checks_the_head_has_not_reported_are_awaited_before_completion],
     review_fix_revalidation => [a_before_landing_fix_lands_under_its_lease_and_an_unreviewed_head_never_merges, a_failed_review_revalidation_rejects_and_preserves_both_commits, a_red_base_during_pr_revalidation_holds_the_task],
     review_repair_leases => [a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease, a_conflicting_reviewed_pr_is_rebased_for_re_review_then_completes],
-    claimed_validation_failures => [a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs, a_claimed_candidate_that_cannot_reach_the_network_fails_transient, a_required_command_red_on_the_base_holds_the_task_without_a_pr],
+    claimed_validation_failures => [identityless_diagnostics_hold_only_for_matching_completed_runs, a_claimed_candidate_on_a_red_base_fails_typed_with_both_logs, a_claimed_candidate_that_cannot_reach_the_network_fails_transient, a_required_command_red_on_the_base_holds_the_task_without_a_pr],
     claimed_publication_and_merge_pins => [a_pr_claim_validates_before_publication_and_pins_after_it, a_pr_merge_batch_lands_the_checked_head_at_its_pin, a_pr_merge_batch_refuses_a_head_that_moved_after_its_freshness_check],
     supervisor_and_truncated_failures => [supervisor_stops_are_environment_failures_and_never_poison_the_base_cache, a_failure_only_the_truncated_middle_names_still_requires_candidate_repair],
     network_retry_and_cached_base => [a_network_flake_is_rerun_before_the_candidate_is_judged, remote_base_transport_retries_preserve_access_refusals, claimed_handoff_fetch_timeout_uses_only_a_related_cached_base],

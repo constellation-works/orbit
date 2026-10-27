@@ -44,7 +44,8 @@ const BASE_REPLAY_RESERVE_DIVISOR: u32 = 4;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BaseFailureVerdict {
     /// Comparable completed runs fail with the same exit status and a
-    /// nonempty candidate failure set covered by the base identities.
+    /// nonempty candidate failure set covered by the base identities, or equal
+    /// diagnostic fingerprints when neither run names failures.
     /// Carries the failures both name.
     Reproduced { failures: Vec<String> },
     /// The base fails as the candidate does, and the candidate's failures
@@ -260,6 +261,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
         "network_retries": run.network_retries,
         "output": run.output,
         "failures": run.failures,
+        "diagnostic_fingerprint": run.diagnostic_fingerprint,
         "host_output_refusal": host_output_refusal,
         "validation_env": run.environment_record(),
         "summary": run.summary,
@@ -405,7 +407,7 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             "a timed-out run cannot establish matching failure identities".to_string(),
         )));
     }
-    if on_candidate.is_empty() || base.failures.is_empty() {
+    if (on_candidate.is_empty() || base.failures.is_empty()) && !check.reproduces(&run) {
         return Ok(checked(BaseFailureVerdict::Inconclusive(
             "failure identities are missing, so matching failures are unconfirmed".to_string(),
         )));
@@ -452,7 +454,11 @@ pub fn verify_base_failure<H: RuntimeHost + ?Sized>(
             failures: on_candidate.into_iter().collect(),
         },
         None => BaseFailureVerdict::Reproduced {
-            failures: on_candidate.into_iter().collect(),
+            failures: if on_candidate.is_empty() {
+                check.failures().identities
+            } else {
+                on_candidate.into_iter().collect()
+            },
         },
     }))
 }
