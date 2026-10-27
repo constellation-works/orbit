@@ -20,7 +20,7 @@ use super::managed_assets::{
 /// References load on demand and may link across the bundled skill trees. The
 /// ordering below groups each skill's files under its router, in the order its
 /// reference table presents them.
-pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 32] = [
+pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 33] = [
     // Everyday task work: the router, then its references in table order.
     (
         "orbit/SKILL.md",
@@ -107,6 +107,10 @@ pub(crate) const DEFAULT_SKILL_FILES: [(&str, &str); 32] = [
     (
         "orbit-setup/references/first-run.md",
         include_str!("../../assets/skills/orbit-setup/references/first-run.md"),
+    ),
+    (
+        "orbit-setup/references/workspace-tuning.md",
+        include_str!("../../assets/skills/orbit-setup/references/workspace-tuning.md"),
     ),
     (
         "orbit-setup/references/configuration.md",
