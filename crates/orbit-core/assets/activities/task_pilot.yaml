@@ -186,6 +186,11 @@ spec:
               description: >
                 Findings with explicit admission severity. Advisory observations
                 set holds_promotion to false; legacy strings always hold.
+                A contract-existence finding names the required contract,
+                pinned-source or tool-schema evidence, dependency coverage and
+                a suggested prerequisite or criterion rewrite. It holds when
+                neither the base nor a dependency provides the contract and
+                the task cannot add it under the repository's own rules.
               type: array
               items:
                 oneOf:
@@ -194,6 +199,11 @@ spec:
                     required: [text, holds_promotion]
                     properties:
                       text:
+                        description: >
+                          Finding and citation. For a missing contract include
+                          its exact name, path:line or tool-schema evidence,
+                          whether a dependency covers it, the applicable
+                          ownership rule and the proposed repair.
                         type: string
                         minLength: 1
                       holds_promotion:
@@ -456,6 +466,46 @@ spec:
       not report a criterion that expects a refusal, or a tool named inside a
       quoted example. When `implementation_lane` is null, do not invent a tool
       set.
+    - **Contract existence.** Inventory every concrete contract required by
+      the description and criteria: tools, tool output fields, schema fields,
+      port methods, config sections and authority requirements. Check the
+      actual definitions, output serialization and authorization paths at
+      `source_revision`, not just a matching name or a selector. Cite the
+      defining `path:line` and revision; for an absent field, cite the enclosing
+      schema or output type that lacks it. This lane runs no `orbit tool show`:
+      inspect the pinned tool schema and implementation with read-only source
+      reads instead. An installed tool's schema alone would not prove the
+      contract at the pinned revision. In a non-Git workspace, use the files
+      inspected and state that limitation.
+      Read the workspace's repository guide files (for example `AGENTS.md`,
+      `CLAUDE.md`, `ARCHITECTURE.md` and any guides applying to the affected
+      paths) at that revision for file ownership, reserved config sections,
+      permitted edits and authority boundaries. Derive these rules from that
+      workspace, never from Orbit-specific ownership assumptions. Selectors
+      alone neither forbid a needed companion edit nor grant a reserved edit.
+      Read each recorded dependency and `blocked_by` relation with
+      `orbit.task.show`, including its description, criteria, plan, selectors
+      and status. A title or a generic dependency edge is not evidence that
+      its scope adds the exact missing contract. A completed dependency whose
+      contract is still absent from the pinned source does not cover the gap.
+      Record each contract's evidence and coverage in `assessment_rationale`:
+      present in the base, explicitly supplied by a dependency (name its ID
+      and scope), owned by this task, or unavailable. When this task is allowed
+      and scoped to add the contract, include the needed selectors; do not
+      flag ordinary implementation work. When an unfinished recorded
+      dependency explicitly supplies it, let that dependency gate execution;
+      do not add a holding warning just for waiting on it.
+      Otherwise, when a required contract is absent and this task cannot add
+      it, emit a `utility_warnings` object with `holds_promotion: true`. Its
+      text names the contract, criterion number or description requirement,
+      evidence (`path:line` at the revision or the checked tool schema),
+      dependency coverage (`none` and why), the ownership or authority rule
+      with its citation, and a suggested prerequisite or criterion rewrite.
+      Keep IDs of unrelated or non-covering dependencies in the rationale,
+      outside this warning: named prerequisite IDs affect admission. Use the
+      existing pilot-warning hold and triage path; never invent a prerequisite
+      ID or relax the repository's rules. A hypothetical example or a
+      criterion expecting a refusal is not a required available contract.
     - **Artifacts.** Screenshots and task artifacts are always feasible; never
       report them. Owner mode attaches with `artifact_attachment.owner` when
       `owner_granted` is true; claimed mode always attaches declared files
@@ -582,8 +632,9 @@ spec:
     current code or contract; criteria the lane cannot satisfy or validate on
     its own host (every finding from Tool feasibility, Sandbox deferral, Owner
     machine and the Native OS tag conflict); authority or tools the lane cannot
-    obtain; or a target that does not exist. Set it to false, or omit the
-    finding, for:
+    obtain; a required contract absent from the base, uncovered by a dependency
+    and outside this task's permitted scope to add; or a target that does not
+    exist. Set it to false, or omit the finding, for:
 
     - an empty or missing plan (the implementer fills plans; they are not a
       filing or promotion requirement);

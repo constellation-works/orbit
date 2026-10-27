@@ -60,6 +60,21 @@ fn advisory_findings_are_approved_and_reach_the_worker() {
 fn both_promotion_authorities_keep_real_warning_holds() {
     for sweep in [false, true] {
         let workspace = Workspace::new();
+        workspace.commit_file(
+            "AGENTS.md",
+            "The integrator owns fixture-tool.json. Feature tasks may edit README.md only.\n",
+            "record fixture ownership",
+        );
+        let revision = workspace.commit_file(
+            "fixture-tool.json",
+            r#"{"name":"fixture.read","output_schema_json":{"type":"object","properties":{"value":{"type":"string"}},"additionalProperties":false}}"#,
+            "pin tool output without ready",
+        );
+        let missing_contract = format!(
+            "Criterion 1 requires fixture.read output field ready, absent from fixture-tool.json:1 at {revision}. \
+             Dependency coverage: none. AGENTS.md:1 reserves schema edits for the integrator. \
+             Add an integrator prerequisite supplying ready: boolean, or rewrite the criterion."
+        );
         let cases = [
             (
                 "surface_warnings",
@@ -67,7 +82,7 @@ fn both_promotion_authorities_keep_real_warning_holds() {
             ),
             (
                 "utility_warnings",
-                json!({"text": "The lane cannot validate this criterion.", "holds_promotion": true}),
+                json!({"text": missing_contract, "holds_promotion": true}),
             ),
             ("surface_warnings", json!("Legacy surface warning")),
             ("utility_warnings", json!("Legacy utility warning")),
@@ -90,6 +105,18 @@ fn both_promotion_authorities_keep_real_warning_holds() {
                 &["file:README.md"],
                 TaskComplexity::Low,
             );
+            if index == 1 {
+                workspace.edit(
+                    &task,
+                    TaskUpdateParams {
+                        description: Some("Display fixture.read readiness in README.md without changing the integrator's schema.".into()),
+                        acceptance_criteria: Some(vec![
+                            "Read the boolean ready output field from fixture.read.".into(),
+                        ]),
+                        ..Default::default()
+                    },
+                );
+            }
             let mut assessed = assessment(&task);
             assessed[field] = json!([finding]);
             // An advisory item must not hide a holding item in the same list.
@@ -125,6 +152,69 @@ fn both_promotion_authorities_keep_real_warning_holds() {
                     .as_str()
                     .unwrap_or_else(|| finding["text"].as_str().unwrap());
                 assert_eq!(held["findings"][0]["text"], text);
+            }
+            if index == 1 {
+                let shown = workspace
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": task.id}))
+                    .unwrap();
+                assert_eq!(
+                    shown["pilot_warnings"],
+                    json!([{
+                        "kind": "utility_warnings", "text": missing_contract,
+                    }])
+                );
+
+                // The same feature may be promoted once an explicit dependency
+                // owns the missing contract. The dependency gates execution;
+                // the pilot need not manufacture an additional warning hold.
+                let dependency = workspace.task(
+                    "Integrator adds fixture.read ready output",
+                    &[],
+                    &["file:fixture-tool.json"],
+                    TaskComplexity::Low,
+                );
+                workspace.edit(
+                    &dependency,
+                    TaskUpdateParams {
+                        description: Some(
+                            "Integrator work: extend the fixture.read output schema.".into(),
+                        ),
+                        acceptance_criteria: Some(vec![
+                            "fixture-tool.json defines ready as a boolean output field.".into(),
+                        ]),
+                        plan: Some(
+                            "Add ready to fixture-tool.json and its output producer.".into(),
+                        ),
+                        ..Default::default()
+                    },
+                );
+                workspace.edit(
+                    &task,
+                    TaskUpdateParams {
+                        dependencies: Some(vec![dependency.id.clone()]),
+                        ..Default::default()
+                    },
+                );
+                let mut covered = assessment(&task);
+                covered["assessment_rationale"] = json!(format!(
+                    "fixture.read.ready is absent at {revision} (fixture-tool.json:1); \
+                     dependency {} explicitly adds that boolean field within its integrator scope. \
+                     The feature edits only README.md under AGENTS.md:1.",
+                    dependency.id
+                ));
+                let covered = apply_authority(&workspace, &task, covered, sweep);
+                assert_eq!(covered[key][0]["decision"], "promote", "{covered}");
+                assert_eq!(workspace.status(&task), TaskStatus::Backlog);
+                let shown = workspace
+                    .runtime
+                    .run_tool("orbit.task.show", json!({"id": task.id}))
+                    .unwrap();
+                assert_eq!(shown["pilot_warnings"], json!([]), "{shown}");
+                assert_eq!(
+                    workspace.runtime.get_task(&task.id).unwrap().dependencies(),
+                    [dependency.id]
+                );
             }
         }
         let task = workspace.task(
