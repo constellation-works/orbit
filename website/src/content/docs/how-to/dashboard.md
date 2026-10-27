@@ -1508,6 +1508,52 @@ Starting with `auto_fix: true` requires operator capability too and returns
 are checked by the shared drain submission path before a run is persisted.
 **Replay run** requires operator capability for any source run.
 
+### Private browser sessions
+
+Private browser sessions are an opt-in credential facility for routes that
+explicitly require a browser session. Enable it on the dashboard host in the
+global configuration (it defaults to off), then start or restart the server:
+
+```bash
+orbit config set --global machine.web_terminal.enabled true
+orbit web serve
+```
+
+Startup opens a private URL in the browser. To reopen a running dashboard or
+get a fresh session after expiry, run `orbit web open` on that host. Each URL
+contains a one-use ticket valid for five minutes; the browser exchanges it for
+a session cookie. `orbit web open --no-open` prints the URL without opening a
+browser. Treat the printed URL as a credential: keep it out of logs and do not
+share it. Startup displays the private URL only on an interactive terminal;
+redirected output contains only the base address.
+
+The HttpOnly, SameSite=Strict cookie is scoped to `/api`. Its lifetime is set
+at startup by global `machine.web_session.ttl` in seconds (default 43200, or
+12 hours; range 1–604800). Restart to apply a change. Sessions also expire in
+server memory and every server restart invalidates them. See the
+[configuration reference](../../reference/config/#settable-keys) for the settings.
+
+On Unix, the credential directory and file must belong to the current user
+and have modes `700` and `600` respectively; symlinks and special files are
+refused. Browser sessions require Unix private-file permissions. `web open`
+also refuses missing or invalid credentials, a stopped server, disabled
+sessions, or a stale credential that does not match the live dashboard. Start
+or restart the enabled dashboard and check local ownership and permissions.
+
+For `orbit web connect`, enable sessions on the remote host and restart its
+dashboard first. Connect requests a fresh remote ticket and opens it through
+the local SSH tunnel. If it cannot obtain one, it warns and continues with the
+ordinary dashboard URL. With `--no-open`, an interactive terminal can display
+the private URL; redirected output does not. Keep the tunnel open while using
+it.
+
+The session endpoint, `/api/session`, exposes the instance identity and
+exchanges tickets when enabled; it returns `404` when disabled, and rejects an
+invalid or reused ticket. No existing dashboard route currently requires the
+browser-session cookie. Existing dashboard routes retain their prior
+authorization, including the operator and workspace gates above; a browser
+session does not grant operator capability.
+
 ## Troubleshooting
 
 | Symptom | What to check |

@@ -253,6 +253,7 @@ See [Schedule Recurring Work](../../how-to/recurring-work/).
 | `orbit mcp listen [ADDR]` | Serve the same surface on a TCP socket. Binds `127.0.0.1:7879` unless you pass `--allow-non-loopback`. `--workspace <selector>` binds each accepted session to that workspace by default. |
 | `orbit web serve` | Serve the Orbit dashboard for the registry under the resolved root, so `orbit --root <ROOT> web serve` shows only `<ROOT>`'s workspaces. `--workspace <SELECTOR>` preselects one. `--operator` enables Operations controls without a TTY or `ORBIT_OPERATOR`. |
 | `orbit web connect` | Open a remote workspace's dashboard over an SSH tunnel. `--workspace <SELECTOR>` preselects the remote workspace; `--root` is refused. The remote server starts with `--operator` unless you pass `--no-operator`, which keeps Operations read-only. |
+| `orbit web open` | Reopen a running, session-enabled local dashboard with a fresh private URL. `--no-open` prints the URL without opening a browser; treat it as a credential. See [Private browser sessions](../../how-to/dashboard/#private-browser-sessions). |
 
 See [Use the Dashboard](../../how-to/dashboard/) for connection, workspace
 scope, Operations controls, and authorization. See
