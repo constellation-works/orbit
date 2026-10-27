@@ -17,10 +17,11 @@ related_artifacts: []
 # Path Leases — Design
 
 This document proposes how path leases work. The lease row of §2, the advisory/hard grant rules
-of §3 without the queue, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
+of §3, the SSH principal of §7 and the phase-1 keys of §8 are implemented as
 runtime operations, CLI, MCP and loopback REST surfaces (see §6). Phase 3 durable notices,
-including Web poll and SSE replay, and owner-clock lifetime handling are implemented; queueing,
-preemption and listener streaming remain later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
+including poll and SSE replay on Orbit Web and the lease listener, owner-clock lifetime
+handling and the phase-4 hard-lease queue with aging and expansion are implemented; preemption
+and the dashboard Leases view remain later work. §1 is what exists today and what the proposal reuses. It leaves the pricing of shared paths to
 [conflict-budget](../conflict-budget/1_scope.md), and open directions to
 [3_vision.md](./3_vision.md).
 
@@ -80,8 +81,12 @@ default, or `lease`) and `mode` (`hard` by default, or `advisory`) to `task_rese
 `files_json`, no task ids and no owner run, so stale-reservation cleanup never touches it. The
 store inserts (refusing a hard lease that overlaps a task reservation or hard lease), renews,
 releases, reads and lists leases, and lazy expiry ends them as it ends reservations. `state` is
-derived for now: `granted` while active, `released` or `expired` from `release_reason`; `queued`,
-`preempted` arrive with their phases. Schema v65 (`lease_notices`) adds `notice_cursor`
+derived: `queued` while an active request waits, `granted` while active otherwise, `released` or
+`expired` from `release_reason`; `preempted` arrives with its phase. Schema v67
+(`task_reservation_lease_queue`) adds `queued_files_json`, `queued_at` and `queue_kind`
+(`request` or `expansion`). A queued request keeps `files_json` empty, so every overlap reader
+skips it without a new filter; a queued expansion keeps its held selectors there and its waiting
+ones in `queued_files_json`. Schema v65 (`lease_notices`) adds `notice_cursor`
 (default 0, reserved for explicit holder acknowledgement; polling and SSE never advance it)
 and an append-only owner notice table. Sequence numbers increase across the owner database,
 so they increase within each workspace and may have gaps. Existing leases start with no
@@ -97,12 +102,14 @@ previous release), and the rows it writes read here as hard task reservations.
 
 **Runtime operations.** `crates/orbit-runtime/src/task/locks/lease.rs` holds one function per
 verb: `request`, `renew`, `release`, `show`, `list`, `check` and `notices`, each refused naming
-`lease.enabled` while it is false. `request` applies §3 without waiting: advisory is granted and
-names the holders it overlaps; hard drops `unlocked_context_paths` from the stored surface and is
-refused with the holders named when what is left overlaps a task context lock, task reservation
-or hard lease; a class set to `lease.hard = "never"` is granted advisory with a notice; a priority
-above the class ceiling is refused. `check` reads without expiring or auditing anything. Grant,
-refusal, renewal, release and lazy expiry each write a `lease` audit event.
+`lease.enabled` while it is false, and `lease/queue.rs` holds `expand` and the grant pass.
+`request` applies §3: advisory is granted and names the holders it overlaps; hard drops
+`unlocked_context_paths` from the stored surface and, when what is left overlaps a task context
+lock, task reservation, hard lease or a queued request ranked ahead of it, queues with the holders
+named (or, with `wait = false`, is refused naming them); a class set to `lease.hard = "never"` is
+granted advisory with a notice; a priority above the class ceiling is refused. `check` reads
+without expiring or auditing anything. Grant, queueing, refusal, expansion, deadlock refusal,
+renewal, release and lazy expiry each write a `lease` audit event.
 
 ## 3. Granting, queueing and the drain
 
@@ -137,6 +144,21 @@ advisory rather than vanishing.
 blocked ones the expansion queues while the lease keeps what it holds. Two leases each waiting on
 the other's expansion are a deadlock; the owner breaks it by refusing the younger, lower-priority
 expansion with a `deadlock` notice.
+
+**Implemented queue.** The owner store keeps queue order transactionally: rank is the priority
+plus one level once `now - queued_at` reaches `lease.aging_minutes` (capped at `high`), then the
+older `queued_at` goes first. A new request also waits behind any queued request that is ranked
+at or above it and wants an overlapping path, so a later arrival never jumps a waiter. A grant
+pass walks the queue in order and grants each waiter whose paths are free of task context locks,
+task reservations, hard leases and the waiters still ahead of it; an expansion takes whichever of
+its waiting paths are free and keeps waiting for the rest. The pass runs after a release, after
+any operation that lazily expires a lease, and on every owner clock tick, which is how a task
+settling or a task reservation's release reaches the queue; between ticks a waiter stays queued.
+A request granted from the queue keeps the TTL it asked for, counted from the original request,
+so an abandoned waiter still ends at its TTL. The deadlock check follows edges from an expansion's
+waiting paths to the hard lease that holds them; on a cycle the expansion ranked last (lowest
+priority, then youngest) loses its waiting paths, keeps what it holds and gets the `deadlock`
+notice.
 
 ## 4. Lifetime
 
@@ -204,8 +226,11 @@ paths and delivering task. Both sides of renames count. Tasks receive no notices
 or the input cursor on an empty page. Repeated reads acknowledge nothing and do not expire
 leases. `orbit lease notices --follow` drains pages then polls, with JSONL in JSON modes.
 Web events emit each notice as JSON with its `seq` as the SSE ID, using `Last-Event-ID`
-in preference to `after`. Invalid cursors are refused. Streams are bounded to eight
-concurrent clients and close on disconnect or server shutdown.
+in preference to `after`, and a `: keep-alive` comment for each empty page (about one a
+second while idle). Invalid cursors are refused. Orbit Web's own streams are bounded to eight
+concurrent clients; the listener's count toward its limits (§7.3). Streams close on
+disconnect or server shutdown. Both servers serve these routes from `lease_router`, framing
+the same pages, and the listener's pages are read on the owner by the same page loop.
 
 ## 6. Surfaces
 
@@ -224,9 +249,11 @@ projections and renders mode and principal in human output.
 Request uses `<selector>... --principal <name> [--mode advisory|hard | --hard]
 [--priority low|normal|high] [--ttl 30m] [--branch <name>] [--base <name>]`.
 Renew takes `<lease-id> [--ttl 30m]`; check takes `<path>... [--lease-id <id>]`.
-All six accept `--json`; refusal of a hard request exits 3. TTL is 1–14400 seconds,
+Every verb accepts `--json`; a hard request that is refused or queued, and an expansion refused
+to break a deadlock, exit 3. TTL is 1–14400 seconds,
 default 1800. Branch bindings are recorded only. The table below also includes
-later-phase surfaces; `notices` is added in phase 3; `expand`, queueing and `--no-wait` remain future work.
+later-phase surfaces; `notices` is added in phase 3 and `expand`, queueing and `--no-wait`
+in phase 4.
 
 | Verb | MCP tool | CLI | REST |
 |---|---|---|---|
@@ -241,10 +268,12 @@ later-phase surfaces; `notices` is added in phase 3; `expand`, queueing and `--n
 **Implemented loopback REST surface.** Orbit Web serves request, renew, release, show, list
 and check, plus notices polling and SSE replay, through the same runtime operations and returns their JSON unchanged. An overlapping
 hard request returns `granted: false` with the runtime's typed `conflicts`, naming each holder
-by kind and ID. Expansion returns HTTP 501 with `code: "not_available_in_this_phase"`; notices and events are implemented on Orbit Web (listener streaming is separate). Select a workspace with `?workspace=<id>` or use the server's
+by kind and ID, and `queued: true` with its `queue_position` unless it asked `wait: false`.
+Expansion returns `added`, `queued`, `conflicts`, `queue_position`, `deadlock` and the lease;
+notices and events are implemented on Orbit Web and the lease listener. Select a workspace with `?workspace=<id>` or use the server's
 default. Request and check bodies are the corresponding operation's JSON input; renew accepts
-its TTL fields and permits an omitted body to use the default TTL. Expansion also permits an
-omitted body. For show, renew and release the URL supplies `lease_id`, overriding a body ID.
+its TTL fields and permits an omitted body to use the default TTL. Expansion requires
+`selectors` in its body. For show, renew and release the URL supplies `lease_id`, overriding a body ID.
 Request declares `principal` in its JSON body or query string; other verbs may declare it too.
 If both body and query declare a principal, they must match. Release accepts query attribution.
 Writes (request, renew, expand and release) require the dashboard's operator session and its
@@ -255,7 +284,9 @@ even though its HTTP method is POST; its Origin check still applies.
 Its public `LeaseBackend` receives `LeaseCaller` (workspace and declared principal) separately
 from the operation JSON and executes on the blocking pool. The dashboard adapter selects its
 runtime from a pinned workspace snapshot and enforces operator write authority. Other servers
-supply their own backend and authentication/Origin policy. A server that authenticates puts a
+supply their own backend and authentication/Origin policy. The router also serves
+`GET /leases/notices` and `GET /leases/events`; a backend reads one notice page and opens a
+stream of pages, admitting its own streams. A server that authenticates puts a
 `LeaseCallerToken` in the request's extensions; the router then takes the principal from it and
 ignores declared ones. The lease listener (§7.3) is that server.
 
@@ -421,7 +452,13 @@ listener will call. `lease.intake.peer_user` is read only from the global `confi
 `run/` directory (`0750`) and the socket (`0660`) belong to the operator and the peer user's
 primary group, which the operator's user must be a member of. Frames are a 4-byte big-endian
 length and a JSON body of at most 64 KiB; each must arrive within 10 seconds, and 16 connections
-are served at once. Both sides send `{"protocol_version": 1}` first and refuse a mismatch. A
+are served at once. Both sides send `{"protocol_version": 2}` first and refuse a mismatch,
+naming both versions; version 2 added `notices` (one page) and `events`. Any change to the
+frames or operations changes the version. `events` is audited once, when it opens, and then
+streams one response per page on its connection until either side closes it or Orbit Web
+shuts down; it holds one of the 16 connections meanwhile. A notice page whose response would
+exceed 64 KiB is shortened to a prefix whose cursor is its last notice, so a client resuming
+from the cursor misses nothing; a single notice over the limit is `frame_too_large`. A
 request's token scope must name its workspace (a registered id or name) and the operation's
 verb. The runtime grants the lower of the token's and the class's priority ceilings, and hard
 only when both allow it. The lease row stores the token id (store migration 66), and every
@@ -502,7 +539,7 @@ and `?workspace=` (default: the token's only workspace; several without one is 4
 revoked and expired tokens and missing ones are 401 `unauthorized`; a missing verb or workspace is
 403. The backend strips any declared principal and forwards the token id, scope and client address
 over the intake socket, one connection per operation; intake codes map to HTTP (`scope_refused`
-403, `lease_not_held` and `unknown_workspace` 404, `invalid_input` 400, expansion 501,
+403, `lease_not_held` and `unknown_workspace` 404, `invalid_input` 400,
 `operation_failed` 500 with the detail logged, an unreachable socket 503).
 
 The listener now applies the complete limits slice. `orbit_auth::limiter::KeyedLimiter`
@@ -529,8 +566,14 @@ The shared HTTP/1 transport bounds connections before TLS, caps headers at 64 fi
 One additional bounded refusal lane can negotiate TLS and send 503; if that lane is occupied,
 further saturated TLS connections close immediately and plain HTTP gets a best-effort 503.
 A rate refusal returns 429 with a rounded-up `Retry-After`, naming only the limit.
-Listener SSE remains phase 3: the token allowance API already reserves its own stream counter,
-and the body wrapper keeps both token and global in-flight allowances until the stream closes.
+The listener serves notice polling and SSE through the intake socket's `notices` and
+`events` operations, with the token's workspace and the `read` verb. Opening a stream spends a
+token read. An open stream holds its connection, one global and one token in-flight allowance,
+a token stream allowance and an intake allowance until it closes, so `max_streams_per_token`,
+`max_in_flight_per_token`, `max_in_flight_requests` and `max_connections` all count it, and
+their refusals are the 429 or 503 of every other route. The handler timeout bounds opening a
+stream, not its life. A stream ends when the client goes, when Orbit closes it, after 30
+seconds without a page from Orbit, or at listener shutdown, without waiting out the drain.
 
 Refusals that never reach Orbit are aggregated in the listener user's own token store,
 `lease_listener_limit_audit` (schema v3), by canonical key, limit/reason and window, with count
@@ -565,7 +608,7 @@ no surface reimplements a check.
 | `lease.default_mode` | `"advisory"` | Mode when a request names none. |
 | `lease.hard` | `{ human = "allow", agent = "allow" }` | Per principal class: `allow` or `never` (granted as advisory). |
 | `lease.max_priority` | `{ human = "high", agent = "normal" }` | Priority ceiling per principal class; tokens carry their own. |
-| `lease.aging_minutes` | `30` | Queue age after which a request moves up one priority level. |
+| `lease.aging_minutes` | `30` | Queue age after which a request or expansion moves up one priority level (1–10080). |
 | `lease.preemption` | `false` | Allow a higher-priority hard request to downgrade a lower-priority hard lease. |
 | `lease.intake.peer_user` | unset | The listener user allowed on the intake socket; unset means no socket (§7.2). |
 | `lease.listener.bind` | unset | Address for the lease listener; unset means no listener. |

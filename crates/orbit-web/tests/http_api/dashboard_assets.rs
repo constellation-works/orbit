@@ -34,6 +34,27 @@ fn dashboard_drops_superseded_audit_codebase_and_scoreboard_responses() {
     );
 }
 
+/// Analytics › Forecast renders a kept review mode, a dropped review mode,
+/// unknown current and historical evidence, and an older response that omits
+/// those fields. The public path is `fetchAndRenderForecast`.
+#[test]
+fn forecast_view_renders_review_mode_uncertainty_and_legacy_responses() {
+    let result = std::process::Command::new("node")
+        .args([
+            "--experimental-vm-modules",
+            "tests/http_api/dashboard_forecast_review.mjs",
+        ])
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("node is required to execute the dashboard forecast review fixture");
+    assert!(
+        result.status.success(),
+        "dashboard forecast review behavior failed:\n{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    );
+}
+
 #[test]
 fn codebase_view_executes_subtab_swap_sections_empty_state_and_denial_badge() {
     let result = std::process::Command::new("node")

@@ -88,6 +88,7 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.friction.add",
             "orbit.friction.update",
             "orbit.lease.check",
+            "orbit.lease.expand",
             "orbit.lease.list",
             "orbit.lease.notices",
             "orbit.lease.release",

@@ -1,12 +1,13 @@
-//! Path-lease operations (`docs/design/path-leases`, phase 1): request,
-//! renew, release, show, list and check over the lease rows the reservation
-//! store keeps.
+//! Path-lease operations (`docs/design/path-leases`): request, renew,
+//! expand, release, show, list, check and notices over the lease rows the
+//! reservation store keeps.
 //!
 //! A lease is held by a principal (a person or an agent), never by a task.
 //! Advisory leases are always granted and block nothing; a hard lease is
 //! granted only when no selector of its hard surface overlaps a task context
-//! lock, a task reservation or another hard lease. There is no waiting queue
-//! yet: an overlapping hard request is refused with the holders named.
+//! lock, a task reservation or another hard lease. An overlapping hard
+//! request waits in the lease queue (`queue`), holding nothing, unless it
+//! asked `wait = false`, which refuses it with the holders named.
 //!
 //! Over SSH the principal class and its `lease.*` ceilings are attribution
 //! plus a guard, not a security boundary.
@@ -14,7 +15,9 @@
 use std::path::Path;
 
 mod lifetime;
+mod queue;
 pub use lifetime::sweep_lease_lifetimes;
+pub use queue::{expand, expand_with_token};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
@@ -23,18 +26,15 @@ use orbit_common::protocol::tool_input::{
     optional_string_alias, optional_string_list_alias, required_string,
 };
 use orbit_store::contracts::{
-    LeaseInsertParams, LeaseMode, LeaseRecord, LeaseReleaseParams, LeaseRenewParams,
-    TaskLockConflict, TaskReservationCheckParams, TaskReservationKind,
-    TaskReservationReleaseReason,
+    LeaseInsertParams, LeaseMode, LeaseQueueKind, LeaseRecord, LeaseReleaseParams,
+    LeaseRenewParams, TaskLockConflict, TaskReservationKind, TaskReservationReleaseReason,
 };
 pub use orbit_store::contracts::{LeasePrincipalClass, LeasePriority};
 use orbit_types::telemetry::AuditEventStatus;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::audit::{
-    emit_expired_lease_events, emit_expired_reservation_events, record_lease_audit_event,
-};
+use super::audit::{emit_expired_lease_events, record_lease_audit_event};
 use super::commands::{
     canonicalize_file_lock_selectors, parse_file_lock_selectors, parse_ttl_seconds,
     reservation_actor_label, workspace_orbit_dir, workspace_task_reservation_id,
@@ -62,6 +62,7 @@ pub(crate) struct LeasePolicy {
     hard_allowed_agent: bool,
     max_priority_human: LeasePriority,
     max_priority_agent: LeasePriority,
+    aging_minutes: u32,
 }
 
 impl LeasePolicy {
@@ -81,6 +82,7 @@ impl LeasePolicy {
                 &snapshot.lease_max_priority_agent,
                 "lease.max_priority.agent",
             )?,
+            aging_minutes: snapshot.lease_aging_minutes,
         })
     }
 
@@ -126,7 +128,10 @@ pub fn lease_principal_class() -> LeasePrincipalClass {
 /// Advisory is always granted and names the holders it overlaps. Hard drops
 /// `workflow.unlocked_context_paths` from its surface and is granted only
 /// when the rest overlaps no task context lock, task reservation or hard
-/// lease; otherwise it is refused with those holders. A class whose
+/// lease, and no queued request or expansion ranked ahead of it wants those
+/// paths; otherwise it queues (`granted: false`, `queued: true`) with those
+/// holders and its queue position, or with `wait = false` is refused with
+/// them. A class whose
 /// `lease.hard` is `never` is granted advisory instead, and the answer says
 /// so. A priority above the class's `lease.max_priority` is refused.
 pub fn request(
@@ -319,6 +324,15 @@ fn request_as(
         LeaseMode::Advisory => (selectors.clone(), Vec::new()),
     };
 
+    let wait = match input.get("wait") {
+        None | Some(Value::Null) => true,
+        Some(Value::Bool(wait)) => *wait,
+        Some(_) => {
+            return Err(OrbitError::InvalidInput(
+                "`wait` must be a boolean".to_string(),
+            ));
+        }
+    };
     let index = TaskLockIndex::load(runtime, &[])?;
     let workspace_id = workspace_task_reservation_id(runtime)?;
     let task_conflicts = if mode == LeaseMode::Hard {
@@ -327,21 +341,6 @@ fn request_as(
     } else {
         Vec::new()
     };
-    if !task_conflicts.is_empty() {
-        // Name every holder, not only the tasks: the store reports the task
-        // reservations and hard leases on the same surface.
-        let check = runtime
-            .stores()
-            .task_reservations()
-            .check_task_reservation_conflicts(TaskReservationCheckParams {
-                workspace_orbit_dir: workspace_orbit_dir(runtime),
-                workspace_id: workspace_id.clone(),
-                requested_files: stored_selectors.clone(),
-            })?;
-        emit_expired_reservation_events(runtime, &check.expired_reservations)?;
-        let conflicts = merge_task_lock_conflicts(task_conflicts, check.conflicts);
-        return refuse(runtime, audit_request, &stored_selectors, conflicts);
-    }
 
     let result = runtime
         .stores()
@@ -364,11 +363,53 @@ fn request_as(
             actor: actor.clone(),
             ttl_seconds,
             token_id: token.map(|grant| grant.token_id.clone()),
+            wait,
+            task_conflicts,
+            aging_minutes: policy.aging_minutes,
         })?;
     emit_expired_lease_events(runtime, REQUEST_TOOL, &result.expired_leases)?;
+    if !result.expired_leases.is_empty() {
+        queue::grant_queued(runtime, REQUEST_TOOL)?;
+    }
+    let conflicts = merge_task_lock_conflicts(result.conflicts, Vec::new());
     let Some(lease) = result.lease else {
-        return refuse(runtime, audit_request, &stored_selectors, result.conflicts);
+        return refuse(
+            runtime,
+            audit_request,
+            &stored_selectors,
+            conflicts,
+            &result.queued_ahead,
+        );
     };
+
+    if lease.queue_kind == Some(LeaseQueueKind::Request) {
+        let mut payload = audit_request;
+        payload["lease_id"] = json!(lease.lease_id);
+        payload["mode"] = json!(lease.mode);
+        payload["hard_surface"] = json!(stored_selectors);
+        payload["conflicts"] = json!(conflicts);
+        payload["queued_ahead"] = json!(result.queued_ahead);
+        payload["queue_position"] = json!(result.queue_position);
+        record_lease_audit_event(
+            runtime,
+            "lease.request.queued",
+            REQUEST_TOOL,
+            Some(lease.lease_id.as_str()),
+            AuditEventStatus::Success,
+            payload,
+        )?;
+        return Ok(json!({
+            "granted": false,
+            "queued": true,
+            "queue_position": result.queue_position,
+            "conflicts": conflicts,
+            "queued_ahead": result.queued_ahead,
+            "requested_mode": requested_mode,
+            "downgraded": false,
+            "unlocked_selectors": unlocked_selectors,
+            "lease": lease_json(&lease),
+        }));
+    }
 
     let overlaps = if mode == LeaseMode::Advisory {
         PathHolders::load(runtime, &index, Some(&lease.lease_id))?
@@ -430,10 +471,12 @@ fn refuse(
     mut payload: Value,
     hard_surface: &[String],
     conflicts: Vec<TaskLockConflict>,
+    queued_ahead: &[String],
 ) -> Result<Value, OrbitError> {
     payload["reason"] = json!("held");
     payload["hard_surface"] = json!(hard_surface);
     payload["conflicts"] = json!(conflicts);
+    payload["queued_ahead"] = json!(queued_ahead);
     record_lease_audit_event(
         runtime,
         "lease.request.refused",
@@ -442,7 +485,12 @@ fn refuse(
         AuditEventStatus::Denied,
         payload,
     )?;
-    Ok(json!({"granted": false, "conflicts": conflicts}))
+    Ok(json!({
+        "granted": false,
+        "queued": false,
+        "conflicts": conflicts,
+        "queued_ahead": queued_ahead,
+    }))
 }
 
 /// Move an active lease's `expires_at` to `ttl_seconds` (reservation
@@ -461,6 +509,9 @@ pub fn renew(runtime: &RuntimeKernel, input: Value) -> Result<Value, OrbitError>
             ttl_seconds,
         })?;
     emit_expired_lease_events(runtime, RENEW_TOOL, &result.expired_leases)?;
+    if !result.expired_leases.is_empty() {
+        queue::grant_queued(runtime, RENEW_TOOL)?;
+    }
     let lease = result.lease.ok_or_else(|| {
         OrbitError::InvalidInput(format!(
             "lease `{lease_id}` is not active (unknown, released or expired); request a new lease"
@@ -489,6 +540,17 @@ pub fn renew_with_token(
     input: Value,
     grant: &LeaseTokenGrant,
 ) -> Result<Value, OrbitError> {
+    ensure_token_covers_lease(runtime, &input, grant)?;
+    renew(runtime, input)
+}
+
+/// Refuse a renewal or expansion of a lease whose mode or priority exceeds
+/// the calling token or its class policy, leaving the lease unchanged.
+fn ensure_token_covers_lease(
+    runtime: &RuntimeKernel,
+    input: &Value,
+    grant: &LeaseTokenGrant,
+) -> Result<(), OrbitError> {
     let found = show(runtime, input.clone())?;
     let lease = &found["lease"];
     let policy = runtime.lease_policy();
@@ -506,10 +568,10 @@ pub fn renew_with_token(
         || (hard && !(grant.hard_allowed && policy.hard_allowed(grant.principal_class)))
     {
         return Err(OrbitError::InvalidInput(
-            "lease exceeds the renewing token's or workspace policy's permissions".to_string(),
+            "lease exceeds the calling token's or workspace policy's permissions".to_string(),
         ));
     }
-    renew(runtime, input)
+    Ok(())
 }
 
 /// End an active lease. `released` is false when it was unknown or had
@@ -535,6 +597,9 @@ pub fn release(
         })?;
     emit_expired_lease_events(runtime, RELEASE_TOOL, &result.expired_leases)?;
     let Some(lease) = result.lease else {
+        if !result.expired_leases.is_empty() {
+            queue::grant_queued(runtime, RELEASE_TOOL)?;
+        }
         return Ok(json!({"released": false, "lease": null}));
     };
     record_lease_audit_event(
@@ -550,6 +615,7 @@ pub fn release(
             "released_by": released_by,
         }),
     )?;
+    queue::grant_queued(runtime, RELEASE_TOOL)?;
     Ok(json!({"released": true, "lease": lease_json(&lease)}))
 }
 
@@ -563,6 +629,9 @@ pub fn show(runtime: &RuntimeKernel, input: Value) -> Result<Value, OrbitError> 
     let leases = runtime.stores().task_reservations();
     let listed = leases.list_active_leases(&orbit_dir, workspace_id.as_deref())?;
     emit_expired_lease_events(runtime, SHOW_TOOL, &listed.expired_leases)?;
+    if !listed.expired_leases.is_empty() {
+        queue::grant_queued(runtime, SHOW_TOOL)?;
+    }
     let lease = leases
         .get_lease(&orbit_dir, workspace_id.as_deref(), &lease_id)?
         .ok_or_else(|| {
@@ -571,14 +640,17 @@ pub fn show(runtime: &RuntimeKernel, input: Value) -> Result<Value, OrbitError> 
     Ok(json!({"lease": lease_json(&lease)}))
 }
 
-/// The workspace's active leases, advisory and hard, oldest first.
+/// The workspace's active leases, advisory, hard and queued, oldest first.
 pub fn list(runtime: &RuntimeKernel) -> Result<Value, OrbitError> {
     runtime.lease_policy().ensure_enabled()?;
-    let listed = runtime.stores().task_reservations().list_active_leases(
-        &workspace_orbit_dir(runtime),
-        workspace_task_reservation_id(runtime)?.as_deref(),
-    )?;
+    let store = runtime.stores().task_reservations();
+    let orbit_dir = workspace_orbit_dir(runtime);
+    let workspace_id = workspace_task_reservation_id(runtime)?;
+    let mut listed = store.list_active_leases(&orbit_dir, workspace_id.as_deref())?;
     emit_expired_lease_events(runtime, LIST_TOOL, &listed.expired_leases)?;
+    if !listed.expired_leases.is_empty() && !queue::grant_queued(runtime, LIST_TOOL)?.is_empty() {
+        listed.leases = store.inspect_active_leases(&orbit_dir, workspace_id.as_deref())?;
+    }
     Ok(json!({
         "leases": listed.leases.iter().map(lease_json).collect::<Vec<_>>(),
     }))
@@ -827,9 +899,14 @@ fn lease_active(lease: &LeaseRecord) -> bool {
             .is_ok_and(|expires_at| expires_at.with_timezone(&Utc) > Utc::now())
 }
 
-/// A lease's fields plus its derived `state`.
+/// A lease's fields plus its derived `state`: `queued` while a request
+/// waits, `granted` while it holds its selectors (an expansion may still
+/// wait in `queued_selectors`), then `released` or `expired`.
 fn lease_json(lease: &LeaseRecord) -> Value {
     let state = match (&lease.released_at, lease.release_reason) {
+        (None, _) if lease_active(lease) && lease.queue_kind == Some(LeaseQueueKind::Request) => {
+            "queued"
+        }
         (None, _) if lease_active(lease) => "granted",
         (None, _) | (Some(_), Some(TaskReservationReleaseReason::TtlExpired)) => "expired",
         (Some(_), _) => "released",

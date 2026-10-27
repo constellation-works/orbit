@@ -117,7 +117,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 
 | Feature | Next | Lead |
 | --- | --- | --- |
-| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Implement the remaining v2 factors: resource fit [ORB-18689] and rework [ORB-18691]; review residual phases remain open from the outcomes factor. | claude |
+| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Implement the remaining v2 factor, rework [ORB-18691]; review residual phases remain open from the outcomes factor, and the shadow counterfactual and follower capacity from the resource-fit factor. | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |

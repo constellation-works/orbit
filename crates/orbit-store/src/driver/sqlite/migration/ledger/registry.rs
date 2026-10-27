@@ -621,12 +621,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_task_reservation_lease_token,
     },
+    // Lease queue: a waiting request or expansion keeps its selectors in
+    // `queued_files_json`, outside the held `files_json` every overlap reader
+    // sees. Three nullable columns; an older binary never reads them, so a
+    // queued lease holds nothing for it either.
+    Migration {
+        version: 67,
+        name: "task_reservation_lease_queue",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_task_reservation_lease_queue,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 66;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 67;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

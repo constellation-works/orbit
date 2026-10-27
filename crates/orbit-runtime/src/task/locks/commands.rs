@@ -123,8 +123,14 @@ pub fn list(runtime: &RuntimeKernel) -> Result<Value, OrbitError> {
     super::audit::emit_expired_lease_events(runtime, "orbit.task.locks", &leases.expired_leases)?;
     let mut listing =
         super::projection::lock_listing_json(&locked_surfaces, &reservation_result.reservations);
-    listing["by_lease"] = json!(leases.leases);
-    listing["total_leases"] = json!(leases.leases.len());
+    // A queued request holds nothing, so it is not a lock holder.
+    let holding = leases
+        .leases
+        .iter()
+        .filter(|lease| lease.queue_kind != Some(orbit_store::contracts::LeaseQueueKind::Request))
+        .collect::<Vec<_>>();
+    listing["by_lease"] = json!(holding);
+    listing["total_leases"] = json!(holding.len());
     Ok(listing)
 }
 

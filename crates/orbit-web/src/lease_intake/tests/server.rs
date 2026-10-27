@@ -11,9 +11,9 @@ use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, Wo
 use serde_json::{Value, json};
 
 use super::super::{
-    IntakeLimits, LEASE_INTAKE_MAX_FRAME_BYTES, LeaseIntakeAuthority, LeaseIntakeClient,
-    LeaseIntakeError, LeaseIntakeOperation, LeaseIntakeRequest, LeaseIntakeResponse,
-    LeaseIntakeSocket,
+    IntakeLimits, LEASE_INTAKE_MAX_FRAME_BYTES, LEASE_INTAKE_PROTOCOL_VERSION,
+    LeaseIntakeAuthority, LeaseIntakeClient, LeaseIntakeError, LeaseIntakeHello,
+    LeaseIntakeOperation, LeaseIntakeRequest, LeaseIntakeResponse, LeaseIntakeSocket,
 };
 use crate::api::tests::test_support::enter_isolated_child;
 use crate::state::{DashboardState, RegistrySource, SINGLE_WORKSPACE_ID};
@@ -699,4 +699,115 @@ fn ambiguous_workspace_id_name_selector_is_refused_without_touching_either_works
 
     drop(client);
     tokio.shutdown_background();
+}
+
+/// A notice page over the frame limit is shortened to a prefix, with the
+/// cursor at its last notice, so polling and the `events` stream deliver
+/// every notice in order, exactly as the runtime pages them, and skip none
+/// (design §5 "Push and poll").
+#[test]
+fn notice_pages_over_the_frame_limit_are_shortened_without_skipping_a_notice() {
+    if !enter_isolated_child(
+        module_path!(),
+        "notice_pages_over_the_frame_limit_are_shortened_without_skipping_a_notice",
+    ) {
+        return;
+    }
+    let fixture = FrameLimitFixture::start();
+    // Each `granted` notice names its selectors, about 18 KiB here.
+    for lease in 0..6 {
+        let selectors: Vec<String> = (0..90)
+            .map(|index| format!("file:src/{lease}-{index:03}-{}.rs", "x".repeat(180)))
+            .collect();
+        lease::request(
+            &fixture.runtime,
+            json!({"principal": "alice", "selectors": selectors}),
+            None,
+            None,
+        )
+        .expect("seed a lease with a large granted notice");
+    }
+    let expected = lease::notices(&fixture.runtime, json!({"after": 0})).unwrap();
+    let expected = expected["notices"].as_array().unwrap().clone();
+    assert!(
+        serde_json::to_vec(&expected).unwrap().len() > LEASE_INTAKE_MAX_FRAME_BYTES as usize,
+        "the fixture must exceed the real frame limit"
+    );
+
+    let mut client = fixture.connect();
+    let mut polled = Vec::new();
+    let mut after = 0;
+    while polled.len() < expected.len() {
+        let page = ok(call(
+            &mut client,
+            "alice",
+            LeaseIntakeOperation::Notices,
+            json!({"after": after}),
+        ));
+        let notices = page["notices"].as_array().unwrap();
+        assert!(
+            !notices.is_empty() && notices.len() < expected.len(),
+            "{page}"
+        );
+        assert_eq!(page["cursor"], notices.last().unwrap()["seq"]);
+        after = page["cursor"].as_u64().unwrap();
+        polled.extend(notices.iter().cloned());
+    }
+    assert_eq!(polled, expected);
+
+    let mut stream = fixture.connect();
+    let mut page = ok(call(
+        &mut stream,
+        "alice",
+        LeaseIntakeOperation::Events,
+        json!({"after": 0}),
+    ));
+    let mut streamed = Vec::new();
+    while streamed.len() < expected.len() {
+        streamed.extend(page["notices"].as_array().unwrap().iter().cloned());
+        if streamed.len() < expected.len() {
+            page = ok(stream.next_response().expect("next page"));
+        }
+    }
+    assert_eq!(streamed, expected);
+}
+
+/// The intake protocol is versioned (design §7.2 "Versioned"): a listener
+/// of another version is refused with a message naming both versions.
+#[test]
+fn a_listener_of_another_protocol_version_is_refused_naming_both_versions() {
+    use std::io::{Read, Write};
+
+    if !enter_isolated_child(
+        module_path!(),
+        "a_listener_of_another_protocol_version_is_refused_naming_both_versions",
+    ) {
+        return;
+    }
+    let fixture = FrameLimitFixture::start();
+    let mut stream =
+        std::os::unix::net::UnixStream::connect(&fixture.socket_path).expect("connect");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("read timeout");
+    let older = LEASE_INTAKE_PROTOCOL_VERSION - 1;
+    let hello = serde_json::to_vec(&json!({"protocol_version": older})).unwrap();
+    stream
+        .write_all(&(hello.len() as u32).to_be_bytes())
+        .and_then(|()| stream.write_all(&hello))
+        .expect("send hello");
+    let mut header = [0u8; 4];
+    stream.read_exact(&mut header).expect("reply header");
+    let mut body = vec![0u8; u32::from_be_bytes(header) as usize];
+    stream.read_exact(&mut body).expect("reply body");
+    let reply: LeaseIntakeHello = serde_json::from_slice(&body).expect("reply hello");
+    let error = reply.error.expect("a refusal");
+    assert_eq!(error.code, "protocol_version_mismatch");
+    for version in [LEASE_INTAKE_PROTOCOL_VERSION, older] {
+        assert!(
+            error.message.contains(&format!("version {version}")),
+            "{}",
+            error.message
+        );
+    }
 }

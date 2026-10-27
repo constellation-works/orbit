@@ -14,11 +14,11 @@ That is the difference from a task reservation: a reservation belongs to a
 task's own delivery and ends with it, while a lease is yours, is renewed by
 you, and ends when you release it or its time-to-live (TTL) lapses.
 
-Leases are available from the CLI (`orbit lease request`, `renew`,
+Leases are available from the CLI (`orbit lease request`, `renew`, `expand`,
 `release`, `show`, `list` and `check`), from the matching `orbit.lease.*`
 MCP tools, and from the dashboard HTTP API. The examples below use the HTTP
 API against a running server — drive them with `curl` or any HTTP client —
-while the same six operations are available through `orbit lease …` and MCP.
+while the same operations are available through `orbit lease …` and MCP.
 
 ## Before you start
 
@@ -33,8 +33,8 @@ One prerequisite applies to every lease operation; two more apply only to the da
    ```
 
    While it is `false` (the default), every lease operation — request, renew,
-   release, show, list and check — is refused with a `400` error naming
-   `lease.enabled`. See [Configuration](../../reference/config/) for the six
+   expand, release, show, list and check — is refused with a `400` error naming
+   `lease.enabled`. See [Configuration](../../reference/config/) for the
    `lease.*` keys.
 
 2. **Writes over HTTP need an operator session.** Requesting, renewing,
@@ -64,15 +64,16 @@ substitute your server's port.
 | Mode | Granted | Blocks |
 |---|---|---|
 | `advisory` | Always | Nothing. The answer names the holders it overlaps. |
-| `hard` | Only when its surface overlaps nothing else held | Overlapping hard requests are refused while it is active. |
+| `hard` | Only when its surface overlaps nothing else held; otherwise it waits in the queue | Overlapping hard requests wait while it is active. |
 
 A hard request uses `workflow.unlocked_context_paths` to determine its stored
 surface. If every selector matches, the request keeps all selectors. Only a
 mixed request — one with both matching and non-matching selectors — drops the
 matching selectors. The request is then granted only when its stored surface
 overlaps no context lock of an `in-progress` or `review` task, no task
-reservation and no other hard lease. There is no waiting queue: an overlapping
-hard request is refused at once (see [Refusals](#refusals)).
+reservation and no other hard lease. Otherwise it waits in the lease queue
+(see [Wait in the queue](#wait-in-the-queue)), or is refused at once when it
+sends `"wait": false` (see [Refusals](#refusals)).
 
 For example, with `workflow.unlocked_context_paths = ["docs/**"]`, a docs-only
 hard request for `["file:docs/guide.md"]` keeps that selector in its stored
@@ -155,6 +156,62 @@ first, then reservations, then leases. Each entry names the overlapped
 `file`, the `held_by` kind (`task`, `reservation` or `lease`), the
 `held_by_id`, and — for a lease — its `mode` and `principal`.
 
+## Wait in the queue
+
+An overlapping hard request answers `200` with `"granted": false`,
+`"queued": true`, its `queue_position` (1 is next), the blocking holders in
+`conflicts`, and a lease in state `queued`:
+
+```json
+{
+  "granted": false,
+  "queued": true,
+  "queue_position": 1,
+  "conflicts": [
+    {"file": "dir:website/src", "held_by": "lease", "held_by_id": "lease-…"}
+  ],
+  "queued_ahead": [],
+  "lease": {"lease_id": "lease-…", "selectors": [], "queued_selectors": ["dir:website/src"], "state": "queued"}
+}
+```
+
+A queued lease holds nothing: drains, task reservations and other requests
+ignore it until it is granted. It gets a `queued` notice naming the holders
+and its position, then a `granted` notice when its holders release, expire or,
+for a task, settle; read them with `GET /api/leases/notices` or
+`orbit lease notices --lease-id <id>`. A lease never preempts an
+`in-progress` or `review` task: it waits for the task to settle or for its own
+TTL, which counts from the original request. Grants follow the lease
+operations that free paths at once, and every owner clock tick otherwise.
+
+The queue orders by priority, then age. A waiter older than
+`lease.aging_minutes` (default 30) moves up one priority level, so a broad
+request is not starved by narrower, higher-priority ones. A new request also
+waits behind queued requests ranked at or above it that want an overlapping
+path; those are listed in `queued_ahead`. Release a queued lease to leave the
+queue.
+
+## Expand a lease
+
+```bash
+curl -s -X POST 'http://127.0.0.1:7878/api/leases/lease-…/expand?workspace=my-workspace' \
+  -H 'Content-Type: application/json' \
+  -H 'Origin: http://127.0.0.1:7878' \
+  -d '{"selectors": ["file:website/astro.config.mjs"]}'
+```
+
+Expansion adds selectors to a granted lease (`orbit lease expand <id>
+<selector>…` and `orbit.lease.expand` do the same). Free paths are added at
+once and listed in `added`. On a hard lease, blocked ones are listed in
+`queued` with the blocking `conflicts` and a `queue_position`: they wait
+while the lease keeps what it holds, and a `granted` notice follows when they
+are added. A lease still waiting as a request cannot be expanded.
+
+When two leases each wait on paths the other holds, the owner refuses the
+expansion ranked last (lower priority, then younger): its waiting paths are
+dropped, it keeps what it holds, and it gets a `deadlock` notice. The answer's
+`deadlock` field is set when that expansion is yours.
+
 ## List and show leases
 
 ```bash
@@ -165,7 +222,7 @@ curl -s 'http://127.0.0.1:7878/api/leases?workspace=my-workspace'
 curl -s 'http://127.0.0.1:7878/api/leases/lease-…?workspace=my-workspace'
 ```
 
-List answers `{"leases": […]}` with advisory and hard leases together. Show
+List answers `{"leases": […]}` with advisory, hard and queued leases together. Show
 answers `{"lease": {…}}`; a lease past its TTL reads `"state": "expired"`
 rather than `granted`, and an unknown ID is refused with a `400` naming the
 workspace. A `lease_id` that does not start with `lease-` is refused as
@@ -226,7 +283,8 @@ against the API:
 
 | Situation | Result |
 |---|---|
-| Hard request overlaps a task, reservation or hard lease | `200` with `{"granted": false, "conflicts": […]}` — a structured refusal, not an HTTP error. Each conflict names the `file`, the `held_by` kind and the `held_by_id`. Nothing is recorded as granted; release or wait for the holder, narrow your selectors, or request `advisory` instead. |
+| Hard request overlaps a task, reservation or hard lease | `200` with `{"granted": false, "queued": true, …}`: the request waits (see [Wait in the queue](#wait-in-the-queue)). |
+| The same with `"wait": false` | `200` with `{"granted": false, "queued": false, "conflicts": […]}` — a structured refusal, not an HTTP error. Each conflict names the `file`, the `held_by` kind and the `held_by_id`. Nothing is recorded; release or wait for the holder, narrow your selectors, or request `advisory` instead. |
 | Leases disabled (`lease.enabled = false`) | `400` with an `error` naming `lease.enabled`. |
 | Write without an operator session | `403` with `"code": "authorization_denied"` and `"operation": "lease.write"`. |
 | Cross-origin or non-loopback call | `403` with `"error": "cross-origin requests not allowed"`. |
@@ -236,17 +294,9 @@ against the API:
 | Renew of an unknown, released or expired lease | `400` telling you to request a new lease. |
 | Show of an unknown lease | `400` naming the lease and workspace. |
 
-## Expansion is not available
-
-`POST /api/leases/{id}/expand` is mounted but not implemented: it answers
-`501` with `"code": "not_available_in_this_phase"` and
-`"error": "lease expansion is not available in this phase"`. To cover more
-paths, release the lease and request a new one with the wider selectors, or
-take a second lease.
-
 ## Related
 
-- [Configuration](../../reference/config/) lists the six `lease.*` keys,
+- [Configuration](../../reference/config/) lists the `lease.*` keys,
   their defaults and the per-class ceilings.
 - [Use the dashboard](../dashboard/) covers starting the dashboard server
   these calls are made against.

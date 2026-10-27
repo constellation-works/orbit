@@ -532,8 +532,10 @@ impl LeasePriority {
     }
 }
 
-/// Record a path lease. A hard lease is refused when its selectors overlap
-/// an active task reservation or hard lease; an advisory one always inserts.
+/// Record a path lease. An advisory one is always granted. A hard one is
+/// granted when its selectors overlap no active task reservation, hard lease
+/// or `task_conflicts` entry and no queued request or expansion ranked ahead
+/// of it wants them; otherwise it queues, or with `wait = false` is refused.
 /// Task context locks and path policy are the runtime's to apply first.
 #[derive(Debug, Clone)]
 pub struct LeaseInsertParams {
@@ -557,15 +559,128 @@ pub struct LeaseInsertParams {
     /// The lease token a listener request authenticated with; `None` for a
     /// lease requested over SSH or the dashboard.
     pub token_id: Option<String>,
+    /// Queue a blocked hard request instead of refusing it.
+    pub wait: bool,
+    /// The task context locks the runtime found on `selectors`.
+    pub task_conflicts: Vec<TaskLockConflict>,
+    /// `lease.aging_minutes`: queue age after which an entry moves up one
+    /// priority level.
+    pub aging_minutes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LeaseInsertResult {
-    /// The recorded lease; `None` when a hard lease was refused.
+    /// The recorded lease, granted or queued; `None` when a hard lease was
+    /// refused.
     pub lease: Option<LeaseRecord>,
-    /// The holders that refused a hard lease.
+    /// The holders blocking a queued or refused hard lease.
     pub conflicts: Vec<TaskLockConflict>,
+    /// Queued requests and expansions ranked ahead that want the same paths.
+    pub queued_ahead: Vec<String>,
+    /// The 1-based queue position of a queued lease.
+    pub queue_position: Option<u32>,
     pub expired_leases: Vec<ExpiredTaskReservation>,
+}
+
+/// What a queued lease waits for: a whole request (it holds nothing yet) or
+/// an expansion (it keeps what it was granted).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LeaseQueueKind {
+    Request,
+    Expansion,
+}
+
+impl LeaseQueueKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Request => "request",
+            Self::Expansion => "expansion",
+        }
+    }
+
+    /// An unknown stored kind reads as a request, which holds nothing until
+    /// granted, so it can never block more than it was granted.
+    pub(crate) fn parse(raw: &str) -> Self {
+        match raw {
+            "expansion" => Self::Expansion,
+            _ => Self::Request,
+        }
+    }
+}
+
+/// Add selectors to a granted lease. Free ones are added at once; on a hard
+/// lease, blocked ones queue while the lease keeps what it holds.
+#[derive(Debug, Clone)]
+pub struct LeaseExpandParams {
+    pub workspace_orbit_dir: String,
+    pub workspace_id: Option<String>,
+    pub lease_id: String,
+    /// Canonical selectors the lease does not already cover, after path
+    /// policy.
+    pub selectors: Vec<String>,
+    /// The task context locks the runtime found on `selectors`.
+    pub task_conflicts: Vec<TaskLockConflict>,
+    pub aging_minutes: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseExpandResult {
+    /// The lease after expansion; `None` when it is unknown, ended or still a
+    /// queued request.
+    pub lease: Option<LeaseRecord>,
+    /// Selectors granted at once.
+    pub added: Vec<String>,
+    /// Selectors now waiting in the queue.
+    pub queued: Vec<String>,
+    /// The holders blocking the queued selectors.
+    pub conflicts: Vec<TaskLockConflict>,
+    /// The 1-based queue position of the waiting expansion.
+    pub queue_position: Option<u32>,
+    /// Waiting expansions refused to break a deadlock, this lease's included.
+    pub deadlocks: Vec<LeaseDeadlock>,
+    pub expired_leases: Vec<ExpiredTaskReservation>,
+}
+
+/// A waiting expansion refused because it closed a cycle of leases each
+/// waiting on another's held paths.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseDeadlock {
+    pub lease_id: String,
+    /// The selectors whose expansion was refused.
+    pub selectors: Vec<String>,
+    /// Every lease in the cycle, the refused one included.
+    pub cycle: Vec<String>,
+}
+
+/// Grant waiting requests and expansions, in queue order, whose paths are now
+/// free.
+#[derive(Debug, Clone)]
+pub struct LeaseQueueGrantParams {
+    pub workspace_orbit_dir: String,
+    pub workspace_id: Option<String>,
+    /// Task context locks on each waiting lease's queued selectors, keyed by
+    /// lease id. A waiting lease missing from the map stays queued.
+    pub task_conflicts: std::collections::BTreeMap<String, Vec<TaskLockConflict>>,
+    pub aging_minutes: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseQueueGrantResult {
+    /// What the pass granted, in queue order.
+    pub granted: Vec<LeaseQueueGrant>,
+    pub expired_leases: Vec<ExpiredTaskReservation>,
+}
+
+/// One queued request or expansion (or part of one) granted from the queue.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LeaseQueueGrant {
+    pub lease_id: String,
+    pub kind: LeaseQueueKind,
+    /// The selectors granted by this pass.
+    pub selectors: Vec<String>,
+    /// Selectors of an expansion still waiting.
+    pub still_queued: Vec<String>,
 }
 
 /// One path lease as recorded, active or ended.
@@ -597,6 +712,15 @@ pub struct LeaseRecord {
     /// the lease intake socket.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_id: Option<String>,
+    /// Selectors a queued request or expansion waits for; never held.
+    #[serde(default)]
+    pub queued_selectors: Vec<String>,
+    /// When the waiting request or expansion entered the queue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queued_at: Option<String>,
+    /// What is waiting, when anything is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue_kind: Option<LeaseQueueKind>,
 }
 
 /// Move an active lease's `expires_at` to `ttl_seconds` from now.

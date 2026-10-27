@@ -175,6 +175,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "lease.aging_minutes": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "advanced",
+      "path": null,
+      "shadowed_by": []
+    },
     "lease.default_mode": {
       "scope": "built-in",
       "state": "default",

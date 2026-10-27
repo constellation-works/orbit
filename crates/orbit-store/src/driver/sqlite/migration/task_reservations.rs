@@ -169,3 +169,19 @@ pub(super) fn apply_task_reservation_leases(conn: &Connection) -> Result<(), Orb
 pub(super) fn apply_task_reservation_lease_token(conn: &Connection) -> Result<(), OrbitError> {
     add_column_if_missing(conn, "task_reservations", "token_id", "TEXT")
 }
+
+/// v67 `task_reservation_lease_queue` migration: the hard-lease queue
+/// (`docs/design/path-leases`, §3).
+///
+/// A queued request or a blocked expansion keeps the selectors it waits for in
+/// `queued_files_json`, never in `files_json`, so every overlap reader, this
+/// binary's and an older one's, sees only what a lease holds. `queue_kind` is
+/// `request` (the lease holds nothing yet) or `expansion` (it keeps its
+/// granted selectors), and `queued_at` is the age the queue's aging reads.
+/// Three nullable columns: an older binary never reads them, and the rows it
+/// writes read here as not waiting.
+pub(super) fn apply_task_reservation_lease_queue(conn: &Connection) -> Result<(), OrbitError> {
+    add_column_if_missing(conn, "task_reservations", "queued_files_json", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "queued_at", "TEXT")?;
+    add_column_if_missing(conn, "task_reservations", "queue_kind", "TEXT")
+}

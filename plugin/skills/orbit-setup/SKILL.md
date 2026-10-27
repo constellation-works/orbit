@@ -22,6 +22,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | First installation or another repository | [First run](references/first-run.md); for an agent lane, continue with [Provider setup](references/providers.md#provider-setup) |
 | Add a Copilot, Antigravity or Muse crew; fix provider authentication | [Configuration — Provider setup](references/providers.md#provider-setup) |
 | Explain crew selection, provider aliases or a dispatch refusal | [Configuration — Provider identity and resolution](references/providers.md#provider-identity-and-resolution) |
+| Configure task-pilot explore briefs, choose tasks by tag, or verify whether a brief was stored and delivered | [Configuration — Explore briefs](references/configuration.md#explore-briefs) |
 | Experiments: `[experiments]` settings, approved config overlays, operator lifecycle, shadow/live modes and readouts | [Configuration — Experiments](references/configuration.md#experiments) |
 | Path leases: enabling or tuning `lease.*`, advisory versus hard coordination, or verifying a lease or a refused hard request | [Configuration — Path-lease policy](references/configuration.md#path-lease-policy) |
 | Landed-delivery line classes (Analytics › Metrics › Lines changed): `workflow.test_paths`, `workflow.non_code_paths`, their defaults and verification; backfilling missing history with `migrate --backfill-diff-stats` | [Configuration — Landed diff classification](references/configuration.md#landed-diff-classification) |
@@ -33,6 +34,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Scheduled execution | [Automation](references/automation.md) |
 | Recurring QA and other task templates | [Auto-tasks](references/auto-tasks.md) |
 | MCP clients, SSH federation, remote dashboard or the lease listener user and its tokens | [Remote access](references/remote-access.md) |
+| Dashboard browser sessions: enabling `machine.web_terminal.enabled` or setting `machine.web_session.ttl`, one-time URLs from `orbit web open`, or checking whether the running dashboard serves `/api/session` (not the headless browser kit) | [Remote access — Browser sessions](references/remote-access.md#browser-sessions) |
 | Installing plugins, their `orbit <ns>` commands and dashboard panels, the `.orbit/plugins.yaml` pin file, and decision channels for plugin answer submission | [Plugins](references/plugins.md#decision-channels) |
 | Owner/replica roles and multiple machines | [Multi-host](references/multi-host.md) |
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |

@@ -81,6 +81,7 @@ pub(super) async fn serve_bounded_listener(
         }
     };
     let _ = closing.send(true);
+    gate.closing.send_replace(true);
     let grace = Duration::from_secs(u64::from(config.limits.request_timeout_seconds)) + timeout;
     let drained =
         tokio::time::timeout(grace, async { while tasks.join_next().await.is_some() {} }).await;

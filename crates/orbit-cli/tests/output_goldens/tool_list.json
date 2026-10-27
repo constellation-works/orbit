@@ -1584,8 +1584,42 @@
     ]
   },
   {
+    "name": "orbit.lease.expand",
+    "description": "Add path selectors to a granted lease. Free paths are added at once; on a hard lease, blocked ones wait in the lease queue while the lease keeps what it holds. When two leases each wait on the other's expansion, the younger, lower-priority expansion is refused with a deadlock notice. Returns the added and queued selectors, blocking holders, queue position, any deadlock and the lease.",
+    "enabled": true,
+    "active": true,
+    "status": "active",
+    "builtin": true,
+    "parameters": [
+      {
+        "name": "lease_id",
+        "description": "Lease identifier returned by request.",
+        "param_type": "string",
+        "required": true
+      },
+      {
+        "name": "selectors",
+        "description": "File or directory selectors to add, such as file:src/lib.rs or dir:src.",
+        "param_type": "string_list",
+        "required": true
+      },
+      {
+        "name": "agent",
+        "description": "Deprecated attribution alias; prefer model.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "model",
+        "description": "Agent family for attribution: codex, claude, gemini, grok or muse.",
+        "param_type": "string",
+        "required": false
+      }
+    ]
+  },
+  {
     "name": "orbit.lease.list",
-    "description": "List active advisory and hard path leases on the workspace owner, oldest first, with mode, principal, priority, selectors and expiry. Expires stale leases before listing.",
+    "description": "List active advisory, hard and queued path leases on the workspace owner, oldest first, with state, mode, principal, priority, held and queued selectors and expiry. Expires stale leases before listing.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1672,7 +1706,7 @@
   },
   {
     "name": "orbit.lease.request",
-    "description": "Request a lease on path selectors; advisory leases never block, while hard leases refuse overlapping task locks, reservations or hard leases. Returns the lease identifier, mode, principal, priority and expiry, or the conflicting holders. Requires lease.enabled in the workspace.",
+    "description": "Request a lease on path selectors; advisory leases never block. A hard lease overlapping task locks, reservations or hard leases waits in the lease queue (granted=false, queued=true, state queued, holding nothing) and is granted in priority-then-age order once they end; read notices for the grant. wait=false refuses it instead. Returns the lease identifier, mode, principal, priority, expiry and state, plus the blocking holders and queue position when not granted. Requires lease.enabled in the workspace.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1724,6 +1758,12 @@
         "name": "branch",
         "description": "Working branch or #<pull-request-number> whose landing releases the lease. The owner checks on its clock cadence; TTL is the backstop.",
         "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "wait",
+        "description": "Queue an overlapping hard request (default true); false refuses it with the holders named.",
+        "param_type": "boolean",
         "required": false
       },
       {

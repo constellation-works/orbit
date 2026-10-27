@@ -12,7 +12,13 @@
 //! then the task requeues at once (failed), returns after its sampled wait
 //! (blocked), finishes outside the drain, or never returns. A blocked task
 //! starts out waiting. A scenario drains only once every scheduled task has
-//! finished. Pure computation: no store, clock or filesystem access.
+//! finished.
+//!
+//! Under resource fit [ORB-18689] the pass also asks gap fit, which prices
+//! each running task's profile by the hours since its admission (an
+//! in-progress task's age at t=0 included); a pass it held while a slot was
+//! free is retried as the running profiles age. Pure computation: no store,
+//! clock or filesystem access.
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, VecDeque};
@@ -31,6 +37,8 @@ pub(super) const HORIZON_HOURS: f64 = 90.0 * 24.0;
 const MAX_EVENTS: usize = 100_000;
 /// The heap key of a running arrival, which is no forecast task.
 const ARRIVAL: usize = usize::MAX;
+/// One summed wait per [`ForecastWait::ALL`] reason.
+pub(super) const WAITS: usize = ForecastWait::ALL.len();
 
 /// One scenario's fixed scheduling inputs.
 pub(super) struct Scenario<'a> {
@@ -41,6 +49,8 @@ pub(super) struct Scenario<'a> {
     /// ones.
     pub(super) included: Vec<bool>,
     pub(super) in_progress: &'a [bool],
+    /// Hours since each in-progress task's running attempt was admitted.
+    age_hours: &'a [f64],
     pub(super) slots: usize,
     /// `included` in dependency order.
     topological: Vec<usize>,
@@ -52,6 +62,7 @@ impl<'a> Scenario<'a> {
         edges: &'a [Vec<usize>],
         included: Vec<bool>,
         in_progress: &'a [bool],
+        age_hours: &'a [f64],
         slots: usize,
     ) -> Self {
         let len = edges.len();
@@ -85,6 +96,7 @@ impl<'a> Scenario<'a> {
             dependents,
             included,
             in_progress,
+            age_hours,
             slots: slots.max(1),
             topological,
         }
@@ -100,7 +112,7 @@ pub(super) struct Run {
     /// Occupied leaf slots integrated over the run, divided by its length.
     pub(super) parallelism: Option<f64>,
     /// Summed task-hours spent waiting, per [`ForecastWait::ALL`] reason.
-    pub(super) waits: Option<[f64; 5]>,
+    pub(super) waits: Option<[f64; WAITS]>,
     /// Summed task-hours waiting to return to the queue.
     pub(super) return_wait: Option<f64>,
     /// Attempts started that were blocked, failed or abandoned.
@@ -133,6 +145,8 @@ impl Ord for End {
 /// Buffers reused across iterations.
 pub(super) struct ScheduleState {
     running: ForecastTaskSet,
+    /// Per running task: the simulated hour its attempt was admitted.
+    admitted_at: Vec<f64>,
     heap: BinaryHeap<End>,
     indegree: Vec<usize>,
     pending: Vec<usize>,
@@ -171,6 +185,7 @@ impl ScheduleState {
         let len = admission.len();
         Self {
             running: ForecastTaskSet::with_len(len),
+            admitted_at: vec![0.0; len],
             heap: BinaryHeap::new(),
             indegree: vec![0; len],
             pending: Vec::with_capacity(len),
@@ -217,9 +232,7 @@ fn critical_path(scenario: &Scenario<'_>, scripts: &[Script]) -> Option<f64> {
         longest[index] = before
             .zip(scripts[index].finish_hours())
             .map(|(a, b)| a + b);
-        if let Some(path) = longest[index] {
-            overall = overall.max(path);
-        }
+        overall = overall.max(longest[index]?);
     }
     Some(overall)
 }
@@ -252,6 +265,7 @@ pub(super) fn simulate_drain(
     state.attempt.fill(0);
     state.charged.fill(Draw::ZERO);
     state.returns.clear();
+    state.scratch.start_drain();
     let included: &[bool] = &scenario.included;
     let scheduled = move || (0..hours.len()).filter(move |index| included[*index]);
     let unavailable = Run {
@@ -285,6 +299,7 @@ pub(super) fn simulate_drain(
             setbacks[slot] += 1;
         }
         state.running.insert(index);
+        state.admitted_at[index] = at;
         state.heap.push(End(at + step.hours, index));
     };
     for index in scheduled() {
@@ -295,6 +310,7 @@ pub(super) fn simulate_drain(
             state.start[index] = Some(0.0);
             state.rank[index] = Some(0.0);
             begin(state, totals, index, 0.0);
+            state.admitted_at[index] = -scenario.age_hours[index];
             continue;
         }
         match scripts[index].initial {
@@ -320,7 +336,7 @@ pub(super) fn simulate_drain(
     let mut at = 0.0f64;
     let mut started = 0.0f64;
     let mut occupied = 0.0f64;
-    let mut waits = [0.0f64; 5];
+    let mut waits = [0.0f64; WAITS];
     let mut return_wait = 0.0f64;
     let mut events = 0usize;
     let mut truncated = false;
@@ -342,6 +358,7 @@ pub(super) fn simulate_drain(
             admission.pass(
                 &state.ready,
                 &state.running,
+                &state.admitted_at,
                 scenario.slots.saturating_sub(running),
                 scenario.slots,
                 at,
@@ -386,11 +403,18 @@ pub(super) fn simulate_drain(
             .filter_map(|index| admission.footprint_deadline(*index))
             .filter(|deadline| *deadline > at)
             .fold(f64::INFINITY, f64::min);
+        // Gap fit held work beside a free slot: the curve falls as the
+        // running profiles age, so the drain's next pass may admit it.
+        let recheck = (state.scratch.resource_held() && running < scenario.slots)
+            .then(|| admission.resource_recheck(&state.running, &state.admitted_at, at))
+            .flatten()
+            .unwrap_or(f64::INFINITY);
         let next = state
             .heap
             .peek()
             .map_or(f64::INFINITY, |end| end.0)
             .min(deadline)
+            .min(recheck)
             .min(state.returns.peek().map_or(f64::INFINITY, |end| end.0))
             .min(next_arrival.unwrap_or(f64::INFINITY));
         let until = next.min(HORIZON_HOURS);

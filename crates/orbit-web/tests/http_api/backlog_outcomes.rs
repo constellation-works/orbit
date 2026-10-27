@@ -14,7 +14,11 @@ use super::support::{Fixture, isolated, json_ok};
 
 /// A medium task now in `status`, whose recorded history is `steps`: each
 /// the status it entered and when, after its creation in backlog.
-fn dated_task(fixture: &Fixture, status: TaskStatus, steps: &[(DateTime<Utc>, TaskStatus)]) {
+fn dated_task(
+    fixture: &Fixture,
+    status: TaskStatus,
+    steps: &[(DateTime<Utc>, TaskStatus)],
+) -> String {
     let id = fixture
         .runtime
         .add_task(TaskAddParams {
@@ -69,6 +73,7 @@ fn dated_task(fixture: &Fixture, status: TaskStatus, steps: &[(DateTime<Utc>, Ta
         .map(|row| serde_json::to_string(row).unwrap() + "\n")
         .collect();
     std::fs::write(events_path, events).unwrap();
+    id
 }
 
 /// Ten clean one-hour deliveries ten days ago and, with `blocking`, ten
@@ -128,6 +133,45 @@ fn forecast(fixture: &Fixture) -> Value {
 }
 
 #[test]
+fn unresolved_paths_make_critical_path_unknown() {
+    isolated(
+        "backlog_outcomes::unresolved_paths_make_critical_path_unknown",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let blocked = dated_task(
+                &fixture,
+                TaskStatus::Blocked,
+                &[(Utc::now() - Duration::hours(1), TaskStatus::Blocked)],
+            );
+            let unknown = json!({"p50": null, "p90": null});
+            let all_unfinished = forecast(&fixture);
+            assert_eq!(
+                prediction(&all_unfinished, &blocked)["completion_probability"],
+                0.0
+            );
+            assert_eq!(all_unfinished["forecast"]["critical_path_hours"], unknown);
+
+            let finite = backlog_task(&fixture, "Finite", &["file:finite.rs"], &[], &[]);
+            let dependent = backlog_task(
+                &fixture,
+                "Dependent",
+                &["file:dependent.rs"],
+                &[],
+                &[&blocked],
+            );
+            let mixed = forecast(&fixture);
+            assert_eq!(prediction(&mixed, &finite)["completion_probability"], 1.0);
+            assert_eq!(
+                prediction(&mixed, &dependent)["completion_probability"],
+                0.0
+            );
+            assert_eq!(mixed["forecast"]["critical_path_hours"], unknown);
+        },
+    );
+}
+
+#[test]
 fn block_history_frees_slots_requeues_and_leaves_work_undrained() {
     isolated(
         "backlog_outcomes::block_history_frees_slots_requeues_and_leaves_work_undrained",
@@ -137,7 +181,8 @@ fn block_history_frees_slots_requeues_and_leaves_work_undrained() {
             let first = backlog_task(&clean, "First", &["file:a.rs"], &[], &[]);
             let second = backlog_task(&clean, "Second", &["file:b.rs"], &[], &[]);
             let clean = forecast(&clean);
-            assert_eq!(clean["model_version"], 5);
+            // Outcomes arrived in model 5; later factors retain them.
+            assert!(clean["model_version"].as_u64().unwrap() >= 5);
             assert_eq!(clean["inputs"]["admission_factors"]["outcomes"], 1);
             assert_eq!(
                 clean["inputs"]["outcomes"]["episodes"],
@@ -318,12 +363,19 @@ fn abandoned_and_blocked_tasks_do_not_corrupt_settled_actuals() {
             let pending = row(5, 1);
             assert_eq!(pending["pending"], 1);
             assert_eq!(pending["settled"], false);
-            let current = &calibration["forecast_level"];
+            // Model 5's own calibration, which later versions keep apart.
+            let five = calibration["by_model_version"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["model_version"] == 5)
+                .unwrap();
+            let current = &five["forecast_level"];
             assert_eq!(current["time_to_drain_hours"]["n"], 0);
             assert_eq!(current["settled"], 1);
             assert_eq!(current["not_drained"], 1);
             // The delivered task is scored in both model-5 forecasts.
-            assert_eq!(calibration["task_level"]["hours"]["n"], 2);
+            assert_eq!(five["task_level"]["hours"]["n"], 2);
         },
     );
 }

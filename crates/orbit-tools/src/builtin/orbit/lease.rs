@@ -15,6 +15,7 @@ impl GuardedModes for LeaseVerb {
         match self {
             LeaseVerb::Request
             | LeaseVerb::Renew
+            | LeaseVerb::Expand
             | LeaseVerb::Release
             | LeaseVerb::Show
             | LeaseVerb::List
@@ -31,6 +32,7 @@ impl GuardedModes for LeaseVerb {
         match self {
             LeaseVerb::Request
             | LeaseVerb::Renew
+            | LeaseVerb::Expand
             | LeaseVerb::Release
             | LeaseVerb::Show
             | LeaseVerb::List
@@ -43,6 +45,7 @@ impl GuardedModes for LeaseVerb {
         match self {
             LeaseVerb::Request
             | LeaseVerb::Renew
+            | LeaseVerb::Expand
             | LeaseVerb::Release
             | LeaseVerb::Show
             | LeaseVerb::List
@@ -55,6 +58,7 @@ impl GuardedModes for LeaseVerb {
         match self {
             LeaseVerb::Request
             | LeaseVerb::Renew
+            | LeaseVerb::Expand
             | LeaseVerb::Release
             | LeaseVerb::Show
             | LeaseVerb::List

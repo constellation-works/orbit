@@ -926,8 +926,62 @@
     }
   },
   {
+    "name": "orbit_lease_expand",
+    "description": "Add path selectors to a granted lease. Free paths are added at once; on a hard lease, blocked ones wait in the lease queue while the lease keeps what it holds. When two leases each wait on the other's expansion, the younger, lower-priority expansion is refused with a deadlock notice. Returns the added and queued selectors, blocking holders, queue position, any deadlock and the lease.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "description": "Lease identifier returned by request."
+        },
+        "selectors": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "File or directory selectors to add, such as file:src/lib.rs or dir:src."
+        },
+        "agent": {
+          "type": "string",
+          "description": "Deprecated attribution alias; prefer model."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "codex",
+            "claude",
+            "gemini",
+            "grok",
+            "muse"
+          ],
+          "description": "Agent family for attribution: codex, claude, gemini, grok or muse."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "Workspace selector for the authoritative server: a registered workspace name, a logical workspace ID (`ws_*`), or an absolute path registered on that server. Optional in this session, which is already bound to a workspace — by `orbit mcp serve --workspace` at launch or `_meta.orbit.workspace` at initialize. Pass it to address a different registered workspace; never inferred from the server process cwd."
+        }
+      },
+      "required": [
+        "lease_id",
+        "selectors"
+      ],
+      "additionalProperties": true
+    },
+    "annotations": {
+      "readOnlyHint": false
+    }
+  },
+  {
     "name": "orbit_lease_list",
-    "description": "List active advisory and hard path leases on the workspace owner, oldest first, with mode, principal, priority, selectors and expiry. Expires stale leases before listing.",
+    "description": "List active advisory, hard and queued path leases on the workspace owner, oldest first, with state, mode, principal, priority, held and queued selectors and expiry. Expires stale leases before listing.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1040,7 +1094,7 @@
   },
   {
     "name": "orbit_lease_request",
-    "description": "Request a lease on path selectors; advisory leases never block, while hard leases refuse overlapping task locks, reservations or hard leases. Returns the lease identifier, mode, principal, priority and expiry, or the conflicting holders. Requires lease.enabled in the workspace.",
+    "description": "Request a lease on path selectors; advisory leases never block. A hard lease overlapping task locks, reservations or hard leases waits in the lease queue (granted=false, queued=true, state queued, holding nothing) and is granted in priority-then-age order once they end; read notices for the grant. wait=false refuses it instead. Returns the lease identifier, mode, principal, priority, expiry and state, plus the blocking holders and queue position when not granted. Requires lease.enabled in the workspace.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1095,6 +1149,10 @@
         "branch": {
           "type": "string",
           "description": "Working branch or #<pull-request-number> whose landing releases the lease. The owner checks on its clock cadence; TTL is the backstop."
+        },
+        "wait": {
+          "type": "boolean",
+          "description": "Queue an overlapping hard request (default true); false refuses it with the holders named."
         },
         "ttl_seconds": {
           "type": "integer",

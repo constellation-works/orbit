@@ -28,7 +28,10 @@ use tower::ServiceExt;
 
 use super::{LeaseListenerConfig, lease_listener_router};
 use crate::api::tests::test_support::enter_isolated_child;
-use crate::lease_intake::{IntakeLimits, LeaseIntakeSocket};
+use crate::lease_intake::{
+    IntakeLimits, LeaseIntakeAuthority, LeaseIntakeClient, LeaseIntakeOperation,
+    LeaseIntakeRequest, LeaseIntakeResponse, LeaseIntakeSocket,
+};
 use crate::state::{DashboardState, SINGLE_WORKSPACE_ID};
 
 const PEER: &str = "192.0.2.10:50000";
@@ -535,4 +538,314 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
         audit_rows(&home).is_empty(),
         "operations that reached Orbit are audited there, not by the listener"
     );
+}
+
+/// The next data chunk of a streaming body, or `None` when it ends.
+async fn next_chunk(body: &mut Body) -> Option<axum::body::Bytes> {
+    use hyper::body::Body as _;
+    loop {
+        let frame = std::future::poll_fn(|cx| std::pin::Pin::new(&mut *body).poll_frame(cx))
+            .await?
+            .ok()?;
+        if let Ok(data) = frame.into_data() {
+            return Some(data);
+        }
+    }
+}
+
+/// Read `count` SSE events as `(id, data)`, skipping keep-alive comments.
+async fn read_events(body: &mut Body, buffer: &mut String, count: usize) -> Vec<(u64, Value)> {
+    let mut events = Vec::new();
+    while events.len() < count {
+        if let Some(end) = buffer.find("\n\n") {
+            let event: String = buffer.drain(..end + 2).collect();
+            if let Some(rest) = event.strip_prefix("id: ") {
+                let (id, data) = rest.split_once("\ndata: ").expect("an id and data");
+                events.push((
+                    id.parse().unwrap(),
+                    serde_json::from_str(data.trim_end()).unwrap(),
+                ));
+            }
+            continue;
+        }
+        let chunk = tokio::time::timeout(Duration::from_secs(10), next_chunk(body))
+            .await
+            .expect("an event within 10 seconds")
+            .expect("the stream stays open");
+        buffer.push_str(std::str::from_utf8(&chunk).unwrap());
+    }
+    events
+}
+
+/// Through the listener, the real intake socket and the runtime, notice
+/// polling and the SSE stream return the notices Orbit Web returns for the
+/// same workspace and cursor, in the same order, and a token reads only its
+/// own workspaces' notices (design §5 "Push and poll", §7.3).
+#[test]
+fn listener_notices_and_events_match_orbit_web_and_stay_in_the_tokens_workspaces() {
+    if !enter_isolated_child(
+        module_path!(),
+        "listener_notices_and_events_match_orbit_web_and_stay_in_the_tokens_workspaces",
+    ) {
+        return;
+    }
+    let _env = orbit_common::test_env::scoped([
+        ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+        ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+    ]);
+    let tmp = tempfile::tempdir().unwrap();
+    let global_root = tmp.path().join("global");
+    let repo_root = tmp.path().join("repo");
+    let workspace_root = repo_root.join(".orbit");
+    std::fs::create_dir_all(&global_root).unwrap();
+    std::fs::create_dir_all(repo_root.join("src")).unwrap();
+    std::fs::create_dir_all(&workspace_root).unwrap();
+    for name in ["x", "y"] {
+        std::fs::write(repo_root.join(format!("src/{name}.rs")), "pub fn f() {}\n").unwrap();
+    }
+    std::fs::write(
+        workspace_root.join("config.toml"),
+        "[lease]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime =
+        Arc::new(OrbitRuntime::from_roots(&global_root, &workspace_root).expect("runtime"));
+
+    let home = tmp.path().join("orbit-lease");
+    let mut store = provisioned_store(&home);
+    let token = |store: &mut LeaseTokenStore, principal: &str, workspace: &str, verb| {
+        mint(
+            store,
+            principal,
+            PrincipalClass::Human,
+            &[workspace],
+            verb,
+            LeasePriorityCeiling::Normal,
+            HardLeasePermission::Allow,
+        )
+        .1
+    };
+    let alice = bearer(&token(
+        &mut store,
+        "alice",
+        SINGLE_WORKSPACE_ID,
+        LeaseTokenVerb::Lease,
+    ));
+    let bob = bearer(&token(
+        &mut store,
+        "bob",
+        SINGLE_WORKSPACE_ID,
+        LeaseTokenVerb::Lease,
+    ));
+    let reader = bearer(&token(
+        &mut store,
+        "reader",
+        SINGLE_WORKSPACE_ID,
+        LeaseTokenVerb::Read,
+    ));
+    let outsider = bearer(&token(
+        &mut store,
+        "outsider",
+        "ws_other",
+        LeaseTokenVerb::Lease,
+    ));
+
+    let tokio = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()
+        .unwrap();
+    let socket_path = tmp.path().join("intake.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&socket_path).unwrap();
+    // SAFETY: geteuid has no preconditions and cannot fail.
+    let own_uid = unsafe { libc::geteuid() };
+    let mut socket = LeaseIntakeSocket::for_test_listener(listener, socket_path.clone(), own_uid);
+    let accept = {
+        let _entered = tokio.enter();
+        socket
+            .serve(
+                DashboardState::single(Arc::clone(&runtime)),
+                IntakeLimits::default(),
+            )
+            .unwrap()
+    };
+    tokio.spawn(accept);
+    let router = lease_listener_router(
+        &config(socket_path.clone(), LeaseClientAddressPolicy::Direct),
+        store,
+    );
+    let web = crate::serve::build_app(DashboardState::single(Arc::clone(&runtime))).unwrap();
+
+    tokio.block_on(async {
+        let web_notices = |query: String| {
+            let web = web.clone();
+            async move {
+                let (status, _, page) = send(
+                    &web,
+                    "GET",
+                    &format!("/api/leases/notices{query}"),
+                    "127.0.0.1:50000",
+                    &[("host", "127.0.0.1")],
+                    None,
+                )
+                .await;
+                assert_eq!(status, StatusCode::OK, "Orbit Web {query}: {page}");
+                page
+            }
+        };
+        let (status, _, first) = send(
+            &router,
+            "POST",
+            "/api/leases",
+            PEER,
+            &[("authorization", &alice)],
+            Some(json!({"selectors": ["file:src/x.rs"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{first}");
+        let (status, _, _) = send(
+            &router,
+            "POST",
+            "/api/leases",
+            PEER,
+            &[("authorization", &bob)],
+            Some(json!({"selectors": ["file:src/x.rs"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let id = first["lease"]["lease_id"].as_str().unwrap();
+        let (status, _, _) = send(
+            &router,
+            "DELETE",
+            &format!("/api/leases/{id}"),
+            PEER,
+            &[("authorization", &alice)],
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let all = web_notices("?after=0".into()).await;
+        let notices = all["notices"].as_array().unwrap().clone();
+        assert!(notices.len() >= 3, "granted, overlap and released: {all}");
+        let cursor = notices[0]["seq"].as_u64().unwrap();
+        for query in [
+            "?after=0".to_string(),
+            format!("?after={cursor}&limit=1"),
+            format!("?after={cursor}&lease_id={id}"),
+        ] {
+            let (status, _, listened) = send(
+                &router,
+                "GET",
+                &format!("/api/leases/notices{query}"),
+                PEER,
+                &[("authorization", &reader)],
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK, "{query}: {listened}");
+            assert_eq!(listened, web_notices(query.clone()).await, "{query}");
+        }
+
+        // `Last-Event-ID` is the cursor, in preference to `after`.
+        let mut request = Request::builder()
+            .uri("/api/leases/events?after=0&limit=1")
+            .header("authorization", &reader)
+            .header("last-event-id", cursor.to_string())
+            .body(Body::empty())
+            .unwrap();
+        request
+            .extensions_mut()
+            .insert(ConnectInfo(PEER.parse::<SocketAddr>().unwrap()));
+        let response = router.clone().oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()[header::CONTENT_TYPE],
+            "text/event-stream"
+        );
+        let mut body = response.into_body();
+        let mut buffer = String::new();
+        let expected = web_notices(format!("?after={cursor}")).await;
+        let expected: Vec<(u64, Value)> = expected["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|notice| (notice["seq"].as_u64().unwrap(), notice.clone()))
+            .collect();
+        let streamed = read_events(&mut body, &mut buffer, expected.len()).await;
+        assert_eq!(streamed, expected);
+
+        // A notice written after the stream opened is pushed on it.
+        let last = expected.last().unwrap().0;
+        let (status, _, _) = send(
+            &router,
+            "POST",
+            "/api/leases",
+            PEER,
+            &[("authorization", &alice)],
+            Some(json!({"selectors": ["file:src/y.rs"]})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let pushed = read_events(&mut body, &mut buffer, 1).await;
+        let expected = web_notices(format!("?after={last}")).await;
+        assert_eq!(pushed[0].1, expected["notices"][0]);
+        assert_eq!(pushed[0].1["kind"], "granted");
+        drop(body);
+
+        // Another workspace's token never reads this workspace's notices.
+        for path in ["/api/leases/notices", "/api/leases/events"] {
+            let (status, _, _) = send(
+                &router,
+                "GET",
+                &format!("{path}?workspace={SINGLE_WORKSPACE_ID}"),
+                PEER,
+                &[("authorization", &outsider)],
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::FORBIDDEN, "{path}");
+            let (status, _, body) = send(
+                &router,
+                "GET",
+                path,
+                PEER,
+                &[("authorization", &outsider)],
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{path}: {body}");
+            assert_eq!(body["code"], "unknown_workspace", "{path}");
+        }
+    });
+
+    // Orbit checks the scope again, so a listener that skipped its own
+    // check still could not read another workspace.
+    let mut client = LeaseIntakeClient::connect(&socket_path, Duration::from_secs(10)).unwrap();
+    for operation in [LeaseIntakeOperation::Notices, LeaseIntakeOperation::Events] {
+        let request = LeaseIntakeRequest {
+            operation,
+            workspace: SINGLE_WORKSPACE_ID.to_string(),
+            authority: LeaseIntakeAuthority {
+                token_id: "tok-outsider".to_string(),
+                scope: LeaseTokenScope {
+                    principal: "outsider".to_string(),
+                    principal_class: PrincipalClass::Human,
+                    workspaces: vec!["ws_other".to_string()],
+                    verbs: LeaseTokenVerb::Lease.granted_by(),
+                    max_priority: LeasePriorityCeiling::Normal,
+                    hard: HardLeasePermission::Allow,
+                },
+                client_address: "192.0.2.10".to_string(),
+            },
+            input: json!({"after": 0}),
+        };
+        match client.call(&request).unwrap() {
+            LeaseIntakeResponse::Error(error) => {
+                assert_eq!(error.code, "scope_refused", "{operation:?}")
+            }
+            LeaseIntakeResponse::Ok { result } => panic!("{operation:?} read {result}"),
+        }
+    }
+    drop(tokio);
 }

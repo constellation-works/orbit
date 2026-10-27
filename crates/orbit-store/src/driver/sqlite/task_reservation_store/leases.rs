@@ -5,13 +5,16 @@
 //! and no owner run, so stale-reservation cleanup never classifies it and a
 //! binary without leases reads it as an exclusive file reservation. A hard
 //! lease blocks overlapping reservations and admission like a task
-//! reservation; an advisory one is recorded and blocks nothing.
+//! reservation; an advisory one is recorded and blocks nothing. A queued
+//! request or expansion keeps what it waits for outside `files_json`
+//! ([`super::lease_queue`]), so it holds nothing.
 
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{OptionalExtension, TransactionBehavior, params};
 
+use super::lease_queue;
 use super::notices::{self, LeaseOverlapNotice};
 use super::rows::{
     LEASE_ROWS, expire_leases, find_reservation_conflicts, parse_string_list, serialize_string_list,
@@ -20,8 +23,8 @@ use super::{reservation_scope_clause, unique_row_id};
 use crate::Store;
 use crate::contracts::{
     LeaseInsertParams, LeaseInsertResult, LeaseListResult, LeaseMode, LeasePrincipalClass,
-    LeasePriority, LeaseRecord, LeaseReleaseParams, LeaseReleaseResult, LeaseRenewParams,
-    LeaseRenewResult, TaskReservationReleaseReason, TaskReservationScope,
+    LeasePriority, LeaseQueueKind, LeaseRecord, LeaseReleaseParams, LeaseReleaseResult,
+    LeaseRenewParams, LeaseRenewResult, TaskReservationReleaseReason, TaskReservationScope,
 };
 use serde_json::json;
 
@@ -29,8 +32,8 @@ const LEASE_ID_PREFIX: &str = "lease-";
 
 impl Store {
     /// Record a lease. A hard lease is checked against active task
-    /// reservations and hard leases in the inserting transaction, so two hard
-    /// requests racing for one path cannot both be granted.
+    /// reservations, hard leases and the queue in the inserting transaction,
+    /// so two hard requests racing for one path cannot both be granted.
     pub fn insert_lease(
         &self,
         params: &LeaseInsertParams,
@@ -40,39 +43,64 @@ impl Store {
             let workspace_id = params.workspace_id.as_deref();
             let expired_leases =
                 expire_leases(tx, &params.workspace_orbit_dir, workspace_id, &now)?;
+            let mut conflicts = Vec::new();
+            let mut queued_ahead = Vec::new();
             if params.mode == LeaseMode::Hard {
-                let conflicts = find_reservation_conflicts(
+                conflicts.extend(params.task_conflicts.iter().cloned());
+                conflicts.extend(find_reservation_conflicts(
                     tx,
                     &params.workspace_orbit_dir,
                     workspace_id,
                     &now,
                     &params.selectors,
+                )?);
+                queued_ahead = lease_queue::queued_ahead_of_request(
+                    tx,
+                    &params.workspace_orbit_dir,
+                    workspace_id,
+                    params.aging_minutes,
+                    params.priority,
+                    &params.selectors,
                 )?;
-                if !conflicts.is_empty() {
-                    return Ok(LeaseInsertResult {
-                        lease: None,
-                        conflicts,
-                        expired_leases,
-                    });
-                }
+            }
+            let blocked = !conflicts.is_empty() || !queued_ahead.is_empty();
+            if blocked && !params.wait {
+                return Ok(LeaseInsertResult {
+                    lease: None,
+                    conflicts,
+                    queued_ahead,
+                    queue_position: None,
+                    expired_leases,
+                });
             }
 
             let lease_id = unique_row_id(LEASE_ID_PREFIX);
             let expires_at = ttl_from_now(params.ttl_seconds);
+            let (held, queued, queued_at, queue_kind) = if blocked {
+                (
+                    Vec::new(),
+                    Some(serialize_string_list(&params.selectors)?),
+                    Some(now.as_str()),
+                    Some(LeaseQueueKind::Request.as_str()),
+                )
+            } else {
+                (params.selectors.clone(), None, None, None)
+            };
             tx.tx
                 .execute(
                     "INSERT INTO task_reservations(
                         reservation_id, workspace_orbit_dir, workspace_id, task_ids_json,
                         files_json, actor, created_at, expires_at, scope, kind, mode,
                         principal, principal_class, machine_id, priority, tags_json,
-                        base_branch, bound_branch, heartbeat_at, token_id
+                        base_branch, bound_branch, heartbeat_at, token_id,
+                        queued_files_json, queued_at, queue_kind
                     ) VALUES (?1, ?2, ?3, '[]', ?4, ?5, ?6, ?7, ?8, 'lease', ?9, ?10, ?11,
-                        ?12, ?13, ?14, ?15, ?16, ?6, ?17)",
+                        ?12, ?13, ?14, ?15, ?16, ?6, ?17, ?18, ?19, ?20)",
                     params![
                         lease_id,
                         params.workspace_orbit_dir,
                         workspace_id,
-                        serialize_string_list(&params.selectors)?,
+                        serialize_string_list(&held)?,
                         params.actor,
                         now,
                         expires_at,
@@ -86,22 +114,52 @@ impl Store {
                         params.base_branch.as_deref(),
                         params.bound_branch.as_deref(),
                         params.token_id.as_deref(),
+                        queued,
+                        queued_at,
+                        queue_kind,
                     ],
                 )
                 .map_err(sqlite_store_error)?;
-            notices::append_lease_notice(tx, &lease_id, "granted", &json!({
-                "mode": params.mode, "principal": params.principal, "selectors": params.selectors,
-            }), "granted")?;
-            notices::append_lease_overlaps(tx, &LeaseOverlapNotice {
-                orbit_dir: &params.workspace_orbit_dir, workspace_id,
-                holder: &lease_id, paths: &params.selectors, kind: "overlap",
-                payload: json!({"lease_id": lease_id, "mode": params.mode, "principal": params.principal}),
-                event_key: &format!("lease:{lease_id}"), landing: None,
-            })?;
+            let mut queue_position = None;
+            if blocked {
+                let position = lease_queue::queue_position(
+                    tx,
+                    &params.workspace_orbit_dir,
+                    workspace_id,
+                    params.aging_minutes,
+                    &lease_id,
+                )?;
+                notices::append_lease_notice(
+                    tx,
+                    &lease_id,
+                    "queued",
+                    &json!({
+                        "selectors": params.selectors,
+                        "priority": params.priority,
+                        "holders": conflicts,
+                        "queued_ahead": queued_ahead,
+                        "position": position,
+                    }),
+                    "queued",
+                )?;
+                queue_position = position;
+            } else {
+                notices::append_lease_notice(tx, &lease_id, "granted", &json!({
+                    "mode": params.mode, "principal": params.principal, "selectors": params.selectors,
+                }), "granted")?;
+                notices::append_lease_overlaps(tx, &LeaseOverlapNotice {
+                    orbit_dir: &params.workspace_orbit_dir, workspace_id,
+                    holder: &lease_id, paths: &params.selectors, kind: "overlap",
+                    payload: json!({"lease_id": lease_id, "mode": params.mode, "principal": params.principal}),
+                    event_key: &format!("lease:{lease_id}"), landing: None,
+                })?;
+            }
             let lease = load_lease(tx, &params.workspace_orbit_dir, workspace_id, &lease_id)?;
             Ok(LeaseInsertResult {
                 lease,
-                conflicts: Vec::new(),
+                conflicts,
+                queued_ahead,
+                queue_position,
                 expired_leases,
             })
         })
@@ -349,11 +407,12 @@ fn active_leases_sql() -> String {
     )
 }
 
-const LEASE_COLUMNS: &str = "reservation_id, workspace_id, files_json, mode, priority, tags_json,
-     principal, principal_class, machine_id, base_branch, bound_branch, actor, created_at,
-     expires_at, heartbeat_at, released_at, release_reason, notice_cursor, token_id";
+pub(super) const LEASE_COLUMNS: &str = "reservation_id, workspace_id, files_json, mode, priority,
+     tags_json, principal, principal_class, machine_id, base_branch, bound_branch, actor,
+     created_at, expires_at, heartbeat_at, released_at, release_reason, notice_cursor, token_id,
+     queued_files_json, queued_at, queue_kind";
 
-struct LeaseRow {
+pub(super) struct LeaseRow {
     lease_id: String,
     workspace_id: Option<String>,
     files_json: String,
@@ -373,9 +432,12 @@ struct LeaseRow {
     release_reason: Option<String>,
     notice_cursor: u64,
     token_id: Option<String>,
+    queued_files_json: Option<String>,
+    queued_at: Option<String>,
+    queue_kind: Option<String>,
 }
 
-fn lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
+pub(super) fn lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
     Ok(LeaseRow {
         lease_id: row.get(0)?,
         workspace_id: row.get(1)?,
@@ -396,11 +458,14 @@ fn lease_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<LeaseRow> {
         release_reason: row.get(16)?,
         notice_cursor: row.get(17)?,
         token_id: row.get(18)?,
+        queued_files_json: row.get(19)?,
+        queued_at: row.get(20)?,
+        queue_kind: row.get(21)?,
     })
 }
 
 impl LeaseRow {
-    fn into_record(self) -> Result<LeaseRecord, OrbitError> {
+    pub(super) fn into_record(self) -> Result<LeaseRecord, OrbitError> {
         let invalid =
             |message: String| OrbitError::Store(format!("lease {}: {message}", self.lease_id));
         let required = |field: &str, value: &Option<String>| {
@@ -427,7 +492,15 @@ impl LeaseRow {
             ),
             None => None,
         };
+        let queue_kind = self.queue_kind.as_deref().map(LeaseQueueKind::parse);
+        let queued_selectors = match (queue_kind, self.queued_files_json.as_deref()) {
+            (Some(_), Some(raw)) => parse_string_list(raw)?,
+            _ => Vec::new(),
+        };
         Ok(LeaseRecord {
+            queued_selectors,
+            queued_at: queue_kind.and(self.queued_at),
+            queue_kind,
             notice_cursor: self.notice_cursor,
             selectors: parse_string_list(&self.files_json)?,
             mode: LeaseMode::parse(&self.mode),
@@ -451,7 +524,7 @@ impl LeaseRow {
     }
 }
 
-fn load_lease(
+pub(super) fn load_lease(
     tx: &mut crate::StoreTx<'_>,
     workspace_orbit_dir: &str,
     workspace_id: Option<&str>,

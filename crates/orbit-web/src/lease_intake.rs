@@ -15,8 +15,10 @@
 //! that many bytes of JSON. A connection opens with a [`LeaseIntakeHello`]
 //! each way; either side refuses a protocol version other than its own,
 //! naming both. Then each [`LeaseIntakeRequest`] gets one
-//! [`LeaseIntakeResponse`]. The socket accepts the lease operations and
-//! nothing else.
+//! [`LeaseIntakeResponse`], except `events`, which streams: it gets one
+//! response per notice page, about one a second while no notices arrive,
+//! until either side closes the connection or an error response ends it.
+//! The socket accepts the lease operations and nothing else.
 
 mod client;
 mod server;
@@ -35,8 +37,9 @@ pub(crate) use socket::LeaseIntakeSocket;
 
 /// The intake protocol version. A listener and an Orbit Web of different
 /// versions refuse each other, since the listener's root-owned binary is
-/// updated separately from the operator's.
-pub const LEASE_INTAKE_PROTOCOL_VERSION: u32 = 1;
+/// updated separately from the operator's. Any change to the frames or
+/// operations changes it. Version 2 added `notices` and `events`.
+pub const LEASE_INTAKE_PROTOCOL_VERSION: u32 = 2;
 
 /// The socket's path under the operator's Orbit home.
 pub const LEASE_INTAKE_SOCKET_PATH: &str = "run/lease-intake.sock";
@@ -73,8 +76,7 @@ impl LeaseIntakeError {
     }
 }
 
-/// The lease operations the socket accepts (design §6). Notices arrive in a
-/// later phase.
+/// The lease operations the socket accepts (design §6).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LeaseIntakeOperation {
@@ -82,7 +84,7 @@ pub enum LeaseIntakeOperation {
     Request,
     /// `orbit.lease.renew`.
     Renew,
-    /// Lease expansion; not available in this phase.
+    /// `orbit.lease.expand`.
     Expand,
     /// `orbit.lease.release`.
     Release,
@@ -92,6 +94,11 @@ pub enum LeaseIntakeOperation {
     List,
     /// `orbit.lease.check`.
     Check,
+    /// One page of `orbit.lease.notices`.
+    Notices,
+    /// `orbit.lease.notices` as a stream of pages, each read from the
+    /// previous page's cursor; audited once, when it opens.
+    Events,
 }
 
 impl LeaseIntakeOperation {
@@ -105,6 +112,8 @@ impl LeaseIntakeOperation {
             Self::Show => "show",
             Self::List => "list",
             Self::Check => "check",
+            Self::Notices => "notices",
+            Self::Events => "events",
         }
     }
 
@@ -112,7 +121,9 @@ impl LeaseIntakeOperation {
     pub fn verb(self) -> LeaseTokenVerb {
         match self {
             Self::Request | Self::Renew | Self::Expand | Self::Release => LeaseTokenVerb::Lease,
-            Self::Show | Self::List | Self::Check => LeaseTokenVerb::Read,
+            Self::Show | Self::List | Self::Check | Self::Notices | Self::Events => {
+                LeaseTokenVerb::Read
+            }
         }
     }
 }

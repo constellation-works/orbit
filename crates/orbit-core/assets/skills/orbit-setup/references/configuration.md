@@ -144,6 +144,52 @@ them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` an
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
 
+## Explore briefs
+
+An explore brief is the task pilot's bounded map of code a task may change,
+including targets, call paths, patterns, covering tests and gotchas. Configure
+whether the pilot makes one and whether an implementer receives it in
+`<workspace>/.orbit/config.toml`:
+
+```toml
+[workflow.explore_brief]
+enabled = true
+tags = ["explore-brief"]
+deliver = true
+```
+
+| Key | Default | Effect |
+|---|---|---|
+| `workflow.explore_brief.enabled` | `false` | Ask the task pilot for a brief for requested tasks. |
+| `workflow.explore_brief.tags` | `[]` | Select tasks by tag; an empty list selects every piloted task. |
+| `workflow.explore_brief.deliver` | `true` | Give a stored brief to the implementer; `false` keeps it in shadow, where it is produced and stored but never delivered. |
+
+Use `orbit config show --all` to inspect the effective values and their
+provenance. With `enabled = true`, tags are read when a task is piloted, so add
+the selected tag before piloting it. A valid brief is stored as the reserved
+task artifact `explore-brief.json`; agents and operators cannot write that
+artifact themselves.
+
+To verify storage, run `orbit task show <task-id>` and inspect the task-pilot
+comment: its `explore_brief` receipt says `written` with a digest and byte count,
+or records a drop reason. To verify an implementation dispatch, run
+`orbit run show <run-id>` and inspect its `Explore brief:` line; JSON carries
+the same records under `tag_instructions.explore_briefs`.
+
+At dispatch, `fresh` means none of the brief's covered files changed since its
+inspection revision. `drifted` means one to three covered files changed by at
+most 200 lines and no `change` target was deleted or renamed; a drifted brief
+can still be delivered, with the changed-file details available to the
+implementer. Changes beyond those limits, or deletion or rename of a `change`
+target, produce `dropped: stale`; an inspection revision that is not an
+ancestor of the run base produces `dropped: revision_unrelated`; and changed
+task material without a new pilot, or material whose fingerprint cannot be
+recomputed, produces `dropped: material_changed`.
+The run's `Explore brief:` line reports these dispatch outcomes. Only a `fresh`
+or `drifted` brief reaches the implementer, and only when both `enabled` and
+`deliver` are on. In shadow mode, the pilot still stores the brief, while the
+dispatch does not pass it to the implementer.
+
 ## Experiments
 
 Experiments compare a control arm with one or more treatments for agent work.
@@ -752,12 +798,13 @@ While it is off, every lease operation is refused with an error naming the key.
 | `lease.hard.agent` | `allow` | `allow`, `never` | The same rule for agent principals. |
 | `lease.max_priority.human` | `high` | `low`, `normal`, `high` | Highest priority a human request may name. |
 | `lease.max_priority.agent` | `normal` | `low`, `normal`, `high` | Highest priority an agent request may name. |
+| `lease.aging_minutes` | `30` | `1`–`10080` | Minutes a queued hard request or expansion waits before it moves up one priority level. |
 | `lease.intake.peer_user` | unset | an OS user name | Global only. The lease listener's OS user that `orbit web serve` accepts lease operations from over `~/.orbit/run/lease-intake.sock`. Unset serves no socket. |
 
 These keys inherit per key like other settings. Set the policy and read it back:
 
 ```bash
-orbit config keys --json                 # confirm the seven lease.* keys in the installed version
+orbit config keys --json                 # confirm the lease.* keys in the installed version
 orbit config set lease.enabled true      # workspace config; add --global for ~/.orbit/config.toml
 orbit config get lease.enabled
 orbit config show --all                  # effective values with their source
@@ -797,16 +844,21 @@ included, is refused and logged with its uid.
 - **Hard** requests are granted only when no selector overlaps a task context
   lock, a task reservation or another hard lease. Paths matching
   `workflow.unlocked_context_paths` leave the hard surface and come back as
-  `unlocked_selectors`. An overlap refuses the request (`granted: false`,
-  `reason: held`) and names every holder in `conflicts`. There is no waiting
-  queue, so retry after the holder releases or expires.
+  `unlocked_selectors`. An overlapping request waits in the lease queue:
+  `granted: false`, `queued: true`, its `queue_position`, every holder in
+  `conflicts`, and a lease in state `queued` that holds nothing, so drains and
+  reservations ignore it. It gets a `queued` notice now and a `granted` notice
+  when its holders release, expire or settle; a task holder is never preempted.
+  The queue orders by priority, then age, and a waiter older than
+  `lease.aging_minutes` moves up one level. Send `wait: false` (CLI
+  `--no-wait`) to be refused instead (`queued: false`, `reason: held`).
 - **Class downgrade:** a hard request from a principal class whose
   `lease.hard.*` is `never` is granted as advisory, with `downgraded: true`
   and a `notice`.
 - **Priority** is stored with the lease and checked only against the class
   ceiling. A request above `lease.max_priority.*` is refused with
-  `reason: priority_ceiling`, and the refusal is audited. Priority does not
-  reorder, preempt or queue anything. A request that names no priority gets
+  `reason: priority_ceiling`, and the refusal is audited. Priority orders the
+  queue; it never preempts a holder. A request that names no priority gets
   `normal`, lowered to the ceiling if the ceiling is below it.
 - **Principal class** is `agent` when the process running the operation declares
   an agent or managed run, and `human` otherwise. Over REST, that is the serving
@@ -818,12 +870,16 @@ included, is refused and logged with its uid.
   touches it, and each ending emits a `lease.expired` audit event. `check` only
   reads: it neither expires nor audits. Renewing an inactive lease fails, and
   releasing one returns `released: false`. Either way, request a new lease.
-- Lease expansion is not available. `POST /api/leases/{id}/expand` returns
-  `501` with `not_available_in_this_phase`.
+- **Expansion** (`orbit lease expand <id> <selector>…`, `orbit.lease.expand`,
+  `POST /api/leases/{id}/expand`) adds selectors to a granted lease. Free paths
+  are added at once; on a hard lease, blocked ones queue while the lease keeps
+  what it holds. When two leases each wait on the other's expansion, the
+  younger, lower-priority one is refused with a `deadlock` notice and keeps
+  what it holds.
 
 ### Transports
 
-CLI and MCP expose request, renew, release, show, list, check and notices through
+CLI and MCP expose request, renew, expand, release, show, list, check and notices through
 the same owner operations. Check `orbit lease --help` and the installed tool catalog
 when coordinating with an older binary. `orbit lease notices --after <seq>` and
 `orbit.lease.notices` return `{notices, cursor}`; add `--lease-id <id>` to filter.
@@ -833,16 +889,19 @@ cursor to resume after a disconnect; reads never acknowledge notices or expire l
 - **Config:** the `orbit config` commands above.
 - **REST:** `orbit web serve` (default `127.0.0.1:7878`) serves `/api/leases`:
   `GET` and `POST /api/leases`, `GET` and `DELETE /api/leases/{id}`,
-  `POST /api/leases/check` and `POST /api/leases/{id}/renew`, plus
+  `POST /api/leases/check`, `POST /api/leases/{id}/renew` and
+  `POST /api/leases/{id}/expand`, plus
   `GET /api/leases/notices?after=<seq>` and `GET /api/leases/events` (SSE).
   SSE accepts `Last-Event-ID` as the resume cursor; each ID is the notice sequence. Select a workspace
-  with `?workspace=<name-or-id>`. Reads need no operator session. Request, renew
-  and release need the server started with `--operator`; otherwise they are denied.
+  with `?workspace=<name-or-id>`. Reads need no operator session. Request, renew,
+  expand and release need the server started with `--operator`; otherwise they are denied.
   The routes accept only localhost origins.
 - **Audit:** `orbit audit list --tool orbit.lease.request --since 1h`, or
   `--kind lease` for every lease event. Granted requests record
-  `lease.request.granted`, refusals record `lease.request.refused` with status
-  `denied`, and expiries record `lease.expired`.
+  `lease.request.granted`, waiting ones `lease.request.queued` and, once granted,
+  `lease.request.granted` with `from_queue: true`; refusals record
+  `lease.request.refused` with status `denied`, expansions `lease.expanded`,
+  and expiries record `lease.expired`.
 
 ### Claude Code edit hook
 
@@ -904,8 +963,8 @@ if warning:
 
 The default is advisory: a warning exits zero and permits the edit. Set
 `ORBIT_LEASE_HOOK_DENY=1` explicitly to deny on warnings (Claude Code command hooks
-use exit 2 to block). Expansion is not implemented yet; coordinate and request a
-replacement lease covering the added paths. This hook does not expand or release
+use exit 2 to block). To cover an added path, run `orbit lease expand "$ORBIT_LEASE_ID"
+<selector>` and wait for its `granted` notice. This hook does not expand or release
 leases automatically. Test both an inside and outside path before enabling denial.
 
 ### Verify the policy
@@ -923,7 +982,7 @@ dashboard with `orbit web serve --operator --no-open`, and then:
    ```
 
 3. `GET /api/leases` lists the lease, and `orbit audit list --tool orbit.lease.request --since 1h` shows the granted event.
-4. To see a hard refusal, send a `"mode":"hard"` request over a path held by another active hard lease or a task context lock. Expect `granted: false` with `conflicts` naming the holder, and a `lease.request.refused` event with status `denied`.
+4. To see the queue, send a `"mode":"hard"` request over a path held by another active hard lease. Expect `granted: false`, `queued: true` and `conflicts` naming the holder; release the holder and expect a `granted` notice for the queued lease. Add `"wait": false` to see a refusal instead, with a `lease.request.refused` event with status `denied`.
 5. To see a priority refusal, set `lease.max_priority.human` to `low` in the disposable workspace, then request `"priority":"high"`. Expect a refusal with `priority_ceiling` in the audit event.
 6. To see class downgrade, set `lease.hard.human` to `never`, then send a hard request. Expect `granted: true`, `downgraded: true` and a `notice`.
 7. Release the test lease with `DELETE /api/leases/<lease_id>`, and restore the previous `lease.*` values with `orbit config set`.

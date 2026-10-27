@@ -18,6 +18,8 @@ operation_registry! {
         Request => REQUEST,
         /// Renew an active lease's TTL.
         Renew => RENEW,
+        /// Add selectors to a granted lease.
+        Expand => EXPAND,
         /// Release a lease early.
         Release => RELEASE,
         /// Inspect a lease in any state.
@@ -92,7 +94,7 @@ const REQUEST: OperationSpec<LeaseVerb> = OperationSpec {
     verb: LeaseVerb::Request,
     cli_path: &["request"],
     tool_name: "orbit.lease.request",
-    tool_description: "Request a lease on path selectors; advisory leases never block, while hard leases refuse overlapping task locks, reservations or hard leases. Returns the lease identifier, mode, principal, priority and expiry, or the conflicting holders. Requires lease.enabled in the workspace.",
+    tool_description: "Request a lease on path selectors; advisory leases never block. A hard lease overlapping task locks, reservations or hard leases waits in the lease queue (granted=false, queued=true, state queued, holding nothing) and is granted in priority-then-age order once they end; read notices for the grant. wait=false refuses it instead. Returns the lease identifier, mode, principal, priority, expiry and state, plus the blocking holders and queue position when not granted. Requires lease.enabled in the workspace.",
     cli_about: "Request an advisory or hard path lease",
     cli_help: CliHelp {
         constraints: &[CliConstraint::ConflictsWith("hard", "mode")],
@@ -175,6 +177,17 @@ const REQUEST: OperationSpec<LeaseVerb> = OperationSpec {
                 ),
                 &["bound_branch"],
             ),
+            mcp_only(
+                "wait",
+                ParamType::Boolean,
+                "Queue an overlapping hard request (default true); false refuses it with the holders named.",
+            ),
+            cli_only(
+                "no_wait",
+                ParamType::Switch,
+                CliArgKind::flag("no-wait"),
+                "Refuse an overlapping hard request instead of queueing it",
+            ),
         ],
         TTL,
         IDENTITY,
@@ -194,6 +207,36 @@ const RENEW: OperationSpec<LeaseVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
     params: &[&[ID], TTL],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Warn,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+const EXPAND: OperationSpec<LeaseVerb> = OperationSpec {
+    verb: LeaseVerb::Expand,
+    cli_path: &["expand"],
+    tool_name: "orbit.lease.expand",
+    tool_description: "Add path selectors to a granted lease. Free paths are added at once; on a hard lease, blocked ones wait in the lease queue while the lease keeps what it holds. When two leases each wait on the other's expansion, the younger, lower-priority expansion is refused with a deadlock notice. Returns the added and queued selectors, blocking holders, queue position, any deadlock and the lease.",
+    cli_about: "Add selectors to a granted lease",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[
+        &[
+            ID,
+            aliased(
+                required(both(
+                    "selectors",
+                    ParamType::StringList,
+                    "File or directory selectors to add, such as file:src/lib.rs or dir:src.",
+                    CliArgKind::Positional,
+                    "File or directory selectors to add",
+                )),
+                &["files"],
+            ),
+        ],
+        IDENTITY,
+    ],
     at_least_one_of: &[],
     retired_fields: &[],
     unknown_fields: UnknownFields::Warn,
@@ -234,7 +277,7 @@ const LIST: OperationSpec<LeaseVerb> = OperationSpec {
     verb: LeaseVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.lease.list",
-    tool_description: "List active advisory and hard path leases on the workspace owner, oldest first, with mode, principal, priority, selectors and expiry. Expires stale leases before listing.",
+    tool_description: "List active advisory, hard and queued path leases on the workspace owner, oldest first, with state, mode, principal, priority, held and queued selectors and expiry. Expires stale leases before listing.",
     cli_about: "List active advisory and hard leases",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

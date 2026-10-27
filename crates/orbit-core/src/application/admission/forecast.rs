@@ -17,10 +17,15 @@
 //!    reservation policy withholds lower-ranked overlapping work.
 //! 2. Unknown-footprint work goes through the shared [`FootprintWave`].
 //! 3. The wave fills the free slots with pairwise non-overlapping candidates.
+//! 4. Under `enforce` auto-concurrency, gap fit then judges each candidate
+//!    against the simulated host load (`resource_fit.rs`) [ORB-18689].
 //!
 //! Nothing here reads a store after [`OrbitRuntime::forecast_admission`]
 //! returns.
 
+mod resource_fit;
+
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
@@ -36,9 +41,12 @@ use super::unknown_footprint::{
     FootprintGuard, FootprintWait, FootprintWave, footprint_waits, whole_tree_holder,
 };
 use crate::OrbitRuntime;
+use crate::runtime::host_resource::profile::ProfileSource;
 use crate::runtime::task::locks::{
     active_task_lock_holders, lock_context_files_for_task, lock_holder_index, task_lock_overlaps,
 };
+pub(crate) use resource_fit::{ForecastHostEvidence, RESOURCE_RECHECK_HOURS};
+use resource_fit::{PassFit, ResourceFit};
 
 /// A fixed-width set of task indices.
 #[derive(Clone, Default)]
@@ -99,15 +107,18 @@ pub(crate) enum ForecastWait {
     Footprint,
     /// Every leaf slot is taken.
     Capacity,
+    /// Gap fit held it: its profile does not fit beside the running work.
+    Resource,
 }
 
 impl ForecastWait {
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::Dependency,
         Self::Lock,
         Self::Reservation,
         Self::Footprint,
         Self::Capacity,
+        Self::Resource,
     ];
 
     pub(crate) fn key(self) -> &'static str {
@@ -117,6 +128,7 @@ impl ForecastWait {
             Self::Reservation => "reservation",
             Self::Footprint => "footprint",
             Self::Capacity => "capacity",
+            Self::Resource => "resource",
         }
     }
 }
@@ -150,6 +162,9 @@ pub(crate) struct ForecastAdmission {
     forecast_at: DateTime<Utc>,
     surface_hash: Vec<String>,
     review_lock_overlaps: Vec<bool>,
+    /// Gap fit's inputs, when the drain enforces it on a host the forecast
+    /// could size.
+    resource_fit: Option<ResourceFit>,
 }
 
 /// Reusable per-pass buffers, so a simulated pass allocates only when a
@@ -161,6 +176,23 @@ pub(crate) struct ForecastPassScratch {
     kept: Vec<usize>,
     reserving: Vec<usize>,
     wave: ForecastTaskSet,
+    /// Gap fit's head, carried between passes as the drain carries it.
+    gap_head: Option<orbit_types::workflow::GapFitHead>,
+    /// Whether the last pass's gap fit held a candidate.
+    resource_held: bool,
+}
+
+impl ForecastPassScratch {
+    /// Forget the previous simulated drain's head.
+    pub(crate) fn start_drain(&mut self) {
+        self.gap_head = None;
+        self.resource_held = false;
+    }
+
+    /// Whether the last pass's gap fit held a candidate.
+    pub(crate) fn resource_held(&self) -> bool {
+        self.resource_held
+    }
 }
 
 impl ForecastAdmission {
@@ -190,6 +222,35 @@ impl ForecastAdmission {
         self.review_lock_overlaps[index]
     }
 
+    /// Judge candidates by gap fit against `evidence`, as an enforcing drain
+    /// on that host does.
+    pub(crate) fn fit_resources(&mut self, evidence: ForecastHostEvidence) {
+        self.resource_fit = Some(ResourceFit::new(evidence, &self.tasks));
+    }
+
+    /// The profile gap fit prices task `index` by; `None` without resource
+    /// fit.
+    pub(crate) fn profile_source(&self, index: usize) -> Option<ProfileSource> {
+        self.resource_fit
+            .as_ref()
+            .map(|fit| fit.profile_source(index))
+    }
+
+    /// When a pass that gap fit held should be retried: after
+    /// [`RESOURCE_RECHECK_HOURS`], while a running delivery's profile still
+    /// changes; `None` once only a completion can make room.
+    pub(crate) fn resource_recheck(
+        &self,
+        running: &ForecastTaskSet,
+        admitted_at: &[f64],
+        at_hours: f64,
+    ) -> Option<f64> {
+        self.resource_fit
+            .as_ref()
+            .filter(|fit| fit.curve_changes(running, admitted_at, at_hours))
+            .map(|_| at_hours + RESOURCE_RECHECK_HOURS)
+    }
+
     pub(crate) fn scratch(&self) -> ForecastPassScratch {
         ForecastPassScratch {
             direct: vec![false; self.len()],
@@ -204,12 +265,15 @@ impl ForecastAdmission {
     /// `running` the tasks holding a slot. Pushes the admitted tasks, in
     /// dispatch order, to `selected`, and reports every other ready task's
     /// first failing gate to `wait`. `slots` is the drain's ceiling: a
-    /// single-slot drain applies no unknown-footprint rule.
+    /// single-slot drain applies no unknown-footprint rule. `admitted_at`
+    /// holds each running task's admission hour, which gap fit ages its
+    /// profile by.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn pass(
         &self,
         ready: &[usize],
         running: &ForecastTaskSet,
+        admitted_at: &[f64],
         free_slots: usize,
         slots: usize,
         at_hours: f64,
@@ -278,6 +342,18 @@ impl ForecastAdmission {
         let mut footprint_applies =
             footprint.holds_tree() || kept.iter().any(|candidate| self.no_footprint[*candidate]);
         scratch.wave.clear();
+        scratch.resource_held = false;
+        let previous_head = scratch.gap_head.take();
+        let host = OnceCell::new();
+        let mut gap_fit = self.resource_fit.as_ref().map(|fit| {
+            PassFit::new(
+                fit,
+                &host,
+                previous_head.as_ref(),
+                self.forecast_at,
+                at_hours,
+            )
+        });
         let first = selected.len();
         for &candidate in &kept {
             let task = &self.tasks[candidate];
@@ -300,6 +376,13 @@ impl ForecastAdmission {
                 wait(candidate, ForecastWait::Lock);
                 continue;
             }
+            if let Some(gap_fit) = gap_fit.as_mut()
+                && !gap_fit.admits(&self.tasks, candidate, running, admitted_at, at_hours)
+            {
+                scratch.resource_held = true;
+                wait(candidate, ForecastWait::Resource);
+                continue;
+            }
             scratch.wave.insert(candidate);
             footprint.selected(task, edits);
             footprint_applies = footprint_applies || footprint.holds_tree();
@@ -307,6 +390,10 @@ impl ForecastAdmission {
         }
         kept.clear();
         scratch.kept = kept;
+        if let Some(gap_fit) = gap_fit {
+            scratch.gap_head = gap_fit
+                .finish(|task_id| ready.iter().any(|index| self.tasks[*index].id == task_id));
+        }
     }
 
     /// The unknown-footprint waits of `candidates` at simulated time: a
@@ -523,6 +610,7 @@ impl OrbitRuntime {
                 .map(|selectors| surface_digest(selectors))
                 .collect(),
             review_lock_overlaps,
+            resource_fit: None,
             tasks,
         }
     }

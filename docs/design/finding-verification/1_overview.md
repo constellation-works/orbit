@@ -2,7 +2,7 @@
 title: Finding Verification — Overview
 owner: claude
 last_updated: 2026-10-11
-last_validated: 2026-10-23
+last_validated: 2026-10-26
 status: Accepted
 stage: shipped
 next: "—"
@@ -59,7 +59,7 @@ first is far cheaper, and it gives the operator the evidence either way.
 | Prepare and apply actions | [application/task/finding_verification_steps/](../../../crates/orbit-core/src/application/task/finding_verification_steps/) | [ORB-15662] |
 | Job | [finding_verification_pipeline.yaml](../../../crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml) | [ORB-15662] |
 | Verifier activity | [verify_finding.yaml](../../../crates/orbit-core/assets/activities/verify_finding.yaml) | [ORB-15662] |
-| State trigger (`finding_unverified`) | [member_host/mod.rs](../../../crates/orbit-core/src/application/automation/members/member_host/mod.rs) | [ORB-15662] |
+| State trigger (`finding_unverified`) | [observation.rs](../../../crates/orbit-core/src/application/automation/members/member_host/observation.rs) | [ORB-15662] |
 | Seeded routine (disabled) | [finding_verification.yaml](../../../crates/orbit-core/assets/routines/finding_verification.yaml) | [ORB-15662] |
 | Admission hold | [pilot/admission.rs](../../../crates/orbit-core/src/application/task/pilot/admission.rs) | [ORB-15662] |
 

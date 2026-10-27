@@ -1,7 +1,9 @@
 use chrono::SecondsFormat;
 use orbit_common::OrbitError;
 use orbit_store::contracts::{DrainLeafOccupancy, JobRunQuery};
-use orbit_types::workflow::{DrainAdmissionsStop, DrainWorkerLimit, JobRun, PipelineState};
+use orbit_types::workflow::{
+    AutoConcurrencyMode, DrainAdmissionsStop, DrainWorkerLimit, JobRun, PipelineState,
+};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
@@ -121,6 +123,22 @@ impl OrbitRuntime {
         let (active, _) = workspace_drains(self)?;
         let pull = live_pull_drain(self)?;
         Ok(drain_ceiling(active.as_ref(), pull.as_ref()))
+    }
+
+    /// The auto-concurrency mode the live local drain admits under (its own
+    /// override, else the host's configured mode) and `live_drain`; with no
+    /// live local drain, the configured mode and `configured`.
+    pub(crate) fn drain_auto_concurrency_mode(
+        &self,
+    ) -> Result<(AutoConcurrencyMode, &'static str), OrbitError> {
+        let (active, _) = workspace_drains(self)?;
+        Ok(match active {
+            Some(drain) => (
+                super::mode::effective_mode(self, &drain.input)?,
+                "live_drain",
+            ),
+            None => (super::mode::effective_mode(self, &json!({}))?, "configured"),
+        })
     }
 }
 

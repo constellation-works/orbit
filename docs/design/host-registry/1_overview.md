@@ -4,7 +4,7 @@ type: design
 title: "Host Registry — Overview"
 owner: codex
 last_updated: 2026-10-26
-last_validated: 2026-10-19
+last_validated: 2026-10-26
 status: Implemented
 stage: shipped
 next: "—"
