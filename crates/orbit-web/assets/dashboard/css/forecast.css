@@ -19,7 +19,7 @@
 .fc-assume-head { color: var(--fg); font-weight: 500; }
 .fc-assume-rate { color: var(--fg-mute); }
 .fc-approved { margin: 0; color: var(--fg-dim); font: 13px var(--font-sans); }
-.fc-table td.fc-state { white-space: nowrap; }
+.fc-table td.fc-state, .fc-table td.fc-review { white-space: nowrap; }
 .fc-table td.fc-basis { color: var(--fg-mute); font: 12px var(--font-mono); white-space: nowrap; }
 /* Coverage counts: one cell per count, wrapping on narrow screens. */
 .fc-coverage {
