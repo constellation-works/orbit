@@ -21,6 +21,7 @@ import {
   hostDisplayName,
   hostLabel,
   hostWriteRefusal,
+  onRegisteredHostsChange,
   setHost,
   setHostUnavailable,
   setHostWrites,
@@ -53,6 +54,16 @@ const FAILURE_HEADLINES = {
 let failure = null;
 let connection = null;
 let onSelect = () => {};
+onRegisteredHostsChange((previous, hosts) => {
+  const selected = getHost();
+  const old = previous.find((row) => row.name === selected);
+  const renamed = old && hosts.find((row) => row.machine_id === old.machine_id && !row.local);
+  buildPicker();
+  renderHostChrome();
+  if (renamed && renamed.name !== selected) {
+    queueMicrotask(() => { if (getHost() === selected) onSelect(renamed.name); });
+  }
+});
 
 function rememberedHost() {
   try {

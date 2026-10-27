@@ -108,6 +108,7 @@ window.confirm = message => { confirmations.push(message); return true; };
 // What readiness reports the composer may start: the owner drains its own
 // backlog; a replica pulls from its owner, and the runtime's refusal for the
 // other source is shown as it words it.
+let extraStartCrews = [];
 const LOCAL_REFUSAL = 'destination capability refused: this checkout is a replica of ws-one; its owner m-owner drains the backlog';
 const PULL_REFUSAL = "destination capability refused: `--pull` runs on a replica checkout; this checkout is its workspace's owner, whose drain is plain `orbit run auto`";
 const startOptions = () => ({
@@ -119,7 +120,7 @@ const startOptions = () => ({
   pull_selector: replicaWorkspace ? 'm-owner/ws-one' : null,
   local_refusal: replicaWorkspace ? LOCAL_REFUSAL : null,
   pull_refusal: replicaWorkspace ? null : PULL_REFUSAL,
-  crews: [{ name: 'opus', enabled: true }, { name: 'sol', enabled: true }, { name: 'luna', enabled: true }, { name: 'retired', enabled: false }],
+  crews: [{ name: 'opus', enabled: true }, { name: 'sol', enabled: true }, { name: 'luna', enabled: true }, { name: 'retired', enabled: false }, ...extraStartCrews.map((name) => ({ name, enabled: true }))],
   complexity_pools: {
     low: { crews: [{ name: 'luna', weight: 1 }], source: 'workflow.low_complexity_crews' },
     medium: { crews: [{ name: 'sol', weight: 2 }, { name: 'luna', weight: 1 }], source: 'workflow.medium_complexity_crews' },
@@ -547,6 +548,28 @@ assert(startBody.querySelector('[data-crew="luna"]').getAttribute('aria-pressed'
 assert(startIssues().includes('Low pool has no allowed crew: unassigned low tasks will wait.'), `a tier with no allowed crew warns: ${startIssues()}`);
 tierButton('hard', 'Override').click();
 assert(startNode('auto-drain-pool-hard').value === 'opus', 'an override starts from the workspace pool');
+// Parse shell words without evaluating substitutions or executing the command.
+function shellWords(command) {
+  const words = []; let word = ''; let quote = null; let started = false;
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote === "'") { if (ch === "'") quote = null; else word += ch; }
+    else if (ch === "'") { quote = ch; started = true; }
+    else if (ch === '\\') { word += command[++i]; started = true; }
+    else if (/\s/.test(ch)) { if (started) { words.push(word); word = ''; started = false; } }
+    else { word += ch; started = true; }
+  }
+  assert(!quote, 'command shell quote is closed');
+  if (started) words.push(word);
+  return words;
+}
+// Crew overrides use comma delimiters; whitespace and shell metacharacters
+// inside a name must remain literal in the copyable command.
+startNode('auto-drain-pool-hard').value = "fast crew:2, quote'$(literal):1";
+startNode('auto-drain-pool-hard').dispatchEvent(new Event('input'));
+const quotedOverride = startCommand();
+const overrideArgv = shellWords(quotedOverride);
+assert(overrideArgv[overrideArgv.indexOf('--hard-complexity-crews') + 1] === "fast crew:2,quote'$(literal):1", `literal override remains one argument: ${quotedOverride}`);
 startNode('auto-drain-pool-hard').value = 'opus:3, sol:1';
 startNode('auto-drain-pool-hard').dispatchEvent(new Event('input'));
 startNode('auto-drain-pool-hard').dispatchEvent(new Event('change'));
@@ -648,6 +671,37 @@ const startedCommand = get('drain-started-command').textContent;
 assert(startedCommand === 'orbit run auto --workspace ws-one --for 4h --concurrency 3 --auto-concurrency enforce --allow-crew opus,sol --hard-complexity-crews opus:3,sol:1 --xhard-complexity-crews --auto-fix', `the equivalent command is rebuilt from the run: ${startedCommand}`);
 get('drain-start-like').click();
 assert(startCommand() === startedCommand, `Start a window like this loads the run's settings: ${startCommand()}`);
+const savedInput = structuredClone(runDetailFixture.run.input);
+runDetailFixture.run.input.allowed_crews = ["fast crew", "quote'$(literal)"];
+runDetailFixture.run.input.auto_crew_pools.hard.crews = [{ name: "fast crew", weight: 2 }, { name: "quote'$(literal)", weight: 1 }];
+await fetchAndRenderOperations();
+const specialRecorded = shellWords(get('drain-started-command').textContent);
+assert(specialRecorded[specialRecorded.indexOf('--allow-crew') + 1] === "fast crew,quote'$(literal)", 'recorded command preserves allowed crew literals');
+assert(specialRecorded[specialRecorded.indexOf('--hard-complexity-crews') + 1] === "fast crew:2,quote'$(literal):1", 'recorded command preserves weighted crew literals');
+assert(get('drain-started-command').parentElement.querySelector('.drain-copy'), 'the recorded command has a copy control for the same text');
+if (globalThis.captureDrainEvidence) await globalThis.captureDrainEvidence('drain-recorded-dark-375.png', '#drain-started-command');
+extraStartCrews = ["fast crew", "quote'$(literal)"];
+await fetchAndRenderOperations();
+get('drain-start-like').click();
+await fetchAndRenderOperations();
+const clonedSpecial = shellWords(startCommand());
+assert(clonedSpecial[clonedSpecial.indexOf('--allow-crew') + 1] === "fast crew,quote'$(literal)", 'cloning preserves allowed crew literals');
+assert(clonedSpecial[clonedSpecial.indexOf('--hard-complexity-crews') + 1] === "fast crew:2,quote'$(literal):1", 'cloning preserves weighted crew literals');
+runDetailFixture.run.input.auto_crew_pools.hard.crews = [{ name: "fast crew", weight: 1 }, { name: "quote'$(literal)", weight: 1 }];
+await fetchAndRenderOperations();
+const unweightedRecorded = shellWords(get('drain-started-command').textContent);
+assert(unweightedRecorded[unweightedRecorded.indexOf('--hard-complexity-crews') + 1] === "fast crew,quote'$(literal)", 'an unweighted recorded pool keeps literal names');
+get('drain-start-like').click();
+await fetchAndRenderOperations();
+const unweightedCloned = shellWords(startCommand());
+assert(unweightedCloned[unweightedCloned.indexOf('--hard-complexity-crews') + 1] === "fast crew,quote'$(literal)", 'cloning an unweighted pool keeps literal names');
+assert(startNode('auto-drain-pool-hard').value === "fast crew,quote'$(literal)", `an unweighted clone keeps internal spaces in the override: ${startNode('auto-drain-pool-hard').value}`);
+assert(get('auto-drain-command').parentElement.querySelector('.drain-copy'), 'the Start command has a copy control for the same text');
+if (globalThis.captureDrainEvidence) await globalThis.captureDrainEvidence('drain-start-dark-375.png', '#auto-drain-command');
+extraStartCrews = [];
+runDetailFixture.run.input = savedInput;
+await fetchAndRenderOperations();
+
 // Cloning must not extend a recorded window to the composer's default merely
 // because its duration is absent from the preset buttons. Check the public
 // Start-like action through confirmation and the HTTP submission, including

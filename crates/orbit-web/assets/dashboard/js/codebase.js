@@ -999,7 +999,7 @@ async function fetchRelated(path, key) {
   paint();
   const visit = captureWorkspaceVisit();
   const sp = new URLSearchParams({ path, window: codebaseQuery.window, min_support: String(codebaseQuery.min_support), top: String(RELATED_TOP) });
-  const current = () => request === related.request && visit.isCurrent() && route.view === "file" && route.path === path;
+  const current = () => request === related.request && visit.isCurrent();
   try {
     const data = await fetchJson(`/api/codebase/related?${sp}`);
     if (!current()) return;
@@ -1008,7 +1008,7 @@ async function fetchRelated(path, key) {
     if (!current()) return;
     related = { ...related, data: null, error: error.message || String(error), loading: false };
   }
-  paint();
+  if (route.view === "file" && route.path === path) paint();
 }
 
 // ---- coupling & locks -------------------------------------------------------

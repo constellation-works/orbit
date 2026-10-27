@@ -56,6 +56,7 @@ const EVENT_LABELS = {
 let selectedId = null;
 let lastPayload = null;
 let requestScope = null;
+let draft = null;
 
 /// The experiment on screen, or null for the list.
 export function getExperimentId() {
@@ -63,7 +64,9 @@ export function getExperimentId() {
 }
 
 export function setExperimentId(id) {
-  selectedId = id ? String(id) : null;
+  const next = id ? String(id) : null;
+  if (next !== selectedId) draft = null;
+  selectedId = next;
 }
 
 /// The hash route of the view on screen, without the leading `#`.
@@ -84,6 +87,7 @@ export function placeholdExperimentsAggregate() {
 
 onWorkspaceChange(() => {
   requestScope = null;
+  draft = null;
   clearExperiments();
 });
 
@@ -148,7 +152,7 @@ export function renderExperiments() {
   }
   const root = el("div", { class: "ex-view" }, nodes);
   root.dataset.key = `experiments-${lastPayload.kind}`;
-  root.dataset.hash = JSON.stringify(lastPayload);
+  root.dataset.hash = JSON.stringify([lastPayload, draft]);
   syncNodes(body, [root]);
 }
 
@@ -424,6 +428,8 @@ function concludeCard(experiment) {
   const open = experiment.conclude_authorized
     && (experiment.status === "running" || experiment.status === "paused");
   if (!open) return null;
+  if (!draft) draft = { arm: "", reason: "", pending: false, status: "" };
+  const state = draft;
   const select = el("select", { class: "ex-conclude-control", "aria-label": "Winning arm" });
   const none = el("option", { text: "No winner" });
   none.value = "";
@@ -434,10 +440,16 @@ function concludeCard(experiment) {
     select.append(option);
   }
   const reason = el("textarea", { class: "ex-conclude-control", "aria-label": "Reason" });
+  select.value = state.arm;
+  select.addEventListener("change", () => { state.arm = select.value; });
   reason.rows = 3;
+  reason.value = state.reason;
+  reason.addEventListener("input", () => { state.reason = reason.value; });
   const status = el("p", { class: "ex-conclude-status", role: "status" });
   const button = el("button", { class: "ex-conclude-submit", type: "button", text: "Conclude experiment" });
-  button.addEventListener("click", () => submitConclude(experiment, select, reason, button, status));
+  status.textContent = state.status;
+  button.disabled = state.pending;
+  button.addEventListener("click", () => submitConclude(experiment, select, reason, button, status, state));
   return el("section", { class: "mx-card ex-card ex-conclude", "aria-label": "Conclude experiment" }, [
     el("div", { class: "mx-card-head" }, [
       el("h2", { class: "mx-card-title", text: "Conclude" }),
@@ -452,23 +464,29 @@ function concludeCard(experiment) {
   ]);
 }
 
-async function submitConclude(experiment, select, reason, button, status) {
+async function submitConclude(experiment, select, reason, button, status, state) {
   const why = reason.value.trim();
   if (!why) {
-    status.textContent = "A reason is required.";
+    state.status = status.textContent = "A reason is required.";
     return;
   }
-  button.disabled = true;
-  status.textContent = "Concluding…";
+  state.arm = select.value;
+  state.reason = reason.value;
+  state.pending = button.disabled = true;
+  state.status = status.textContent = "Concluding…";
   try {
     await postJson(`${ENDPOINT}/${encodeURIComponent(experiment.id)}/conclude`, {
       arm: select.value.trim() || null,
       reason: why,
     });
+    if (draft !== state) return;
+    state.pending = false;
     await fetchAndRenderExperiments();
   } catch (error) {
-    status.textContent = error && error.message ? error.message : "Conclude failed.";
-    button.disabled = false;
+    if (draft !== state) return;
+    state.status = error && error.message ? error.message : "Conclude failed.";
+    state.pending = false;
+    renderExperiments();
   }
 }
 

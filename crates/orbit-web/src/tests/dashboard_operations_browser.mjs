@@ -117,6 +117,92 @@ try {
   const pageErrors = [];
   page.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
   await page.goto(`http://127.0.0.1:${server.address().port}/#operations/routines`);
+  await page.exposeFunction('captureDrainEvidence', async (name, selector) => {
+    const previous = page.viewportSize();
+    await page.setViewportSize({ width: 375, height: 900 });
+    const placed = await page.evaluate((target) => {
+      const node = document.querySelector(target);
+      if (!node) return { missing: true };
+      const restore = {
+        activePanes: [...document.querySelectorAll('.tab-pane.active')].map((pane) => pane.dataset.tab),
+        activeTabs: [...document.querySelectorAll('.tab.active')].map((tab) => tab.dataset.tab),
+        mode: document.getElementById('side-dock')?.dataset.mode || null,
+        segments: [...document.querySelectorAll('#dock-mode-toggle .dock-seg')].map((btn) => ({
+          mode: btn.dataset.mode,
+          on: btn.classList.contains('on'),
+          selected: btn.getAttribute('aria-selected'),
+        })),
+      };
+      // The operations fixture renders Drain cards while the Automation tab is
+      // open, so those cards have no box until the Drain page and the card's
+      // own dock view are shown. Restore both after the shot.
+      document.querySelectorAll('.tab-pane').forEach((pane) => {
+        pane.classList.toggle('active', pane.dataset.tab === 'drain');
+      });
+      document.querySelectorAll('.tab').forEach((tab) => {
+        const on = tab.dataset.tab === 'drain';
+        tab.classList.toggle('active', on);
+        tab.setAttribute('aria-current', on ? 'page' : 'false');
+      });
+      document.querySelector('.tab[data-tab="drain"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+      const dock = document.getElementById('side-dock');
+      const pane = node.closest('.dock-pane');
+      if (dock && pane?.dataset.pane) {
+        dock.dataset.mode = pane.dataset.pane;
+        for (const btn of document.querySelectorAll('#dock-mode-toggle .dock-seg')) {
+          const on = btn.dataset.mode === pane.dataset.pane;
+          btn.classList.toggle('on', on);
+          btn.setAttribute('aria-selected', on ? 'true' : 'false');
+        }
+      }
+      const textNode = node.firstChild;
+      const quotedCrew = node.textContent.indexOf("'fast crew");
+      const marker = quotedCrew >= 0 ? quotedCrew : node.textContent.indexOf('--allow-crew');
+      if (textNode && marker >= 0) {
+        const range = document.createRange();
+        range.setStart(textNode, marker);
+        range.setEnd(textNode, Math.min(node.textContent.length, marker + 16));
+        const markerBox = range.getBoundingClientRect();
+        const box = node.getBoundingClientRect();
+        node.scrollLeft += markerBox.left - box.left - 8;
+      }
+      node.scrollIntoView({ block: 'center', inline: 'nearest' });
+      const rect = node.getBoundingClientRect();
+      window.__drainShotRestore = restore;
+      return {
+        top: rect.top, left: rect.left, width: rect.width, height: rect.height,
+        text: node.innerText.slice(0, 180),
+      };
+    }, selector);
+    if (!placed.missing && placed.width > 0 && placed.height > 0) {
+      await page.screenshot({ path: path.join(evidence, name), animations: 'disabled' });
+    }
+    await page.evaluate(() => {
+      const restore = window.__drainShotRestore;
+      if (!restore) return;
+      document.querySelectorAll('.tab-pane').forEach((pane) => {
+        pane.classList.toggle('active', restore.activePanes.includes(pane.dataset.tab));
+      });
+      document.querySelectorAll('.tab').forEach((tab) => {
+        const on = restore.activeTabs.includes(tab.dataset.tab);
+        tab.classList.toggle('active', on);
+        tab.setAttribute('aria-current', on ? 'page' : 'false');
+      });
+      const dock = document.getElementById('side-dock');
+      if (dock && restore.mode) dock.dataset.mode = restore.mode;
+      for (const saved of restore.segments) {
+        const btn = document.querySelector(`#dock-mode-toggle .dock-seg[data-mode="${saved.mode}"]`);
+        if (!btn) continue;
+        btn.classList.toggle('on', saved.on);
+        if (saved.selected != null) btn.setAttribute('aria-selected', saved.selected);
+      }
+      delete window.__drainShotRestore;
+    });
+    await page.setViewportSize(previous || { width: 1440, height: 1000 });
+    if (placed.missing || placed.width <= 0 || placed.height <= 0) {
+      throw new Error(`drain evidence ${name} has no layout: ${JSON.stringify(placed)}`);
+    }
+  });
   await page.addScriptTag({ type: 'module', url: '/dock-feedback.mjs' });
   await page.waitForFunction(() => globalThis.operationsTestsPassed, undefined, { timeout: 15000 });
   await page.evaluate(() => {

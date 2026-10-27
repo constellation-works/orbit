@@ -53,6 +53,7 @@ const WORKSPACES = {
 };
 let forwardWrites = { authorized: true, reason: null };
 let routeLog = [];
+let hideTasks = false;
 // The log tail's snapshots per host. A held host's snapshot requests wait in
 // `heldLogs` until the test settles them; open streams wait in `logStreams`
 // for the test to push events.
@@ -143,7 +144,7 @@ function hostApi(host, req, rest, url, res) {
     if (workspaceHolds.has(host)) { heldWorkspaces.push({ host, res }); return; }
     return json(workspaces);
   }
-  if (rest === 'tasks') return json({ items: tasksFor(host, workspace), total: 4, limit: 50, truncated: false });
+  if (rest === 'tasks') return json({ items: hideTasks ? [] : tasksFor(host, workspace), total: hideTasks ? 0 : 4, limit: 50, truncated: false });
   if (rest === 'tasks/all') return json({ items: workspaces.flatMap((ws) => tasksFor(host, ws.id)), total: 4 * workspaces.length });
   if (rest === 'tasks/locks') return json({ total_locked: 0, total_tasks: 0, by_task: [] });
   const artifact = rest.match(/^tasks\/([^/]+)\/artifacts\/(.+)$/);
@@ -194,6 +195,34 @@ const server = http.createServer((req, res) => {
   }
   routeLog.push({ method: req.method, path: `${name}${url.search}` });
   const json = (body, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(body)); };
+  if (name === '/api/hosts' && req.method === 'POST') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      const data = JSON.parse(body);
+      const row = hostRow(data.name, 'hm_added', { ssh: data.ssh });
+      HOSTS.hosts.push(row);
+      json({ action: 'added', entry: row });
+    });
+    return;
+  }
+  const editHost = name.match(/^\/api\/hosts\/(hm_added)$/);
+  if (editHost && req.method === 'PATCH') {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      const row = HOSTS.hosts.find(item => item.machine_id === editHost[1]);
+      const previous_name = row.name;
+      row.name = JSON.parse(body).name;
+      json({ previous_name, entry: row });
+    });
+    return;
+  }
+  if (editHost && req.method === 'DELETE') {
+    const index = HOSTS.hosts.findIndex(item => item.machine_id === editHost[1]);
+    const [row] = HOSTS.hosts.splice(index, 1);
+    return json({ entry: row });
+  }
   if (name === '/api/hosts') return json(HOSTS);
   const conn = name.match(/^\/api\/hosts\/([^/]+)\/connection$/);
   if (conn) {
@@ -903,6 +932,78 @@ try {
   evidenceLog.historyAggregateForward = await restoreAggregate(1, 'Forward from a single-workspace host', 'tasks/all');
   await page.close();
 
+  // Settings publishes externally refreshed host-file rows to every reader.
+  await openPage('/#config/hosts', { fresh: true });
+  await page.locator('#config-body').waitFor({ state: 'visible' });
+  await page.locator('.host-add-open').click();
+  await page.locator('.host-input-ssh').fill('added-ssh');
+  await page.locator('.host-input-name').fill('added-host');
+  await page.locator('.host-editor .host-submit').click();
+  await until('added host published', async () => await page.locator('#host-select option[value="added-host"]').count() === 1);
+  assert(await page.evaluate(async () => !!(await import('/static/js/common.js')).findRegisteredHost('added-host')), 'new host appears in shared registry');
+  await page.getByRole('button', { name: 'Rename added-host' }).click();
+  await page.locator('.host-input-name').fill('renamed-host');
+  await page.locator('.host-editor .host-submit').click();
+  await until('renamed host published', async () => await page.locator('#host-select option[value="renamed-host"]').count() === 1);
+  assert(await page.locator('#host-select option[value="added-host"]').count() === 0, 'old name leaves the picker');
+  WORKSPACES['renamed-host'] = WORKSPACES.alpha;
+  await page.getByRole('link', { name: 'Show renamed-host' }).click();
+  await until('Show selects renamed host', async () => (await page.locator('#host-select').inputValue()) === 'renamed-host');
+  WORKSPACES['selected-host'] = WORKSPACES.alpha;
+  await page.getByRole('button', { name: 'Rename renamed-host' }).click();
+  await page.locator('.host-input-name').fill('selected-host');
+  await page.locator('.host-editor .host-submit').click();
+  await until('selected rename follows its machine', async () => (await page.locator('#host-select').inputValue()) === 'selected-host');
+  await page.getByRole('button', { name: 'Remove selected-host' }).click();
+  await page.locator('.host-remove-confirm .host-confirm').click();
+  await until('removed host published', async () => await page.evaluate(async () => !(await import('/static/js/common.js')).findRegisteredHost('selected-host')));
+  assert((await page.locator('#host-select option[value="selected-host"]').textContent()).includes('not registered'), 'removed selected host is identified as unregistered');
+  // A later external registry refresh also reaches the picker.
+  HOSTS.hosts.push(hostRow('external-host', 'hm_external'));
+  await page.evaluate(async () => (await import('/static/js/hosts.js')).fetchAndRenderHosts({ probe: false }));
+  assert(await page.locator('#host-select option[value="external-host"]').count() === 1, 'external addition reaches picker');
+  await page.close();
+  // Fleet, execution location, host resources and the checkout-owner hint
+  // read the same registry Settings just published.
+  const localHost = HOSTS.hosts.find((host) => host.local);
+  localHost.workspaces = [{ id: 'ws_orbit', role: 'replica', owner_machine_id: 'hm_external' }];
+  hideTasks = true;
+  await openPage('/?workspace=ws_orbit#tasks', { fresh: true });
+  await until('replica owner hint', async () => (await page.locator('#tasks-body').textContent()).includes('pull replica of external-host'));
+  assert(await page.getByRole('button', { name: 'Show on external-host' }).count() === 1, 'the checkout-owner hint names the refreshed owner');
+  const shared = await page.evaluate(async () => {
+    const common = await import('/static/js/common.js');
+    const distributed = await import('/static/js/distributed.js');
+    const fleet = await import('/static/js/fleet-drains.js');
+    const added = common.findRegisteredHost('external-host');
+    const located = distributed.registeredMachineHost({ known: true, machine_id: added.machine_id, machine_name: 'stale-name' });
+    const drains = await fleet.fetchFleetDrains({ force: true });
+    return {
+      distributed: located && located.name,
+      fleet: drains.items.some((row) => row.host === 'external-host'),
+      registry: common.getRegisteredHosts().map((row) => row.name),
+    };
+  });
+  assert(shared.distributed === 'external-host', 'execution location follows the refreshed registry');
+  assert(shared.fleet, 'fleet membership includes the refreshed host');
+  assert(shared.registry.includes('external-host') && shared.registry.includes('alpha'), 'shared registry lists the serving host and the addition');
+  WORKSPACES['external-host'] = WORKSPACES.alpha;
+  const resources = await page.evaluate(async () => {
+    const common = await import('/static/js/common.js');
+    const hostResources = await import('/static/js/host-resources.js');
+    common.setHost('external-host');
+    await hostResources.fetchHostResourcePayload();
+    const row = common.findRegisteredHost(common.getHost());
+    return { name: row && row.name, machine_id: row && row.machine_id, ssh: row && row.ssh };
+  });
+  assert(resources.name === 'external-host' && resources.machine_id === 'hm_external' && resources.ssh === 'external-host-ssh', 'host resources resolve the refreshed host');
+  assert(logged(/^GET \/api\/on\/external-host\/host\/resources$/), 'host resources read the refreshed host');
+  localHost.workspaces = [];
+  hideTasks = false;
+  delete WORKSPACES['external-host'];
+  HOSTS.hosts.pop();
+  await page.close();
+
   if (pageErrors.length) throw new Error(`page errors: ${pageErrors.join(' | ')}`);
   fs.writeFileSync(path.join(evidence, 'host-switch-assertions.json'), `${JSON.stringify({
     assertions: [
@@ -914,6 +1015,7 @@ try {
       'browser-workspaces-rebuild-per-host',
       'browser-host-level-failure-and-way-back',
       'browser-host-skew-banner',
+      'browser-refreshed-registry-reaches-shared-consumers',
       'browser-remote-run-links',
       'browser-remote-writes-disabled-with-reason',
       'browser-read-only-host-still-lists-jobs-and-auto-tasks',
