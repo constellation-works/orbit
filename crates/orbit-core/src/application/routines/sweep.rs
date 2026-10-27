@@ -25,8 +25,8 @@ use chrono::Utc;
 use orbit_automation::routines::sweep::TICK_DEADLINE;
 use orbit_automation::routines::sweep::run_sweep_core;
 pub use orbit_automation::routines::sweep::{
-    AutoTaskSweepReport, RoutineDispatch, RoutineSweepReport, RunOwnerLiveness, SweepOptions,
-    SweepOutcome,
+    AutoTaskSweepReport, ExternalMergeSweepReport, RoutineDispatch, RoutineSweepReport,
+    RunOwnerLiveness, SweepOptions, SweepOutcome,
 };
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
@@ -287,6 +287,37 @@ pub(crate) fn run_sweep_at_with_providers_at(
         loaded
     };
 
+    // Settle owner tasks whose delivery PR merged outside Orbit. Runs after
+    // the clock environment loads so forge credentials are available, and
+    // before the host-shutdown hold: settlement starts no work. Only owner
+    // entries settle; replicas are followers. A forge or store failure logs
+    // and skips that workspace without failing routines or auto-tasks.
+    let mut external_merge_settlements: Vec<ExternalMergeSweepReport> = Vec::new();
+    if !options.dry_run {
+        for (workspace, runtime) in &discovered.entries {
+            if !tick_allows_workspace(deadline, workspace, &mut skipped_workspaces) {
+                continue;
+            }
+            match runtime.settle_externally_merged_tasks() {
+                Ok(settled) => {
+                    external_merge_settlements.extend(settled.into_iter().map(|settlement| {
+                        ExternalMergeSweepReport {
+                            task_id: settlement.task_id,
+                            source: workspace.name.clone(),
+                            pr_number: settlement.pr_number,
+                        }
+                    }));
+                }
+                Err(error) => tracing::warn!(
+                    target: "orbit.core.sweep",
+                    workspace = %workspace.name,
+                    error = %error,
+                    "sweep.external_merge_settlement_failed"
+                ),
+            }
+        }
+    }
+
     // [ORB-12968] A host shutdown inside the hold horizon would kill anything
     // this tick starts, so the whole fire phase — routines and auto-tasks —
     // stands down for it. A later schedule does not. Cursors are not advanced
@@ -326,6 +357,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
             load_errors,
             clock_env_loaded,
             no_workspace_loaded,
+            external_merge_settlements,
             deadline_exceeded: Instant::now() >= deadline,
             skipped_workspaces: skipped_workspaces.into_iter().collect(),
         });
@@ -645,6 +677,7 @@ pub(crate) fn run_sweep_at_with_providers_at(
         load_errors,
         clock_env_loaded,
         no_workspace_loaded,
+        external_merge_settlements,
         deadline_exceeded,
         skipped_workspaces: skipped_workspaces.into_iter().collect(),
     })

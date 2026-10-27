@@ -138,6 +138,17 @@ pub struct AutoTaskSweepReport {
     pub task_id: Option<String>,
 }
 
+/// A task settled from its merged delivery PR during one sweep pass.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalMergeSweepReport {
+    /// The settled task.
+    pub task_id: String,
+    /// Source workspace name.
+    pub source: String,
+    /// The merged delivery PR number.
+    pub pr_number: u64,
+}
+
 /// Result of one sweep pass.
 #[derive(Debug, Default)]
 pub struct SweepOutcome {
@@ -164,6 +175,8 @@ pub struct SweepOutcome {
     /// loaded nothing. The CLI prints this one row and exits non-zero.
     /// Partial load errors leave this `None`.
     pub no_workspace_loaded: Option<String>,
+    /// Tasks settled from merged delivery PRs on this pass (owner only).
+    pub external_merge_settlements: Vec<ExternalMergeSweepReport>,
 }
 
 /// The dispatch-agnostic core of one sweep pass: outcome-sync

@@ -49,7 +49,7 @@ pub use status::{
     toggle_listed_routine,
 };
 pub use sweep::{
-    AutoTaskSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
+    AutoTaskSweepReport, ExternalMergeSweepReport, RoutineSweepReport, SweepOptions, SweepOutcome,
     run_sweep_at_with_providers, run_sweep_with_providers,
 };
 pub use trigger_edit::{

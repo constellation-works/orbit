@@ -19,6 +19,7 @@
       "test_function_paths": [
         "command/clock/tests/command.rs::clock_status_state_token_for_each_status_combination",
         "command/clock/tests/tick.rs::deadline_failure_returns_nonzero_with_deferred_workspaces_in_both_views",
+        "command/clock/tests/tick.rs::settled_tasks_list_with_pr_number_in_both_views",
         "command/init/tests/linux_host.rs::an_installed_binary_that_differs_from_the_signed_digest_is_removed",
         "command/init/tests/linux_host.rs::an_old_host_bwrap_gets_the_bundled_one_and_its_failures_stop_before_sudo",
         "command/init/tests/linux_host.rs::apparmor_package_install_rechecks_the_signature_before_loading_policy",
