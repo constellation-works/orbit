@@ -19,6 +19,7 @@ use crate::OrbitRuntime;
 use crate::application::contracts::DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED;
 use crate::application::job::JobDrainPort;
 use crate::application::landing::dispatch_recorded_authority;
+use crate::application::task;
 
 impl OrbitRuntime {
     pub fn accepted_task_handoff(
@@ -490,7 +491,7 @@ impl OrbitRuntime {
                 kind: ClaimRefusalKind::StaleClaim,
                 message: format!("no claim '{claim_id}' is current on this owner (stale_claim)"),
             })?;
-        let observed = phase_label(claim.claim.phase);
+        let observed = task::execution_claim_phase_label(claim.claim.phase);
         let Some(expected_phase) = phase_from_label(expected_phase) else {
             return Err(OrbitError::ClaimRefused {
                 kind: ClaimRefusalKind::StaleClaim,
@@ -516,7 +517,7 @@ impl OrbitRuntime {
         )?;
         Ok(serde_json::json!({
             "claim_id": result.claim_id,
-            "phase": phase_label(result.phase),
+            "phase": task::execution_claim_phase_label(result.phase),
             "task_status": result.status.to_string(),
         }))
     }
@@ -591,7 +592,7 @@ fn settled_claim_summary_json(claim: &ClaimInspection) -> serde_json::Value {
         "claim_id": claim.claim.claim_id,
         "task_id": claim.claim.task_id,
         "host": location.machine_name.as_deref().unwrap_or(&location.machine_id),
-        "outcome": phase_label(claim.claim.phase),
+        "outcome": task::execution_claim_phase_label(claim.claim.phase),
         "settled_at": claim.updated_at,
     })
 }
@@ -600,7 +601,7 @@ fn mutation_json(handoff_id: &str, result: &ClaimMutationResult) -> serde_json::
     serde_json::json!({
         "handoff_id": handoff_id,
         "claim_id": result.claim_id,
-        "phase": phase_label(result.phase),
+        "phase": task::execution_claim_phase_label(result.phase),
         "task_status": result.status.to_string(),
     })
 }
@@ -616,19 +617,7 @@ fn phase_from_label(label: &str) -> Option<ExecutionClaimPhase> {
         ExecutionClaimPhase::Landed,
     ]
     .into_iter()
-    .find(|phase| phase_label(*phase) == label)
-}
-
-fn phase_label(phase: ExecutionClaimPhase) -> &'static str {
-    match phase {
-        ExecutionClaimPhase::Claimed => "claimed",
-        ExecutionClaimPhase::Running => "running",
-        ExecutionClaimPhase::HandedOff => "handed_off",
-        ExecutionClaimPhase::RepairPending => "repair_pending",
-        ExecutionClaimPhase::Failed => "failed",
-        ExecutionClaimPhase::Revoked => "revoked",
-        ExecutionClaimPhase::Landed => "landed",
-    }
+    .find(|phase| task::execution_claim_phase_label(*phase) == label)
 }
 
 /// What the phase means for an operator, in the words the lifecycle uses.
@@ -682,7 +671,7 @@ fn claim_json(
         "claim_id": claim.claim.claim_id,
         "task_id": claim.claim.task_id,
         "request_id": claim.claim.request_id,
-        "phase": phase_label(claim.claim.phase),
+        "phase": task::execution_claim_phase_label(claim.claim.phase),
         "phase_summary": phase_summary(claim.claim.phase),
         "authorizes_execution": matches!(
             claim.claim.phase,
