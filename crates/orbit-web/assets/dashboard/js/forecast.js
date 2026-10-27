@@ -615,7 +615,7 @@ function calibrationCard() {
   const meta = stored.latest_at ? `latest stored ${formatDateTime(stored.latest_at)}` : "none stored yet";
   const blurb = el("p", { class: "mx-blurb" }, [
     `The default forecast is stored at most once every ${stored.min_interval_minutes ?? 60} minutes while this view is open, then scored as its tasks finish. A well-calibrated forecast has about 50% of actuals under p50 and 90% under p90. `,
-    infoHint("Tasks since rejected, archived, removed or re-scoped to another complexity, and done tasks with no agent runs after the forecast, are left out and counted. A forecast is scored as a whole only once all its tasks are done and none was left out."),
+    infoHint("Removed or re-scoped tasks, and done tasks with no agent runs after the forecast, are left out and counted. Rejected and archived tasks are also excluded under model versions before 5; from version 5 they count as abandoned, with their post-forecast cost and token usage retained in actual totals. A forecast is scored as a whole once no tasks are pending, at least one task is done or abandoned, and none was left out. An abandoned task can settle the cohort without a drain, so any settled cohort with an abandoned task is scored as not drained and has no time-to-drain actual."),
   ]);
   if (!forecasts.length) {
     return card("Calibration", meta, [blurb, el("div", { class: "mx-empty" }, [
