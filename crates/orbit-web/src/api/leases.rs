@@ -3,6 +3,8 @@
 //! The runtime operations own the JSON input/output contract. Backends return
 //! those values unchanged, including structured answers such as a queued
 //! request's `granted: false, queued: true`.
+//! Notice polling and the SSE event stream share their handlers too
+//! ([`super::lease_notices`]), so both servers frame the same pages the same way.
 
 use std::sync::Arc;
 
@@ -18,7 +20,9 @@ use orbit_core::runtime::task::locks::lease;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use tokio::sync::mpsc;
 
+use super::lease_notices;
 use super::routines::{authorization_denied, authorized_caller};
 use super::{OptionalJson, bad_request, map_runtime_error, server_error};
 use crate::state::DashboardState;
@@ -57,7 +61,7 @@ pub struct LeaseCallerToken {
 }
 
 /// The query-string caller plus the authenticated token, if any.
-struct LeaseCallerParts(LeaseCaller);
+pub(super) struct LeaseCallerParts(pub(super) LeaseCaller);
 
 impl<S: Send + Sync> FromRequestParts<S> for LeaseCallerParts {
     type Rejection = Response;
@@ -74,6 +78,12 @@ impl<S: Send + Sync> FromRequestParts<S> for LeaseCallerParts {
 /// A runtime-contract JSON answer, or an HTTP error using the web error mapping.
 /// Structured operation refusals remain JSON answers, not transport errors.
 pub type LeaseBackendResult = Result<Value, Box<Response>>;
+
+/// The pages of one notice stream, oldest first, each the
+/// `orbit.lease.notices` contract. A page with no notices means none arrived
+/// since the previous page; an error, or the sender closing, ends the stream.
+/// Dropping the receiver tells the backend the client has gone.
+pub type LeaseNoticePages = mpsc::Receiver<LeaseBackendResult>;
 
 /// Operations needed by the lease-only HTTP router.
 ///
@@ -97,17 +107,35 @@ pub trait LeaseBackend: Send + Sync + 'static {
     fn list(&self, caller: &LeaseCaller) -> LeaseBackendResult;
     /// Check paths, returning the `orbit.lease.check` contract.
     fn check(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// Read one page of notices after `input.after`, returning the
+    /// `orbit.lease.notices` contract.
+    fn notices(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult;
+    /// Open a notice stream from `input.after`. Read and check the first page
+    /// before returning, so a refusal is an HTTP error rather than an empty
+    /// stream; then keep reading pages from each page's cursor until the
+    /// receiver is dropped, waiting between empty pages. The backend admits
+    /// its own streams and holds whatever allowance it took until the stream
+    /// ends.
+    fn notice_stream(
+        &self,
+        caller: &LeaseCaller,
+        input: Value,
+    ) -> Result<LeaseNoticePages, Box<Response>>;
 }
 
 /// Build only the `/leases` routes over a caller-supplied backend.
 ///
-/// Nest this router under `/api`. It contains no dashboard, health, notices or
-/// event routes and applies no dashboard session or localhost middleware.
+/// Nest this router under `/api`. It contains the lease operations, notice
+/// polling (`GET /leases/notices`) and the SSE event stream
+/// (`GET /leases/events`, resuming from `Last-Event-ID`), and no dashboard or
+/// health routes. It applies no dashboard session or localhost middleware.
 pub fn lease_router(backend: impl LeaseBackend) -> Router {
     let backend: Arc<dyn LeaseBackend> = Arc::new(backend);
     Router::new()
         .route("/leases", get(list_leases).post(request_lease))
         .route("/leases/check", post(check_leases))
+        .route("/leases/notices", get(lease_notices::get_lease_notices))
+        .route("/leases/events", get(lease_notices::stream_lease_notices))
         .route("/leases/{id}", get(show_lease).delete(release_lease))
         .route("/leases/{id}/renew", post(renew_lease))
         .route("/leases/{id}/expand", post(expand_lease))
@@ -185,9 +213,25 @@ impl LeaseBackend for RuntimeLeaseBackend {
         let runtime = self.lease_runtime(caller, false)?;
         lease::check(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
     }
+
+    fn notices(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        let runtime = self.lease_runtime(caller, false)?;
+        lease::notices(&runtime, input).map_err(|e| Box::new(map_runtime_error(e)))
+    }
+
+    fn notice_stream(
+        &self,
+        caller: &LeaseCaller,
+        input: Value,
+    ) -> Result<LeaseNoticePages, Box<Response>> {
+        lease_notices::open_runtime_notice_stream(self, caller, input)
+    }
 }
 
-fn lease_call_input(mut caller: LeaseCaller, input: &Value) -> Result<LeaseCaller, Box<Response>> {
+pub(super) fn lease_call_input(
+    mut caller: LeaseCaller,
+    input: &Value,
+) -> Result<LeaseCaller, Box<Response>> {
     if !input.is_object() {
         return Err(Box::new(bad_request(
             "lease input must be a JSON object".to_string(),
@@ -214,7 +258,7 @@ fn lease_call_input(mut caller: LeaseCaller, input: &Value) -> Result<LeaseCalle
     Ok(caller)
 }
 
-async fn lease_backend_call(
+pub(super) async fn lease_backend_call(
     backend: Arc<dyn LeaseBackend>,
     caller: LeaseCaller,
     input: Value,

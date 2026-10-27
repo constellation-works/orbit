@@ -37,7 +37,9 @@ use orbit_config::LeaseListenerSettings;
 use orbit_core::OrbitError;
 use serde_json::{Value, json};
 
-use crate::api::leases::{LeaseBackend, LeaseBackendResult, LeaseCaller, lease_router};
+use crate::api::leases::{
+    LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseNoticePages, lease_router,
+};
 use crate::lease_intake::{
     LeaseIntakeAuthority, LeaseIntakeClient, LeaseIntakeError, LeaseIntakeOperation,
     LeaseIntakeRequest, LeaseIntakeResponse,
@@ -52,12 +54,16 @@ mod tls;
 mod transport;
 
 pub use limits::LeaseListenerLimits;
-use tokio::sync::Semaphore;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tower_http::limit::RequestBodyLimitLayer;
 use tower_http::timeout::TimeoutLayer;
 
 /// How long the listener waits for each intake frame.
 const INTAKE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How long an open notice stream waits for its next page. Orbit sends one
+/// about every second, so silence this long means it has gone.
+const INTAKE_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The listener's validated configuration.
 #[derive(Debug, Clone)]
@@ -260,6 +266,7 @@ fn build_listener_router(
     let intake_in_flight = Arc::new(Semaphore::new(
         config.limits.max_in_flight_requests as usize,
     ));
+    let (closing, closing_streams) = watch::channel(false);
     let gate = Arc::new(ListenerGate {
         client_address: config.client_address.clone(),
         store: Arc::new(Mutex::new(store)),
@@ -273,12 +280,14 @@ fn build_listener_router(
         failed_auth_window: config.failed_auth_window,
         in_flight,
         flush_lock: Arc::new(tokio::sync::Mutex::new(())),
+        closing,
     });
     let backend = IntakeLeaseBackend {
         intake_socket: config.intake_socket.clone(),
         intake_in_flight,
         timeout: Duration::from_secs(u64::from(config.limits.request_timeout_seconds))
             .min(INTAKE_TIMEOUT),
+        closing: closing_streams,
     };
     let app = Router::new()
         .route("/healthz", get(listener_healthz))
@@ -344,6 +353,8 @@ struct IntakeLeaseBackend {
     intake_socket: PathBuf,
     intake_in_flight: Arc<Semaphore>,
     timeout: Duration,
+    /// Set when the listener shuts down, so open notice streams end.
+    closing: watch::Receiver<bool>,
 }
 
 impl IntakeLeaseBackend {
@@ -351,8 +362,72 @@ impl IntakeLeaseBackend {
         &self,
         caller: &LeaseCaller,
         operation: LeaseIntakeOperation,
-        mut input: Value,
+        input: Value,
     ) -> LeaseBackendResult {
+        let (request, _permit) = self.intake_request(caller, operation, input)?;
+        let answer = LeaseIntakeClient::connect(&self.intake_socket, self.timeout)
+            .and_then(|mut client| client.call(&request));
+        match answer {
+            Ok(LeaseIntakeResponse::Ok { result }) => Ok(result),
+            Ok(LeaseIntakeResponse::Error(error)) => Err(Box::new(intake_error_response(error))),
+            Err(error) => Err(Box::new(intake_unavailable(&error))),
+        }
+    }
+
+    /// Open an `events` stream: its first page is read here, and the rest by
+    /// a blocking reader that holds this operation's intake allowance until
+    /// the client goes, Orbit closes the stream or the listener shuts down.
+    fn open_notice_stream(
+        &self,
+        caller: &LeaseCaller,
+        input: Value,
+    ) -> Result<LeaseNoticePages, Box<Response>> {
+        let (request, permit) = self.intake_request(caller, LeaseIntakeOperation::Events, input)?;
+        let mut client = LeaseIntakeClient::connect(&self.intake_socket, self.timeout)
+            .map_err(|error| Box::new(intake_unavailable(&error)))?;
+        let first = match client.call(&request) {
+            Ok(LeaseIntakeResponse::Ok { result }) => result,
+            Ok(LeaseIntakeResponse::Error(error)) => {
+                return Err(Box::new(intake_error_response(error)));
+            }
+            Err(error) => return Err(Box::new(intake_unavailable(&error))),
+        };
+        client
+            .set_read_timeout(INTAKE_STREAM_IDLE_TIMEOUT)
+            .map_err(|error| Box::new(intake_unavailable(&error)))?;
+        let (pages, receiver) = mpsc::channel(4);
+        let _ = pages.try_send(Ok(first));
+        let closing = self.closing.clone();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            while !*closing.borrow() && !pages.is_closed() {
+                let page = match client.next_response() {
+                    Ok(LeaseIntakeResponse::Ok { result }) => Ok(result),
+                    Ok(LeaseIntakeResponse::Error(error)) => {
+                        Err(Box::new(intake_error_response(error)))
+                    }
+                    Err(error) => {
+                        tracing::debug!(%error, "lease notice stream from the intake socket ended");
+                        return;
+                    }
+                };
+                let last = page.is_err();
+                if pages.blocking_send(page).is_err() || last {
+                    return;
+                }
+            }
+        });
+        Ok(receiver)
+    }
+
+    /// The intake request for `operation`, carrying the authenticated token,
+    /// and the allowance its blocking socket I/O holds.
+    fn intake_request(
+        &self,
+        caller: &LeaseCaller,
+        operation: LeaseIntakeOperation,
+        mut input: Value,
+    ) -> Result<(LeaseIntakeRequest, OwnedSemaphorePermit), Box<Response>> {
         let Some(token) = &caller.token else {
             tracing::error!("lease listener backend called without an authenticated token");
             return Err(Box::new(backend_refusal(
@@ -367,7 +442,7 @@ impl IntakeLeaseBackend {
         }
         // A handler timeout cannot cancel blocking socket I/O. Keep a separate
         // allowance in this blocking operation until its socket really closes.
-        let Ok(_permit) = Arc::clone(&self.intake_in_flight).try_acquire_owned() else {
+        let Ok(permit) = Arc::clone(&self.intake_in_flight).try_acquire_owned() else {
             return Err(Box::new(backend_refusal(
                 StatusCode::SERVICE_UNAVAILABLE,
                 json!({"error": "in_flight_requests"}),
@@ -384,21 +459,19 @@ impl IntakeLeaseBackend {
             },
             input,
         };
-        let answer = LeaseIntakeClient::connect(&self.intake_socket, self.timeout)
-            .and_then(|mut client| client.call(&request));
-        match answer {
-            Ok(LeaseIntakeResponse::Ok { result }) => Ok(result),
-            Ok(LeaseIntakeResponse::Error(error)) => Err(Box::new(intake_error_response(error))),
-            Err(error) => {
-                tracing::warn!(%error, "lease listener could not reach the intake socket");
-                Err(Box::new(backend_refusal(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    json!({"error": "the lease service is unavailable; retry later"}),
-                    "intake_unavailable",
-                )))
-            }
-        }
+        Ok((request, permit))
     }
+}
+
+/// An unreachable intake socket, or a refused handshake, such as from an
+/// Orbit Web of another protocol version; the reason is logged, not sent.
+fn intake_unavailable(error: &OrbitError) -> Response {
+    tracing::warn!(%error, "lease listener could not reach the intake socket");
+    backend_refusal(
+        StatusCode::SERVICE_UNAVAILABLE,
+        json!({"error": "the lease service is unavailable; retry later"}),
+        "intake_unavailable",
+    )
 }
 
 fn backend_refusal(status: StatusCode, body: Value, reason: &'static str) -> Response {
@@ -476,6 +549,18 @@ impl LeaseBackend for IntakeLeaseBackend {
 
     fn check(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
         self.forward(caller, LeaseIntakeOperation::Check, input)
+    }
+
+    fn notices(&self, caller: &LeaseCaller, input: Value) -> LeaseBackendResult {
+        self.forward(caller, LeaseIntakeOperation::Notices, input)
+    }
+
+    fn notice_stream(
+        &self,
+        caller: &LeaseCaller,
+        input: Value,
+    ) -> Result<LeaseNoticePages, Box<Response>> {
+        self.open_notice_stream(caller, input)
     }
 }
 

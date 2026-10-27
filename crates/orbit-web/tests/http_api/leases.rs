@@ -301,9 +301,23 @@ impl orbit_web::LeaseBackend for ProbeBackend {
     probe_lease_verb!(release);
     probe_lease_verb!(show);
     probe_lease_verb!(check);
+    probe_lease_verb!(notices);
 
     fn list(&self, caller: &orbit_web::LeaseCaller) -> orbit_web::LeaseBackendResult {
         Ok(json!({"verb": "list", "principal": caller.principal, "workspace": caller.workspace}))
+    }
+
+    fn notice_stream(
+        &self,
+        caller: &orbit_web::LeaseCaller,
+        input: Value,
+    ) -> Result<orbit_web::LeaseNoticePages, Box<axum::response::Response>> {
+        let (pages, receiver) = tokio::sync::mpsc::channel(1);
+        let notice = json!({"seq": 7, "workspace": caller.workspace, "input": input});
+        pages
+            .try_send(Ok(json!({"notices": [notice], "cursor": 7})))
+            .unwrap();
+        Ok(receiver)
     }
 }
 
@@ -326,6 +340,7 @@ fn check_standalone_routes() {
                 ("POST", "/api/leases/lease-url/renew", "renew"),
                 ("POST", "/api/leases/lease-url/expand", "expand"),
                 ("POST", "/api/leases/check", "check"),
+                ("GET", "/api/leases/notices", "notices"),
             ] {
                 let response = router
                     .clone()
@@ -354,6 +369,32 @@ fn check_standalone_routes() {
                     assert_eq!(body["input"]["lease_id"], "lease-url");
                 }
             }
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri("/api/leases/events?workspace=listener-workspace&after=0&limit=5")
+                        .header("last-event-id", "3")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            assert_eq!(response.headers()["content-type"], "text/event-stream");
+            let body = to_bytes(response.into_body(), 8192).await.unwrap();
+            let body = std::str::from_utf8(&body).unwrap();
+            let data = body
+                .strip_prefix("id: 7\ndata: ")
+                .and_then(|rest| rest.strip_suffix("\n\n"))
+                .unwrap_or_else(|| panic!("one notice event, its seq as the id: {body:?}"));
+            let notice: Value = serde_json::from_str(data).unwrap();
+            assert_eq!(notice["workspace"], "listener-workspace");
+            assert_eq!(
+                notice["input"],
+                json!({"after": 3, "limit": 5}),
+                "Last-Event-ID is the cursor, in preference to after"
+            );
             for path in ["/api/tasks", "/api/config/effective", "/healthz"] {
                 let response = router
                     .clone()

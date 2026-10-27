@@ -42,7 +42,7 @@ mod why_stuck;
 mod tests;
 
 pub use api::leases::{
-    LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseCallerToken, lease_router,
+    LeaseBackend, LeaseBackendResult, LeaseCaller, LeaseCallerToken, LeaseNoticePages, lease_router,
 };
 pub use api::session::RequireBrowserSession;
 pub use browser_session::{OpenArgs, open_dashboard};

@@ -186,7 +186,10 @@ async fn token_writes_reads_and_other_tokens_have_separate_budgets() {
                 .set_read_timeout(Some(Duration::from_secs(5)))
                 .unwrap();
             read_frame(&mut stream);
-            write_frame(&mut stream, json!({"protocol_version": 1}));
+            write_frame(
+                &mut stream,
+                json!({"protocol_version": orbit_web::lease_intake::LEASE_INTAKE_PROTOCOL_VERSION}),
+            );
             read_frame(&mut stream);
             write_frame(
                 &mut stream,

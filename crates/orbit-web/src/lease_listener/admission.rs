@@ -30,6 +30,8 @@ pub(super) struct ListenerGate {
     pub(super) failed_auth_window: Duration,
     pub(super) in_flight: Arc<Semaphore>,
     pub(super) flush_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Set at shutdown so open notice streams close instead of holding the drain.
+    pub(super) closing: tokio::sync::watch::Sender<bool>,
 }
 
 impl ListenerGate {
