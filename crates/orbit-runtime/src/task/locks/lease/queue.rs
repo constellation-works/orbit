@@ -281,5 +281,15 @@ pub(super) fn grant_queued(
             }),
         )?;
     }
+    for refused in &result.deadlocks {
+        record_lease_audit_event(
+            runtime,
+            "lease.expand.deadlock",
+            tool,
+            Some(refused.lease_id.as_str()),
+            AuditEventStatus::Denied,
+            json!(refused),
+        )?;
+    }
     Ok(result.granted)
 }
