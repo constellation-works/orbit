@@ -52,6 +52,10 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/tasks/completion-by-complexity",
             get(tasks::completion_by_complexity),
         )
+        .route(
+            "/tasks/settle-merged",
+            post(tasks::settle_merged_tasks_action),
+        )
         .route("/tasks/create", post(task_create::create_proposal))
         .route("/tasks/all", get(workspaces::list_all_tasks))
         .route("/job-runs/all", get(workspaces::list_all_job_runs))

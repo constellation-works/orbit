@@ -160,8 +160,10 @@ pub use write_response::{
     with_dashboard_extras,
 };
 
-pub use external_merge::ExternalMergeSettlement;
 pub(crate) use external_merge::settled_merge_commit;
+pub use external_merge::{
+    ExternalMergeBatchSettlement, ExternalMergeSettlement, ExternalMergeSkippedTask,
+};
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub use lifecycle::{
     EXTERNAL_MERGE_SETTLED_EVENT, task_status_transition_allowed,

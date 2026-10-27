@@ -46,13 +46,15 @@
 //! authorization, records no merge intent or landing attempt, and leaves the
 //! revoked landing request revoked.
 //!
-//! Three entry points run it. Each `orbit run auto` admission pass settles from
+//! Entry points run it. Each `orbit run auto` admission pass settles from
 //! one listing of the most recently merged PRs, and reads the forge only when
 //! a candidate task has a PR to match. Each scheduler clock tick
 //! (`orbit clock tick` / `orbit sweep`) runs the same owner pass for every
 //! registered, active owner workspace, so a merged task settles with no drain
 //! running. `orbit task settle-merged <id>` reads the task's own PRs one by
-//! one, so a merge older than that listing settles too.
+//! one, so a merge older than that listing settles too; the dashboard's
+//! batch settlement runs that per-task read over every candidate and
+//! reports each skip instead of refusing the batch.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -97,6 +99,24 @@ pub struct ExternalMergeSettlement {
     pub base_branch: String,
     /// The commit it merged as.
     pub merge_commit: String,
+}
+
+/// A candidate task the batch settlement skipped, with why it did not settle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExternalMergeSkippedTask {
+    /// The skipped task.
+    pub task_id: String,
+    /// Why it did not settle, without the per-task refusal prefix.
+    pub reason: String,
+}
+
+/// The outcome of settling every candidate from its own recorded PRs.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ExternalMergeBatchSettlement {
+    /// Tasks settled to `done`, in candidate order.
+    pub settled: Vec<ExternalMergeSettlement>,
+    /// Candidates left unchanged, in candidate order, with why.
+    pub skipped: Vec<ExternalMergeSkippedTask>,
 }
 
 /// A task that may settle, with the PRs that may have delivered it.
@@ -212,6 +232,42 @@ impl OrbitRuntime {
             }
         }
         Ok(settled)
+    }
+
+    /// Settle every `blocked`, `in-progress` and `review` task from its own
+    /// recorded PRs, as [`Self::settle_externally_merged_task_as`] does per
+    /// task, so a merge older than the recent-merges listing also settles.
+    /// One task that cannot settle is reported in `skipped` and left
+    /// unchanged; the rest still settle.
+    pub fn settle_externally_merged_tasks_from_recorded_prs_as(
+        &self,
+        actor: Option<&str>,
+    ) -> Result<ExternalMergeBatchSettlement, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let mut ids = Vec::new();
+        for status in SETTLEABLE_STATUSES {
+            for task in self.stores().tasks().list_tasks_filtered(
+                Some(status),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )? {
+                ids.push(task.id);
+            }
+        }
+        let mut batch = ExternalMergeBatchSettlement::default();
+        for id in ids {
+            match self.settle_externally_merged_task_as(&id, actor) {
+                Ok(settlement) => batch.settled.push(settlement),
+                Err(error) => batch.skipped.push(ExternalMergeSkippedTask {
+                    reason: external_merge_skip_reason(&error, &id),
+                    task_id: id,
+                }),
+            }
+        }
+        Ok(batch)
     }
 
     /// Settle task `id` from its merged delivery PR, reading each PR Orbit
@@ -788,6 +844,16 @@ impl OrbitRuntime {
             .err()
             .map(|error| error.to_string())
     }
+}
+
+/// The reason a per-task refusal names, without its `task '<id>' does not
+/// settle …:` prefix; any other error keeps its full message.
+fn external_merge_skip_reason(error: &OrbitError, id: &str) -> String {
+    let OrbitError::InvalidInput(message) = error else {
+        return error.to_string();
+    };
+    let prefix = format!("task '{id}' does not settle from a merged delivery pull request: ");
+    message.strip_prefix(&prefix).unwrap_or(message).to_string()
 }
 
 fn refused(id: &str, reason: &str) -> OrbitError {
