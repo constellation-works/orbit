@@ -78,9 +78,10 @@ picker above the workspace picker. It lists the serving host first, marked
 panel, action, log tail, and the rail's host readings show that host.
 The host picker names it; the readings do not repeat the name. The workspace picker then lists that
 host's workspaces: the workspace you had stays selected if the host also
-lists it, **All workspaces** stays the aggregate of that host's workspaces,
+lists it as active, **All workspaces** stays the aggregate of that host's workspaces,
 and anything else falls back to that host's remembered workspace, a workspace
-with a live drain, then its registry default.
+with a live drain, then its registry default (or its first active workspace
+when that default is not active).
 
 The serving dashboard reaches the host over SSH, with the SSH identity of the
 machine that serves the dashboard, not your browser's machine. It opens a
@@ -456,7 +457,7 @@ command line refuses (an unknown crew, for example) before any run exists.
 | Control | Effect |
 |---|---|
 | **Where the work comes from** | **Local backlog** (`--workspace`) drains this workspace's backlog on its owner. **Pull from the owner** (`--pull <workspace> --host <owner>`) claims the owner's work from a replica and hands each result back. Pull is offered only on a replica, and Local is blocked there. A pull window greys the options the owner decides. |
-| **Window length** | **One pass** (no `--for`), or `30m` to `12h` (`--for`). |
+| **Window length** | **One pass** (no `--for`), or `1h`, `2h`, `4h`, `8h`, `12h` or `24h` (`--for`). The default is `1h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
 | **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. It needs an operator session. |
 | **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. A hold for pilot warnings also shows each finding's kind and first line. |
