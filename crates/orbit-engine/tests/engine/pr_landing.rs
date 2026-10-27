@@ -5818,7 +5818,7 @@ check() {
             printf '{"__typename":"CheckRun","name":"test","status":"%s","conclusion":"%s","isRequired":true},{"__typename":"CheckRun","name":"coverage","status":"COMPLETED","conclusion":"FAILURE","isRequired":false}' "$test_state" "$conclusion" ;;
         pending) printf '{"__typename":"CheckRun","name":"test","status":"IN_PROGRESS","conclusion":""}' ;;
         success) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"SUCCESS"}' ;;
-        failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
+        failure|dirty_failure) printf '{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE"}' ;;
         # Two required failures. `test` then `lint`, or the reverse. Both
         # carry isRequired so the policy read does not tag only the last node.
         paired_pending|paired_failure|paired_failure_reversed)
@@ -5913,6 +5913,7 @@ status() {
         # A freshly pushed head before the provider has queued any check.
         unreported) merge_state=BLOCKED; rollup='' ;;
         dirty) merge_state=DIRTY; rollup=$(check success) ;;
+        dirty_failure) merge_state=DIRTY; rollup=$(check failure) ;;
         closed) state=CLOSED; merge_state=CLEAN; rollup=$(check success) ;;
         contradictory) merged_at='"2026-10-05T12:47:15Z"'; merge_state=CLEAN; rollup=$(check success) ;;
         *) echo "fake gh: unknown check state '$observed'" >&2; exit 2 ;;

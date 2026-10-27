@@ -21,6 +21,8 @@ pub enum DeliveryRefusal {
     LandingConflict,
     /// Required reviews or checks remain unsatisfied, without a red check.
     RequirementsUnsatisfied,
+    /// Failed checks require the base's own result before candidate recovery.
+    BaseChecksPending,
 }
 
 impl DeliveryRefusal {
@@ -35,6 +37,7 @@ impl DeliveryRefusal {
             Self::TaskNotPromotable => "delivery_task_not_promotable",
             Self::LandingConflict => "delivery_landing_conflict",
             Self::RequirementsUnsatisfied => "delivery_requirements_unsatisfied",
+            Self::BaseChecksPending => "delivery_base_checks_pending",
         }
     }
 
@@ -49,6 +52,7 @@ impl DeliveryRefusal {
             "delivery_task_not_promotable" => Some(Self::TaskNotPromotable),
             "delivery_landing_conflict" => Some(Self::LandingConflict),
             "delivery_requirements_unsatisfied" => Some(Self::RequirementsUnsatisfied),
+            "delivery_base_checks_pending" => Some(Self::BaseChecksPending),
             _ => None,
         }
     }

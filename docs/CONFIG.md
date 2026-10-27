@@ -1036,6 +1036,7 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 | `delivery_task_not_promotable` | The task's current status refuses promotion. |
 | `delivery_landing_conflict` | Owner landing requires a conflict repair with fresh validation and a new handoff. |
 | `delivery_requirements_unsatisfied` | Required reviews or checks are unsatisfied, without a failed check. |
+| `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; wait for the base's own result before candidate recovery. |
 
 These codes come from typed refusals, never from matching diagnostic wording.
 The refusing action keeps its existing task transition and landing evidence;

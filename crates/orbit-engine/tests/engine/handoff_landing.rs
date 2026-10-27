@@ -1984,7 +1984,14 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
                 )
             },
         );
-        outcome.expect_err(case);
+        let error = outcome.expect_err(case);
+        if matches!(case, "stale" | "github_stale" | "fresh_red") {
+            assert!(
+                matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
+                    if refusal.error_code() == "delivery_base_checks_pending"),
+                "{case}: the base wait must not dispatch job recovery: {error}"
+            );
+        }
         let repairable = matches!(case, "changed" | "fresh_green" | "github_changed");
         assert_steps(
             &forge.steps(),
