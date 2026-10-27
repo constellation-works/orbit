@@ -72,9 +72,9 @@ template:
     ## Partition the tree into modules
 
     The module bound is **25,000 tracked text lines**, a maximum, not a target
-    that may be exceeded. This is the same partition rule the whole-tree
-    snapshot review uses, with no language- or toolchain-specific rule, so both
-    definitions agree on what a module is. Inventory tracked files with
+    that may be exceeded. This rotation has its own partition rule: it includes
+    documentation and authored assets, unlike the code-only `full-code-review`
+    areas. Inventory tracked files with
     `git ls-tree -r -z <sha>` and count each text blob at that SHA
     (`git show <sha>:<path>`), including an unterminated final line. Do not
     measure the moving checkout or count a concatenated archive containing
