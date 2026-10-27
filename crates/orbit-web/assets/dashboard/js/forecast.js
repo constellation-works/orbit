@@ -36,7 +36,24 @@ const ARRIVALS = [["off", "No arrivals"], ["on", "Recent arrivals"]];
 const COMPLEXITY_LABELS = {
   low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unassessed: "Unassessed",
 };
-const BASIS_LABELS = { cell: "cell", complexity: "complexity", workspace: "workspace", none: "no history" };
+// An older forecast omits review-mode coverage. Its sampling table keeps these
+// labels. A response that reports the new fields uses REVIEW_BASIS_LABELS, so
+// a mode-preserving widening never reads the same as dropping the review mode.
+const LEGACY_BASIS_LABELS = { cell: "cell", complexity: "complexity", workspace: "workspace", none: "no history" };
+const REVIEW_BASIS_LABELS = {
+  cell: "same complexity, crew and review mode",
+  review_complexity: "review mode kept, crew dropped",
+  review_workspace: "review mode kept, complexity dropped",
+  mode_pooled_cell: "review mode dropped, same complexity and crew",
+  complexity: "review mode dropped, same complexity",
+  workspace: "review mode dropped, all deliveries",
+  none: "no history",
+};
+const REVIEW_MODE_LABELS = {
+  none: "No review", before_pr: "Before PR", before_landing: "Before landing",
+  mixed: "Mixed review", unknown: "Unknown assumption",
+};
+const REVIEW_COVERAGE_KEYS = ["review_mode_fallbacks", "review_mode_unknown", "history_review_mode_unknown"];
 // Why a task has no simulated start: its dependency is work the drain will
 // not start on its own, or sits behind such work or a cycle.
 const UNFORECASTABLE_LABELS = {
@@ -342,7 +359,7 @@ function forecastCard() {
     ]),
     el("p", { class: "mx-blurb" }, [
       `${meta}. Simulated ${inputs.iterations ?? 0} times on ${capacityText(inputs)}. `,
-      infoHint("Each task draws a completed delivery's wall time, tokens and cost from tasks of the same complexity and crew pool, falling back to its complexity, then to all deliveries, when there are too few. Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Each attempt first draws a recorded attempt of the same pool: one that blocked, failed or was abandoned frees its slot when that attempt did, then requeues, waits for a return drawn from how long blocked work took to come back (or never does), or stops. Blocked tasks start out waiting for that return. Review and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet."),
+      infoHint(`${samplingExplanation(inputs)} Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Each attempt first draws a recorded attempt of the same pool: one that blocked, failed or was abandoned frees its slot when that attempt did, then requeues, waits for a return drawn from how long blocked work took to come back (or never does), or stops. Blocked tasks start out waiting for that return. Review and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet.`),
       lastPayload.model_version != null ? el("span", { class: "fc-model mx-muted", text: ` Model v${lastPayload.model_version}.` }) : null,
     ]),
   ];
@@ -441,9 +458,11 @@ function scheduleCard() {
   const predictions = lastPayload.forecast?.task_predictions || [];
   if (!predictions.length) return null;
   const shown = predictions.slice(0, SCHEDULE_ROWS);
+  const review = scheduleShowsReview(shown);
   const rows = shown.map((row) => el("tr", {}, [
     taskCell(row),
     el("td", { class: "fc-state", text: row.status }),
+    review ? el("td", { class: "fc-review", text: reviewAssumptionText(row) }) : null,
     row.unforecastable
       ? el("td", { class: "fc-unforecastable", colspan: "3", text: UNFORECASTABLE_LABELS[row.unforecastable] || row.unforecastable })
       : el("td", { class: "num", text: row.status === "in-progress" ? "running" : formatForecastQuantileRange(row.predicted_start_hours, formatForecastHours) }),
@@ -451,15 +470,59 @@ function scheduleCard() {
     row.unforecastable ? null : el("td", { class: "num", text: fmtShare(row.completion_probability) }),
   ]));
   const meta = predictions.length > shown.length ? `first ${shown.length} of ${predictions.length}` : `${predictions.length} task${predictions.length === 1 ? "" : "s"}`;
+  const head = [["Task"], ["Status"], ["Starts in", true], ["Start order", true], ["Finishes", true]];
+  if (review) head.splice(2, 0, ["Review"]);
+  const caption = review
+    ? "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; finishes is the share of runs in which the task finishes within the horizon. Review is the assumed review mode: a thin pool either keeps that mode or drops it."
+    : "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; finishes is the share of runs in which the task finishes within the horizon.";
   return card("Predicted schedule", meta, [
-    table("Predicted schedule", [["Task"], ["Status"], ["Starts in", true], ["Start order", true], ["Finishes", true]], rows, "In-progress tasks, then the backlog in dispatch order. Start time and order are p50 – p90 across simulated drains; finishes is the share of runs in which the task finishes within the horizon."),
+    table("Predicted schedule", head, rows, caption),
   ]);
+}
+
+// Review-mode coverage is present on current forecasts and absent on older
+// ones. Per-task `review_mode` is the same contract, so either is enough.
+function reportsReviewMode(payload = lastPayload) {
+  const coverage = payload?.coverage;
+  if (coverage && REVIEW_COVERAGE_KEYS.some((key) => Object.prototype.hasOwnProperty.call(coverage, key))) {
+    return true;
+  }
+  return (payload?.forecast?.task_predictions || []).some((row) => row && (row.review_mode != null || row.review_mode_fallback != null));
+}
+
+function basisLabel(key) {
+  const labels = reportsReviewMode() ? REVIEW_BASIS_LABELS : LEGACY_BASIS_LABELS;
+  return labels[key] || key;
+}
+
+// Shipped order: keep the review mode while widening, and drop it only after
+// the mode-preserving pools are thin. Complexity and workspace after that do
+// not wait for another full cell.
+function samplingExplanation(inputs) {
+  if (!reportsReviewMode()) {
+    return "Each task draws a completed delivery's wall time, tokens and cost from tasks of the same complexity and crew pool, falling back to its complexity, then to all deliveries, when there are too few.";
+  }
+  const min = inputs?.min_cell_samples ?? 5;
+  return `Each task draws a completed delivery's wall time, tokens and cost from deliveries of the same complexity, crew pool and review mode. Below ${min} deliveries it keeps the review mode, first widening to that complexity at any crew, then to every delivery of that mode. Only after that does it drop the review mode: the same complexity and crew pool once that pool also has ${min} deliveries, then that complexity, then every delivery.`;
 }
 
 function basisText(basis) {
   return Object.entries(basis || {})
-    .map(([key, count]) => `${BASIS_LABELS[key] || key} ${count}`)
+    .map(([key, count]) => `${basisLabel(key)} ${count}`)
     .join(" · ");
+}
+
+function scheduleShowsReview(predictions) {
+  return predictions.some((row) => row && (row.review_mode != null || row.review_mode_fallback != null));
+}
+
+function reviewAssumptionText(row) {
+  if (row.review_mode == null && row.review_mode_fallback == null) return "—";
+  if (row.review_mode === "unknown") return "Unknown assumption";
+  const mode = REVIEW_MODE_LABELS[row.review_mode] || row.review_mode || "—";
+  if (row.review_mode_fallback) return `${mode} · mode dropped`;
+  if (row.basis === "review_complexity" || row.basis === "review_workspace") return `${mode} · mode kept`;
+  return mode;
 }
 
 function byComplexityCard() {
@@ -481,9 +544,19 @@ function coverageCard() {
   const coverage = lastPayload.coverage || {};
   const backlog = lastPayload.backlog || {};
   const arrivals = lastPayload.arrivals?.coverage || {};
+  const min = lastPayload.inputs?.min_cell_samples ?? 5;
+  const thinHint = reportsReviewMode()
+    ? `Fewer than ${min} deliveries of the same complexity, crew pool and review mode. The wider pool may keep the review mode (any crew of that complexity, then any delivery of that mode) or drop it. Review mode dropped counts only the tasks that lost review conditioning.`
+    : `Fewer than ${min} deliveries of the same complexity and crew pool: sampled from a wider pool.`;
+  const reviewItems = reportsReviewMode() ? [
+    ["Review mode dropped", coverage.review_mode_fallbacks, `The sample no longer conditions on the task's review mode. The mode-preserving pools had fewer than ${min} deliveries, including when the lookback has no history. A wider pool that still keeps the review mode is counted under thin-cell fallbacks instead.`],
+    ["Unknown review assumption", coverage.review_mode_unknown, "The task's review mode could not be resolved, so it is not treated as a measured review policy. An unknown assumption uses the mode-pooled fallback."],
+    ["History with unknown review", coverage.history_review_mode_unknown, "Deliveries in the lookback whose review evidence is missing or contradictory. They are not a measured review mode."],
+  ] : [];
   const items = [
     ["Unassessed", coverage.unassessed, "No complexity yet: sampled from every delivery."],
-    ["Thin-cell fallbacks", coverage.thin_cell_fallbacks, `Fewer than ${lastPayload.inputs?.min_cell_samples ?? 5} deliveries of the same complexity and crew pool: sampled from a wider pool.`],
+    ["Thin-cell fallbacks", coverage.thin_cell_fallbacks, thinHint],
+    ...reviewItems,
     ["Uncovered model", coverage.uncovered_model, "No sampled delivery has every run priced, so tokens are not forecast for these tasks."],
     ["Uncosted", coverage.uncosted, "No sampled delivery has every run's provider cost, so cost is not forecast for these tasks."],
     ["No history", coverage.no_history, "Nothing to sample at all."],
