@@ -113,10 +113,11 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (6)
+### Building (7)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
+| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Implement shared admission simulation [ORB-18686], then the remaining v2 factors. | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
@@ -131,7 +132,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 
-### Shipped (34)
+### Shipped (33)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -142,7 +143,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Operator decides when admission moves from shadow to forecast mode | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | — | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | — | codex |
-| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | — | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
 | [Crew Performance](./design/crew-performance/1_scope.md) | Operator picks a workflow.crew_performance default from the shadow share report | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | — | claude |
@@ -193,7 +193,7 @@ a conservative title/status fallback.
 | [Auto-concurrency](./design/auto-concurrency/1_overview.md) | Partly implemented predictive admission — Orbit records per-task CPU and memory samples, builds resource profiles, forecasts host load, and supports shadow or forecast-based admission for local and pull drains; operational accuracy evidence remains limited. | Draft | claude |
 | [Auto-tasks](./design/auto-tasks/1_overview.md) | Dynamically-defined recurring task templates minted by the host clock tick — periodic work as data, not code. | Accepted | claude |
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage. | Draft | codex |
-| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: forecast backlog time to drain, USD and normalized tokens as p50/p90 by resampling completed deliveries, store the forecast hourly and score it against actuals | Draft | claude |
+| [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Scope: simulate real drain admission, review modes, retry outcomes, host resource fit and regression rework; expose task riskiness and score each forecast model version separately | Draft | claude |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task | Draft | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Scope: let footprint admission run overlapping tasks together when the expected cost of repairing their landing conflicts fits an operator budget that can be high by day and low at night, scored per path from recorded conflict history | Draft | claude |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
