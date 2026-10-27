@@ -267,6 +267,39 @@ fn redact_all_masks_same_line_api_key_assignments_and_keeps_key_names() {
 }
 
 #[test]
+fn redact_all_masks_embedded_quotes_in_api_key_assignments() {
+    for key in ["api_key", "serviceApiKey", "\"api_key\""] {
+        for (value, quote) in [
+            ("abcdefgh'ijklmnop", '"'),
+            ("abcdefgh\"ijklmnop", '\''),
+            (r#"abcdefgh\"ijklmnop"#, '"'),
+            (r"abcdefgh\'ijklmnop", '\''),
+            (r"abcdefgh\\", '"'),
+        ] {
+            let raw = format!("{key}={quote}{value}{quote} after");
+            let redacted = redact_all(&raw);
+            assert!(!redacted.contains("abcdefgh"), "prefix leaked: {redacted}");
+            assert!(!redacted.contains("ijklmnop"), "suffix leaked: {redacted}");
+            assert!(
+                redacted.ends_with(" after"),
+                "following text changed: {redacted}"
+            );
+            assert_eq!(redact_all(&redacted), redacted, "idempotence: {redacted}");
+        }
+    }
+    let json = r#"{"api_key":"abcdefgh\"ijklmnop","other":"visible"}"#;
+    assert_eq!(
+        redact_all(json),
+        r#"{"api_key":"[REDACTED_AUTH]","other":"visible"}"#
+    );
+    let json_header = r#"{"x-api-key":"abcdefgh\"ijklmnop","other":"visible"}"#;
+    assert_eq!(
+        redact_all(json_header),
+        r#"{"x-api-key":"[REDACTED_AUTH]","other":"visible"}"#
+    );
+}
+
+#[test]
 fn redact_all_scrubs_provider_scm_cloud_tokens_and_connection_passwords() {
     let google = format!("AIza{}", "A".repeat(35));
     let gitlab = format!("glpat-{}", "B".repeat(20));
