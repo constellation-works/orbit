@@ -3,6 +3,8 @@
 What is tunable and where. `orbit config keys` and `orbit config show` expose
 the installed version's supported keys and effective values without a source
 checkout. Check `orbit --version` before applying version-dependent CLI advice.
+To choose values for a repository, in dependency order and from its own CI,
+build and backlog evidence, follow [workspace tuning](workspace-tuning.md).
 
 ## Where config lives
 
