@@ -507,10 +507,22 @@ selector pair. So the runtime bounds token callers (`LeaseTokenGrant`), before a
   runtime sizes the largest answer the request or expansion could get with empty holder lists
   (its selectors, tags, branches and a worst-case lease record), plus a 512-byte margin; when that
   cannot fit, it is refused with `invalid_input` before anything is written. Otherwise
-  `overlaps`, `conflicts` and `queued_ahead` are built only until the remaining budget is spent,
-  never as a full cross product, oldest holder first, and the answer carries `truncated: true`.
-  A truncated grant is delivered, not released, so each `overlap` notice names a lease that
-  exists. `check`, a read, answers per path and stays bounded only by the frame.
+  `overlaps`, `conflicts` and `queued_ahead` are built only up to the prefix the remaining
+  budget fits, never as a full cross product, and the answer carries `truncated: true`. Each
+  entry costs its JSON plus one byte, and once one does not fit nothing after it is shown.
+  Every holder still decides the outcome: a hard request or expansion scans each task lock,
+  frozen claim, task reservation, hard lease and queue entry to decide grant, queue or refusal
+  (and which expansion selectors wait), but keeps only the conflicts that sort first, at most
+  the remaining bytes over an empty conflict's size, before cutting them to the bytes that fit.
+  The lists are ordered as follows. `overlaps` (advisory) lists tasks (`in-progress`, then
+  `review`, oldest first), then task reservations, then leases oldest first. `conflicts` (hard)
+  is ordered by requested selector, then task locks, reservations and hard leases, then holder
+  id. `queued_ahead` follows queue order and gets only what `conflicts` left. A queued request
+  or expansion writes the same prefix to its `queued` notice (`holders`, and `queued_ahead` for
+  a request) with `truncated: true`, so the notice fits the frame too. Ranking still reads every
+  waiting queue entry, which is queue state rather than answer data. A truncated grant is
+  delivered, not released, so each `overlap` notice names a lease that exists. `check`, a read,
+  answers per path and stays bounded only by the frame.
 
 Notices and ended lease rows are retained as before, so history grows with the write budget,
 but no longer by more than one notice per active holder for each write. SSH and dashboard

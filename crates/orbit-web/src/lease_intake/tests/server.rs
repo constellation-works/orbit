@@ -636,6 +636,162 @@ fn token_grant_answers_fit_the_frame_without_compensating_release() {
     assert_eq!(all_notices(&fixture.runtime), notices_before);
 }
 
+/// A hard token request or expansion blocked by more holders than its frame
+/// can name answers, and writes its `queued` notice with, only the prefix that
+/// fits (ORB-19006), while every holder, shown or not, still keeps it waiting.
+#[test]
+fn token_hard_holder_lists_are_bounded_while_every_holder_still_blocks() {
+    if !enter_isolated_child(
+        module_path!(),
+        "token_hard_holder_lists_are_bounded_while_every_holder_still_blocks",
+    ) {
+        return;
+    }
+    const FRAME: usize = 4 * 1024;
+    let fixture = FrameLimitFixture::start_with(IntakeLimits {
+        max_frame_bytes: FRAME as u32,
+        ..IntakeLimits::default()
+    });
+    let repo = fixture._tmp.path().join("ws_frame_limit");
+    std::fs::create_dir_all(repo.join("own")).expect("create own directory");
+    std::fs::write(repo.join("own/carol.rs"), "").expect("create Carol's file");
+    let mut held: Vec<String> = (0..40)
+        .map(|index| {
+            let granted = lease::request(
+                &fixture.runtime,
+                json!({
+                    "principal": "alice",
+                    "selectors": [format!("file:src/{index:02}.rs")],
+                    "mode": "hard",
+                }),
+                None,
+                None,
+            )
+            .expect("seed a disjoint hard lease");
+            assert_eq!(granted["lease"]["mode"], "hard", "{granted}");
+            granted["lease"]["lease_id"].as_str().unwrap().to_string()
+        })
+        .collect();
+    // Conflicts on one selector are ordered by holder id.
+    held.sort();
+    let shown_prefix = |answer: &Value| -> Vec<String> {
+        let conflicts = answer["conflicts"].as_array().expect("conflicts");
+        let ids: Vec<String> = conflicts
+            .iter()
+            .map(|conflict| {
+                assert_eq!(conflict["file"], "dir:src", "{conflict}");
+                assert_eq!(conflict["held_by"], "lease", "{conflict}");
+                conflict["held_by_id"].as_str().unwrap().to_string()
+            })
+            .collect();
+        assert!(!ids.is_empty() && ids.len() < held.len(), "{answer}");
+        assert_eq!(ids, held[..ids.len()], "the conflicts are a prefix");
+        ids
+    };
+    let queued_notice = |lease_id: &str| -> Value {
+        let notices: Vec<_> = all_notices(&fixture.runtime)
+            .into_iter()
+            .filter(|notice| notice["lease_id"] == lease_id && notice["kind"] == "queued")
+            .collect();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        notices[0].clone()
+    };
+    let state = |lease_id: &str| {
+        lease::show(&fixture.runtime, json!({"lease_id": lease_id})).expect("show lease")["lease"]
+            .clone()
+    };
+    let mut client = fixture.connect();
+    let mut hard_token = |principal: &str, operation, input: Value| {
+        let response = call(&mut client, principal, operation, input);
+        let size = serde_json::to_vec(&response).unwrap().len();
+        assert!(size <= FRAME, "the answer must fit the frame: {size} bytes");
+        ok(response)
+    };
+
+    // A queued expansion names a prefix of the holders, and so does its
+    // persisted notice.
+    let carol = hard_token(
+        "carol",
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:own/carol.rs"], "mode": "hard"}),
+    );
+    let carol_id = carol["lease"]["lease_id"].as_str().unwrap().to_string();
+    let expanded = hard_token(
+        "carol",
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": carol_id, "selectors": ["dir:src"]}),
+    );
+    assert_eq!(expanded["added"], json!([]), "{expanded}");
+    assert_eq!(expanded["queued"], json!(["dir:src"]), "{expanded}");
+    assert_eq!(expanded["truncated"], true, "{expanded}");
+    shown_prefix(&expanded);
+    let notice = queued_notice(&carol_id);
+    assert_eq!(
+        notice["payload"]["holders"], expanded["conflicts"],
+        "{notice}"
+    );
+    assert_eq!(notice["payload"]["truncated"], true, "{notice}");
+
+    // So does a queued request; nothing is left for `queued_ahead` once the
+    // conflicts are cut, though Carol's expansion still ranks ahead.
+    let bob = hard_token(
+        "bob",
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["dir:src"], "mode": "hard"}),
+    );
+    assert_eq!(bob["granted"], false, "{bob}");
+    assert_eq!(bob["queued"], true, "{bob}");
+    assert_eq!(bob["queue_position"], 2, "{bob}");
+    assert_eq!(bob["truncated"], true, "{bob}");
+    assert_eq!(bob["queued_ahead"], json!([]), "{bob}");
+    shown_prefix(&bob);
+    let bob_id = bob["lease"]["lease_id"].as_str().unwrap().to_string();
+    let notice = queued_notice(&bob_id);
+    assert_eq!(notice["payload"]["holders"], bob["conflicts"], "{notice}");
+    assert_eq!(notice["payload"]["queued_ahead"], json!([]), "{notice}");
+    assert_eq!(notice["payload"]["truncated"], true, "{notice}");
+
+    // A request that may not wait is refused with the same bounded answer
+    // and writes nothing.
+    let leases_before = active_lease_ids(&fixture.runtime);
+    let notices_before = all_notices(&fixture.runtime);
+    let refused = hard_token(
+        "dave",
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["dir:src"], "mode": "hard", "wait": false}),
+    );
+    assert_eq!(refused["granted"], false, "{refused}");
+    assert_eq!(refused["queued"], false, "{refused}");
+    assert_eq!(refused["truncated"], true, "{refused}");
+    shown_prefix(&refused);
+    assert_eq!(active_lease_ids(&fixture.runtime), leases_before);
+    assert_eq!(all_notices(&fixture.runtime), notices_before);
+
+    // Holders past the shown prefix still block: releasing all but the last
+    // grants nothing.
+    let (last, rest) = held.split_last().unwrap();
+    for lease_id in rest {
+        let released = lease::release(&fixture.runtime, json!({"lease_id": lease_id}), None, None)
+            .expect("release a holder");
+        assert_eq!(released["released"], true, "{released}");
+    }
+    assert_eq!(state(&carol_id)["queued_selectors"], json!(["dir:src"]));
+    assert_eq!(state(&bob_id)["state"], "queued");
+
+    // Once the last goes, the queue grants in order: Carol's expansion, which
+    // then holds the paths Bob waits for.
+    lease::release(&fixture.runtime, json!({"lease_id": last}), None, None)
+        .expect("release the last holder");
+    let carol = state(&carol_id);
+    assert_eq!(
+        carol["selectors"],
+        json!(["dir:src", "file:own/carol.rs"]),
+        "{carol}"
+    );
+    assert_eq!(carol["queued_selectors"], json!([]), "{carol}");
+    assert_eq!(state(&bob_id)["state"], "queued");
+}
+
 /// Bob's low, never-hard tokens may hold at most the token limit of active
 /// leases in a workspace (ORB-18776). The count is the owner's lease rows by
 /// principal, so it survives a restart and a replacement token, and a refusal

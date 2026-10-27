@@ -562,11 +562,19 @@ pub struct LeaseInsertParams {
     pub token_id: Option<String>,
     /// Queue a blocked hard request instead of refusing it.
     pub wait: bool,
-    /// The task context locks the runtime found on `selectors`.
+    /// The task context locks the runtime found on `selectors`. A bounded
+    /// caller may pass only those its answer could show, as long as every
+    /// blocked selector keeps at least one.
     pub task_conflicts: Vec<TaskLockConflict>,
     /// `lease.aging_minutes`: queue age after which an entry moves up one
     /// priority level.
     pub aging_minutes: u32,
+    /// The bytes the answer has left for `conflicts` and then `queued_ahead`,
+    /// each entry costing its JSON plus one. Every holder still decides
+    /// whether the lease is blocked, but only the prefix that fits is kept,
+    /// returned and written to the `queued` notice. Lease-token requests set
+    /// it; `None` (SSH and the dashboard) keeps every holder.
+    pub holder_list_bytes: Option<usize>,
     /// Refuse the request, writing nothing, while `principal` already has
     /// this many active (granted or queued) leases in the workspace, whatever
     /// token or surface recorded them. Lease-token requests set it; `None`
@@ -579,9 +587,11 @@ pub struct LeaseInsertResult {
     /// The recorded lease, granted or queued; `None` when a hard lease was
     /// refused.
     pub lease: Option<LeaseRecord>,
-    /// The holders blocking a queued or refused hard lease.
+    /// The holders blocking a queued or refused hard lease, by requested
+    /// selector, then task locks, reservations and hard leases, then id.
     pub conflicts: Vec<TaskLockConflict>,
-    /// Queued requests and expansions ranked ahead that want the same paths.
+    /// Queued requests and expansions ranked ahead that want the same paths,
+    /// in queue order.
     pub queued_ahead: Vec<String>,
     /// The 1-based queue position of a queued lease.
     pub queue_position: Option<u32>,
@@ -590,6 +600,9 @@ pub struct LeaseInsertResult {
     /// the request; nothing was written.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_lease_limit_reached: Option<u32>,
+    /// `holder_list_bytes` cut `conflicts` or `queued_ahead` short.
+    #[serde(default)]
+    pub holders_truncated: bool,
 }
 
 /// What a queued lease waits for: a whole request (it holds nothing yet) or
@@ -629,9 +642,16 @@ pub struct LeaseExpandParams {
     /// Canonical selectors the lease does not already cover, after path
     /// policy.
     pub selectors: Vec<String>,
-    /// The task context locks the runtime found on `selectors`.
+    /// The task context locks the runtime found on `selectors`. A bounded
+    /// caller may pass only those its answer could show, as long as every
+    /// blocked selector keeps at least one.
     pub task_conflicts: Vec<TaskLockConflict>,
     pub aging_minutes: u32,
+    /// The bytes the answer has left for `conflicts`, as for
+    /// [`LeaseInsertParams::holder_list_bytes`]: every holder decides which
+    /// selectors wait, but only the prefix that fits is returned and written
+    /// to the `queued` notice. `None` keeps every holder.
+    pub holder_list_bytes: Option<usize>,
     /// Refuse the expansion, writing nothing, when the lease's held and
     /// waiting selectors plus the new ones would exceed this. Lease-token
     /// expansions set it; `None` is unlimited.
@@ -647,7 +667,8 @@ pub struct LeaseExpandResult {
     pub added: Vec<String>,
     /// Selectors now waiting in the queue.
     pub queued: Vec<String>,
-    /// The holders blocking the queued selectors.
+    /// The holders blocking the queued selectors, ordered as
+    /// [`LeaseInsertResult::conflicts`].
     pub conflicts: Vec<TaskLockConflict>,
     /// The 1-based queue position of the waiting expansion.
     pub queue_position: Option<u32>,
@@ -657,6 +678,9 @@ pub struct LeaseExpandResult {
     /// `max_selectors` refused the expansion; the lease is unchanged.
     #[serde(default)]
     pub selector_limit_exceeded: bool,
+    /// `holder_list_bytes` cut `conflicts` short.
+    #[serde(default)]
+    pub holders_truncated: bool,
 }
 
 /// A waiting expansion refused because it closed a cycle of leases each
