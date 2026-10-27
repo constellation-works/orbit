@@ -4,8 +4,8 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::StoredBacklogForecast;
 use orbit_core::application::task::TaskAddParams;
-use orbit_store::contracts::InvocationInsertParams;
-use orbit_types::task::{TaskComplexity, TaskEventRowV2, TaskStatus};
+use orbit_store::contracts::{InvocationInsertParams, TaskHistoryUpdateParams};
+use orbit_types::task::{TaskComment, TaskComplexity, TaskEnvelopeV2, TaskEventRowV2, TaskStatus};
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
 
@@ -947,6 +947,202 @@ fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
             for metric in ["hours", "tokens", "usd"] {
                 assert_eq!(nine["task_level"][metric]["n"], 1, "{metric}: {nine}");
             }
+        },
+    );
+}
+
+/// Point `id`'s envelope and index at `updated_at`. Opening the HTTP server
+/// rebuilds the index from `task.yaml`, so dating only the projection does
+/// not keep the metadata old.
+fn age_task_metadata(
+    fixture: &Fixture,
+    id: &str,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &fixture.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    let bundle = registry
+        .find_task_binding(id)
+        .unwrap()
+        .unwrap()
+        .canonical_path;
+    let envelope_path = bundle.join("task.yaml");
+    let mut envelope: TaskEnvelopeV2 =
+        serde_yaml::from_str(&std::fs::read_to_string(&envelope_path).unwrap()).unwrap();
+    envelope.created_at = created_at;
+    envelope.updated_at = updated_at;
+    std::fs::write(&envelope_path, serde_yaml::to_string(&envelope).unwrap()).unwrap();
+    let index = rusqlite::Connection::open(fixture.global.join("tasks/index.sqlite")).unwrap();
+    assert_eq!(
+        index
+            .execute(
+                "UPDATE task_bundle_index SET created_at = ?1, updated_at = ?2, terminal_month = ?3 WHERE task_id = ?4",
+                (
+                    created_at.to_rfc3339(),
+                    updated_at.to_rfc3339(),
+                    updated_at.format("%Y-%m").to_string(),
+                    id,
+                ),
+            )
+            .unwrap(),
+        1
+    );
+}
+
+fn append_terminal_comment(fixture: &Fixture, id: &str) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &fixture.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        fixture.runtime.workspace_id().unwrap(),
+        fixture.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(
+        id,
+        TaskHistoryUpdateParams {
+            actor: "fixture".into(),
+            append_comments: vec![TaskComment {
+                at: Utc::now(),
+                by: "fixture".into(),
+                message: "Delivery evidence recorded after completion".into(),
+                operation_id: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
+#[test]
+fn mature_model10_cohort_keeps_retry_slot_hours_outside_the_sample_window() {
+    isolated(
+        "backlog_outcomes::mature_model10_cohort_keeps_retry_slot_hours_outside_the_sample_window",
+        || {
+            // Snapshot F is 200 days old. The task holds a slot for two hours
+            // with no invocation, then delivers on a one-hour invocation the
+            // next day. Metadata stays at that completion, outside
+            // lookback + 90 days, while the status log stays readable.
+            let fixture = Fixture::new();
+            let forecast_at = Utc::now() - Duration::days(200);
+            let admitted = forecast_at + Duration::hours(1);
+            let failed = forecast_at + Duration::hours(3);
+            let reentered = forecast_at + Duration::days(1);
+            let delivered = reentered + Duration::hours(1);
+            let retried = dated_task(
+                &fixture,
+                TaskStatus::Done,
+                &[
+                    (admitted, TaskStatus::InProgress),
+                    (failed, TaskStatus::Backlog),
+                    (reentered, TaskStatus::InProgress),
+                    (delivered, TaskStatus::Done),
+                ],
+            );
+            age_task_metadata(
+                &fixture,
+                &retried,
+                admitted - Duration::minutes(1),
+                delivered,
+            );
+            invocation(&fixture, &retried, delivered, 1, 1.0);
+
+            let within_two = json!({"p50": 2.0, "p90": 2.0});
+            // Oldest first: the store refuses a row older than its newest.
+            for (version, at, forecast) in [
+                (
+                    9u32,
+                    forecast_at - Duration::hours(1),
+                    json!({"hours": within_two, "tokens": within_two, "usd": within_two}),
+                ),
+                (
+                    10,
+                    forecast_at,
+                    json!({"work_hours": within_two, "tokens": within_two, "usd": within_two}),
+                ),
+            ] {
+                let tasks = json!([{
+                    "id": retried,
+                    "complexity": "medium",
+                    "forecast": forecast,
+                }]);
+                assert!(
+                    fixture
+                        .runtime
+                        .record_backlog_forecast(
+                            StoredBacklogForecast {
+                                workspace_id: String::new(),
+                                forecast_at: at,
+                                model_version: version,
+                                inputs_json: "{}".into(),
+                                result_json: "{}".into(),
+                                tasks_json: tasks.to_string(),
+                            },
+                            Duration::minutes(1),
+                        )
+                        .unwrap(),
+                    "model {version} snapshot was not stored"
+                );
+            }
+
+            let server = fixture.server(false);
+            let hour_calibration = |lookback: i64| {
+                let body = json_ok(server.get(&format!("{ENDPOINT}&lookback_days={lookback}")));
+                let calibration = &body["calibration"];
+                let legacy = calibration["by_model_version"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["model_version"] == 9)
+                    .unwrap();
+                (
+                    json!({
+                        "measure": calibration["task_hours_measure"],
+                        "current": calibration["task_level"]["hours"],
+                        "legacy_measure": legacy["task_hours_measure"],
+                        "legacy": legacy["task_level"]["hours"],
+                        "episodes": body["inputs"]["outcomes"]["episodes"],
+                    }),
+                    body,
+                )
+            };
+            // 2h failed hold + 1h delivery = 3h, so p90=2 misses (under_p90 0).
+            // Invocation-only fallback is 1h and would hit. The legacy row
+            // still scores that 1h delivery. The old attempts stay outside
+            // the outcome sample.
+            let expected = json!({
+                "measure": "attempt_work_hours",
+                "current": {"n": 1, "under_p50": 0.0, "under_p90": 0.0},
+                "legacy_measure": "delivery_hours",
+                "legacy": {"n": 1, "under_p50": 1.0, "under_p90": 1.0},
+                "episodes": {},
+            });
+            let (default, default_body) = hour_calibration(30);
+            assert_eq!(default, expected, "{default_body}");
+            for lookback in [7_i64, 180] {
+                let (hours, body) = hour_calibration(lookback);
+                assert_eq!(
+                    hours, expected,
+                    "lookback {lookback} moved the retained cohort's work-hours actual: {body}"
+                );
+            }
+            append_terminal_comment(&fixture, &retried);
+            let (commented, commented_body) = hour_calibration(30);
+            assert_eq!(
+                commented, expected,
+                "a terminal comment moved the retained cohort's work-hours actual: {commented_body}"
+            );
         },
     );
 }
