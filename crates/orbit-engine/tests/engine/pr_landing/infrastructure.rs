@@ -315,6 +315,7 @@ fn missing_required_prerequisite_recovers_once_without_source_repair() {
                 "changed_policy",
                 "legacy_success",
                 "legacy_substitute",
+                "rules_unpinned",
                 "moved",
                 "deleted",
             ] {
@@ -356,6 +357,14 @@ fn missing_required_prerequisite_recovers_once_without_source_repair() {
                             value["statuses"] = json!([{"id":10,"context":"Protected (rust)","state":"success","url":format!("https://api.github.com/repos/orbit/test/statuses/{}", fx.candidate)}]);
                         });
                     }
+                    if mode == "rules_unpinned" {
+                        update(&fx, "rules", |value| {
+                            value[0]["parameters"]["required_status_checks"][0]
+                                .as_object_mut()
+                                .unwrap()
+                                .remove("integration_id");
+                        });
+                    }
                     if mode == "clean_missing" {
                         update(&fx, "checks-after", |value| {
                             value["total_count"] = json!(0);
@@ -391,7 +400,10 @@ fn missing_required_prerequisite_recovers_once_without_source_repair() {
                         },
                         || action(&host, "pr_complete", &input),
                     );
-                    if matches!(mode, "positive" | "merge" | "lost" | "legacy_success") {
+                    if matches!(
+                        mode,
+                        "positive" | "merge" | "lost" | "legacy_success" | "rules_unpinned"
+                    ) {
                         let output = outcome.expect(mode);
                         assert_eq!(
                             if mode == "merge" {
@@ -504,7 +516,7 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                 "optional",
                 "review",
                 "policy",
-                "rules",
+                "rules_malformed_integration",
                 "app",
                 "head",
                 "base",
@@ -619,11 +631,9 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                         "policy" => update(&fx, "policy", |value| {
                             value["errors"] = json!([{"message":"forbidden"}]);
                         }),
-                        "rules" => update(&fx, "rules", |value| {
-                            value[0]["parameters"]["required_status_checks"][0]
-                                .as_object_mut()
-                                .unwrap()
-                                .remove("integration_id");
+                        "rules_malformed_integration" => update(&fx, "rules", |value| {
+                            value[0]["parameters"]["required_status_checks"][0]["integration_id"] =
+                                json!(0);
                         }),
                         "app" => update(&fx, "suite", |value| {
                             value["app"]["id"] = json!(901);
@@ -725,7 +735,7 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                         "optional" => "only optional",
                         "review" => "review is required",
                         "policy" => "classic policy errors",
-                        "rules" => "required integration",
+                        "rules_malformed_integration" => "required integration",
                         "app" => "protected integration differs",
                         "head" => "run head",
                         "base" => "changed base",
