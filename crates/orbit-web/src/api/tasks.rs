@@ -960,6 +960,45 @@ pub(super) async fn settle_merged_task_action(
     }
 }
 
+/// `POST /tasks/settle-merged` — operator-gated batch settle from merged PRs:
+/// every blocked, in-progress and review task in the selected workspace whose
+/// own recorded delivery PR merged settles; the rest are reported skipped.
+pub(super) async fn settle_merged_tasks_action(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+) -> Response {
+    if let Err(denial) = authorized_caller(&DASHBOARD_TASK_SETTLE_MERGED, state.operator_session())
+    {
+        return authorization_denied(denial);
+    }
+    let result = tokio::task::spawn_blocking(move || {
+        runtime.settle_externally_merged_tasks_from_recorded_prs_as(Some(DASHBOARD_ACTOR))
+    })
+    .await;
+    match result {
+        Ok(Ok(batch)) => Json(json!({
+            "settled": batch.settled.iter().map(|settlement| json!({
+                "task_id": settlement.task_id,
+                "previous_status": settlement.previous_status,
+                "status": "done",
+                "pr_number": settlement.pr_number,
+                "base_branch": settlement.base_branch,
+                "merge_commit": settlement.merge_commit,
+            })).collect::<Vec<_>>(),
+            "skipped": batch.skipped.iter().map(|skipped| json!({
+                "task_id": skipped.task_id,
+                "code": "settle_merged_refused",
+                "reason": skipped.reason,
+            })).collect::<Vec<_>>(),
+        }))
+        .into_response(),
+        Ok(Err(e)) => map_runtime_error(e),
+        Err(join_err) => server_error(orbit_core::OrbitError::Execution(format!(
+            "task settle-merged batch panicked: {join_err}"
+        ))),
+    }
+}
+
 #[derive(Deserialize, Default)]
 pub(super) struct PilotAdmissionBody {
     #[serde(default)]
