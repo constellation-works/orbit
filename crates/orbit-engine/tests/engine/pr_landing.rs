@@ -144,11 +144,35 @@ fn fx_host_requiring(sandbox: &Path, commands: &[&str]) -> (Fixture, DeliveryHos
     host.require_commands(commands);
     (fx, host)
 }
+fn fx_host_gate(sandbox: &Path) -> (Fixture, DeliveryHost, Gate) {
+    let (fx, host) = fx_host(sandbox);
+    let gate = Gate::new(sandbox);
+    host.gate_commands(&gate);
+    (fx, host, gate)
+}
 fn validate_err(fx: &Fixture, host: &DeliveryHost) -> String {
     action_err(host, "candidate_validate", &fx.validate_input()).to_string()
 }
 fn validate_ok(fx: &Fixture, host: &DeliveryHost) -> Value {
     action_ok(host, "candidate_validate", &fx.validate_input())
+}
+/// The owner and claimed validation boundaries, with their own input contracts.
+fn validation_routes(fx: &Fixture) -> [(&'static str, Value); 2] {
+    [
+        ("candidate_validate", fx.validate_input()),
+        ("claim_validate", fx.claim_input()),
+    ]
+}
+/// Failed candidate and comparator logs use different namespaces on the two routes.
+fn failed_validation_logs(host: &DeliveryHost, route: &str) -> (Value, Value) {
+    if route == "candidate_validate" {
+        (host.run_log("0.json"), host.run_log("0.baseline.json"))
+    } else {
+        (
+            host.claim_log("validation/claim-landing/0.failed.json"),
+            host.claim_log("validation/claim-landing/0.baseline.json"),
+        )
+    }
 }
 fn open_review(fx: &Fixture, host: &DeliveryHost) {
     open_ok(fx, host);
@@ -229,72 +253,7 @@ fn previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads()
         "previous_published_head_metadata_lag_refuses_unverified_or_persistent_heads",
         |sandbox| {
             for case in "persistent review_only time_cap third_head third_after_old remote_missing remote_moved_after_old review_mismatch review_only_third no_checkpoint".split_whitespace() {
-                let (fx, host) = fx_host(sandbox);
-                open_review(&fx, &host);
-                let mut input = fx.republished_completion_input(&host);
-                let candidate = input["published_head_sha"].as_str().unwrap().to_string();
-                let mut heads = vec![fx.candidate.as_str()];
-                let mut remote = Some(candidate.as_str());
-                let (expected_reads, error_code) = match case {
-                    "persistent" => {
-                        input["max_wait_seconds"] = json!(240);
-                        (4, "delivery_evidence_stale")
-                    }
-                    "review_only" => {
-                        input.as_object_mut().unwrap().remove("published_head_sha");
-                        input["max_wait_seconds"] = json!(240);
-                        (4, "review_gate_stale")
-                    }
-                    "time_cap" => {
-                        input["max_wait_seconds"] = json!(8);
-                        (2, "delivery_evidence_stale")
-                    }
-                    "third_head" => {
-                        heads = vec![fx.base_sha.as_str()];
-                        (1, "delivery_evidence_stale")
-                    }
-                    "third_after_old" => {
-                        heads.push(&fx.base_sha);
-                        (2, "delivery_evidence_stale")
-                    }
-                    "remote_missing" => {
-                        remote = None;
-                        (1, "delivery_evidence_stale")
-                    }
-                    "remote_moved_after_old" => {
-                        heads.push(&candidate);
-                        fs::write(
-                            fx.forge.join("remote-heads"),
-                            format!("{candidate}\n{}\n", fx.candidate),
-                        )
-                        .unwrap();
-                        (2, "delivery_evidence_stale")
-                    }
-                    "review_mismatch" => {
-                        heads = vec![candidate.as_str()];
-                        input["reviewed_head_sha"] = json!(fx.candidate);
-                        (1, "review_gate_stale")
-                    }
-                    "no_checkpoint" => {
-                        input
-                            .as_object_mut()
-                            .unwrap()
-                            .remove("previous_published_head_sha");
-                        (1, "delivery_evidence_stale")
-                    }
-                    "review_only_third" => {
-                        input.as_object_mut().unwrap().remove("published_head_sha");
-                        heads = vec![fx.base_sha.as_str()];
-                        (1, "review_gate_stale")
-                    }
-                    _ => unreachable!(),
-                };
-                fx.script_heads(&heads, remote);
-                let before = fx.status_reads();
-                let error = action_err(&host, "pr_complete", &input);
-                assert!(error.to_string().contains(error_code), "{case}: {error}");
-                assert_eq!(fx.status_reads() - before, expected_reads, "{case}");
-                assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+                assert_previous_head_refusal(sandbox, case, false);
             }
         },
     );
@@ -326,86 +285,140 @@ fn previous_published_head_pull_ref_lag_settles_with_exact_merge_pin(sandbox: &P
         assert_landed_exactly(&fx, &host, &candidate, "candidate");
     }
 }
-/// The pull-ref wait is fail-closed: anything but the known previous head with the task branch at the candidate, inside the bound, refuses and leaves the task in review without a merge request.
+/// Both lag observers are fail-closed: only the known previous head may be
+/// retried, while the task branch is still at the candidate and within bounds.
+#[allow(clippy::print_stderr)]
+fn assert_previous_head_refusal(sandbox: &Path, case: &str, pull: bool) {
+    eprintln!(
+        "scenario: {} {case}",
+        if pull { "pull-ref" } else { "metadata" }
+    );
+    let (fx, host) = fx_host(sandbox);
+    open_review(&fx, &host);
+    let mut input = fx.republished_completion_input(&host);
+    let candidate = input["published_head_sha"].as_str().unwrap().to_string();
+    let mut metadata = vec![fx.candidate.clone()];
+    let mut pull_ref = vec![fx.candidate.clone()];
+    let mut remote = Some(if pull {
+        fx.candidate.clone()
+    } else {
+        candidate.clone()
+    });
+    let (expected_reads, error_code) = match case {
+        "persistent" | "persistent_after_metadata" | "review_only" => {
+            input["max_wait_seconds"] = json!(240);
+            if case == "persistent_after_metadata" {
+                metadata.push(candidate.clone());
+            }
+            if case == "review_only" {
+                input.as_object_mut().unwrap().remove("published_head_sha");
+            }
+            (
+                4,
+                if case == "review_only" {
+                    "review_gate_stale"
+                } else {
+                    "delivery_evidence_stale"
+                },
+            )
+        }
+        "time_cap" => {
+            input["max_wait_seconds"] = json!(8);
+            (2, "delivery_evidence_stale")
+        }
+        "third_head" | "review_only_third" => {
+            metadata = vec![fx.base_sha.clone()];
+            if case == "review_only_third" {
+                input.as_object_mut().unwrap().remove("published_head_sha");
+            }
+            (
+                1,
+                if case == "review_only_third" {
+                    "review_gate_stale"
+                } else {
+                    "delivery_evidence_stale"
+                },
+            )
+        }
+        "third_after_old" => {
+            metadata.push(fx.base_sha.clone());
+            (2, "delivery_evidence_stale")
+        }
+        "remote_missing" => {
+            remote = None;
+            (1, "delivery_evidence_stale")
+        }
+        "remote_moved_after_old" => {
+            metadata.push(candidate.clone());
+            pull_ref = vec![candidate.clone(), fx.candidate.clone()];
+            (2, "delivery_evidence_stale")
+        }
+        "review_mismatch" => {
+            metadata = vec![candidate.clone()];
+            input["reviewed_head_sha"] = json!(fx.candidate);
+            (1, "review_gate_stale")
+        }
+        "no_checkpoint" | "previous_unknown" => {
+            input
+                .as_object_mut()
+                .unwrap()
+                .remove("previous_published_head_sha");
+            (1, "delivery_evidence_stale")
+        }
+        "pull_ref_third" | "pull_ref_third_after_old" => {
+            if case == "pull_ref_third" {
+                pull_ref = vec![fx.base_sha.clone()];
+                (1, "delivery_evidence_stale")
+            } else {
+                pull_ref.push(fx.base_sha.clone());
+                metadata.push(fx.candidate.clone());
+                (2, "delivery_evidence_stale")
+            }
+        }
+        "branch_missing" => {
+            fx.remote_git(&["update-ref", "-d", &format!("refs/heads/{BRANCH}")]);
+            (1, "delivery_evidence_stale")
+        }
+        "branch_at_previous" => {
+            fx.remote_git(&["update-ref", &format!("refs/heads/{BRANCH}"), &fx.candidate]);
+            (1, "delivery_evidence_stale")
+        }
+        "previous_empty" | "previous_is_candidate" => {
+            input["previous_published_head_sha"] = json!(if case == "previous_empty" {
+                ""
+            } else {
+                &candidate
+            });
+            (1, "delivery_evidence_stale")
+        }
+        "ls_remote_fails" => {
+            fx.git(&[
+                "remote",
+                "set-url",
+                "origin",
+                "/nonexistent/orbit-remote.git",
+            ]);
+            (1, "delivery_evidence_stale")
+        }
+        _ => unreachable!("unknown head-refusal case {case}"),
+    };
+    fx.script_heads(
+        &metadata.iter().map(String::as_str).collect::<Vec<_>>(),
+        remote.as_deref(),
+    );
+    if pull || case == "remote_moved_after_old" {
+        fx.write_forge("remote-heads", pull_ref.join("\n") + "\n");
+    }
+    let before = fx.status_reads();
+    let error = action_err(&host, "pr_complete", &input);
+    assert!(error.to_string().contains(error_code), "{case}: {error}");
+    assert_eq!(fx.status_reads() - before, expected_reads, "{case}");
+    assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+}
 fn pull_ref_refusal_rows(test: &str, selected: &[&str]) {
     isolated(test, |sandbox| {
-        for case in "pull_ref_third pull_ref_third_after_old branch_missing branch_at_previous previous_unknown previous_empty previous_is_candidate persistent persistent_after_metadata time_cap review_mismatch ls_remote_fails"
-            .split_whitespace()
-            .filter(|case| selected.contains(case))
-        {
-            let (fx, host) = fx_host(sandbox);
-            open_review(&fx, &host);
-            let mut input = fx.republished_completion_input(&host);
-            let candidate = input["published_head_sha"].as_str().unwrap().to_string();
-            let mut metadata = vec![fx.candidate.clone()];
-            let mut pull_ref = vec![fx.candidate.clone()];
-            let (expected_reads, error_code) = match case {
-                "pull_ref_third" => {
-                    pull_ref = vec![fx.base_sha.clone()];
-                    (1, "delivery_evidence_stale")
-                }
-                "pull_ref_third_after_old" => {
-                    pull_ref.push(fx.base_sha.clone());
-                    metadata.push(fx.candidate.clone());
-                    (2, "delivery_evidence_stale")
-                }
-                "branch_missing" => {
-                    fx.remote_git(&["update-ref", "-d", &format!("refs/heads/{BRANCH}")]);
-                    (1, "delivery_evidence_stale")
-                }
-                "branch_at_previous" => {
-                    fx.remote_git(&["update-ref", &format!("refs/heads/{BRANCH}"), &fx.candidate]);
-                    (1, "delivery_evidence_stale")
-                }
-                "previous_unknown" => {
-                    input
-                        .as_object_mut()
-                        .unwrap()
-                        .remove("previous_published_head_sha");
-                    (1, "delivery_evidence_stale")
-                }
-                "previous_empty" => {
-                    input["previous_published_head_sha"] = json!("");
-                    (1, "delivery_evidence_stale")
-                }
-                "previous_is_candidate" => {
-                    input["previous_published_head_sha"] = json!(candidate);
-                    (1, "delivery_evidence_stale")
-                }
-                "persistent" => {
-                    input["max_wait_seconds"] = json!(240);
-                    (4, "delivery_evidence_stale")
-                }
-                "persistent_after_metadata" => {
-                    input["max_wait_seconds"] = json!(240);
-                    metadata.push(candidate.clone());
-                    (4, "delivery_evidence_stale")
-                }
-                "time_cap" => {
-                    input["max_wait_seconds"] = json!(8);
-                    (2, "delivery_evidence_stale")
-                }
-                "review_mismatch" => {
-                    metadata = vec![candidate.clone()];
-                    input["reviewed_head_sha"] = json!(fx.candidate);
-                    (1, "review_gate_stale")
-                }
-                "ls_remote_fails" => {
-                    fx.git(&["remote", "set-url", "origin", "/nonexistent/orbit-remote.git"]);
-                    (1, "delivery_evidence_stale")
-                }
-                _ => unreachable!(),
-            };
-            fx.script_heads(
-                &metadata.iter().map(String::as_str).collect::<Vec<_>>(),
-                Some(&fx.candidate),
-            );
-            fx.write_forge("remote-heads", pull_ref.join("\n") + "\n");
-            let before = fx.status_reads();
-            let error = action_err(&host, "pr_complete", &input);
-            assert!(error.to_string().contains(error_code), "{case}: {error}");
-            assert_eq!(fx.status_reads() - before, expected_reads, "{case}");
-            assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+        for case in selected {
+            assert_previous_head_refusal(sandbox, case, true);
         }
     });
 }
@@ -436,9 +449,8 @@ fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr(sand
         "gateway" => (vec!["pr list", "pr create", "pr list", "pr create", "pr view"], false);
         "applied_gateway" => (vec!["pr list", "pr create", "pr list", "pr view"], true)
     } {
-        let fx = Fixture::new(sandbox);
+        let (fx, host) = fx_host(sandbox);
         fx.script_creates(&[outcome, "success"]);
-        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
         let opened = open_ok(&fx, &host);
         assert_eq!(opened["pr_created"], !reused, "{outcome}");
         assert_eq!(opened["pr_reused"], reused, "{outcome}");
@@ -451,9 +463,8 @@ fn pr_open_recovers_a_transient_create_and_reuses_an_ambiguously_created_pr(sand
     }
 }
 fn pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling(sandbox: &Path) {
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     fx.script_pr_views(&["HTTP 499: 499 (https://api.github.com/graphql)", "success"]);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     let opened = open_ok(&fx, &host);
     assert_eq!(opened["pr_created"], true);
     assert_eq!(
@@ -461,9 +472,8 @@ fn pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling(s
         ["pr list", "pr create", "pr view", "pr view"]
     );
     assert_eq!(fx.pr_view_reads(), 2);
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     fx.script_pr_views(&["HTTP 499: 499 (https://api.github.com/graphql)"]);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     let error = action_err(
         &host,
         "pr_open",
@@ -543,9 +553,8 @@ fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens(sand
     );
 }
 fn pr_open_stops_transient_creation_at_the_attempt_ceiling_in_the_create_phase(sandbox: &Path) {
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     fx.script_creates(&["gateway"]);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     let error = action_err(
         &host,
         "pr_open",
@@ -563,9 +572,8 @@ fn pr_open_permanent_create_failures_never_retry_or_look_up_again(sandbox: &Path
         "body_too_long" => ("Body is too long (maximum is 65536 characters)");
         "rate_limit" => ("API rate limit exceeded (HTTP 403)")
     } {
-        let fx = Fixture::new(sandbox);
+        let (fx, host) = fx_host(sandbox);
         fx.script_creates(&[outcome, "success"]);
-        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
         let error = action_err(
             &host,
             "pr_open",
@@ -592,9 +600,8 @@ fn assert_create_failure(host: &DeliveryHost, error: &OrbitError, diagnostic: &s
     assert_eq!(host.status(TASK_ID), TaskStatus::InProgress);
 }
 fn passing_checks_merge_the_reviewed_candidate_and_record_its_delivery(sandbox: &Path) {
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     fx.script_checks(&["pending", "success"]);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     let opened = open_ok(&fx, &host);
     assert_eq!(opened["pr_created"], true);
     assert_eq!(opened["pr_number"], PR_NUMBER);
@@ -963,10 +970,9 @@ fn a_draft_pull_request_stops_completion_before_any_merge_request() {
 fn a_draft_pull_request_stops_completion_before_any_merge_request_scenario(sandbox: &Path) {
     for merge_state in ["BLOCKED", "UNKNOWN"] {
         eprintln!("scenario: draft {merge_state}");
-        let fx = Fixture::new(sandbox);
+        let (fx, host) = fx_host(sandbox);
         fx.script_checks(&["success"]);
         fx.write_forge("draft-merge-state", merge_state);
-        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
         action(
             &host,
             "pr_open",
@@ -987,9 +993,8 @@ fn a_draft_pull_request_stops_completion_before_any_merge_request_scenario(sandb
         assert_nothing_landed(&fx, &host, TaskStatus::Review, merge_state);
     }
     eprintln!("scenario: ready");
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     fx.script_checks(&["success"]);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     open_review(&fx, &host);
     let completed = action_ok(&host, "pr_complete", &fx.complete_input());
     assert_eq!(completed["merge"]["merged"], true);
@@ -1001,9 +1006,8 @@ fn a_failed_or_blocked_check_never_merges_and_the_task_stays_in_review(sandbox: 
         "pending checks that then fail" => (&["pending", "failure"][..], "status check 'test' failed");
         "required review outstanding" => (&["review_required"][..], "REVIEW_REQUIRED")
     } {
-        let fx = Fixture::new(sandbox);
+        let (fx, host) = fx_host(sandbox);
         fx.script_checks(checks);
-        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
         action(
             &host,
             "pr_open",
@@ -1132,15 +1136,11 @@ fn with_completion_clock<T>(run: impl FnOnce() -> T) -> T {
     )
 }
 fn a_base_modified_merge_refusal_retries_the_same_candidate_on_fresh_evidence(sandbox: &Path) {
-    for (case, reviewed, checks) in [
-        ("reviewed", true, &["success"][..]),
-        ("ungated but published", false, &["success"][..]),
-        (
-            "pending on refresh",
-            true,
-            &["success", "pending", "success"][..],
-        ),
-    ] {
+    for (case, reviewed, checks) in rows_by_name! {
+        "reviewed" => (true, &["success"][..]);
+        "ungated but published" => (false, &["success"][..]);
+        "pending on refresh" => (true, &["success", "pending", "success"][..]);
+    } {
         let (fx, host) = fx_host(sandbox);
         let published = open_for_completion(&fx, &host);
         fx.script_checks(checks);
@@ -1302,11 +1302,11 @@ fn an_already_merged_refresh_reconciles_without_another_merge_request(sandbox: &
     assert_eq!(host.status(TASK_ID), TaskStatus::Done);
 }
 fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget(sandbox: &Path) {
-    for (case, max_wait_seconds, requests, refusal) in [
-        ("attempt ceiling", 30, 3, "attempt 3 of 3"),
-        ("zero budget", 0, 1, "timed out after 0s"),
-        ("budget spent by the wait", 5, 1, "timed out after 5s"),
-    ] {
+    for (case, max_wait_seconds, requests, refusal) in rows_by_name! {
+        "attempt ceiling" => (30, 3, "attempt 3 of 3");
+        "zero budget" => (0, 1, "timed out after 0s");
+        "budget spent by the wait" => (5, 1, "timed out after 5s");
+    } {
         let (fx, host) = fx_host(sandbox);
         open_for_completion(&fx, &host);
         fx.script_merges(&["base_modified"; 4]);
@@ -1330,11 +1330,10 @@ fn repeated_base_races_stop_at_the_attempt_ceiling_within_the_wait_budget(sandbo
 }
 // Reviewed-candidate binding at publication
 fn pr_open_accepts_a_fresh_stacked_base_at_the_landing_tip(sandbox: &Path) {
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     fx.git(&["branch", "main", &fx.base_sha]);
     fx.git(&["push", "origin", "main"]);
     assert_eq!(fx.remote_tip(BASE), fx.remote_tip("main"));
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     let mut input = fx.open_input(&fx.candidate, &fx.base_sha);
     input["landing_branch"] = json!("main");
     let opened = action_ok(&host, "pr_open", &input);
@@ -1869,85 +1868,65 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sa
         output_path.display()
     );
     host.require_commands(&[&command]);
-    let message = action(&host, "candidate_validate", &fx.validate_input())
-        .unwrap_err()
-        .to_string();
-    let candidate_path = format!("validation/{RUN_ID}/0.json");
-    let base_path = format!("validation/{RUN_ID}/0.baseline.json");
-    assert!(
-        message.len() <= 16 * 1024,
-        "diagnostic bound: {}",
-        message.len()
-    );
-    for field in [
-        &command,
-        "exit 3",
-        "actual_failure",
-        "Base verdict:",
-        "failure was not reproduced",
-        &candidate_path,
-        &base_path,
-    ] {
-        assert!(message.contains(field));
+    for (route, input) in validation_routes(&fx) {
+        let message = action_err(&host, route, &input).to_string();
+        let (candidate_path, base_path) = if route == "candidate_validate" {
+            (
+                format!("validation/{RUN_ID}/0.json"),
+                format!("validation/{RUN_ID}/0.baseline.json"),
+            )
+        } else {
+            (
+                "validation/claim-landing/0.failed.json".into(),
+                "validation/claim-landing/0.baseline.json".into(),
+            )
+        };
+        assert!(
+            message.len() <= 16 * 1024,
+            "{route}: diagnostic bound: {}",
+            message.len()
+        );
+        for field in [
+            "actual_failure",
+            "exit 3",
+            "failure was not reproduced",
+            "Neither run declared a selection",
+            "source causation is unconfirmed",
+            &candidate_path,
+            &base_path,
+        ] {
+            assert!(
+                message.contains(field),
+                "{route}: missing {field}: {message}"
+            );
+        }
+        assert!(
+            !message.contains("candidate introduced"),
+            "[F2026-10-378] {route}: a skipped guard proves no source causation: {message}"
+        );
+        let (log, base) = failed_validation_logs(&host, route);
+        assert!(log["output"].as_str().unwrap().starts_with(&output));
+        assert_eq!(log["failure_kind"], "candidate");
+        assert_eq!(log["tested_head"], fx.candidate);
+        assert_eq!(base["base_sha"], fx.base_sha);
+        assert_eq!(base["command"], log["command"]);
+        assert_eq!(base["exit_code"], 0);
+        assert_eq!(base["output"], "", "the base skipped the failing guard");
+        if route == "candidate_validate" {
+            assert!(message.contains(&command) && message.contains("Base verdict:"));
+            assert!(!message.contains("foo_bar:"));
+            assert_eq!(log["baseline"]["log"], base_path);
+            assert!(log["summary"].is_null() && base["summary"].is_null());
+        } else {
+            assert!(message.contains(&fx.candidate) && message.contains(&fx.base_sha));
+        }
     }
-    assert!(
-        message.contains("Neither run declared a selection")
-            && message.contains("source causation is unconfirmed")
-            && !message.contains("candidate introduced"),
-        "[F2026-10-378] a no-summary base that skips the failing guard proves no source causation: {message}"
-    );
-    assert!(!message.contains("foo_bar:"));
-    let log = host.validation_log(TASK_ID, &candidate_path);
-    assert!(log["output"].as_str().unwrap().starts_with(&output));
-    assert_eq!(log["baseline"]["log"], base_path);
-    let base = host.validation_log(TASK_ID, &base_path);
-    assert_eq!(base["exit_code"], 0);
-    assert_eq!(base["command"], log["command"]);
-    assert_eq!(base["base_sha"], fx.base_sha);
-    assert_eq!(log["tested_head"], fx.candidate);
-    assert_eq!(log["failure_kind"], "candidate");
-    assert!(log["summary"].is_null() && base["summary"].is_null());
-    assert_eq!(base["output"], "", "the base skipped the failing guard");
-    let input = fx.claim_input();
-    let message = action(&host, "claim_validate", &input)
-        .unwrap_err()
-        .to_string();
-    assert!(message.len() <= 16 * 1024);
-    assert!(
-        message.contains("failure was not reproduced")
-            && message.contains("Neither run declared a selection")
-            && message.contains("source causation is unconfirmed")
-            && !message.contains("candidate introduced"),
-        "[F2026-10-378] claimed validation retains uncertainty about the skipped guard: {message}"
-    );
-    for field in [
-        &fx.candidate,
-        &fx.base_sha,
-        "actual_failure",
-        "exit 3",
-        "validation/claim-landing/0.failed.json",
-        "validation/claim-landing/0.baseline.json",
-    ] {
-        assert!(message.contains(field));
-    }
-    let log = host.claim_log("validation/claim-landing/0.failed.json");
-    assert!(log["output"].as_str().unwrap().starts_with(&output));
-    assert_eq!(log["failure_kind"], "candidate");
-    assert_eq!(log["tested_head"], fx.candidate);
-    let base = host.claim_log("validation/claim-landing/0.baseline.json");
-    assert_eq!(base["base_sha"], fx.base_sha);
-    assert_eq!(base["command"], log["command"]);
-    assert_eq!(base["exit_code"], 0);
-    assert_eq!(base["output"], "");
     // Complete identity-less diagnostics establish reproduction even when capture bounds the logs.
     let output = format!("{}\nbase failure evidence\n", "é evidence\n".repeat(12000));
     fs::write(&output_path, &output).unwrap();
     let command = format!("cat '{}'; exit 3", output_path.display());
     host.require_commands(&[&command]);
-    for (action_name, input) in [
-        ("candidate_validate", fx.validate_input()),
-        ("claim_validate", input),
-    ] {
+    for (action_name, input) in validation_routes(&fx) {
         let message = action(&host, action_name, &input).unwrap_err().to_string();
         assert!(message.len() <= 16 * 1024);
         assert!(baseline_red(&message), "{message}");
@@ -1958,13 +1937,7 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sa
     host.require_commands(&[
         "if test -e src/feature.txt; then exit 3; else orbit-missing-base-tool; fi",
     ]);
-    for (route, input) in [
-        ("candidate_validate", fx.validate_input()),
-        (
-            "claim_validate",
-            json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha}),
-        ),
-    ] {
+    for (route, input) in validation_routes(&fx) {
         let message = action(&host, route, &input).unwrap_err().to_string();
         assert!(
             message.contains("could not be judged")
@@ -1979,82 +1952,28 @@ fn required_validation_bounds_diagnostics_and_retains_candidate_and_base_logs(sa
 fn identityless_diagnostics_hold_only_for_matching_completed_runs(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
     let diagnostic = "policy denied widget";
+    // Shape from the incident's cargo-deny artifact; no parsed test identities.
+    let cargo_deny = "advisories FAILED, bans ok, licenses FAILED, sources ok\\nerror[vulnerability]: zip: archive extraction escapes its destination\\n    ┌─ $PWD/Cargo.lock:182:1\\n    ├ ID: RUSTSEC-2026-0368";
     let mut fingerprint = None;
-    for (case, candidate, base, candidate_exit, held) in [
-        ("plain", "policy denied widget", diagnostic, 2, true),
-        (
-            "ansi",
-            "\\033[31mpolicy denied widget\\033[0m",
-            diagnostic,
-            2,
-            true,
-        ),
-        (
-            "whitespace",
-            "  policy   denied\\twidget  ",
-            diagnostic,
-            2,
-            true,
-        ),
-        (
-            "paths",
-            "policy denied widget\\n$PWD/src/lib.rs\\n/tmp/candidate-123/log",
-            "policy denied widget\\n$PWD/src/lib.rs\\n/tmp/base-456/log",
-            2,
-            true,
-        ),
-        (
-            "noise",
-            "PATH=/candidate/bin\\npolicy denied widget\\nfinished in 1.23s",
-            "finished in 9.87s\\npolicy denied widget\\nPATH=/base/bin",
-            2,
-            true,
-        ),
-        // Diagnostic shape from the incident's cargo-deny base artifact:
-        // error[vulnerability] and box-drawing locations yield no parsed identities.
-        (
-            "cargo-deny",
-            "advisories FAILED, bans ok, licenses FAILED, sources ok\\nerror[vulnerability]: zip: archive extraction escapes its destination\\n    ┌─ $PWD/Cargo.lock:182:1\\n    ├ ID: RUSTSEC-2026-0368",
-            "advisories FAILED, bans ok, licenses FAILED, sources ok\\nerror[vulnerability]: zip: archive extraction escapes its destination\\n    ┌─ $PWD/Cargo.lock:182:1\\n    ├ ID: RUSTSEC-2026-0368",
-            2,
-            true,
-        ),
-        ("diagnostic", "policy denied gadget", diagnostic, 2, false),
-        ("exit", diagnostic, diagnostic, 3, false),
-        ("empty", "", "", 2, false),
-        (
-            "refusal",
-            "policy denied widget\\nSKIP: host test unavailable",
-            "policy denied widget\\nSKIP: host test unavailable",
-            2,
-            false,
-        ),
-        (
-            "base-refusal",
-            diagnostic,
-            "policy denied widget\\nSKIP: host test unavailable",
-            2,
-            false,
-        ),
-        (
-            "deferral",
-            "DEFERRED: bubblewrap unavailable: denied",
-            "DEFERRED: bubblewrap unavailable: denied",
-            2,
-            false,
-        ),
-    ] {
+    for (case, candidate, base, candidate_exit, held) in rows_by_name! {
+        "plain" => ("policy denied widget", diagnostic, 2, true);
+        "ansi" => ("\\033[31mpolicy denied widget\\033[0m", diagnostic, 2, true);
+        "whitespace" => ("  policy   denied\\twidget  ", diagnostic, 2, true);
+        "paths" => ("policy denied widget\\n$PWD/src/lib.rs\\n/tmp/candidate-123/log", "policy denied widget\\n$PWD/src/lib.rs\\n/tmp/base-456/log", 2, true);
+        "noise" => ("PATH=/candidate/bin\\npolicy denied widget\\nfinished in 1.23s", "finished in 9.87s\\npolicy denied widget\\nPATH=/base/bin", 2, true);
+        "cargo-deny" => (cargo_deny, cargo_deny, 2, true);
+        "diagnostic" => ("policy denied gadget", diagnostic, 2, false);
+        "exit" => (diagnostic, diagnostic, 3, false);
+        "empty" => ("", "", 2, false);
+        "refusal" => ("policy denied widget\\nSKIP: host test unavailable", "policy denied widget\\nSKIP: host test unavailable", 2, false);
+        "base-refusal" => (diagnostic, "policy denied widget\\nSKIP: host test unavailable", 2, false);
+        "deferral" => ("DEFERRED: bubblewrap unavailable: denied", "DEFERRED: bubblewrap unavailable: denied", 2, false);
+    } {
         let command = format!(
             "# {case}\nif test -e src/feature.txt; then printf \"{candidate}\\n\"; exit {candidate_exit}; else printf \"{base}\\n\"; exit 2; fi"
         );
         host.require_commands(&[&command]);
-        for (route, input) in [
-            ("candidate_validate", fx.validate_input()),
-            (
-                "claim_validate",
-                json!({"workspace_path": fx.repo, "base_sync": "local", "base_sha": fx.base_sha}),
-            ),
-        ] {
+        for (route, input) in validation_routes(&fx) {
             let message = action(&host, route, &input).unwrap_err().to_string();
             assert_eq!(baseline_red(&message), held, "{route} {case}: {message}");
             if held {
@@ -2208,9 +2127,7 @@ fn a_required_pass_that_deferred_a_sandbox_path_is_an_environment_failure(sandbo
 // Deferred sandbox handoff [ORB-15287]
 /// An implementer whose affected-test gate passed with only Bubblewrap deferrals hands the gate off instead of failing [ORB-15287].
 fn a_documented_bubblewrap_deferral_is_accepted_and_replayed_before_delivery(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
-    let gate = Gate::new(sandbox);
-    host.gate_commands(&gate);
+    let (fx, host, gate) = fx_host_gate(sandbox);
     let record = deferral(&fx, &gate.command());
     let handoff = json!({
         "summary": "done",
@@ -2403,10 +2320,8 @@ fn attach_deferred(host: &DeliveryHost, record: &Value) {
 }
 /// A claimed leaf always runs its implementer, so its validation replays the gate from this attempt's output before publication, and the pin expects the replay among the results [ORB-15287].
 fn a_claimed_leaf_replays_its_implementers_deferral_before_publication(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
+    let (fx, host, gate) = fx_host_gate(sandbox);
     host.ship_pr();
-    let gate = Gate::new(sandbox);
-    host.gate_commands(&gate);
     let mut input = claim_deferral_input(&fx, deferral(&fx, &gate.command()));
     let pending = claim_replay_pinned(&host, &mut input, &gate, "claimed leaf");
     assert_eq!(pending["commands"], json!(["true", gate.command()]));
@@ -2423,9 +2338,7 @@ fn a_claimed_leaf_replays_its_implementers_deferral_before_publication(sandbox: 
 }
 /// A macOS implementer whose gate passed with only the Seatbelt guard's skips hands it off like a Bubblewrap deferral [ORB-15409].
 fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
-    let gate = Gate::new(sandbox);
-    host.gate_commands(&gate);
+    let (fx, host, gate) = fx_host_gate(sandbox);
     let record = seatbelt_deferral(&fx, &gate.command());
     run_implementation(
         &fx,
@@ -2454,11 +2367,9 @@ fn a_documented_seatbelt_deferral_is_accepted_and_replayed_before_publication(sa
 }
 /// A macOS claimed leaf whose agent sandbox refuses to exec `ps` hands off the tests that compare against it like a nested-Seatbelt skip [ORB-15587].
 fn a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
+    let (fx, host, gate) = fx_host_gate(sandbox);
     host.ship_pr();
     host.set_os(EvidenceHostOs::Macos);
-    let gate = Gate::new(sandbox);
-    host.gate_commands(&gate);
     let record = ps_deferral(&fx, &gate.command());
     let handoff = |fx: &Fixture| {
         json!({
@@ -2497,11 +2408,9 @@ fn a_macos_claimed_leafs_ps_denied_deferral_is_replayed_before_publication(sandb
 }
 /// A macOS claimed leaf's broad gate prints Seatbelt skips and ps-denied deferrals together, and one record defers both once Orbit's probe of each refuses in the lane [ORB-15692].
 fn a_seatbelt_and_ps_denied_deferral_is_replayed_like_a_single_sandboxs(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
+    let (fx, host, gate) = fx_host_gate(sandbox);
     host.ship_pr();
     host.set_os(EvidenceHostOs::Macos);
-    let gate = Gate::new(sandbox);
-    host.gate_commands(&gate);
     let record = mixed_deferral(&fx, &gate.command());
     let handoff = json!({
         "summary": "done",
@@ -2827,80 +2736,52 @@ fn an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr(sandbox: &Path)
         "the task comment records the kind"
     );
 }
-/// [ORB-14266] A run its provider failed did not judge the candidate.
-fn a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
-    let head_before = fx.head();
-    let remote_before = fx.remote_tip(BRANCH);
-    fx.write_repo("src/wip.txt", "half written\n");
-    let message = format!(
-        "step `implement_one`: {}",
-        provider_failure_text(
-            ProviderFailureClass::Refusal,
-            "codex",
-            "cli subprocess exited with code 1: codex provider refused the request: \
-             This content was flagged for possible cybersecurity risk.",
-        )
+/// Unjudged dirty candidates are committed to a durable ref without publishing
+/// a PR or changing task status. Classification remains specific to each row.
+fn implementation_handoff_contracts(sandbox: &Path) {
+    run_named_row(
+        sandbox,
+        "an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr",
+        an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr,
     );
-    let handoff = failure_handoff_ok(&fx, &host, "implement_one", "provider_refusal", &message);
-    assert_eq!(handoff["decision"], "held_provider_failure");
-    assert_eq!(handoff["provider_failure"], "provider_refusal");
-    assert_eq!(fx.git(&["show", "HEAD:src/wip.txt"]), "half written");
-    assert_committed_held(
-        &fx,
-        &host,
-        &handoff,
-        &head_before,
-        &remote_before,
-        "provider",
-    );
-}
-fn an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
-    let head_before = fx.head();
-    let remote_before = fx.remote_tip(BRANCH);
-    fx.write_repo("src/wip.txt", "reviewer fix in progress\n");
-    let blocker = AgentBlocker {
-        kind: "orbit.generation_switch_pending".to_string(),
-        evidence: "upgrade admission refused: cannot record the pending generation \
-                   switch: Operation not permitted (os error 1)"
-            .to_string(),
-    };
-    let message = format!(
-        "{}\noriginal error before recovery: the review report was never recorded",
-        blocker.step_failure_message()
-    );
-    let handoff = failure_handoff_ok(&fx, &host, "review", "upgrade_pending", &message);
-    assert_eq!(handoff["decision"], "held_upgrade_pending");
-    assert_eq!(handoff["blocker_kind"], "orbit.generation_switch_pending");
-    assert_committed_held(
-        &fx,
-        &host,
-        &handoff,
-        &head_before,
-        &remote_before,
-        "upgrade",
-    );
-}
-/// A delivery its gate stopped waiting for [ORB-15643] is cancelled mid-validation.
-fn a_child_its_parent_stopped_waiting_for_holds_its_candidate(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
-    let head_before = fx.head();
-    let remote_before = fx.remote_tip(BRANCH);
-    fs::write(
-        fx.repo.join("src/wip.txt"),
-        "implementation under validation\n",
-    )
-    .unwrap();
-    let handoff = failure_handoff_ok(
-        &fx,
-        &host,
-        "validate",
-        "child_timeout",
-        "child_timeout: parent run jrun-parent stopped waiting for child run jrun-child after 14400 s",
-    );
-    assert_eq!(handoff["decision"], "held_child_timeout");
-    assert_committed_held(&fx, &host, &handoff, &head_before, &remote_before, "child");
+    for (name, step, code, contents, decision, detail) in rows_by_name! {
+        "a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write" => ("implement_one", "provider_refusal", "half written\n", "held_provider_failure", Some(("provider_failure", "provider_refusal")));
+        "an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task" => ("review", "upgrade_pending", "reviewer fix in progress\n", "held_upgrade_pending", Some(("blocker_kind", "orbit.generation_switch_pending")));
+        "a_child_its_parent_stopped_waiting_for_holds_its_candidate" => ("validate", "child_timeout", "implementation under validation\n", "held_child_timeout", None)
+    } {
+        run_named_row(sandbox, name, |row| {
+            let message = match code {
+                // [ORB-14266] A provider refusal did not judge the candidate.
+                "provider_refusal" => format!("step `implement_one`: {}", provider_failure_text(
+                    ProviderFailureClass::Refusal, "codex",
+                    "cli subprocess exited with code 1: codex provider refused the request: This content was flagged for possible cybersecurity risk.",
+                )),
+                "upgrade_pending" => {
+                    let blocker = AgentBlocker {
+                        kind: "orbit.generation_switch_pending".into(),
+                        evidence: "upgrade admission refused: cannot record the pending generation switch: Operation not permitted (os error 1)".into(),
+                    };
+                    format!("{}\noriginal error before recovery: the review report was never recorded", blocker.step_failure_message())
+                }
+                // [ORB-15643] The parent stopped waiting during validation.
+                "child_timeout" => "child_timeout: parent run jrun-parent stopped waiting for child run jrun-child after 14400 s".into(),
+                _ => unreachable!("unknown held failure {code}"),
+            };
+            let (fx, host) = fx_host(row);
+            let head_before = fx.head();
+            let remote_before = fx.remote_tip(BRANCH);
+            fx.write_repo("src/wip.txt", contents);
+            let handoff = failure_handoff_ok(&fx, &host, step, code, &message);
+            assert_eq!(handoff["decision"], decision, "{name}: {handoff}");
+            if let Some((key, value)) = detail {
+                assert_eq!(handoff[key], value, "{name}: {handoff}");
+            }
+            if code == "provider_refusal" {
+                assert_eq!(fx.git(&["show", "HEAD:src/wip.txt"]), "half written");
+            }
+            assert_committed_held(&fx, &host, &handoff, &head_before, &remote_before, name);
+        });
+    }
 }
 // A red base and network flakes [ORB-14258]
 const RED_LINT: &str = "make ci-lint";
@@ -2918,24 +2799,28 @@ fn printed_supervisor_notes_remain_candidate_failures_on_both_streams(sandbox: &
                  if test -f src/feature.txt; then exit 1; else exit 0; fi"
             );
             host.require_commands(&[&command]);
-            let message = action_err(&host, "candidate_validate", &fx.validate_input()).to_string();
-            assert!(!message.contains("[validation_environment]") && !baseline_red(&message));
-            let log = host.run_log("0.json");
-            assert_eq!(log["exit_code"], 1, "{command}: {log}");
-            assert_eq!(log["timed_out"], false, "{command}: {log}");
-            assert_eq!(log["failure_kind"], "candidate", "{command}: {log}");
-            assert_eq!(log["baseline"]["decision"], "passed", "{command}: {log}");
-            let base = host.run_log("0.baseline.json");
-            assert_eq!(base["exit_code"], 0, "the healthy base ran: {base}");
-            assert_eq!(base["base_sha"], fx.base_sha, "{base}");
-            let claim_input = fx.claim_input();
-            let message = action_err(&host, "claim_validate", &claim_input).to_string();
-            assert!(!message.contains("[validation_environment]") && !baseline_red(&message));
-            let claim = host.claim_log("validation/claim-landing/0.failed.json");
-            assert_eq!(claim["exit_code"], 1, "{command}: {claim}");
-            assert_eq!(claim["timed_out"], false, "{command}: {claim}");
-            assert_eq!(claim["failure_kind"], "candidate", "{command}: {claim}");
-            assert_eq!(claim["baseline"]["decision"], "passed");
+            for (route, input) in validation_routes(&fx) {
+                let message = action_err(&host, route, &input).to_string();
+                assert!(
+                    !message.contains("[validation_environment]") && !baseline_red(&message),
+                    "{route}: {command}: {message}"
+                );
+                let (log, base) = failed_validation_logs(&host, route);
+                assert_eq!(log["exit_code"], 1, "{route}: {command}: {log}");
+                assert_eq!(log["timed_out"], false, "{route}: {command}: {log}");
+                assert_eq!(
+                    log["failure_kind"], "candidate",
+                    "{route}: {command}: {log}"
+                );
+                assert_eq!(
+                    log["baseline"]["decision"], "passed",
+                    "{route}: {command}: {log}"
+                );
+                if route == "candidate_validate" {
+                    assert_eq!(base["exit_code"], 0, "the healthy base ran: {base}");
+                    assert_eq!(base["base_sha"], fx.base_sha, "{base}");
+                }
+            }
         }
     }
     assert_eq!(fx.head(), fx.candidate);
@@ -3152,6 +3037,45 @@ fn nextest_failures(tests: &[&str]) -> String {
         })
         .collect()
 }
+/// Both validation routes retain the same candidate/base failure identities and
+/// reproduction decision; the claimed route keeps them under its claim namespace.
+fn assert_known_red_refusal(
+    host: &DeliveryHost,
+    route: &str,
+    case: &str,
+    base: &[&str],
+    candidate: Option<&[&str]>,
+    held: bool,
+) {
+    let (log, baseline) = failed_validation_logs(host, route);
+    assert_eq!(
+        log["failure_kind"],
+        if held { "baseline_red" } else { "candidate" },
+        "{route}/{case}"
+    );
+    assert_eq!(log["baseline_reproduces"], held, "{route}/{case}");
+    assert_eq!(
+        log["failures"],
+        json!(named_tests(candidate.unwrap_or(base))),
+        "{route}/{case}"
+    );
+    assert_eq!(
+        baseline["failures"],
+        json!(
+            named_tests(base)
+                .into_iter()
+                .chain(base.first().map(|test| format!("test {test}")))
+                .collect::<Vec<_>>()
+        ),
+        "{route}/{case}"
+    );
+    let baseline_path = if route == "candidate_validate" {
+        format!("validation/{RUN_ID}/0.baseline.json")
+    } else {
+        "validation/claim-landing/0.baseline.json".into()
+    };
+    assert_eq!(log["baseline"]["log"], baseline_path, "{route}/{case}");
+}
 /// [ORB-15375] A candidate whose failing tests all fail on a red base — the same tests, or some of them — introduced none of them: validation passes as `passed_with_known_red`, and the run's output, the log, the task's history and the pull request name the known-red tests.
 fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them(sandbox: &Path) {
     let mut legacy_history = false;
@@ -3188,33 +3112,13 @@ fn a_candidate_failing_only_known_red_tests_proceeds_and_records_them(sandbox: &
                 .to_string();
             let held = case == "both-unknown";
             assert_eq!(baseline_red(&message), held, "{case}: {message}");
-            assert_eq!(
-                log["failure_kind"],
-                if held { "baseline_red" } else { "candidate" },
-                "{case}"
-            );
-            assert_eq!(log["baseline_reproduces"], held, "{case}");
-            assert_eq!(
-                log["failures"],
-                json!(named_tests(candidate_tests.unwrap_or(base))),
-                "{case}"
-            );
-            let baseline =
-                host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.baseline.json"));
-            assert_eq!(
-                baseline["failures"],
-                json!(
-                    named_tests(base)
-                        .into_iter()
-                        .chain(base.first().map(|test| format!("test {test}")))
-                        .collect::<Vec<_>>()
-                ),
-                "{case}"
-            );
-            assert_eq!(
-                log["baseline"]["log"],
-                format!("validation/{RUN_ID}/0.baseline.json"),
-                "{case}"
+            assert_known_red_refusal(
+                &host,
+                "candidate_validate",
+                case,
+                base,
+                candidate_tests,
+                held,
             );
             assert!(recorded.is_empty(), "{case}: {recorded:?}");
             continue;
@@ -3471,35 +3375,14 @@ fn claimed_known_red_rows(test: &str, selected: &[&str]) {
                     "different or unknown failures cannot hold for a red base: {case}: {message}"
                 );
                 assert!(host.handoffs().is_empty(), "{case}");
-                let logs = locked(&host.claim_log_contents);
-                let log: Value =
-                    serde_json::from_slice(&logs["validation/claim-landing/0.failed.json"])
-                        .unwrap();
-                let baseline: Value =
-                    serde_json::from_slice(&logs["validation/claim-landing/0.baseline.json"])
-                        .unwrap();
-                assert_eq!(log["failure_kind"], "candidate", "{case}");
-                assert_eq!(log["baseline_reproduces"], false, "{case}");
-                assert_eq!(
-                    log["failures"],
-                    json!(named_tests(candidate_tests.unwrap_or(base))),
-                    "{case}"
+                assert_known_red_refusal(
+                    &host,
+                    "claim_validate",
+                    case,
+                    base,
+                    candidate_tests,
+                    false,
                 );
-                assert_eq!(
-                    baseline["failures"],
-                    json!(
-                        named_tests(base)
-                            .into_iter()
-                            .chain(base.first().map(|test| format!("test {test}")))
-                            .collect::<Vec<_>>()
-                    ),
-                    "{case}"
-                );
-                assert_eq!(
-                    log["baseline"]["log"], "validation/claim-landing/0.baseline.json",
-                    "{case}"
-                );
-                drop(logs);
                 if base.is_empty() || candidate_tests.is_some_and(|tests| tests.is_empty()) {
                     continue;
                 }
@@ -4384,10 +4267,11 @@ fn a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking(sand
     assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
     assert_eq!(fx.forge_state("pr-head"), None);
 }
-fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks(sandbox: &Path) {
-    let (fx, host) = fx_host(sandbox);
+/// Seed the persisted evidence hold; provenance stays optional so the forged
+/// agent-written artifact is still exercised independently of a system hold.
+fn seed_evidence_hold(fx: &Fixture, host: &DeliveryHost, attempt: &str, system: bool) -> Value {
     let hold = json!({
-        "schema_version": 1, "attempt_id": "rvw-held", "lineage_key": "lineage", "run_id": RUN_ID,
+        "schema_version": 1, "attempt_id": attempt, "lineage_key": "lineage", "run_id": RUN_ID,
         "candidate": {"commit": fx.candidate, "tree": fx.git(&["rev-parse", "HEAD^{tree}"])},
         "task_meaning_digest": "meaning",
         "requirements": [{"kind": "native_os", "name": "macOS native", "command": "native run", "artifact": "macos.json"}],
@@ -4396,10 +4280,17 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks(sandb
         (TASK_ID.into(), "review-evidence-hold.json".into()),
         serde_json::to_vec(&hold).unwrap(),
     );
-    locked(&host.artifact_creators).insert(
-        (TASK_ID.into(), "review-evidence-hold.json".into()),
-        "system".into(),
-    );
+    if system {
+        locked(&host.artifact_creators).insert(
+            (TASK_ID.into(), "review-evidence-hold.json".into()),
+            "system".into(),
+        );
+    }
+    hold
+}
+fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    seed_evidence_hold(&fx, &host, "rvw-held", true);
     // Settlement never reaches the handoff with a hold: it ends the run held. The hold reaches the handoff only as an admission refusal.
     let mut input = json!({
         "failed_step_id": "review_gate_admit", "error_code": ReviewGateRefusal::AwaitingEvidence.error_code(),
@@ -4420,16 +4311,7 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks(sandb
     assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
     let forged_fx = Fixture::new(sandbox);
     let forged_host = DeliveryHost::new(&forged_fx.repo, TaskStatus::InProgress);
-    let forged_hold = json!({
-        "schema_version": 1, "attempt_id": "rvw-forged", "lineage_key": "lineage", "run_id": RUN_ID,
-        "candidate": {"commit": forged_fx.candidate, "tree": forged_fx.git(&["rev-parse", "HEAD^{tree}"])},
-        "task_meaning_digest": "meaning",
-        "requirements": [{"kind": "native_os", "name": "macOS native", "command": "native run", "artifact": "macos.json"}],
-    });
-    locked(&forged_host.artifacts).insert(
-        (TASK_ID.into(), "review-evidence-hold.json".into()),
-        serde_json::to_vec(&forged_hold).unwrap(),
-    );
+    seed_evidence_hold(&forged_fx, &forged_host, "rvw-forged", false);
     let forged = action_ok(
         &forged_host,
         "pr_failure_handoff",
@@ -4441,24 +4323,10 @@ fn an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks(sandb
 /// ORB-14651: a requeued evidence-held task is admitted again by a later run.
 fn an_admission_refusal_for_held_evidence_stays_held_not_escalated(sandbox: &Path) {
     const RERUN_ID: &str = "jrun-landing-rerun";
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     // The operator requeue leaves the task in backlog; the rerun's admission moves it back to in-progress and claims it for the rerun before the handoff.
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     locked(&host.tasks).get_mut(TASK_ID).unwrap().job_run_id = Some(RERUN_ID.to_string());
-    let hold = json!({
-        "schema_version": 1, "attempt_id": "rvw-held", "lineage_key": "lineage", "run_id": RUN_ID,
-        "candidate": {"commit": fx.candidate, "tree": fx.git(&["rev-parse", "HEAD^{tree}"])},
-        "task_meaning_digest": "meaning",
-        "requirements": [{"kind": "native_os", "name": "macOS native", "command": "native run", "artifact": "macos.json"}],
-    });
-    locked(&host.artifacts).insert(
-        (TASK_ID.into(), "review-evidence-hold.json".into()),
-        serde_json::to_vec(&hold).unwrap(),
-    );
-    locked(&host.artifact_creators).insert(
-        (TASK_ID.into(), "review-evidence-hold.json".into()),
-        "system".into(),
-    );
+    let hold = seed_evidence_hold(&fx, &host, "rvw-held", true);
     // Admission refused before reserving an attempt, so no `review_gate_admit` output reaches the handoff.
     let mut input = json!({
         "failed_step_id": "review_gate_admit", "error_code": ReviewGateRefusal::AwaitingEvidence.error_code(),
@@ -4498,7 +4366,7 @@ fn an_admission_refusal_for_held_evidence_stays_held_not_escalated(sandbox: &Pat
 }
 // Fixtures
 fn fixture_push_refuses_non_file_transports_without_network(sandbox: &Path) {
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let url = format!("https://{}/remote.git", listener.local_addr().unwrap());
@@ -4522,7 +4390,6 @@ fn fixture_push_refuses_non_file_transports_without_network(sandbox: &Path) {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     let error = execute_deterministic_action(
         &host,
         "git_push",
@@ -4591,45 +4458,98 @@ fn bare_tip(bare: &Path, branch: &str) -> Option<String> {
         .success()
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
-/// ORB-17671: the fetch remote already holding the candidate must not make `git_push` report `reused_current` when the effective push destination is a different, empty repository.
+/// A lease and publication must follow the effective destination, including a
+/// composed rewrite whose decoy already holds the candidate [ORB-17686].
+#[allow(clippy::print_stderr)]
+fn assert_effective_push_destination(sandbox: &Path, case: &str) {
+    eprintln!("scenario: effective push destination {case}");
+    let (fx, host) = fx_host(sandbox);
+    let push_remote = fx.bare_repo("push.git");
+    let fetch_remote = fx.forge.join("remote.git");
+    assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
+    assert_eq!(bare_tip(&push_remote, BRANCH), None, "{case}");
+    if case == "composed" {
+        let decoy = fx.bare_repo("decoy.git");
+        fx.git(&["push", path_str(&decoy), BRANCH]);
+        assert_eq!(
+            bare_tip(&decoy, BRANCH).as_deref(),
+            Some(fx.candidate.as_str())
+        );
+        fx.git(&[
+            "push",
+            path_str(&push_remote),
+            &format!("{BASE}:refs/heads/{BRANCH}"),
+        ]);
+        fx.git(&[
+            "config",
+            &format!("url.{}.insteadOf", path_str(&decoy)),
+            path_str(&push_remote),
+        ]);
+    }
+    if case == "pushurl" {
+        fx.git(&["config", "remote.origin.pushurl", path_str(&push_remote)]);
+    } else {
+        fx.git(&[
+            "config",
+            &format!("url.{}.pushInsteadOf", path_str(&push_remote)),
+            path_str(&fetch_remote),
+        ]);
+    }
+    if case == "composed" {
+        assert_eq!(
+            fx.git(&["remote", "get-url", "--push", "--all", "origin"]),
+            path_str(&push_remote)
+        );
+    }
+    // Neither the fetch remote nor the decoy satisfies the destination's lease.
+    let leased = action_err(
+        &host,
+        "git_push",
+        &json!({ "workspace_path": fx.repo, "branch": BRANCH, "lease_remote_sha": fx.candidate }),
+    );
+    assert!(
+        leased.to_string().contains("push_lease_lost"),
+        "{case}: {leased}"
+    );
+    assert_eq!(
+        bare_tip(&push_remote, BRANCH).as_deref(),
+        if case == "composed" {
+            Some(fx.base_sha.as_str())
+        } else {
+            None
+        },
+        "{case}"
+    );
+    let pushed = action_ok(&host, "git_push", &fx.push_input());
+    assert_eq!(
+        pushed["decision"],
+        if case == "composed" {
+            "performed_fast_forward"
+        } else {
+            "performed_create"
+        },
+        "{case}"
+    );
+    assert_eq!(
+        bare_tip(&push_remote, BRANCH).as_deref(),
+        Some(fx.candidate.as_str()),
+        "{case}"
+    );
+    // Reuse is truthful only after that destination itself holds the candidate.
+    let reused = action_ok(&host, "git_push", &fx.push_input());
+    assert_eq!(reused["decision"], "reused_current", "{case}: {reused}");
+}
+fn git_push_probes_composed_rewrite_destination_not_its_rewrite(sandbox: &Path) {
+    assert_effective_push_destination(sandbox, "composed");
+}
+/// The fetch remote holding a candidate does not publish it to an empty push
+/// destination [ORB-17671]. Each row owns a separate repository and forge.
 fn git_push_publishes_to_effective_push_destination_not_fetch_remote(sandbox: &Path) {
     for case in ["pushurl", "pushInsteadOf"] {
-        let fx = Fixture::new(sandbox);
-        let push_remote = fx.bare_repo("push.git");
-        assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
-        assert_eq!(bare_tip(&push_remote, BRANCH), None, "{case}");
-        let fetch_remote = fx.forge.join("remote.git");
-        if case == "pushurl" {
-            fx.git(&["config", "remote.origin.pushurl", path_str(&push_remote)]);
-        } else {
-            fx.git(&[
-                "config",
-                &format!("url.{}.pushInsteadOf", path_str(&push_remote)),
-                path_str(&fetch_remote),
-            ]);
-        }
-        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-        // A lease on the published head is a lease at the push destination: the fetch remote holding it does not satisfy it.
-        let leased = action_err(
-            &host,
-            "git_push",
-            &json!({ "workspace_path": fx.repo, "branch": BRANCH, "lease_remote_sha": fx.candidate, }),
-        );
-        assert!(leased.to_string().contains("push_lease_lost"), "{case}");
-        assert_eq!(bare_tip(&push_remote, BRANCH), None, "{case}");
-        let pushed = action_ok(&host, "git_push", &fx.push_input());
-        assert_eq!(pushed["decision"], "performed_create", "{case}");
-        assert_eq!(
-            bare_tip(&push_remote, BRANCH).as_deref(),
-            Some(fx.candidate.as_str()),
-            "{case}"
-        );
-        // Only now, with the destination holding the exact candidate, is reuse a truthful report.
-        let reused = action_ok(&host, "git_push", &fx.push_input());
-        assert_eq!(reused["decision"], "reused_current", "{case}: {reused}");
+        assert_effective_push_destination(sandbox, case);
     }
     // Several distinct push destinations are refused before any of them is written or reported as published.
-    let fx = Fixture::new(sandbox);
+    let (fx, host) = fx_host(sandbox);
     let first = fx.forge.join("push-one.git");
     let second = fx.forge.join("push-two.git");
     fx.bare_repo_at(&first);
@@ -4641,75 +4561,16 @@ fn git_push_publishes_to_effective_push_destination_not_fetch_remote(sandbox: &P
         "remote.origin.pushurl",
         path_str(&second),
     ]);
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
     let refused = action_err(&host, "git_push", &fx.push_input());
     assert!(refused.to_string().contains("distinct effective push URLs"));
     assert_eq!(bare_tip(&first, BRANCH), None);
     assert_eq!(bare_tip(&second, BRANCH), None);
 }
-/// ORB-17686: a `pushInsteadOf` destination that also matches an `insteadOf` rule must be probed and fetched as itself, not as the repository the `insteadOf` rule rewrites it to.
-fn git_push_probes_composed_rewrite_destination_not_its_rewrite(sandbox: &Path) {
-    let fx = Fixture::new(sandbox);
-    let fetch_remote = fx.forge.join("remote.git");
-    let push_remote = fx.forge.join("push.git");
-    let decoy = fx.forge.join("decoy.git");
-    fx.bare_repo_at(&push_remote);
-    fx.bare_repo_at(&decoy);
-    // The decoy and the fetch remote both hold the candidate; the publication destination holds only the base.
-    fx.git(&["push", path_str(&decoy), BRANCH]);
-    assert_eq!(
-        bare_tip(&decoy, BRANCH).as_deref(),
-        Some(fx.candidate.as_str())
-    );
-    fx.git(&[
-        "push",
-        path_str(&push_remote),
-        &format!("{BASE}:refs/heads/{BRANCH}"),
-    ]);
-    // origin fetches from fetch.git, pushes to push.git, and push.git as a URL argument would rewrite to decoy.git.
-    fx.git(&[
-        "config",
-        &format!("url.{}.pushInsteadOf", path_str(&push_remote)),
-        path_str(&fetch_remote),
-    ]);
-    fx.git(&[
-        "config",
-        &format!("url.{}.insteadOf", path_str(&decoy)),
-        path_str(&push_remote),
-    ]);
-    assert_eq!(
-        fx.git(&["remote", "get-url", "--push", "--all", "origin"]),
-        path_str(&push_remote)
-    );
-    let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
-    // A lease on the candidate is not satisfied by the decoy (or the fetch remote) holding it: the destination is at the base, so the lease is lost and nothing is written.
-    let leased = action_err(
-        &host,
-        "git_push",
-        &json!({ "workspace_path": fx.repo, "branch": BRANCH, "lease_remote_sha": fx.candidate, }),
-    );
-    assert!(leased.to_string().contains("push_lease_lost"), "{leased}");
-    assert_eq!(
-        bare_tip(&push_remote, BRANCH).as_deref(),
-        Some(fx.base_sha.as_str())
-    );
-    // The probe sees the base at the destination, fetches that head from the destination, and fast-forwards it.
-    let pushed = action_ok(&host, "git_push", &fx.push_input());
-    assert_eq!(pushed["decision"], "performed_fast_forward");
-    assert_eq!(
-        bare_tip(&push_remote, BRANCH).as_deref(),
-        Some(fx.candidate.as_str())
-    );
-    // Only now, with the destination itself holding the exact candidate, is reuse a truthful report.
-    let reused = action_ok(&host, "git_push", &fx.push_input());
-    assert_eq!(reused["decision"], "reused_current", "{reused}");
-}
 /// ORB-17671: a self-pointing effective push URL is refused even when the fetch URL names a real remote, including from a linked worktree that shares the primary checkout's Git common directory.
 fn git_push_refuses_self_pointing_effective_push_url(sandbox: &Path) {
     for case in ["direct", "linked_worktree"] {
-        let fx = Fixture::new(sandbox);
+        let (fx, host) = fx_host(sandbox);
         fx.git(&["config", "remote.origin.pushurl", path_str(&fx.repo)]);
-        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
         let workspace = if case == "linked_worktree" {
             let linked = fx.forge.join("linked-worktree");
             fx.git(&["worktree", "add", "--detach", path_str(&linked)]);
@@ -4735,13 +4596,12 @@ fn git_push_refuses_self_pointing_effective_push_url(sandbox: &Path) {
 /// ORB-14717: a silent origin must not turn reviewed work into a candidate failure. Only a cached ref sharing ancestry can complete the handoff.
 fn claimed_handoff_fetch_timeout_uses_only_a_related_cached_base(sandbox: &Path) {
     for cache in ["related", "missing", "unrelated"] {
-        let fx = Fixture::new(sandbox);
+        let (fx, host) = fx_host(sandbox);
         // A local upload-pack stalls without permitting any network transport from this test process.
         let silent = fx._root.path().join("silent-upload-pack");
         fs::write(&silent, "#!/bin/sh\nexec sleep 30\n").unwrap();
         fs::set_permissions(&silent, fs::Permissions::from_mode(0o755)).unwrap();
         fx.git(&["config", "remote.origin.uploadpack", path_str(&silent)]);
-        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
         let mut input = fx.claim_input();
         let validated = action_ok(&host, "claim_validate", &input);
         input["candidate"] = validated["candidate"].clone();
@@ -4808,7 +4668,7 @@ fn remote_base_transport_retries_preserve_access_refusals(sandbox: &Path) {
         "Permission denied (publickey). Connection closed" => (false, 1, false);
         "Authentication failed. Connection reset by peer" => (false, 1, false)
     } {
-        let fx = Fixture::new(sandbox);
+        let (fx, host) = fx_host(sandbox);
         let count = fx._root.path().join("fetch-attempts");
         let upload_pack = fx._root.path().join("upload-pack");
         fs::write(&count, "0").unwrap();
@@ -4818,7 +4678,6 @@ fn remote_base_transport_retries_preserve_access_refusals(sandbox: &Path) {
         )).unwrap();
         fs::set_permissions(&upload_pack, fs::Permissions::from_mode(0o755)).unwrap();
         fx.git(&["config", "remote.origin.uploadpack", path_str(&upload_pack)]);
-        let host = DeliveryHost::new(&fx.repo, TaskStatus::InProgress);
         if !transient && !recovery {
             let mut input = json!({"workspace_path": fx.repo, "base_sync": "local"});
             let validated = action_ok(&host, "claim_validate", &input);
@@ -6529,13 +6388,16 @@ fn in_fresh_row(parent: &Path, body: impl FnOnce(&Path)) {
 }
 type Scenario = fn(&Path);
 /// Run each scenario in its own fresh row under `parent` (the isolated child's sandbox), recording each pass by name as `run_scenarios` does.
-#[allow(clippy::print_stderr)]
 fn run_rows(parent: &Path, rows: &[(&str, Scenario)]) {
     for (name, scenario) in rows {
-        eprintln!("scenario: {name}");
-        in_fresh_row(parent, scenario);
-        test_env::record_scenario_pass(name);
+        run_named_row(parent, name, scenario);
     }
+}
+#[allow(clippy::print_stderr)]
+fn run_named_row(parent: &Path, name: &str, scenario: impl FnOnce(&Path)) {
+    eprintln!("scenario: {name}");
+    in_fresh_row(parent, scenario);
+    test_env::record_scenario_pass(name);
 }
 // Wrapper tables: each `#[test]` runs its scenarios in one isolated child (see `isolated`); scenario names double as their row names.
 macro_rules! container_groups {
@@ -6568,7 +6430,6 @@ container_groups! {
     validation_environment_contracts => [missing_required_validation_tool_reports_its_search_path, validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain, a_missing_validation_tool_is_an_environment_failure],
     empty_validation_and_handoff_contracts => [required_validation_without_commands_is_a_no_op, claimed_validation_without_commands_is_a_recorded_no_op, claimed_handoff_carries_before_pr_evidence_only_for_its_candidate, claimed_handoff_without_logs_is_refused_when_commands_are_required],
     failure_handoff_contracts => [a_failure_handoff_releases_the_run_s_review_attempts_even_for_a_bundle, a_reviewer_timeout_preserves_its_candidate_and_requeues_without_blocking, an_external_evidence_handoff_holds_while_a_substantive_rejection_blocks, an_admission_refusal_for_held_evidence_stays_held_not_escalated, a_worktree_step_failure_ends_the_failure_hook_as_no_candidate, a_failure_before_the_worktree_checkpoint_releases_reviews_and_a_later_gap_is_refused],
-    implementation_handoff_contracts => [an_implementer_blocker_keeps_the_dirty_candidate_without_a_pr, a_provider_failure_commits_the_candidate_without_a_pr_or_a_status_write, an_upgrade_refused_reviewer_holds_the_candidate_without_blocking_the_task, a_child_its_parent_stopped_waiting_for_holds_its_candidate],
 }
 test_groups! {
     pr_body_and_promotion_contracts => [pr_promote_records_the_pull_request_page_with_its_number, pr_open_appends_the_review_fixes_section_to_the_published_body],
