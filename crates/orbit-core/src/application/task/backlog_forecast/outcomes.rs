@@ -280,11 +280,16 @@ impl ReturnCurve {
     }
 
     /// What follows a wait that has already lasted `age` hours.
+    ///
+    /// Age 0 is a fresh block: no atom has elapsed, so a return recorded
+    /// at the same instant is still drawn. A positive age has elapsed
+    /// every atom at or before it. Both choices use `return_atom_elapsed`,
+    /// so the remaining mass is the complement.
     pub(super) fn draw(&self, rng: &mut Rng, age: f64) -> Follow {
         let elapsed: f64 = self
             .atoms
             .iter()
-            .filter(|atom| atom.0 <= age)
+            .filter(|atom| return_atom_elapsed(age, atom.0))
             .map(|atom| atom.2)
             .sum();
         let surviving = 1.0 - elapsed;
@@ -292,7 +297,11 @@ impl ReturnCurve {
             return Follow::Never;
         }
         let mut left = rng.unit() * surviving;
-        for &(at, event, mass) in self.atoms.iter().filter(|atom| atom.0 > age) {
+        for &(at, event, mass) in self
+            .atoms
+            .iter()
+            .filter(|atom| !return_atom_elapsed(age, atom.0))
+        {
             if left <= mass {
                 let wait = at - age;
                 return match event {
@@ -319,12 +328,26 @@ impl ReturnCurve {
 
     /// Whether a wait already `age` hours old has no observation left
     /// to draw its future from.
+    ///
+    /// An observation counts as passed only once `return_atom_elapsed`
+    /// says so. A fresh block is therefore not past a pool whose last
+    /// observation sits at age 0.
     pub(super) fn unsupported_at(&self, age: f64) -> bool {
-        self.support == 0 || (self.tail_unsupported && age >= self.last_observed)
+        self.support == 0 || (self.tail_unsupported && return_atom_elapsed(age, self.last_observed))
     }
 }
 
+/// Whether a return atom at `at` has already elapsed for a wait of `age`
+/// hours. A fresh wait has elapsed nothing, including a return recorded
+/// at the instant the block began.
+fn return_atom_elapsed(age: f64, at: f64) -> bool {
+    age > 0.0 && at <= age
+}
+
 /// The hours from `from` to `to`, never negative.
+///
+/// Sub-second spans stay fractional. Whole seconds made a return a
+/// fraction of a second after the block into a zero-time atom.
 pub(super) fn hours_between(from: DateTime<Utc>, to: DateTime<Utc>) -> f64 {
-    (to - from).num_seconds().max(0) as f64 / 3600.0
+    (to - from).as_seconds_f64().max(0.0) / 3600.0
 }

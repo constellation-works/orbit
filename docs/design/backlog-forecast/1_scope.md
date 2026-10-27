@@ -1,8 +1,8 @@
 ---
 title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
-last_updated: 2026-10-26
-last_validated: 2026-10-26
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Draft
 stage: building
 next: "Implement the remaining v2 factor, rework [ORB-18691]; review residual phases remain open from the outcomes factor, and the shadow counterfactual and follower capacity from the resource-fit factor."
@@ -15,7 +15,7 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 # Scope: backlog forecast v2 from drain admission
 
-Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, and [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6** (see [Shipped so far](#shipped-so-far)); the remaining v2 rules and fields are planned until their tasks land. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, [ORB-18687] shipped review-mode sampling, [ORB-18688] shipped attempt outcomes and blocked returns, [ORB-18689] shipped enforce-mode resource fit as `MODEL_VERSION` **6**, and [ORB-18853] keeps sub-second and same-instant blocked returns drawable as `MODEL_VERSION` **7** (see [Shipped so far](#shipped-so-far)); the remaining v2 rules and fields are planned until their tasks land. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/task/backlog_forecast.rs`, with simulation in `backlog_forecast/model.rs` and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
@@ -77,6 +77,12 @@ Not yet shipped from the resource-fit rules below:
 - **Live reservations.** Admissions in flight at the snapshot, the live forecast's reservations, are not carried into the simulation.
 - **UI.** Analytics › Forecast does not yet show the resource row of `wait_hours` or `inputs.resource_fit`.
 - **Latency.** No latency was measured.
+
+[ORB-18853] (`MODEL_VERSION` 7; `inputs.admission_factors.outcomes` stays `1`) keeps a recorded sub-second or same-instant return drawable for a newly blocked attempt. A pool of observed returns no longer becomes no-return mass for a fresh block.
+
+- **Timing.** Episode holds, return waits and phase ages keep the fractional hours between the recorded timestamps. A return half a second after the block is a short wait, not a zero-time atom.
+- **Fresh draws.** A wait of age 0 has elapsed no atom, including one recorded at the same instant the block began. The same elapsed rule decides `return_tail_unsupported`: a fresh block is not past an observation at age 0. A wait that has already lasted still treats every atom at or before its age as elapsed.
+- **Left as conditioned.** A wait already older than every observed return, with no probability mass left, still draws no return and does not gain a new `return_tail_unsupported` flag. That draw is the conditional distribution of a completed incidence curve, not mass invented from a zero-time atom.
 
 ## Problem
 
