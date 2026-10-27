@@ -1053,6 +1053,46 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     );
 }
 
+#[test]
+fn mcp_task_list_fields_cli_example_runs_with_canonical_tool_name() {
+    let (workspace, mut client, task_id) = McpWorkspace::with_task("CLI example probe");
+    let listed = client.tools_list();
+    let fields_description = find_tool(tools_array(&listed), "orbit_task_list")["inputSchema"]["properties"]["fields"]["description"]
+        .as_str()
+        .expect("task-list fields description");
+
+    assert!(
+        fields_description.contains("fetch one task with `orbit_task_show`"),
+        "prose cross-references must keep using the advertised callable MCP name: {fields_description}"
+    );
+    let cli_tool = fields_description
+        .split("orbit tool run ")
+        .nth(1)
+        .and_then(|example| example.split('`').next())
+        .expect("task-list fields description includes an orbit tool run example");
+
+    let cli_input = json!({ "limit": 1, "model": "codex" }).to_string();
+    let cli_output = workspace.run(&["tool", "run", cli_tool, "--input", &cli_input]);
+    assert!(
+        cli_output.status.success(),
+        "running the command advertised by MCP must succeed; status: {}, stderr: {}",
+        cli_output.status,
+        stderr(&cli_output)
+    );
+    assert_eq!(
+        cli_tool, "orbit.task.list",
+        "a runnable CLI example must retain the canonical dotted tool name"
+    );
+
+    let task_list = stdout_json(&cli_output);
+    assert!(
+        task_list["tasks"]
+            .as_array()
+            .is_some_and(|tasks| { tasks.iter().any(|task| task["id"] == task_id) }),
+        "the advertised CLI example must return the documented task-list envelope: {task_list}"
+    );
+}
+
 fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials() {
     use orbit_common::governance::authorization::governed_tool;
     use orbit_types::tool::{McpCapability, mcp_advertised_tool_name};
