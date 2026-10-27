@@ -24,9 +24,6 @@ mod client;
 mod server;
 mod socket;
 
-#[cfg(test)]
-mod tests;
-
 use orbit_auth::scope::{LeaseTokenScope, LeaseTokenVerb};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

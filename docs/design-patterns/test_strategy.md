@@ -365,9 +365,9 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 
 - `crates/orbit-web/src/log_format/tests/scan.rs`: `post_window_errors_do_not_consume_the_match_budget_or_advance_coverage` (criterion 1, combinatorial scan budgets and coverage). A table drives the existing segmented-reader seam with complete, capped and retention-limited windows and excess newer records. The HTTP boundary fixes the process scan budget at 50,000; this seam proves those cases with a handful of rows, while the HTTP month test covers endpoint wiring and agreement with stderr.
 
-- `crates/orbit-web/src/lease_intake/tests/server.rs::ambiguous_workspace_id_name_selector_is_refused_without_touching_either_workspace` (criterion 3, workspace-selection safety at the Unix socket boundary). A real registry-backed dashboard gives two workspaces the `ws_alpha` id/name collision, and the test sends request, renew and release frames through the server and public client. Unique name and id requests must grant leases in their own runtimes, while ambiguous operations are refused and both leases keep their original expiry and granted state. The server's test listener and registry-backed state builder are crate-private, so the crate-root integration binary cannot assemble the same fixture without widening the production API.
+- `crates/orbit-web/src/tests/lease_intake.rs::ambiguous_workspace_id_name_selector_is_refused_without_touching_either_workspace` (criterion 3, workspace-selection safety at the Unix socket boundary). A real registry-backed dashboard gives two workspaces the `ws_alpha` id/name collision, and the test sends request, renew and release frames through the server and public client. Unique name and id requests must grant leases in their own runtimes, while ambiguous operations are refused and both leases keep their original expiry and granted state. The server's test listener and registry-backed state builder are crate-private, so the crate-root integration binary cannot assemble the same fixture without widening the production API.
 
-- `crates/orbit-web/src/lease_intake/tests/server.rs`: `oversized_read_responses_are_bounded_errors_and_other_connections_still_work` and `oversized_request_response_releases_the_grant_before_returning_an_error` (criterion 3, bounded protocol frames and grant recovery, ORB-18638). Both reproduce oversized responses through the real Unix socket and public intake client. The read table covers list, show and check, continued framing on the same connection, and small requests on another connection; the request case verifies retries leave no new active lease. The test listener and dashboard state are crate-private, so a crate-root integration fixture would require widening production visibility.
+- `crates/orbit-web/src/tests/lease_intake.rs`: `oversized_read_responses_are_bounded_errors_and_other_connections_still_work` and `token_grant_answers_fit_the_frame_without_compensating_release` (criterion 3, bounded protocol frames and grant safety, ORB-18638, ORB-18776). Both exercise bounded responses through the real Unix socket and public intake client. The read table covers list, show and check, continued framing on the same connection, and small requests on another connection; the grant case verifies a fitting overlap prefix leaves a real active lease and an answer that cannot fit is refused before any lease or notice is written. The test listener and dashboard state are crate-private, so a crate-root integration fixture would require widening production visibility.
 
 - The four [worker log sibling tests](../../crates/orbit-core/src/application/job/pipeline/worker/tests/log.rs) — `appends_after_the_size_snapshot_are_excluded_from_the_bounded_read`, `empty_short_and_exact_limit_logs_keep_their_expected_content`, `long_logs_report_the_snapshot_window_and_return_only_its_tail`, and `shrink_after_the_size_snapshot_reports_only_bytes_still_available` (criterion 2, deterministic interleaving). A captured size is passed through the same bounded reader used by the audit and supervisor callers; the append case proves bytes written after that snapshot cannot exceed the 16 KiB window, while controls cover empty, short, exact-limit, long and shrinking files. The callers do not lock out the append-oriented worker, and an integration test cannot force the metadata/read order reproducibly [ORB-15610].
 - `crates/orbit-core/src/application/job/pipeline/worker/tests/supervisor.rs`: `store_read_faults_retain_supervision_and_reap_in_a_live_parent` (criterion 2, fault injection). A SQLite store wrapper injects unreadable and missing startup records and a post-exit read fault while a socket rendezvous bounds a real child. The isolated parent asserts fresh-state settlement and OS reaping before it exits; the public runtime cannot inject these observer reads.
@@ -893,7 +893,7 @@ cap case uses real SSE ownership and follows the configured capacity without pin
 its value. Dashboard Node fixtures live beside these integration modules and exercise
 the shipped JavaScript with their existing assertions.
 
-`crates/orbit-web/src/lease_intake/tests/server.rs::token_queued_selector_expansion_retries_do_not_double_count`
+`crates/orbit-web/src/tests/lease_intake.rs::token_queued_selector_expansion_retries_do_not_double_count`
 is admitted under criterion 3 for the token selector resource bound (ORB-19005,
 regressing ORB-18776). It drives the real token intake socket and checks single
 and batch retries, a mixed duplicate/new expansion, and refusal of a new 65th
@@ -901,7 +901,7 @@ selector without changing the lease. The test stays in the in-crate fixture
 because `LeaseIntakeSocket::for_test_listener` is crate-private; an external
 integration target cannot start the same socket without widening that seam.
 
-`crates/orbit-web/src/lease_intake/tests/server.rs::token_expansion_accounts_for_a_near_limit_deadlock_cycle`
+`crates/orbit-web/src/tests/lease_intake.rs::token_expansion_accounts_for_a_near_limit_deadlock_cycle`
 is admitted as the public token-intake regression for an expansion whose
 deadlock cycle exceeds the frame (ORB-19007). The fixed answer is sized with
 `deadlock` null, and committing the cycle made intake return `frame_too_large`
@@ -910,7 +910,7 @@ socket: a three-lease cycle that fits is delivered whole, and a 32-lease cycle
 on a near-limit record is refused with `invalid_input` before any queue change
 or notice. It stays beside the selector-bound case for the same private listener.
 
-`crates/orbit-web/src/lease_intake/tests/server.rs::token_task_holder_prebound_reports_truncation_for_requests_and_expansions`
+`crates/orbit-web/src/tests/lease_intake.rs::token_task_holder_prebound_reports_truncation_for_requests_and_expansions`
 is admitted under criterion 3 for the reproduced task-holder truncation defect
 (ORB-19080). Three in-progress task context holders block one selector. A
 4096-byte token answer is sized to fit the first conflict but not its omission
