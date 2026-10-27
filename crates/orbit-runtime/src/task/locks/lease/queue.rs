@@ -26,8 +26,9 @@ use super::super::commands::{
 };
 use super::super::index::{TaskLockIndex, merge_task_lock_conflicts, task_lock_conflicts_indexed};
 use super::{
-    LEASE_INTAKE_ACTOR, LeaseTokenGrant, PathHolders, ensure_token_covers_lease, lease_active,
-    lease_json, parse_selectors, required_lease_id, selector_covers,
+    LEASE_INTAKE_ACTOR, LeaseTokenGrant, PathHolders, ResponseBudget, TOKEN_MAX_LEASE_SELECTORS,
+    ensure_token_covers_lease, ensure_token_selector_count, lease_active, lease_json,
+    parse_selectors, required_lease_id, selector_covers,
 };
 use crate::RuntimeKernel;
 
@@ -50,11 +51,13 @@ pub fn expand(
 ) -> Result<Value, OrbitError> {
     runtime.lease_policy().ensure_enabled()?;
     let actor = reservation_actor_label(runtime, agent.as_deref(), model.as_deref())?;
-    expand_as(runtime, input, actor)
+    expand_as(runtime, input, actor, None)
 }
 
 /// Expand a lease for an authenticated lease token, refused without change
-/// when the lease's mode or priority exceeds the token or its class policy.
+/// when the lease's mode or priority exceeds the token or its class policy,
+/// when the lease would hold and wait for more than the token selector limit
+/// together, or when its answer could not fit the token transport.
 pub fn expand_with_token(
     runtime: &RuntimeKernel,
     input: Value,
@@ -62,10 +65,15 @@ pub fn expand_with_token(
 ) -> Result<Value, OrbitError> {
     runtime.lease_policy().ensure_enabled()?;
     ensure_token_covers_lease(runtime, &input, grant)?;
-    expand_as(runtime, input, LEASE_INTAKE_ACTOR.to_string())
+    expand_as(runtime, input, LEASE_INTAKE_ACTOR.to_string(), Some(grant))
 }
 
-fn expand_as(runtime: &RuntimeKernel, input: Value, actor: String) -> Result<Value, OrbitError> {
+fn expand_as(
+    runtime: &RuntimeKernel,
+    input: Value,
+    actor: String,
+    token: Option<&LeaseTokenGrant>,
+) -> Result<Value, OrbitError> {
     let lease_id = required_lease_id(&input)?;
     let repo_root = runtime.paths().repo_root.as_path();
     let selectors = parse_selectors(&input, &["selectors", "files"], "selectors", repo_root)?;
@@ -110,6 +118,32 @@ fn expand_as(runtime: &RuntimeKernel, input: Value, actor: String) -> Result<Val
                 .any(|held| selector_covers(held, selector))
         })
         .collect::<Vec<_>>();
+    let mut budget = match token {
+        None => ResponseBudget::unbounded(),
+        Some(grant) => {
+            ensure_token_selector_count(
+                current.selectors.len() + current.queued_selectors.len() + surface.len(),
+            )?;
+            // The largest answer: every new selector both added and queued.
+            let mut provisional = current.clone();
+            provisional.selectors.extend(surface.iter().cloned());
+            provisional.queued_selectors.extend(surface.iter().cloned());
+            ResponseBudget::for_token(
+                grant.max_response_bytes,
+                &json!({
+                    "added": surface,
+                    "queued": surface,
+                    "queue_position": u32::MAX,
+                    "conflicts": [],
+                    "deadlock": null,
+                    "unlocked_selectors": unlocked_selectors,
+                    "overlaps": [],
+                    "truncated": false,
+                    "lease": lease_json(&provisional),
+                }),
+            )?
+        }
+    };
     let index = TaskLockIndex::load(runtime, &[])?;
     let task_conflicts = if current.mode == LeaseMode::Hard && !surface.is_empty() {
         runtime.reconcile_stale_owned_reservations_for_files(&surface, 32)?;
@@ -124,19 +158,32 @@ fn expand_as(runtime: &RuntimeKernel, input: Value, actor: String) -> Result<Val
         selectors: surface,
         task_conflicts,
         aging_minutes: runtime.lease_policy().aging_minutes,
+        max_selectors: token.map(|_| TOKEN_MAX_LEASE_SELECTORS as u32),
     })?;
     emit_expired_lease_events(runtime, EXPAND_TOOL, &result.expired_leases)?;
     if !result.expired_leases.is_empty() {
         grant_queued(runtime, EXPAND_TOOL)?;
     }
+    if result.selector_limit_exceeded {
+        // Checked above too; the store's check holds against a concurrent
+        // expansion of the same lease.
+        return Err(OrbitError::InvalidInput(format!(
+            "lease `{lease_id}` would have more than the lease token limit of \
+             {TOKEN_MAX_LEASE_SELECTORS} selectors; it is unchanged"
+        )));
+    }
     let lease = result.lease.ok_or_else(not_active)?;
-    let conflicts = merge_task_lock_conflicts(result.conflicts, Vec::new());
+    let conflicts = budget.take(merge_task_lock_conflicts(result.conflicts, Vec::new()));
     let deadlock = result
         .deadlocks
         .iter()
         .find(|deadlock| deadlock.lease_id == lease_id);
     let overlaps = if lease.mode == LeaseMode::Advisory {
-        PathHolders::load(runtime, &index, Some(&lease_id))?.overlapping(&result.added, repo_root)
+        PathHolders::load(runtime, &index, Some(&lease_id))?.overlapping(
+            &result.added,
+            repo_root,
+            &mut budget,
+        )
     } else {
         Vec::new()
     };
@@ -175,6 +222,7 @@ fn expand_as(runtime: &RuntimeKernel, input: Value, actor: String) -> Result<Val
         "deadlock": deadlock,
         "unlocked_selectors": unlocked_selectors,
         "overlaps": overlaps,
+        "truncated": budget.truncated,
         "lease": lease_json(&lease),
     }))
 }

@@ -10,8 +10,11 @@
 //! asked `wait = false`, which refuses it with the holders named.
 //!
 //! Over SSH the principal class and its `lease.*` ceilings are attribution
-//! plus a guard, not a security boundary.
+//! plus a guard, not a security boundary. A lease token is bounded further:
+//! its principal's active leases, each lease's selectors, and the size of
+//! every answer it gets (see `TOKEN_MAX_ACTIVE_LEASES`).
 
+use std::ops::ControlFlow;
 use std::path::Path;
 
 mod lifetime;
@@ -51,6 +54,21 @@ const RELEASE_TOOL: &str = "orbit.lease.release";
 const SHOW_TOOL: &str = "orbit.lease.show";
 const LIST_TOOL: &str = "orbit.lease.list";
 const LEASE_ID_PREFIX: &str = "lease-";
+
+/// Active (granted or queued) leases one lease-token principal may have in a
+/// workspace. Counted from the owner's lease rows by principal, so a new
+/// token for the same principal, or a listener restart, starts nowhere new.
+const TOKEN_MAX_ACTIVE_LEASES: u32 = 64;
+
+/// Selectors one lease-token lease may hold and wait for, together. It bounds
+/// the overlap notices one request or expansion writes per holder and the
+/// selector pairs the owner compares.
+const TOKEN_MAX_LEASE_SELECTORS: usize = 64;
+
+/// Room kept free in a token answer's size estimate for what the estimate
+/// cannot know before the write: the response envelope, the final lease id
+/// and timestamps, and a queue position.
+const TOKEN_RESPONSE_MARGIN_BYTES: usize = 512;
 
 /// `lease.*` as admitted: whether leases are accepted, the mode a request
 /// that names none gets, and the per-principal-class guards.
@@ -125,7 +143,7 @@ pub fn lease_principal_class() -> LeasePrincipalClass {
 
 /// Request a lease on `selectors` for `principal`.
 ///
-/// Advisory is always granted and names the holders it overlaps. Hard drops
+/// Advisory is granted and names the holders it overlaps. Hard drops
 /// `workflow.unlocked_context_paths` from its surface and is granted only
 /// when the rest overlaps no task context lock, task reservation or hard
 /// lease, and no queued request or expansion ranked ahead of it wants those
@@ -174,6 +192,10 @@ pub struct LeaseTokenGrant {
     pub hard_allowed: bool,
     /// The client address the listener resolved.
     pub client_address: String,
+    /// The largest serialized answer the transport can deliver. A request or
+    /// expansion whose answer could not fit is refused before anything is
+    /// written, and holder lists are cut to fit (`truncated: true`).
+    pub max_response_bytes: usize,
 }
 
 /// Request a lease for an authenticated lease token.
@@ -182,7 +204,10 @@ pub struct LeaseTokenGrant {
 /// instead of the caller's declared principal and process class, and with the
 /// stricter of the token's scope and the workspace's class policy: the lower
 /// of the two priority ceilings, and hard only when both allow it. The lease
-/// records the token id, and its audit rows name the token and client.
+/// records the token id, and its audit rows name the token and client. A
+/// token is also held to `TOKEN_MAX_ACTIVE_LEASES` per principal, to
+/// `TOKEN_MAX_LEASE_SELECTORS` per lease, and to answers that fit
+/// [`LeaseTokenGrant::max_response_bytes`], each checked before any write.
 pub fn request_with_token(
     runtime: &RuntimeKernel,
     input: Value,
@@ -333,8 +358,64 @@ fn request_as(
             ));
         }
     };
-    let index = TaskLockIndex::load(runtime, &[])?;
     let workspace_id = workspace_task_reservation_id(runtime)?;
+    let tags = optional_string_list_alias(&input, &["tags"])?.unwrap_or_default();
+    let machine_id = optional_string_alias(&input, &["machine_id", "remote_caller_machine_id"])?;
+    let base_branch = Some(
+        optional_string_alias(&input, &["base_branch", "base"])?
+            .unwrap_or_else(|| runtime.workspace_base_branch().to_string()),
+    );
+    let bound_branch = optional_string_alias(&input, &["branch", "bound_branch"])?;
+    let mut budget = match token {
+        None => ResponseBudget::unbounded(),
+        Some(grant) => {
+            ensure_token_selector_count(selectors.len())?;
+            // The largest answer this request can get before its holder
+            // lists: a grant with a notice, or a queued answer.
+            let provisional = LeaseRecord {
+                lease_id: format!("{LEASE_ID_PREFIX}{}", "0".repeat(64)),
+                notice_cursor: 0,
+                workspace_id: workspace_id.clone(),
+                selectors: stored_selectors.clone(),
+                mode,
+                priority,
+                tags: tags.clone(),
+                principal: principal.clone(),
+                principal_class,
+                machine_id: machine_id.clone(),
+                base_branch: base_branch.clone(),
+                bound_branch: bound_branch.clone(),
+                actor: actor.clone(),
+                created_at: PLACEHOLDER_TIMESTAMP.to_string(),
+                expires_at: PLACEHOLDER_TIMESTAMP.to_string(),
+                heartbeat_at: PLACEHOLDER_TIMESTAMP.to_string(),
+                released_at: None,
+                release_reason: None,
+                token_id: Some(grant.token_id.clone()),
+                queued_selectors: stored_selectors.clone(),
+                queued_at: Some(PLACEHOLDER_TIMESTAMP.to_string()),
+                queue_kind: Some(LeaseQueueKind::Request),
+            };
+            ResponseBudget::for_token(
+                grant.max_response_bytes,
+                &json!({
+                    "granted": true,
+                    "queued": true,
+                    "queue_position": u32::MAX,
+                    "requested_mode": requested_mode,
+                    "downgraded": downgraded,
+                    "unlocked_selectors": unlocked_selectors,
+                    "overlaps": [],
+                    "conflicts": [],
+                    "queued_ahead": [],
+                    "truncated": false,
+                    "lease": lease_json(&provisional),
+                    "notice": "x".repeat(128),
+                }),
+            )?
+        }
+    };
+    let index = TaskLockIndex::load(runtime, &[])?;
     let task_conflicts = if mode == LeaseMode::Hard {
         runtime.reconcile_stale_owned_reservations_for_files(&stored_selectors, 32)?;
         task_lock_conflicts_indexed(&index, &[], &stored_selectors, repo_root)
@@ -351,34 +432,37 @@ fn request_as(
             selectors: stored_selectors.clone(),
             mode,
             priority,
-            tags: optional_string_list_alias(&input, &["tags"])?.unwrap_or_default(),
+            tags,
             principal: principal.clone(),
             principal_class,
-            machine_id: optional_string_alias(&input, &["machine_id", "remote_caller_machine_id"])?,
-            base_branch: Some(
-                optional_string_alias(&input, &["base_branch", "base"])?
-                    .unwrap_or_else(|| runtime.workspace_base_branch().to_string()),
-            ),
-            bound_branch: optional_string_alias(&input, &["branch", "bound_branch"])?,
+            machine_id,
+            base_branch,
+            bound_branch,
             actor: actor.clone(),
             ttl_seconds,
             token_id: token.map(|grant| grant.token_id.clone()),
             wait,
             task_conflicts,
             aging_minutes: policy.aging_minutes,
+            active_lease_limit: token.map(|_| TOKEN_MAX_ACTIVE_LEASES),
         })?;
     emit_expired_lease_events(runtime, REQUEST_TOOL, &result.expired_leases)?;
     if !result.expired_leases.is_empty() {
         queue::grant_queued(runtime, REQUEST_TOOL)?;
     }
-    let conflicts = merge_task_lock_conflicts(result.conflicts, Vec::new());
+    if let Some(active) = result.active_lease_limit_reached {
+        return refuse_over_active_limit(runtime, audit_request, active);
+    }
+    let conflicts = budget.take(merge_task_lock_conflicts(result.conflicts, Vec::new()));
+    let queued_ahead = budget.take(result.queued_ahead);
     let Some(lease) = result.lease else {
         return refuse(
             runtime,
             audit_request,
             &stored_selectors,
             conflicts,
-            &result.queued_ahead,
+            &queued_ahead,
+            budget.truncated,
         );
     };
 
@@ -388,7 +472,7 @@ fn request_as(
         payload["mode"] = json!(lease.mode);
         payload["hard_surface"] = json!(stored_selectors);
         payload["conflicts"] = json!(conflicts);
-        payload["queued_ahead"] = json!(result.queued_ahead);
+        payload["queued_ahead"] = json!(queued_ahead);
         payload["queue_position"] = json!(result.queue_position);
         record_lease_audit_event(
             runtime,
@@ -403,7 +487,8 @@ fn request_as(
             "queued": true,
             "queue_position": result.queue_position,
             "conflicts": conflicts,
-            "queued_ahead": result.queued_ahead,
+            "queued_ahead": queued_ahead,
+            "truncated": budget.truncated,
             "requested_mode": requested_mode,
             "downgraded": false,
             "unlocked_selectors": unlocked_selectors,
@@ -412,8 +497,11 @@ fn request_as(
     }
 
     let overlaps = if mode == LeaseMode::Advisory {
-        PathHolders::load(runtime, &index, Some(&lease.lease_id))?
-            .overlapping(&lease.selectors, repo_root)
+        PathHolders::load(runtime, &index, Some(&lease.lease_id))?.overlapping(
+            &lease.selectors,
+            repo_root,
+            &mut budget,
+        )
     } else {
         Vec::new()
     };
@@ -458,6 +546,7 @@ fn request_as(
         "downgraded": downgraded,
         "unlocked_selectors": unlocked_selectors,
         "overlaps": overlaps,
+        "truncated": budget.truncated,
         "lease": lease_json(&lease),
     });
     if let Some(notice) = notice {
@@ -472,6 +561,7 @@ fn refuse(
     hard_surface: &[String],
     conflicts: Vec<TaskLockConflict>,
     queued_ahead: &[String],
+    truncated: bool,
 ) -> Result<Value, OrbitError> {
     payload["reason"] = json!("held");
     payload["hard_surface"] = json!(hard_surface);
@@ -490,7 +580,120 @@ fn refuse(
         "queued": false,
         "conflicts": conflicts,
         "queued_ahead": queued_ahead,
+        "truncated": truncated,
     }))
+}
+
+/// Refuse a token request whose principal already has
+/// [`TOKEN_MAX_ACTIVE_LEASES`] active leases; the store wrote nothing.
+fn refuse_over_active_limit(
+    runtime: &RuntimeKernel,
+    mut payload: Value,
+    active: u32,
+) -> Result<Value, OrbitError> {
+    payload["reason"] = json!("active_lease_limit");
+    payload["active_leases"] = json!(active);
+    payload["limit"] = json!(TOKEN_MAX_ACTIVE_LEASES);
+    record_lease_audit_event(
+        runtime,
+        "lease.request.refused",
+        REQUEST_TOOL,
+        None,
+        AuditEventStatus::Denied,
+        payload,
+    )?;
+    Ok(json!({
+        "granted": false,
+        "queued": false,
+        "reason": "active_lease_limit",
+        "active_leases": active,
+        "limit": TOKEN_MAX_ACTIVE_LEASES,
+        "message": format!(
+            "this principal already has {active} active leases in this workspace, the lease \
+             token limit of {TOKEN_MAX_ACTIVE_LEASES}; release one before requesting another"
+        ),
+        "conflicts": [],
+        "queued_ahead": [],
+        "truncated": false,
+    }))
+}
+
+/// Refuse a token request or expansion that would leave a lease with more
+/// than [`TOKEN_MAX_LEASE_SELECTORS`] selectors, before anything is written.
+fn ensure_token_selector_count(count: usize) -> Result<(), OrbitError> {
+    if count <= TOKEN_MAX_LEASE_SELECTORS {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "a lease token's lease may have at most {TOKEN_MAX_LEASE_SELECTORS} selectors; this \
+         one would have {count}. Lease a covering `dir:` selector instead"
+    )))
+}
+
+/// A timestamp at least as long as any the store writes, for sizing answers.
+const PLACEHOLDER_TIMESTAMP: &str = "0000-00-00T00:00:00.000000000+00:00";
+
+/// What remains of a lease-token answer's size limit for its holder lists
+/// (`overlaps`, `conflicts`, `queued_ahead`), measured as serialized JSON.
+/// The lists are cut to a prefix that fits, and `truncated` says so; every
+/// holder still gets its notice. SSH and dashboard callers are unbounded.
+struct ResponseBudget {
+    remaining: Option<usize>,
+    truncated: bool,
+}
+
+impl ResponseBudget {
+    fn unbounded() -> Self {
+        Self {
+            remaining: None,
+            truncated: false,
+        }
+    }
+
+    /// The budget left by `fixed`, the largest answer the operation can give
+    /// with empty holder lists. When that alone cannot fit `max_bytes` the
+    /// operation is refused here, before it writes anything.
+    fn for_token(max_bytes: usize, fixed: &Value) -> Result<Self, OrbitError> {
+        let needed = serialized_len(fixed) + TOKEN_RESPONSE_MARGIN_BYTES;
+        if needed > max_bytes {
+            return Err(OrbitError::InvalidInput(format!(
+                "the answer to this lease operation would need about {needed} bytes, over the \
+                 {max_bytes}-byte limit of the lease token transport; use fewer or shorter \
+                 selectors, tags or branch names"
+            )));
+        }
+        Ok(Self {
+            remaining: Some(max_bytes - needed),
+            truncated: false,
+        })
+    }
+
+    /// Whether `item` still fits; once one does not, nothing more does, so
+    /// every list stays a prefix.
+    fn admit(&mut self, item: &impl Serialize) -> bool {
+        let Some(remaining) = self.remaining.as_mut() else {
+            return true;
+        };
+        // One more byte for the separating comma.
+        let size = serialized_len(item) + 1;
+        if self.truncated || size > *remaining {
+            self.truncated = true;
+            return false;
+        }
+        *remaining -= size;
+        true
+    }
+
+    fn take<T: Serialize>(&mut self, items: Vec<T>) -> Vec<T> {
+        items
+            .into_iter()
+            .take_while(|item| self.admit(item))
+            .collect()
+    }
+}
+
+fn serialized_len(value: &impl Serialize) -> usize {
+    serde_json::to_vec(value).map_or(usize::MAX / 2, |bytes| bytes.len())
 }
 
 /// Move an active lease's `expires_at` to `ttl_seconds` (reservation
@@ -737,7 +940,11 @@ pub fn check(runtime: &RuntimeKernel, input: Value) -> Result<Value, OrbitError>
                 "path": path,
                 "covered": covered,
                 "unlocked": unlocked.unlocks(path),
-                "holders": holders.overlapping(std::slice::from_ref(path), repo_root),
+                "holders": holders.overlapping(
+                    std::slice::from_ref(path),
+                    repo_root,
+                    &mut ResponseBudget::unbounded(),
+                ),
             })
         })
         .collect::<Vec<_>>();
@@ -806,9 +1013,32 @@ impl<'a> PathHolders<'a> {
     }
 
     /// The holders overlapping any of `files`, tasks first (in lock-status
-    /// order), then reservations, then leases (oldest first).
-    fn overlapping(&self, files: &[String], workspace_root: &Path) -> Vec<LeaseHolder> {
+    /// order), then reservations, then leases (oldest first): the prefix that
+    /// fits `budget`, built without materializing the rest.
+    fn overlapping(
+        &self,
+        files: &[String],
+        workspace_root: &Path,
+        budget: &mut ResponseBudget,
+    ) -> Vec<LeaseHolder> {
         let mut holders = Vec::new();
+        let _ = self.visit_overlapping(files, workspace_root, &mut |holder| {
+            if budget.admit(&holder) {
+                holders.push(holder);
+                ControlFlow::Continue(())
+            } else {
+                ControlFlow::Break(())
+            }
+        });
+        holders
+    }
+
+    fn visit_overlapping(
+        &self,
+        files: &[String],
+        workspace_root: &Path,
+        visit: &mut dyn FnMut(LeaseHolder) -> ControlFlow<()>,
+    ) -> ControlFlow<()> {
         let mut tasks = self
             .index
             .tasks()
@@ -823,61 +1053,55 @@ impl<'a> PathHolders<'a> {
         });
         for task in tasks {
             let held = self.index.lock_context_files(task, workspace_root);
-            push_overlaps(&mut holders, files, &held, |file, held_selector| {
-                LeaseHolder {
-                    file,
-                    held_by: HolderKind::Task,
-                    held_by_id: task.id.clone(),
-                    held_selector,
-                    mode: None,
-                    principal: None,
-                }
-            });
+            visit_overlaps(visit, files, &held, |file, held_selector| LeaseHolder {
+                file,
+                held_by: HolderKind::Task,
+                held_by_id: task.id.clone(),
+                held_selector,
+                mode: None,
+                principal: None,
+            })?;
         }
         for (reservation_id, held) in &self.reservations {
-            push_overlaps(&mut holders, files, held, |file, held_selector| {
-                LeaseHolder {
-                    file,
-                    held_by: HolderKind::Reservation,
-                    held_by_id: reservation_id.clone(),
-                    held_selector,
-                    mode: None,
-                    principal: None,
-                }
-            });
+            visit_overlaps(visit, files, held, |file, held_selector| LeaseHolder {
+                file,
+                held_by: HolderKind::Reservation,
+                held_by_id: reservation_id.clone(),
+                held_selector,
+                mode: None,
+                principal: None,
+            })?;
         }
         for lease in &self.leases {
-            push_overlaps(
-                &mut holders,
-                files,
-                &lease.selectors,
-                |file, held_selector| LeaseHolder {
+            visit_overlaps(visit, files, &lease.selectors, |file, held_selector| {
+                LeaseHolder {
                     file,
                     held_by: HolderKind::Lease,
                     held_by_id: lease.lease_id.clone(),
                     held_selector,
                     mode: Some(lease.mode),
                     principal: Some(lease.principal.clone()),
-                },
-            );
+                }
+            })?;
         }
-        holders
+        ControlFlow::Continue(())
     }
 }
 
-fn push_overlaps(
-    holders: &mut Vec<LeaseHolder>,
+fn visit_overlaps(
+    visit: &mut dyn FnMut(LeaseHolder) -> ControlFlow<()>,
     files: &[String],
     held: &[String],
     holder: impl Fn(String, String) -> LeaseHolder,
-) {
+) -> ControlFlow<()> {
     for file in files {
         for held_selector in held {
             if overlaps(file, held_selector) {
-                holders.push(holder(file.clone(), held_selector.clone()));
+                visit(holder(file.clone(), held_selector.clone()))?;
             }
         }
     }
+    ControlFlow::Continue(())
 }
 
 /// Whether `selector` covers all of `path`: the same anchor, or a `dir:`

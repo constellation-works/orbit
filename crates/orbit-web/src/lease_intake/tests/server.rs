@@ -127,14 +127,39 @@ struct FrameLimitFixture {
 
 impl FrameLimitFixture {
     fn start() -> Self {
+        Self::start_with(IntakeLimits::default())
+    }
+
+    fn start_with(limits: IntakeLimits) -> Self {
         let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("global")).expect("global root");
+        seed_registered_workspace(tmp.path(), "ws_frame_limit");
+        Self::serve(tmp, limits, "intake.sock")
+    }
+
+    /// Stop serving and serve the same owner store again from a new runtime
+    /// and socket, as after an Orbit Web or listener restart.
+    fn restart(self, limits: IntakeLimits) -> Self {
+        let Self {
+            runtime,
+            _socket,
+            _tokio,
+            _tmp,
+            ..
+        } = self;
+        drop(_socket);
+        _tokio.shutdown_background();
+        drop(runtime);
+        Self::serve(_tmp, limits, "intake-restarted.sock")
+    }
+
+    fn serve(tmp: tempfile::TempDir, limits: IntakeLimits, socket_name: &str) -> Self {
         let global_root = tmp.path().join("global");
-        std::fs::create_dir_all(&global_root).expect("global root");
-        let repo = seed_registered_workspace(tmp.path(), "ws_frame_limit");
+        let repo = tmp.path().join("ws_frame_limit");
         let runtime = Arc::new(
             OrbitRuntime::from_roots(&global_root, &repo.join(".orbit")).expect("runtime"),
         );
-        let socket_path = tmp.path().join("intake.sock");
+        let socket_path = tmp.path().join(socket_name);
         let listener = std::os::unix::net::UnixListener::bind(&socket_path).expect("bind");
         // SAFETY: geteuid has no preconditions and cannot fail.
         let own_uid = unsafe { libc::geteuid() };
@@ -148,10 +173,7 @@ impl FrameLimitFixture {
         let accept = {
             let _entered = tokio.enter();
             socket
-                .serve(
-                    DashboardState::single(Arc::clone(&runtime)),
-                    IntakeLimits::default(),
-                )
+                .serve(DashboardState::single(Arc::clone(&runtime)), limits)
                 .expect("serve")
         };
         tokio.spawn(accept);
@@ -242,11 +264,31 @@ fn oversized_read_responses_are_bounded_errors_and_other_connections_still_work(
     }
 }
 
+/// Every notice in the workspace, oldest first.
+fn all_notices(runtime: &OrbitRuntime) -> Vec<Value> {
+    let page = lease::notices(runtime, json!({"after": 0, "limit": 500})).expect("notices");
+    let notices = page["notices"].as_array().expect("notices").clone();
+    assert!(notices.len() < 500, "the fixture must read every notice");
+    notices
+}
+
+fn active_lease_ids(runtime: &OrbitRuntime) -> Vec<String> {
+    lease::list(runtime).expect("list")["leases"]
+        .as_array()
+        .expect("leases")
+        .iter()
+        .map(|lease| lease["lease_id"].as_str().expect("lease id").to_string())
+        .collect()
+}
+
+/// A token low on priority with `hard = never` is still bounded (ORB-18776):
+/// a request whose selectors exceed the token limit is refused before the
+/// store writes a grant or any overlap notice.
 #[test]
-fn oversized_request_response_releases_the_grant_before_returning_an_error() {
+fn oversized_token_request_is_refused_before_any_grant_or_notice() {
     if !enter_isolated_child(
         module_path!(),
-        "oversized_request_response_releases_the_grant_before_returning_an_error",
+        "oversized_token_request_is_refused_before_any_grant_or_notice",
     ) {
         return;
     }
@@ -258,22 +300,227 @@ fn oversized_request_response_releases_the_grant_before_returning_an_error() {
         None,
     )
     .expect("seed an overlapping lease");
+    let notices_before = all_notices(&fixture.runtime);
     let mut client = fixture.connect();
     for _ in 0..2 {
-        // The request fits; its success response repeats every path in overlaps
-        // and the granted lease, exceeding the real protocol limit.
-        let error = refusal(call(
+        let error = refusal(call_scoped(
             &mut client,
             "bob",
+            "tok-bob-low",
+            LeasePriorityCeiling::Low,
+            HardLeasePermission::Never,
             LeaseIntakeOperation::Request,
             json!({"selectors": oversized_response_paths(), "mode": "advisory"}),
         ));
-        assert_eq!(error.code, "frame_too_large", "{error:?}");
-        let listed = lease::list(&fixture.runtime).expect("active leases after error");
-        let leases = listed["leases"].as_array().expect("leases");
-        assert_eq!(leases.len(), 1, "a failed response must not leave a grant");
-        assert_eq!(leases[0]["lease_id"], held["lease"]["lease_id"]);
+        assert_eq!(error.code, "invalid_input", "{error:?}");
+        assert_eq!(
+            active_lease_ids(&fixture.runtime),
+            [held["lease"]["lease_id"].as_str().unwrap()],
+            "a refused request must not leave a grant"
+        );
+        assert_eq!(
+            all_notices(&fixture.runtime),
+            notices_before,
+            "a refused request must not notify the holders it would overlap"
+        );
     }
+
+    // Nor can a token grow a small lease past the limit by expanding it.
+    let small = ok(call_scoped(
+        &mut client,
+        "bob",
+        "tok-bob-low",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Never,
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:src/one.rs"]}),
+    ));
+    let lease_id = small["lease"]["lease_id"].clone();
+    let notices_before = all_notices(&fixture.runtime);
+    let error = refusal(call_scoped(
+        &mut client,
+        "bob",
+        "tok-bob-low",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Never,
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": lease_id, "selectors": oversized_response_paths()}),
+    ));
+    assert_eq!(error.code, "invalid_input", "{error:?}");
+    let shown = lease::show(&fixture.runtime, json!({"lease_id": lease_id})).unwrap();
+    assert_eq!(shown["lease"]["selectors"], json!(["file:src/one.rs"]));
+    assert_eq!(all_notices(&fixture.runtime), notices_before);
+}
+
+/// With a frame too small for every overlap, a token grant answers with the
+/// prefix that fits and `truncated: true` instead of being granted, notified
+/// and then released (ORB-18776). Every overlapped holder's notice names a
+/// lease that really exists. An answer that cannot fit even without
+/// holders is refused before anything is written.
+#[test]
+fn token_grant_answers_fit_the_frame_without_compensating_release() {
+    if !enter_isolated_child(
+        module_path!(),
+        "token_grant_answers_fit_the_frame_without_compensating_release",
+    ) {
+        return;
+    }
+    let limits = IntakeLimits {
+        max_frame_bytes: 8 * 1024,
+        ..IntakeLimits::default()
+    };
+    let fixture = FrameLimitFixture::start_with(limits);
+    let held: Vec<String> = (0..40)
+        .map(|index| {
+            let granted = lease::request(
+                &fixture.runtime,
+                json!({
+                    "principal": "alice",
+                    "selectors": [format!("file:src/{index:02}-{}.rs", "h".repeat(120))],
+                }),
+                None,
+                None,
+            )
+            .expect("seed a disjoint advisory lease");
+            granted["lease"]["lease_id"].as_str().unwrap().to_string()
+        })
+        .collect();
+    let mut client = fixture.connect();
+    let mut low_never = |input: Value| {
+        call_scoped(
+            &mut client,
+            "bob",
+            "tok-bob-low",
+            LeasePriorityCeiling::Low,
+            HardLeasePermission::Never,
+            LeaseIntakeOperation::Request,
+            input,
+        )
+    };
+
+    let response = low_never(json!({"selectors": ["dir:src"], "mode": "hard"}));
+    let size = serde_json::to_vec(&response).unwrap().len();
+    assert!(
+        size <= 8 * 1024,
+        "the answer must fit the frame: {size} bytes"
+    );
+    let granted = ok(response);
+    assert_eq!(granted["granted"], true, "{granted}");
+    assert_eq!(granted["downgraded"], true, "{granted}");
+    assert_eq!(granted["truncated"], true, "{granted}");
+    let overlaps = granted["overlaps"].as_array().unwrap();
+    assert!(
+        !overlaps.is_empty() && overlaps.len() < held.len(),
+        "{granted}"
+    );
+    let shown: Vec<_> = overlaps.iter().map(|o| o["held_by_id"].clone()).collect();
+    let oldest: Vec<_> = held[..overlaps.len()].iter().map(|id| json!(id)).collect();
+    assert_eq!(shown, oldest, "the overlaps are the oldest holders' prefix");
+    let lease_id = granted["lease"]["lease_id"].as_str().unwrap();
+    assert!(
+        active_lease_ids(&fixture.runtime).contains(&lease_id.to_string()),
+        "the grant is delivered, not released"
+    );
+    let overlap_notices: Vec<_> = all_notices(&fixture.runtime)
+        .into_iter()
+        .filter(|notice| notice["kind"] == "overlap")
+        .collect();
+    assert_eq!(
+        overlap_notices.len(),
+        held.len(),
+        "every holder is notified"
+    );
+    for notice in overlap_notices {
+        assert_eq!(notice["payload"]["lease_id"], lease_id, "{notice}");
+    }
+
+    let leases_before = active_lease_ids(&fixture.runtime);
+    let notices_before = all_notices(&fixture.runtime);
+    let error = refusal(low_never(json!({
+        "selectors": ["dir:src"], "tags": ["t".repeat(7500)],
+    })));
+    assert_eq!(error.code, "invalid_input", "{error:?}");
+    assert_eq!(active_lease_ids(&fixture.runtime), leases_before);
+    assert_eq!(all_notices(&fixture.runtime), notices_before);
+}
+
+/// Bob's low, never-hard tokens may hold at most the token limit of active
+/// leases in a workspace (ORB-18776). The count is the owner's lease rows by
+/// principal, so it survives a restart and a replacement token, and a refusal
+/// writes neither a lease nor an overlap notice.
+#[test]
+fn token_active_leases_are_bounded_per_principal_across_restart_and_tokens() {
+    if !enter_isolated_child(
+        module_path!(),
+        "token_active_leases_are_bounded_per_principal_across_restart_and_tokens",
+    ) {
+        return;
+    }
+    const LIMIT: usize = 64;
+    let fixture = FrameLimitFixture::start();
+    let request = |client: &mut LeaseIntakeClient, token: &str, selector: &str| {
+        ok(call_scoped(
+            client,
+            "bob",
+            token,
+            LeasePriorityCeiling::Low,
+            HardLeasePermission::Never,
+            LeaseIntakeOperation::Request,
+            json!({"selectors": [selector]}),
+        ))
+    };
+    let mut client = fixture.connect();
+    let mut first = None;
+    for index in 0..LIMIT {
+        let granted = request(&mut client, "tok-bob-1", &format!("file:src/{index:02}.rs"));
+        assert_eq!(granted["granted"], true, "{granted}");
+        first.get_or_insert_with(|| granted["lease"]["lease_id"].clone());
+    }
+    let refused_unchanged = |runtime: &OrbitRuntime, refused: Value| {
+        assert_eq!(refused["granted"], false, "{refused}");
+        assert_eq!(refused["reason"], "active_lease_limit", "{refused}");
+        assert_eq!(refused["limit"], LIMIT, "{refused}");
+        assert_eq!(active_lease_ids(runtime).len(), LIMIT);
+    };
+    let notices = all_notices(&fixture.runtime);
+    // A directory over every held file would notify each of them.
+    let refused = request(&mut client, "tok-bob-1", "dir:src");
+    refused_unchanged(&fixture.runtime, refused);
+    assert_eq!(all_notices(&fixture.runtime), notices);
+    drop(client);
+
+    let fixture = fixture.restart(IntakeLimits::default());
+    let mut client = fixture.connect();
+    let refused = request(&mut client, "tok-bob-2", "dir:src");
+    refused_unchanged(&fixture.runtime, refused);
+    assert_eq!(all_notices(&fixture.runtime), notices);
+
+    let released = ok(call_scoped(
+        &mut client,
+        "bob",
+        "tok-bob-2",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Never,
+        LeaseIntakeOperation::Release,
+        json!({"lease_id": first.expect("first lease")}),
+    ));
+    assert_eq!(released["released"], true, "{released}");
+    let granted = request(&mut client, "tok-bob-2", "file:src/again.rs");
+    assert_eq!(granted["granted"], true, "a released lease frees its place");
+
+    // The limit is per principal: another principal is not refused.
+    let other = ok(call(
+        &mut client,
+        "carol",
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["dir:src"]}),
+    ));
+    assert_eq!(other["granted"], true, "{other}");
+    assert_eq!(
+        other["overlaps"].as_array().unwrap().len(),
+        LIMIT,
+        "{other}"
+    );
 }
 
 #[test]

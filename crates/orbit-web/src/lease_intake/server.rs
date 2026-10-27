@@ -354,7 +354,14 @@ fn dispatch(
         input,
     } = request;
     let runtime = workspace_runtime(state, &workspace);
-    let outcome = run_operation(runtime.as_ref(), operation, &workspace, &authority, input);
+    let outcome = run_operation(
+        runtime.as_ref(),
+        operation,
+        &workspace,
+        &authority,
+        input,
+        max_frame_bytes,
+    );
     let lease_id = outcome
         .as_ref()
         .ok()
@@ -418,7 +425,9 @@ fn dispatch(
 }
 
 /// Replace an oversized response before auditing or sending it. A notice
-/// page is shortened instead. A request's new grant must be released before
+/// page is shortened instead. The runtime already sizes a request's or
+/// expansion's answer to the frame before writing anything, so releasing an
+/// oversized new grant here is only a backstop: it must still happen before
 /// its caller can observe the size failure.
 fn bounded_operation_response(
     runtime: Option<&OrbitRuntime>,
@@ -567,6 +576,7 @@ fn run_operation(
     workspace: &str,
     authority: &LeaseIntakeAuthority,
     input: Value,
+    max_frame_bytes: u32,
 ) -> Result<Value, LeaseIntakeError> {
     let scope = authority
         .scope
@@ -629,6 +639,7 @@ fn run_operation(
         },
         hard_allowed: scope.hard == HardLeasePermission::Allow,
         client_address: authority.client_address.clone(),
+        max_response_bytes: max_frame_bytes as usize,
     };
     let result = match operation {
         LeaseIntakeOperation::Request => lease::request_with_token(runtime, input, &grant),

@@ -532,7 +532,8 @@ impl LeasePriority {
     }
 }
 
-/// Record a path lease. An advisory one is always granted. A hard one is
+/// Record a path lease. An advisory one is granted unless
+/// `active_lease_limit` refuses it. A hard one is
 /// granted when its selectors overlap no active task reservation, hard lease
 /// or `task_conflicts` entry and no queued request or expansion ranked ahead
 /// of it wants them; otherwise it queues, or with `wait = false` is refused.
@@ -566,6 +567,11 @@ pub struct LeaseInsertParams {
     /// `lease.aging_minutes`: queue age after which an entry moves up one
     /// priority level.
     pub aging_minutes: u32,
+    /// Refuse the request, writing nothing, while `principal` already has
+    /// this many active (granted or queued) leases in the workspace, whatever
+    /// token or surface recorded them. Lease-token requests set it; `None`
+    /// (SSH and the dashboard) is unlimited.
+    pub active_lease_limit: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -580,6 +586,10 @@ pub struct LeaseInsertResult {
     /// The 1-based queue position of a queued lease.
     pub queue_position: Option<u32>,
     pub expired_leases: Vec<ExpiredTaskReservation>,
+    /// The principal's active lease count when `active_lease_limit` refused
+    /// the request; nothing was written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_lease_limit_reached: Option<u32>,
 }
 
 /// What a queued lease waits for: a whole request (it holds nothing yet) or
@@ -622,6 +632,10 @@ pub struct LeaseExpandParams {
     /// The task context locks the runtime found on `selectors`.
     pub task_conflicts: Vec<TaskLockConflict>,
     pub aging_minutes: u32,
+    /// Refuse the expansion, writing nothing, when the lease's held and
+    /// waiting selectors plus the new ones would exceed this. Lease-token
+    /// expansions set it; `None` is unlimited.
+    pub max_selectors: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -640,6 +654,9 @@ pub struct LeaseExpandResult {
     /// Waiting expansions refused to break a deadlock, this lease's included.
     pub deadlocks: Vec<LeaseDeadlock>,
     pub expired_leases: Vec<ExpiredTaskReservation>,
+    /// `max_selectors` refused the expansion; the lease is unchanged.
+    #[serde(default)]
+    pub selector_limit_exceeded: bool,
 }
 
 /// A waiting expansion refused because it closed a cycle of leases each

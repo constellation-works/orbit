@@ -28,6 +28,7 @@ fn lease_params(owner: &Coordinated, selector: &str, mode: LeaseMode) -> LeaseIn
         wait: false,
         task_conflicts: Vec::new(),
         aging_minutes: 30,
+        active_lease_limit: None,
     }
 }
 
