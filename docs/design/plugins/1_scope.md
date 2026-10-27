@@ -1229,8 +1229,10 @@ provenance-aware disabled-plugin skip beside `RETIRED_ROUTINE_JOBS`;
 - [ORB-12785] — bound the grant witness to the install a tampered
   `plugins` row would run.
 - [ORB-12789] — repaired the plugin callback gate's allowed-tools source.
-- [ORB-12798] — kept callback session identity after a backend descendant
-  changed directory.
+- [ORB-12798] — closed a callback bypass through process-group/session
+  changes: the host-issued descriptor carries identity across `setsid`, and
+  a confined child that loses it is refused instead of treated as an ordinary
+  caller.
 - [ORB-12799] — closed missing `fs.write` tails below symlinks bypassing
   the protected-global-root check.
 - [ORB-12801] — bound callback sessions to the caller's effective tool
