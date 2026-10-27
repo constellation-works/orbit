@@ -140,8 +140,9 @@ the named seeded definitions. `[seeding]` and `[config]` are written before defa
 seeding, and `[enable]` is applied after seeding.
 
 Orbit records the preset name and SHA-256 digest with its apply time in
-`.orbit/state/workspace-preset.json`. Workspace initialization and `orbit workspace show`
-report the applied preset and the definitions it enabled.
+`.orbit/state/workspace-preset.json`. Workspace initialization reports the applied preset
+and, when nonempty, the definitions it enabled. `orbit workspace show` reports the applied
+preset's name, SHA-256 digest, and apply time.
 
 ### How a distribution installs
 
