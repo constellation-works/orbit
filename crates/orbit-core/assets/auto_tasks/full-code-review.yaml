@@ -176,10 +176,14 @@ template:
     > `orbit tool run orbit.search --input '{"query":"<distinctive symptom, symbol, or file terms>","kind":"task","all":true,"model":"<agent-family>"}'`
     > and skip anything an open `code-review` task already tracks. File each
     > confirmed finding as its own task with
-    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review","full-code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this area task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`,
-    > citing `file:line` evidence at the pinned SHA. Derive canonical `file:`
-    > selectors from every evidenced source path, removing the line suffix,
-    > and add the matching regression-test location. Use existing paths where
+    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review","full-code-review"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this area task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`,
+    > citing `file:line` evidence at the pinned SHA. Derive canonical
+    > selectors from every evidenced source location, removing the line
+    > suffix: `symbol:<path>#<name>:<kind>` for the function, method or type
+    > that holds it (`<name>` qualified by its type for a member, e.g.
+    > `Store::claim:method`), or `file:<path>` when the defect is file-wide
+    > or the file has no symbols. Add the matching regression-test location
+    > as `file:`. Use existing paths where
     > possible; for a test file that must be created, set
     > `allow_missing_context: true` and identify that intended path. Never file
     > a finding without context selectors. Skip nitpicks.

@@ -217,13 +217,17 @@ template:
     > Reuse an open task whose reproducer covers the same defect, and reassess
     > a closed one against the pinned SHA rather than treating it as
     > suppression. File each confirmed non-duplicate finding as its own task with
-    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-full-sweep"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this area task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    > `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["qa-full-sweep"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this area task ID>"}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
     > Its description holds the exact reproducer, the pinned SHA, the
     > environment, expected and observed results and the evidence artifact.
     > Add `ui` to its tags when the defect is in something a user sees
     > (dashboard, web pages, docs site, desktop app UI).
-    > Derive canonical `file:` selectors from the source that implements the
-    > failing behaviour and add the matching regression-test location. Use
+    > Derive canonical selectors from the source that implements the failing
+    > behaviour: `symbol:<path>#<name>:<kind>` for the function, method or
+    > type that holds it (`<name>` qualified by its type for a member, e.g.
+    > `Store::claim:method`), or `file:<path>` when the defect is file-wide
+    > or the file has no symbols. Add the matching regression-test location
+    > as `file:`. Use
     > existing paths where possible; for a test file that must be created,
     > set `allow_missing_context: true` and identify that intended path.
     > Never file a finding without context selectors. Record each finding's

@@ -281,8 +281,10 @@ template:
     - **Complexity.** `hard` for anything that crosses a package boundary or
       moves an exported item; `xhard` for a package extraction or a change
       touching more than about 100 files. A measurement task is `medium`.
-    - **`context_files`.** Verified `file:`/`dir:` selectors for every
-      definition, edge, and call site that changes. For a split, merge, or
+    - **`context_files`.** Verified selectors for every definition, edge,
+      and call site that changes: `symbol:<path>#<name>:<kind>` for an
+      existing function or type edited in place, `file:`/`dir:` for moved,
+      split or merged files and packages. For a split, merge, or
       move, also list the package manifests and lockfile, the documented
       architecture the filing cites (when one exists), the repository's
       dependency-direction guard (when it ships one), and, for a package

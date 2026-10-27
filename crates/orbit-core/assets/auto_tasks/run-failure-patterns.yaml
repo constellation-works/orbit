@@ -166,8 +166,9 @@ template:
       prevent. List the rest in the report as deferred.
     - Each fix task: `type` `bug`, tags `["run-failure-patterns", "no-auto-approve"]` plus the
       job's area (`delivery`, `review`, `providers`, `pilot`, `landing`), `complexity` assessed
-      honestly (never `xhard`), `context_files` with verified `file:` selectors for files the fix
-      will modify (never `docs/CONFIG.md`), and a `spawned_from` relation to this task. Read
+      honestly (never `xhard`), `context_files` with verified selectors for what the fix will
+      modify — `symbol:<path>#<name>:<kind>` for each existing function or
+      type, `file:` when the change is file-wide (never `docs/CONFIG.md`) — and a `spawned_from` relation to this task. Read
       every created task back and confirm that edge.
     - Body: the problem in a sentence or two; an evidence table (signature, 7-day and 30-day
       occurrences, distinct runs, share of the job's folded failures, hosts, first and last

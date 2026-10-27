@@ -35,7 +35,7 @@ template:
     A correctness defect you confirm in passing is filed as a `bug` tagged
     `code-health` per the installed `orbit` skill's task-authoring reference
     and does not count toward the cap. File it with
-    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown with file:line evidence>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<evidence source path>","file:<matching test path>"],"complexity":"medium","tags":["code-health"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high|critical>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown with file:line evidence>","acceptance_criteria":["<observable outcome>"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"complexity":"medium","tags":["code-health"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"<low|medium|high|critical>","workspace":"<current workspace path>","model":"<agent-family>"}'`.
 
     ## Rules and command surfaces
 
@@ -304,8 +304,11 @@ template:
       compatibility aliases with no stored data; `hard` for cross-module
       duplication, every architecture finding and every persisted-format
       reader.
-    - **`context_files`.** Verified `file:`/`dir:` selectors for every copy,
-      definition and call site that changes, plus the tests that cover them.
+    - **`context_files`.** Verified selectors for every copy, definition and
+      call site that changes, plus the tests that cover them:
+      `symbol:<path>#<name>:<kind>` for each existing function or type that
+      changes, `file:`/`dir:` when the change is file-wide (deletion of a
+      whole file, a move, more than about five symbols in one file).
     - **Description.** It contains **Outcome**; **Evidence** (paths with line
       numbers at the pinned SHA, reference counts, the copies side by side or
       the rule cited, and the routes checked for a dead-code candidate); **Scope

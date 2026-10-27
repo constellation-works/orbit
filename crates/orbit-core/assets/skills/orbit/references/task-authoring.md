@@ -256,6 +256,28 @@ in the description instead of reserving locks for them. Prefer
 precise verified files/symbols; a directory is appropriate for a genuinely owned
 area, not a shortcut for all possibly relevant code.
 
+### Selector granularity
+
+Declare at symbol level when you can, so Orbit learns which symbols changes
+and regressions concentrate in. Locks stay per file: a `symbol:` selector
+locks its whole file, so granularity changes the record, not admission.
+
+- Use `symbol:<path>#<name>:<kind>` for each existing source symbol the
+  change modifies or deletes. `<name>` is the identifier as declared,
+  qualified by its enclosing type or impl for a member (`Store::claim`);
+  `<kind>` is one of `function`, `method`, `struct`, `enum`, `trait`,
+  `impl`, `class`, `interface`, `type`, `const`, `static`, `macro`,
+  `module` or `test`. The name must occur in the file at the revision you
+  scoped.
+- Use `file:` instead when the change is file-wide: a new file, new
+  top-level items, imports or module wiring, a large refactor or move, more
+  than about five symbols in the file, or a file with no symbols —
+  Markdown, configuration, manifests, lockfiles, generated output, data and
+  goldens.
+- Never declare a symbol you expect to create; declare its file. Mixing is
+  fine: `symbol:` selectors for the edited functions and `file:` for a file
+  the change rewrites.
+
 For substantive source targets, inspect the repository's generator or
 synchronization evidence at the revision being scoped. Declare each exact
 generated companion that the planned source change is expected to alter

@@ -761,6 +761,34 @@
     },
     {
       "comments": [
+        "## Attribute each finding to the task that introduced it",
+        "## Build the last-reviewed map and select two modules",
+        "## File confirmed findings",
+        "## Findings that narrow a shared invariant",
+        "## Partition the tree into modules",
+        "## Pin the commit",
+        "## Record the rotation and the cursor",
+        "## Review the two selected modules in full",
+        "## Rules and command surfaces"
+      ],
+      "digest": "8c68d9265b1def42b78f30a3476da11ec60955bb13a36b5260b210f9d483b15a",
+      "revision": "24f34a13c0393a54df474fdf7c80d8c062ae526a",
+      "settings": {
+        "complexity": "hard",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 */6 * * *"
+        },
+        "tags": [
+          "code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# The portable system lane is seeded per machine and compatibility-aliased",
         "# for configs written before that crew existed.",
         "## Attribute each finding to the task that introduced it",
@@ -2151,6 +2179,30 @@
       "settings": {
         "complexity": "medium",
         "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "0 6 1 * *"
+        },
+        "tags": [
+          "full-code-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## File one area review per area",
+        "## Finish",
+        "## Partition the tree",
+        "## Pin the commit",
+        "## Rules and command surfaces"
+      ],
+      "digest": "77fcb15b8dab63336e4a8f88b395b2e34fda203cef2ecd85647435591b01b5a0",
+      "revision": "b771dca716a3188f74479d753bd531db294d6645",
+      "settings": {
+        "complexity": "medium",
         "dedupe": "skip_if_open",
         "enabled": false,
         "priority": "medium",
