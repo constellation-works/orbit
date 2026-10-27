@@ -77,6 +77,12 @@ impl GuardedModes for TaskVerb {
             TaskVerb::RetryHandoff => {
                 managed_run_refusal(ctx, "managed runs cannot retry owner handoffs")
             }
+            TaskVerb::RecoverClaim => {
+                managed_run_refusal(ctx, "managed runs cannot recover claims")
+            }
+            TaskVerb::RevokeHandoff => {
+                managed_run_refusal(ctx, "managed runs cannot revoke handoff authority")
+            }
             TaskVerb::ReviewReset => {
                 managed_run_refusal(ctx, "managed runs cannot reset review budgets")
             }
@@ -115,6 +121,8 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject => return,
         };
         let Some(object) = input.as_object_mut() else {
@@ -198,6 +206,8 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => None,
         }
@@ -236,6 +246,8 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => Ok(()),
         }
@@ -259,6 +271,8 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
+            | TaskVerb::RecoverClaim
+            | TaskVerb::RevokeHandoff
             | TaskVerb::Reject
             | TaskVerb::Delete => None,
         }

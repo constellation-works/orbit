@@ -425,6 +425,117 @@ pub(super) const DELETE: TaskOperation = TaskOperation {
     mcp_scope: None,
 };
 
+const RECOVER_STATUS_VALUES: &[EnumValue] =
+    &[EnumValue::plain("blocked"), EnumValue::plain("backlog")];
+
+/// Recover a follower claim to blocked or backlog, fencing its attempt.
+pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
+    verb: TaskVerb::RecoverClaim,
+    cli_path: &["recover-claim"],
+    tool_name: "orbit.task.recover_claim",
+    tool_description: "Recover a live execution claim on its owner workspace to blocked or backlog, fencing the attempt, invalidating pending landing authority and releasing its reservation in one transaction. Requires trusted operator authority; unavailable to managed runs. Supply the claim phase you observed, the target status, a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original recovery.",
+    cli_about: "Recover a live claim to blocked or backlog with an audited reason",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        HOST_PARAM,
+        WORKSPACE_PARAM,
+        required(both(
+            "claim_id",
+            ParamType::String,
+            "Live claim to recover",
+            CliArgKind::Positional,
+            "Claim to recover",
+        )),
+        required(both(
+            "expected_phase",
+            ParamType::String,
+            "Claim phase you observed; a claim that moved on is refused",
+            flag_named("phase", "PHASE"),
+            "Expected claim phase you observed",
+        )),
+        required(both(
+            "status",
+            ParamType::Enum(RECOVER_STATUS_VALUES),
+            "Target status: blocked for diagnosis or backlog for retry",
+            flag_named("status", "STATUS"),
+            "Move the task to blocked or backlog",
+        )),
+        required(free_text(both(
+            "reason",
+            ParamType::String,
+            "Required operator reason retained durably",
+            flag_named("reason", "REASON"),
+            "Operator reason recorded with the recovery",
+        ))),
+        required(both(
+            "request_key",
+            ParamType::String,
+            "Durable request key; reuse exactly after a lost reply",
+            flag_named("request", "KEY"),
+            "Durable replay key; reuse after a lost reply",
+        )),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
+/// Revoke a handoff's completion authority.
+pub(super) const REVOKE_HANDOFF: TaskOperation = TaskOperation {
+    verb: TaskVerb::RevokeHandoff,
+    cli_path: &["revoke-handoff"],
+    tool_name: "orbit.task.revoke_handoff",
+    tool_description: "Revoke a handoff's completion authority on its owner workspace, cancelling its pending landing request while the task stays in review. Requires trusted operator authority; unavailable to managed runs. Compare the exact accepted candidate/base, supply a required reason and a durable request_key; resubmitting the same request_key with the same input replays the original revocation. Refused while an external merge intent is unresolved.",
+    cli_about: "Revoke a handoff's completion authority with an audited reason",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        HOST_PARAM,
+        WORKSPACE_PARAM,
+        required(both(
+            "handoff_id",
+            ParamType::String,
+            "Accepted handoff whose authority to revoke",
+            CliArgKind::Positional,
+            "Accepted handoff identity",
+        )),
+        required(both(
+            "expected_candidate_commit",
+            ParamType::String,
+            "Accepted candidate commit the operator observed",
+            flag_named("candidate", "COMMIT"),
+            "Expected accepted candidate commit",
+        )),
+        required(both(
+            "expected_base_commit",
+            ParamType::String,
+            "Accepted base commit the operator observed",
+            flag_named("base", "COMMIT"),
+            "Expected accepted base commit",
+        )),
+        required(free_text(both(
+            "reason",
+            ParamType::String,
+            "Required operator reason retained durably",
+            flag_named("reason", "REASON"),
+            "Operator reason recorded with the revocation",
+        ))),
+        required(both(
+            "request_key",
+            ParamType::String,
+            "Durable request key; reuse exactly after a lost reply",
+            flag_named("request", "KEY"),
+            "Durable replay key; reuse after a lost reply",
+        )),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+};
+
 /// Retry an existing authorized handoff, preserving its immutable foreign binding.
 pub(super) const RETRY_HANDOFF: TaskOperation = TaskOperation {
     verb: TaskVerb::RetryHandoff,

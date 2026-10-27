@@ -152,6 +152,72 @@ pub(in crate::adapter::tool_host) fn dispatch(
                 .map_err(serialize_error("serialize landing retry"))?;
             Ok((response, Some(dispatch.task_id)))
         }
+        TaskVerb::RecoverClaim => {
+            if orbit_common::governance::authorization::agent_context_declared() {
+                return Err(OrbitError::CapabilityDenied(
+                    "managed agents cannot recover claims".into(),
+                ));
+            }
+            let authority = runtime
+                .admit_operator_operation("orbit.task.recover_claim", caller.session_context)?;
+            let actor = authority
+                .remote_caller_machine_id
+                .map_or_else(|| runtime.actor().resolve_write_label(None, None), Ok)?;
+            let claim_id = input.required_string("claim_id")?;
+            let expected_phase = input.required_string("expected_phase")?;
+            let status_raw = input.required_string("status")?;
+            let status = parse_task_status("status", &status_raw)?;
+            let reason = input.required_string("reason")?;
+            let request_key = input.required_string("request_key")?;
+            let response = runtime.recover_claim_as_operator(
+                &claim_id,
+                &expected_phase,
+                status,
+                &actor,
+                &reason,
+                &format!("operator-recover:{claim_id}:{request_key}"),
+            )?;
+            // The response names the claim, not its task; resolve the task for
+            // the redaction audit from the claim console's task id if present.
+            let persisted = response
+                .get("task_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| Some(claim_id.clone()));
+            Ok((response, persisted))
+        }
+        TaskVerb::RevokeHandoff => {
+            if orbit_common::governance::authorization::agent_context_declared() {
+                return Err(OrbitError::CapabilityDenied(
+                    "managed agents cannot revoke handoff authority".into(),
+                ));
+            }
+            let authority = runtime
+                .admit_operator_operation("orbit.task.revoke_handoff", caller.session_context)?;
+            let actor = authority
+                .remote_caller_machine_id
+                .map_or_else(|| runtime.actor().resolve_write_label(None, None), Ok)?;
+            let handoff_id = input.required_string("handoff_id")?;
+            let expected = crate::application::review::ExpectedCandidate {
+                candidate_commit: input.required_string("expected_candidate_commit")?,
+                base_commit: input.required_string("expected_base_commit")?,
+            };
+            let reason = input.required_string("reason")?;
+            let request_key = input.required_string("request_key")?;
+            let response = runtime.revoke_handoff_as_operator(
+                &handoff_id,
+                &expected,
+                &actor,
+                &reason,
+                &format!("operator-revoke:{handoff_id}:{request_key}"),
+            )?;
+            let persisted = response
+                .get("claim_id")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+                .or_else(|| Some(handoff_id.clone()));
+            Ok((response, persisted))
+        }
         TaskVerb::Reject => written(reject(runtime, &input, caller.agent, caller.model)),
         TaskVerb::Delete => read(delete(runtime, &input)),
     }

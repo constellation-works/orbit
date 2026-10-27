@@ -62,6 +62,8 @@ fn builtin_annotations(canonical_name: &str) -> Option<McpToolAnnotations> {
         // Supersedes a recorded escalation; with `discard_candidate` it also
         // closes the published pull request.
         "orbit.task.requeue" => A::destructive(false),
+        "orbit.task.recover_claim" => A::destructive(false),
+        "orbit.task.revoke_handoff" => A::destructive(false),
         // A requeue supersedes a recorded escalation; a second decision on
         // the same block episode is refused rather than a no-op.
         "orbit.task.block_triage" => A::destructive(false),

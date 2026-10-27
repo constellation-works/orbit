@@ -19,7 +19,8 @@ use orbit_types::task::{TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS_CS
 use orbit_types::tool::McpToolScope;
 
 use super::lifecycle_operations::{
-    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, REJECT, REQUEUE, RETRY_HANDOFF, REVIEW_RESET,
+    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REQUEUE, RETRY_HANDOFF,
+    REVIEW_RESET, REVOKE_HANDOFF,
 };
 use super::nested_operations::{
     ARTIFACT_GET, ARTIFACT_PUT, LOCKS_LIST, LOCKS_RELEASE, LOCKS_RESERVE,
@@ -78,6 +79,10 @@ operation_registry! {
         BlockTriage => BLOCK_TRIAGE,
         /// Retry a stopped or uncertain authorized owner handoff.
         RetryHandoff => RETRY_HANDOFF,
+        /// Recover a live claim to blocked or backlog, as an operator decision.
+        RecoverClaim => RECOVER_CLAIM,
+        /// Revoke a handoff's completion authority, as an operator decision.
+        RevokeHandoff => REVOKE_HANDOFF,
         /// Reject a task.
         Reject => REJECT,
         /// Permanently delete a task.
