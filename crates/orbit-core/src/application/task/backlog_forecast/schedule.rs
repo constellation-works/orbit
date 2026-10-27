@@ -232,9 +232,7 @@ fn critical_path(scenario: &Scenario<'_>, scripts: &[Script]) -> Option<f64> {
         longest[index] = before
             .zip(scripts[index].finish_hours())
             .map(|(a, b)| a + b);
-        if let Some(path) = longest[index] {
-            overall = overall.max(path);
-        }
+        overall = overall.max(longest[index]?);
     }
     Some(overall)
 }
