@@ -2,7 +2,9 @@ use clap::Args;
 use std::collections::HashSet;
 
 use orbit_core::application::contracts::{ClaimedLeafStage, DrainClaimedLeaf};
-use orbit_core::application::job::agent_invoke_result;
+use orbit_core::application::job::{
+    RunFailureCause, RunFailureContextProfile, RunFailureRead, agent_invoke_result,
+};
 use orbit_core::runtime::audit::run::RunProviderProcess;
 use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
 use orbit_types::workflow::{JobRunState, PipelineState};
@@ -14,7 +16,7 @@ use super::drain_summary::{
     pass_refusal_line, pass_throttle_line, pass_waiting_lines, summarize_drain_leaves,
 };
 use super::format::{
-    RunRootCause, WaitingTaskFormatter, format_backlog_exclusion_lines, format_root_cause_lines,
+    WaitingTaskFormatter, format_backlog_exclusion_lines, format_root_cause_lines,
 };
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
@@ -202,8 +204,13 @@ pub(crate) fn run_show_payload(
         // The drain's own `state` only says the coordinator ran.
         "drain_summary": drain_summary.as_ref().map(|summary| summary.to_json()),
         "waiting_on_lock_holders": lock_holders,
-        "root_cause": root_causes.first(),
-        "additional_root_causes": root_causes.get(1..).unwrap_or_default(),
+        "root_cause": root_causes.first().map(RunFailureCause::to_leaf_json),
+        "additional_root_causes": root_causes
+            .get(1..)
+            .unwrap_or_default()
+            .iter()
+            .map(RunFailureCause::to_leaf_json)
+            .collect::<Vec<_>>(),
         // The same projection the registered/MCP run-show surface emits, so
         // both readers name a live child identically [ORB-11752].
         "provider_processes": provider_processes
@@ -502,7 +509,7 @@ fn review_layer_line(layer: &Value) -> Option<String> {
 fn resume_hint(
     runtime: &OrbitRuntime,
     run: &JobRun,
-    causes: &[RunRootCause],
+    causes: &[RunFailureCause],
     read: RunRead,
 ) -> Option<String> {
     if !is_resumable_state(run.state) {
@@ -546,122 +553,37 @@ fn is_resumable_state(state: JobRunState) -> bool {
     )
 }
 
-/// Follow persisted child dispatches depth first. Only failed terminal leaves
-/// are reported; a wrapper's own error stays in its normal run header/steps.
+/// `orbit run show`'s failed terminal leaves, through the shared failure
+/// query. A wrapper's own error stays in its normal run header/steps.
 fn collect_failed_leaf_causes(
     runtime: &OrbitRuntime,
     run: &JobRun,
     state: Option<&PipelineState>,
     read: RunRead,
-) -> Result<Vec<RunRootCause>, OrbitError> {
-    let mut causes = Vec::new();
-    let mut visited = HashSet::new();
-    collect_failed_leaf_causes_from(runtime, run, state, read, &mut visited, &mut causes)?;
-    Ok(causes)
-}
-
-fn collect_failed_leaf_causes_from(
-    runtime: &OrbitRuntime,
-    run: &JobRun,
-    state: Option<&PipelineState>,
-    read: RunRead,
-    visited: &mut HashSet<String>,
-    causes: &mut Vec<RunRootCause>,
-) -> Result<(), OrbitError> {
-    if !visited.insert(run.run_id.clone()) {
-        return Ok(());
-    }
-    let before_children = causes.len();
-    for dispatch in state.into_iter().flat_map(|state| &state.child_dispatches) {
-        let child = match read.show(runtime, &dispatch.child_run_id) {
-            Ok(child) => child,
-            Err(OrbitError::NotFound { .. }) => continue,
-            Err(error) => return Err(error),
-        };
-        let child_state = match runtime.read_run_state(&child.run_id) {
-            Ok(state) => state,
-            Err(error) => {
-                tracing::warn!(
-                    target: "orbit.cli.run",
-                    run_id = %child.run_id,
-                    %error,
-                    "pipeline checkpoint unreadable; run shown without it"
-                );
-                eprintln!(
-                    "warning: pipeline checkpoint unreadable for {}; run shown without it: {error}",
-                    child.run_id
-                );
-                None
-            }
-        };
-        collect_failed_leaf_causes_from(
-            runtime,
-            &child,
-            child_state.as_ref(),
-            read,
-            visited,
-            causes,
-        )?;
-    }
-    if causes.len() != before_children
-        || !matches!(
-            run.state,
-            JobRunState::Failed
-                | JobRunState::Timeout
-                | JobRunState::Cancelled
-                | JobRunState::Interrupted
-        )
-    {
-        return Ok(());
-    }
-
-    // V2 runs can store a synthetic job-level step as well as the actual YAML
-    // steps in their audit trail. Prefer an audit error so the named step is
-    // the one that failed, even when the stored step only wraps that failure.
-    let audit_steps = runtime.collect_run_audit_steps(&run.run_id)?;
-    let audit_error = audit_steps.iter().rev().find(|step| {
-        step.state.as_deref() != Some("skipped")
-            && step
-                .error_message
-                .as_deref()
-                .is_some_and(|message| !message.is_empty())
-    });
-    let stored_error = run.steps.iter().rev().find(|step| {
-        step.state != JobRunState::Skipped
-            && step
-                .error_message
-                .as_deref()
-                .is_some_and(|message| !message.is_empty())
-    });
-    let audit_failed = audit_steps.iter().rev().find(|step| {
-        matches!(
-            step.state.as_deref(),
-            Some("error" | "failed" | "timeout" | "interrupted")
-        )
-    });
-    let stored_failed = run.steps.iter().rev().find(|step| {
-        matches!(
-            step.state,
-            JobRunState::Failed | JobRunState::Timeout | JobRunState::Interrupted
-        )
-    });
-    let (step, message) = if let Some(step) = audit_error {
-        (Some(step.step_id.clone()), step.error_message.clone())
-    } else if let Some(step) = stored_error {
-        (Some(step.target_id.clone()), step.error_message.clone())
-    } else if let Some(step) = audit_failed {
-        (Some(step.step_id.clone()), step.error_message.clone())
-    } else if let Some(step) = stored_failed {
-        (Some(step.target_id.clone()), step.error_message.clone())
-    } else {
-        (None, None)
+) -> Result<Vec<RunFailureCause>, OrbitError> {
+    let read = match read {
+        RunRead::Reconcile => RunFailureRead::Reconcile,
+        RunRead::Observe => RunFailureRead::Observe,
     };
-    causes.push(RunRootCause {
-        run_id: run.run_id.clone(),
-        step,
-        message,
-    });
-    Ok(())
+    let context = runtime.run_failure_context(
+        run,
+        state,
+        RunFailureContextProfile::AllFailedLeaves(read),
+        // This profile survives only an unreadable child checkpoint.
+        &mut |warning| {
+            tracing::warn!(
+                target: "orbit.cli.run",
+                run_id = %warning.run_id,
+                error = %warning.error,
+                "pipeline checkpoint unreadable; run shown without it"
+            );
+            eprintln!(
+                "warning: pipeline checkpoint unreadable for {}; run shown without it: {}",
+                warning.run_id, warning.error
+            );
+        },
+    )?;
+    Ok(context.causes)
 }
 
 /// A pull drain's graceful cancel and the claimed leaves it still carries.

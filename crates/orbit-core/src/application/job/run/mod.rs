@@ -16,7 +16,8 @@
 //! - `interrupted_review` — keeping the repair of a review a stopped run was inside.
 //! - `child_timeout` — cancelling a child whose parent's wait expired, keeping its candidate.
 //! - `completion_audit` — the completion audit the stop, worker-ceiling and extension controls share.
-//! - `root_cause` — typed root causes of cascaded failures, and folding a listing by incident.
+//! - `root_cause` — typed root causes of cascaded failures, folding a listing by incident, and the
+//!   run-failure observation query run views share.
 //! - `step_recovery` — authenticating executor-owned recovery before it mutates Git.
 //! - `tests/*` — helpers and regression tests split by concern (actions, reconcile, owner, conflict).
 
@@ -64,7 +65,10 @@ pub use projection::{
     ActivityInvocationEvidence, JobRunListStates, job_run_task_ids, job_run_to_json,
     job_run_to_json_with_activity_provenance, run_error_step,
 };
-pub use root_cause::{RunIncident, fold_run_incidents};
+pub use root_cause::{
+    RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
+    RunFailureEvidence, RunFailureRead, RunIncident, fold_run_incidents,
+};
 pub use types::{
     JobRunCancelOutcome, JobRunCancelResult, JobRunListParams, JobRunOrder, UnstoppedChild,
     UnstoppedLeaf,
