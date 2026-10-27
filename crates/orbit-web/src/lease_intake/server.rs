@@ -479,28 +479,26 @@ fn run_operation(
         ));
     }
     input["principal"] = json!(scope.principal);
+    let grant = LeaseTokenGrant {
+        principal: scope.principal.clone(),
+        principal_class: match scope.principal_class {
+            PrincipalClass::Human => LeasePrincipalClass::Human,
+            PrincipalClass::Agent => LeasePrincipalClass::Agent,
+        },
+        token_id: authority.token_id.clone(),
+        max_priority: match scope.max_priority {
+            LeasePriorityCeiling::Low => LeasePriority::Low,
+            LeasePriorityCeiling::Normal => LeasePriority::Normal,
+            LeasePriorityCeiling::High => LeasePriority::High,
+        },
+        hard_allowed: scope.hard == HardLeasePermission::Allow,
+        client_address: authority.client_address.clone(),
+    };
     let result = match operation {
-        LeaseIntakeOperation::Request => {
-            let grant = LeaseTokenGrant {
-                principal: scope.principal.clone(),
-                principal_class: match scope.principal_class {
-                    PrincipalClass::Human => LeasePrincipalClass::Human,
-                    PrincipalClass::Agent => LeasePrincipalClass::Agent,
-                },
-                token_id: authority.token_id.clone(),
-                max_priority: match scope.max_priority {
-                    LeasePriorityCeiling::Low => LeasePriority::Low,
-                    LeasePriorityCeiling::Normal => LeasePriority::Normal,
-                    LeasePriorityCeiling::High => LeasePriority::High,
-                },
-                hard_allowed: scope.hard == HardLeasePermission::Allow,
-                client_address: authority.client_address.clone(),
-            };
-            lease::request_with_token(runtime, input, &grant)
-        }
+        LeaseIntakeOperation::Request => lease::request_with_token(runtime, input, &grant),
         LeaseIntakeOperation::Renew => {
             ensure_principal_holds(runtime, &input, &scope.principal)?;
-            lease::renew(runtime, input)
+            lease::renew_with_token(runtime, input, &grant)
         }
         LeaseIntakeOperation::Expand => {
             return Err(LeaseIntakeError::new(

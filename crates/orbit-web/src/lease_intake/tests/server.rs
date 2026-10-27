@@ -54,6 +54,36 @@ fn call_workspace(
     client.call(&request).expect("intake call")
 }
 
+fn call_scoped(
+    client: &mut LeaseIntakeClient,
+    principal: &str,
+    token_id: &str,
+    max_priority: LeasePriorityCeiling,
+    hard: HardLeasePermission,
+    operation: LeaseIntakeOperation,
+    input: Value,
+) -> LeaseIntakeResponse {
+    client
+        .call(&LeaseIntakeRequest {
+            operation,
+            workspace: SINGLE_WORKSPACE_ID.to_string(),
+            authority: LeaseIntakeAuthority {
+                token_id: token_id.to_string(),
+                scope: LeaseTokenScope {
+                    principal: principal.to_string(),
+                    principal_class: PrincipalClass::Human,
+                    workspaces: vec![SINGLE_WORKSPACE_ID.to_string()],
+                    verbs: vec![LeaseTokenVerb::Lease, LeaseTokenVerb::Read],
+                    max_priority,
+                    hard,
+                },
+                client_address: "192.0.2.7".to_string(),
+            },
+            input,
+        })
+        .expect("intake call")
+}
+
 fn seed_registered_workspace(base: &std::path::Path, id: &str) -> std::path::PathBuf {
     let repo_root = base.join(id);
     let orbit_dir = repo_root.join(".orbit");
@@ -244,6 +274,136 @@ fn oversized_request_response_releases_the_grant_before_returning_an_error() {
         assert_eq!(leases.len(), 1, "a failed response must not leave a grant");
         assert_eq!(leases[0]["lease_id"], held["lease"]["lease_id"]);
     }
+}
+
+#[test]
+fn token_renewal_obeys_current_scope_and_workspace_policy() {
+    if !enter_isolated_child(
+        module_path!(),
+        "token_renewal_obeys_current_scope_and_workspace_policy",
+    ) {
+        return;
+    }
+    let _env = orbit_common::test_env::scoped([
+        ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
+        ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
+    ]);
+    let fixture = FrameLimitFixture::start();
+    let mut client = fixture.connect();
+    let granted = ok(call_scoped(
+        &mut client,
+        "alice",
+        "high-token",
+        LeasePriorityCeiling::High,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:src/lease.rs"], "mode": "hard", "priority": "high"}),
+    ));
+    let id = granted["lease"]["lease_id"].as_str().expect("lease id");
+    assert_eq!(granted["lease"]["mode"], "hard");
+    assert_eq!(granted["lease"]["priority"], "high");
+    let before = granted["lease"]["expires_at"].clone();
+    let narrow = refusal(call_scoped(
+        &mut client,
+        "alice",
+        "narrow-token",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Never,
+        LeaseIntakeOperation::Renew,
+        json!({"lease_id": id, "ttl_seconds": 14400}),
+    ));
+    assert_eq!(narrow.code, "invalid_input");
+    let shown = ok(call(
+        &mut client,
+        "alice",
+        LeaseIntakeOperation::Show,
+        json!({"lease_id": id}),
+    ));
+    assert_eq!(shown["lease"]["expires_at"], before);
+    assert_eq!(shown["lease"]["mode"], "hard");
+    assert_eq!(shown["lease"]["priority"], "high");
+    let renewed = ok(call_scoped(
+        &mut client,
+        "alice",
+        "high-token",
+        LeasePriorityCeiling::High,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Renew,
+        json!({"lease_id": id, "ttl_seconds": 600}),
+    ));
+    assert_eq!(renewed["renewed"], true);
+    let other = refusal(call(
+        &mut client,
+        "bob",
+        LeaseIntakeOperation::Renew,
+        json!({"lease_id": id}),
+    ));
+    assert_eq!(other.code, "lease_not_held");
+    // The service admits policy at startup. Reopen the same store under a
+    // tightened policy and exercise the actual intake socket again.
+    let root = fixture._tmp.path();
+    let workspace = root.join("ws_frame_limit/.orbit");
+    std::fs::write(workspace.join("config.toml"),
+        "[lease]\nenabled = true\n[lease.hard]\nhuman = \"never\"\n[lease.max_priority]\nhuman = \"low\"\n").unwrap();
+    let restricted = Arc::new(OrbitRuntime::from_roots(&root.join("global"), &workspace).unwrap());
+    let path = root.join("restricted.sock");
+    let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+    // SAFETY: geteuid has no preconditions.
+    let uid = unsafe { libc::geteuid() };
+    let mut socket = LeaseIntakeSocket::for_test_listener(listener, path.clone(), uid);
+    let accept = {
+        let _entered = fixture._tokio.enter();
+        socket
+            .serve(
+                DashboardState::single(Arc::clone(&restricted)),
+                IntakeLimits::default(),
+            )
+            .unwrap()
+    };
+    fixture._tokio.spawn(accept);
+    let mut restricted_client = LeaseIntakeClient::connect(&path, Duration::from_secs(10)).unwrap();
+    let denied = refusal(call_scoped(
+        &mut restricted_client,
+        "alice",
+        "high-token",
+        LeasePriorityCeiling::High,
+        HardLeasePermission::Allow,
+        LeaseIntakeOperation::Renew,
+        json!({"lease_id": id, "ttl_seconds": 14400}),
+    ));
+    assert_eq!(denied.code, "invalid_input");
+    let operator = lease::renew(&restricted, json!({"lease_id": id, "ttl_seconds": 600})).unwrap();
+    assert_eq!(operator["renewed"], true);
+    let compliant = ok(call_scoped(
+        &mut restricted_client,
+        "alice",
+        "narrow-token",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Never,
+        LeaseIntakeOperation::Request,
+        json!({"selectors": ["file:src/new.rs"], "mode": "advisory", "priority": "low"}),
+    ));
+    let compliant_id = compliant["lease"]["lease_id"].as_str().unwrap();
+    let renewed = ok(call_scoped(
+        &mut restricted_client,
+        "alice",
+        "narrow-token",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Never,
+        LeaseIntakeOperation::Renew,
+        json!({"lease_id": compliant_id}),
+    ));
+    assert_eq!(renewed["renewed"], true);
+    let released = ok(call_scoped(
+        &mut restricted_client,
+        "alice",
+        "narrow-token",
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Never,
+        LeaseIntakeOperation::Release,
+        json!({"lease_id": id}),
+    ));
+    assert_eq!(released["released"], true);
 }
 
 /// Review finding F1 on ORB-18430: a token renewed and released any lease

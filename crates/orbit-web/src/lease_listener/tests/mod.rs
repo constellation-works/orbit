@@ -169,6 +169,7 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     std::fs::create_dir_all(&workspace_root).unwrap();
     std::fs::write(repo_root.join("src/x.rs"), "pub fn x() {}\n").unwrap();
     std::fs::write(repo_root.join("src/y.rs"), "pub fn y() {}\n").unwrap();
+    std::fs::write(repo_root.join("src/z.rs"), "pub fn z() {}\n").unwrap();
     std::fs::write(
         workspace_root.join("config.toml"),
         "[lease]\nenabled = true\n",
@@ -187,6 +188,24 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
         LeaseTokenVerb::Lease,
         LeasePriorityCeiling::Normal,
         HardLeasePermission::Allow,
+    );
+    let (high_id, high) = mint(
+        &mut store,
+        "alice",
+        PrincipalClass::Human,
+        &[SINGLE_WORKSPACE_ID],
+        LeaseTokenVerb::Lease,
+        LeasePriorityCeiling::High,
+        HardLeasePermission::Allow,
+    );
+    let (_, narrow) = mint(
+        &mut store,
+        "alice",
+        PrincipalClass::Human,
+        &[SINGLE_WORKSPACE_ID],
+        LeaseTokenVerb::Lease,
+        LeasePriorityCeiling::Low,
+        HardLeasePermission::Never,
     );
     let (_, agent) = mint(
         &mut store,
@@ -232,6 +251,8 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
         store,
     );
 
+    let mut revoker = LeaseTokenStore::open_in_orbit_home(&home).unwrap();
+
     tokio.block_on(async {
         let (status, _, granted) = send(
             &router,
@@ -245,6 +266,58 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
         assert_eq!(status, StatusCode::OK, "{granted}");
         assert_eq!(granted["lease"]["principal"], "alice", "{granted}");
         assert_eq!(granted["lease"]["token_id"], alice_id.as_str(), "{granted}");
+
+        let (status, _, high_grant) = send(
+            &router,
+            "POST",
+            "/api/leases",
+            PEER,
+            &[("authorization", &bearer(&high))],
+            Some(json!({"selectors": ["file:src/z.rs"], "mode": "hard", "priority": "high"})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{high_grant}");
+        let high_lease = high_grant["lease"]["lease_id"].as_str().unwrap();
+        assert_eq!(high_grant["lease"]["mode"], "hard");
+        assert_eq!(high_grant["lease"]["priority"], "high");
+        revoker.revoke(&high_id, "test", Utc::now()).unwrap();
+        let uri = format!("/api/leases/{high_lease}/renew");
+        let (status, _, revoked) = send(
+            &router,
+            "POST",
+            &uri,
+            PEER,
+            &[("authorization", &bearer(&high))],
+            Some(json!({"ttl_seconds": 14400})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{revoked}");
+        let (status, _, denied) = send(
+            &router,
+            "POST",
+            &uri,
+            PEER,
+            &[("authorization", &bearer(&narrow))],
+            Some(json!({"ttl_seconds": 14400})),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{denied}");
+        let (status, _, shown) = send(
+            &router,
+            "GET",
+            &format!("/api/leases/{high_lease}"),
+            PEER,
+            &[("authorization", &bearer(&narrow))],
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{shown}");
+        assert_eq!(
+            shown["lease"]["expires_at"],
+            high_grant["lease"]["expires_at"]
+        );
+        assert_eq!(shown["lease"]["mode"], "hard");
+        assert_eq!(shown["lease"]["priority"], "high");
 
         let (status, _, refused) = send(
             &router,
