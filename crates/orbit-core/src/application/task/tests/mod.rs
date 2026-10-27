@@ -33,7 +33,18 @@ pub(super) fn enter_isolated_child(module: &str, test: &str) -> bool {
         return true;
     }
 
-    let home = tempdir().expect("isolated fixture home");
+    // Linux Bubblewrap masks `$HOME/.orbit/run` and refuses the mask when a
+    // bind of the checkout also reaches it. Nested sweep scratch puts TMPDIR
+    // inside that checkout, so the Linux home goes on /dev/shm: outside the
+    // checkout, and outside the /tmp overlay a sandboxed child mounts.
+    let home = if cfg!(target_os = "linux") {
+        tempfile::Builder::new()
+            .prefix("ohome")
+            .tempdir_in("/dev/shm")
+            .expect("isolated fixture home")
+    } else {
+        tempdir().expect("isolated fixture home")
+    };
     let mut command = Command::new(std::env::current_exe().expect("test executable"));
     orbit_common::test_env::clear_inherited_authority(|name| {
         command.env_remove(name);
