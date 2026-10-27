@@ -1043,6 +1043,7 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 | Code | Decision |
 | --- | --- |
 | `delivery_head_changed` | The PR reports a head different from the one this run published. |
+| `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. |
 | `delivery_repair_dispatched` | A repair was already dispatched for the blocked head. |
 | `delivery_pr_draft` | The PR is still a draft. |
 | `delivery_pr_closed` | The PR closed without merging. |
@@ -1061,8 +1062,9 @@ parents pass the held child, run history lists it as `held`, and reliability
 counts it under held, outside the failure rate. Routine fires retain their
 existing `succeeded` status for a held underlying run.
 
-A missing PR head, contradictory merge evidence, unreadable forge evidence,
-failed candidate checks, and unlisted refusals remain failures. In particular,
+Missing pinned identity fields, including the PR head, and contradictory merge
+evidence produce typed `delivery_evidence_stale` holds. Ordinary forge-read
+errors, failed candidate checks, and unlisted refusals remain failures. In particular,
 `delivery_evidence_stale` text alone does not establish a hold. Completion's
 ordinary conflict-recovery path also retains its existing failure and repair
 semantics. Resolve the named refusal before starting a new delivery attempt;
