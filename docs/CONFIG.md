@@ -708,6 +708,17 @@ Task list/detail JSON and MCP expose the same `pilot_warnings` array of
 `{kind, text}` entries, and CLI readiness uses that source for warning holds.
 The dashboard drain payload omits per-finding text.
 
+The pilot checks concrete contracts required by a task's description and
+criteria against pinned source: tools and their output fields, schemas, port
+methods, config sections and authority requirements. It reads the workspace's
+repository guides for ownership rules and the recorded dependencies' scopes.
+If a required contract is absent, no dependency supplies it, and the task is
+not permitted and scoped to add it, a holding `utility_warnings` finding names
+the contract, source or tool-schema evidence, dependency coverage and a
+suggested prerequisite or criterion rewrite. It follows the existing warning
+hold and triage path. A dependency explicitly adding the contract gates
+execution through its existing edge; it needs no additional warning hold.
+
 Full task records also expose `resolvable_pilot_admission_hold`, derived from
 the current admission finding and trusted resolutions independently of
 `pilot_warnings`. A held backlog task's detail offers **Clear hold** and
