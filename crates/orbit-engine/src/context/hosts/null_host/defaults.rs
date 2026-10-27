@@ -439,6 +439,11 @@ pub trait NullRuntimeHost: Send + Sync {
         Vec::new()
     }
 
+    /// The `workflow.base_branch` default.
+    fn workspace_base_branch(&self) -> String {
+        "main".to_string()
+    }
+
     fn unlocked_path_validation(&self) -> crate::context::UnlockedPathValidation {
         crate::context::UnlockedPathValidation::default()
     }
