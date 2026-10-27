@@ -16,6 +16,118 @@ fn workspace() -> TestWorkspace {
 }
 
 #[test]
+fn task_grants_are_visible_beside_requirements_and_in_history() {
+    let workspace = workspace();
+    let output = workspace.run_as_operator(
+        &[
+            "task",
+            "add",
+            "--title",
+            "Grant visibility",
+            "--complexity",
+            "low",
+            "--required-tools",
+            "github.run.list",
+            "--granted-tools",
+            "orbit.auto_task.update",
+            "--json",
+        ],
+        "create a granted task",
+    );
+    let task: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = task["id"].as_str().unwrap();
+    for args in [
+        vec!["task", "list", "--format", "table"],
+        vec!["task", "list", "--full", "--format", "table"],
+    ] {
+        let output = workspace.run(&args, "list granted task");
+        let text = String::from_utf8_lossy(&output.stdout);
+        assert!(text.contains("github.run.list"), "{text}");
+        assert!(text.contains("orbit.auto_task.update"), "{text}");
+        assert!(text.contains("REQUIRED TOOLS"), "{text}");
+        assert!(text.contains("GRANTED TOOLS"), "{text}");
+    }
+    let shown = workspace.run(&["task", "show", id], "show granted task");
+    let text = String::from_utf8_lossy(&shown.stdout);
+    assert!(text.contains("Required Tools: github.run.list"), "{text}");
+    assert!(
+        text.contains("Granted Tools: orbit.auto_task.update"),
+        "{text}"
+    );
+    let history = workspace.run(
+        &["task", "show", id, "--fields", "history"],
+        "show grant history",
+    );
+    let text = String::from_utf8_lossy(&history.stdout);
+    let grant = task["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["event"] == "granted_tools_changed")
+        .unwrap();
+    assert!(text.contains(grant["by"].as_str().unwrap()), "{text}");
+    assert!(
+        text.contains(&grant["at"].as_str().unwrap()[..19]),
+        "{text}"
+    );
+    assert!(text.contains("orbit.auto_task.update"), "{text}");
+
+    let mut denied = cargo_bin_cmd!("orbit");
+    test_env::clear_inherited_authority(|name| {
+        denied.env_remove(name);
+    });
+    let output = denied
+        .current_dir(&workspace.work)
+        .env("HOME", &workspace.home)
+        .env("USERPROFILE", &workspace.home)
+        .env("ORBIT_TASK_ACTOR_KIND", "agent")
+        .env("ORBIT_ACTIVITY_TOOL_POLICY", "deny")
+        .env("ORBIT_ACTIVITY_TOOLS_DENY", "orbit.auto_task.update")
+        .env("ORBIT_ACTIVITY_NAME", "agent_implement")
+        .args([
+            "tool",
+            "run",
+            "orbit.auto_task.update",
+            "--input",
+            r#"{"name":"never-applied"}"#,
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("disallow list"),
+        "{output:?}"
+    );
+    let audit = workspace.run(
+        &["audit", "list", "--kind", "operation", "--json"],
+        "query authorization audit",
+    );
+    let events: Value = serde_json::from_slice(&audit.stdout).unwrap();
+    assert!(
+        events
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|event| event["command"] == "authorization"
+                && event["target_id"] == "orbit.auto_task.update"
+                && event["status"] == "denied"),
+        "{events}"
+    );
+    let stats = workspace.run(
+        &[
+            "audit",
+            "stats",
+            "--tool",
+            "orbit.auto_task.update",
+            "--json",
+        ],
+        "count denied call once",
+    );
+    let stats: Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert_eq!(stats["policy_denied_count"], 1, "{stats}");
+}
+
+#[test]
 fn fresh_root_task_list_has_no_startup_warnings() {
     let workspace = workspace();
     let output = workspace.run(&["task", "list", "--json"], "list tasks in a fresh root");

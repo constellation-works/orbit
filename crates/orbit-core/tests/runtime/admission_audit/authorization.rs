@@ -106,3 +106,66 @@ fn an_agent_session_cannot_delete_a_task_through_any_tool_path() {
     // The refusal is real, not cosmetic: the task is still there.
     assert!(runtime.get_task(&task_id).is_ok());
 }
+
+#[test]
+fn grant_changes_and_denied_calls_share_the_authorization_audit_predicate() {
+    if !crate::admission_audit::isolate(
+        module_path!(),
+        "grant_changes_and_denied_calls_share_the_authorization_audit_predicate",
+    ) {
+        return;
+    }
+    let (_root, runtime, _repo) = crate::admission_audit::tool_support::test_runtime();
+    let task = runtime
+        .add_task(orbit_core::application::task::TaskAddParams {
+            title: "Audit grant".into(),
+            ..Default::default()
+        })
+        .unwrap();
+    runtime
+        .run_tool_with_context_and_role(
+            "orbit.task.update",
+            json!({"id": task.id, "granted_tools": ["orbit.auto_task.update"]}),
+            Role::Admin,
+            context_with([McpCapability::Operator]),
+        )
+        .unwrap();
+    let events = runtime
+        .list_audit_events(None, None, None, None, 200)
+        .unwrap();
+    assert!(
+        events.iter().any(|event| event.command == "authorization"
+            && event.target_id.as_deref() == Some("orbit.task.grant_tools")
+            && event.status == orbit_core::AuditEventStatus::Success),
+        "{events:#?}"
+    );
+    let mut context = context_with([McpCapability::Agent]);
+    context.tool_deny_policy = Some(orbit_types::workflow::ActivityToolDenyPolicy {
+        activity: "agent_implement".into(),
+        disallow_list: vec!["orbit.auto_task.update".into()],
+    });
+    let error = runtime
+        .run_tool_with_context_and_role(
+            "orbit.auto_task.update",
+            json!({"name": "never-applied"}),
+            Role::Admin,
+            context,
+        )
+        .expect_err("a mutating grant must remain denied live");
+    assert!(error.to_string().contains("disallow list"), "{error}");
+    let events = runtime
+        .list_audit_events(None, None, None, None, 200)
+        .unwrap();
+    assert!(
+        events.iter().any(|event| event.command == "authorization"
+            && event.target_id.as_deref() == Some("orbit.auto_task.update")
+            && event.status == orbit_core::AuditEventStatus::Denied),
+        "{events:#?}"
+    );
+    let denials = runtime.audit_denials_by_operation(None).unwrap();
+    assert_eq!(denials, vec![("orbit.auto_task.update".to_string(), 1)]);
+    assert_eq!(
+        runtime.get_task(&task.id).unwrap().granted_tools,
+        ["orbit.auto_task.update"]
+    );
+}
