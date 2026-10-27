@@ -98,6 +98,12 @@ fn completion_refusals_hold_the_run_and_pass_its_parents() {
             Some(DeliveryRefusal::CompletionBudgetExpired),
             "completion deadline expired",
         ),
+        (
+            "deadline_infrastructure",
+            json!({"mergeStateStatus": "BLOCKED", "reviewDecision": "APPROVED", "statusCheckRollup": [{"name": "optional-check", "status": "COMPLETED", "conclusion": "FAILURE"}]}),
+            Some(DeliveryRefusal::CompletionBudgetExpired),
+            "auto_fix_stopped",
+        ),
     ] {
         completion_outcome(case, patch, refusal, diagnostic);
     }
@@ -130,11 +136,19 @@ fn completion_outcome(
         .extend(patch.as_object().unwrap().clone());
     std::fs::write(&status, observation.to_string()).unwrap();
     let gh = bin.join("gh");
-    std::fs::write(&gh, format!(
-        "#!/bin/sh\nset -eu\ncase \"$1 $2\" in\n'pr view') touch '{}'; cat '{}' ;;\n*) echo \"unexpected forge call: $*\" >&2; exit 1 ;;\nesac\n",
-        fx.repo.join("deadline-hit").display(),
-        status.display(),
-    )).unwrap();
+    let calls = fx.repo.join("gh-calls");
+    let required_checks = json!({"data":{"repository":{"pullRequest":{"headRefOid":"published-head","commits":{"nodes":[{"commit":{"oid":"published-head","statusCheckRollup":null}}]}}}}});
+    std::fs::write(
+        &gh,
+        format!(
+            "#!/bin/sh\nset -eu\nprintf '%s %s\\n' \"$1\" \"${{2:-}}\" >> '{}'\ncase \"$1 ${{2:-}}\" in\n'pr view') touch '{}'; cat '{}' ;;\n'api graphql') printf '%s\\n' '{}' ;;\n*) echo \"unexpected forge call: $*\" >&2; exit 1 ;;\nesac\n",
+            calls.display(),
+            fx.repo.join("deadline-hit").display(),
+            status.display(),
+            required_checks,
+        ),
+    )
+    .unwrap();
     if case == "forge_read" {
         std::fs::write(
             &gh,
@@ -154,10 +168,17 @@ fn completion_outcome(
                 "workspace_path": "{{ input.workspace_path }}",
                 "completed_task_ids": "{{ input.task_ids }}", "pr_number": "42",
                 "published_head_sha": "published-head",
-                "max_wait_seconds": if case == "deadline_parked" { 600 } else { 0 },
+                "max_wait_seconds": if matches!(case, "deadline_parked" | "deadline_infrastructure") { 600 } else { 0 },
             },
         }]},
     }).to_string()).unwrap();
+    if case == "deadline_infrastructure" {
+        let job_config = std::fs::read_to_string(&job).unwrap();
+        let mut job_json: Value = serde_json::from_str(&job_config).unwrap();
+        job_json["spec"]["steps"][0]["default_input"]["auto_fix"] = json!(true);
+        job_json["spec"]["steps"][0]["default_input"]["completion"] = json!("review");
+        std::fs::write(&job, job_json.to_string()).unwrap();
+    }
     let task_status = match case {
         "not_promotable" => TaskStatus::Blocked,
         "head_inprogress" => TaskStatus::InProgress,
@@ -209,6 +230,23 @@ fn completion_outcome(
             |_, _| {},
             || fx.runtime.execute_pipeline_run_worker(&run.run_id),
         );
+    } else if case == "deadline_infrastructure" {
+        let now = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+        let clock = std::rc::Rc::clone(&now);
+        let reads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = std::rc::Rc::clone(&reads);
+        let _ = orbit_engine::test_support::with_prerequisite_clock(
+            move || clock.get(),
+            move |label, _| {
+                if label == "PR required checks" {
+                    observed.set(observed.get() + 1);
+                    if observed.get() == 2 {
+                        now.set(1_600_001);
+                    }
+                }
+            },
+            || fx.runtime.execute_pipeline_run_worker(&run.run_id),
+        );
     } else {
         let _ = fx.runtime.execute_pipeline_run_worker(&run.run_id);
     }
@@ -235,6 +273,38 @@ fn completion_outcome(
         stored.steps.last().unwrap().error_code.as_deref(),
         refusal.map(DeliveryRefusal::error_code)
     );
+    if case == "deadline_infrastructure" {
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        assert_eq!(
+            calls.lines().filter(|line| *line == "api graphql").count(),
+            2,
+            "the successful infrastructure required-check read expires before another provider operation"
+        );
+        assert!(
+            !calls.contains("merge"),
+            "a held completion never merges the PR"
+        );
+        assert!(
+            !calls.contains("rerun"),
+            "a deadline hold never dispatches a repair"
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&std::fs::read(&status).unwrap()).unwrap()["state"],
+            "OPEN",
+            "the PR remains open after the infrastructure deadline hold"
+        );
+        let runs = fx
+            .runtime
+            .list_job_runs(JobRunListParams::default())
+            .unwrap();
+        assert_eq!(
+            runs.iter()
+                .map(|row| row.run_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![run.run_id.as_str()],
+            "the held worker does not dispatch final recovery"
+        );
+    }
     assert_eq!(
         fx.runtime.get_task(&task).unwrap().status,
         task_status,
