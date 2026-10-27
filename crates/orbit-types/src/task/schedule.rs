@@ -9,7 +9,7 @@
 //! the override covers the run from submission through dispatch and resume.
 //! Changing `not_before` afterwards reinstates the hold for the new time.
 
-use chrono::{DateTime, SecondsFormat, Timelike, Utc};
+use chrono::{DateTime, SecondsFormat, Utc};
 
 use crate::task::{Task, TaskError, TaskHistoryEntry};
 
@@ -23,21 +23,19 @@ pub const SCHEDULE_OVERRIDDEN_EVENT: &str = "schedule_overridden";
 /// the sentence (a pull follower reading the owner's hold) can classify it.
 pub const SCHEDULED_HOLD_PREFIX: &str = "scheduled: not before ";
 
-/// The canonical spelling of a scheduled time: RFC 3339 in UTC, to the second.
+/// The canonical spelling of a scheduled time: RFC 3339 in UTC, retaining any
+/// fractional seconds.
 #[must_use]
 pub fn format_not_before(not_before: DateTime<Utc>) -> String {
-    not_before.to_rfc3339_opts(SecondsFormat::Secs, true)
+    not_before.to_rfc3339_opts(SecondsFormat::AutoSi, true)
 }
 
-/// Parse an RFC 3339 instant with an explicit offset into UTC, to the second,
-/// refusing anything else and naming the input.
+/// Parse an RFC 3339 instant with an explicit offset into UTC, retaining
+/// fractional seconds, refusing anything else and naming the input.
 pub fn parse_not_before(raw: &str) -> Result<DateTime<Utc>, TaskError> {
     let trimmed = raw.trim();
     DateTime::parse_from_rfc3339(trimmed)
-        .map(|instant| {
-            let utc = instant.with_timezone(&Utc);
-            utc.with_nanosecond(0).unwrap_or(utc)
-        })
+        .map(|instant| instant.with_timezone(&Utc))
         .map_err(|error| {
             TaskError::Invalid(format!(
                 "`{NOT_BEFORE_FIELD}` must be an RFC 3339 instant with an offset, such as \
