@@ -202,6 +202,44 @@ function loadingRow(row) {
   return item;
 }
 
+// Repaint a fleet container without dropping keyboard focus held by a
+// ready workspace button. When the previously focused button's workspace
+// is still present, its node is moved into the new tree while both trees
+// are connected (so it never disconnects), and focus is restored to that
+// same node if the move still blurred it. If the workspace is gone, focus
+// is left where the browser puts it rather than stolen for another row.
+export function replaceFleetDrains(container, payload, selectScope) {
+  if (!container) return;
+  const doc = container.ownerDocument || null;
+  const active = doc?.activeElement || null;
+  const focusedLabel = active && container.contains(active) && active.classList?.contains('fleet-workspace')
+    ? active.getAttribute?.('aria-label') : null;
+  const next = renderFleetDrains(payload, selectScope);
+  if (!focusedLabel) {
+    container.replaceChildren(next);
+    return;
+  }
+  const previous = container.querySelector(':scope > .fleet-drains');
+  if (!previous || container.childElementCount !== 1) {
+    container.replaceChildren(next);
+    const candidate = [...container.querySelectorAll('button.fleet-workspace')]
+      .find(button => button.getAttribute('aria-label') === focusedLabel);
+    candidate?.focus({ preventScroll: true });
+    return;
+  }
+  const oldButton = [...previous.querySelectorAll('button.fleet-workspace')]
+    .find(button => button.getAttribute('aria-label') === focusedLabel);
+  const newButton = [...next.querySelectorAll('button.fleet-workspace')]
+    .find(button => button.getAttribute('aria-label') === focusedLabel);
+  container.append(next);
+  if (oldButton && newButton && oldButton === active) newButton.replaceWith(oldButton);
+  previous.remove();
+  const restored = oldButton && newButton ? oldButton
+    : [...container.querySelectorAll('button.fleet-workspace')]
+      .find(button => button.getAttribute('aria-label') === focusedLabel);
+  if (restored && doc.activeElement !== restored) restored.focus({ preventScroll: true });
+}
+
 // One group per host, in registry order. Live drains lead their group; the
 // rest keep the host's order (the sort is stable). Idle rows show a muted dot and slots only.
 export function renderFleetDrains(payload, selectScope) {

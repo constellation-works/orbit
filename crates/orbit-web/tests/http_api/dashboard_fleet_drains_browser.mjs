@@ -191,6 +191,14 @@ async function assertFleetPartial(browser, port) {
           ['/api/on/owner/fleet/drains', '/api/on/remote/fleet/drains'],
           `fleet partial ${scenario.name} ${width}: each host requested once`);
         assert.ok(await page.locator('#auto-drain-body .fleet-row[data-phase="loading"]').textContent().then(text => text.includes('loading')), 'pending row text names loading');
+        // Focus a ready local workspace while the remote host is held; its
+        // keyboard target must survive that other host settling.
+        const readyButton = page.locator('#auto-drain-body .fleet-row[data-phase="idle"] .fleet-workspace').first();
+        const readyLabel = await readyButton.getAttribute('aria-label');
+        assert.ok(readyLabel, `fleet partial ${scenario.name} ${width}: ready workspace button has an accessible name`);
+        await readyButton.focus();
+        assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('aria-label')), readyLabel,
+          `fleet partial ${scenario.name} ${width}: ready workspace button focused before release`);
         if (scenario.name === 'success') {
           await page.screenshot({ path: path.join(evidence, `dashboard-fleet-remote-pending-dark-${width}.png`) });
         }
@@ -214,7 +222,16 @@ async function assertFleetPartial(browser, port) {
         } else {
           await page.screenshot({ path: path.join(evidence, `dashboard-fleet-remote-failed-dark-${width}.png`) });
         }
-        results.push({ scenario: scenario.name, width, before, after });
+        const focusAfter = await page.evaluate(() => {
+          const active = document.activeElement;
+          return { label: active?.getAttribute('aria-label'), connected: Boolean(active?.isConnected), tag: active?.tagName };
+        });
+        assert.deepEqual(focusAfter, { label: readyLabel, connected: true, tag: 'BUTTON' },
+          `fleet partial ${scenario.name} ${width}: settling another host preserves the ready workspace focus: ${JSON.stringify(focusAfter)}`);
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(() => document.querySelector('#workspace-select')?.value === 'idle', null, { timeout: 5000 });
+        assert.deepEqual(errors, [], `fleet partial ${scenario.name} ${width}: Enter selects the focused ready workspace without page errors`);
+        results.push({ scenario: scenario.name, width, before, after, readyLabel, focusAfter });
       } finally {
         await page.close();
       }
@@ -516,7 +533,7 @@ try {
   assert.deepEqual(errors, []);
   const polls = await assertPollBudget(browser, server.address().port);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup, workspaceDefaults, fleetPartial,
-    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'ready fleet hosts shown while another host is loading at 1440 and 375px', 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
+    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'ready fleet hosts shown while another host is loading at 1440 and 375px', 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', 'ready workspace focus preserved and Enter selects it when another host settles (success and failure, 1440 and 375px)', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
   console.log('fleet browser startup, scope, mobile, and poll-budget checks passed');
 } finally {
   if (browser) await browser.close();

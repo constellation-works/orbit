@@ -5,7 +5,7 @@ import { backlogForecastSummary, drainBacklogForecastLink, fetchBacklogForecast 
 import { navigateToRun, setActiveTab } from './router.js';
 import { chooseDockMode, dockHome, onDockHomeChange, setDockMode } from './log-tail.js';
 import { renderAutomation } from './automation.js';
-import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, renderFleetDrains } from './fleet-drains.js';
+import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
 import { cpuLoadMultiple, cpuMeasuresUtilization, cpuReadingLabel, cpuReadingValue } from './host-resources.js';
 import { DRAIN_LOCK_REASONS, DRAIN_POOLS, drainCrewNote, drainPilotNote, drainReason, drainReadinessView, setDrainReadiness } from './drain-waits.js';
 import { sparkline, svg } from './sparkline.js';
@@ -3713,7 +3713,7 @@ function paintAggregateFleet(payload) {
   const dot = $("auto-drain-dot");
   if (dot) dot.className = 'drain-dot';
   const body = $("auto-drain-body");
-  if (body) body.replaceChildren(renderFleetDrains(payload, context.selectFleetScope));
+  if (body) replaceFleetDrains(body, payload, context.selectFleetScope);
   for (const id of START_CARDS) clearStartCard(id);
   const label = $("auto-drain-phase-label");
   if (label) label.textContent = "Fleet";
@@ -3733,7 +3733,7 @@ function renderDrainFleet(payload) {
     body.textContent = "";
     return;
   }
-  body.replaceChildren(renderFleetDrains(payload, context.selectFleetScope));
+  replaceFleetDrains(body, payload, context.selectFleetScope);
 }
 
 function paintFleetSurfaces(payload) {
@@ -3742,7 +3742,7 @@ function paintFleetSurfaces(payload) {
   const card = $("auto-drain-panel");
   if (card?.dataset.drainState !== "fleet") return;
   const body = $("auto-drain-body");
-  if (body) body.replaceChildren(renderFleetDrains(payload, context.selectFleetScope));
+  if (body) replaceFleetDrains(body, payload, context.selectFleetScope);
 }
 
 let fleetRefreshStarted = false;
