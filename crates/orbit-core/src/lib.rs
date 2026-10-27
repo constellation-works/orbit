@@ -158,7 +158,9 @@ pub use application::job::{
 pub use application::routines::seed::{
     RoutineNameCollision, RoutineSeedIdentity, default_routine_name_collisions,
 };
-pub use application::search::{GlobalSearchHit, GlobalSearchKind, GlobalSearchParams};
+pub use application::search::{
+    GlobalSearchHit, GlobalSearchKind, GlobalSearchParams, SearchRequest, SearchRequestProfile,
+};
 pub use application::task::LockContentionReport;
 pub use application::workflow::{CompletionPolicy, ShipMode, find_workflow, resolved_ship_mode};
 pub use application::workspace_sync::{

@@ -5,10 +5,12 @@ mod filters;
 mod friction;
 mod merge;
 mod path_match;
+mod request;
 mod runtime;
 mod types;
 
 pub use path_match::task_selectors_contain_path;
+pub use request::{SearchRequest, SearchRequestProfile};
 pub(crate) use types::whitespace_query_note;
 pub use types::{
     GlobalSearchHit, GlobalSearchKind, GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse,
