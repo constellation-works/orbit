@@ -77,8 +77,8 @@ pub(super) fn build_name_map(
     Ok(map)
 }
 
-/// Rewrite the canonical dotted names of advertised tools in `text` to the
-/// names `tools/list` advertises.
+/// Rewrite canonical tool names in `text` to the names `tools/list` advertises,
+/// except in runnable `orbit tool run` examples, which need the CLI names.
 ///
 /// A description is written once, in canonical terms, and is shared with
 /// `orbit tool list`, where the dotted form is the callable one. An MCP client
@@ -86,6 +86,7 @@ pub(super) fn build_name_map(
 /// the exact canonical names in `canonical_names` are rewritten, and only as
 /// whole names: `_meta.orbit.workspace` and a longer dotted path are left alone.
 pub(super) fn advertise_tool_names(text: &str, canonical_names: &[&str]) -> String {
+    const CLI_TOOL_RUN_PREFIX: &str = "orbit tool run ";
     let is_path_char = |c: char| c.is_alphanumeric() || c == '_' || c == '.';
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -95,7 +96,13 @@ pub(super) fn advertise_tool_names(text: &str, canonical_names: &[&str]) -> Stri
         // or `_meta.orbit.workspace`.
         for name in canonical_names {
             if rest.starts_with(name) && name_ends_here(&rest[name.len()..]) {
-                out.push_str(&sanitize_tool_name(name));
+                if out.ends_with(CLI_TOOL_RUN_PREFIX) {
+                    // The CLI resolves canonical names, while MCP prose calls
+                    // the advertised name through `tools/call`.
+                    out.push_str(name);
+                } else {
+                    out.push_str(&sanitize_tool_name(name));
+                }
                 rest = &rest[name.len()..];
                 continue 'scan;
             }

@@ -1970,7 +1970,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional per-task field projection as a string or array, using the field names `orbit_task_show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, created_at, updated_at, workspace), the same rows `orbit tool run orbit_task_list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit_task_show`."
+          "description": "Optional per-task field projection as a string or array, using the field names `orbit_task_show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit_task_show`."
         },
         "view": {
           "type": "string",
