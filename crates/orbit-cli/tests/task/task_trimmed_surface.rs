@@ -13,7 +13,9 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use chrono::Utc;
 use orbit_common::test_env;
+use orbit_types::task::{TaskHistoryEntry, TaskStatus};
 use serde_json::{Value, json};
 use tempfile::tempdir;
 
@@ -290,6 +292,126 @@ fn task_update_and_add_accept_valid_context_selectors(workspace: &TestWorkspace)
         "--json",
     ]);
     assert_eq!(updated["context_files"], json!(["file:existing.rs"]));
+}
+
+/// [ORB-12490] A restoration reports the surface it leaves behind. A task whose
+/// pruned selectors were just re-declared must not still read as declaring no
+/// usable context, while a task with nothing to restore stays actionable.
+fn lint_sweep_reports_the_surface_a_restoration_leaves(workspace: &TestWorkspace) {
+    let pruned_history = || {
+        vec![TaskHistoryEntry {
+            at: Utc::now(),
+            by: "system".into(),
+            event: "context_files_pruned".into(),
+            note: Some("dropped: file:pruned.rs (selector anchor not found in workspace)".into()),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        }]
+    };
+    let mut proposed = workspace.task_seed("Pruned while proposed");
+    proposed.history = pruned_history();
+    let mut backlog = workspace.task_seed("Pruned while backlog");
+    backlog.status = TaskStatus::Backlog;
+    backlog.history = pruned_history();
+    let mut empty = workspace.task_seed("Declares nothing");
+    empty.status = TaskStatus::Backlog;
+    let seeded = workspace.seed_tasks(&[proposed, backlog, empty]);
+    let proposed_id = seeded[0]["id"].as_str().expect("proposed id");
+    let backlog_id = seeded[1]["id"].as_str().expect("backlog id");
+    let empty_id = seeded[2]["id"].as_str().expect("empty id");
+    let restores_recorded = |id: &str| {
+        workspace.task_json(&["task", "show", id, "--json"])["history"]
+            .as_array()
+            .expect("task history")
+            .iter()
+            .filter(|entry| entry["event"] == json!("context_files_restored"))
+            .count()
+    };
+
+    // A dry run plans the restoration and leaves the declaration alone.
+    let planned = workspace.task_json(&["task", "lint", "--json"]);
+    let planned_entry = sweep_entry(&planned, proposed_id);
+    assert_eq!(planned_entry["empty_surface"], json!(true));
+    assert_eq!(planned_entry["restorable"], json!(["file:pruned.rs"]));
+    assert_eq!(planned_entry["written"], json!(false));
+    assert_eq!(
+        workspace.task_json(&["task", "show", proposed_id, "--json"])["context_files"],
+        json!([])
+    );
+
+    // The report for a restored task must describe the declaration it now has.
+    let restored = workspace.task_json(&[
+        "task",
+        "lint",
+        "--status",
+        "proposed",
+        "--restore-pruned",
+        "--json",
+    ]);
+    let restored_entry = sweep_entry(&restored, proposed_id);
+    assert_eq!(restored_entry["written"], json!(true));
+    assert_eq!(
+        restored_entry["empty_surface"],
+        json!(false),
+        "a restored selector is a usable declaration"
+    );
+    assert_eq!(restored_entry["restorable"], json!(["file:pruned.rs"]));
+    assert_eq!(
+        workspace.task_json(&["task", "show", proposed_id, "--json"])["context_files"],
+        json!(["file:pruned.rs"])
+    );
+
+    let output = workspace.run(
+        &["task", "lint", "--status", "backlog", "--restore-pruned"],
+        "restore backlog pruned selectors",
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    let line_for = |id: &str| {
+        text.lines()
+            .find(|line| line.starts_with(&format!("{id}:")))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let restored_line = line_for(backlog_id);
+    assert!(
+        restored_line.contains("restored: file:pruned.rs"),
+        "{restored_line}"
+    );
+    assert!(
+        !restored_line.contains("declares no usable context"),
+        "{restored_line}"
+    );
+    assert!(
+        line_for(empty_id).contains("declares no usable context"),
+        "a task with nothing to restore stays actionable"
+    );
+    assert_eq!(
+        workspace.task_json(&["task", "show", backlog_id, "--json"])["context_files"],
+        json!(["file:pruned.rs"])
+    );
+
+    // Repeating the repair finds nothing left to write.
+    let repeat = workspace.task_json(&["task", "lint", "--restore-pruned", "--json"]);
+    assert_eq!(repeat["tasks_written"], json!(0));
+    assert!(sweep_entry(&repeat, proposed_id).is_null());
+    assert!(sweep_entry(&repeat, backlog_id).is_null());
+    assert_eq!(sweep_entry(&repeat, empty_id)["empty_surface"], json!(true));
+    assert_eq!(restores_recorded(proposed_id), 1);
+    assert_eq!(restores_recorded(backlog_id), 1);
+}
+
+/// The context repair sweep's entry for one task, or `Value::Null` when the
+/// sweep reports nothing for it.
+fn sweep_entry(sweep: &Value, id: &str) -> Value {
+    sweep["tasks"]
+        .as_array()
+        .expect("sweep tasks")
+        .iter()
+        .find(|entry| entry["id"] == json!(id))
+        .cloned()
+        .unwrap_or(Value::Null)
 }
 
 /// [ORB-13753] Scope extensions must send the full union: a tool update with
@@ -956,6 +1078,10 @@ fn candidate_and_context_updates() {
         (
             "task_update_and_add_accept_valid_context_selectors",
             task_update_and_add_accept_valid_context_selectors as fn(&TestWorkspace),
+        ),
+        (
+            "lint_sweep_reports_the_surface_a_restoration_leaves",
+            lint_sweep_reports_the_surface_a_restoration_leaves as fn(&TestWorkspace),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

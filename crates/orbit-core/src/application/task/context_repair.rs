@@ -100,10 +100,13 @@ impl OrbitRuntime {
             if !statuses.contains(&task.status) {
                 continue;
             }
-            let restoration = if restore {
-                self.restore_pruned_context_files(&task.id)?.1
+            // A restore hands back the task as it now stands; the surface must
+            // come from that, not from the snapshot the restore just changed.
+            let (task, restoration) = if restore {
+                self.restore_pruned_context_files(&task.id)?
             } else {
-                self.plan_context_file_restore(&task.id)?
+                let restoration = self.plan_context_file_restore(&task.id)?;
+                (task, restoration)
             };
             let declared = self.declared_context_surface(&task);
             let empty_surface = declared.retained.is_empty();
