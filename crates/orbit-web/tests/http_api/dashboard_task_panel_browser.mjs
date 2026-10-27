@@ -24,6 +24,8 @@ const tasks = statuses.map((status, index) => ({
   title: 'Panel fixture task ' + (index + 1) + ': ' + ['Tighten the readiness card', 'Retire the legacy dock route', 'Measure drain admission latency'][index % 3],
   status, priority: 'medium', projection: 'summary', crew: index % 2 ? 'opus' : null,
   job_run_id: status === 'in-progress' ? 'jrun-fixture-' + (index + 1) : null,
+  ...(index === 3 ? { riskiness: { state: 'no_footprint' } } : {}),
+  ...(index === 4 ? { riskiness: { state: 'estimated', probability: 0.23 } } : {}),
   status_transitions: [{ status: status === 'backlog' ? 'in-progress' : 'backlog' }],
   comment_count: index === 1 ? 0 : 2, artifact_count: 1,
   ...(index === 2 ? {
@@ -203,6 +205,50 @@ try {
   // the thread in Comments, and neither appears in the other task panels.
   for (const width of [1440, 375]) {
     const { page, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    const noEstimate = row(page, 'PANEL-4').locator('.risk-part');
+    const estimate = row(page, 'PANEL-5').locator('.risk-part');
+    assert.equal(await noEstimate.textContent(), 'no estimate · no files', 'An unestimated in-progress task names the unavailable estimate');
+    assert.equal(await noEstimate.evaluate(node => node.tagName), 'SPAN', 'Unestimated risk metadata remains informational text');
+    assert.equal(await noEstimate.evaluate(node => node.matches(':disabled')), false, 'Unestimated risk metadata is not a disabled control');
+    assert.equal(await estimate.textContent(), 'risk 23%', 'An estimated in-progress task retains its risk value');
+    assert.notEqual(await noEstimate.getAttribute('class'), await estimate.getAttribute('class'), 'Estimated and unestimated risk values keep distinct states');
+    const contrast = await noEstimate.evaluate(node => {
+      const rgba = value => {
+        const [red, green, blue, alpha = 1] = value.match(/[\d.]+/g).map(Number);
+        return { channels: [red, green, blue], alpha };
+      };
+      const linear = channel => {
+        const normalized = channel / 255;
+        return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+      };
+      const luminance = value => {
+        const [red, green, blue] = rgba(value).channels.map(linear);
+        return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+      };
+      const foreground = getComputedStyle(node).color;
+      const row = node.closest('.row');
+      const backgroundLayers = [];
+      for (let ancestor = row; ancestor; ancestor = ancestor.parentElement) {
+        const color = getComputedStyle(ancestor).backgroundColor;
+        if (rgba(color).alpha > 0) backgroundLayers.push({ element: ancestor.tagName.toLowerCase() + (ancestor.id ? `#${ancestor.id}` : ''), color });
+      }
+      let backgroundChannels = [0, 0, 0];
+      let backgroundAlpha = 0;
+      for (const layer of backgroundLayers.reverse()) {
+        const foregroundLayer = rgba(layer.color);
+        const outputAlpha = foregroundLayer.alpha + backgroundAlpha * (1 - foregroundLayer.alpha);
+        backgroundChannels = foregroundLayer.channels.map((channel, index) => (
+          channel * foregroundLayer.alpha + backgroundChannels[index] * backgroundAlpha * (1 - foregroundLayer.alpha)
+        ) / outputAlpha);
+        backgroundAlpha = outputAlpha;
+      }
+      const background = `rgb(${backgroundChannels.map(channel => Math.round(channel)).join(', ')})`;
+      const [lighter, darker] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+      return { foreground, background, backgroundLayers, fontSize: getComputedStyle(node).fontSize, fontWeight: getComputedStyle(node).fontWeight, ratio: (lighter + 0.05) / (darker + 0.05) };
+    });
+    assert.equal(contrast.fontSize, '12.5px', 'Risk metadata remains normal text at the row font size');
+    assert.equal(contrast.fontWeight, '400', 'Risk metadata remains normal weight');
+    assert.ok(contrast.ratio >= 4.5, `Unestimated risk metadata meets WCAG AA against its row background: ${JSON.stringify(contrast)}`);
     await row(page, 'PANEL-1').locator('.title').click();
     await waitShown(page, 'PANEL-1');
     const detail = pane(page).locator('#detail-PANEL-1');
