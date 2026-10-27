@@ -123,6 +123,16 @@ pub(super) fn attempt_final_recovery(
             "host-owned preparation recovery refused or exhausted; preserve the candidate without source repair",
         );
     }
+    // [ORB-19224] No decision about the task lets a lane run a required check
+    // its sandbox refuses, such as `orbit plugin test` inside a macOS worker
+    // that did not hand it to the host replay: the failure handoff keeps the
+    // candidate and a claimed leaf releases its claim.
+    if orbit_types::workflow::is_validation_route_unavailable(None, Some(error_message)) {
+        return skip(
+            "required validation cannot run in the lane that tried it and was not handed to its \
+             host replay; the candidate was not judged",
+        );
+    }
     // [ORB-13987] No decision about the task fixes a host that lacks a tool;
     // the failure handoff keeps the candidate for a resume instead.
     if orbit_types::workflow::is_validation_environment_failure(None, Some(error_message)) {

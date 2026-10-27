@@ -50,9 +50,11 @@ pub(super) fn completion_diagnostic(error: &str, redactor: &PatternRedactor) -> 
 
 /// The step message for an envelope that declared failure. [ORB-14260] An
 /// agent whose claimed-owner call could not reach its coordinator declares
-/// `owner_route_unavailable`; the typed marker lets recovery skip the step and
-/// a pull drain release the claim. The code grants no authority: the marker
-/// only withholds a repair and returns the task to its owner's backlog.
+/// `owner_route_unavailable`; [ORB-19224] one whose required check cannot run
+/// in its lane and has no route that runs it declares
+/// `validation_route_unavailable`. The typed marker lets recovery skip the
+/// step and a pull drain release the claim. The code grants no authority: the
+/// marker only withholds a repair and returns the task to its owner's backlog.
 pub(super) fn declared_failure_diagnostic(
     status: &str,
     failure: Option<&orbit_agent::DeclaredResponseFailure>,
@@ -65,6 +67,11 @@ pub(super) fn declared_failure_diagnostic(
     };
     let marker = if orbit_types::workflow::is_owner_route_unavailable(Some(&error.code), None) {
         format!("{} ", orbit_types::workflow::OWNER_ROUTE_UNAVAILABLE_MARKER)
+    } else if orbit_types::workflow::is_validation_route_unavailable(Some(&error.code), None) {
+        format!(
+            "{} ",
+            orbit_types::workflow::VALIDATION_ROUTE_UNAVAILABLE_MARKER
+        )
     } else {
         String::new()
     };

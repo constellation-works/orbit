@@ -11,7 +11,8 @@
 //!
 //! [ORB-14260] A claimed worker whose owner calls could not reach its run's
 //! coordinator declares `owner_route_unavailable`; repair cannot open the
-//! route either, so that run takes the same skip.
+//! route either, so that run takes the same skip. [ORB-19224] So does one
+//! whose required check its own sandbox refuses (`validation_route_unavailable`).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -33,9 +34,9 @@ use orbit_types::workflow::activity_job::{
     Provider, V2AuditEvent, V2AuditEventKind,
 };
 use orbit_types::workflow::{
-    BaselineRedHold, failed_provider, is_baseline_red_failure, is_owner_route_unavailable,
-    is_provider_capacity_exhausted, is_provider_failure, is_provider_refusal,
-    is_provider_unavailable,
+    BaselineRedHold, ClaimFailureClass, failed_provider, is_baseline_red_failure,
+    is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
+    is_provider_refusal, is_provider_unavailable, is_validation_route_unavailable,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -770,6 +771,64 @@ fn a_declared_owner_route_failure_skips_recovery() {
     assert_eq!(host.calls("handoff").len(), 1);
 }
 
+/// [ORB-19224] A Mac worker whose `orbit plugin test` was refused because its
+/// own Seatbelt profile refuses the backend's declares
+/// `validation_route_unavailable`. Before the typed route that envelope
+/// reached final recovery, which escalated it as human-only; now it skips both
+/// recoveries, keeps the candidate as a validation-environment failure, and a
+/// claimed leaf releases its claim instead of blocking the task.
+fn a_declared_validation_route_failure_skips_recovery() {
+    let worktree = tempfile::tempdir().unwrap();
+    let fake = FakeProvider::new(
+        "claude",
+        r#"{"schemaVersion":1,"status":"failed","result":{},"error":{"code":"validation_route_unavailable","message":"orbit plugin test: sandbox-exec: sandbox_apply: Operation not permitted"}}"#,
+        "",
+        0,
+        "",
+    );
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let run = run_job(
+        &implementation_job(agent_spec(Provider::Claude)),
+        &host,
+        "validation-route-run",
+    );
+
+    let message = failure_message(&run.outcome);
+    assert!(
+        is_validation_route_unavailable(None, Some(&message)),
+        "the run keeps the typed marker: {message}"
+    );
+    assert_eq!(
+        ClaimFailureClass::of_step_failure(None, Some(&message)),
+        Some(ClaimFailureClass::Environment),
+        "a claimed leaf releases the claim as the lane's failure: {message}"
+    );
+    assert_eq!(fake.invocations(), 1, "the step is not rerun");
+    assert!(host.calls("step_fix").is_empty(), "no step recovery runs");
+    assert_eq!(
+        *host.final_recovery_admissions.lock().unwrap(),
+        0,
+        "final recovery is not admitted"
+    );
+    assert!(host.calls("decide").is_empty(), "no final recovery runs");
+    assert_eq!(
+        count(&run.events, |kind| matches!(
+            kind,
+            V2AuditEventKind::FinalRecoveryAttempted { outcome, detail, .. }
+                if outcome == "skipped"
+                    && detail.as_deref().is_some_and(|detail| detail.contains("host replay"))
+        )),
+        1,
+        "the skip is audited with the route's reason"
+    );
+    let handoff = host.calls("handoff");
+    assert_eq!(handoff.len(), 1, "the failure handoff keeps the candidate");
+    assert_eq!(
+        handoff[0]["error_code"], "validation_environment",
+        "{handoff:?}"
+    );
+}
+
 /// Every failure that is not provider capacity still gets step recovery and
 /// its post-recovery attempt: a failed exit (whose answer may even quote the
 /// capacity text) and a declared `status: "failed"` envelope. A timeout takes
@@ -1108,6 +1167,10 @@ fn provider_failure_contracts_2() {
             (
                 "a_declared_owner_route_failure_skips_recovery",
                 a_declared_owner_route_failure_skips_recovery,
+            ),
+            (
+                "a_declared_validation_route_failure_skips_recovery",
+                a_declared_validation_route_failure_skips_recovery,
             ),
             (
                 "other_provider_failures_still_reach_recovery_and_the_post_recovery_attempt",

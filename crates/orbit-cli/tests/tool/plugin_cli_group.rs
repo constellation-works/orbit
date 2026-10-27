@@ -66,7 +66,24 @@ impl Fixture {
     /// authority — including the managed-run activity allowlist, which would
     /// otherwise decide whether a plugin tool may be called at all.
     fn orbit(&self) -> assert_cmd::Command {
-        let mut command = cargo_bin_cmd!("orbit");
+        self.pinned(cargo_bin_cmd!("orbit"))
+    }
+
+    /// `orbit` started inside a Seatbelt profile, as a macOS worker's agent
+    /// runs it: any profile applied here makes a nested `sandbox-exec` exit
+    /// 71 with `sandbox_apply: Operation not permitted`.
+    #[cfg(target_os = "macos")]
+    fn orbit_inside_seatbelt(&self) -> assert_cmd::Command {
+        let mut command = assert_cmd::Command::new("/usr/bin/sandbox-exec");
+        command.args([
+            "-p",
+            "(version 1) (allow default)",
+            env!("CARGO_BIN_EXE_orbit"),
+        ]);
+        self.pinned(command)
+    }
+
+    fn pinned(&self, mut command: assert_cmd::Command) -> assert_cmd::Command {
         test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
         });
@@ -2387,5 +2404,178 @@ fn plugin_test_refuses_an_unconfined_manifest_until_the_operator_accepts_it() {
     assert!(
         consented_write.is_dir(),
         "the consented absolute write root is opened"
+    );
+}
+
+/// A conformance fixture whose backend tries to write `marker`, outside every
+/// root the plugin declares, before it answers. Under its declared sandbox the
+/// write is refused; only a backend started with weaker containment leaves
+/// the file behind.
+#[cfg(target_os = "macos")]
+fn write_contained_conformance_plugin(source: &Path, namespace: &str, marker: &Path) {
+    let root = source.join(".orbit-plugin");
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin bin dir");
+    std::fs::create_dir_all(root.join("tests/conformance")).expect("create conformance dir");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        format!(
+            "#!/bin/sh\ncat > /dev/null\n: > '{}' 2>/dev/null\nprintf              '{{\"ok\":true,\"output\":{{\"subject\":\"world\"}}}}\\n'\n",
+            marker.display()
+        ),
+    )
+    .expect("write backend");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod backend");
+    }
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 1.0.0\n  \
+             description: Conformance fixture.\nspec:\n  backend:\n    type: exec\n    command: \
+             bin/backend.sh\n  tools:\n    - name: greet\n      description: Greet.\n      \
+             execution_kind: read_only\n      mcp_scope: workspace\n  tests: \
+             [tests/conformance/*.yaml]\n"
+        ),
+    )
+    .expect("write manifest");
+    std::fs::write(
+        root.join("tests/conformance/greet.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: greet_answers\n    tool: greet\n    \
+         input: {}\n    expect:\n      output:\n        subject: world\n",
+    )
+    .expect("write golden");
+}
+
+/// [ORB-19224] `orbit plugin test` inside a macOS worker's Seatbelt profile.
+/// Before, every case failed with the nested `sandbox_apply` refusal (exit
+/// 71) and the worker escalated. Now no backend starts there: a gate run that
+/// asked for a validation summary defers every case with the sanctioned
+/// Seatbelt notice and exits 0, and Orbit derives the deferred sandbox
+/// validation the claim host replays; any other run is refused, typed. The
+/// replay outside the profile runs the case under the plugin's own sandbox.
+/// No route ever starts the backend with weaker containment than declared.
+#[cfg(target_os = "macos")]
+#[test]
+fn plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay() {
+    use orbit_types::workflow::{
+        DeferralLane, EvidenceHostOs, HostValidationGates, NamespaceProbe, SEATBELT_APPLY_PROBE,
+        SEATBELT_DEFERRAL_PREFIX, ValidationGates, deferral_handoff,
+    };
+
+    // The outer profile must apply here: this test plays the worker.
+    if !orbit_exec::macos_sandbox_test_guard(
+        "plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let source = fixture.source("nested");
+    let marker = fixture.home.join("backend-escaped");
+    write_contained_conformance_plugin(&source, "nested", &marker);
+    let dir = source.to_str().expect("plugin directory");
+    let gate = format!("orbit plugin test {dir}");
+    let base = "0123456789abcdef0123456789abcdef01234567";
+
+    // Without a summary to defer through, the run is refused with the typed
+    // marker, and no case ran.
+    let refused = fixture
+        .orbit_inside_seatbelt()
+        .args(["plugin", "test", dir])
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&refused.get_output().stderr);
+    assert!(
+        stderr.contains("[validation_route_unavailable]")
+            && stderr.contains("ORBIT_VALIDATION_SUMMARY"),
+        "{stderr}"
+    );
+    assert!(!marker.exists(), "no backend ran unconfined");
+
+    // As a gate: deferred, exit 0, one sanctioned notice per case.
+    let summary_path = fixture.home.join("gate-summary.json");
+    let deferred = fixture
+        .orbit_inside_seatbelt()
+        .args(["plugin", "test", dir])
+        .env("ORBIT_VALIDATION_SUMMARY", &summary_path)
+        .env("ORBIT_VALIDATION_GATE", &gate)
+        .env("ORBIT_VALIDATION_BASE", base)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&deferred.get_output().stdout);
+    let notice_prefix = format!("{SEATBELT_DEFERRAL_PREFIX} nested/greet_answers:");
+    assert!(
+        stdout.lines().any(|line| line.starts_with(&notice_prefix)),
+        "{stdout}"
+    );
+    assert!(stdout.contains("sandbox_apply"), "{stdout}");
+    assert!(!marker.exists(), "no backend ran with weaker containment");
+    let summary_bytes = std::fs::read(&summary_path).expect("the gate wrote its summary");
+    let summary: Value = serde_json::from_slice(&summary_bytes).expect("summary JSON");
+    assert_eq!(summary["command"], gate);
+    assert_eq!(summary["base"], base);
+    assert_eq!(summary["exit_code"], 0);
+    assert_eq!(summary["tests_run"], 1);
+    assert_eq!(summary["selection"]["cases"], json!(["greet_answers"]));
+
+    // Orbit accepts it as the implementer's deferred sandbox validation,
+    // with the probe it runs in the worker's lane.
+    let handoff = deferral_handoff(&json!({
+        "deferred_sandbox_validation": {"summary": summary_path.display().to_string()}
+    }))
+    .expect("handoff shape")
+    .expect("handoff present");
+    let pending = handoff
+        .derive(
+            &summary_bytes,
+            &HostValidationGates::local(ValidationGates {
+                required_validation_commands: vec![gate.clone()],
+                baseline_commands: Vec::new(),
+                light_delivery_paths: None,
+                review_skip_tags: None,
+            }),
+            Some(base),
+            DeferralLane {
+                claimed: true,
+                os: Some(EvidenceHostOs::Macos),
+            },
+        )
+        .expect("the summary is a deferrable gate run");
+    let probe = std::process::Command::new("/usr/bin/sandbox-exec")
+        .args(["-p", "(version 1) (allow default)"])
+        .args(pending.probes()[0].argv)
+        .output()
+        .expect("run the Seatbelt probe inside the worker profile");
+    assert_eq!(pending.probes()[0].command, SEATBELT_APPLY_PROBE);
+    let record = pending
+        .complete(vec![NamespaceProbe {
+            command: SEATBELT_APPLY_PROBE.to_string(),
+            exit_code: probe.status.code().unwrap_or(-1),
+            output: String::from_utf8_lossy(&probe.stderr).into_owned(),
+        }])
+        .expect("the worker lane refuses the nested profile");
+    assert_eq!(record.command, gate);
+
+    // The host replay, outside the worker profile, runs the case under the
+    // plugin's declared sandbox, which still refuses the escape.
+    let replay_summary = fixture.home.join("replay-summary.json");
+    let replay = fixture
+        .orbit()
+        .args(["plugin", "test", dir])
+        .env("ORBIT_VALIDATION_SUMMARY", &replay_summary)
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&replay.get_output().stdout);
+    assert!(!stdout.contains(SEATBELT_DEFERRAL_PREFIX), "{stdout}");
+    let replayed: Value =
+        serde_json::from_slice(&std::fs::read(&replay_summary).expect("replay summary"))
+            .expect("replay summary JSON");
+    assert_eq!(replayed["tests_run"], 1);
+    assert_eq!(replayed["notices"], json!([]));
+    assert!(
+        !marker.exists(),
+        "the backend ran under its declared sandbox, which refused the write"
     );
 }

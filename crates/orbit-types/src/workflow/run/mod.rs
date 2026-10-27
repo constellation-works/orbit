@@ -77,10 +77,11 @@ pub use state::{
     STALLED_ERROR_CODE, STALLED_MARKER, STEERING_DELIVERED_EVENT, STEERING_UNCONSUMED_EVENT,
     STEERING_UNCONSUMED_MARKER, SteeringRound, SteeringWatermark, StepSteeringSnapshot,
     TRANSIENT_FAILURE_ERROR_CODE, TRANSIENT_FAILURE_MARKER, TaskCancellationPolicy,
-    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER, is_contract_refusal,
-    is_owner_busy, is_owner_route_unavailable, is_provider_capacity_exhausted, is_provider_failure,
-    is_provider_limit, is_provider_refusal, is_provider_unavailable,
-    is_validation_environment_failure,
+    VALIDATION_ENVIRONMENT_ERROR_CODE, VALIDATION_ENVIRONMENT_MARKER,
+    VALIDATION_ROUTE_UNAVAILABLE_ERROR_CODE, VALIDATION_ROUTE_UNAVAILABLE_MARKER,
+    is_contract_refusal, is_owner_busy, is_owner_route_unavailable, is_provider_capacity_exhausted,
+    is_provider_failure, is_provider_limit, is_provider_refusal, is_provider_unavailable,
+    is_validation_environment_failure, is_validation_route_unavailable,
 };
 pub use transient_infra::{
     MAX_TRANSIENT_INFRA_REQUEUES, TRANSIENT_INFRA_BLOCKED_EVENT,

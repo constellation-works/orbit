@@ -235,6 +235,17 @@ list has to name each of those requests. Either flag applies only to this run an
 record a host grant; `orbit plugin enable --grant` is still what authorizes the installed
 plugin.
 
+Inside another Seatbelt sandbox, such as a macOS Orbit worker's, `sandbox-exec` cannot apply the
+backend's profile (exit 71, `sandbox_apply: Operation not permitted`), and the backend is never
+started with weaker containment instead. Run there as a required validation gate with
+`ORBIT_VALIDATION_SUMMARY=<file>`, `ORBIT_VALIDATION_GATE='<the gate as configured>'` and
+`ORBIT_VALIDATION_BASE=<delivery base>`: every case is reported `deferred` with a
+`SKIP: sandbox-exec cannot apply a profile:` line, the command exits 0 and writes the summary, and
+the implementer hands that summary off as a deferred sandbox validation. The claim host then reruns
+the gate outside the worker sandbox, and that run is the evidence. Without a summary, or with
+`ORBIT_REQUIRE_SANDBOX_EXEC=1`, the command fails with `[validation_route_unavailable]` and runs no
+case. A deferred run certifies nothing.
+
 A passing run records this Orbit's version on the installed plugin, and `orbit plugin show <ns>` prints it as `Certified for: <version>`.
 The record is only written when the directory tested is the installed one (same manifest
 digest); reinstalling a changed manifest drops the claim.
