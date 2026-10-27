@@ -22,8 +22,10 @@ use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 /// failed and abandoned attempts, returns and blocked tasks [ORB-18688].
 /// 6: gap fit holds work below the ceiling where the drain enforces it
 /// [ORB-18689]. 7: sub-second and same-instant returns stay drawable for
-/// a fresh blocked attempt [ORB-18853].
-pub(super) const MODEL_VERSION: u32 = 7;
+/// a fresh blocked attempt [ORB-18853]. 8: a censored blocked wait is
+/// summed through the horizon, and absorption stops at its own event
+/// [ORB-18856].
+pub(super) const MODEL_VERSION: u32 = 8;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
@@ -404,7 +406,7 @@ impl Script {
         let mut total = match self.initial {
             Follow::Requeue(wait) => wait,
             Follow::Resolve(wait) => return Some(wait),
-            Follow::Never => return None,
+            Follow::Absorb(_) | Follow::Censored | Follow::Never => return None,
         };
         for step in &self.steps {
             total += step.hours;
@@ -414,7 +416,7 @@ impl Script {
             match step.then {
                 Follow::Requeue(wait) => total += wait,
                 Follow::Resolve(wait) => return Some(total + wait),
-                Follow::Never => return None,
+                Follow::Absorb(_) | Follow::Censored | Follow::Never => return None,
             }
         }
         None

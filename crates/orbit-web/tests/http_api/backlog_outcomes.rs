@@ -444,7 +444,7 @@ fn subsecond_and_immediate_returns_stay_drawable() {
                 block_that_returned(&fixture, delay);
                 let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
                 let forecast = forecast(&fixture);
-                assert_eq!(forecast["model_version"], 7);
+                assert_eq!(forecast["model_version"], 8);
                 assert_eq!(
                     forecast["inputs"]["outcomes"]["episodes"],
                     json!({"blocked": 1, "delivered": 1})
@@ -505,6 +505,196 @@ fn subsecond_and_immediate_returns_stay_drawable() {
             assert!(
                 completion > 0.6,
                 "the same-instant return must still be drawn: {completion}"
+            );
+        },
+    );
+}
+
+fn quantile_pair(value: &Value) -> (Option<f64>, Option<f64>) {
+    (value["p50"].as_f64(), value["p90"].as_f64())
+}
+
+fn metric(value: &Value) -> f64 {
+    value
+        .as_f64()
+        .unwrap_or_else(|| panic!("{value} is not a number"))
+}
+
+/// Five one-hour deliveries, one episode, and one queued task. The episode's
+/// task ends in `status`, which is outside the forecast cohort.
+fn forecast_queued_against(
+    label: &str,
+    status: TaskStatus,
+    steps: &[(DateTime<Utc>, TaskStatus)],
+) -> (Value, String) {
+    let fixture = Fixture::new();
+    one_hour_history(&fixture);
+    dated_task(&fixture, status, steps);
+    let id = backlog_task(&fixture, label, &["file:queued.rs"], &[], &[]);
+    let forecast = forecast(&fixture);
+    assert_eq!(forecast["model_version"], 8, "{label}");
+    assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{label}");
+    assert_eq!(forecast["forecast"]["tasks"], 1, "{label}");
+    assert_eq!(
+        quantile_pair(&prediction(&forecast, &id)["predicted_start_hours"]),
+        (Some(0.0), Some(0.0)),
+        "{label} must start at once: {}",
+        prediction(&forecast, &id)
+    );
+    (forecast, id)
+}
+
+fn assert_return_wait(forecast: &Value, hours: f64, label: &str) {
+    let waits = &forecast["forecast"]["wait_hours"];
+    assert_eq!(
+        quantile_pair(&waits["return"]),
+        (Some(hours), Some(hours)),
+        "{label} return wait: {waits}"
+    );
+    for key in [
+        "dependency",
+        "lock",
+        "reservation",
+        "footprint",
+        "capacity",
+        "resource",
+    ] {
+        assert_eq!(
+            quantile_pair(&waits[key]),
+            (Some(0.0), Some(0.0)),
+            "{label} also counted the wait as {key}: {waits}"
+        );
+    }
+}
+
+fn assert_hold_without_the_wait(forecast: &Value, parallelism: f64, label: &str) {
+    let body = &forecast["forecast"];
+    assert_eq!(
+        quantile_pair(&body["by_complexity"][0]["work_hours"]),
+        (Some(2.0), Some(2.0)),
+        "{label} slot hold: {body}"
+    );
+    assert_eq!(
+        quantile_pair(&body["effective_parallelism"]),
+        (Some(parallelism), Some(parallelism)),
+        "{label} kept a slot during the wait: {body}"
+    );
+}
+
+#[test]
+fn censored_blocks_wait_through_the_horizon_without_a_slot() {
+    isolated(
+        "backlog_outcomes::censored_blocks_wait_through_the_horizon_without_a_slot",
+        || {
+            let at = Utc::now() - Duration::days(10);
+            let hours = |count: i64| at + Duration::hours(count);
+            // Still out of the queue, so the only draw is a censored block.
+            // The two-hour hold is the slot; the other 2158 hours are not.
+            let (censored, _) = forecast_queued_against(
+                "Censored",
+                TaskStatus::Someday,
+                &[
+                    (at, TaskStatus::InProgress),
+                    (hours(2), TaskStatus::Someday),
+                ],
+            );
+            assert_eq!(
+                censored["inputs"]["outcomes"]["episodes"],
+                json!({"blocked": 1})
+            );
+            assert_eq!(
+                censored["inputs"]["outcomes"]["returns"],
+                json!({"waits": 1, "returned": 0, "resolved": 0, "absorbed": 0, "censored": 1})
+            );
+            assert_return_wait(&censored, 2_158.0, "censored");
+            assert_hold_without_the_wait(&censored, 0.0, "censored");
+            assert_eq!(
+                metric(&censored["forecast"]["outcomes"]["blocked_attempts"]),
+                1.0
+            );
+            assert_eq!(metric(&censored["forecast"]["outcomes"]["no_return"]), 1.0);
+            assert_eq!(metric(&censored["forecast"]["not_expected_to_drain"]), 1.0);
+            assert_eq!(metric(&censored["forecast"]["completion_probability"]), 0.0);
+            assert!(censored["forecast"]["time_to_drain_hours"]["p50"].is_null());
+
+            // Resolves 24 hours after the block: one finite return wait,
+            // then the task is finished and the rest of the horizon is not.
+            let (finite, id) = forecast_queued_against(
+                "Finite",
+                TaskStatus::Done,
+                &[
+                    (at, TaskStatus::InProgress),
+                    (hours(2), TaskStatus::Blocked),
+                    (hours(26), TaskStatus::Done),
+                ],
+            );
+            assert_eq!(finite["inputs"]["outcomes"]["returns"]["resolved"], 1);
+            assert_return_wait(&finite, 24.0, "finite");
+            assert_hold_without_the_wait(&finite, 0.08, "finite");
+            assert_eq!(metric(&finite["forecast"]["outcomes"]["no_return"]), 0.0);
+            assert_eq!(metric(&finite["forecast"]["not_expected_to_drain"]), 0.0);
+            assert_eq!(metric(&finite["forecast"]["completion_probability"]), 1.0);
+            assert_eq!(
+                metric(&prediction(&finite, &id)["completion_probability"]),
+                1.0
+            );
+            assert_eq!(
+                quantile_pair(&finite["forecast"]["time_to_drain_hours"]),
+                (Some(26.0), Some(26.0))
+            );
+
+            // Absorption ten hours after the block stops there. It is not
+            // a censored wait, and it does not finish the task.
+            let (absorbed, _) = forecast_queued_against(
+                "Absorbed",
+                TaskStatus::Rejected,
+                &[
+                    (at, TaskStatus::InProgress),
+                    (hours(2), TaskStatus::Blocked),
+                    (hours(12), TaskStatus::Rejected),
+                ],
+            );
+            assert_eq!(absorbed["inputs"]["outcomes"]["returns"]["absorbed"], 1);
+            assert_return_wait(&absorbed, 10.0, "absorbed");
+            assert_hold_without_the_wait(&absorbed, 0.0, "absorbed");
+            assert_eq!(metric(&absorbed["forecast"]["outcomes"]["no_return"]), 1.0);
+            assert_eq!(
+                metric(&absorbed["forecast"]["outcomes"]["abandoned_attempts"]),
+                0.0
+            );
+            assert_eq!(metric(&absorbed["forecast"]["not_expected_to_drain"]), 1.0);
+            assert_eq!(metric(&absorbed["forecast"]["completion_probability"]), 0.0);
+            assert!(absorbed["forecast"]["time_to_drain_hours"]["p50"].is_null());
+
+            // Abandonment is the attempt's end, not time out of the queue.
+            let (abandoned, _) = forecast_queued_against(
+                "Abandoned",
+                TaskStatus::Rejected,
+                &[
+                    (at, TaskStatus::InProgress),
+                    (hours(2), TaskStatus::Rejected),
+                ],
+            );
+            assert_eq!(
+                abandoned["inputs"]["outcomes"]["episodes"],
+                json!({"abandoned": 1})
+            );
+            assert_eq!(abandoned["inputs"]["outcomes"]["returns"]["waits"], 0);
+            assert_return_wait(&abandoned, 0.0, "abandoned");
+            assert_hold_without_the_wait(&abandoned, 0.0, "abandoned");
+            assert_eq!(
+                metric(&abandoned["forecast"]["outcomes"]["abandoned_attempts"]),
+                1.0
+            );
+            assert_eq!(
+                metric(&abandoned["forecast"]["outcomes"]["blocked_attempts"]),
+                0.0
+            );
+            assert_eq!(metric(&abandoned["forecast"]["outcomes"]["no_return"]), 1.0);
+            assert_eq!(metric(&abandoned["forecast"]["not_expected_to_drain"]), 1.0);
+            assert_eq!(
+                metric(&abandoned["forecast"]["completion_probability"]),
+                0.0
             );
         },
     );
