@@ -1428,6 +1428,28 @@
         "## Reconcile each selected feature",
         "## Select features"
       ],
+      "digest": "314d11470f14090cd892120b76a683e71862c370a13fcbdafab8a351c916d46d",
+      "revision": "b866351c469f409184ad0b1bcf82952d05e8452a",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 720
+        },
+        "tags": [
+          "design-sync",
+          "docs"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Ledger and summary",
+        "## Reconcile each selected feature",
+        "## Select features"
+      ],
       "digest": "a65b6570fa620076ceae2ba97647154454d781fb0b196dfd688ba658b2f5a7b5",
       "revision": "62af41540e6f177764108079a34e4685330ae3cb",
       "settings": {
@@ -3195,6 +3217,32 @@
       "settings": {
         "complexity": "medium",
         "crew": "system",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "fa6a327cf1f5eac46a9083883e68ff5c6dc8147ee23d7e43a7dbb78b23543d97",
+      "revision": "7ccf8a7029d0ca24feaa5b55aef825cb5eb6b220",
+      "settings": {
+        "complexity": "medium",
         "dedupe": "skip_if_open",
         "enabled": false,
         "priority": "medium",
