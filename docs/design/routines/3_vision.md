@@ -2,7 +2,7 @@
 title: Routines — Vision
 owner: claude
 last_updated: 2026-10-26
-last_validated: 2026-10-19
+last_validated: 2026-10-26
 status: Draft
 feature: routines
 doc_role: vision
