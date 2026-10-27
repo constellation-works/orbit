@@ -1024,3 +1024,133 @@ fn expand_adds_free_paths_queues_blocked_ones_and_refuses_a_deadlock() {
         );
     }
 }
+
+#[test]
+fn grant_that_closes_a_lease_cycle_refuses_the_ranked_last_expansion() {
+    if !super::isolate(
+        module_path!(),
+        "grant_that_closes_a_lease_cycle_refuses_the_ranked_last_expansion",
+    ) {
+        return;
+    }
+    let _env = caller_env(None);
+    let (_root, runtime, repo_root) = enabled_runtime();
+    write_locked_fixture(&repo_root);
+    let task = create_context_task(
+        &runtime,
+        &repo_root,
+        TaskStatus::InProgress,
+        &["file:lib/core.rs"],
+    );
+    let first = request(
+        &runtime,
+        json!({"principal": "alice", "selectors": ["file:src/lib.rs"], "mode": "hard"}),
+    );
+    let first_id = lease_id(&first);
+    let ahead = request(
+        &runtime,
+        json!({"principal": "bob", "selectors": ["file:src/other.rs"], "mode": "hard", "priority": "high"}),
+    );
+    let ahead_id = lease_id(&ahead);
+    let expand = |lease_id: &str, selectors: Value| {
+        lease::expand(
+            &runtime,
+            json!({"lease_id": lease_id, "selectors": selectors}),
+            None,
+            Some("codex".into()),
+        )
+        .expect("expand lease")
+    };
+
+    // The higher-priority lease waits on the task's path and on the path the
+    // other lease holds; the other lease waits only on the task, so no lease
+    // cycle exists yet.
+    let ahead_expansion = expand(&ahead_id, json!(["file:lib/core.rs", "file:src/lib.rs"]));
+    assert_eq!(
+        ahead_expansion["queued"],
+        json!(["file:lib/core.rs", "file:src/lib.rs"]),
+        "{ahead_expansion}"
+    );
+    assert!(ahead_expansion["deadlock"].is_null(), "{ahead_expansion}");
+    let behind_expansion = expand(&first_id, json!(["file:lib/core.rs"]));
+    assert_eq!(
+        behind_expansion["queued"],
+        json!(["file:lib/core.rs"]),
+        "{behind_expansion}"
+    );
+    assert!(behind_expansion["deadlock"].is_null(), "{behind_expansion}");
+    assert!(
+        !lease_notices(&runtime, &first_id)
+            .iter()
+            .any(|n| n["kind"] == "deadlock"),
+        "no cycle exists before the grant"
+    );
+
+    orbit_engine::RuntimeHost::apply_task_automation_update(
+        &runtime,
+        &task.id,
+        orbit_engine::TaskAutomationUpdate {
+            status: Some(TaskStatus::Done),
+            ..orbit_engine::TaskAutomationUpdate::default()
+        },
+    )
+    .expect("settle the task");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    lease::sweep_lease_lifetimes(&runtime, deadline).unwrap();
+
+    // The grant gives the task's path to the lease ranked ahead, which still
+    // waits on the other lease's path. That closes a cycle, so the expansion
+    // ranked last (the normal-priority lease) is refused.
+    let ahead_shown = lease::show(&runtime, json!({"lease_id": ahead_id})).unwrap();
+    assert_eq!(
+        ahead_shown["lease"]["selectors"],
+        json!(["file:lib/core.rs", "file:src/other.rs"]),
+        "the ranked-ahead expansion gains the freed path: {ahead_shown}"
+    );
+    assert_eq!(
+        ahead_shown["lease"]["queued_selectors"],
+        json!(["file:src/lib.rs"]),
+        "{ahead_shown}"
+    );
+    assert!(
+        !lease_notices(&runtime, &ahead_id)
+            .iter()
+            .any(|n| n["kind"] == "deadlock"),
+        "the ranked-ahead expansion is not refused"
+    );
+    let behind_shown = lease::show(&runtime, json!({"lease_id": first_id})).unwrap();
+    assert_eq!(
+        behind_shown["lease"]["selectors"],
+        json!(["file:src/lib.rs"]),
+        "{behind_shown}"
+    );
+    assert_eq!(
+        behind_shown["lease"]["queued_selectors"],
+        json!([]),
+        "the ranked-last expansion loses its queued selectors: {behind_shown}"
+    );
+    let deadlock_notices: Vec<_> = lease_notices(&runtime, &first_id)
+        .into_iter()
+        .filter(|n| n["kind"] == "deadlock")
+        .collect();
+    assert_eq!(deadlock_notices.len(), 1, "{deadlock_notices:?}");
+    assert_eq!(
+        deadlock_notices[0]["payload"]["selectors"],
+        json!(["file:lib/core.rs"]),
+        "{deadlock_notices:?}"
+    );
+    let cycle = deadlock_notices[0]["payload"]["cycle"]
+        .as_array()
+        .expect("deadlock cycle");
+    assert!(
+        cycle.iter().any(|id| id == &json!(first_id))
+            && cycle.iter().any(|id| id == &json!(ahead_id)),
+        "the deadlock notice names both leases in the cycle: {deadlock_notices:?}"
+    );
+    assert!(
+        lease_audit_commands(&runtime)
+            .iter()
+            .any(|c| c == "lease.expand.deadlock"),
+        "the grant-created deadlock is audited"
+    );
+}

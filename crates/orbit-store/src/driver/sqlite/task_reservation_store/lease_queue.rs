@@ -403,7 +403,10 @@ fn break_deadlocks(
 impl Store {
     /// Grant, in queue order, every waiting request whose paths are now free
     /// and every free selector of a waiting expansion. Entries without an
-    /// entry in `task_conflicts` stay queued and still rank ahead.
+    /// entry in `task_conflicts` stay queued and still rank ahead. A grant
+    /// can close a deadlock cycle the queueing expansion did not (a lease
+    /// gains a path another expansion waits on while still waiting on the
+    /// first lease), so any cycle present after the pass is broken.
     pub fn grant_queued_leases(
         &self,
         params: &LeaseQueueGrantParams,
@@ -465,8 +468,10 @@ impl Store {
                     waiting.push(rest);
                 }
             }
+            let deadlocks = break_deadlocks(tx, dir, workspace_id, params.aging_minutes)?;
             Ok(LeaseQueueGrantResult {
                 granted,
+                deadlocks,
                 expired_leases,
             })
         })

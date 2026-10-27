@@ -686,6 +686,9 @@ pub struct LeaseQueueGrantParams {
 pub struct LeaseQueueGrantResult {
     /// What the pass granted, in queue order.
     pub granted: Vec<LeaseQueueGrant>,
+    /// Waiting expansions refused because a grant in this pass closed a
+    /// deadlock cycle.
+    pub deadlocks: Vec<LeaseDeadlock>,
     pub expired_leases: Vec<ExpiredTaskReservation>,
 }
 
