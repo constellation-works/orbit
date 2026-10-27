@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-10-26
+last_validated: 2026-10-27
 ---
 
 # Orbit Configuration
@@ -233,14 +233,17 @@ source (`exact`, `without_complexity`, `base_class`,
 `orbit run readiness` shows the same last-pass snapshot, CPU and memory peaks,
 and headroom in percentage points below the **current** configured admission
 limits. JSON adds `capacity.admission_forecast`, with the recorded fields,
-`task_titles`, `headroom` (`cpu_percent`, `memory_percent`,
+`task_titles`, `task_statuses` (the current status of each named task,
+including one the admission population no longer lists because it is `done`),
+`headroom` (`cpu_percent`, `memory_percent`,
 `admit_cpu_percent`, `admit_memory_percent`), and the drain that recorded it
 (`drain_run_id`, with `drain_live` false once that drain has ended). An unknown
 host capacity has unknown headroom; negative headroom means the peak exceeds
 the limit. Text names each task as `ORB-12 "title"` and prints memory in GiB.
 A pass that builds a forecast also retains it in
 `pipeline_state.drain_last_forecast`; readiness exposes the same observation
-as `capacity.last_admission_forecast`, with titles and current-limit headroom.
+as `capacity.last_admission_forecast`, with titles, current statuses and
+current-limit headroom.
 When later passes build none, both commands say so and show the retained
 forecast as `Last forecast <time> (<age> ago, from drain <run id>)`, with its
 admitted and skipped candidates, and its peaks as `Last forecast peak:`. A
@@ -264,7 +267,7 @@ its first hour as percentages of the host, one point per `bucket_minutes` (5)
 from minute 0 to +60m, each the highest minute of its bucket, so the highest
 point equals the peak whenever the peak is within the hour. It is absent when
 the host could not be measured and in records written before it was kept.
-The dashboard Drain card shows the same snapshot: forecast time, CPU and memory over the first hour as sparklines with the admit threshold dashed and the peak's minute marked (peak bars for a record without `series`), headroom, each admitted task with its profile source, and each candidate enforce held. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` when one was retained. Shadow decisions are labelled hypothetical.
+The dashboard Drain card shows the same snapshot: forecast time, CPU and memory over the first hour as sparklines with the admit threshold dashed and the peak's minute marked (peak bars for a record without `series`), headroom, each admitted task with its profile source, and each candidate enforce held. A pass with no forecast says `no forecast this pass` and shows `capacity.last_admission_forecast` as **Last forecast** when one was retained. That retained block is history: decisions are past and time-anchored (`Admitted at 03:59 UTC`, `Held at 03:59 UTC`, `Starvation guard protected at 03:59 UTC`), each listed task shows its current status, and when that drain has ended with nothing running the block says `window ended · nothing running`. A live pass keeps present tense (`Admitted`, `Held`, `Starvation guard protects`). A live shadow forecast says `Would admit` and `Would hold`; a retained shadow forecast says `Would have admitted at 03:59 UTC` and `Would have held at 03:59 UTC`.
 
 `orbit run profiles --accuracy` checks the forecast itself. Each local drain
 pass under `shadow` or `enforce` that built a forecast records it at +5, +10,
