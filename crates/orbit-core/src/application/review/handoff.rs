@@ -456,7 +456,10 @@ impl OrbitRuntime {
     /// death, so this exists precisely because an operator has to decide.
     ///
     /// `expected_phase` is the phase the operator saw. A claim that moved on
-    /// since the page was rendered is refused rather than recovered.
+    /// since the page was rendered is refused rather than recovered, unless
+    /// this request is an identical replay of the recovery that moved it:
+    /// the phase precondition is enforced inside the store transaction,
+    /// after the recorded receipt has had its chance to replay.
     pub fn recover_claim_as_operator(
         &self,
         claim_id: &str,
@@ -488,7 +491,7 @@ impl OrbitRuntime {
                 message: format!("no claim '{claim_id}' is current on this owner (stale_claim)"),
             })?;
         let observed = phase_label(claim.claim.phase);
-        if observed != expected_phase {
+        let Some(expected_phase) = phase_from_label(expected_phase) else {
             return Err(OrbitError::ClaimRefused {
                 kind: ClaimRefusalKind::StaleClaim,
                 message: format!(
@@ -496,7 +499,7 @@ impl OrbitRuntime {
                      action was prepared against (stale_claim)"
                 ),
             });
-        }
+        };
         let context = ClaimInvocation::trusted_operator(
             claim.claim.task_id.clone(),
             claim.claim.claim_id.clone(),
@@ -508,6 +511,7 @@ impl OrbitRuntime {
             &ClaimMutation::Recover {
                 status,
                 reason: reason.to_string(),
+                expected_phase,
             },
         )?;
         Ok(serde_json::json!({
@@ -599,6 +603,20 @@ fn mutation_json(handoff_id: &str, result: &ClaimMutationResult) -> serde_json::
         "phase": phase_label(result.phase),
         "task_status": result.status.to_string(),
     })
+}
+
+fn phase_from_label(label: &str) -> Option<ExecutionClaimPhase> {
+    [
+        ExecutionClaimPhase::Claimed,
+        ExecutionClaimPhase::Running,
+        ExecutionClaimPhase::HandedOff,
+        ExecutionClaimPhase::RepairPending,
+        ExecutionClaimPhase::Failed,
+        ExecutionClaimPhase::Revoked,
+        ExecutionClaimPhase::Landed,
+    ]
+    .into_iter()
+    .find(|phase| phase_label(*phase) == label)
 }
 
 fn phase_label(phase: ExecutionClaimPhase) -> &'static str {

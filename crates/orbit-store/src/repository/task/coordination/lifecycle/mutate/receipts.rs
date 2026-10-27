@@ -18,7 +18,7 @@ impl TaskCommitBoundary {
             return Ok(None);
         };
         let receipt: MutationReceipt = decode(&receipt.payload_json)?;
-        if receipt.input != input {
+        if !receipt_input_matches(&receipt.input, input, mutation) {
             return Err(invalid("mutation_mismatch"));
         }
         if let ClaimMutation::RetryLanding(request) = mutation {
@@ -63,4 +63,35 @@ impl TaskCommitBoundary {
         self.with_friction_result(receipt.result, receipt_id)
             .map(Some)
     }
+}
+
+/// Whether `input` is the input `recorded` was written for. Recovery
+/// receipts written before `expected_phase` joined the recovery mutation
+/// recorded no phase, so a recovery replays one of those when every other
+/// part of the input matches; the phase the original request observed is
+/// unrecoverable from such a receipt. Receipts written since then match
+/// exactly, including the phase.
+fn receipt_input_matches(recorded: &str, input: &str, mutation: &ClaimMutation) -> bool {
+    if recorded == input {
+        return true;
+    }
+    if !matches!(mutation, ClaimMutation::Recover { .. }) {
+        return false;
+    }
+    let Ok(mut current) = serde_json::from_str::<serde_json::Value>(input) else {
+        return false;
+    };
+    let Ok(recorded) = serde_json::from_str::<serde_json::Value>(recorded) else {
+        return false;
+    };
+    let Some(recover) = current
+        .as_array_mut()
+        .and_then(|tuple| tuple.last_mut())
+        .and_then(|mutation| mutation.get_mut("Recover"))
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return false;
+    };
+    recover.remove("expected_phase");
+    current == recorded
 }

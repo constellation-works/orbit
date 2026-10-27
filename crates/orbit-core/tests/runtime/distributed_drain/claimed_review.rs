@@ -1286,6 +1286,143 @@ fn a_claimed_reviewers_manifest_read_needs_the_owners_active_claim() {
     }
 }
 
+/// An identical recover-claim request whose reply was lost replays the
+/// recorded recovery after it has moved the claim to `revoked`; reusing the
+/// same request key with a different phase or recovery input, and a fresh
+/// request prepared against the old phase, are both refused.
+fn a_recovered_claim_replays_the_same_recovery_request() {
+    let mut leaf = ReviewedLeaf::admit();
+    leaf.admit_review();
+    let (claim_id, _) = leaf.claim();
+    let owner = &leaf.pair.wire.owner;
+    let recover = |expected_phase: &str,
+                   status: TaskStatus,
+                   reason: &str,
+                   request_id: &str|
+     -> Result<Value, OrbitError> {
+        owner.recover_claim_as_operator(
+            &claim_id,
+            expected_phase,
+            status,
+            "operator",
+            reason,
+            request_id,
+        )
+    };
+    let first = recover(
+        "running",
+        TaskStatus::Backlog,
+        "The operator took the claim back.",
+        "recover-replay",
+    )
+    .expect("the operator recovers the running claim");
+    assert_eq!(first["phase"], "revoked", "{first}");
+    assert_eq!(first["task_status"], "backlog", "{first}");
+
+    let replay = recover(
+        "running",
+        TaskStatus::Backlog,
+        "The operator took the claim back.",
+        "recover-replay",
+    )
+    .expect("the identical request replays after the claim became revoked");
+    assert_eq!(replay, first, "the replay returns the original recovery");
+
+    let changed_phase = recover(
+        "claimed",
+        TaskStatus::Backlog,
+        "The operator took the claim back.",
+        "recover-replay",
+    )
+    .expect_err("the same key with a different phase is refused");
+    assert!(
+        changed_phase.to_string().contains("mutation_mismatch"),
+        "{changed_phase}"
+    );
+    let changed_input = recover(
+        "running",
+        TaskStatus::Blocked,
+        "The operator took the claim back.",
+        "recover-replay",
+    )
+    .expect_err("the same key with a different recovery input is refused");
+    assert!(
+        changed_input.to_string().contains("mutation_mismatch"),
+        "{changed_input}"
+    );
+
+    let stale = recover(
+        "running",
+        TaskStatus::Backlog,
+        "The operator took the claim back.",
+        "recover-fresh",
+    )
+    .expect_err("a fresh request against the old phase is refused");
+    assert!(stale.to_string().contains("stale_claim"), "{stale}");
+    assert_eq!(leaf.pair.owner_status(&leaf.task), "backlog");
+
+    // A receipt recorded before the phase joined the recovery input still
+    // replays: rewrite the stored recovery receipt to that shape and the
+    // identical request returns the original recovery again.
+    let workspace_id = owner.workspace_id().unwrap();
+    let connection = rusqlite::Connection::open(owner.global_root().join("orbit.db")).unwrap();
+    let mut statement = connection
+        .prepare(
+            "SELECT row_id, payload_json FROM task_coordination_rows \
+             WHERE workspace_id=?1 AND kind='distributed-claim-mutation-v1'",
+        )
+        .unwrap();
+    let rows = statement
+        .query_map(rusqlite::params![workspace_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    drop(statement);
+    let mut rewritten = 0;
+    for (row_id, payload) in rows {
+        let mut receipt: Value = serde_json::from_str(&payload).unwrap();
+        let Some(input) = receipt["input"].as_str().map(str::to_string) else {
+            continue;
+        };
+        let Ok(mut input) = serde_json::from_str::<Value>(&input) else {
+            continue;
+        };
+        let Some(recover) = input
+            .as_array_mut()
+            .and_then(|tuple| tuple.last_mut())
+            .and_then(|mutation| mutation.get_mut("Recover"))
+            .and_then(Value::as_object_mut)
+        else {
+            continue;
+        };
+        recover.remove("expected_phase");
+        receipt["input"] = Value::String(serde_json::to_string(&input).unwrap());
+        let updated = connection
+            .execute(
+                "UPDATE task_coordination_rows SET payload_json=?1 \
+                 WHERE workspace_id=?2 AND row_id=?3",
+                rusqlite::params![
+                    serde_json::to_string(&receipt).unwrap(),
+                    workspace_id,
+                    row_id
+                ],
+            )
+            .unwrap();
+        rewritten += updated;
+    }
+    assert_eq!(rewritten, 1, "the one recovery receipt is rewritten");
+    let legacy_replay = recover(
+        "running",
+        TaskStatus::Backlog,
+        "The operator took the claim back.",
+        "recover-replay",
+    )
+    .expect("a pre-fix recovery receipt replays the identical request");
+    assert_eq!(legacy_replay, first);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_claimed_leaf_reviews_before_pr_and_the_owner_accepts_its_evidence_scenarios,
@@ -1293,5 +1430,6 @@ crate::scenario_table!(
     a_rejected_claimed_review_blocks_the_task_on_the_owner,
     a_claimed_landing_review_refusal_records_its_pending_decision,
     a_follower_without_the_review_crew_claims_nothing,
-    a_claimed_reviewers_manifest_read_needs_the_owners_active_claim
+    a_claimed_reviewers_manifest_read_needs_the_owners_active_claim,
+    a_recovered_claim_replays_the_same_recovery_request
 );
