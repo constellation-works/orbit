@@ -28,12 +28,18 @@ impl TaskCommitBoundary {
         if file.sha256 != reference.sha256 {
             return Err(invalid("validation artifact changed"));
         }
-        let bytes = std::fs::read(
-            self.bundle_store
-                .bundle_path(task_id)?
-                .join(orbit_types::task::TASK_ARTIFACTS_DIR_NAME)
-                .join(&file.blob),
-        )?;
+        let artifacts_root = self
+            .bundle_store
+            .bundle_path(task_id)?
+            .join(orbit_types::task::TASK_ARTIFACTS_DIR_NAME);
+        let Some(bytes) =
+            crate::fs::path_safety::read_contained_artifact_blob(&artifacts_root, &file.blob)?
+        else {
+            return Err(OrbitError::Io(format!(
+                "artifact blob '{}' is missing",
+                artifacts_root.join(&file.blob).display()
+            )));
+        };
         if sha256_hex(&bytes) != reference.sha256 {
             return Err(invalid("validation artifact changed"));
         }

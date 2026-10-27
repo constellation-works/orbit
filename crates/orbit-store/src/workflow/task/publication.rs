@@ -25,6 +25,7 @@ use crate::driver::file::task_bundle::{
     recover_pending_bundle_at, write_bundle_at, write_bundle_with_artifacts_at,
 };
 use crate::driver::sqlite::task_registry::TaskRegistryStore;
+use crate::fs::path_safety::read_contained_artifact_blob;
 use crate::fs::yaml::write_yaml_atomic_with;
 
 /// Version of the publication envelope and tree contract.
@@ -616,13 +617,26 @@ fn scan_captured_attachments(
     scanner: Option<&dyn AttachmentSensitivityScanner>,
 ) -> Result<(), OrbitError> {
     for file in files {
-        let blob_path = captured.join(TASK_ARTIFACTS_DIR_NAME).join(&file.blob);
-        let bytes = fs::read(&blob_path).map_err(|error| {
-            OrbitError::Store(format!(
-                "task publication could not read attachment for task '{task_id}' at '{}': {error}",
-                file.path
-            ))
-        })?;
+        let artifacts_root = captured.join(TASK_ARTIFACTS_DIR_NAME);
+        let bytes = match read_contained_artifact_blob(&artifacts_root, &file.blob) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                return Err(OrbitError::Store(format!(
+                    "task publication could not read attachment for task '{task_id}' at '{}': {}",
+                    file.path,
+                    std::io::Error::from(std::io::ErrorKind::NotFound)
+                )));
+            }
+            Err(error) => {
+                return Err(match error {
+                    OrbitError::Io(detail) => OrbitError::Store(format!(
+                        "task publication could not read attachment for task '{task_id}' at '{}': {detail}",
+                        file.path
+                    )),
+                    other => other,
+                });
+            }
+        };
         let scan_result = scanner.map(|scanner| {
             scanner.scan(AttachmentScanInput {
                 task_id,
