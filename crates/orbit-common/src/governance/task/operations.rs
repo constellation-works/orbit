@@ -15,7 +15,7 @@
 //! **Every string below is shipped contract.** Tool names and parameter names
 //! are the MCP wire; CLI flag spellings and help text are the argv surface.
 
-use orbit_types::task::{TASK_SHOW_DELIVERY_FIELD, TASK_SHOW_PROJECTION_FIELDS_CSV};
+use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
 use orbit_types::tool::McpToolScope;
 
 use super::lifecycle_operations::{
@@ -505,7 +505,7 @@ const SHOW: TaskOperation = TaskOperation {
     verb: TaskVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.task.show",
-    tool_description: "Fetch a single Orbit task as JSON. `id` is a globally unique primary key resolved through the host task registry by default; cwd, MCP initialize metadata, and linked-worktree runtime identities are not used as filters. An optional `workspace` argument is an explicit fail-closed filter only. Use the optional `fields` projection (or single-field alias `field`) to retrieve only specific task fields, including the derived read-only `terminal` field. `os_requirement` reports tags intersected with the stored crew executor host_os, its source, and unresolved/conflict states; it is never persisted. The `crew` field selects execution, while `orchestrator` records orchestration attribution. `field: \"delivery\"` (optional `run_id`) reports what a delivery run committed and landed for the task: typed status, base/head and landed commit SHAs, PR number, timestamps and provenance only, from the host's own commit and merge step records. Missing or inconsistent evidence is reported as unavailable, never inferred. Full run details stay on the operator-only `orbit.workflow.run.show`.",
+    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
     cli_help: CliHelp {
         long_about: Some(
@@ -546,7 +546,9 @@ const SHOW: TaskOperation = TaskOperation {
                 preserve_empty: false,
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
-                mcp_description: Some(Description::Computed(show_fields_description)),
+                mcp_description: Some(Description::Static(
+                    "Optional field names as a string or array; returns only those fields. `delivery` must be selected alone. Catalogue and response semantics: installed Orbit skill `references/task-fields.md`.",
+                )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,
                     kind: CliArgKind::Flag {
@@ -664,12 +666,6 @@ const TASK_ID_PARAM: ParamSpec = ParamSpec {
         "Task ID",
     )
 };
-
-fn show_fields_description() -> String {
-    format!(
-        "Optional field projection as a string or array of strings. When set, returns only the requested field(s) as JSON. A single derived `terminal` selection remains keyed as an object. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}. `crew` is execution selection; `orchestrator` is separate orchestration attribution. `{TASK_SHOW_DELIVERY_FIELD}` alone returns what a delivery run committed and landed for this task instead of task fields."
-    )
-}
 
 fn show_run_id_description() -> String {
     format!(

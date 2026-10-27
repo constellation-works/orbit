@@ -16,7 +16,6 @@
 //!
 //! **Every string below is shipped contract.**
 
-use orbit_types::task::TASK_SHOW_PROJECTION_FIELDS_CSV;
 use orbit_types::tool::McpToolScope;
 
 use super::operations::{
@@ -24,9 +23,9 @@ use super::operations::{
     TASK_TYPE_VALUES, TaskOperation, TaskVerb,
 };
 use crate::governance::operation::{
-    CliArgKind, CliHelp, Description, Effect, EnumValue, ParamSpec, ParamType, RETIRED_AGENT_FIELD,
-    Redaction, RetiredField, UnknownFields, both, cli_only, cli_required, defaulted, free_text,
-    mcp_only, preserve_empty, required,
+    CliArgKind, CliHelp, Effect, EnumValue, ParamSpec, ParamType, RETIRED_AGENT_FIELD, Redaction,
+    RetiredField, UnknownFields, both, cli_only, cli_required, defaulted, free_text, mcp_only,
+    preserve_empty, required,
 };
 
 /// The hidden wire field that carries `orbit task add` and `orbit task update`
@@ -73,10 +72,11 @@ const WRITE_MODEL_PARAM: ParamSpec = both(
 
 /// The response projection a write takes.
 pub(super) const WRITE_PROJECTION_PARAMS: &[ParamSpec] = &[
-    ParamSpec {
-        mcp_description: Some(Description::Computed(write_fields_description)),
-        ..mcp_only("fields", ParamType::StringList, "")
-    },
+    mcp_only(
+        "fields",
+        ParamType::StringList,
+        "Optional response field names as a string or array. Defaults omit `comments` and `history`; request them explicitly. Catalogue and projection semantics: installed Orbit skill `references/task-fields.md`.",
+    ),
     mcp_only(
         "field",
         ParamType::String,
@@ -627,21 +627,21 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
             path(preserve_empty(both(
                 "context_files",
                 ParamType::StringList,
-                "Replacement task context selectors as a comma-separated string or array of strings. Omit both `context_files` and `context` to preserve the current list. A supplied value replaces the whole list; it does not append. An empty array `[]` clears the list, as does a comma-only string such as `\",\"`; an empty string is rejected. The string `\"[]\"` is treated as a selector, not an empty list. To extend scope, read the current list and send the full union of existing and new selectors. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files referenced only for context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`. Legacy raw paths are accepted and upgraded automatically. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
+                "Replaces the whole selector list; omit both context fields to preserve it. To extend, read `context_files` and send the deduplicated union of all existing and new selectors. Policy and clear/create cases: installed Orbit skill `references/task-fields.md`.",
                 flag_with_delimiter("context", &["context-files"], None),
                 "Replace the whole task context list. Omit to preserve it; an empty string clears it. To extend scope, include all existing selectors plus the new ones. Repeat or comma-separate for multiple selectors. Prefer `file:`, `dir:`, or `symbol:` forms; legacy raw paths are accepted and upgraded. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up",
             ))),
             both(
                 "allow_missing_context",
                 ParamType::Switch,
-                "Optional. Set true to accept `context_files` selectors whose target does not exist yet, for work that creates the file. Each such selector is recorded on the task as durable creation intent for that exact selector, which later writes and task preparation honor; re-sending a declared selector needs no flag, and a replacement list that omits it revokes it. Syntax, workspace containment and file/directory kind are still checked. Missing selectors are rejected by default.",
+                "Accept missing targets for files this task creates, recording durable creation intent per selector. Missing targets are rejected by default. Persistence and validation rules: installed Orbit skill `references/task-fields.md`.",
                 CliArgKind::flag("allow-missing-context"),
                 "Accept context selectors whose target does not exist yet (for work that creates the file). Each missing selector is recorded as durable creation intent; dropping a selector from the list revokes it, and re-sending a recorded one needs no flag",
             ),
             path(mcp_only(
                 "context",
                 ParamType::String,
-                "Legacy string alias for `context_files`. Omit both fields to preserve the current list. A supplied value replaces the whole list; it does not append. A comma-only string such as `\",\"` clears the list; prefer `context_files: []` to clear explicitly. An empty string is rejected, and the string `\"[]\"` is treated as a selector, not an empty list. `context_files` takes precedence when both fields are supplied. To extend scope, read the current list and send the full union of existing and new selectors. Add entries ONLY for existing files, directories, or symbols expected to be modified or deleted by the task. Do not add background-reading entries or files that are only relevant background context. Prefer canonical selectors: `file:path`, `dir:path`, or `symbol:path#name:kind`. Existence checks verify the filesystem anchor only; a `symbol:` name and kind are not looked up.",
+                "Legacy string alias for `context_files`, which takes precedence. Replaces the whole list; to extend, read and send the union of all existing and new selectors. Omit both to preserve. Policy: installed Orbit skill `references/task-fields.md`.",
             )),
         ],
         WRITE_PROJECTION_PARAMS,
@@ -706,9 +706,3 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
 };
-
-fn write_fields_description() -> String {
-    format!(
-        "Optional response field projection as a string or array. When omitted, write responses exclude append-heavy `comments` and `history`; request those fields explicitly when needed. Valid values: {TASK_SHOW_PROJECTION_FIELDS_CSV}."
-    )
-}
