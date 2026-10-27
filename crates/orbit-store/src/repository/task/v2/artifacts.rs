@@ -142,11 +142,19 @@ impl TaskV2Store {
             return Ok(Some(Vec::new()));
         };
         let bundle_dir = self.bundle_store.bundle_path(id)?;
+        let artifacts_root = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
         let mut artifacts = Vec::new();
         for file in manifest.files {
-            let artifact_file = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME).join(&file.blob);
-            let content =
-                fs::read(&artifact_file).map_err(|err| OrbitError::Io(err.to_string()))?;
+            // Absence is an error. Skipping the entry would change the result
+            // count and the stable path order callers observe.
+            let Some(content) =
+                crate::fs::path_safety::read_contained_artifact_blob(&artifacts_root, &file.blob)?
+            else {
+                return Err(OrbitError::Io(format!(
+                    "artifact blob '{}' is missing",
+                    artifacts_root.join(&file.blob).display()
+                )));
+            };
             artifacts.push(TaskArtifact {
                 path: file.path,
                 media_type: file.media_type,
@@ -203,10 +211,13 @@ impl TaskV2Store {
             return Ok(None);
         };
         let bundle_dir = self.bundle_store.bundle_path(id)?;
-        let Some(artifact_file) = resolve_v2_artifact_file_path(&bundle_dir, &file.blob)? else {
+        let Some(content) = crate::fs::path_safety::read_contained_artifact_blob(
+            &bundle_dir.join(TASK_ARTIFACTS_DIR_NAME),
+            &file.blob,
+        )?
+        else {
             return Ok(None);
         };
-        let content = fs::read(&artifact_file).map_err(|err| OrbitError::Io(err.to_string()))?;
         Ok(Some(TaskArtifact {
             path: file.path,
             media_type: file.media_type,
@@ -311,24 +322,33 @@ impl TaskV2Store {
             {
                 artifacts.push(history);
             }
+            let artifacts_root = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME);
             for artifact in &artifacts {
                 let path = normalize_v2_artifact_path(&artifact.path)?;
                 let sha256 = sha256_hex(&artifact.content);
                 let blob = immutable_artifact_blob(&path, &sha256);
-                let destination = bundle_dir.join(TASK_ARTIFACTS_DIR_NAME).join(&blob);
-                match fs::read(&destination) {
-                    Ok(existing) if existing == artifact.content => {}
-                    Ok(_) => {
+                let destination = artifacts_root.join(&blob);
+                let write_blob = || {
+                    atomic_write_bytes(&destination, &artifact.content)
+                        .map_err(|err| OrbitError::from_write_io(&destination, err))
+                };
+                match crate::fs::path_safety::read_contained_artifact_blob(&artifacts_root, &blob) {
+                    Ok(Some(existing)) if existing == artifact.content => {}
+                    Ok(Some(_)) => {
                         return Err(OrbitError::Store(format!(
                             "artifact blob {} has unexpected content",
                             destination.display()
                         )));
                     }
-                    Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                        atomic_write_bytes(&destination, &artifact.content)
-                            .map_err(|err| OrbitError::from_write_io(&destination, err))?;
+                    // A missing blob is written. An escaping symlink is not a
+                    // stored blob: replace the directory entry rather than
+                    // comparing the outside target. `atomic_write_bytes`
+                    // renames over that entry and does not follow it.
+                    Ok(None) => write_blob()?,
+                    Err(err) if crate::fs::path_safety::is_artifact_containment_refusal(&err) => {
+                        write_blob()?;
                     }
-                    Err(err) => return Err(OrbitError::Io(err.to_string())),
+                    Err(err) => return Err(err),
                 }
                 by_path.insert(
                     path.clone(),

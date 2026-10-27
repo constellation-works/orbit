@@ -4,7 +4,10 @@
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{NotFoundKind, OrbitError, OrbitRuntime, TaskStatus};
 use orbit_engine::{ReviewLandingRequest, RuntimeHost};
-use orbit_types::task::{ArtifactWriter, MAX_TASK_ARTIFACT_CONTENT_BYTES, TaskArtifact};
+use orbit_types::task::{
+    ArtifactManifestV2, ArtifactWriter, MAX_TASK_ARTIFACT_CONTENT_BYTES,
+    TASK_ARTIFACT_MANIFEST_FILE_NAME, TASK_ARTIFACTS_DIR_NAME, TaskArtifact,
+};
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     REVIEW_BASELINE_ARTIFACT, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
@@ -813,4 +816,159 @@ crate::scenario_table!(
     artifact_errors_explain_the_source_file_listing_and_size_remedies,
     review_preflight_fetches_only_existing_optional_artifacts,
     doc_duties_discovery_fetches_only_listed_ledgers
+);
+
+/// Bulk retrieval follows the same root check as singular retrieval.
+///
+/// The on-disk blob is replaced with a symlink to a byte-identical file
+/// outside the artifact directory, which is the case size and sha checks
+/// accept. Symlink planting is Unix-only; other hosts do not run the case.
+fn bulk_get_task_artifacts_refuses_symlink_outside_artifact_root() {
+    #[cfg(unix)]
+    refuse_bulk_artifact_symlink();
+}
+
+#[cfg(unix)]
+fn refuse_bulk_artifact_symlink() {
+    let fixture = Fixture::new();
+    let runtime = &fixture.runtime;
+    let text = b"notes\n".to_vec();
+    let binary = b"\0\xffbinary".to_vec();
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Artifact containment".into(),
+            description: "Seed artifacts, then point one blob outside the root.".into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .expect("seed task");
+    runtime
+        .update_task_with_identity(
+            &task.id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![
+                    TaskArtifact {
+                        path: "notes/readme.txt".into(),
+                        media_type: "text/plain".into(),
+                        content: text.clone(),
+                        created_by: None,
+                    },
+                    TaskArtifact {
+                        path: "payload.bin".into(),
+                        media_type: "application/octet-stream".into(),
+                        content: binary.clone(),
+                        created_by: None,
+                    },
+                ],
+                ..Default::default()
+            },
+            Some("codex".into()),
+            Some(orbit_common::test_fixtures::TEST_CODEX_MODEL.into()),
+        )
+        .expect("store text and binary artifacts");
+
+    let stored = runtime.get_task_artifacts(&task.id).expect("bulk read");
+    let again = runtime
+        .get_task_artifacts(&task.id)
+        .expect("stable bulk read");
+    assert_eq!(stored, again, "bulk reads keep order, bytes and metadata");
+    assert_eq!(
+        stored
+            .iter()
+            .map(|artifact| artifact.path.as_str())
+            .collect::<Vec<_>>(),
+        ["notes/readme.txt", "payload.bin"]
+    );
+    assert_eq!(stored[0].content, text);
+    assert_eq!(stored[0].media_type, "text/plain");
+    assert!(
+        stored[0]
+            .created_by
+            .as_ref()
+            .is_some_and(|by| !by.is_empty())
+    );
+    assert_eq!(stored[1].content, binary);
+    assert_eq!(stored[1].media_type, "application/octet-stream");
+    for artifact in &stored {
+        let one = runtime
+            .get_task_artifact(&task.id, &artifact.path)
+            .expect("singular read")
+            .expect("artifact present");
+        assert_eq!(one, *artifact);
+    }
+
+    let blob = find_artifact_blob(&runtime.global_root(), &task.id, "payload.bin");
+    assert!(
+        blob.components()
+            .any(|component| component.as_os_str() == "artifacts"),
+        "blob must live under the artifact directory: {}",
+        blob.display()
+    );
+    let artifact_root = std::fs::canonicalize(
+        blob.parent()
+            .expect("files dir")
+            .parent()
+            .expect("artifacts dir"),
+    )
+    .expect("canonicalize artifact root");
+    let outside = runtime
+        .data_root()
+        .join(format!("outside-twin-{}.bin", task.id));
+    std::fs::write(&outside, &binary).expect("write outside twin");
+    let outside = std::fs::canonicalize(&outside).expect("canonicalize outside twin");
+    assert!(
+        !outside.starts_with(&artifact_root),
+        "twin must sit outside the artifact directory"
+    );
+    std::fs::remove_file(&blob).expect("remove artifact blob");
+    std::os::unix::fs::symlink(&outside, &blob).expect("plant escaping symlink");
+
+    let bulk = runtime
+        .get_task_artifacts(&task.id)
+        .expect_err("bulk read must refuse the escaping blob");
+    let singular = runtime
+        .get_task_artifact(&task.id, "payload.bin")
+        .expect_err("singular read must refuse the escaping blob");
+    assert!(
+        matches!(
+            &bulk,
+            OrbitError::InvalidInput(message) if message.contains("outside the task artifact directory")
+        ),
+        "bulk containment error: {bulk}"
+    );
+    assert_eq!(
+        bulk.to_string(),
+        singular.to_string(),
+        "bulk and singular retrieval report the same containment error"
+    );
+}
+
+#[cfg(unix)]
+fn find_artifact_blob(
+    root: &std::path::Path,
+    task_id: &str,
+    logical_path: &str,
+) -> std::path::PathBuf {
+    let workspaces = root.join("tasks/workspaces");
+    for workspace in std::fs::read_dir(&workspaces)
+        .expect("task workspaces")
+        .flatten()
+    {
+        let artifact_dir = workspace.path().join(task_id).join(TASK_ARTIFACTS_DIR_NAME);
+        let manifest_path = artifact_dir.join(TASK_ARTIFACT_MANIFEST_FILE_NAME);
+        let Ok(raw) = std::fs::read_to_string(&manifest_path) else {
+            continue;
+        };
+        let manifest: ArtifactManifestV2 =
+            serde_yaml::from_str(&raw).expect("parse artifact manifest");
+        if let Some(file) = manifest.files.iter().find(|file| file.path == logical_path) {
+            return artifact_dir.join(&file.blob);
+        }
+    }
+    panic!("artifact blob for {logical_path} on task {task_id}");
+}
+
+crate::scenario_table!(
+    bulk_artifact_containment,
+    bulk_get_task_artifacts_refuses_symlink_outside_artifact_root
 );
