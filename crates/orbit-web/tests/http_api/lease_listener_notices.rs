@@ -12,6 +12,7 @@ use axum::body::Body;
 use axum::extract::ConnectInfo;
 use axum::http::{Request, StatusCode, header};
 use axum::response::Response;
+use hyper_util::rt::TokioIo;
 use orbit_auth::client_address::LeaseClientAddressPolicy;
 use orbit_auth::scope::{
     HardLeasePermission, LeasePriorityCeiling, LeaseTokenVerb, PrincipalClass,
@@ -21,6 +22,7 @@ use orbit_web::lease_intake::{
 };
 use orbit_web::lease_listener::{lease_listener_router, serve_lease_listener_on};
 use serde_json::{Value, json};
+use tokio::net::TcpStream;
 use tower::ServiceExt;
 
 use super::lease_listener::{audit_rows, bearer, config, mint, provisioned_store, send};
@@ -292,6 +294,125 @@ async fn a_notice_stream_holds_a_connection_and_ends_at_shutdown() {
     })
     .await;
     assert!(rest.is_ok(), "the stream ends with the listener");
+}
+
+/// A refused `/healthz` is answered only after its request is read.
+///
+/// Hosted CI failed [`a_notice_stream_holds_a_connection_and_ends_at_shutdown`]
+/// at its `/healthz` send with `hyper::Error(UnexpectedMessage)` when the
+/// refusal wrote the 503 before that request was in flight. The wait after
+/// the refusal is audited is long enough for that write to reach the socket
+/// and shorter than the header timeout, so a read-first refusal still has
+/// nothing to deliver until this request arrives.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_refused_health_check_is_read_before_its_overload_response() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let mut store = provisioned_store(&home);
+    let (_, secret) = mint(
+        &mut store,
+        "alice",
+        PrincipalClass::Human,
+        &["ws_alpha"],
+        LeaseTokenVerb::Read,
+        LeasePriorityCeiling::Normal,
+        HardLeasePermission::Allow,
+    );
+    let socket = tmp.path().join("intake.sock");
+    scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
+    let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
+    settings.limits.max_connections = 1;
+    settings.limits.header_timeout_seconds = 30;
+    settings.limits.request_timeout_seconds = 60;
+    let listener = tokio::net::TcpListener::bind(settings.bind).await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (stop, shutdown) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(serve_lease_listener_on(listener, settings, store, async {
+        let _ = shutdown.await;
+    }));
+    let client = reqwest::Client::builder().no_proxy().build().unwrap();
+    let mut stream = client
+        .get(format!("http://{address}/api/leases/events"))
+        .bearer_auth(&secret)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(stream.status(), StatusCode::OK);
+    let chunk = tokio::time::timeout(Duration::from_secs(5), stream.chunk())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(&chunk[..], b": keep-alive\n\n");
+
+    let excess = TcpStream::connect(address).await.unwrap();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !max_connections_refusal_is_audited(&home) && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        max_connections_refusal_is_audited(&home),
+        "the excess connection was not refused"
+    );
+    let saw_early_bytes = matches!(
+        tokio::time::timeout(Duration::from_millis(500), excess.peek(&mut [0u8; 1])).await,
+        Ok(Ok(read)) if read > 0
+    );
+    let (mut sender, connection) = tokio::time::timeout(
+        Duration::from_secs(5),
+        hyper::client::conn::http1::handshake(TokioIo::new(excess)),
+    )
+    .await
+    .expect("overload handshake within 5s")
+    .expect("overload handshake");
+    // Drive the connection beside the request. Its finish races the response
+    // on a clean close, so the request's own result is the outcome that counts.
+    tokio::spawn(connection);
+    let request = Request::builder()
+        .method("GET")
+        .uri("/healthz")
+        .header(header::HOST, "localhost")
+        .body(Body::empty())
+        .unwrap();
+    let response = tokio::time::timeout(Duration::from_secs(5), sender.send_request(request))
+        .await
+        .expect("refused /healthz answered within 5s")
+        .unwrap_or_else(|error| {
+            panic!(
+                "refused /healthz must be a 503 after the request is read; a response written first surfaces as UnexpectedMessage (bytes before the request: {saw_early_bytes}): {error:?}"
+            );
+        });
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let bytes = axum::body::to_bytes(Body::new(response.into_body()), 1024)
+        .await
+        .expect("overload body");
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).unwrap(),
+        json!({"error": "max_connections"})
+    );
+
+    stop.send(()).unwrap();
+    tokio::time::timeout(Duration::from_secs(5), server)
+        .await
+        .expect("an open notice stream must not hold the listener's shutdown")
+        .unwrap()
+        .unwrap();
+    drop(stream);
+}
+
+fn max_connections_refusal_is_audited(home: &Path) -> bool {
+    let Ok(connection) = rusqlite::Connection::open(home.join("lease-tokens.db")) else {
+        return false;
+    };
+    let _ = connection.busy_timeout(Duration::from_millis(50));
+    connection
+        .query_row(
+            "SELECT COUNT(*) FROM lease_listener_limit_audit WHERE limit_name = 'max_connections'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0
 }
 
 /// The intake protocol is versioned (design §7.2 "Versioned"): the listener
