@@ -3148,18 +3148,69 @@ function forecastPeaks(forecast) {
   return list;
 }
 
-function forecastDecisions(forecast, hypothetical) {
+// "05:00 UTC" from the same clock as the forecast's timestamp, so a retained
+// decision names when it was made. Empty when the stamp cannot be read.
+function forecastDecisionAnchor(forecast) {
+  const formatted = time(forecastBuiltAt(forecast));
+  const match = /(\d{2}:\d{2})(?:\s+(\S+))?$/.exec(formatted);
+  if (!match) return "";
+  return match[2] ? `${match[1]} ${match[2]}` : match[1];
+}
+
+// Live decisions stay present tense. A retained forecast is history: the verb
+// carries the time it was decided, and a shadow decision says what that pass
+// would have done rather than what this pass would do.
+function forecastVerbs(forecast, hypothetical, retained) {
+  if (!retained) {
+    return {
+      admit: hypothetical ? "Would admit " : "Admitted ",
+      hold: hypothetical ? "Would hold " : "Held ",
+      guard: hypothetical ? "Starvation guard would protect " : "Starvation guard protects ",
+      stuck: hypothetical ? "Stuck head (shadow; hypothetical): " : "Stuck head: ",
+      improved: "has not improved",
+    };
+  }
+  const at = forecastDecisionAnchor(forecast);
+  const when = at ? ` at ${at}` : " earlier";
+  if (hypothetical) {
+    return {
+      admit: `Would have admitted${when} `,
+      hold: `Would have held${when} `,
+      guard: `Starvation guard would have protected${when} `,
+      stuck: `Was a stuck head${when}: `,
+      improved: "had not improved",
+    };
+  }
+  return {
+    admit: `Admitted${when} `,
+    hold: `Held${when} `,
+    guard: `Starvation guard protected${when} `,
+    stuck: `Was a stuck head${when}: `,
+    improved: "had not improved",
+  };
+}
+
+// Current status beside a retained decision. Absent for a live forecast, and
+// when neither the loaded task row nor the forecast map names one.
+function forecastStatusNote(statuses, taskId) {
+  const status = statuses?.[taskId];
+  if (!status) return null;
+  return el("span", { class: "drain-forecast-task-status", text: ` · ${status}` });
+}
+
+function forecastDecisions(forecast, hypothetical, { retained = false, statuses = null } = {}) {
   const items = [];
-  const admitVerb = hypothetical ? "Would admit " : "Admitted ";
-  const holdVerb = hypothetical ? "Would hold " : "Held ";
+  const verbs = forecastVerbs(forecast, hypothetical, retained);
+  const statusFor = taskId => (retained ? forecastStatusNote(statuses, taskId) : null);
   for (const task of Array.isArray(forecast.admitted) ? forecast.admitted : []) {
     if (!task?.task_id) continue;
     const notes = [`profile ${task.profile_source || "unknown"}`];
     if (task.idle_host) notes.push(String(task.idle_host));
     // An admitted task stays on one line; its full text is the tooltip.
     const item = el("li", { class: "drain-forecast-task admitted" }, [
-      admitVerb,
+      verbs.admit,
       forecastTaskRef(forecast, task.task_id),
+      statusFor(task.task_id),
       ` · ${notes.join(" · ")}`,
     ]);
     item.title = item.textContent;
@@ -3168,15 +3219,17 @@ function forecastDecisions(forecast, hypothetical) {
   for (const task of Array.isArray(forecast.skipped) ? forecast.skipped : []) {
     if (!task?.task_id) continue;
     items.push(el("li", { class: "drain-forecast-task held" }, [
-      holdVerb,
+      verbs.hold,
       forecastTaskRef(forecast, task.task_id),
+      statusFor(task.task_id),
       ` · ${forecastHoldDetail(task)} · profile ${task.profile_source || "unknown"}`,
     ]));
   }
   if (forecast.head?.protected === true && forecast.head.task_id) {
     items.push(el("li", { class: "drain-forecast-task held" }, [
-      hypothetical ? "Starvation guard would protect " : "Starvation guard protects ",
+      verbs.guard,
       forecastTaskRef(forecast, forecast.head.task_id),
+      statusFor(forecast.head.task_id),
     ]));
   }
   const stall = forecast.head?.stall;
@@ -3191,14 +3244,18 @@ function forecastDecisions(forecast, hypothetical) {
       : "unmeasured";
     const since = stall.since ? time(stall.since) : "unknown";
     items.push(el("li", { class: "drain-forecast-task held" }, [
-      `${hypothetical ? "Stuck head (shadow; hypothetical)" : "Stuck head"}: `,
+      verbs.stuck,
       forecastTaskRef(forecast, forecast.head.task_id),
-      ` — ${forecastHoldDetail(miss)} (${profile}; ${resource} baseline ${baseline}) has not improved over ${stall.passes ?? "?"} protected passes since ${since}.`,
+      statusFor(forecast.head.task_id),
+      ` — ${forecastHoldDetail(miss)} (${profile}; ${resource} baseline ${baseline}) ${verbs.improved} over ${stall.passes ?? "?"} protected passes since ${since}.`,
     ]));
   }
   if (items.length === 0) return null;
   const list = el("ul", { class: "drain-forecast-tasks" }, items);
-  list.setAttribute("aria-label", hypothetical ? "Hypothetical forecast decisions" : "Forecast decisions");
+  const label = retained
+    ? "Retained forecast decisions"
+    : (hypothetical ? "Hypothetical forecast decisions" : "Forecast decisions");
+  list.setAttribute("aria-label", label);
   return list;
 }
 
@@ -3209,7 +3266,7 @@ function forecastHead(label, ...meta) {
   ]);
 }
 
-function forecastBlock(forecast, { retained }) {
+function forecastBlock(forecast, { retained, statuses = null, windowEnded = false }) {
   const hypothetical = forecast.mode === "shadow";
   const at = forecastBuiltAt(forecast);
   const block = el("div", { class: retained ? "drain-forecast-retained" : "drain-forecast-built" });
@@ -3221,7 +3278,11 @@ function forecastBlock(forecast, { retained }) {
       at ? " · " : null,
       el("span", { class: `drain-forecast-mode${hypothetical ? " shadow" : ""}`, text: hypothetical ? "shadow · hypothetical" : (forecast.mode || "forecast") }),
     ),
-    ...[forecastPeaks(forecast), forecastDecisions(forecast, hypothetical)].filter(Boolean),
+    ...[
+      windowEnded ? el("p", { class: "drain-forecast-ended", text: "window ended · nothing running" }) : null,
+      forecastPeaks(forecast),
+      forecastDecisions(forecast, hypothetical, { retained, statuses: retained ? statuses : null }),
+    ].filter(Boolean),
   );
   return block;
 }
@@ -3268,6 +3329,33 @@ function refreshBacklogForecast() {
   return promise;
 }
 
+// Status beside a retained decision. A task row the dashboard already loaded
+// wins; the forecast map fills in tasks that row does not carry, such as one
+// that has since reached `done`.
+function forecastTaskStatuses(payload, forecast) {
+  const statuses = {};
+  for (const task of Array.isArray(payload?.tasks) ? payload.tasks : []) {
+    if (task?.task_id && task.status) statuses[String(task.task_id)] = String(task.status);
+  }
+  const recorded = forecast?.task_statuses;
+  if (recorded && typeof recorded === "object" && !Array.isArray(recorded)) {
+    for (const [id, status] of Object.entries(recorded)) {
+      if (id && status != null && status !== "" && statuses[id] == null) statuses[id] = String(status);
+    }
+  }
+  return statuses;
+}
+
+// A retained forecast whose drain has ended, with no pull drain and no
+// winding-down children, is not a live window.
+function retainedWindowEnded(payload, forecast) {
+  if (forecast?.drain_live !== false) return false;
+  const capacity = payload?.capacity || {};
+  if (capacity.pull_drain_run_id) return false;
+  const phase = capacity.drain_phase;
+  return phase == null || phase === "idle";
+}
+
 // The last local pass's gap-fit forecast. Readiness puts the pass on
 // `capacity.admission_forecast` and the last forecast that was actually built
 // on `capacity.last_admission_forecast`. A pass that built none says so, unless
@@ -3291,7 +3379,13 @@ function autoDrainForecast(payload) {
     section.append(forecastHead("Forecast", el("span", { class: "drain-forecast-state", text: "no forecast this pass" })));
     if (decisions) section.append(decisions);
   }
-  if (retained) section.append(forecastBlock(last, { retained: true }));
+  if (retained) {
+    section.append(forecastBlock(last, {
+      retained: true,
+      statuses: forecastTaskStatuses(payload, last),
+      windowEnded: retainedWindowEnded(payload, last),
+    }));
+  }
   placeBacklogForecast(section);
   return section;
 }

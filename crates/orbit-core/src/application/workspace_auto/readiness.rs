@@ -621,7 +621,12 @@ pub fn explain_workspace_auto_readiness(
             "admit_cpu_percent": settings.admit_cpu_percent,
             "admit_memory_percent": settings.admit_memory_percent,
         });
+        // Titles come from the admission population, which omits terminal
+        // tasks. Statuses also come from the registry projection the snapshot
+        // already holds, so a done task the forecast still names keeps its
+        // current status (`done`, not the backlog population's silence).
         let mut titles = BTreeMap::new();
+        let mut statuses = BTreeMap::new();
         for id in forecast
             .admitted
             .iter()
@@ -631,9 +636,13 @@ pub fn explain_workspace_auto_readiness(
         {
             if let Some(task) = snapshot.task_lookup.get(id) {
                 titles.insert(id.clone(), task.title.clone());
+                statuses.insert(id.clone(), task.status.to_string());
+            } else if let Some(status) = snapshot.status_by_id.get(id) {
+                statuses.insert(id.clone(), status.to_string());
             }
         }
         view["task_titles"] = json!(titles);
+        view["task_statuses"] = json!(statuses);
         // The drain whose passes recorded it, and whether that drain is still
         // live: a finished drain's forecast is history, not this host's load.
         view["drain_run_id"] = json!(status_run_id);
