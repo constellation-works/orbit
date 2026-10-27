@@ -100,23 +100,33 @@ pub struct ClaimInvocation {
     pub(crate) attribution: ClaimAttribution,
 }
 
-/// The crew and model a claimed leaf ran as, as its follower reports them.
-/// Attribution only: the owner keeps them on the claim's settlement record
-/// for the scorecards and never consults them for validation, a settlement's
-/// outcome or review-crew selection.
+/// The crew and model a claimed leaf ran as, and the branch and worktree its
+/// `worktree` step recorded, as its follower reports them. Attribution only:
+/// the owner keeps them on the claim's settlement record for the scorecards
+/// and the task detail panel, and never consults them for validation, a
+/// settlement's outcome or review-crew selection.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ClaimAttribution {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crew_model: Option<String>,
+    /// The leaf's worktree branch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+    /// The leaf's absolute worktree path on its executing machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
 }
 
 impl ClaimAttribution {
-    /// Whether neither field is reported.
+    /// Whether no field is reported.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.crew.is_none() && self.crew_model.is_none()
+        self.crew.is_none()
+            && self.crew_model.is_none()
+            && self.branch.is_none()
+            && self.worktree_path.is_none()
     }
 }
 

@@ -22,6 +22,7 @@ mod resume;
 mod review_hook;
 mod run;
 mod run_stage;
+mod run_worktree;
 mod task_port;
 mod triage_submit;
 mod upgrade_resume;

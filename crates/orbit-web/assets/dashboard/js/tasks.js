@@ -3887,7 +3887,16 @@ function buildDeliveryCard(task, drain, context) {
     if (task.pr_status) value.appendChild(el("span", { class: "fact-note", text: ` · ${task.pr_status}` }));
     rows.push(row("pr", "Pull request", value));
   }
-  if (task.job_run_id != null && task.job_run_id !== "") rows.push(row("run", "Run", buildRunValue(task)));
+  if (task.job_run_id != null && task.job_run_id !== "") {
+    rows.push(row("run", "Run", buildRunValue(task)));
+    // Detail-only: the list row carries no `job_run_worktree`, so these rows
+    // appear once the task detail read lands.
+    const worktree = task.job_run_worktree;
+    if (worktree) {
+      rows.push(row("run-branch", "Branch", buildRunWorktreeValue(worktree.branch, "branch", worktree.unrecorded)));
+      rows.push(row("run-worktree", "Worktree", buildRunWorktreeValue(worktree.worktree_path, "worktree path", worktree.unrecorded)));
+    }
+  }
   const hands = buildHandsChain(task);
   if (hands) rows.push(row("hands", "Handled by", hands));
   // One row per relation type; its ids sit inline and each opens its task.
@@ -3964,6 +3973,21 @@ function buildRunValue(task) {
   if (task.job_run_navigable === false) notes.push("No owner-local run for this id — inspect it on its execution machine.");
   if (!known) notes.push(`Execution machine ${formatExecutionLocation(null)}.`);
   if (notes.length) value.appendChild(infoHint(notes.join("\n")));
+  return value;
+}
+
+// The run's branch or worktree path on its execution machine, as the detail
+// read's `job_run_worktree` reports it from the run's own record; a click
+// copies the exact value. A value the run never recorded reads
+// "unavailable", with the reason as the hint, never a derived guess.
+function buildRunWorktreeValue(recorded, noun, unrecorded) {
+  const value = el("span", { class: "value run-worktree-value" });
+  if (recorded) {
+    value.appendChild(makeCopyButton(recorded, { class: "mono run-worktree-copy", title: `Copy the run's ${noun}` }));
+    return value;
+  }
+  value.appendChild(el("span", { class: "fact-note", text: "unavailable" }));
+  if (unrecorded) value.appendChild(infoHint(unrecorded));
   return value;
 }
 

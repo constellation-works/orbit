@@ -37,6 +37,7 @@ fn handoff_attribution_keeps_older_lifecycle_readers_and_replays_working() {
         .with_attribution(ClaimAttribution {
             crew: Some("reported-crew".into()),
             crew_model: Some("reported-model".into()),
+            ..ClaimAttribution::default()
         });
     let mutation = ClaimMutation::AcceptHandoff(delivery.handoff.clone());
     let boundary = &delivery.owner.backends.commit_boundary;
