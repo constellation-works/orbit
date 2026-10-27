@@ -1555,6 +1555,10 @@ For the full persisted pass, including every skip and any `pass_error`, run
 - `authority`: the run was started with `--complete` and the drain was not;
 - `not_orbit_pull_request`: a branch, body or author that is not Orbit's;
 - `pull_request_not_recorded`, `pull_request_not_open` or `no_pull_request`;
+- `failure_handoff`: the run published its pull request through its failure
+  handoff instead of `pr_open`, so the drain cannot resume it. When the
+  published candidate is sound, run
+  `orbit task requeue <task-id> --reason '<why this candidate can continue>'`;
 - `no_blocker` and `checked_recently`: nothing to repair;
 - `mergeability_unknown`: GitHub is still calculating this pull request's
   mergeability; other candidates in the pass are still checked;

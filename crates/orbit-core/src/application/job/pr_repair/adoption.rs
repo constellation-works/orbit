@@ -56,7 +56,9 @@ use std::time::{Duration, Instant};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{JobRunOrder, JobRunQuery};
 use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskStatus, names_task_delivery_pull_request};
-use orbit_types::workflow::{DEFAULT_BRANCH_PREFIX, JobRun, JobRunState, PrAutoFixBlocker};
+use orbit_types::workflow::{
+    DEFAULT_BRANCH_PREFIX, JobRun, JobRunState, PipelineState, PrAutoFixBlocker,
+};
 use serde_json::{Value, json};
 
 use super::super::orphan_adoption::AdoptionAuthority;
@@ -491,6 +493,18 @@ impl OrbitRuntime {
                 ) {
                     (Some(number), Some(head)) => (number.to_string(), head.to_string()),
                     _ => {
+                        if Self::run_published_failure_handoff_pr(&state, task_id, &pr_number) {
+                            return skip(
+                                "failure_handoff",
+                                "the run published its pull request through its failure handoff \
+                                 instead of pr_open, so the drain cannot resume it; when the \
+                                 published candidate is sound, run `orbit task requeue <task-id> \
+                                 --reason '<why this candidate can continue>'` (the requeue can \
+                                 refuse when the task specification changed or no handoff receipt \
+                                 binds the candidate)"
+                                    .to_string(),
+                            );
+                        }
                         return skip(
                             "no_pull_request",
                             "the run did not open a pull request".to_string(),
@@ -635,6 +649,48 @@ impl OrbitRuntime {
             blocker,
             marker,
         }))
+    }
+
+    /// Whether `state` carries the failure handoff that published `pr_number`
+    /// for `task_id` instead of a `pr_open` checkpoint: activity
+    /// `pr_failure_handoff` with a blocked-PR decision naming this task and
+    /// its recorded pull request. The number may be recorded as a string or
+    /// a JSON number, as the handoff receipt accepts both.
+    fn run_published_failure_handoff_pr(
+        state: &PipelineState,
+        task_id: &str,
+        pr_number: &str,
+    ) -> bool {
+        let Some(checkpoint) = state.failure_activity_checkpoint.as_ref() else {
+            return false;
+        };
+        if checkpoint.activity_name != "pr_failure_handoff" {
+            return false;
+        }
+        let output = &checkpoint.output;
+        if !matches!(
+            output.get("decision").and_then(Value::as_str),
+            Some("blocked_failure_pr" | "blocked_conflict_pr")
+        ) {
+            return false;
+        }
+        if output.get("task_id").and_then(Value::as_str) != Some(task_id) {
+            return false;
+        }
+        let published = output
+            .get("pr_number")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                output
+                    .get("pr_number")
+                    .and_then(Value::as_u64)
+                    .map(|number| number.to_string())
+            });
+        if published.as_deref() != Some(pr_number) {
+            return false;
+        }
+        true
     }
 
     /// Whether checkpoint resume accepts `run` rewound for `repair`.
