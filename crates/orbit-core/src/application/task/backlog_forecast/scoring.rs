@@ -7,8 +7,12 @@
 //! complexity changed (re-scoped), is excluded and counted; a forecast with
 //! an exclusion is not scored as a whole, since its totals covered work that
 //! no longer exists.
+//!
+//! Hits are kept per model version: a version's quantiles mean something
+//! different from another's, so the top-level hit rates describe the
+//! current version alone and `by_model_version` holds every version's own.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::StoredBacklogForecast;
@@ -88,19 +92,48 @@ fn round(value: f64) -> f64 {
     (value * 100.0).round() / 100.0
 }
 
+/// One model version's hit rates.
+#[derive(Default)]
+struct VersionHits {
+    forecasts: u64,
+    task: [Hits; 3],
+    total: [Hits; 3],
+}
+
+impl VersionHits {
+    fn task_level(&self) -> Value {
+        json!({
+            "hours": self.task[0].to_json(),
+            "tokens": self.task[1].to_json(),
+            "usd": self.task[2].to_json(),
+        })
+    }
+
+    fn forecast_level(&self) -> Value {
+        json!({
+            "time_to_drain_hours": self.total[0].to_json(),
+            "tokens": self.total[1].to_json(),
+            "usd": self.total[2].to_json(),
+        })
+    }
+}
+
 /// Score `stored` (newest first) against the tasks' current records, their
-/// done times and their invocations.
+/// done times and their invocations. The top-level hit rates are
+/// `current_version`'s.
 pub(super) fn score_backlog_forecasts(
     stored: &[StoredBacklogForecast],
     tasks: &HashMap<String, Task>,
     done_at: &HashMap<String, DateTime<Utc>>,
     runs: &HashMap<String, Vec<ForecastRun>>,
+    current_version: u32,
 ) -> Value {
-    let mut task_hits = [Hits::default(); 3];
-    let mut total_hits = [Hits::default(); 3];
+    let mut versions: BTreeMap<u32, VersionHits> = BTreeMap::new();
     let mut all_excluded = Excluded::default();
     let mut forecasts = Vec::new();
     for forecast in stored {
+        let hits = versions.entry(forecast.model_version).or_default();
+        hits.forecasts += 1;
         let stored_tasks: Vec<StoredTask> =
             serde_json::from_str(&forecast.tasks_json).unwrap_or_default();
         let result: Value = serde_json::from_str(&forecast.result_json).unwrap_or(Value::Null);
@@ -143,7 +176,7 @@ pub(super) fn score_backlog_forecasts(
             let actuals = [Some(used.hours), used.tokens, used.usd];
             for (index, metric) in METRICS.iter().enumerate() {
                 if let Some(actual) = actuals[index] {
-                    task_hits[index].add(actual, &stored_task.forecast[*metric]);
+                    hits.task[index].add(actual, &stored_task.forecast[*metric]);
                 }
             }
         }
@@ -161,7 +194,7 @@ pub(super) fn score_backlog_forecasts(
         if whole && let Some(actual) = &actual {
             for (index, key) in TOTALS.iter().enumerate() {
                 if let Some(value) = actual[*key].as_f64() {
-                    total_hits[index].add(value, &result[*key]);
+                    hits.total[index].add(value, &result[*key]);
                 }
             }
         }
@@ -186,18 +219,28 @@ pub(super) fn score_backlog_forecasts(
             "actual": actual,
         }));
     }
+    let current = versions.remove(&current_version).unwrap_or_default();
+    let mut by_model_version: Vec<Value> = versions
+        .iter()
+        .map(|(version, hits)| (*version, hits))
+        .chain(std::iter::once((current_version, &current)))
+        .filter(|(_, hits)| hits.forecasts > 0)
+        .map(|(version, hits)| {
+            json!({
+                "model_version": version,
+                "forecasts": hits.forecasts,
+                "task_level": hits.task_level(),
+                "forecast_level": hits.forecast_level(),
+            })
+        })
+        .collect();
+    by_model_version.sort_by_key(|row| std::cmp::Reverse(row["model_version"].as_u64()));
     json!({
+        "model_version": current_version,
         "forecasts": forecasts,
-        "task_level": {
-            "hours": task_hits[0].to_json(),
-            "tokens": task_hits[1].to_json(),
-            "usd": task_hits[2].to_json(),
-        },
-        "forecast_level": {
-            "time_to_drain_hours": total_hits[0].to_json(),
-            "tokens": total_hits[1].to_json(),
-            "usd": total_hits[2].to_json(),
-        },
+        "task_level": current.task_level(),
+        "forecast_level": current.forecast_level(),
+        "by_model_version": by_model_version,
         "excluded": all_excluded.to_json(),
     })
 }

@@ -17,14 +17,22 @@
 //!   unassessed or its complexity has none.
 //! - The drain is simulated on the drain's leaf-run ceiling
 //!   ([`OrbitRuntime::drain_concurrency_ceiling`]), with no new arrivals
-//!   unless `arrivals=on`.
+//!   unless `arrivals=on`. Each iteration admits work as the drain would
+//!   [ORB-18686]: in its dispatch order, once in-forecast dependencies have
+//!   finished, never beside overlapping locks, with unknown footprints run
+//!   alone and surface reservations honoured (`schedule.rs`, through the
+//!   admission module's forecast adapter). A task whose dependency the
+//!   forecast cannot schedule leaves the full-backlog totals unknown and is
+//!   reported with a schedulable subset (`dependencies.rs`).
 //!
 //! The canonical forecast (default lookback, the live ceiling, no arrivals)
 //! is stored at most once per workspace per [`STORE_INTERVAL_MINUTES`], and
 //! the owner clock records it even without reads; every request scores the
 //! newest stored forecasts.
 
+mod dependencies;
 mod model;
+mod schedule;
 mod scoring;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -34,7 +42,7 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{BacklogForecastStoreBackend as _, StoredBacklogForecast};
 use orbit_types::task::{
-    Task, TaskPriority, TaskStatus, UNSET_BUCKET, auto_task_template, complexity_bucket,
+    Task, TaskReferenceIndex, TaskStatus, UNSET_BUCKET, auto_task_template, complexity_bucket,
 };
 use serde_json::{Value, json};
 
@@ -173,15 +181,6 @@ pub(super) fn forecast_usage(runs: &[ForecastRun], after: Option<DateTime<Utc>>)
     }
     used.hours = busy.num_seconds().max(0) as f64 / 3600.0;
     used
-}
-
-fn priority_rank(priority: TaskPriority) -> u8 {
-    match priority {
-        TaskPriority::Critical => 0,
-        TaskPriority::High => 1,
-        TaskPriority::Medium => 2,
-        TaskPriority::Low => 3,
-    }
 }
 
 /// Complexity tier → the crews its pool draws (weight above zero).
@@ -350,20 +349,9 @@ fn calculate_backlog_forecast(
             )
         })
         .collect();
-    // In-progress work holds its slots first, then the backlog in dispatch
-    // order, then proposed work (counted only if approved).
-    queued.sort_by(|left, right| {
-        let stage = |task: &Task| match task.status {
-            TaskStatus::InProgress => 0,
-            TaskStatus::Backlog => 1,
-            _ => 2,
-        };
-        stage(left)
-            .cmp(&stage(right))
-            .then(priority_rank(left.priority).cmp(&priority_rank(right.priority)))
-            .then(left.created_at.cmp(&right.created_at))
-            .then(left.id.to_string().cmp(&right.id.to_string()))
-    });
+    // A stable item order; the simulation admits in the drain's own
+    // dispatch order, interleaving proposed work when approved.
+    queued.sort_by(|left, right| left.id.cmp(&right.id));
     let items: Vec<Item> = queued
         .iter()
         .map(|task| {
@@ -386,6 +374,7 @@ fn calculate_backlog_forecast(
             };
             Item {
                 task_id: id,
+                title: task.title.clone(),
                 complexity,
                 crews,
                 in_progress,
@@ -423,8 +412,27 @@ fn calculate_backlog_forecast(
         history: &history,
     });
 
-    let forecast =
-        model::simulate_backlog_forecast(&items, &resolved, &history, slots, arrivals.as_ref());
+    let status_by_id = runtime.dependency_status_index(queued.iter().copied())?;
+    let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
+    let plan = dependencies::plan_forecast_dependencies(&queued, &status_by_id, &reference_index);
+    let workspace: BTreeMap<String, Task> = tasks
+        .iter()
+        .map(|(id, task)| (id.clone(), task.clone()))
+        .collect();
+    let admission = runtime.forecast_admission(
+        queued.iter().map(|task| (*task).clone()).collect(),
+        &workspace,
+        now,
+    );
+    let forecast = model::simulate_backlog_forecast(
+        &items,
+        &resolved,
+        &history,
+        &admission,
+        &plan,
+        slots,
+        arrivals.as_ref(),
+    );
 
     let coverage = |proposed: bool| {
         let mut counts = BTreeMap::from([
@@ -436,13 +444,32 @@ fn calculate_backlog_forecast(
             ("uncovered_model", 0),
             ("uncosted", 0),
             ("no_history", 0),
+            ("dependency_unforecastable", 0),
+            ("unverifiable_dependencies", 0),
+            ("review_lock_overlaps", 0),
         ]);
+        let reasons = if proposed {
+            &plan.approved
+        } else {
+            &plan.backlog
+        };
+        let mut unforecastable: BTreeMap<&str, u64> = BTreeMap::new();
         let mut bump = |key: &'static str| *counts.entry(key).or_default() += 1;
-        for (item, resolved) in items.iter().zip(&resolved) {
+        for (index, (item, resolved)) in items.iter().zip(&resolved).enumerate() {
             if item.proposed != proposed {
                 continue;
             }
             bump("tasks");
+            if let Some(reason) = reasons[index] {
+                bump("dependency_unforecastable");
+                *unforecastable.entry(reason).or_default() += 1;
+            }
+            if admission.overlaps_review_lock(index) {
+                bump("review_lock_overlaps");
+            }
+            for _ in 0..plan.unverifiable[index] {
+                bump("unverifiable_dependencies");
+            }
             if item.complexity == UNSET_BUCKET {
                 bump("unassessed");
             }
@@ -467,7 +494,15 @@ fn calculate_backlog_forecast(
                 bump("uncosted");
             }
         }
-        counts
+        let mut coverage: serde_json::Map<String, Value> = counts
+            .into_iter()
+            .map(|(key, count)| (key.to_string(), json!(count)))
+            .collect();
+        coverage.insert(
+            "dependency_unforecastable_reasons".into(),
+            json!(unforecastable),
+        );
+        Value::Object(coverage)
     };
     let status_count =
         |status: TaskStatus| tasks.values().filter(|task| task.status == status).count();
@@ -479,6 +514,11 @@ fn calculate_backlog_forecast(
         "auto_concurrency_mode": runtime.auto_concurrency_settings().mode,
         "arrivals": options.arrivals,
         "iterations": model::ITERATIONS,
+        "horizon_hours": schedule::HORIZON_HOURS,
+        "admission_factors": model::ADMISSION_FACTORS
+            .iter()
+            .map(|(factor, revision)| (factor.to_string(), json!(revision)))
+            .collect::<serde_json::Map<String, Value>>(),
         "min_cell_samples": model::MIN_CELL_SAMPLES,
         "gap_bridge_hours": GAP_BRIDGE_HOURS,
         "history_deliveries": history.len(),
@@ -488,11 +528,20 @@ fn calculate_backlog_forecast(
     let mut stored_now = None;
     let backlog_count = items.iter().filter(|item| !item.proposed).count();
     if options.canonical() && backlog_count > 0 && !history.is_empty() {
+        let predictions: HashMap<&str, &Value> = forecast.backlog["task_predictions"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|row| Some((row["id"].as_str()?, row)))
+            .collect();
         let stored_tasks: Vec<Value> = items
             .iter()
             .zip(&resolved)
-            .filter(|(item, _)| !item.proposed)
-            .map(|(item, resolved)| {
+            .enumerate()
+            .filter(|(_, (item, _))| !item.proposed)
+            .map(|(index, (item, resolved))| {
+                let prediction = predictions.get(item.task_id.as_str());
+                let field = |key: &str| prediction.map_or(Value::Null, |row| row[key].clone());
                 json!({
                     "id": item.task_id,
                     "complexity": item.complexity,
@@ -500,15 +549,29 @@ fn calculate_backlog_forecast(
                     "basis": resolved.basis.key(),
                     "cell_samples": resolved.cell_samples,
                     "forecast": resolved.marginals(&history, item.spent),
+                    "dependencies": plan.edges[index]
+                        .iter()
+                        .map(|dep| items[*dep].task_id.as_str())
+                        .collect::<Vec<_>>(),
+                    "footprint": admission.surface_hash(index),
+                    "unforecastable": plan.backlog[index],
+                    "predicted_start_hours": field("predicted_start_hours"),
+                    "predicted_start_rank": field("predicted_start_rank"),
+                    "completion_probability": field("completion_probability"),
                 })
             })
             .collect();
+        // Per-task predictions are stored once, with each task above.
+        let mut result = forecast.backlog.clone();
+        if let Some(result) = result.as_object_mut() {
+            result.remove("task_predictions");
+        }
         let row = StoredBacklogForecast {
             workspace_id: String::new(),
             forecast_at: now,
             model_version: model::MODEL_VERSION,
             inputs_json: inputs.to_string(),
-            result_json: forecast.backlog.to_string(),
+            result_json: result.to_string(),
             tasks_json: Value::Array(stored_tasks).to_string(),
         };
         match runtime.record_backlog_forecast(row, Duration::minutes(STORE_INTERVAL_MINUTES)) {
@@ -521,7 +584,8 @@ fn calculate_backlog_forecast(
     } else {
         stored
     };
-    let calibration = scoring::score_backlog_forecasts(&stored, &tasks, &done_at, &runs);
+    let calibration =
+        scoring::score_backlog_forecasts(&stored, &tasks, &done_at, &runs, model::MODEL_VERSION);
 
     Ok(json!({
         "model_version": model::MODEL_VERSION,
@@ -531,6 +595,12 @@ fn calculate_backlog_forecast(
             "arrivals": if options.arrivals { "recent_rate" } else { "none" },
             "excluded_statuses": ["review", "blocked", "someday"],
             "arrival_missing_metrics": "propagate_null",
+            // Admission factors the simulation does not model yet: review
+            // locks are counted in coverage, arrivals take a slot but hold
+            // no lock, and static eligibility gates are not replayed.
+            "review_lock_holders": "not_modelled",
+            "arrival_conflicts": "slot_only",
+            "static_eligibility": "not_modelled",
         },
         "backlog": {
             "backlog": status_count(TaskStatus::Backlog),

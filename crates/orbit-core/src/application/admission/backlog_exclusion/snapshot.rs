@@ -526,7 +526,7 @@ pub(super) fn backlog_snapshot_in_mode(
 }
 
 /// The backlog tasks whose frozen batch nears its deadline [ORB-14624].
-fn expiring_backlog_batches(
+pub(in crate::application::admission) fn expiring_backlog_batches(
     runtime: &OrbitRuntime,
     backlog: &[&Task],
 ) -> BTreeMap<String, DateTime<Utc>> {
