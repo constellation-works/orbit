@@ -403,7 +403,78 @@ fn a_retained_forecast_reports_the_current_status_of_a_done_task() {
     );
 }
 
+/// A finished drain keeps its built final pass under the current-pass key as
+/// well as the retained-forecast key. Readiness must expose both as the same
+/// timestamped history and retain the current status of a done task.
+fn a_terminal_built_forecast_is_projected_as_current_history() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace)
+        .unwrap()
+        .with_host_resource_probe(PressureProbe::calm());
+    let done = add(
+        &runtime,
+        "finished candidate",
+        TaskStatus::Done,
+        None,
+        &[],
+        &["file:README.md"],
+    );
+    let now = Utc::now();
+    let jobs = runtime.stores().jobs();
+    let run = jobs
+        .insert_job_run("workspace_auto_pipeline", 1, now, Some(json!({})), None)
+        .unwrap();
+    jobs.mark_job_run_running(&run.run_id, now, std::process::id())
+        .unwrap();
+    let forecast: DrainAdmissionForecast = serde_json::from_value(json!({
+        "mode": "enforce",
+        "forecast_at": "2026-10-27T03:59:00Z",
+        "admitted": [{ "task_id": done, "profile_source": "exact" }]
+    }))
+    .unwrap();
+    let mut state = PipelineState::new(
+        run.run_id.clone(),
+        "workspace_auto_pipeline".into(),
+        json!({}),
+    );
+    state.pull_drain.record_admission_pass(
+        serde_json::from_value(json!({
+            "recorded_at": "2026-10-27T03:59:00Z",
+            "queued": 0,
+            "admission_forecast": forecast
+        }))
+        .unwrap(),
+    );
+    runtime.write_run_state(&run.run_id, &state).unwrap();
+    jobs.finalize_job_run(&run.run_id, JobRunState::Success, now, Some(0))
+        .unwrap();
+
+    let report = readiness(&runtime, &[]).unwrap();
+    let current = &report["capacity"]["admission_forecast"];
+    assert_eq!(
+        current["drain_live"], false,
+        "a finished drain's final pass is historical (ORB-19041): {report}"
+    );
+    assert_eq!(
+        current["forecast_at"], "2026-10-27T03:59:00Z",
+        "a finished drain's built forecast keeps its timestamp (ORB-19041): {current}"
+    );
+    assert_eq!(
+        current["task_statuses"][done.as_str()],
+        "done",
+        "a terminal task keeps its current status on the built final pass (ORB-19041): {current}"
+    );
+    assert_eq!(
+        report["capacity"]["last_admission_forecast"], *current,
+        "the current final pass and retained forecast are the same observation (ORB-19041): {report}"
+    );
+}
+
 crate::scenario_table!(
     retained_forecast_names_current_task_status_scenarios,
     a_retained_forecast_reports_the_current_status_of_a_done_task,
+    a_terminal_built_forecast_is_projected_as_current_history,
 );

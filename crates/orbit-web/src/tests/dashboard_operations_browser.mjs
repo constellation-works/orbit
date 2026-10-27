@@ -175,6 +175,30 @@ try {
     });
     initTabs();
   });
+  const initialDockMode = await page.locator('#side-dock').getAttribute('data-mode');
+  const captureDrainForecast = async (scenario) => {
+    await page.evaluate(async (name) => {
+      await globalThis.setDrainForecastScenarioForScreenshot(name);
+      const { setDockMode } = await import('/js/log-tail.js');
+      const { setActiveTab } = await import('/js/router.js');
+      setDockMode('drain');
+      setActiveTab('auto-drain');
+    }, scenario);
+    const forecast = page.locator('#auto-drain-body .drain-forecast');
+    await forecast.waitFor({ state: 'visible' });
+    await forecast.screenshot({ path: path.join(evidence, `drain-forecast-${scenario}-dark-1440.png`), animations: 'disabled' });
+    await page.setViewportSize({ width: 375, height: 812 });
+    await forecast.screenshot({ path: path.join(evidence, `drain-forecast-${scenario}-dark-375.png`), animations: 'disabled' });
+    await page.setViewportSize({ width: 1440, height: 1000 });
+  };
+  await captureDrainForecast('live');
+  await captureDrainForecast('terminal');
+  await page.evaluate(async (mode) => {
+    const { setDockMode } = await import('/js/log-tail.js');
+    const { setActiveTab } = await import('/js/router.js');
+    if (mode) setDockMode(mode);
+    setActiveTab('operations');
+  }, initialDockMode);
   const viewports = [
     { name: '1440', width: 1440, height: 1000 },
     { name: '672', width: 672, height: 900 },

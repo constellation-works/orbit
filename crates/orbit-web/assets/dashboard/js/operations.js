@@ -3366,24 +3366,29 @@ function autoDrainForecast(payload) {
   const current = asForecast(capacity.admission_forecast);
   const last = asForecast(capacity.last_admission_forecast);
   const section = el("div", { class: "drain-forecast", role: "group", "aria-label": "Admission forecast" });
-  if (forecastBuiltAt(current)) {
+  const currentBuilt = forecastBuiltAt(current);
+  const currentRetained = currentBuilt && current.drain_live === false;
+  if (currentBuilt && !currentRetained) {
     section.dataset.forecastState = "built";
     section.append(forecastBlock(current, { retained: false }));
     placeBacklogForecast(section);
     return section;
   }
-  const retained = forecastBuiltAt(last);
+  const retainedForecast = currentRetained ? current : last;
+  const retained = forecastBuiltAt(retainedForecast);
   section.dataset.forecastState = retained ? "retained" : "none";
-  const decisions = forecastHasDecisions(current) ? forecastDecisions(current, current.mode === "shadow") : null;
+  const decisions = !currentRetained && forecastHasDecisions(current)
+    ? forecastDecisions(current, current.mode === "shadow")
+    : null;
   if (decisions || !retained) {
     section.append(forecastHead("Forecast", el("span", { class: "drain-forecast-state", text: "no forecast this pass" })));
     if (decisions) section.append(decisions);
   }
   if (retained) {
-    section.append(forecastBlock(last, {
+    section.append(forecastBlock(retainedForecast, {
       retained: true,
-      statuses: forecastTaskStatuses(payload, last),
-      windowEnded: retainedWindowEnded(payload, last),
+      statuses: forecastTaskStatuses(payload, retainedForecast),
+      windowEnded: retainedWindowEnded(payload, retainedForecast),
     }));
   }
   placeBacklogForecast(section);
