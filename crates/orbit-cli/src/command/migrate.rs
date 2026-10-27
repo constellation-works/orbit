@@ -10,14 +10,12 @@ use serde_json::json;
 use crate::command::{Block, CommandOut, Execute, Payload};
 
 // ORB-10012: source provenance for the versioned migration surface.
-/// `orbit migrate` — versioned `.orbit/` upgrade surface.
+/// Inspect or apply pending `.orbit/` workspace upgrades.
 ///
-/// Both migration ledgers auto-apply on workspace open (the SQLite schema
-/// ledger inside `Store::open`, the workspace-layout registry in the runtime
-/// pre-flight), so the apply path simply opens the runtime and reports what
-/// happened. The default and `--dry-run` inspect *without* opening a runtime,
-/// which is the only way to list pending migrations instead of silently
-/// applying them. `--confirm` selects the apply path.
+/// By default, this command lists pending upgrades without applying them.
+/// `--dry-run` explicitly requests the same inspection, while `--confirm`
+/// applies the pending upgrades. Orbit also applies required workspace
+/// upgrades automatically when it opens a workspace.
 #[derive(Args)]
 #[command(about = "Apply or inspect pending .orbit layout and store schema migrations")]
 pub struct MigrateCommand {
