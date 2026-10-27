@@ -67,6 +67,7 @@
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
           <button class="tab" data-tab="jobs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Jobs</span><span class="rail-count" id="rail-count-jobs"></span></button>
           <button class="tab" data-tab="drain" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12l-4 6v5l-4 2v-7z"/></svg><span class="rail-label">Drain</span></button>
+          <button class="tab" data-tab="leases" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="9" width="10" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg><span class="rail-label">Leases</span></button>
           </div>
 
           <div class="rail-group">
@@ -782,6 +783,43 @@
             <div class="empty-state">
               <div class="icon">✧</div>
               <div class="text">No friction selected.</div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </section>
+    <section class="tab-pane" data-tab="leases" tabindex="0" role="region" aria-labelledby="topbar-crumb">
+      <!-- Path leases per path and the recent landing notices, read through
+           Orbit Web's lease routes. Read-only: requests, renewals and
+           releases stay on `orbit lease` and the lease tools. -->
+      <main class="leases-layout">
+        <section class="panel" id="leases-panel">
+          <header>
+            <span>Leases</span>
+            <span class="count" id="leases-count">-</span>
+          </header>
+          <p class="leases-explainer">
+            Active and queued path leases in this workspace, by path: who holds each path and who waits for it, oldest request first.
+            Leases are requested, renewed and released with <span class="mono">orbit lease</span> or the lease tools.
+          </p>
+          <div class="body" id="leases-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
+              <div class="skeleton skeleton-row" style="width: 80%"></div>
+            </div>
+          </div>
+        </section>
+        <section class="panel" id="lease-landings-panel">
+          <header>
+            <span>Recent landings</span>
+            <span class="count" id="lease-landings-count">-</span>
+          </header>
+          <p class="leases-explainer">
+            Landed commits on a lease's base branch that changed paths the lease holds, newest first.
+          </p>
+          <div class="body" id="lease-landings-body">
+            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
+              <div class="skeleton skeleton-row"></div>
             </div>
           </div>
         </section>
