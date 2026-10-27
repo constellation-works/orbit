@@ -107,18 +107,29 @@ impl WindowBoundaryTokens {
         // redactor only recognizes JSON/header spellings. The separator may
         // precede this token (key = value, key: value) or belong to it
         // (key=value/key =value).
-        let assignment_key = if let Some(key) = prefix.trim_end().strip_suffix(['=', ':']) {
-            key.split_whitespace().last()
-        } else {
-            token.split_once('=').and_then(|(key, _)| {
-                if key.is_empty() {
-                    prefix.split_whitespace().last()
-                } else {
-                    Some(key)
-                }
-            })
-        };
-        let api_key_assignment = assignment_key.is_some_and(|key| {
+        let prefix_assignment_key = prefix
+            .trim_end()
+            .strip_suffix(['=', ':'])
+            .and_then(|key| key.split_whitespace().last());
+        let token_assignment_key = token
+            .split_once('=')
+            .map(|(key, _)| key)
+            .filter(|key| !key.is_empty());
+        let empty_key_fallback = token.split_once('=').and_then(|(key, _)| {
+            if key.is_empty() {
+                prefix_assignment_key.or_else(|| prefix.split_whitespace().last())
+            } else {
+                None
+            }
+        });
+        let api_key_assignment = [
+            token_assignment_key,
+            prefix_assignment_key,
+            empty_key_fallback,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|key| {
             let key = key.trim_matches(['\'', '"', '[', ']', '{', '}', '(', ')']);
             // Normalize separators and case for one suffix check, while
             // retaining source positions to distinguish `capiKey` from a

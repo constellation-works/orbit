@@ -296,11 +296,15 @@ fn every_selected_window_hides_credential_fragments() {
     const FRAGMENT_BYTES: usize = 12;
     let github_token = format!("ghp_{}", "a".repeat(36));
     let header_value = "q7Lx2Rv9Kp4Nm8Zs3Tw6";
+    let equals_value = "B6w2R9k4N7c1F3a8Y5mQ0";
+    let colon_value = "Z8p3T1v6H4d9L2x5C7nA0";
     let service_value = "Yh5Dc8Bn2Mj6Qe1Ua4Wr9";
     let split_value = "Gt3Pk7Lz0Xv5Fs8Ob2Hd6";
     let raw = format!(
         "Authorization: Bearer {github_token}\n\
          HTTPAPIKey={header_value}\n\
+         note= HTTPAPIKey={equals_value}\n\
+         Error: HTTPAPIKey={colon_value}\n\
          2026-10-26T14:42:00.0000000Z SERVICEAPIKey: {service_value}\n\
          api_key:\n\
          {split_value}\n"
@@ -316,6 +320,8 @@ fn every_selected_window_hides_credential_fragments() {
             span("Authorization:", github_token.as_str()),
         ),
         (header_value, span("HTTPAPIKey=", header_value)),
+        (equals_value, span("note=", equals_value)),
+        (colon_value, span("Error:", colon_value)),
         (service_value, span("SERVICEAPIKey:", service_value)),
         (split_value, span("api_key:", split_value)),
     ];
