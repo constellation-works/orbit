@@ -1084,7 +1084,7 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
             let mut detail =
                 json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")));
             let extras = detail.as_object_mut().unwrap();
-            for key in ["status_transitions", "job_run_navigable"] {
+            for key in ["status_transitions", "job_run_navigable", "riskiness"] {
                 assert!(extras.remove(key).is_some(), "dashboard extra `{key}`");
             }
             assert!(
@@ -1285,6 +1285,7 @@ fn task_detail_includes_blocked_guidance_and_list_rows_omit_it() {
                 "job_run_navigable",
                 "escalation_triage",
                 "why_stuck",
+                "riskiness",
             ] {
                 assert!(stripped.remove(key).is_some(), "dashboard extra `{key}`");
             }

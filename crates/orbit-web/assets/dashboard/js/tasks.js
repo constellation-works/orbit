@@ -6,6 +6,7 @@ import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
+import { buildRiskChip, buildRiskDetail, buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, buildExecutionProvenance, formatExecutionLocation, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims, registeredMachineHost } from './distributed.js';
 
 const $ = (id) => document.getElementById(id);
@@ -3682,9 +3683,13 @@ function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
     el("span", { class: "visually-hidden", text: "Runs on: " }),
     buildOsReadout(task),
   ]));
+  const risk = buildRiskChip(task);
+  if (risk) levers.appendChild(risk);
   if (showsEditor("tags")) levers.appendChild(el("div", { class: "task-levers-tags" }, [editor("tags")]));
 
   const head = el("div", { class: "task-meta-block" }, [levers]);
+  const riskDetail = buildRiskDetail(task);
+  if (riskDetail) head.appendChild(riskDetail);
   const lifecycle = buildLifecycleStrip(task.status);
   if (lifecycle) head.appendChild(lifecycle);
   const stageStrip = buildStageStrip(task);
@@ -6355,7 +6360,7 @@ export function renderTasks(tasks, context) {
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -6367,6 +6372,7 @@ export function renderTasks(tasks, context) {
           makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" }),
           t.status === "backlog" ? buildRowReason(t) : null,
           run ? buildRunCell(t) : null,
+          buildRiskRowPart(t),
         ]);
         const [prefixes, rest] = splitTitlePrefix(t.title);
         const tags = [

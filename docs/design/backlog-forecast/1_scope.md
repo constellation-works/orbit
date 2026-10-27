@@ -15,7 +15,7 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 # Scope: backlog forecast v2 from drain admission
 
-Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. All v2 rules and fields in this document are planned until their task lands. “v2” names the feature revision; the current numeric `MODEL_VERSION` is already **2**, so implementations must increment from the value they find, not reset it to 2.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690]; every other v2 rule and field in this document is planned until its task lands. “v2” names the feature revision; the current numeric `MODEL_VERSION` is already **2**, so implementations must increment from the value they find, not reset it to 2.
 
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/task/backlog_forecast.rs`, with simulation in `backlog_forecast/model.rs` and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
@@ -123,6 +123,15 @@ Use the configured `workflow.regression_risk.window_days` (default 30) and `min_
 
 Task row: percentage plus an uncertainty/partial-support marker, or “No estimate” with its reason. Task detail and the row tooltip: probability, window/cutoff, distinct support, regressed counts, driving files/rates, uncovered anchors, resolved crew/complexity and adjustment/fallback basis. Task list/detail APIs expose the same `riskiness` object and estimator version; it is derived, not a persisted task policy field. Batch/cache shared facts for task lists so scores do not introduce per-row history scans or delay task mutations. Existing hotspot prompt marks keep their own threshold and purpose.
 
+Shipped in [ORB-18690] as estimator version **1** (`TASK_RISKINESS_ESTIMATOR_VERSION`), in `crates/orbit-core/src/application/codebase/riskiness.rs`. `OrbitRuntime::task_riskiness_model` reads the windowed regression facts once (`scan_regressions`, the same `CodebaseFacts` and `regression_rows` touching lists the Regressions ranking counts) and `TaskRiskinessModel::estimate` scores any number of tasks from that model without another history read. It reads `window_days` and `min_support` from `workflow.regression_risk` regardless of its `enabled` switch, which governs only the prompt marks. A task's crew is its `crew`, else its `implemented_by`; an unassigned crew averages over the task's **complexity** crew pool (`workflow.<tier>_complexity_crews`) by positive weight; type pools (`workflow.type_complexity_crews`) are not consulted. An unassessed complexity omits the adjustment. The `riskiness` object carries:
+
+- `estimator_version`, `state` (`estimated`, `no_footprint`, `unsupported_footprint`, `insufficient_history`), `probability` and `unadjusted_probability` (the max shrunk anchor rate before the adjustment), and `support_state` (`full`, or `partial` when some anchors lack support); the probability fields are null without an estimate.
+- `window_days`, `min_support`, `since` and `observed_through` (the scan's time), and `workspace` `{tasks, regressed, base_rate}`.
+- `supporting_tasks` and `supporting_regressed` (distinct done tasks behind the supported anchors), `anchors`, `uncovered_anchors`, `unsupported_selectors`, and `driving_files` (up to three `{path, probability, support, regressed}`; a `dir:` rollup's path ends in `/`).
+- `crew`, `complexity` and `adjustment` `{state, reason, min_support, groups}`: `state` is `applied`, `pool_weighted` or `omitted`; `reason` is one of `no_complexity`, `no_crew`, `workspace_below_support`, `group_below_support`, `pool_below_support` or `pool_partial_support`; each group lists `{crew, weight, tasks, regressed, rate, applied}`. Adjustment is null without an anchor estimate.
+
+The dashboard's `GET /api/tasks`, `GET /api/tasks/all` and `GET /api/tasks/:id` attach the same object. They share one model per runtime, cached for five minutes and served stale (up to a day) while one background refresh replaces it, so only the first read after start waits for the scan. A failed scan serves `{estimator_version, state: "unavailable", probability: null}` instead of failing the task read. The forecast's [ORB-18691] work consumes `TaskRiskinessModel` directly.
+
 ### Regression follow-up work
 
 After a simulated initial task reaches done, draw Bernoulli(p) using its riskiness probability. For a task with no estimate, use the supported crew/complexity regression base rate, else workspace p0 (same minimum support), **only as a forecast prior**, count `risk_prior_fallbacks`, and leave the task UI estimate null. With no supported prior mark regression-adjusted totals unavailable (`risk_unestimated`); a labelled pre-regression baseline may remain. Never assume no footprint means no rework.
@@ -194,7 +203,7 @@ No new admission settings. `lookback_days`, `concurrency` and `arrivals=on` reta
 - `GET /api/diagnostics/backlog_forecast?workspace=…[&lookback_days=…][&concurrency=…][&arrivals=on]`: existing read-only service apart from throttled snapshot writes.
 - Analytics › Forecast: existing time/USD/token tiles, complexity table, arrival and coverage/calibration panels; add effective parallelism, critical path, waits, completion/non-drain probability, rework and version/host labels. Per-task schedule details expose predicted start range/order with support, rather than a deterministic promise.
 - Tasks drain card: retain the p50–p90 line and whole-dollar cost when known, tooltip counts/exact cost/tokens and link to Analytics › Forecast [ORB-18533]. A failed/unavailable forecast leaves primary controls usable. With v2 incomplete/unknown totals, explain the reason instead of presenting a partial backlog as drained.
-- Task rows/detail and their APIs: the shared `riskiness` object and support tooltip described above. Implementers update [user interface](../user-interface/2_design.md) with their shipped UI and capture screenshots then; this scope changes no rendered view.
+- Task rows/detail and their APIs: the shared `riskiness` object and support tooltip described above. Implementers update [user interface](../user-interface/2_design.md) with their shipped UI and capture screenshots then; this scope changes no rendered view. Shipped in the user interface design's Tasks section.
 
 ## Non-goals
 
@@ -238,7 +247,7 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 | [ORB-18687] | Invocation/run-derived review-mode cells, pending policy resolution and counted fallbacks. |
 | [ORB-18688] | Episode outcomes, censored/age-conditioned blocked returns, review residual phases, incomplete probabilities and outcome-aware scoring. |
 | [ORB-18689] | Execution-host profile/capacity inputs and shared gap fit, mode/host coverage and resource diagnostics. Remote telemetry transport stays deferred. |
-| [ORB-18690] | Reusable per-task riskiness estimator and task API/list/detail UI, with support and no-footprint states; independent estimator version. |
+| [ORB-18690] | Shipped: reusable per-task riskiness estimator (version 1) and task API/list/detail UI, with support and no-estimate states. |
 | [ORB-18691] | Risk-driven regression bundles, synthetic admission/arrival accounting, expected rework/scoring; also depends on [ORB-18690]. |
 
 ## Task References
@@ -250,7 +259,7 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 - [ORB-18687] — implements review-mode sampling.
 - [ORB-18688] — implements blocked/failed/retry outcomes.
 - [ORB-18689] — implements resource-fit concurrency.
-- [ORB-18690] — implements task riskiness APIs and UI.
+- [ORB-18690] — shipped task riskiness APIs and UI.
 - [ORB-18691] — implements forecast regression rework.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

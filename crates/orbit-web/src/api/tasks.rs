@@ -33,7 +33,7 @@ use super::{
     OptionalJson, bad_request, blocking, map_runtime_error, non_empty_string, server_error,
     validate_id,
 };
-use crate::projections::{TaskListProjection, task_detail_json};
+use crate::projections::{TaskListProjection, cached_riskiness_model, task_detail_json};
 use crate::state::DashboardState;
 
 /// Actor recorded for a dashboard-authored comment when the request supplies no
@@ -392,18 +392,23 @@ where
 /// task's `created_at`, ID, or filter membership while paging may move it across
 /// the boundary; clients that need a new live snapshot restart without a cursor.
 /// The cross-workspace `/api/tasks/all` aggregate uses the same contract.
-pub(super) async fn list_tasks(Ws(runtime): Ws, RawQuery(query): RawQuery) -> Response {
+pub(super) async fn list_tasks(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    RawQuery(query): RawQuery,
+) -> Response {
     let query = match TaskPageQuery::parse(query.as_deref()) {
         Ok(query) => query,
         Err(message) => return bad_request(message),
     };
+    let riskiness = cached_riskiness_model(&state, &runtime).await;
     match blocking("task list", move || {
         let scope = format!("workspace:{}", runtime.workspace_id()?);
         let mut query = query;
         query
             .bind_cursor(&scope)
             .map_err(orbit_core::OrbitError::InvalidInput)?;
-        Ok(task_list_page_json(&runtime, &query, &scope))
+        Ok(task_list_page_json(&runtime, &query, &scope, riskiness))
     })
     .await
     {
@@ -418,6 +423,7 @@ fn task_list_page_json(
     runtime: &OrbitRuntime,
     query: &TaskPageQuery,
     scope: &str,
+    riskiness: Option<Arc<orbit_core::application::codebase::TaskRiskinessModel>>,
 ) -> Result<Value, orbit_core::OrbitError> {
     let page = runtime.query_task_rows(&orbit_core::application::task::TaskListQuery {
         filter: query.filter(),
@@ -428,7 +434,9 @@ fn task_list_page_json(
     let total = page.total_without_cursor;
     let status_by_id = page.status_by_id;
     let attention = runtime.delivery_attention_map(page.items.iter())?;
-    let projection = TaskListProjection::new(runtime).with_delivery_attention(attention);
+    let projection = TaskListProjection::new(runtime)
+        .with_delivery_attention(attention)
+        .with_riskiness(riskiness);
     let items = page
         .items
         .iter()
@@ -484,16 +492,21 @@ fn dashboard_status_index(
     runtime.dependency_status_index([task])
 }
 
-pub(super) async fn get_task(Ws(runtime): Ws, Path(id): Path<String>) -> Response {
+pub(super) async fn get_task(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Path(id): Path<String>,
+) -> Response {
     let id = match validate_id(&id) {
         Ok(id) => id,
         Err(message) => return bad_request(message),
     };
     let id = id.to_string();
+    let riskiness = cached_riskiness_model(&state, &runtime).await;
     match blocking("task detail", move || {
         let row = runtime.get_task_row(&id)?;
         Ok(dashboard_status_index(&runtime, &row.task)
-            .and_then(|statuses| task_detail_json(&runtime, &row, &statuses)))
+            .and_then(|statuses| task_detail_json(&runtime, &row, &statuses, riskiness.as_deref())))
     })
     .await
     {

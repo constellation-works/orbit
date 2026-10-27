@@ -6,10 +6,15 @@
 //! profile, so it does not carry show-only guidance. An audit event builds on
 //! the base the CLI shares (`orbit_types::telemetry::audit_event_base_json`).
 //! The job-catalog projection lives in `orbit_core::application::job`; the
-//! list summary and the other projections are dashboard-local.
+//! list summary and the other projections are dashboard-local. List rows and
+//! the detail both carry the same `riskiness` object, estimated from one
+//! cached [`TaskRiskinessModel`].
 
 use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+
+use orbit_core::application::codebase::{TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskinessModel};
 
 use orbit_core::application::task::{
     PullRequestLinks, TaskOsReadout, TaskRow, job_run_is_locally_navigable, link_pull_requests,
@@ -21,6 +26,9 @@ use orbit_core::{AuditEvent, OrbitError, OrbitRuntime, ResolvedCrewProjection, T
 use orbit_types::task::task_base_json;
 use orbit_types::telemetry::audit_event_base_json;
 use serde_json::{Map, Value, json};
+
+use crate::runtime_memo::{TASK_RISKINESS_STALE_LIMIT, TASK_RISKINESS_TTL};
+use crate::state::DashboardState;
 
 pub(crate) fn audit_event_to_json(event: &AuditEvent) -> Value {
     let actor = event.actor();
@@ -48,20 +56,72 @@ pub(crate) fn task_to_json(
     object
 }
 
+/// The riskiness model cached for `runtime`. The first read for a runtime
+/// waits for one scan; later reads are served from the cache, stale while one
+/// background refresh replaces it. A failed scan is logged and leaves the
+/// estimate unavailable rather than failing the task read.
+pub(crate) async fn cached_riskiness_model(
+    state: &DashboardState,
+    runtime: &Arc<OrbitRuntime>,
+) -> Option<Arc<TaskRiskinessModel>> {
+    let scan_runtime = Arc::clone(runtime);
+    match state
+        .riskiness_memo()
+        .get_or_refresh(
+            runtime,
+            (),
+            TASK_RISKINESS_TTL,
+            TASK_RISKINESS_STALE_LIMIT,
+            move || scan_runtime.task_riskiness_model(),
+        )
+        .await
+    {
+        Ok(served) => Some(served.body),
+        Err(error) => {
+            tracing::warn!(%error, "task riskiness model unavailable");
+            None
+        }
+    }
+}
+
+/// A task's `riskiness` object: the model's estimate, or `unavailable` with
+/// a null probability when no model could be built.
+pub(crate) fn task_riskiness_json(model: Option<&TaskRiskinessModel>, task: &Task) -> Value {
+    let unavailable = || {
+        json!({
+            "estimator_version": TASK_RISKINESS_ESTIMATOR_VERSION,
+            "state": "unavailable",
+            "probability": null,
+        })
+    };
+    let Some(model) = model else {
+        return unavailable();
+    };
+    serde_json::to_value(model.estimate(task)).unwrap_or_else(|error| {
+        tracing::warn!(task_id = %task.id, %error, "riskiness estimate not serialisable");
+        unavailable()
+    })
+}
+
 /// `GET /api/tasks/:id`: the show record plus the dashboard extras — linked
 /// pull requests, the lifecycle transitions with their evidence requirements,
 /// run navigability and `readiness.preparing` — and, for a proposed task
 /// held by pilot warnings or a blocked task, `escalation_triage`: whether
 /// the details panel's Triage action may submit now, and why not. A blocked
 /// task, or a task whose latest delivery run is held, also carries
-/// `why_stuck`.
+/// `why_stuck`. Every task carries `riskiness`, as its list row does.
 pub(crate) fn task_detail_json(
     runtime: &OrbitRuntime,
     row: &TaskRow,
     status_by_id: &BTreeMap<String, TaskStatus>,
+    riskiness: Option<&TaskRiskinessModel>,
 ) -> Result<Value, OrbitError> {
     let mut value = task_detail_with_dashboard_extras(runtime, row, status_by_id)?;
     if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "riskiness".to_string(),
+            task_riskiness_json(riskiness, &row.task),
+        );
         if let Some(triage) = runtime.escalation_triage_eligibility_json(row)? {
             object.insert("escalation_triage".to_string(), triage);
         }
@@ -102,6 +162,8 @@ pub(crate) struct TaskListProjection {
     preparing: OnceCell<BTreeSet<String>>,
     /// Reads the origin remote once, on the page's first unlinked PR ref.
     pull_request_links: PullRequestLinks,
+    /// The page's riskiness model; `None` when it is unavailable.
+    riskiness: Option<Arc<TaskRiskinessModel>>,
 }
 
 impl TaskListProjection {
@@ -113,7 +175,13 @@ impl TaskListProjection {
             delivery_attention: BTreeMap::new(),
             preparing: OnceCell::new(),
             pull_request_links: PullRequestLinks::new(runtime),
+            riskiness: None,
         }
+    }
+
+    pub(crate) fn with_riskiness(mut self, model: Option<Arc<TaskRiskinessModel>>) -> Self {
+        self.riskiness = model;
+        self
     }
 
     pub(crate) fn with_delivery_attention(mut self, map: BTreeMap<String, Value>) -> Self {
@@ -178,6 +246,10 @@ impl TaskListProjection {
         if let Some(attention) = self.delivery_attention.get(&task.id) {
             object.insert("delivery_attention".to_string(), attention.clone());
         }
+        object.insert(
+            "riskiness".to_string(),
+            task_riskiness_json(self.riskiness.as_deref(), task),
+        );
         let mut value = Value::Object(object);
         if value.get("readiness").is_some() {
             let preparing = self

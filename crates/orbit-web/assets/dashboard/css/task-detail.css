@@ -475,6 +475,12 @@
 .task-chip-host {
   --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='2' y='2' width='20' height='8' rx='2'/%3E%3Crect x='2' y='14' width='20' height='8' rx='2'/%3E%3Cpath d='M6 6h.01M6 18h.01'/%3E%3C/svg%3E");
 }
+.task-chip-risk {
+  --chip-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z'/%3E%3Cpath d='M12 9v4M12 17h.01'/%3E%3C/svg%3E");
+  font-variant-numeric: tabular-nums;
+}
+.task-chip-risk.risk-elevated { border-color: var(--warn-line); color: var(--warn-fg); }
+.task-chip-risk.risk-none .risk-value { color: var(--fg-mute); font-weight: 400; }
 .task-chip .fact-note { color: var(--fg-mute); font-weight: 400; }
 .task-chip .value { display: inline-flex; align-items: center; gap: 6px; }
 
@@ -1827,3 +1833,18 @@ input.field-editor-input {
 .decision-option { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .decision-consequence { flex: 1 1 200px; min-width: 0; color: var(--fg-dim); font-size: 12px; overflow-wrap: anywhere; }
 .decision-pending { color: var(--fg-mute); font-size: 12px; }
+
+/* Regression risk breakdown under the levers: closed by default, its summary
+   repeating the chip's value so a phone reads it without a tooltip. */
+.task-risk { font-size: 12.5px; color: var(--fg-dim); }
+.task-risk > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; color: var(--fg-soft); }
+.task-risk > summary::-webkit-details-marker { display: none; }
+.task-risk > summary::before { content: "▸"; width: 8px; color: var(--fg-mute); }
+.task-risk[open] > summary::before { content: "▾"; }
+.task-risk-value { font-variant-numeric: tabular-nums; color: var(--fg-dim); }
+.task-risk-value.risk-elevated { color: var(--warn-fg); }
+.task-risk-value.risk-none { color: var(--fg-mute); }
+.task-risk-body { margin: 6px 0 0 16px; }
+.task-risk-body > p { margin: 2px 0; overflow-wrap: anywhere; }
+.task-risk-lead { color: var(--fg-soft); }
+.task-risk-file { padding-left: 12px; font-size: 12px; }
