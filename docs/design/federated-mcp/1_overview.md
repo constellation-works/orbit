@@ -2,7 +2,7 @@
 title: Federated MCP — Overview
 owner: grok
 last_updated: 2026-08-29
-last_validated: 2026-10-24
+last_validated: 2026-10-27
 status: Draft
 stage: shipped
 next: "—"
