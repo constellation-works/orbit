@@ -75,7 +75,7 @@ For an id-routed tool:
    call carries no selector, so the federated rule that refuses task reads on a replica
    selector (`capability_refused`) does not come into play. The prefix's host is the
    task's writer by definition. The `task_reads` entry in the federated conformance reference
-   gains the id-only routed case.
+   includes the id-only routed case.
 4. **Anything else** fails with `unknown_task_prefix`, naming the prefix and pointing to
    `orbit host list` and `orbit host add`.
 
@@ -127,6 +127,8 @@ It is accepted:
 
 - with `--workspace` on the routable task commands: `orbit task show`, `update`,
   `artifact put|get`, `review-reset`, `reconcile-review …`, and `requeue`, and on `orbit tool run`;
+- with `--workspace` on `orbit task recover-claim` and `orbit task revoke-handoff`, which are not
+  id-routed;
 - with `--pull` on `orbit run auto`.
 
 To resolve, Orbit reads the host's live workspace list and matches the workspace value by
@@ -144,7 +146,7 @@ by concatenation, which keeps federated selector rule 2.
 the value is a full selector: Orbit never picks a host by itself.
 
 Commands that open a host-local runtime directly reject `--host` at parse time. These include
-`task list`, `task add`, other task commands outside the routable set above, `run history`,
+`task list`, `task add`, other task commands outside the sets above, `run history`,
 `run logs`, `run show`, `doctor`, `workspace …`, `config …`, `update` and the deploy targets.
 Pass `--host` after the routable task subcommand, rather than on the `task` group.
 The error gives the command to run on that host:
