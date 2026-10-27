@@ -62,6 +62,8 @@ const initializer = `
     const window = { key: url.searchParams.get('since'), bucket_seconds: 3600 };
     if (api === '/api/diagnostics/implement_one') return json({ window,
       outcome: url.searchParams.get('outcome'), current: {}, previous: {}, buckets: [] });
+    if (api === '/api/diagnostics/backlog_forecast') return json({ backlog: { backlog: 3, in_progress: 1 },
+      forecast: { time_to_drain_hours: { p50: 1, p90: 2 }, usd: { p50: 3, p90: 4 } } });
     if (api === '/api/diagnostics/completions') return json({ window, buckets: [],
       current: { done: { total: 0, low: 0, medium: 0, hard: 0, other: 0 }, rejected: 0, archived: 0 } });
     if (api === '/api/diagnostics/defects') return json({ error: 'Not supported by fixture host' }, 404);
@@ -182,6 +184,10 @@ async function assertPollBudget(browser, port) {
     await page.waitForFunction(() => globalThis.fleetReady);
     await settleDashboard(page);
     await page.waitForFunction(() => document.querySelector('.global-drain-label')?.textContent.includes('1 of 3 workspaces draining'));
+    await page.waitForFunction(() => document.querySelector('#auto-drain-body .drain-backlog-forecast-figures'));
+    const backlogForecastReads = () => page.evaluate(() => globalThis.fleetRequests.filter(url =>
+      new URL(url, location.href).pathname.endsWith('/diagnostics/backlog_forecast')).length);
+    assert.ok(await backlogForecastReads() > 0, 'the Tasks dock loads its backlog forecast summary');
     const fleetReads = () => page.evaluate(() => globalThis.fleetRequests.filter(url => url.includes('/fleet/drains')).length);
     assert.equal(await fleetReads(), 2, 'two registered hosts are read once at startup; the first panel poll does not read the fleet');
     const polls = [];
@@ -192,6 +198,8 @@ async function assertPollBudget(browser, port) {
       fs.writeFileSync(path.join(evidence, 'poll-requests.json'), JSON.stringify(polls, null, 2));
       const fleet = counted.filter(url => url.includes('/fleet/drains'));
       assert.deepEqual(fleet, [], `${label} poll reads fleet drains: ${counted.join(', ')}`);
+      const forecasts = counted.filter(url => new URL(url, 'http://fixture').pathname.endsWith('/diagnostics/backlog_forecast'));
+      assert.equal(forecasts.length, label === 'tasks' ? 1 : 0, `${label} poll reads the optional backlog forecast only while its card is shown`);
       assert.ok(counted.length > 0 && counted.length <= 10, `${label} poll issued ${counted.length} requests: ${counted.join(', ')}`);
       return counted.map(value => new URL(value, 'http://fixture').pathname);
     };
@@ -233,6 +241,24 @@ async function assertPollBudget(browser, port) {
         }
       }
     }
+    const beforeDrainForecast = await backlogForecastReads();
+    await page.evaluate(async () => {
+      const { setActiveTab } = await import('/js/router.js');
+      const meta = document.getElementById('meta-text');
+      setActiveTab('drain');
+      const deadline = performance.now() + 3000;
+      let sawFetching = false;
+      while (performance.now() < deadline) {
+        const text = meta?.textContent || '';
+        if (text.startsWith('fetching')) sawFetching = true;
+        if (sawFetching && !text.startsWith('fetching')) return;
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+      throw new Error(`navigation did not settle on drain: ${meta?.textContent}`);
+    });
+    assert.ok(await backlogForecastReads() > beforeDrainForecast, 'the Drain route refreshes its backlog forecast');
+    await page.waitForFunction(() => document.querySelector('#auto-drain-body .drain-backlog-forecast-figures'));
+    assert.ok(await page.locator('#auto-drain-body .drain-backlog-forecast-figures').textContent(), 'the Drain page paints its backlog forecast summary');
     const beforeCard = await fleetReads();
     await page.locator('#global-drain-state').click();
     await page.locator('.fleet-drains').waitFor({ state: 'visible' });

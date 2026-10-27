@@ -3311,7 +3311,10 @@ function paintBacklogForecast() {
 // payload with no time-to-drain estimate becomes the muted line and never
 // rejects the drain card. Aggregate and unselected views do not ask.
 function refreshBacklogForecast() {
-  if (!selectedWorkspace() || isAggregateView()) return Promise.resolve();
+  const tab = context?.getTab?.();
+  // The forecast is shown in the Tasks dock and on the Drain page. Other
+  // dashboard polls refresh readiness without needing this optional read.
+  if (!selectedWorkspace() || isAggregateView() || !["tasks", "drain"].includes(tab)) return Promise.resolve();
   const revision = getWorkspaceRevision();
   if (backlogForecastFlight && backlogForecastFlight.revision === revision) return backlogForecastFlight.promise;
   const promise = fetchBacklogForecast().then((payload) => {
