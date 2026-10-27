@@ -379,7 +379,11 @@ impl CheckWaitRefusal {
         wrap: impl FnOnce(&str) -> OrbitError,
     ) -> OrbitError {
         let wrapper = wrap(&self.reason);
-        if let Some(refusal) = self.refusal {
+        let refusal = self.refusal.or(match self.cause.as_deref() {
+            Some(OrbitError::DeliveryRefused { refusal, .. }) => Some(*refusal),
+            _ => None,
+        });
+        if let Some(refusal) = refusal {
             return match wrapper {
                 OrbitError::Execution(message) => OrbitError::DeliveryRefused { refusal, message },
                 other => other,

@@ -2,12 +2,13 @@
 use super::super::{completion_deadline::Deadline, operations};
 use super::{
     answers::{PullRequestStatus, RequiredChecks},
-    auto_fix::{AutoFix, attach_evidence, stopped, stopped_by},
+    auto_fix::{AutoFix, attach_evidence, hold_auto_fix_stop, stopped, stopped_by},
 };
 use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::{
-    PrInfrastructureAdmission, PrInfrastructureEvidence, pr_infrastructure_reservations,
+    DeliveryRefusal, PrInfrastructureAdmission, PrInfrastructureEvidence,
+    pr_infrastructure_reservations,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -100,9 +101,12 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
     {
         let evidence = &reservation.evidence;
         if deadline.remaining().is_err() {
-            return Err(stopped(
-                pr,
-                "completion deadline expired with a reserved infrastructure rerun",
+            return Err(hold_auto_fix_stop(
+                stopped(
+                    pr,
+                    "completion deadline expired with a reserved infrastructure rerun",
+                ),
+                DeliveryRefusal::CompletionBudgetExpired,
             ));
         }
         exact_remote(workspace, status, evidence, deadline)?;
@@ -114,9 +118,12 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             .map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
         record(host, auto_fix, evidence, "observation", &observed)?;
         if deadline.remaining().is_err() {
-            return Err(stopped(
-                pr,
-                "completion deadline expired while observing infrastructure recovery",
+            return Err(hold_auto_fix_stop(
+                stopped(
+                    pr,
+                    "completion deadline expired while observing infrastructure recovery",
+                ),
+                DeliveryRefusal::CompletionBudgetExpired,
             ));
         }
         if observed["gates_passed"] == true {
@@ -159,9 +166,12 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
         return Ok(InfrastructureStep::None);
     }
     if deadline.remaining().is_err() {
-        return Err(stopped(
-            pr,
-            "no completion deadline remains for infrastructure recovery",
+        return Err(hold_auto_fix_stop(
+            stopped(
+                pr,
+                "no completion deadline remains for infrastructure recovery",
+            ),
+            DeliveryRefusal::CompletionBudgetExpired,
         ));
     }
     let response = host.run_private_vcs_operation(operations::CI_PREREQUISITE_EVIDENCE, json!({"workspace_path":workspace,"pr":pr,"head_sha":head,"head_branch":status.head_branch,"base_branch":status.base_branch,"deadline_ms":deadline_ms})).map_err(|error| stopped_by(pr, &error.to_string(), &error))?;
@@ -173,9 +183,12 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             .map_err(|error| stopped(pr, &format!("unreadable prerequisite evidence: {error}")))?;
     exact_remote(workspace, status, &evidence, deadline)?;
     if deadline.remaining().is_err() {
-        return Err(stopped(
-            pr,
-            "completion deadline expired while reading infrastructure evidence",
+        return Err(hold_auto_fix_stop(
+            stopped(
+                pr,
+                "completion deadline expired while reading infrastructure evidence",
+            ),
+            DeliveryRefusal::CompletionBudgetExpired,
         ));
     }
     let admission =

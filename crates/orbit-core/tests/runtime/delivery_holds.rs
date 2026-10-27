@@ -86,6 +86,18 @@ fn completion_refusals_hold_the_run_and_pass_its_parents() {
             None,
             "contradictory merge state",
         ),
+        (
+            "merge_wait",
+            json!({"mergeStateStatus": "PENDING", "statusCheckRollup": [{"name": "test", "status": "IN_PROGRESS", "conclusion": null}]}),
+            Some(DeliveryRefusal::CompletionBudgetExpired),
+            "timed out after",
+        ),
+        (
+            "deadline_parked",
+            json!({"mergeStateStatus": "BLOCKED", "reviewDecision": "APPROVED", "statusCheckRollup": [{"name": "test", "status": "IN_PROGRESS", "conclusion": null}]}),
+            Some(DeliveryRefusal::CompletionBudgetExpired),
+            "completion deadline expired",
+        ),
     ] {
         completion_outcome(case, patch, refusal, diagnostic);
     }
@@ -119,7 +131,8 @@ fn completion_outcome(
     std::fs::write(&status, observation.to_string()).unwrap();
     let gh = bin.join("gh");
     std::fs::write(&gh, format!(
-        "#!/bin/sh\nset -eu\ncase \"$1 $2\" in\n'pr view') cat '{}' ;;\n*) echo \"unexpected forge call: $*\" >&2; exit 1 ;;\nesac\n",
+        "#!/bin/sh\nset -eu\ncase \"$1 $2\" in\n'pr view') touch '{}'; cat '{}' ;;\n*) echo \"unexpected forge call: $*\" >&2; exit 1 ;;\nesac\n",
+        fx.repo.join("deadline-hit").display(),
         status.display(),
     )).unwrap();
     if case == "forge_read" {
@@ -140,7 +153,8 @@ fn completion_outcome(
             "default_input": {
                 "workspace_path": "{{ input.workspace_path }}",
                 "completed_task_ids": "{{ input.task_ids }}", "pr_number": "42",
-                "published_head_sha": "published-head", "max_wait_seconds": 0,
+                "published_head_sha": "published-head",
+                "max_wait_seconds": if case == "deadline_parked" { 600 } else { 0 },
             },
         }]},
     }).to_string()).unwrap();
@@ -179,7 +193,25 @@ fn completion_outcome(
             &PipelineState::new(run.run_id.clone(), run.job_id, input),
         )
         .unwrap();
-    let _ = fx.runtime.execute_pipeline_run_worker(&run.run_id);
+    if case == "deadline_parked" {
+        let hit = fx.repo.join("deadline-hit");
+        let _ = orbit_engine::test_support::with_prerequisite_clock(
+            move || {
+                let now = u64::try_from(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis(),
+                )
+                .unwrap();
+                if hit.exists() { now + 601_000 } else { now }
+            },
+            |_, _| {},
+            || fx.runtime.execute_pipeline_run_worker(&run.run_id),
+        );
+    } else {
+        let _ = fx.runtime.execute_pipeline_run_worker(&run.run_id);
+    }
     let stored = fx.runtime.show_job_run(&run.run_id).unwrap();
     let expected = if refusal.is_some() {
         JobRunState::Held

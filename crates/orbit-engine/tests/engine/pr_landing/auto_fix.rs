@@ -2725,7 +2725,7 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
                         json!({"task_ids": [TASK_ID]}),
                         None,
                     );
-                    assert!(!outcome.is_ok_and(|outcome| outcome.success));
+                    assert!(!matches!(&outcome, Ok(outcome) if outcome.success));
                     let recovery = host
                         .scripted_inputs
                         .lock()
@@ -2773,12 +2773,14 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
                             recovery.is_none(),
                             "partial checks cannot authorize a base-only diagnosis"
                         );
-                        let applied = host.scripted_inputs.lock().unwrap();
-                        assert_eq!(
-                            applied["applied_final_recovery"]["decision"], "requeue",
-                            "pending checks must wait for another observation, not block for a human"
+                        // The merge-wait budget expiry is now a typed hold:
+                        // final recovery does not run and the task stays in review.
+                        let error = outcome.expect_err("the timeout case holds");
+                        assert!(
+                            matches!(&error, DispatchError::DeliveryRefused { refusal, .. } if *refusal == orbit_types::workflow::DeliveryRefusal::CompletionBudgetExpired),
+                            "pending checks park as a held budget expiry: {error}"
                         );
-                        assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
+                        assert_eq!(host.status(TASK_ID), TaskStatus::Review);
                     }
                     assert!(fx.merge_requests().is_empty());
                     assert_eq!(fx.head(), fx.candidate);
@@ -2858,6 +2860,42 @@ fn a_dispatched_repair_holds_completion_without_another_recovery() {
                     "{action} must not run for a held refusal"
                 );
             }
+        },
+    );
+}
+
+/// An unreadable check log is an inconclusive auto-fix stop: held, not failed.
+#[test]
+fn an_unreadable_check_log_holds_auto_fix_completion() {
+    isolated(
+        "auto_fix::an_unreadable_check_log_holds_auto_fix_completion",
+        |sandbox| {
+            let (fx, host) = opened_review(sandbox);
+            host.script("ci.prerequisite_evidence", json!({"evidence": null}));
+            host.script(
+                "ci.commit_jobs",
+                json!({"jobs": [{
+                    "name": "test", "workflow": "CI", "conclusion": "failure",
+                    "run_id": 10, "job_id": 11, "failed_step": "Tests",
+                    "failed_steps": ["Tests"]
+                }]}),
+            );
+            host.script(
+                "ci.job_log",
+                json!({"log": "partial", "truncated": true, "source_complete": false, "source": "run_log"}),
+            );
+            fx.script_checks(&["failure"]);
+            let input = auto_fix_input(&fx);
+            let error = action(&host, "pr_complete", &input).unwrap_err();
+            let refusal = orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive;
+            assert!(
+                matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
+                "{error}"
+            );
+            assert!(error.to_string().contains("auto_fix_stopped"), "{error}");
+            assert!(error.to_string().contains("could not be read"), "{error}");
+            assert!(repair_attempts(&host).is_empty());
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
         },
     );
 }

@@ -32,6 +32,9 @@ pub(in crate::executor::automation::vcs) enum HeadCheckEvidence {
     /// Not a failure a code repair can clear, or not one this read could
     /// establish, for this reason.
     Stop(String),
+    /// The check log could not be read conclusively, so no repair is known
+    /// to clear the failure.
+    Inconclusive(String),
     /// The cited failure needs the base's own result before any repair.
     WaitForBase(String),
 }
@@ -57,7 +60,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
     let jobs = match commit_jobs(host, workspace, head) {
         Ok(jobs) => jobs,
         Err(error) => {
-            return HeadCheckEvidence::Stop(format!(
+            return HeadCheckEvidence::Inconclusive(format!(
                 "the jobs on head {head} could not be read: {error}"
             ));
         }
@@ -96,7 +99,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
         let log = match job_log(host, workspace, run_id, job_id, job) {
             Ok(log) => log,
             Err(error) => {
-                return HeadCheckEvidence::Stop(format!(
+                return HeadCheckEvidence::Inconclusive(format!(
                     "the log of '{}' could not be read: {error}",
                     job_label(job)
                 ));
@@ -111,7 +114,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
         }
         let signature = error_signature(&log, failed_step(job));
         if signature.step_fallback {
-            return HeadCheckEvidence::Stop(format!(
+            return HeadCheckEvidence::Inconclusive(format!(
                 "the log of '{}' names no emitted diagnostic, only the failed step",
                 job_label(job)
             ));

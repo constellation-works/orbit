@@ -471,6 +471,12 @@ pub(super) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
             annotations,
         } => (evidence, annotations),
         HeadCheckEvidence::Stop(reason) => return stopped(pr_number, &reason),
+        HeadCheckEvidence::Inconclusive(reason) => {
+            return hold_auto_fix_stop(
+                stopped(pr_number, &reason),
+                DeliveryRefusal::CheckEvidenceInconclusive,
+            );
+        }
         HeadCheckEvidence::WaitForBase(reason) => {
             return hold_auto_fix_stop(
                 stopped(pr_number, &reason),
