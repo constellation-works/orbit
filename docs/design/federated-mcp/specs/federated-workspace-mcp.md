@@ -21,7 +21,7 @@ Without this contract, an implementation will key selectors on renameable `host_
 
 ## Mux, not fleet registry
 
-1. Remote destinations are operator-configured SSH remotes. The gateway does not register, retire, or enumerate a fleet of machines as host-registry records. Once [ORB-14448] ships, the operator registers them with `orbit host add` into the host-registry host file ([host-commands](../../host-registry/specs/host-commands.md)). The gateway reads that file and still registers, probes or retires nothing itself.
+1. Remote destinations are operator-configured SSH remotes. The gateway does not register, retire, or enumerate a fleet of machines as host-registry records. [ORB-14448] provides `orbit host add`, which registers them in the host-registry host file ([host-commands](../../host-registry/specs/host-commands.md)); the gateway reads that file and does not manage its entries.
 2. The accepting machine is an implicit local destination, using its existing stable `machine_id` and workspace registry. That is this host's own membership, not fleet discovery.
 3. The gateway does not auto-discover the owner checkout of a repository and does not perform placement.
 4. The gateway must not reinterpret a selector against its own local catalog. A copied `hm_*/ws_*` selector is delivered to the destination encoded in the token: the local in-process host when that destination is this machine, otherwise the configured SSH remote.
