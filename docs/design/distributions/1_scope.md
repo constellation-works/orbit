@@ -129,20 +129,24 @@ auto_tasks = []
 "workflow.auto_ship" = false
 ```
 
-The preset's top-level `name` is required. The optional `[seeding]` and `[enable]` tables
-reject unknown fields; `[config]` accepts only keys supported by `orbit config set`. The
-whole preset is validated before it writes anything; a refused config key, blank or
-unseeded enable name, plugin-consent request, or file larger than 256 KiB rejects the
-preset. Presets never grant plugin permissions or enable plugins. The operator must first
-enable a plugin and grant its permissions through
-`orbit plugin enable` so its definitions are seeded. Applying the preset then enables only
-the named seeded definitions. `[seeding]` and `[config]` are written before default
-seeding, and `[enable]` is applied after seeding.
+`orbit workspace init --preset <file>` applies it to a new or an existing workspace:
 
-Orbit records the preset name and SHA-256 digest with its apply time in
-`.orbit/state/workspace-preset.json`. Workspace initialization reports the applied preset
-and, when nonempty, the definitions it enabled. `orbit workspace show` reports the applied
-preset's name, SHA-256 digest, and apply time.
+1. **Validated before any write.** Unknown fields are refused, and so is any `config` key
+   that `orbit config set` refuses, including `seeding.*`, which belongs in `[seeding]`. An
+   `[enable]` name that an enabled plugin has already seeded must have its seeded file present
+   and loadable, as the plugin asset manifest records it, and a stale name refuses the whole
+   preset. The file is capped at 256 KiB. A preset has no field that grants a permission,
+   enables a plugin or names a crew pool, so it cannot ask for one.
+2. **Recorded.** The workspace records the preset's `name` and the digest of its bytes,
+   beside the seeding policy it wrote. Applying the same file again is a no-op. Applying a
+   changed file is an update, and it follows the policy rules above.
+3. **Enabling is deferred to seeding.** Workspace init runs before the user enables the
+   plugins, because `orbit plugin enable` needs a workspace. So when a plugin seeds its
+   definitions into a workspace, it seeds the ones the recorded preset names
+   `enabled: true` and the rest `enabled: false`. The operator's preset is the operator
+   act the plugin standard requires; a plugin still never enables its own schedules.
+4. **No layering.** A workspace has at most one recorded preset. A later
+   `--preset` replaces it.
 
 ### How a distribution installs
 

@@ -2476,7 +2476,7 @@ auto_tasks = ["graph-reindex"]
 minutes = 45
 ```
 
-- **Validated whole, before any write.** An unknown field in any table, a `[config]` key or value `orbit config set` refuses for this workspace, a `seeding.*` key under `[config]`, a blank or unseeded `[enable]` name, or a file over 256 KiB is refused, and nothing is written or registered.
+- **Validated whole, before any write.** An unknown field in any table, a `[config]` key or value `orbit config set` refuses for this workspace, a `seeding.*` key under `[config]`, a blank or unseeded `[enable]` name, a plugin-seeded `[enable]` name whose file is missing or does not load, or a file over 256 KiB is refused, and nothing is written or registered.
 - **No consent.** A preset never grants plugin permissions or enables a plugin: a `grant`, `grants`, `permissions`, `plugin`, `plugins`, `enable_plugins` or `plugin_enablement` field, at the top level or under `[enable]`, and any `plugin_enablement*` key under `[config]`, is refused. `[enable]` only switches on a definition an already enabled plugin seeded into this workspace (the name `orbit routine list` or `orbit auto-task list` shows), so run `orbit plugin enable <plugin>` first, then `orbit workspace init --force --preset <file>`.
 - **Order.** The `[seeding]` and `[config]` keys are written to `.orbit/config.toml` in one validated save before defaults are seeded, so the first seeding already follows the policy. `[enable]` is applied after seeding.
 - **Provenance.** The preset's `name` and `sha256:` digest of the file bytes are recorded with the apply time in `.orbit/state/workspace-preset.json`. `orbit workspace init` prints them with the definitions it enabled, and `orbit workspace show` reports them.
