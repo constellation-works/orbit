@@ -6,7 +6,9 @@ use orbit_auth::scope::{
     HardLeasePermission, LeasePriorityCeiling, LeaseTokenScope, LeaseTokenVerb, PrincipalClass,
 };
 use orbit_core::OrbitRuntime;
+use orbit_core::application::task::TaskAddParams;
 use orbit_core::runtime::task::locks::lease;
+use orbit_types::task::TaskStatus;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::{Value, json};
 
@@ -794,6 +796,253 @@ fn token_hard_holder_lists_are_bounded_while_every_holder_still_blocks() {
     );
     assert_eq!(carol["queued_selectors"], json!([]), "{carol}");
     assert_eq!(state(&bob_id)["state"], "queued");
+}
+
+/// A byte-derived task-conflict pre-bound keeps one extra witness so a
+/// fitting prefix cannot be mistaken for the complete holder list.
+#[test]
+fn token_task_holder_prebound_reports_truncation_for_requests_and_expansions() {
+    if !enter_isolated_child(
+        module_path!(),
+        "token_task_holder_prebound_reports_truncation_for_requests_and_expansions",
+    ) {
+        return;
+    }
+    const FRAME: usize = 4 * 1024;
+    const BLOCKED: &str = "file:a";
+    let fixture = FrameLimitFixture::start_with(IntakeLimits {
+        max_frame_bytes: FRAME as u32,
+        ..IntakeLimits::default()
+    });
+    let repo = fixture._tmp.path().join("ws_frame_limit");
+    std::fs::write(repo.join("a"), "").expect("create shared task context file");
+    let mut task_ids: Vec<String> = (0..3)
+        .map(|index| {
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: format!("task context holder {index}"),
+                    description: "lease holder fixture".to_string(),
+                    context_files: vec![BLOCKED.to_string()],
+                    status: Some(TaskStatus::InProgress),
+                    ..Default::default()
+                })
+                .expect("add task context holder")
+                .id
+                .to_string()
+        })
+        .collect();
+    task_ids.sort();
+
+    // The operator path remains unbounded and confirms all three tasks block
+    // this selector. Its first conflict also sizes a budget that fits exactly
+    // one conflict while leaving room for the runtime's omission witness.
+    let unbounded = lease::request(
+        &fixture.runtime,
+        json!({
+            "principal": "operator",
+            "selectors": [BLOCKED],
+            "mode": "hard",
+            "wait": false,
+        }),
+        None,
+        None,
+    )
+    .expect("operator request against task holders");
+    assert_eq!(unbounded["granted"], false, "{unbounded}");
+    assert_eq!(unbounded["queued"], false, "{unbounded}");
+    assert_eq!(unbounded["truncated"], false, "{unbounded}");
+    let unbounded_conflicts = unbounded["conflicts"].as_array().expect("conflicts");
+    assert_eq!(unbounded_conflicts.len(), task_ids.len(), "{unbounded}");
+    let unbounded_ids: Vec<_> = unbounded_conflicts
+        .iter()
+        .map(|conflict| {
+            assert_eq!(conflict["file"], BLOCKED, "{conflict}");
+            assert_eq!(conflict["held_by"], "task", "{conflict}");
+            conflict["held_by_id"].as_str().unwrap().to_string()
+        })
+        .collect();
+    assert_eq!(unbounded_ids, task_ids, "operator conflicts stay unbounded");
+
+    let first_conflict_bytes = serde_json::to_vec(&unbounded_conflicts[0])
+        .expect("serialize first task conflict")
+        .len();
+    let holder_slack = first_conflict_bytes + 1;
+    let smallest_conflict_bytes = serde_json::to_vec(&json!({
+        "file": "",
+        "held_by": "task",
+        "held_by_id": "",
+    }))
+    .expect("serialize smallest task conflict")
+    .len()
+        + 1;
+    assert_eq!(
+        holder_slack / smallest_conflict_bytes,
+        1,
+        "the reproduction requires a pre-bound of exactly one holder"
+    );
+
+    let mut client = fixture.connect();
+    let grant = lease::LeaseTokenGrant {
+        principal: "bob".to_string(),
+        principal_class: lease::LeasePrincipalClass::Human,
+        token_id: "tok-bob".to_string(),
+        max_priority: lease::LeasePriority::Normal,
+        hard_allowed: true,
+        client_address: "192.0.2.7".to_string(),
+        max_response_bytes: FRAME,
+    };
+    let request_probe = lease::request_with_token(
+        &fixture.runtime,
+        json!({
+            "selectors": ["file:src/new.rs"],
+            "mode": "hard",
+            "tags": ["x".repeat(FRAME)],
+        }),
+        &grant,
+    )
+    .expect_err("the fixed request answer with a maximum tag exceeds the frame");
+    let request_needed = preflight_needed_bytes(&request_probe.to_string());
+    let request_tag_len = 2 * FRAME - holder_slack - request_needed;
+    assert!((1..FRAME).contains(&request_tag_len), "{request_tag_len}");
+    let request = ok(call(
+        &mut client,
+        "bob",
+        LeaseIntakeOperation::Request,
+        json!({
+            "selectors": [BLOCKED],
+            "mode": "hard",
+            "tags": ["x".repeat(request_tag_len)],
+        }),
+    ));
+    assert!(
+        serde_json::to_vec(&LeaseIntakeResponse::Ok {
+            result: request.clone(),
+        })
+        .expect("encode bounded request answer")
+        .len()
+            <= FRAME,
+        "the request answer must fit the frame"
+    );
+    assert_eq!(request["granted"], false, "{request}");
+    assert_eq!(request["queued"], true, "{request}");
+    assert_eq!(request["truncated"], true, "{request}");
+    let request_conflicts = request["conflicts"].as_array().expect("request conflicts");
+    assert_eq!(request_conflicts.len(), 1, "{request}");
+    assert_eq!(
+        request_conflicts[0]["held_by_id"], task_ids[0],
+        "the response preserves the first holder prefix"
+    );
+    let request_id = request["lease"]["lease_id"].as_str().unwrap();
+    let queued_notice = |lease_id: &str| -> Value {
+        let notices: Vec<_> = all_notices(&fixture.runtime)
+            .into_iter()
+            .filter(|notice| notice["lease_id"] == lease_id && notice["kind"] == "queued")
+            .collect();
+        assert_eq!(notices.len(), 1, "{notices:?}");
+        notices[0].clone()
+    };
+    let request_notice = queued_notice(request_id);
+    assert_eq!(request_notice["payload"]["holders"], request["conflicts"]);
+    assert_eq!(
+        request_notice["payload"]["truncated"], true,
+        "{request_notice}"
+    );
+    lease::release(
+        &fixture.runtime,
+        json!({"lease_id": request_id}),
+        None,
+        None,
+    )
+    .expect("release queued request fixture");
+
+    // Calibrate expansion independently because its fixed answer includes a
+    // different set of fields and the existing lease record. The oversized
+    // operator-created lease is only a fixture for the public token preflight;
+    // that refusal occurs before it can change the lease.
+    let expansion_probe = lease::request(
+        &fixture.runtime,
+        json!({
+            "principal": "carol",
+            "selectors": ["file:src/new.rs"],
+            "mode": "hard",
+            "tags": ["x".repeat(FRAME)],
+        }),
+        None,
+        None,
+    )
+    .expect("create expansion budget probe");
+    let expansion_probe_id = expansion_probe["lease"]["lease_id"].as_str().unwrap();
+    let expansion_error = refusal(call(
+        &mut client,
+        "carol",
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": expansion_probe_id, "selectors": [BLOCKED]}),
+    ));
+    assert_eq!(expansion_error.code, "invalid_input", "{expansion_error:?}");
+    let expansion_needed = preflight_needed_bytes(&expansion_error.message);
+    let expansion_tag_len = 2 * FRAME - holder_slack - expansion_needed;
+    assert!(
+        (1..FRAME).contains(&expansion_tag_len),
+        "{expansion_tag_len}"
+    );
+    lease::release(
+        &fixture.runtime,
+        json!({"lease_id": expansion_probe_id}),
+        None,
+        None,
+    )
+    .expect("release expansion budget probe");
+
+    let expandable = lease::request(
+        &fixture.runtime,
+        json!({
+            "principal": "carol",
+            "selectors": ["file:src/new.rs"],
+            "mode": "hard",
+            "tags": ["x".repeat(expansion_tag_len)],
+        }),
+        None,
+        None,
+    )
+    .expect("create lease for token expansion");
+    let expandable_id = expandable["lease"]["lease_id"].as_str().unwrap();
+    let expanded = ok(call(
+        &mut client,
+        "carol",
+        LeaseIntakeOperation::Expand,
+        json!({"lease_id": expandable_id, "selectors": [BLOCKED]}),
+    ));
+    assert!(
+        serde_json::to_vec(&LeaseIntakeResponse::Ok {
+            result: expanded.clone(),
+        })
+        .expect("encode bounded expansion answer")
+        .len()
+            <= FRAME,
+        "the expansion answer must fit the frame"
+    );
+    assert_eq!(expanded["added"], json!([]), "{expanded}");
+    assert_eq!(expanded["queued"], json!([BLOCKED]), "{expanded}");
+    assert_eq!(expanded["truncated"], true, "{expanded}");
+    let expansion_conflicts = expanded["conflicts"].as_array().expect("conflicts");
+    assert_eq!(expansion_conflicts.len(), 1, "{expanded}");
+    assert_eq!(
+        expansion_conflicts[0]["held_by_id"], task_ids[0],
+        "the expansion preserves the first holder prefix"
+    );
+    let expansion_notice = queued_notice(expandable_id);
+    assert_eq!(
+        expansion_notice["payload"]["holders"], expanded["conflicts"],
+        "{expansion_notice}"
+    );
+    assert_eq!(
+        expansion_notice["payload"]["truncated"], true,
+        "{expansion_notice}"
+    );
+    let queued_lease = lease::show(&fixture.runtime, json!({"lease_id": expandable_id}))
+        .expect("show expanded lease");
+    assert_eq!(queued_lease["lease"]["queued_selectors"], json!([BLOCKED]));
 }
 
 /// Bob's low, never-hard tokens may hold at most the token limit of active

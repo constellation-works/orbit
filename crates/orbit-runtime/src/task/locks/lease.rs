@@ -699,15 +699,15 @@ impl ResponseBudget {
             .map(|remaining| if self.truncated { 0 } else { remaining })
     }
 
-    /// The most conflicts the rest of the budget could show, each costing at
-    /// least an empty one; `None` when unbounded.
+    /// The most conflicts the rest of the budget could show, plus one bounded
+    /// witness for omitted conflicts; `None` when unbounded.
     fn conflicts_shown(&self) -> Option<usize> {
         let smallest = serialized_len(&TaskLockConflict {
             file: String::new(),
             held_by: TaskLockHolder::Task,
             held_by_id: String::new(),
         }) + 1;
-        self.holder_list_bytes().map(|bytes| bytes / smallest)
+        self.holder_list_bytes().map(|bytes| bytes / smallest + 1)
     }
 
     fn take<T: Serialize>(&mut self, items: Vec<T>) -> Vec<T> {
