@@ -27,15 +27,20 @@ fn a_nonzero_exit_fails_the_activity_and_is_audited() {
     let host = ShellHost::new(repo.path());
 
     let audited = dispatch_with_audit(
-        &shell_activity(json!({ "shell": "/bin/sh", "script": "exit 9" })),
+        &shell_activity(json!({ "shell": "/bin/sh", "script": "echo command-failed; exit 9" })),
         json!({}),
         &host,
     );
     let error = audited.result.expect_err("nonzero exit fails the activity");
 
     match &error {
-        DispatchError::DeterministicActionFailed { action, message } => {
-            assert_eq!(action, "local_shell");
+        DispatchError::LocalShellFailed { output, message } => {
+            assert_eq!(output["exit_code"], 9);
+            assert_eq!(output["log_tail"], "command-failed\n");
+            assert!(
+                output.get("stdout").is_none(),
+                "failed diagnostics retain only the bounded summary"
+            );
             assert!(message.contains("exited with status 9"), "{message}");
         }
         other => panic!("unexpected dispatch error: {other:?}"),

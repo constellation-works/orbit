@@ -231,6 +231,16 @@ fn dispatch_once(
         },
         t.activity_name.as_deref(),
     );
+    if let Err(DispatchError::LocalShellFailed { output, .. }) = &dispatch {
+        record_pipeline(ctx, &step.id, output.as_ref().clone());
+        if let Err(error) = ctx
+            .host
+            .checkpoint_step_diagnostic(&ctx.run_id, &step.id, output)
+        {
+            ctx.audit
+                .note_telemetry_failure("step_diagnostic", Some(&step.id), &error);
+        }
+    }
     if let Err(DispatchError::RecoverableVcsConflict(conflict)) = &dispatch {
         let diagnostic = serde_json::json!({
             "conflicting_paths": conflict.conflicting_paths,

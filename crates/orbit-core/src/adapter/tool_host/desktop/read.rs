@@ -6,7 +6,6 @@ use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_string, required_string,
 };
-use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::{JobRunQuery, TaskListFilter};
 use orbit_types::task::{TaskEnvelopeV2, TaskPriority, TaskRelationType, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
@@ -14,6 +13,7 @@ use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
+use crate::application::job::{RunStepSource, run_display_steps};
 use crate::runtime::audit::run::RunProviderProcess;
 use crate::runtime::audit::run_logs::{
     BOUNDED_EXCERPT_MAX_BYTES, RunCliInvocationProfile, bounded_redacted_text,
@@ -230,16 +230,6 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
     let run = runtime.show_job_run_observed(&id)?;
     let mut value = run_summary(&run);
     let state = runtime.read_run_state(&id).ok().flatten();
-    // Provider responses and original inputs are deliberately absent.
-    value["steps"] =
-        json!(run.steps.iter().take(MAX_PAGE).map(|s| json!({
-        "step_index": s.step_index, "target_id": s.target_id, "target_type": s.target_type,
-        "state": s.state, "started_at": s.started_at, "finished_at": s.finished_at,
-        "duration_ms": s.duration_ms, "exit_code": s.exit_code, "error_code": s.error_code,
-        "error_message": s.error_message.as_deref().map(redact_all),
-    })).collect::<Vec<_>>());
-    value["steps_total"] = json!(run.steps.len());
-    value["steps_truncated"] = json!(run.steps.len() > MAX_PAGE);
     // Progress and the log page come from one bounded audit read; its total
     // is a store count, so a long history pages honestly.
     let page_limit = offset
@@ -248,6 +238,33 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
         .saturating_sub(offset);
     let detail =
         runtime.collect_bounded_run_detail(&id, offset, page_limit, BOUNDED_EXCERPT_MAX_BYTES)?;
+    let steps = run_display_steps(&run, || detail.steps.clone());
+    let steps_complete = steps.source == RunStepSource::Record || detail.steps_complete;
+    // Reuse the lifecycle window; never replay an unbounded trail to populate
+    // missing record steps. Provider responses and original inputs stay absent.
+    value["steps"] = json!(
+        steps
+            .records
+            .iter()
+            .take(MAX_PAGE)
+            .map(|step| {
+                let output = step.command_output_summary(state.as_ref());
+                let exit_code = step.exit_code.map(|code| json!(code)).or_else(|| output.as_ref().map(|output| output["exit_code"].clone()));
+                json!({
+                    "step_index":step.step_index, "target_id":step.target_id,
+                    "target_type":step.target_type, "state":step.state,
+                    "started_at":step.started_at, "finished_at":step.finished_at,
+                    "duration_ms":step.duration_ms, "exit_code":exit_code,
+                    "error_code":step.error_code,
+                    "error_message":step.error_message.as_deref().map(|message| bounded_redacted_text(message,4096).0),
+                    "output":output,
+                })
+            })
+            .collect::<Vec<_>>()
+    );
+    value["steps_source"] = json!(steps.source.as_str());
+    value["steps_total"] = json!(steps_complete.then_some(steps.records.len()));
+    value["steps_truncated"] = json!(!steps_complete || steps.records.len() > MAX_PAGE);
     let progress = &detail.progress;
     value["agent_invocation"] = serde_json::to_value(crate::application::job::agent_invoke_result(
         &run,

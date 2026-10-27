@@ -25,7 +25,8 @@ use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
 use super::run::{
-    MAX_PROVIDER_PROCESSES, RunAuditEvent, RunCliInvocationRecord, RunExecutionProgress,
+    MAX_PROVIDER_PROCESSES, RunAuditEvent, RunAuditStep, RunCliInvocationRecord,
+    RunExecutionProgress,
 };
 use super::run_projection::{
     audit_steps_from_events, bound_provider_processes, cli_invocation_record,
@@ -71,6 +72,11 @@ pub struct BoundedRunDetail {
     /// `observed` when the run has v2 audit evidence, `unavailable` when not.
     pub state: &'static str,
     pub progress: RunExecutionProgress,
+    /// Steps reconstructed from the bounded lifecycle prefix already read for
+    /// progress. Consumers can render runs whose record has no step history.
+    pub steps: Vec<RunAuditStep>,
+    /// Whether the lifecycle prefix includes every lifecycle row for the run.
+    pub steps_complete: bool,
     /// Every finished CLI invocation the run recorded, counted by the store.
     pub logs_total: usize,
     /// The requested page of those invocations, oldest first.
@@ -117,6 +123,8 @@ impl RuntimeKernel {
             return Ok(BoundedRunDetail {
                 state: "unavailable",
                 progress: RunExecutionProgress::unavailable(),
+                steps: Vec::new(),
+                steps_complete: true,
                 logs_total: 0,
                 logs: Vec::new(),
                 complete: true,
@@ -220,6 +228,8 @@ impl RuntimeKernel {
 
         Ok(BoundedRunDetail {
             state: "observed",
+            steps,
+            steps_complete,
             progress: RunExecutionProgress {
                 state: "observed",
                 active_step,

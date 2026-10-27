@@ -5,6 +5,7 @@
 //! source answers and how an audit-derived step reads once its run has ended.
 
 use chrono::{DateTime, Utc};
+use orbit_common::security::redaction::redact_all;
 use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType, PipelineState};
 use serde_json::{Value, json};
 
@@ -145,6 +146,53 @@ impl RunDisplayStep {
             "error_message": self.error_message,
             "outcome": self.outcome,
         })
+    }
+
+    /// A command's bounded result, excluding argv, environment and raw streams.
+    /// Other checkpoint values (including provider responses) stay private to
+    /// their existing projections. Older command checkpoints derive a tail
+    /// from their captured streams; missing command results return none.
+    pub(crate) fn command_output_summary(&self, state: Option<&PipelineState>) -> Option<Value> {
+        let output = self.output(state?)?;
+        let captured = match output.get("log_tail").and_then(Value::as_str) {
+            Some(tail) => tail.to_string(),
+            None if output.get("argv").is_some_and(Value::is_array)
+                && output.get("sandbox").is_some_and(Value::is_string) =>
+            {
+                format!(
+                    "{}{}",
+                    output.get("stdout").and_then(Value::as_str).unwrap_or(""),
+                    output.get("stderr").and_then(Value::as_str).unwrap_or(""),
+                )
+            }
+            None => return None,
+        };
+        let text = redact_all(&captured);
+        let mut start = text.len().saturating_sub(4096);
+        while !text.is_char_boundary(start) {
+            start += 1;
+        }
+        Some(json!({
+            "success":output.get("success").and_then(Value::as_bool),
+            "exit_code":output.get("exit_code").and_then(Value::as_i64),
+            "duration_ms":output.get("duration_ms").and_then(Value::as_u64),
+            "timed_out":output.get("timed_out").and_then(Value::as_bool),
+            "log_tail":&text[start..],
+            "log_tail_truncated":start > 0 || output.get("log_tail_truncated").and_then(Value::as_bool).unwrap_or(false),
+        }))
+    }
+
+    /// Render step metadata together with its bounded command result.
+    pub fn to_json_with_command_output(&self, state: Option<&PipelineState>) -> Value {
+        let mut value = self.to_json();
+        let output = self.command_output_summary(state);
+        if self.exit_code.is_none()
+            && let Some(output) = output.as_ref()
+        {
+            value["exit_code"] = output["exit_code"].clone();
+        }
+        value["output"] = json!(output);
+        value
     }
 }
 

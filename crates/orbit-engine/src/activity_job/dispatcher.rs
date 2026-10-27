@@ -171,6 +171,11 @@ pub enum DispatchError {
     #[error("deterministic action `{action}` failed: {message}")]
     DeterministicActionFailed { action: String, message: String },
 
+    /// A command failed after it ran. Its bounded diagnostic is retained
+    /// independently of successful checkpoints, so resume still reruns it.
+    #[error("deterministic action `local_shell` failed: {message}")]
+    LocalShellFailed { message: String, output: Box<Value> },
+
     /// [ORB-16307] `pr_complete` lost only a read-only completion observation
     /// to a transient provider failure, before any completion mutation.
     /// Displays exactly as [`DispatchError::DeterministicActionFailed`]; final
@@ -628,18 +633,26 @@ fn run_deterministic(
     if let Some(binding) = tool_context.activity_binding.as_mut() {
         binding.task_id = task_id_from_input(input).map(ToOwned::to_owned);
     }
+    let state_context = crate::executor::automation::StateExecutionContext {
+        run_id: input
+            .get("run_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        fs_profile: fs_profile.map(ToOwned::to_owned),
+        ..crate::executor::automation::StateExecutionContext::default()
+    };
     let output = match DeterministicAction::parse(&spec.action) {
+        Some(DeterministicAction::Engine(
+            orbit_types::workflow::EngineDeterministicAction::LocalShell,
+        )) => crate::executor::automation::dispatch_local_shell(
+            host,
+            &spec.config,
+            input,
+            Some(&state_context),
+        )?,
         Some(DeterministicAction::Engine(action)) => {
-            let state_context = crate::executor::automation::StateExecutionContext {
-                run_id: input
-                    .get("run_id")
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(ToOwned::to_owned),
-                fs_profile: fs_profile.map(ToOwned::to_owned),
-                ..crate::executor::automation::StateExecutionContext::default()
-            };
             crate::executor::automation::execute_engine_action(
                 host,
                 action,

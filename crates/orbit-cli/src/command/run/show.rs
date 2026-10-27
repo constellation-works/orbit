@@ -22,8 +22,7 @@ use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
 use super::steps::{
     RunDisplaySteps, RunRead, StepSource, activity_provenance_lines, resolve_run, resolve_run_step,
-    run_display_steps, run_header_text_with_lock_holders, run_step_record_to_json,
-    step_record_payload, step_summary_table,
+    run_display_steps, run_header_text_with_lock_holders, step_record_payload, step_summary_table,
 };
 
 /// `CatalogReferenceLayer::layer` for a definition this binary ships.
@@ -198,7 +197,7 @@ pub(crate) fn run_show_payload(
         // The steps the view below renders, whichever source answered. The
         // record's own `run.steps` stay exactly as stored, so a caller can
         // still tell the two apart [ORB-12113].
-        "steps": steps.iter().map(run_step_record_to_json).collect::<Vec<_>>(),
+        "steps": steps.iter().map(|step| step.to_json_with_command_output(state.as_ref())).collect::<Vec<_>>(),
         "steps_source": steps_source.as_str(),
         // What a drain's leaves did; null for any run that is not a drain.
         // The drain's own `state` only says the coordinator ran.
