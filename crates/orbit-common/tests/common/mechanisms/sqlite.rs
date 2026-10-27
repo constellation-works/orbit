@@ -183,6 +183,13 @@ mod read_only_observation {
         panic!("the writer process never reached '{step}'");
     }
 
+    // Publish payloads only after the complete contents are available to the peer.
+    fn publish_message(path: &Path, contents: &str) {
+        let pending = path.with_extension("pending");
+        fs::write(&pending, contents).expect("write pending message");
+        fs::rename(&pending, path).expect("publish message");
+    }
+
     /// A writer holding the database open in another process.
     ///
     /// It has to be another process: SQLite shares one wal-index mapping per
@@ -237,7 +244,7 @@ mod read_only_observation {
             self.commits += 1;
             let request = self.control.join(format!("commit-{}", self.commits));
             let confirmation = self.control.join(format!("committed-{}", self.commits));
-            fs::write(&request, value).expect("request a commit");
+            publish_message(&request, value);
             wait_for(&confirmation, "commit");
             let outcome = fs::read_to_string(&confirmation).expect("read commit outcome");
             assert_eq!(outcome, "ok", "the writer process failed to commit");
@@ -284,8 +291,7 @@ mod read_only_observation {
                 Ok(_) => "ok".to_string(),
                 Err(error) => format!("failed: {error}"),
             };
-            fs::write(control.join(format!("committed-{commits}")), outcome)
-                .expect("confirm the commit");
+            publish_message(&control.join(format!("committed-{commits}")), &outcome);
         }
     }
 
