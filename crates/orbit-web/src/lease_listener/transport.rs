@@ -9,7 +9,7 @@ use axum::{Extension, Router, extract::ConnectInfo};
 use hyper::server::conn::http1;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::service::TowerToHyperService;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
@@ -19,6 +19,8 @@ use super::admission::REQUEST_WINDOW;
 use super::{LeaseListenerConfig, ListenerGate};
 
 const OVERLOADED: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"max_connections\"}";
+/// Most request-head bytes a refused connection reads before its 503.
+const REFUSED_HEAD_LIMIT: usize = 8 * 1024;
 
 pub(super) async fn serve_bounded_listener(
     listener: TcpListener,
@@ -117,6 +119,20 @@ async fn serve_connection(
     }
 }
 
+/// Reads up to the blank line that ends a request head, EOF, or `REFUSED_HEAD_LIMIT` bytes.
+async fn read_refused_head<S: AsyncRead + Unpin>(stream: &mut S) -> io::Result<()> {
+    let mut head = Vec::new();
+    let mut chunk = [0; 1024];
+    while head.len() < REFUSED_HEAD_LIMIT && !head.windows(4).any(|window| window == b"\r\n\r\n") {
+        let read = stream.read(&mut chunk).await?;
+        if read == 0 {
+            break;
+        }
+        head.extend_from_slice(&chunk[..read]);
+    }
+    Ok(())
+}
+
 async fn serve_http_connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     mut stream: S,
     peer: SocketAddr,
@@ -126,6 +142,11 @@ async fn serve_http_connection<S: AsyncRead + AsyncWrite + Unpin + Send + 'stati
     mut closing: watch::Receiver<bool>,
 ) -> io::Result<()> {
     if overloaded {
+        // Read the request head before answering. hyper's client reports a response
+        // that arrives before its request is in flight as an unexpected message, and
+        // closing with the request unread can reset the 503 away. A client that never
+        // sends a head still gets the 503 when the header timeout ends.
+        let _ = tokio::time::timeout(timeout, read_refused_head(&mut stream)).await;
         return tokio::time::timeout(timeout, async {
             stream.write_all(OVERLOADED).await?;
             stream.shutdown().await

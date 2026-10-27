@@ -903,8 +903,8 @@ included, is refused and logged with its uid.
   `POST /api/leases/{id}/expand`) adds selectors to a granted lease. Free paths
   are added at once; on a hard lease, blocked ones queue while the lease keeps
   what it holds. When two leases each wait on the other's expansion, the
-  younger, lower-priority one is refused with a `deadlock` notice and keeps
-  what it holds.
+  expansion ranked last in queue order (lowest effective priority, then
+  youngest) is refused with a `deadlock` notice and keeps what it holds.
 
 ### Transports
 
