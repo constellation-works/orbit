@@ -303,10 +303,9 @@ diff review is owned by `delivery-code-review` — because that window re-read
 recent changes and never re-read stable code. Each fired run pins one
 integration-branch SHA, partitions the tracked tree into modules with the
 partition rule below, and reads in full the **2 modules reviewed least
-recently**. The partition rule is the one `full-code-review` uses, so both
-definitions agree on what a module is: directory boundaries first, at most
-25,000 tracked text lines per module, disjoint modules, and every exclusion
-named, with no language- or toolchain-specific rule. A module's ID is its
+recently**. This `code-review` rotation includes source, tests, documentation
+and authored assets, including files at the root; its partition rule is
+separate from the code-only `full-code-review` area rule. A module's ID is its
 selectors; a module that grows past the bound is split, and its children
 inherit its last-reviewed time.
 

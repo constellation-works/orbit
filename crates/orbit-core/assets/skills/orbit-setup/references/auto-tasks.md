@@ -374,11 +374,20 @@ plugin being removed.
   artifact; the `sweep-cursor.json` artifact is the scheduler cursor.
 - **`full-code-review`** (`medium`) — on demand (`orbit auto-task mint
   full-code-review`); its monthly cron stays off until you enable it. The minted
-  task is a coordinator: it pins the integration branch's tip, splits the tree
-  into review areas of at most 25,000 tracked text lines, preferring package
-  and module boundaries where they fit that bound, and files one area-review
-  chore per area, tagged `full-code-review` and `no-diff-expected` (never
-  `code-review`), at `hard` complexity or below with no pinned crew. Each area
+  task is a coordinator: it pins the integration branch's tip and counts only
+  source in programming or scripting languages, tests, build and maintenance
+  scripts, and CI workflow definitions. It excludes documentation and prose,
+  lockfiles, dependency manifests and declarative configuration, test fixtures
+  and other test data, and generated, vendored, minified, binary and static
+  asset files; exclusions are recorded as path patterns with reasons and file
+  counts. It splits candidates above 25,000 included lines, then merges every
+  candidate below 10,000 lines with related candidates while the combined area
+  stays within 25,000 lines. If included code totals 25,000 lines or fewer, it
+  makes one area. It does not file an area under 5,000 lines unless no in-bound
+  merge is possible, and records the reason in `full-review-areas.json`. It
+  files one area-review chore per area, tagged `full-code-review` and
+  `no-diff-expected` (never `code-review`), at `hard` complexity or below with
+  no pinned crew. Each area
   reviewer reads its whole area at that commit in partitions of at most 10,000
   lines and files confirmed findings as bugs tagged `code-review` and
   `full-code-review`;

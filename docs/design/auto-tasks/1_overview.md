@@ -128,9 +128,18 @@ definition of the same name.
   cursor task.
 - `full-code-review` — disabled-by-default, minted on demand (its monthly cron
   stays off until enabled). The minted coordinator pins one integration-branch
-  commit, measures tracked text at that SHA, and splits directories or file
-  sets into areas of at most 25,000 lines. Its `full-review-areas.json` artifact
-  records the inventories, counts and exclusions. It files one area-review
+  commit and counts only source in programming or scripting languages, tests,
+  build and maintenance scripts, and CI workflow definitions at that SHA.
+  Exclude documentation and prose, lockfiles, dependency manifests and
+  declarative configuration, test fixtures and other test data, and generated,
+  vendored, minified, binary and static asset files; record exclusions as path
+  patterns with reasons and file counts. Split candidate areas above 25,000
+  included lines, then merge every candidate below 10,000 lines with related
+  candidates while the combined area stays within 25,000 lines. If included
+  code totals 25,000 lines or fewer, make it one area. Do not file an area under
+  5,000 lines unless no in-bound merge is possible, and record the reason in
+  `full-review-areas.json`. That artifact records the inventories, counts and
+  exclusions. It files one area-review
   chore per bounded area tagged
   `full-code-review` + `no-diff-expected` — never `code-review` — at `hard`
   complexity or below with no pinned crew. Area reviewers read every partition
