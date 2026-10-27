@@ -221,6 +221,66 @@ fn clock_forecast_skips_replica_and_missing_history_and_contains_write_failure()
     );
 }
 
+#[test]
+fn clock_records_blocked_only_cohort_without_endpoint_reads() {
+    isolated(
+        "backlog_forecast::clock_records_blocked_only_cohort_without_endpoint_reads",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            one_hour_history(&fixture);
+            forecast_tick(&fixture, now, false);
+            assert!(
+                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                "no forecastable work yet"
+            );
+
+            fixture
+                .runtime
+                .add_task(TaskAddParams {
+                    title: "Blocked only".into(),
+                    status: Some(TaskStatus::Blocked),
+                    ..Default::default()
+                })
+                .unwrap();
+            forecast_tick(&fixture, now, true);
+            assert!(
+                fixture.runtime.backlog_forecasts(10).unwrap().is_empty(),
+                "dry run"
+            );
+            forecast_tick(&fixture, now, false);
+            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(
+                rows.len(),
+                1,
+                "the owner clock must store a blocked-only forecast without a GET"
+            );
+            let stored_tasks: Value = serde_json::from_str(&rows[0].tasks_json).unwrap();
+            assert_eq!(stored_tasks.as_array().unwrap().len(), 1);
+            assert_eq!(stored_tasks[0]["status"], "blocked");
+
+            let server = fixture.server(false);
+            let read = json_ok(server.get(ENDPOINT));
+            assert_eq!(read["stored"]["recorded"], false);
+            assert_eq!(read["backlog"]["blocked"], 1);
+            drop(server);
+
+            forecast_tick(&fixture, now + Duration::minutes(59), false);
+            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
+            forecast_tick(&fixture, now + Duration::minutes(60), false);
+            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 2);
+
+            let fixture = fixture.into_replica("hm_forecast_owner");
+            forecast_tick(&fixture, now + Duration::hours(2), false);
+            assert_eq!(
+                fixture.runtime.backlog_forecasts(10).unwrap().len(),
+                2,
+                "replica cannot fill a free slot"
+            );
+        },
+    );
+}
+
 fn history(
     fixture: &Fixture,
 ) -> std::sync::Arc<dyn orbit_store::contracts::TaskHistoryStoreBackend> {
