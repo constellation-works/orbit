@@ -4,7 +4,8 @@
 //! a disposable workspace in a temporary directory.
 
 use orbit_core::application::task::{
-    FinalRecoveryCompletion, FinalRecoveryRequest, TaskAddParams, TaskUpdateParams,
+    FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, TaskAddParams,
+    TaskUpdateParams,
 };
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_core::{OrbitRuntime, TaskStatus};
@@ -476,6 +477,82 @@ fn final_recovery_done_unapplied_proposal_blocks_case() {
     );
 }
 
+/// An already-done task is not a completion. Final recovery records the
+/// terminal refusal even while a mutation proposal is still unapplied.
+fn final_recovery_refuses_already_done_unapplied_proposal_case() {
+    let (root, runtime, task_id) = unapplied_review_task();
+    let human = runtime
+        .clone()
+        .with_actor(orbit_core::ActorIdentity::human("human:operator"));
+    human
+        .force_update_task_with_identity(
+            &task_id,
+            TaskUpdateParams {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .expect("a human force still completes a task that has an unapplied proposal");
+    assert_eq!(runtime.get_task(&task_id).unwrap().status, TaskStatus::Done);
+    let repo = root.path().join("repo");
+    let git = |args: &[&str]| {
+        let mut command = crate::git_test_support::command();
+        let output = command.args(args).current_dir(&repo).output().unwrap();
+        assert!(output.status.success(), "git {args:?}: {output:?}");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["config", "user.name", "Orbit Test"]);
+    git(&["config", "user.email", "orbit-test@example.com"]);
+    git(&["commit", "--allow-empty", "-q", "-m", "landed"]);
+    let commit = git(&["rev-parse", "HEAD"]);
+    let task = runtime.get_task(&task_id).unwrap();
+    assert!(
+        task.relations.is_empty(),
+        "the fixture's resolves are workspace-local because it names none"
+    );
+    assert!(task.job_run_id.is_none(), "the completion run is stopped");
+    let observed = runtime.final_recovery_revision(&task).unwrap();
+    let outcome = runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: task_id.clone(),
+                run_id: "jrun-fr-already-done".to_string(),
+                observed,
+                repo_root: repo,
+                base_ref: "main".to_string(),
+                completion: FinalRecoveryCompletion::Done,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "complete_no_diff",
+                "evidence_commit": commit,
+                "rationale": "already landed"
+            })),
+        )
+        .unwrap_or_else(|error| {
+            panic!("an already-done task must be refused, not denied: {error}")
+        });
+    let FinalRecoveryOutcome::Refused { reason } = outcome else {
+        panic!("an already-done task must be refused, got {outcome:?}");
+    };
+    assert!(
+        reason.contains("already done")
+            && reason.contains("final recovery never reopens settled work"),
+        "{reason}"
+    );
+    assert_eq!(runtime.get_task(&task_id).unwrap().status, TaskStatus::Done);
+    let comments = runtime.get_task_comments(&task_id).unwrap();
+    assert!(
+        comments.iter().any(|comment| {
+            comment.message.contains("outcome=refused") && comment.message.contains(&reason)
+        }),
+        "the refusal comment must be recorded: {comments:?}"
+    );
+}
+
 #[derive(Clone)]
 struct MergedForge {
     merged: MergedPullRequest,
@@ -674,6 +751,7 @@ crate::scenario_table!(
     approve_unapplied_proposal_blocks_and_force_completes_case,
     automation_done_unapplied_proposal_blocks_case,
     final_recovery_done_unapplied_proposal_blocks_case,
+    final_recovery_refuses_already_done_unapplied_proposal_case,
     external_merge_unapplied_proposal_blocks_case,
     applied_proposals_still_complete_case
 );

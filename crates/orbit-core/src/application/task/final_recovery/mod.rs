@@ -12,6 +12,7 @@ mod revision;
 mod verify;
 
 pub use crate::runtime::task::FINAL_RECOVERY_REQUEUED_EVENT;
+pub(crate) use request::TERMINAL_REFUSAL_MARK;
 pub use request::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
 };

@@ -29,7 +29,7 @@ use orbit_types::workflow::{
 use crate::OrbitRuntime;
 use crate::application::task::{
     FinalRecoveryCompletion, FinalRecoveryOutcome, FinalRecoveryRequest, FinalRecoveryRequeueBound,
-    FinalRecoveryTaskRevision,
+    FinalRecoveryTaskRevision, TERMINAL_REFUSAL_MARK,
 };
 
 impl OrbitRuntime {
@@ -268,9 +268,13 @@ fn warn_applied_despite(run_id: &str, application: &FinalRecoveryApplication, er
     );
 }
 
-/// The engine's view of what the applier did. A refusal means a human acted
-/// after the failure; the run's ordinary failure path still preserves its
-/// work, so it is treated like an escalation.
+/// The engine's view of what the applier did.
+///
+/// A refusal because the task changed after the failure means a later
+/// decision stands. The run's ordinary failure path still preserves its
+/// work, so that refusal is an escalation. A refusal because the task is
+/// already terminal settles the run: the failure activity must not run
+/// over work final recovery will not reopen.
 fn applied_from(outcome: FinalRecoveryOutcome) -> FinalRecoveryApplied {
     match outcome {
         FinalRecoveryOutcome::Resume { .. } => FinalRecoveryApplied::Resume,
@@ -295,9 +299,15 @@ fn applied_from(outcome: FinalRecoveryOutcome) -> FinalRecoveryApplied {
                 None => "blocked for a human".to_string(),
             },
         },
-        FinalRecoveryOutcome::Refused { reason } => FinalRecoveryApplied::Escalated {
-            outcome: format!("refused: {reason}"),
-        },
+        FinalRecoveryOutcome::Refused { reason } => {
+            let settles = reason.contains(TERMINAL_REFUSAL_MARK);
+            let outcome = format!("refused: {reason}");
+            if settles {
+                FinalRecoveryApplied::Settled { outcome }
+            } else {
+                FinalRecoveryApplied::Escalated { outcome }
+            }
+        }
     }
 }
 

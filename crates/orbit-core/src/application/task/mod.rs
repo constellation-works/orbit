@@ -98,6 +98,7 @@ pub use escalation_triage_steps::{
     PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,
 };
 pub(crate) use escalation_triage_steps::{PilotWarningCandidacy, pilot_warning_candidacy};
+pub(crate) use final_recovery::TERMINAL_REFUSAL_MARK;
 pub use final_recovery::{
     FINAL_RECOVERY_REQUEUED_EVENT, FinalRecoveryCompletion, FinalRecoveryOutcome,
     FinalRecoveryRequest, FinalRecoveryRequeueBound, FinalRecoveryTaskRevision,
