@@ -6,7 +6,7 @@ tableOfContents:
   maxHeadingLevel: 2
 ---
 
-**Effective date: 4 October 2026**
+**Effective date: 27 October 2026**
 
 This policy covers the Orbit project maintained by
 [constellation-works](https://github.com/constellation-works):
@@ -70,8 +70,10 @@ host you configured, under that host's terms. Scheduled routines that contact
 GitHub or perform delivery are shipped disabled until you enable them. The
 crew-performance refresh is a local exception: it is seeded enabled and
 scheduled hourly. While `workflow.crew_performance` is `off` (the default),
-its action skips the scan and writes no snapshot. It fires only while the
-host's Orbit scheduler clock is running.
+its action skips the scan and writes no snapshot. Unattended hourly runs
+require the host's Orbit scheduler clock to be enabled, but an operator can
+still run a due refresh with `orbit clock tick` while scheduled ticks are
+paused.
 
 ### Task publication (optional)
 
