@@ -435,7 +435,21 @@ impl StreamedLogCollector {
             let prefix_kept =
                 tail.len() == raw_tail.len() || std::ptr::eq(tail.as_ptr(), raw_tail.as_ptr());
             let tail = if prefix_kept {
-                excerpt_without_orphaned_tail_token(tail, &self.tail_dropped)
+                // The head is also source before the tail: an introducer
+                // split by the head cut lies there, not in the dropped
+                // middle. Give the orphan check the source suffix ending
+                // at the tail (head suffix plus dropped middle).
+                let keep = WINDOW_TOKEN_CONTEXT_BYTES;
+                let total = self.head.len() + self.tail_dropped.len();
+                let skip = total.saturating_sub(keep);
+                let mut lookbehind = Vec::new();
+                if skip < self.head.len() {
+                    lookbehind.extend_from_slice(&self.head[skip..]);
+                    lookbehind.extend_from_slice(&self.tail_dropped);
+                } else {
+                    lookbehind.extend_from_slice(&self.tail_dropped[skip - self.head.len()..]);
+                }
+                excerpt_without_orphaned_tail_token(tail, &lookbehind)
             } else {
                 excerpt_without_partial_prefix(tail, tail_continues)
             };
