@@ -14,6 +14,10 @@
 //!   start time the forecast can simulate yet, so the dependent is
 //!   unforecastable, as is everything downstream of it and every task on or
 //!   behind a dependency cycle.
+//!
+//! A task the caller already cannot simulate (a blocked task without return
+//! evidence) is unforecastable for its own reason, with the same
+//! downstream effect.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -45,11 +49,13 @@ fn unscheduled_reason(status: Option<TaskStatus>) -> &'static str {
 }
 
 /// Resolve `tasks`' dependencies. `in_progress` tasks are already running,
-/// so their own edges never hold them back.
+/// so their own edges never hold them back. `unschedulable[i]` names why
+/// task `i` cannot be simulated whatever its dependencies.
 pub(super) fn plan_forecast_dependencies(
     tasks: &[&Task],
     status_by_id: &BTreeMap<String, TaskStatus>,
     reference_index: &TaskReferenceIndex,
+    unschedulable: &[Option<&'static str>],
 ) -> DependencyPlan {
     let index_of: HashMap<&str, usize> = tasks
         .iter()
@@ -58,7 +64,7 @@ pub(super) fn plan_forecast_dependencies(
         .collect();
     let len = tasks.len();
     let mut edges = vec![Vec::new(); len];
-    let mut external: Vec<Option<&'static str>> = vec![None; len];
+    let mut external: Vec<Option<&'static str>> = unschedulable.to_vec();
     let mut unverifiable = vec![0u64; len];
     for (index, task) in tasks.iter().enumerate() {
         if task.status == TaskStatus::InProgress {
@@ -77,7 +83,7 @@ pub(super) fn plan_forecast_dependencies(
                 unverifiable[index] += 1;
                 continue;
             }
-            external[index].get_or_insert(unscheduled_reason(status));
+            external[index].get_or_insert_with(|| unscheduled_reason(status));
         }
         edges[index].sort_unstable();
         edges[index].dedup();

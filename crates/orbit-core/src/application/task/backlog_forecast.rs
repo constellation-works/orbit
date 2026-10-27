@@ -5,12 +5,16 @@
 //!
 //! The method is documented in `docs/design/backlog-forecast/1_scope.md`. In short:
 //!
-//! - The sampling unit is one completed delivery: a task that reached
+//! - A delivering attempt draws one completed delivery: a task that reached
 //!   `done` inside the lookback, with every managed invocation linked to it
-//!   (recoveries, auto-fixes and reworks included). Its hours are the union
-//!   of those invocations' run intervals, bridging gaps shorter than
-//!   [`GAP_BRIDGE_HOURS`]; its tokens and USD are their normalized token
-//!   and provider cost sums.
+//!   since its last attempt that did not deliver (recoveries, auto-fixes
+//!   and reworks included). Its hours are the union of those invocations'
+//!   run intervals, bridging gaps shorter than [`GAP_BRIDGE_HOURS`]; its
+//!   tokens and USD are their normalized token and provider cost sums.
+//! - Each attempt first draws an admission episode from status history,
+//!   delivered or not, and a blocked one draws its return from a
+//!   competing-risk return curve [ORB-18688] (`outcomes.rs`). Blocked tasks
+//!   join the cohort waiting for that return.
 //! - Each task draws from its complexity × crew-pool × review-mode cell.
 //!   Thin cells drop crew, then complexity, preserving mode at five samples;
 //!   only then use the mode-pooled cell, complexity and workspace history.
@@ -31,6 +35,7 @@
 
 mod dependencies;
 mod model;
+mod outcomes;
 mod review_modes;
 mod schedule;
 mod scoring;
@@ -42,11 +47,13 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{BacklogForecastStoreBackend as _, StoredBacklogForecast};
 use orbit_types::task::{
-    Task, TaskReferenceIndex, TaskStatus, UNSET_BUCKET, auto_task_template, complexity_bucket,
+    Task, TaskHistoryEntry, TaskReferenceIndex, TaskStatus, UNSET_BUCKET, auto_task_template,
+    complexity_bucket,
 };
 use serde_json::{Value, json};
 
 use model::{Arrivals, Basis, Delivery, Item, Resolved, Spent};
+use outcomes::{AwayWait, Episode, EpisodeOutcome, RETURN_HORIZON_HOURS, TaskEpisodes};
 use review_modes::{ReviewHistory, ReviewMode};
 
 /// Default history lookback, in days.
@@ -184,6 +191,40 @@ pub(super) fn forecast_usage(runs: &[ForecastRun], after: Option<DateTime<Utc>>)
     used
 }
 
+/// What the runs overlapping `from`..`to` used: one attempt's tokens and USD.
+fn window_spend(
+    runs: &[ForecastRun],
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> (Option<f64>, Option<f64>) {
+    runs.iter()
+        .filter(|run| run.end > from && run.start < to)
+        .fold((Some(0.0), Some(0.0)), |(tokens, usd), run| {
+            (
+                tokens.zip(run.tokens).map(|(sum, one)| sum + one),
+                usd.zip(run.usd).map(|(sum, one)| sum + one),
+            )
+        })
+}
+
+/// Read `id`'s status history once per forecast; `None` when unreadable.
+fn cached_history<'a>(
+    runtime: &OrbitRuntime,
+    cache: &'a mut HashMap<String, Option<Vec<TaskHistoryEntry>>>,
+    id: &str,
+) -> Option<&'a [TaskHistoryEntry]> {
+    cache
+        .entry(id.to_string())
+        .or_insert_with(|| match runtime.get_task_history(id) {
+            Ok(history) => Some(history),
+            Err(error) => {
+                tracing::warn!(task_id = %id, %error, "backlog forecast: task history unreadable");
+                None
+            }
+        })
+        .as_deref()
+}
+
 /// Complexity tier → the crews its pool draws (weight above zero).
 fn complexity_pools(runtime: &OrbitRuntime) -> BTreeMap<String, BTreeSet<String>> {
     let pools = match runtime.workspace_complexity_crew_pools() {
@@ -251,6 +292,7 @@ fn calculate_backlog_forecast(
         .min();
     let mut done_at: HashMap<String, DateTime<Utc>> = HashMap::new();
     let mut history_rows = Vec::new();
+    let mut histories: HashMap<String, Option<Vec<TaskHistoryEntry>>> = HashMap::new();
     // The index dates terminal rows by updated_at, which later comments or
     // artifacts can advance. Use it only to narrow candidates: an actual
     // completion cannot be newer than its last update. Read each candidate's
@@ -262,19 +304,11 @@ fn calculate_backlog_forecast(
         .into_iter()
         .filter(|row| row.status == TaskStatus::Done)
     {
-        let task_history = match runtime.get_task_history(&row.task_id) {
-            Ok(history) => history,
-            Err(error) => {
-                tracing::warn!(
-                    task_id = %row.task_id,
-                    %error,
-                    "backlog forecast: task history unreadable"
-                );
-                continue;
-            }
+        let Some(task_history) = cached_history(runtime, &mut histories, &row.task_id) else {
+            continue;
         };
         let completed_at = task_history
-            .into_iter()
+            .iter()
             .rev()
             .find(|entry| entry.to_status == Some(TaskStatus::Done))
             .map(|entry| entry.at);
@@ -285,6 +319,35 @@ fn calculate_backlog_forecast(
             }
         }
     }
+
+    // Attempts and returns come from status history. Returns are observed
+    // from 90 days before the lookback, so a recent lookback need not prove
+    // a 90-day tail on its own. `updated_at` only narrows the candidates: a
+    // transition cannot be newer than its task's last update. Running and
+    // blocked tasks are always read, for their elapsed age.
+    let return_start = lookback_start - Duration::days(outcomes::RETURN_WINDOW_DAYS);
+    let mut task_episodes: HashMap<String, TaskEpisodes> = HashMap::new();
+    let mut episode_ids: Vec<&String> = tasks
+        .iter()
+        .filter(|(_, task)| {
+            task.updated_at >= return_start
+                || matches!(task.status, TaskStatus::InProgress | TaskStatus::Blocked)
+        })
+        .map(|(id, _)| id)
+        .collect();
+    episode_ids.sort();
+    for id in episode_ids {
+        if let Some(history) = cached_history(runtime, &mut histories, id) {
+            task_episodes.insert(id.clone(), TaskEpisodes::read(history));
+        }
+    }
+    drop(histories);
+    let attempted = task_episodes.iter().any(|(_, episodes)| {
+        episodes
+            .settled
+            .iter()
+            .any(|(admitted, _, _)| *admitted >= lookback_start)
+    });
 
     // The invocation read starts at the earliest of the lookback, the oldest
     // task it must cover and the oldest stored forecast. Creation times
@@ -300,7 +363,7 @@ fn calculate_backlog_forecast(
         .filter_map(|row| row.created_at)
         .chain(in_progress_created)
         .chain(oldest_forecast)
-        .chain((!history_rows.is_empty()).then_some(lookback_start))
+        .chain((!history_rows.is_empty() || attempted).then_some(lookback_start))
         .min()
         .map(|oldest| oldest - SPEND_READ_SLACK);
     let mut runs: HashMap<String, Vec<ForecastRun>> = HashMap::new();
@@ -312,6 +375,7 @@ fn calculate_backlog_forecast(
     let review_task_ids = history_rows
         .iter()
         .map(|row| row.task_id.as_str())
+        .chain(task_episodes.keys().map(String::as_str))
         .collect();
     let reviews = ReviewHistory::collect(runtime, &spends, &review_task_ids)?;
     if spend_since.is_some() {
@@ -335,8 +399,17 @@ fn calculate_backlog_forecast(
 
     let mut history = Vec::new();
     let mut without_invocations = 0u64;
+    let task_runs = |id: &str| runs.get(id).map_or(no_runs, Vec::as_slice);
+    let last_setback = |id: &str, until: Option<DateTime<Utc>>| {
+        task_episodes
+            .get(id)
+            .and_then(|episodes| episodes.last_setback(until))
+    };
     for row in &history_rows {
-        let used = forecast_usage(runs.get(&row.task_id).map_or(no_runs, Vec::as_slice), None);
+        // Attempts that did not deliver are sampled as episodes, so the
+        // delivery counts only what followed the last of them.
+        let since = last_setback(&row.task_id, done_at.get(&row.task_id).copied());
+        let used = forecast_usage(task_runs(&row.task_id), since);
         if used.invocations == 0 {
             without_invocations += 1;
             continue;
@@ -351,19 +424,89 @@ fn calculate_backlog_forecast(
         });
     }
 
+    let sample_cell = |id: &str| {
+        let task = tasks.get(id);
+        (
+            complexity_bucket(task.and_then(|task| task.complexity.map(|c| c.as_str())))
+                .to_string(),
+            task.and_then(|task| task.crew.clone()),
+            reviews.delivery_mode(id),
+        )
+    };
+    let mut episodes: Vec<Episode> = Vec::new();
+    let mut waits: Vec<AwayWait> = Vec::new();
+    let mut live_episodes = 0u64;
+    let mut episode_ids: Vec<&String> = task_episodes.keys().collect();
+    episode_ids.sort();
+    for id in episode_ids {
+        let recorded = &task_episodes[id];
+        let (complexity, crew, review_mode) = sample_cell(id);
+        if recorded
+            .live
+            .is_some_and(|admitted| admitted >= lookback_start)
+        {
+            live_episodes += 1;
+        }
+        for (admitted, settled, outcome) in &recorded.settled {
+            if *admitted < lookback_start {
+                continue;
+            }
+            let (tokens, usd) = if *outcome == EpisodeOutcome::Delivered {
+                (None, None)
+            } else {
+                window_spend(task_runs(id), *admitted, *settled)
+            };
+            episodes.push(Episode {
+                complexity: complexity.clone(),
+                crew: crew.clone(),
+                review_mode,
+                outcome: *outcome,
+                hold_hours: outcomes::hours_between(*admitted, *settled),
+                tokens,
+                usd,
+            });
+        }
+        for (left, follow) in &recorded.away {
+            if *left < return_start {
+                continue;
+            }
+            let (hours, event) = match follow {
+                Some((at, event)) => (outcomes::hours_between(*left, *at), Some(*event)),
+                None => (outcomes::hours_between(*left, now), None),
+            };
+            // Past the horizon a wait is censored there: no return within it.
+            let (hours, event) = if hours > RETURN_HORIZON_HOURS {
+                (RETURN_HORIZON_HOURS, None)
+            } else {
+                (hours, event)
+            };
+            waits.push(AwayWait {
+                complexity: complexity.clone(),
+                crew: crew.clone(),
+                review_mode,
+                hours,
+                event,
+            });
+        }
+    }
+
     let pools = complexity_pools(runtime);
     let mut queued: Vec<&Task> = tasks
         .values()
         .filter(|task| {
             matches!(
                 task.status,
-                TaskStatus::Backlog | TaskStatus::InProgress | TaskStatus::Proposed
+                TaskStatus::Backlog
+                    | TaskStatus::InProgress
+                    | TaskStatus::Proposed
+                    | TaskStatus::Blocked
             )
         })
         .collect();
     // A stable item order; the simulation admits in the drain's own
     // dispatch order, interleaving proposed work when approved.
     queued.sort_by(|left, right| left.id.cmp(&right.id));
+    let mut age_unknown: BTreeSet<String> = BTreeSet::new();
     let items: Vec<Item> = queued
         .iter()
         .map(|task| {
@@ -374,8 +517,12 @@ fn calculate_backlog_forecast(
                 None => pools.get(&complexity).cloned().unwrap_or_default(),
             };
             let in_progress = task.status == TaskStatus::InProgress;
+            let blocked = task.status == TaskStatus::Blocked;
+            let recorded = task_episodes.get(&id);
+            // Only the running attempt's use is subtracted; a blocked task's
+            // earlier use is sunk.
             let spent = if in_progress {
-                let used = forecast_usage(runs.get(&id).map_or(no_runs, Vec::as_slice), None);
+                let used = forecast_usage(task_runs(&id), last_setback(&id, None));
                 Spent {
                     hours: used.hours,
                     tokens: used.tokens.unwrap_or(0.0),
@@ -384,6 +531,16 @@ fn calculate_backlog_forecast(
             } else {
                 Spent::default()
             };
+            let since = if in_progress {
+                recorded.and_then(|recorded| recorded.live)
+            } else if blocked {
+                recorded.and_then(|recorded| recorded.blocked_since)
+            } else {
+                None
+            };
+            if (in_progress || blocked) && since.is_none() {
+                age_unknown.insert(id.clone());
+            }
             let (review_mode, review_mode_source) = reviews.assumed_mode(runtime, task)?;
             Ok(Item {
                 task_id: id,
@@ -394,13 +551,15 @@ fn calculate_backlog_forecast(
                 review_mode_source,
                 in_progress,
                 proposed: task.status == TaskStatus::Proposed,
+                blocked,
+                age_hours: since.map_or(0.0, |since| outcomes::hours_between(since, now)),
                 spent,
             })
         })
         .collect::<Result<_, OrbitError>>()?;
     let resolved: Vec<Resolved> = items
         .iter()
-        .map(|item| model::resolve_forecast_item(item, &history))
+        .map(|item| model::resolve_forecast_item(item, &history, &episodes, &waits))
         .collect();
 
     let (concurrency, concurrency_source) = match options.concurrency {
@@ -429,13 +588,37 @@ fn calculate_backlog_forecast(
 
     let status_by_id = runtime.dependency_status_index(queued.iter().copied())?;
     let reference_index = TaskReferenceIndex::from_status_index(&status_by_id);
-    let plan = dependencies::plan_forecast_dependencies(&queued, &status_by_id, &reference_index);
+    // A blocked task with no return evidence has no start time to simulate.
+    let no_return_support: Vec<Option<&'static str>> = items
+        .iter()
+        .zip(&resolved)
+        .map(|(item, resolved)| {
+            (item.blocked && resolved.returns.support == 0).then_some("return_unsupported")
+        })
+        .collect();
+    let plan = dependencies::plan_forecast_dependencies(
+        &queued,
+        &status_by_id,
+        &reference_index,
+        &no_return_support,
+    );
     let workspace: BTreeMap<String, Task> = tasks
         .iter()
         .map(|(id, task)| (id.clone(), task.clone()))
         .collect();
+    // A blocked task re-enters the queue as backlog, with its own priority
+    // and footprint.
     let admission = runtime.forecast_admission(
-        queued.iter().map(|task| (*task).clone()).collect(),
+        queued
+            .iter()
+            .map(|task| match task.status {
+                TaskStatus::Blocked => Task {
+                    status: TaskStatus::Backlog,
+                    ..(*task).clone()
+                },
+                _ => (*task).clone(),
+            })
+            .collect(),
         &workspace,
         now,
     );
@@ -443,6 +626,7 @@ fn calculate_backlog_forecast(
         &items,
         &resolved,
         &history,
+        &episodes,
         &admission,
         &plan,
         slots,
@@ -464,6 +648,12 @@ fn calculate_backlog_forecast(
             ("review_lock_overlaps", 0),
             ("review_mode_fallbacks", 0),
             ("review_mode_unknown", 0),
+            ("blocked", 0),
+            ("outcome_fallbacks", 0),
+            ("outcome_no_history", 0),
+            ("return_unsupported", 0),
+            ("return_tail_unsupported", 0),
+            ("phase_age_unknown", 0),
             (
                 "history_review_mode_unknown",
                 history
@@ -484,9 +674,31 @@ fn calculate_backlog_forecast(
                 continue;
             }
             bump("tasks");
-            if let Some(reason) = reasons[index] {
-                bump("dependency_unforecastable");
-                *unforecastable.entry(reason).or_default() += 1;
+            match reasons[index] {
+                Some("return_unsupported") => bump("return_unsupported"),
+                Some(reason) => {
+                    bump("dependency_unforecastable");
+                    *unforecastable.entry(reason).or_default() += 1;
+                }
+                None => {}
+            }
+            if item.blocked {
+                bump("blocked");
+            }
+            match resolved.outcome_basis {
+                Basis::None => bump("outcome_no_history"),
+                Basis::Cell => {}
+                _ => bump("outcome_fallbacks"),
+            }
+            let age = if item.blocked { item.age_hours } else { 0.0 };
+            if (item.blocked || resolved.can_block(&episodes))
+                && resolved.returns.support > 0
+                && resolved.returns.unsupported_at(age)
+            {
+                bump("return_tail_unsupported");
+            }
+            if age_unknown.contains(&item.task_id) {
+                bump("phase_age_unknown");
             }
             if admission.overlaps_review_lock(index) {
                 bump("review_lock_overlaps");
@@ -558,6 +770,22 @@ fn calculate_backlog_forecast(
             *counts.entry(delivery.review_mode.key().into()).or_default() += 1;
             counts
         }),
+        "outcomes": {
+            "episodes": episodes.iter().fold(BTreeMap::<&str, u64>::new(), |mut counts, episode| {
+                *counts.entry(episode.outcome.key()).or_default() += 1;
+                counts
+            }),
+            "live_episodes": live_episodes,
+            "return_window_days": options.lookback_days + outcomes::RETURN_WINDOW_DAYS,
+            "return_horizon_hours": RETURN_HORIZON_HOURS,
+            "returns": {
+                "waits": waits.len(),
+                "returned": waits.iter().filter(|wait| wait.event == Some(outcomes::ReturnEvent::Returned)).count(),
+                "resolved": waits.iter().filter(|wait| wait.event == Some(outcomes::ReturnEvent::Resolved)).count(),
+                "absorbed": waits.iter().filter(|wait| wait.event == Some(outcomes::ReturnEvent::Absorbed)).count(),
+                "censored": waits.iter().filter(|wait| wait.event.is_none()).count(),
+            },
+        },
     });
 
     let mut stored_now = None;
@@ -581,7 +809,18 @@ fn calculate_backlog_forecast(
                     "id": item.task_id,
                     "complexity": item.complexity,
                     "in_progress": item.in_progress,
+                    "status": if item.in_progress {
+                        "in-progress"
+                    } else if item.blocked {
+                        "blocked"
+                    } else {
+                        "backlog"
+                    },
                     "basis": resolved.basis.key(),
+                    "outcome_basis": resolved.outcome_basis.key(),
+                    "setback_probability": resolved.setback_probability(&episodes),
+                    "return_basis": resolved.return_basis.key(),
+                    "return_probability": resolved.returns.return_probability(),
                     "cell_samples": resolved.cell_samples,
                     "review_mode": item.review_mode,
                     "review_mode_source": item.review_mode_source,
@@ -631,7 +870,11 @@ fn calculate_backlog_forecast(
         "inputs": inputs,
         "assumptions": {
             "arrivals": if options.arrivals { "recent_rate" } else { "none" },
-            "excluded_statuses": ["review", "blocked", "someday"],
+            "excluded_statuses": ["review", "someday"],
+            // A blocked task waits for a sampled return, conditioned on how
+            // long it has been blocked; attempts sample episode outcomes.
+            "blocked_tasks": "age_conditioned_return",
+            "attempt_outcomes": "sampled_episodes",
             "arrival_missing_metrics": "propagate_null",
             // Admission factors the simulation does not model yet: review
             // locks are counted in coverage, arrivals take a slot but hold
