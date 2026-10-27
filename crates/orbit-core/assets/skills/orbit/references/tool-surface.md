@@ -473,8 +473,9 @@ ceiling. Over SSH, principal/class policy is attribution and a guard.
 Renew, release and show take `lease_id`; renew optionally takes `ttl_seconds`.
 Expand takes `lease_id` and `selectors`: free paths are `added` at once, and
 on a hard lease blocked ones are `queued` while the lease keeps what it holds.
-A mutual expansion wait refuses the younger, lower-priority expansion with a
-`deadlock` notice (`deadlock` is set in that caller's answer).
+A mutual expansion wait refuses the expansion ranked last in queue order
+(lowest effective priority, then youngest) with a `deadlock` notice
+(`deadlock` is set in that caller's answer).
 List returns active leases, queued ones included. Check takes `paths` and optional `lease_id` and
 reports coverage, unlocked policy and overlapping holders without mutations.
 Show and list expire stale leases and can write expiry audit events.

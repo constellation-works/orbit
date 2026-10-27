@@ -217,7 +217,7 @@ const EXPAND: OperationSpec<LeaseVerb> = OperationSpec {
     verb: LeaseVerb::Expand,
     cli_path: &["expand"],
     tool_name: "orbit.lease.expand",
-    tool_description: "Add path selectors to a granted lease. Free paths are added at once; on a hard lease, blocked ones wait in the lease queue while the lease keeps what it holds. When two leases each wait on the other's expansion, the younger, lower-priority expansion is refused with a deadlock notice. Returns the added and queued selectors, blocking holders, queue position, any deadlock and the lease.",
+    tool_description: "Add path selectors to a granted lease. Free paths are added at once; on a hard lease, blocked ones wait in the lease queue while the lease keeps what it holds. When two leases each wait on the other's expansion, the expansion ranked last in queue order (lowest effective priority, then youngest) is refused with a deadlock notice. Returns the added and queued selectors, blocking holders, queue position, any deadlock and the lease.",
     cli_about: "Add selectors to a granted lease",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

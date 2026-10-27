@@ -144,8 +144,8 @@ advisory rather than vanishing.
 
 **Expansion.** `expand` adds selectors to a granted lease. Free paths are added at once; for
 blocked ones the expansion queues while the lease keeps what it holds. Two leases each waiting on
-the other's expansion are a deadlock; the owner breaks it by refusing the younger, lower-priority
-expansion with a `deadlock` notice.
+the other's expansion are a deadlock; the owner breaks it by refusing the expansion ranked
+last in queue order (lowest effective priority, then youngest) with a `deadlock` notice.
 
 **Implemented queue.** The owner store keeps queue order transactionally: rank is the priority
 plus one level once `now - queued_at` reaches `lease.aging_minutes` (capped at `high`), then the
