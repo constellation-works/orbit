@@ -26,8 +26,8 @@ struct Outcome {
     /// Summed task-hours waiting to return after leaving the queue.
     return_waits: Vec<Option<f64>>,
     /// Over available iterations: attempts started that were blocked,
-    /// failed or abandoned; tasks left without a return; iterations in
-    /// which a task hit [`MAX_ATTEMPTS`].
+    /// failed or abandoned; tasks left without a return; tasks whose
+    /// [`MAX_ATTEMPTS`]-th attempt started.
     setbacks: [u64; 3],
     no_return: u64,
     attempt_limited: u64,
@@ -115,6 +115,7 @@ impl Outcome {
             *total += count;
         }
         self.no_return += run.no_return as u64;
+        self.attempt_limited += run.attempt_limited;
         self.drained += u64::from(run.drained.is_some());
         self.complete += u64::from(run.unfinished == 0);
         self.unfinished += run.unfinished as u64;
@@ -272,12 +273,14 @@ impl Outcome {
             "drain_probability": whole(self.drained),
             "not_expected_to_drain": full.then(|| mean(self.unfinished)).flatten(),
             // Means per simulated drain, over the scheduled tasks.
+            // `attempt_limited` is how many tasks started their 25th
+            // attempt, not how many pre-generated scripts hold 25 steps.
             "outcomes": {
                 "blocked_attempts": mean(self.setbacks[0]),
                 "failed_attempts": mean(self.setbacks[1]),
                 "abandoned_attempts": mean(self.setbacks[2]),
                 "no_return": mean(self.no_return),
-                "attempt_limited": self.attempt_limited,
+                "attempt_limited": mean(self.attempt_limited),
                 "max_attempts": MAX_ATTEMPTS,
             },
             "horizon_hours": HORIZON_HOURS,
@@ -498,11 +501,6 @@ pub(super) fn simulate_backlog_forecast(
                 totals = Draw::MISSING;
             }
             outcome.record(scenario, &run, state, totals);
-            outcome.attempt_limited += u64::from(
-                run.waits.is_some()
-                    && (0..items.len())
-                        .any(|index| scenario.included[index] && scripts[index].limited),
-            );
             for (key, cell) in complexity {
                 let entry = outcome.by_complexity.entry(key.to_string()).or_default();
                 entry[0].push(cell.hours);
