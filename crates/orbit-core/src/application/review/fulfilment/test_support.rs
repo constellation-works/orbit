@@ -9,19 +9,22 @@ use super::{EvidenceRun, FulfilmentRefusal};
 struct Completion {
     findings: Vec<ReviewEvidenceFinding>,
     before_transition: Option<Box<dyn FnOnce()>>,
+    before_write: Option<Box<dyn FnOnce()>>,
 }
 
 thread_local! {
     static COMPLETION: RefCell<Option<Completion>> = const { RefCell::new(None) };
 }
 
-/// Supply completed external findings, then interleave a task update just before
-/// the findings transition enters its critical section. This exercises the real
+/// Supply completed external findings and checkpoints before the current-hold
+/// check and immediately before the backlog write. The latter runs only after
+/// the check succeeds, inside the transition's mutation. This exercises the real
 /// public fulfilment action and artifact writes without running an analyzer.
 /// Scoped to this thread; restores the previous fixture on return or unwind.
 pub fn with_review_evidence_completion<T>(
     findings: Vec<ReviewEvidenceFinding>,
     before_transition: impl FnOnce() + 'static,
+    before_write: impl FnOnce() + 'static,
     operation: impl FnOnce() -> T,
 ) -> T {
     struct Restore(Option<Completion>);
@@ -34,6 +37,7 @@ pub fn with_review_evidence_completion<T>(
         slot.replace(Some(Completion {
             findings,
             before_transition: Some(Box::new(before_transition)),
+            before_write: Some(Box::new(before_write)),
         }))
     }));
     operation()
@@ -63,6 +67,17 @@ pub(crate) fn before_findings_transition() {
         slot.borrow_mut()
             .as_mut()
             .and_then(|completion| completion.before_transition.take())
+    });
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+pub(crate) fn before_findings_write() {
+    let hook = COMPLETION.with(|slot| {
+        slot.borrow_mut()
+            .as_mut()
+            .and_then(|completion| completion.before_write.take())
     });
     if let Some(hook) = hook {
         hook();

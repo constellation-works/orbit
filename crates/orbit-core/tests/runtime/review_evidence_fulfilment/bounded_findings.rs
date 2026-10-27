@@ -57,6 +57,7 @@ fn combined_findings_remain_readable_with_near_limit_results_and_json_escaping()
         let output = with_review_evidence_completion(
             findings,
             || {},
+            || {},
             || {
                 fixture
                     .runtime

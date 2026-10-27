@@ -626,6 +626,8 @@ pub(crate) fn route_evidence_findings(
                 return Ok(());
             }
             runtime.with_mutation(|| {
+                #[cfg(feature = "test-support")]
+                super::fulfilment_test_support::before_findings_write();
                 let updated = runtime.stores().task_records().update(
                     task_id,
                     TaskRecordUpdateParams {
