@@ -267,6 +267,28 @@ fn redact_all_masks_same_line_api_key_assignments_and_keeps_key_names() {
 }
 
 #[test]
+fn redact_all_leaves_following_line_alone_after_empty_api_key_assignment() {
+    const TIMESTAMP: &str = "2026-10-26T14:42:00.0000000Z";
+    // An empty `=` assignment carries no value, so the next line's timestamp
+    // and prose must stay readable (ORB-19017 regression).
+    for key in ["apiKey", "serviceApiKey", "api_key", "my_api_key"] {
+        let raw = format!("{key}=\n{TIMESTAMP} safe output");
+        assert_eq!(redact_all(&raw), raw, "next line masked after empty {key}=");
+    }
+
+    // A same-line value still masks through the public boundary.
+    let redacted = redact_all("serviceApiKey=q7Lx2Rv9Kp4Nm8Zs3Tw6");
+    assert_eq!(redacted, "serviceApiKey=[REDACTED_AUTH]");
+
+    // The pinned multi-line `api_key:` mapping still masks its next-line
+    // value via the line-start pattern.
+    assert_eq!(
+        redact_all("api_key:\nSYNTHETICVALUE1234567890\nsafe output\n"),
+        "api_key:\n[REDACTED_AUTH]\nsafe output\n"
+    );
+}
+
+#[test]
 fn redact_all_masks_embedded_quotes_in_api_key_assignments() {
     for key in ["api_key", "serviceApiKey", "\"api_key\""] {
         for (value, quote) in [
