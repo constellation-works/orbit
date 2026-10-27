@@ -13,7 +13,8 @@ use serde_json::{Value, json};
 use crate::auto_task_lifecycle_cli::git;
 use crate::isolated_cli_fixture::Fixture;
 use crate::review_after_landing_cli::{
-    commit, in_isolated_child, open_runtime, retarget, toggle, trigger,
+    commit, enable_review_crew, in_isolated_child, land_and_evaluate, open_runtime, retarget,
+    toggle, trigger,
 };
 
 const CONSUMER: &str = "delivery-code-review";
@@ -134,6 +135,101 @@ fn listing_reports_last_fire_outcomes_from_scheduler_cursors() {
         assert!(row.get("run_id").is_none(), "{row}");
         assert!(row.get("logs").is_none(), "{row}");
         assert!(row.get("step_output").is_none(), "{row}");
+    }
+}
+
+/// [ORB-19122] A delivery schedule never writes the time cursor, so its
+/// `last_fire` comes from scheduler-owned automation records: the task a
+/// real delivery admission minted, not `null`, and not a stale interval-era
+/// cursor left behind when the definition was retargeted to deliveries.
+#[test]
+fn listing_reports_last_fire_from_a_delivery_admission() {
+    const TEST: &str = "auto_task_listing_cli::listing_reports_last_fire_from_a_delivery_admission";
+    if !in_isolated_child(TEST) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    enable_review_crew(&fixture);
+    git(&fixture, &["checkout", "-b", "fixture-delivery"]);
+    commit(&fixture, "baseline\n");
+    retarget(&fixture, &trigger());
+    toggle(&fixture, "on");
+    let runtime = open_runtime(&fixture);
+
+    // A stale interval-era cursor naming another definition's task.
+    runtime
+        .auto_task_add(AutoTaskAddParams {
+            name: "stale-source".into(),
+            description: "stale cursor fixture".into(),
+            schedule: AutoTaskSchedule::Interval { every_minutes: 60 },
+            template: AutoTaskTemplate {
+                title: "Stale source".into(),
+                description: "Stale cursor fixture".into(),
+                acceptance_criteria: vec![],
+                task_type: TaskType::Chore,
+                tags: vec![],
+                required_tools: vec![],
+                context_files: vec![],
+                priority: TaskPriority::Medium,
+                complexity: None,
+                crew: None,
+                status: TaskStatus::Backlog,
+            },
+            dedupe: DedupePolicy::Always,
+        })
+        .unwrap();
+    let stale_task = runtime.auto_task_mint("stale-source").unwrap();
+    let cursor_path =
+        orbit_core::application::auto_tasks::cursor_state_path(&runtime.paths().state_dir);
+    let baseline_at = (Utc::now() - Duration::hours(3)).to_rfc3339();
+    let stale_at = (Utc::now() - Duration::hours(2)).to_rfc3339();
+    fs::create_dir_all(cursor_path.parent().unwrap()).unwrap();
+    fs::write(
+        &cursor_path,
+        json!({"definitions": {
+            CONSUMER: {
+                "baseline_at": baseline_at,
+                "last_fired_at": stale_at,
+                "last_task_id": stale_task.id,
+            },
+        }})
+        .to_string(),
+    )
+    .unwrap();
+
+    let rows = runtime
+        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .unwrap();
+    assert!(
+        named(&rows, CONSUMER)["last_fire"].is_null(),
+        "a delivery definition that has not fired ignores its stale time cursor: {rows}"
+    );
+
+    let minted_id = land_and_evaluate(&fixture, &runtime, "landed delivery\n")
+        .expect("the delivery admission mints a review task");
+    assert_ne!(minted_id, stale_task.id.to_string());
+    let minted = runtime.get_task(&minted_id).unwrap();
+
+    let rows = runtime
+        .run_tool_as_human("orbit.auto_task.list", json!({}))
+        .unwrap();
+    let consumer = named(&rows, CONSUMER);
+    assert_eq!(
+        consumer["last_fire"],
+        json!({
+            "kind": "fired",
+            "at": minted.created_at,
+            "task_id": minted.id,
+            "task_status": minted.status,
+        }),
+        "the delivery fire reports its minted task and current status: {consumer}"
+    );
+    let last_fire = consumer["last_fire"].as_object().unwrap();
+    assert_eq!(last_fire.len(), 4, "{last_fire:?}");
+    for key in ["run_id", "logs", "step_output"] {
+        assert!(consumer.get(key).is_none(), "{consumer}");
+        assert!(last_fire.get(key).is_none(), "{last_fire:?}");
     }
 }
 

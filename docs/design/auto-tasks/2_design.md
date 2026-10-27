@@ -178,6 +178,14 @@ clears it.
 `null` before either. The fired projection reads the task's current status by
 its ID. It exposes no run ID, logs, step output, or skip comparison metadata.
 
+Delivery schedules never write that cursor, so their `last_fire` reads
+scheduler-owned automation records instead: the active batch's minted task,
+or the newest accepted receipt's task once no batch is active, whichever is
+newer. `at` is the minted task's creation time, falling back to the recorded
+batch or receipt time when the task is gone. A leftover cursor from an
+earlier time schedule never shadows a delivery fire, and a delivery
+definition that has not fired reports `null`.
+
 ## 4. The scheduler pass
 
 `scheduler::run_auto_task_scheduler_at` loads the workspace's definitions,
