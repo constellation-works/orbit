@@ -482,6 +482,36 @@ pub fn renew(runtime: &RuntimeKernel, input: Value) -> Result<Value, OrbitError>
     Ok(json!({"renewed": true, "lease": lease_json(&lease)}))
 }
 
+/// Renew only when the lease fits the calling token and its class policy.
+/// An out-of-scope lease is left unchanged; operators may still renew it.
+pub fn renew_with_token(
+    runtime: &RuntimeKernel,
+    input: Value,
+    grant: &LeaseTokenGrant,
+) -> Result<Value, OrbitError> {
+    let found = show(runtime, input.clone())?;
+    let lease = &found["lease"];
+    let policy = runtime.lease_policy();
+    let ceiling = lower_priority(
+        policy.max_priority(grant.principal_class),
+        grant.max_priority,
+    );
+    let priority = lease
+        .get("priority")
+        .and_then(Value::as_str)
+        .ok_or_else(|| OrbitError::InvalidInput("lease is not active".to_string()))?;
+    let priority = parse_priority(priority, "priority")?;
+    let hard = lease.get("mode").and_then(Value::as_str) == Some("hard");
+    if priority_rank(priority) > priority_rank(ceiling)
+        || (hard && !(grant.hard_allowed && policy.hard_allowed(grant.principal_class)))
+    {
+        return Err(OrbitError::InvalidInput(
+            "lease exceeds the renewing token's or workspace policy's permissions".to_string(),
+        ));
+    }
+    renew(runtime, input)
+}
+
 /// End an active lease. `released` is false when it was unknown or had
 /// already ended.
 pub fn release(

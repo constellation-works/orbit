@@ -597,6 +597,7 @@
         "lease_intake/tests/server.rs::ambiguous_workspace_id_name_selector_is_refused_without_touching_either_workspace",
         "lease_intake/tests/server.rs::oversized_read_responses_are_bounded_errors_and_other_connections_still_work",
         "lease_intake/tests/server.rs::oversized_request_response_releases_the_grant_before_returning_an_error",
+        "lease_intake/tests/server.rs::token_renewal_obeys_current_scope_and_workspace_policy",
         "lease_intake/tests/server.rs::token_renews_and_releases_only_its_own_principals_leases",
         "lease_listener/tests/mod.rs::a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_socket",
         "log_format/tests/render.rs::format_message_html_escapes_dynamic_field_values",

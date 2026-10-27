@@ -428,7 +428,10 @@ only when both allow it. The lease row stores the token id (store migration 66),
 operation writes one `lease.intake.<operation>` audit row with principal, token id, client
 address and outcome. A token renews and releases only leases whose principal is its own; any
 other lease, like an unknown one, is refused with `lease_not_held`, which names no holder,
-because a token authorizes leases and nothing else (`4_decisions.md`). Show, list and check read
+because a token authorizes leases and nothing else (`4_decisions.md`). Renewal is refused without
+changing the lease when its mode or priority exceeds the renewing token or the workspace class
+policy admitted by the running service; release remains allowed to the same principal. Restart the
+service to admit changed workspace policy. Show, list and check read
 every lease in the token's workspace. The operator-session REST routes keep full authority over
 every lease.
 
