@@ -1,7 +1,7 @@
 ---
 type: pattern
 summary: "Boundary-First Testing: integration, golden and e2e by default; unit tests by exception"
-last_validated: 2026-10-26
+last_validated: 2026-10-27
 ---
 # Boundary-First Testing
 
@@ -903,6 +903,14 @@ after the queue and notices had changed. The test drives the real intake
 socket: a three-lease cycle that fits is delivered whole, and a 32-lease cycle
 on a near-limit record is refused with `invalid_input` before any queue change
 or notice. It stays beside the selector-bound case for the same private listener.
+
+`crates/orbit-web/src/lease_intake/tests/server.rs::token_task_holder_prebound_reports_truncation_for_requests_and_expansions`
+is admitted under criterion 3 for the reproduced task-holder truncation defect
+(ORB-19080). Three in-progress task context holders block one selector. A
+4096-byte token answer is sized to fit the first conflict but not its omission
+witness; the real intake socket then verifies request and expansion answers,
+their queued notices, the fitting prefix and the blocked path. An unbounded
+operator request verifies that it still returns all three holders.
 
 Two SSH decisions are corrected under criteria 2 and 4. The delayed-bind control
 injects a 500 ms attach budget and a 2 s bind delay; host forwarding fixes that budget

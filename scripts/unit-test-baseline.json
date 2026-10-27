@@ -607,6 +607,7 @@
         "lease_intake/tests/server.rs::token_queued_selector_expansion_retries_do_not_double_count",
         "lease_intake/tests/server.rs::token_renewal_obeys_current_scope_and_workspace_policy",
         "lease_intake/tests/server.rs::token_renews_and_releases_only_its_own_principals_leases",
+        "lease_intake/tests/server.rs::token_task_holder_prebound_reports_truncation_for_requests_and_expansions",
         "lease_listener/tests/mod.rs::a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_socket",
         "lease_listener/tests/mod.rs::listener_notices_and_events_match_orbit_web_and_stay_in_the_tokens_workspaces",
         "log_format/tests/render.rs::format_message_html_escapes_dynamic_field_values",
