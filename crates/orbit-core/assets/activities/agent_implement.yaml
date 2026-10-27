@@ -240,7 +240,8 @@ spec:
        ones; report contradictions you cannot resolve. Recover truncated
        comments when you need them to understand the mandate.
     2. Resolve every `context_files` selector. Read `file:` targets with the
-       provider's file-read tool. For `dir:`, check it is inside the
+       provider's file-read tool; for `symbol:<path>#<name>:<kind>`, read
+       its file and locate the symbol. For `dir:`, check it is inside the
        workspace root, list it with `rg --files <dir>` and read the key
        files; never pass a directory to the file-read tool.
     3. `input.workspace_path` and `input.repo_root` override task paths.

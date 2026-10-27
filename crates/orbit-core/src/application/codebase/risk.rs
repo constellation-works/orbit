@@ -3,10 +3,10 @@
 //! files fare once agents are.
 //!
 //! A mark is pushed into the prompt, compact and gated; the drill-down stays
-//! with `orbit codebase show` and the `orbit.codebase.*` tools. A `file:`
-//! selector's path is marked when, among the tasks done in the trailing
-//! window whose declared footprint named it, at least `min_support` did so
-//! and at least `threshold_percent` of them were named by a
+//! with `orbit codebase show` and the `orbit.codebase.*` tools. The path of a
+//! `file:` or `symbol:` selector is marked when, among the tasks done in the
+//! trailing window whose declared footprint named it, at least `min_support`
+//! did so and at least `threshold_percent` of them were named by a
 //! `regression_from` link. Low-support paths and hub files every task
 //! touches therefore stay unmarked, and a fixed hotspot drops out once its
 //! regressed tasks age out of the window. At most `max_files` paths are
@@ -54,8 +54,8 @@ struct Mark<'a> {
 impl OrbitRuntime {
     /// The `regression_risk` section of the prompt `run_id` builds for
     /// `activity` on `task_id`, whose canonical context selectors are
-    /// `selectors`, or `None` when marks are off or no `file:` path
-    /// qualifies. Marks it returns are recorded on the task first; a record
+    /// `selectors`, or `None` when marks are off or no `file:` or `symbol:`
+    /// file qualifies. Marks it returns are recorded on the task first; a record
     /// that cannot be written is logged and does not withhold them.
     pub(crate) fn regression_risk_section(
         &self,
@@ -67,7 +67,10 @@ impl OrbitRuntime {
         let settings = self.regression_risk_settings();
         let paths: BTreeSet<String> = selectors
             .iter()
-            .filter(|selector| selector.trim_start().starts_with("file:"))
+            .filter(|selector| {
+                let selector = selector.trim_start();
+                selector.starts_with("file:") || selector.starts_with("symbol:")
+            })
             .filter_map(|selector| Anchor::parse(selector))
             .map(|anchor| anchor.path)
             .collect();

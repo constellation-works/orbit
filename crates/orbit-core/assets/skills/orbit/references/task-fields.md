@@ -21,10 +21,12 @@ array of strings. The legacy `context` alias accepts a string;
   selector, not an empty list.
 - Add only files, directories or symbols the task expects to modify or
   delete, or files it will create as described below. Do not add entries only
-  for background reading. Prefer `file:path`, `dir:path`, or
-  `symbol:path#name:kind`; legacy raw paths are accepted and upgraded.
+  for background reading. Prefer `symbol:path#name:kind` for existing
+  symbols the change edits, else `file:path` or `dir:path` (see
+  [Selector granularity](task-authoring.md#selector-granularity)); legacy
+  raw paths are accepted and upgraded.
 - Existence checks verify the filesystem anchor only; a `symbol:` name and
-  kind are not looked up.
+  kind are not looked up. A `symbol:` selector locks its whole file.
 
 Use `allow_missing_context: true` to declare a target before creating its
 file. Missing targets are rejected by default. Each accepted missing selector

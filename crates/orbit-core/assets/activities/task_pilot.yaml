@@ -390,6 +390,18 @@ spec:
     `dir:` or `symbol:` selectors for files the implementation will create,
     modify or delete as a substantive part of the change.
 
+    - Granularity: declare `symbol:<path>#<name>:<kind>` for each existing
+      source symbol the change modifies or deletes, so Orbit can learn which
+      symbols changes and regressions concentrate in; a `symbol:` still locks
+      its whole file. `<name>` is the declared identifier, qualified by its
+      type or impl for a member (`Store::claim`), and must occur in the file
+      at `source_revision`; `<kind>` is one of `function`, `method`, `struct`,
+      `enum`, `trait`, `impl`, `class`, `interface`, `type`, `const`,
+      `static`, `macro`, `module` or `test`. Use `file:` when the change is
+      file-wide (a new file, new top-level items, imports or module wiring,
+      a large refactor or move, more than about five symbols) or the file
+      has no symbols (Markdown, config, manifests, generated output, data,
+      goldens). Never declare a symbol that does not exist yet.
     - Omit read-only context: tests and fixtures only consulted, and shared
       reference docs that need at most an incidental line update. Never list
       `docs/CONFIG.md`. The implementer still updates such docs in the same PR.
@@ -422,7 +434,11 @@ spec:
       shared-doc touch, and record each drop in `context_evidence_dropped` as
       `{"selector":"<exact current selector>","reason":"<what you inspected and
       why no substantive change is needed>"}`. Never drop a change target or a
-      creation target. Omit the field or return [] when nothing is dropped.
+      creation target. Narrowing is not a drop of the target: when you
+      replace a filed `file:` selector with `symbol:` selectors in that same
+      file, record the `file:` selector with the reason `narrowed to
+      <the symbol selectors>`. Omit the field or return [] when nothing is
+      dropped.
     - Do not return `context_files_before`.
 
     ## Dispositions

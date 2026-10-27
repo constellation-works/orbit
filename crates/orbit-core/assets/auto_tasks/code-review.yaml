@@ -39,9 +39,9 @@ template:
       and list open review work with
       `orbit tool run orbit.task.list --input '{"status":["backlog","in-progress","proposed","blocked"],"tag":"code-review","model":"<agent-family>"}'`.
       File a confirmed high or critical finding as its own task with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"priority":"<low|medium|high|critical>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
       File a module's grouped medium and low findings as its single cleanup task with
-      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown listing every grouped finding>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["file:<evidence source path>","file:<matching test path>"],"priority":"<low|medium>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
+      `orbit tool run orbit.task.add --input '{"title":"<title>","description":"<markdown listing every grouped finding>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","tags":["code-review"],"context_files":["symbol:<evidence source path>#<name>:<kind>","file:<matching test path>"],"priority":"<low|medium>","type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"},{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"workspace":"<current workspace path>","model":"<agent-family>"}'`.
       In the grouped payload, `context_files` is the deduplicated union of every
       grouped finding's selectors, and `relations` carries at most one
       classified `regression_from` entry per distinct culprit task among the
@@ -53,9 +53,12 @@ template:
       description and classify the single `regression_from` link
       `unclassified`). In either payload, omit
       the `regression_from` relation only when no landed task can be held
-      responsible. Derive canonical `file:` selectors from every evidenced
-      source path, removing the line suffix, and add the matching
-      regression-test location. Use existing paths where possible; for a test file
+      responsible. Derive canonical selectors from every evidenced source
+      location, removing the line suffix: `symbol:<path>#<name>:<kind>` for
+      the function, method or type that holds it (`<name>` qualified by its
+      type for a member, e.g. `Store::claim:method`), or `file:<path>` when
+      the defect is file-wide or the file has no symbols. Add the matching
+      regression-test location as `file:`. Use existing paths where possible; for a test file
       that must be created, set `allow_missing_context: true` and identify that
       intended path. Never file a finding without context selectors.
       Do not use direct lifecycle CLI subcommands; they skip agent provenance.

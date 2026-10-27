@@ -154,7 +154,7 @@ template:
     at the pinned SHA. File only uncovered findings, with verified source
     `context_files`, measurable acceptance criteria, pinned evidence, and a
     `spawned_from` relation to this minted chore. Use
-    `orbit tool run orbit.task.add --input '{"title":"<finding>","description":"<evidence and scope>","acceptance_criteria":["<observable outcome>"],"context_files":["file:<verified source path>"],"complexity":"<assessed>","tags":["suppression-ratchet","tech-debt"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    `orbit tool run orbit.task.add --input '{"title":"<finding>","description":"<evidence and scope>","acceptance_criteria":["<observable outcome>"],"context_files":["symbol:<verified source path>#<suppressed item>:<kind>"],"complexity":"<assessed>","tags":["suppression-ratchet","tech-debt"],"type":"bug","relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"medium","workspace":"<current workspace path>","model":"<agent-family>"}'`.
     The example files a ratchet bug; for the reduction task use the same
     fields with `type: "refactor"` and its bounded reduction evidence.
     Tool-created tasks start `proposed`; read each back to verify its fields.
