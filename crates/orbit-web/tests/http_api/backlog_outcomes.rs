@@ -4,7 +4,9 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::StoredBacklogForecast;
 use orbit_core::application::task::TaskAddParams;
+use orbit_store::contracts::InvocationInsertParams;
 use orbit_types::task::{TaskComplexity, TaskEventRowV2, TaskStatus};
+use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 use serde_json::{Value, json};
 
 use super::backlog_forecast::{
@@ -445,7 +447,7 @@ fn subsecond_and_immediate_returns_stay_drawable() {
                 block_that_returned(&fixture, delay);
                 let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
                 let forecast = forecast(&fixture);
-                assert_eq!(forecast["model_version"], 9);
+                assert_eq!(forecast["model_version"], 10);
                 assert_eq!(
                     forecast["inputs"]["outcomes"]["episodes"],
                     json!({"blocked": 1, "delivered": 1})
@@ -533,7 +535,7 @@ fn forecast_queued_against(
     dated_task(&fixture, status, steps);
     let id = backlog_task(&fixture, label, &["file:queued.rs"], &[], &[]);
     let forecast = forecast(&fixture);
-    assert_eq!(forecast["model_version"], 9, "{label}");
+    assert_eq!(forecast["model_version"], 10, "{label}");
     assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{label}");
     assert_eq!(forecast["forecast"]["tasks"], 1, "{label}");
     assert_eq!(
@@ -767,6 +769,184 @@ fn attempt_limit_is_the_mean_of_caps_the_drain_started() {
                 .collect();
             started.sort_by(f64::total_cmp);
             assert_eq!(started, vec![0.0, 1.0], "{long}");
+        },
+    );
+}
+
+/// One `hours`-long invocation of task `id` ending at `end`, costing `usd`.
+fn invocation(fixture: &Fixture, id: &str, end: DateTime<Utc>, hours: u64, usd: f64) {
+    let run = format!("run-{id}-{}", end.timestamp());
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            job_run_id: run.clone(),
+            account: None,
+            activity_id: "implement_one".into(),
+            agent: "codex".into(),
+            provider: None,
+            model: Some("gpt-6.1-sol".into()),
+            task_ids: vec![id.to_string()],
+            trace: InvocationTrace {
+                duration_ms: hours * 3_600_000,
+                usage: TokenUsage {
+                    input: 100 * hours,
+                    ..Default::default()
+                },
+                provider_cost_usd: Some(usd),
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .with_transaction(|tx| {
+            tx.connection()
+                .execute(
+                    "UPDATE invocations SET ts = ?1 WHERE job_run_id = ?2",
+                    (end.to_rfc3339(), &run),
+                )
+                .map_err(|e| orbit_core::OrbitError::Store(e.to_string()))?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
+    isolated(
+        "backlog_outcomes::stored_task_forecasts_count_failed_attempts_and_score_like_measures",
+        || {
+            // Five one-hour, $1 deliveries; an outcome pool of one delivered
+            // and one two-hour, $2 failed attempt (both parked in someday);
+            // one queued medium task and no arrivals.
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let at = Utc::now() - Duration::days(10);
+            dated_task(
+                &fixture,
+                TaskStatus::Someday,
+                &[
+                    (at, TaskStatus::InProgress),
+                    (at + Duration::hours(1), TaskStatus::Review),
+                    (at + Duration::hours(2), TaskStatus::Someday),
+                ],
+            );
+            let failed = dated_task(
+                &fixture,
+                TaskStatus::Someday,
+                &[
+                    (at, TaskStatus::InProgress),
+                    (at + Duration::hours(2), TaskStatus::Backlog),
+                    (at + Duration::hours(3), TaskStatus::Someday),
+                ],
+            );
+            invocation(&fixture, &failed, at + Duration::hours(2), 2, 2.0);
+            let queued = backlog_task(&fixture, "Queued", &["file:queued.rs"], &[], &[]);
+
+            let response = json_ok(fixture.server(false).get(ENDPOINT));
+            assert_eq!(response["stored"]["recorded"], true, "{response}");
+            assert_eq!(
+                response["inputs"]["outcomes"]["episodes"],
+                json!({"delivered": 1, "failed": 1}),
+                "{response}"
+            );
+            let response = initial_work_forecast_baseline(response);
+            let cohort = &response["forecast"];
+            assert_eq!(cohort["tasks"], 1, "{response}");
+            let simulated = prediction(&response, &queued);
+            let stored = fixture.runtime.backlog_forecasts(1).unwrap().remove(0);
+            assert_eq!(stored.model_version, 10);
+            let tasks: Value = serde_json::from_str(&stored.tasks_json).unwrap();
+            let task = &tasks[0]["forecast"];
+            assert_eq!(tasks[0]["id"], queued.as_str());
+            // With one task and no arrivals, its stored quantiles are the
+            // cohort's own simulated work and spend.
+            assert_eq!(task["usd"], cohort["usd"], "{response}");
+            assert_eq!(task["tokens"], cohort["tokens"], "{response}");
+            assert_eq!(
+                task["work_hours"], cohort["by_complexity"][0]["work_hours"],
+                "{response}"
+            );
+            for metric in ["work_hours", "tokens", "usd"] {
+                assert_eq!(task[metric], simulated[metric], "{metric}: {response}");
+            }
+            // Retries are in it: p90 is above one delivery's $1 and hour,
+            // and every failed hour carries its dollar and 100 tokens.
+            let p90 = metric(&task["usd"]["p90"]);
+            assert!(p90 >= 3.0, "{task}");
+            assert_eq!(metric(&task["work_hours"]["p90"]), p90, "{task}");
+            assert_eq!(metric(&task["tokens"]["p90"]), 100.0 * p90, "{task}");
+
+            // Calibration: a task done after one failed attempt and a
+            // delivery is scored against these stored quantiles in model 10
+            // and against one delivery draw in an older snapshot, which
+            // stays readable under its own measure. A fresh workspace, so
+            // the snapshots are not newer than the one just recorded.
+            let fixture = Fixture::new();
+            let forecast_at = Utc::now() - Duration::days(3);
+            let start = forecast_at + Duration::hours(1);
+            let retried = dated_task(
+                &fixture,
+                TaskStatus::Done,
+                &[
+                    (start, TaskStatus::InProgress),
+                    (start + Duration::hours(2), TaskStatus::Backlog),
+                    (start + Duration::hours(3), TaskStatus::InProgress),
+                    (start + Duration::hours(4), TaskStatus::Review),
+                    (start + Duration::hours(5), TaskStatus::Done),
+                ],
+            );
+            invocation(&fixture, &retried, start + Duration::hours(2), 2, 2.0);
+            invocation(&fixture, &retried, start + Duration::hours(4), 1, 1.0);
+            let one_delivery = json!({"p50": 1.0, "p90": 1.0});
+            // Oldest first: the store refuses a row older than its newest.
+            for (version, minutes, forecast) in [
+                (
+                    9,
+                    60,
+                    json!({"hours": one_delivery, "tokens": {"p50": 100.0, "p90": 100.0}, "usd": one_delivery}),
+                ),
+                (10, 0, task.clone()),
+            ] {
+                let tasks = json!([{"id": retried, "complexity": "medium", "forecast": forecast}]);
+                assert!(
+                    fixture
+                        .runtime
+                        .record_backlog_forecast(
+                            StoredBacklogForecast {
+                                workspace_id: String::new(),
+                                forecast_at: forecast_at - Duration::minutes(minutes),
+                                model_version: version,
+                                inputs_json: "{}".into(),
+                                result_json: "{}".into(),
+                                tasks_json: tasks.to_string(),
+                            },
+                            Duration::minutes(1),
+                        )
+                        .unwrap()
+                );
+            }
+            let calibration = &json_ok(fixture.server(false).get(ENDPOINT))["calibration"];
+            assert_eq!(calibration["task_hours_measure"], "attempt_work_hours");
+            // Two hours held by the failed attempt and the delivery's one,
+            // $3 and 300 tokens: inside the retry-aware p90.
+            let current = &calibration["task_level"];
+            for metric in ["hours", "tokens", "usd"] {
+                assert_eq!(current[metric]["n"], 1, "{metric}: {calibration}");
+                assert_eq!(current[metric]["under_p90"], 1.0, "{metric}: {calibration}");
+            }
+            let nine = calibration["by_model_version"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["model_version"] == 9)
+                .unwrap();
+            assert_eq!(nine["task_hours_measure"], "delivery_hours");
+            for metric in ["hours", "tokens", "usd"] {
+                assert_eq!(nine["task_level"][metric]["n"], 1, "{metric}: {nine}");
+            }
         },
     );
 }
