@@ -1,32 +1,4 @@
-//  Identity allocation and coordinated admission through the store's public
-//  composition.
-//
-//  - Task ids come from the host registry's allocator: monotonic, never
-//    wrapped past the ceiling, and exhausted cleanly, including when an import
-//    lands the maximum id.
-//  - Job-run ids are never minted twice, even after the run they named is
-//    archived or deleted and the store reopened; local pull admission holds
-//    one slot per admitted request under a shared ceiling, which is the
-//    drain's live worker limit and nothing else.
-//  - The owner's commit boundary admits at most one claim per request and per
-//    task under concurrent pulls, and a handoff is authorized only by the
-//    policy its claim was admitted under and only over unchanged evidence.
-//  - A settled claim's mutation receipts are pruned once past retention; its
-//    claim and lifecycle rows stay, so a pruned replay is refused, never rerun.
-//  - Claimed evidence stores canonical artifact paths, and racing review
-//    report revisions are each retained in the store-owned report history.
-//  - An atomic task mutation's receipt is a typed field it replays on; a
-//    receipt written as text before that field still replays.
-//  - A pull naming the work its host has room for is granted only a task in
-//    that list.
-//  - Within a band, a pull takes work only its executor can run among the
-//    live executor census first; each pull's census row lands with its
-//    receipt and stays live while its machine holds a claim.
-//  - A hard path lease defers an overlapping pull and names the lease; an
-//    advisory one holds nothing.
-//
-//  Every test re-runs itself in a child of this binary with inherited Orbit
-//  authority cleared, a disposable `HOME`, and a bounded wait.
+// Identity allocation and coordinated admission through the store's public composition: task ids are monotonic, never wrapped past the ceiling and exhausted cleanly (including an imported maximum); job-run ids are never reminted after archive/delete; local pull admission holds one slot per request under the drain's live ceiling; the commit boundary admits at most one claim per request/task under concurrent pulls; a handoff is authorized only by its admission policy over unchanged evidence; settled claims' receipts are pruned past retention while claim/lifecycle rows stay (pruned replays are refused); claimed evidence stores canonical paths and racing report revisions are each retained; typed mutation receipts replay (text receipts still do); a pull is granted only listed, executor-runnable work (census rows land with receipts and stay live while claiming); a hard path lease defers and names itself, an advisory one holds nothing. Every test re-runs itself in a child with inherited Orbit authority cleared, a disposable `HOME`, a bounded wait.
 
 #[path = "allocation_admission/claim_reads.rs"]
 mod claim_reads;
@@ -50,21 +22,15 @@ mod reservation_grants;
 mod task_index;
 #[path = "allocation_admission/work_fit.rs"]
 mod work_fit;
-
 /// How long one isolated test may run before it is killed and fails.
 const CHILD_DEADLINE: Duration = orbit_common::test_env::CHILD_TEST_DEADLINE;
-
-/// Run `test` alone in a child of this binary with inherited Orbit authority
-/// cleared and a disposable `HOME`; `true` inside that child. The parent
-/// waits up to [`CHILD_DEADLINE`] and reaps the child on any exit.
+/// Run `test` alone in a child with authority cleared and a disposable `HOME`; `true` inside the child.
 fn allocation_admission_isolated(test: &str) -> bool {
     const MARKER: &str = "ORBIT_TEST_STORE_ALLOCATION_CHILD";
     if std::env::var(MARKER).as_deref() == Ok(test) {
         return true;
     }
     let home = TempDir::new().unwrap();
-    let stdout_path = home.path().join("stdout.log");
-    let stderr_path = home.path().join("stderr.log");
     let mut command = std::process::Command::new(std::env::current_exe().unwrap());
     orbit_common::test_env::clear_inherited_authority(|key| {
         command.env_remove(key);
@@ -74,51 +40,12 @@ fn allocation_admission_isolated(test: &str) -> bool {
         .env(MARKER, test)
         .env("HOME", home.path())
         .env("USERPROFILE", home.path())
-        .current_dir(home.path())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::fs::File::create(&stdout_path).unwrap())
-        .stderr(std::fs::File::create(&stderr_path).unwrap());
-    let mut child = ChildGuard(command.spawn().unwrap());
-    let started = Instant::now();
-    let status = loop {
-        if let Some(status) = child.0.try_wait().unwrap() {
-            break Some(status);
-        }
-        if started.elapsed() > CHILD_DEADLINE {
-            break None;
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    };
-    drop(child);
-    let read = |path: &Path| {
-        let mut text = String::new();
-        std::fs::File::open(path)
-            .unwrap()
-            .read_to_string(&mut text)
-            .unwrap();
-        text
-    };
-    let (stdout, stderr) = (read(&stdout_path), read(&stderr_path));
-    let status = status
-        .unwrap_or_else(|| panic!("`{test}` ran past {CHILD_DEADLINE:?}:\n{stdout}\n{stderr}"));
-    assert!(status.success(), "`{test}` failed:\n{stdout}\n{stderr}");
-    assert!(
-        stdout.contains("test result: ok. 1 passed;"),
-        "the child must run `{test}` itself:\n{stdout}"
-    );
+        .current_dir(home.path());
+    let output = process::run_bounded_capped(&mut command, CHILD_DEADLINE, 64 * 1024)
+        .expect("run isolated allocation fixture");
+    test_env::assert_child_test_passed(test, output.status, output.stdout, output.stderr);
     false
 }
-
-/// Kills and reaps the isolated child however the parent leaves.
-struct ChildGuard(std::process::Child);
-
-impl Drop for ChildGuard {
-    fn drop(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
 // Keep each test's exact-name child and deadline; only its setup guard is shared.
 macro_rules! allocation_test {
     ($name:ident, $body:block) => {
@@ -128,21 +55,109 @@ macro_rules! allocation_test {
         }
     };
 }
-
+type ClaimResult = Result<ClaimMutationResult, OrbitError>;
+type JobRun = orbit_types::workflow::JobRun;
+fn registry_at(root: &Path) -> TaskRegistryStore {
+    TaskRegistryStore::open(&task_registry_path(root)).unwrap()
+}
+fn export_all(
+    registry: &TaskRegistryStore,
+    workspace: &str,
+    dest: &Path,
+) -> Result<orbit_store::workflow::task::ExportOutcome, OrbitError> {
+    export_tasks(
+        registry,
+        workspace,
+        ExportSelection::All,
+        dest,
+        Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
+    )
+}
+fn json_artifact(path: String, content: Vec<u8>) -> TaskArtifact {
+    TaskArtifact {
+        path,
+        content,
+        media_type: "application/json".into(),
+        created_by: None,
+    }
+}
+/// One pull-admission fixture: a store, its drain parent and destination.
+struct PullFixture {
+    _root: TempDir,
+    jobs: Arc<dyn JobRunStoreBackend>,
+    parent: JobRun,
+    destination: PullDestination,
+}
+impl PullFixture {
+    fn new(job: &str, limits: Option<(u32, u32)>) -> Self {
+        let root = TempDir::new().unwrap();
+        let jobs =
+            workspace_job_run_store(Store::open(&root.path().join("pull.db")).unwrap(), "ws");
+        let parent = jobs.insert_job_run(job, 1, Utc::now(), None, None).unwrap();
+        let (run_id, job_id) = (parent.run_id.clone(), parent.job_id.clone());
+        let mut state = PipelineState::new(run_id, job_id, serde_json::json!({}));
+        if let Some((retuned, submitted)) = limits {
+            assert!(state.set_drain_worker_limit(retuned, submitted, "cli".into(), None, None));
+        }
+        jobs.write_run_state(&parent.run_id, &state).unwrap();
+        let destination = PullDestination {
+            owner_machine_id: "owner".into(),
+            owner_workspace_id: "ws".into(),
+            selector: "owner/ws".into(),
+            execution_machine_id: "owner".into(),
+        };
+        Self {
+            _root: root,
+            destination,
+            jobs,
+            parent,
+        }
+    }
+    fn admit(&self, request_id: &str, ceiling: usize) -> bool {
+        let request = pull_request(&self.parent.run_id, request_id);
+        self.jobs
+            .allocate_pull_request(&self.destination, &request, ceiling)
+            .unwrap()
+            .is_some()
+    }
+    fn occupancy(&self) -> orbit_store::contracts::DrainLeafOccupancy {
+        self.jobs.drain_leaf_occupancy().unwrap()
+    }
+    fn mark_retrying(&self, run_id: &str) {
+        let store = Store::open(&self._root.path().join("pull.db")).unwrap();
+        let run_id = run_id.to_string();
+        store
+            .with_transaction(|tx| {
+                let changed = tx.connection().execute(
+                    "UPDATE job_runs SET state = 'retrying' WHERE workspace_id = ?1 AND run_id = ?2",
+                    ["ws", run_id.as_str()],
+                ).unwrap();
+                assert_eq!(changed, 1, "retrying fixture run exists");
+                Ok(())
+            })
+            .unwrap();
+    }
+    fn leaf(&self, job: &str, task: &str) -> JobRun {
+        self.jobs
+            .insert_job_run(
+                job,
+                1,
+                Utc::now(),
+                Some(serde_json::json!({ "task_ids": [task] })),
+                None,
+            )
+            .unwrap()
+    }
+}
 fn is_exhausted<T: std::fmt::Debug>(result: Result<T, OrbitError>) -> bool {
     matches!(result, Err(OrbitError::Store(ref message)) if message.contains("exhausted"))
 }
-
+// --------------------------------------------------------------------------- Task id allocation
 // ---------------------------------------------------------------------------
-// Task id allocation
-// ---------------------------------------------------------------------------
-
 const PARTITION_ID: &str = "orbit-test-123456";
-
 fn bind(registry: &TaskRegistryStore, root: &Path, partition_id: &str) -> WorkspaceCheckoutBinding {
     bind_workspace(registry, root, partition_id, None)
 }
-
 fn bind_with_fingerprint(
     registry: &TaskRegistryStore,
     root: &Path,
@@ -151,7 +166,6 @@ fn bind_with_fingerprint(
 ) -> WorkspaceCheckoutBinding {
     bind_workspace(registry, root, partition_id, Some(fingerprint))
 }
-
 fn bind_workspace(
     registry: &TaskRegistryStore,
     root: &Path,
@@ -172,74 +186,55 @@ fn bind_workspace(
         })
         .expect("bind workspace")
 }
-
 allocation_test!(task_ids_are_monotonic_across_workspaces_and_batches, {
     let root = TempDir::new().unwrap();
-    let registry = TaskRegistryStore::open(&task_registry_path(root.path())).unwrap();
+    let registry = registry_at(root.path());
     let first = bind(&registry, root.path(), "first-aaaaaa");
     let second = bind(&registry, root.path(), "second-bbbbbb");
-
-    let mut minted = vec![
-        registry.allocate_task_id(&first.partition_id).unwrap(),
-        registry.allocate_task_id(&second.partition_id).unwrap(),
-    ];
+    let next_id = |partition: &str| registry.allocate_task_id(partition).unwrap();
+    let mut minted = vec![next_id(&first.partition_id), next_id(&second.partition_id)];
     minted.extend(registry.allocate_task_ids(&first.partition_id, 3).unwrap());
-    minted.push(registry.allocate_task_id(&second.partition_id).unwrap());
+    minted.push(next_id(&second.partition_id));
+    let want = [
+        "ORB-00000",
+        "ORB-00001",
+        "ORB-00002",
+        "ORB-00003",
+        "ORB-00004",
+        "ORB-00005",
+    ];
     assert_eq!(
-        minted,
-        [
-            "ORB-00000",
-            "ORB-00001",
-            "ORB-00002",
-            "ORB-00003",
-            "ORB-00004",
-            "ORB-00005"
-        ],
+        minted, want,
         "one host-wide counter serves every workspace and batch, in order"
     );
-
     // Reopening the registry (a later process) continues from the counter.
     drop(registry);
-    let registry = TaskRegistryStore::open(&task_registry_path(root.path())).unwrap();
-    assert_eq!(
-        registry.allocate_task_id(&first.partition_id).unwrap(),
-        "ORB-00006"
-    );
+    let registry = registry_at(root.path());
+    let got = registry.allocate_task_id(&first.partition_id).unwrap();
+    assert_eq!(got, "ORB-00006");
     // Seeding never lowers the counter.
     assert!(registry.seed_allocator_start(3).is_err());
-    assert_eq!(
-        registry.allocate_task_id(&first.partition_id).unwrap(),
-        "ORB-00007"
-    );
+    let got = registry.allocate_task_id(&first.partition_id).unwrap();
+    assert_eq!(got, "ORB-00007");
 });
-
-// The last id is minted once; every later allocation is refused as
-// exhausted, never wrapped to a low id that may already be taken. A batch
-// that would cross the ceiling is refused whole and leaves the counter.
+// The last id is minted once; later allocations stay exhausted, never wrap. A batch crossing the ceiling is refused whole.
 allocation_test!(
     task_id_allocation_exhausts_at_the_ceiling_without_wrapping,
     {
         let root = TempDir::new().unwrap();
-        let registry = TaskRegistryStore::open(&task_registry_path(root.path())).unwrap();
+        let registry = registry_at(root.path());
         let workspace = bind(&registry, root.path(), PARTITION_ID);
         registry.seed_allocator_start(ORB_TASK_ID_MAX - 1).unwrap();
-
         assert!(
             is_exhausted(registry.allocate_task_ids(&workspace.partition_id, 3)),
             "a reservation past the ceiling is refused whole"
         );
-        assert_eq!(
-            registry.allocator_next_number().unwrap(),
-            ORB_TASK_ID_MAX - 1
-        );
-        assert_eq!(
-            registry.allocate_task_id(&workspace.partition_id).unwrap(),
-            format!("ORB-{}", ORB_TASK_ID_MAX - 1)
-        );
-        assert_eq!(
-            registry.allocate_task_id(&workspace.partition_id).unwrap(),
-            format!("ORB-{ORB_TASK_ID_MAX}")
-        );
+        let got = registry.allocator_next_number().unwrap();
+        assert_eq!(got, ORB_TASK_ID_MAX - 1);
+        let got = registry.allocate_task_id(&workspace.partition_id).unwrap();
+        assert_eq!(got, format!("ORB-{}", ORB_TASK_ID_MAX - 1));
+        let got = registry.allocate_task_id(&workspace.partition_id).unwrap();
+        assert_eq!(got, format!("ORB-{ORB_TASK_ID_MAX}"));
         for _ in 0..2 {
             assert!(
                 is_exhausted(registry.allocate_task_id(&workspace.partition_id)),
@@ -248,18 +243,15 @@ allocation_test!(
         }
         assert!(is_exhausted(registry.allocator_next_number()));
         assert!(is_exhausted(registry.seed_allocator_start(ORB_TASK_ID_MAX)));
-
         drop(registry);
-        let registry = TaskRegistryStore::open(&task_registry_path(root.path())).unwrap();
+        let registry = registry_at(root.path());
         assert!(
             is_exhausted(registry.allocate_task_id(&workspace.partition_id)),
             "exhaustion survives a reopen"
         );
     }
 );
-
-// Importing a task that holds the maximum id leaves the target's allocator
-// exhausted, not wrapped to `ORB-00000`.
+// Importing a task holding the maximum id leaves the target allocator exhausted, not wrapped.
 allocation_test!(
     importing_the_maximum_task_id_exhausts_the_target_allocator,
     {
@@ -268,7 +260,6 @@ allocation_test!(
         let archive = source_root.path().join("tasks.tar.zst");
         std::fs::write(&archive, b"previous backup").unwrap();
         let max_id = format!("ORB-{ORB_TASK_ID_MAX}");
-
         let source = Coordinated::open(source_root.path());
         source
             .registry
@@ -277,75 +268,50 @@ allocation_test!(
         assert_eq!(source.create_task("final id").id, max_id);
         let destination_dir = source_root.path().join("archive-directory");
         std::fs::create_dir(&destination_dir).unwrap();
-        let entries_before = std::fs::read_dir(source_root.path()).unwrap().count();
-        export_tasks(
-            &source.registry,
-            PARTITION_ID,
-            ExportSelection::All,
-            &destination_dir,
-            Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
-        )
-        .expect_err("publishing an archive over a directory must fail");
+        let entries = || std::fs::read_dir(source_root.path()).unwrap().count();
+        let entries_before = entries();
+        export_all(&source.registry, PARTITION_ID, &destination_dir)
+            .expect_err("publishing an archive over a directory must fail");
         assert!(destination_dir.is_dir());
         assert_eq!(std::fs::read(&archive).unwrap(), b"previous backup");
         assert_eq!(
-            std::fs::read_dir(source_root.path()).unwrap().count(),
+            entries(),
             entries_before,
             "failed publication must remove its staging file"
         );
-        export_tasks(
-            &source.registry,
-            PARTITION_ID,
-            ExportSelection::All,
-            &archive,
-            Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
-        )
-        .expect("export");
+        export_all(&source.registry, PARTITION_ID, &archive).expect("export");
         assert_eq!(
-            std::fs::read_dir(source_root.path()).unwrap().count(),
+            entries(),
             entries_before,
             "successful replacement must leave no staging file"
         );
-
-        let target = TaskRegistryStore::open(&task_registry_path(target_root.path())).unwrap();
+        let target = registry_at(target_root.path());
         let outcome =
             import_tasks(&target, &archive, None, ImportConflictPolicy::Fail).expect("import");
         assert_eq!(outcome.tasks[0].final_id, max_id);
         assert!(target.find_task_binding(&max_id).unwrap().is_some());
         assert!(is_exhausted(target.allocator_next_number()));
+        let ok = is_exhausted(target.allocate_task_id(PARTITION_ID));
         assert!(
-            is_exhausted(target.allocate_task_id(PARTITION_ID)),
+            ok,
             "the next id after an imported maximum must be refused, not wrapped"
         );
     }
 );
-
-// Restoring a publication containing both local and foreign-prefix tasks
-// advances the local allocator only past local task numbers, leaving it at
-// `max(previous, max_local + 1)`. A publication containing only foreign-prefix
-// tasks preserves the prior allocator and does not error.
+// Publication restore advances the allocator only past local ids (`max(previous, max_local + 1)`); foreign-only preserves it.
 allocation_test!(
     publication_restore_advances_allocator_only_for_local_task_numbers,
     {
         const FINGERPRINT: &str = "ssh://source.test/orbit.git";
         let foreign_root = TempDir::new().unwrap();
-        let foreign_registry =
-            TaskRegistryStore::open(&task_registry_path(foreign_root.path())).unwrap();
+        let foreign_registry = registry_at(foreign_root.path());
         foreign_registry.set_task_prefix("DANI").unwrap();
         let foreign =
             Coordinated::open_with_fingerprint(foreign_root.path(), "ws_foreign", FINGERPRINT);
         foreign.registry.seed_allocator_start(90000).unwrap();
         assert_eq!(foreign.create_task("foreign dani task").id, "DANI-90000");
         let dani_archive = foreign.root().join("dani.tar.zst");
-        export_tasks(
-            &foreign.registry,
-            "ws_foreign",
-            ExportSelection::All,
-            &dani_archive,
-            Utc.with_ymd_and_hms(2026, 10, 3, 12, 0, 0).unwrap(),
-        )
-        .expect("export dani");
-
+        export_all(&foreign.registry, "ws_foreign", &dani_archive).expect("export dani");
         let source_root = TempDir::new().unwrap();
         let source =
             Coordinated::open_with_fingerprint(source_root.path(), "ws_source", FINGERPRINT);
@@ -359,10 +325,9 @@ allocation_test!(
         )
         .expect("import dani into source");
         assert_eq!(imported.tasks[0].final_id, "DANI-90000");
-
-        // Keep separate destinations and exact allocator/id checks for each row.
-        // Foreign-only restoration additionally checks the actual restored identity.
+        // Keep separate destinations and exact allocator/id checks for each row. Foreign-only restoration additionally checks the actual restored identity.
         let publication_root = TempDir::new().unwrap();
+        let pub_root = publication_root.path();
         for (workspace, publisher, publication_id, authority, rows) in [
             (
                 "ws_source",
@@ -379,26 +344,14 @@ allocation_test!(
                 &[("foreign only", 4, 4)][..],
             ),
         ] {
-            let bare = publication_root
-                .path()
-                .join(format!("{publication_id}.git"));
-            let cache = publication_root
-                .path()
-                .join(format!("{publication_id}-cache"));
+            let bare = pub_root.join(format!("{publication_id}.git"));
+            let remote = bare.to_str().unwrap();
+            let cache = pub_root.join(format!("{publication_id}-cache"));
             std::fs::create_dir_all(&cache).unwrap();
             let mut git = crate::git_test_support::command();
+            git.args(["init", "--bare", "--quiet", "-b", "main", remote]);
             assert!(
-                git.args([
-                    "init",
-                    "--bare",
-                    "--quiet",
-                    "-b",
-                    "main",
-                    bare.to_str().unwrap()
-                ])
-                .status()
-                .unwrap()
-                .success(),
+                git.status().unwrap().success(),
                 "{publication_id}: initialize publication"
             );
             publish_task_snapshot(
@@ -411,7 +364,7 @@ allocation_test!(
                     authority_machine_id: authority.into(),
                     local_machine_id: authority.into(),
                     caller_role: PublicationCallerRole::Owner,
-                    publication_remote: bare.to_str().unwrap().into(),
+                    publication_remote: remote.into(),
                     publication_branch: "main".into(),
                     cache_dir: cache,
                     published_at: Utc.with_ymd_and_hms(2026, 10, 4, 12, 0, 0).unwrap(),
@@ -427,18 +380,13 @@ allocation_test!(
                 None,
             )
             .unwrap_or_else(|error| panic!("{publication_id}: publish: {error}"));
-
             for &(case, previous, expected) in rows {
                 let target_root = TempDir::new().unwrap();
-                let target =
-                    TaskRegistryStore::open(&task_registry_path(target_root.path())).unwrap();
+                let target = registry_at(target_root.path());
                 bind_with_fingerprint(&target, target_root.path(), "ws_target", FINGERPRINT);
                 target.seed_allocator_start(previous).unwrap();
-                assert_eq!(
-                    target.allocator_next_number().unwrap(),
-                    previous,
-                    "{case}: before restore"
-                );
+                let got = target.allocator_next_number().unwrap();
+                assert_eq!(got, previous, "{case}: before restore");
                 let cache = target_root.path().join("restore_cache");
                 std::fs::create_dir_all(&cache).unwrap();
                 let outcome = restore_publication(
@@ -450,7 +398,7 @@ allocation_test!(
                             source_repository_fingerprint: FINGERPRINT.into(),
                             publication_id: publication_id.into(),
                             authority_machine_id: authority.into(),
-                            publication_remote: bare.to_str().unwrap().into(),
+                            publication_remote: remote.into(),
                             publication_branch: "main".into(),
                             cache_dir: cache,
                             commit: None,
@@ -464,55 +412,43 @@ allocation_test!(
                 } else {
                     assert_eq!(outcome.restored_task_ids.len(), 2, "{case}");
                 }
+                let got = target.allocator_next_number().unwrap();
                 assert_eq!(
-                    target.allocator_next_number().unwrap(),
-                    expected,
-                    "{case}: restore advances only past local ids and never lowers the counter"
+                    got, expected,
+                    "{case}: restore advances only past local ids, never lowers"
                 );
+                let got = target.allocate_task_id("ws_target").unwrap();
                 assert_eq!(
-                    target.allocate_task_id("ws_target").unwrap(),
+                    got,
                     format!("ORB-{expected:05}"),
-                    "{case}: the next minted task continues from the restored counter"
+                    "{case}: next minted task"
                 );
             }
         }
     }
 );
-
-// ---------------------------------------------------------------------------
-// Job-run ids and pull occupancy
-// ---------------------------------------------------------------------------
-
-fn minute_stem(run_id: &str) -> &str {
-    run_id.rsplit_once('-').expect("run id has a sequence").0
-}
-
+// Job-run ids and pull occupancy.
 fn finish(jobs: &dyn JobRunStoreBackend, run_id: &str) {
     let at = Utc::now();
-    assert!(
-        jobs.mark_job_run_running(run_id, at, 42)
-            .unwrap()
-            .owns_execution()
-    );
+    let running = jobs.mark_job_run_running(run_id, at, 42).unwrap();
+    assert!(running.owns_execution());
     assert!(
         jobs.finalize_job_run(run_id, JobRunState::Success, at, Some(1))
             .unwrap()
     );
 }
-
-// [ORB-13599] Archive and delete remove a run's row; the id must stay
-// reserved so the next run minted in the same minute, by this process or a
-// later one, never takes it.
+// [ORB-13599] Archive/delete remove a run's row; its id stays reserved and is never reminted in the same minute.
 allocation_test!(removed_job_run_ids_are_never_reallocated, {
     let root = TempDir::new().unwrap();
     let db = root.path().join("orbit.db");
+    let open = || workspace_job_run_store(Store::open(&db).unwrap(), "ws_a");
     let mut minted = Vec::new();
     for delete in [false, true] {
-        // The id stem is the wall-clock minute; retry the cycle if it crossed
-        // a minute boundary, which would make the comparison vacuous.
+        // The id stem is the wall-clock minute; retry the cycle if it crossed a minute boundary, which
+        // would make the comparison vacuous.
         let (removed, next) = (0..3)
             .find_map(|_| {
-                let jobs = workspace_job_run_store(Store::open(&db).unwrap(), "ws_a");
+                let jobs = open();
                 let removed = jobs
                     .insert_job_run("job-a", 1, Utc::now(), None, None)
                     .unwrap();
@@ -524,12 +460,12 @@ allocation_test!(removed_job_run_ids_are_never_reallocated, {
                 }
                 assert!(jobs.get_job_run(&removed.run_id).unwrap().is_none());
                 drop(jobs);
-
-                let reopened = workspace_job_run_store(Store::open(&db).unwrap(), "ws_a");
+                let reopened = open();
                 let next = reopened
                     .insert_job_run("job-a", 1, Utc::now(), None, None)
                     .unwrap();
-                (minute_stem(&removed.run_id) == minute_stem(&next.run_id))
+                (removed.run_id.rsplit_once('-').unwrap().0
+                    == next.run_id.rsplit_once('-').unwrap().0)
                     .then_some((removed.run_id, next.run_id))
             })
             .expect("two runs minted within one minute");
@@ -537,82 +473,70 @@ allocation_test!(removed_job_run_ids_are_never_reallocated, {
         minted.extend([removed, next]);
     }
     let unique = minted.iter().collect::<HashSet<_>>();
-    assert_eq!(
-        unique.len(),
-        minted.len(),
-        "every id minted once: {minted:?}"
-    );
+    let got = unique.len();
+    assert_eq!(got, minted.len(), "every id minted once: {minted:?}");
 });
-
-fn pull_parent(
-    jobs: &dyn JobRunStoreBackend,
-    job: &str,
-    limits: Option<(u32, u32)>,
-) -> orbit_types::workflow::JobRun {
-    let parent = jobs.insert_job_run(job, 1, Utc::now(), None, None).unwrap();
-    let mut state = PipelineState::new(
-        parent.run_id.clone(),
-        parent.job_id.clone(),
-        serde_json::json!({}),
-    );
-    if let Some((retuned, submitted)) = limits {
-        assert!(state.set_drain_worker_limit(retuned, submitted, "cli".into(), None, None));
-    }
-    jobs.write_run_state(&parent.run_id, &state).unwrap();
-    parent
-}
-
-fn pull_destination() -> PullDestination {
-    PullDestination {
-        owner_machine_id: "owner".into(),
-        owner_workspace_id: "ws".into(),
-        selector: "owner/ws".into(),
-        execution_machine_id: "owner".into(),
-    }
-}
-
-fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
+fn admission_request(
+    request_id: &str,
+    caller_version: &str,
+    run_id: &str,
+    job_name: &str,
+    machine_name: Option<&str>,
+    ship: AdmissionShipContract,
+) -> AdmissionRequest {
     AdmissionRequest {
         labels: Vec::new(),
         request_id: request_id.into(),
-        caller_version: "1".into(),
+        caller_version: caller_version.into(),
         caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
         caller_fingerprint: None,
         caller_before_pr: false,
         review_gate: false,
         run_context: AdmissionRunContext {
             run_id: run_id.into(),
-            job_name: "workspace_auto_pipeline".into(),
-            machine_name: None,
+            job_name: job_name.into(),
+            machine_name: machine_name.map(str::to_string),
         },
-        ship: AdmissionShipContract {
-            mode: "local".into(),
-            base_branch: "main".into(),
-            landing_branch: "main".into(),
-            before_pr: false,
-            before_landing: false,
-            completion: "review".into(),
-            authorization_reference: None,
-            review: None,
-        },
+        ship,
         crews: None,
         os: None,
         browser_kit: false,
         admissible: None,
     }
 }
-
-// Twelve independent connections race for local pull admission under a
-// ceiling of three: exactly three are admitted and the store's occupancy
-// reading counts each admitted request as one slot.
+fn ship_contract(mode: &str, branch: &str) -> AdmissionShipContract {
+    AdmissionShipContract {
+        mode: mode.into(),
+        base_branch: branch.into(),
+        landing_branch: branch.into(),
+        before_pr: false,
+        before_landing: false,
+        completion: "review".into(),
+        authorization_reference: None,
+        review: None,
+    }
+}
+fn pull_request(run_id: &str, request_id: &str) -> AdmissionRequest {
+    admission_request(
+        request_id,
+        "1",
+        run_id,
+        "workspace_auto_pipeline",
+        None,
+        ship_contract("local", "main"),
+    )
+}
+// Twelve connections race for pull admission under a ceiling of three: exactly three are admitted, one slot each.
 allocation_test!(concurrent_pull_admission_obeys_the_shared_ceiling, {
     const RACERS: usize = 12;
     const CEILING: usize = 3;
-    let root = TempDir::new().unwrap();
-    let db = root.path().join("pull.db");
-    let jobs = workspace_job_run_store(Store::open(&db).unwrap(), "ws");
-    let parent = pull_parent(jobs.as_ref(), "workspace_auto_pipeline", None);
-    let destination = pull_destination();
+    let fixture = PullFixture::new("workspace_auto_pipeline", None);
+    let db = fixture._root.path().join("pull.db");
+    let (jobs, parent, destination) = (
+        fixture.jobs.clone(),
+        fixture.parent.clone(),
+        fixture.destination.clone(),
+    );
     let barrier = Arc::new(Barrier::new(RACERS));
     let racers = (0..RACERS)
         .map(|index| {
@@ -632,61 +556,28 @@ allocation_test!(concurrent_pull_admission_obeys_the_shared_ceiling, {
         .into_iter()
         .map(|racer| usize::from(racer.join().unwrap()))
         .sum::<usize>();
-
     assert_eq!(admitted, CEILING);
     assert_eq!(jobs.local_pull_admissions().unwrap().len(), CEILING);
-    assert_eq!(jobs.drain_leaf_occupancy().unwrap().occupied, CEILING);
-    assert_eq!(
-        jobs.drain_leaf_occupancy_for_run(&parent.run_id)
-            .unwrap()
-            .inherited,
-        Some(0)
-    );
+    assert_eq!(fixture.occupancy().occupied, CEILING);
+    let inherited = |run_id: &str| jobs.drain_leaf_occupancy_for_run(run_id).unwrap().inherited;
+    assert_eq!(inherited(&parent.run_id), Some(0));
     let replacement = jobs
         .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
         .unwrap();
-    assert_eq!(
-        jobs.drain_leaf_occupancy_for_run(&replacement.run_id)
-            .unwrap()
-            .inherited,
-        Some(CEILING)
-    );
-    let late = pull_request(&parent.run_id, "late");
-    assert!(
-        jobs.allocate_pull_request(&destination, &late, CEILING)
-            .unwrap()
-            .is_none(),
-        "a full ceiling admits nothing more"
-    );
+    assert_eq!(inherited(&replacement.run_id), Some(CEILING));
+    let ok = !fixture.admit("late", CEILING);
+    assert!(ok, "a full ceiling admits nothing more");
 });
-
-// The drain's own limit is the only ceiling on pulled leaves: one drain
-// admits well past the ten a leaf definition used to allow, under the limit
-// an operator retuned on the drain's state rather than the one it was
-// submitted with.
+// The drain's live (retuned) limit is the only ceiling on pulled leaves, past any per-leaf limit.
 allocation_test!(pull_admission_is_bound_only_by_the_drains_live_limit, {
     const SUBMITTED: usize = 3;
     const RETUNED: u32 = 24;
-    let root = TempDir::new().unwrap();
-    let jobs = workspace_job_run_store(Store::open(&root.path().join("pull.db")).unwrap(), "ws");
-    let parent = pull_parent(
-        jobs.as_ref(),
-        "workspace_pull_pipeline",
-        Some((RETUNED, SUBMITTED as u32)),
-    );
-    let destination = pull_destination();
-
+    let fixture = PullFixture::new("workspace_pull_pipeline", Some((RETUNED, SUBMITTED as u32)));
     let admitted = (0..RETUNED + 6)
-        .filter(|index| {
-            let request = pull_request(&parent.run_id, &format!("request-{index}"));
-            jobs.allocate_pull_request(&destination, &request, SUBMITTED)
-                .unwrap()
-                .is_some()
-        })
+        .filter(|index| fixture.admit(&format!("request-{index}"), SUBMITTED))
         .count();
-
     assert_eq!(admitted, RETUNED as usize, "the retuned limit governs");
-    let occupancy = jobs.drain_leaf_occupancy().unwrap();
+    let occupancy = fixture.occupancy();
     assert_eq!(occupancy.occupied, RETUNED as usize);
     assert_eq!(
         occupancy.per_pipeline.get("task_claimed_local_pipeline"),
@@ -694,82 +585,39 @@ allocation_test!(pull_admission_is_bound_only_by_the_drains_live_limit, {
         "one leaf definition holds every slot, with no ceiling of its own"
     );
 });
-
-// A claimed leaf waiting for retry still owns one drain slot, while terminal
-// leaf history releases its slot and does not affect the capacity reading.
+// A retrying claimed leaf owns one drain slot; terminal leaf history releases its slot.
 allocation_test!(
     retrying_claimed_leaf_occupies_capacity_and_terminal_history_does_not,
     {
         const CEILING: usize = 1;
-        let root = TempDir::new().unwrap();
-        let store = Store::open(&root.path().join("pull.db")).unwrap();
-        let jobs = workspace_job_run_store(store.clone(), "ws");
-        let parent = pull_parent(
-            jobs.as_ref(),
+        let fixture = PullFixture::new(
             "workspace_pull_pipeline",
             Some((CEILING as u32, CEILING as u32)),
         );
-        let retrying = jobs
-            .insert_job_run(
-                "task_claimed_local_pipeline",
-                1,
-                Utc::now(),
-                Some(serde_json::json!({"task_ids": ["ORB-TEST"]})),
-                None,
-            )
-            .unwrap();
-        let terminal = jobs
-            .insert_job_run(
-                "task_claimed_pr_pipeline",
-                1,
-                Utc::now(),
-                Some(serde_json::json!({"task_ids": ["ORB-OLD"]})),
-                None,
-            )
-            .unwrap();
-        finish(jobs.as_ref(), &terminal.run_id);
-        let retrying_run_id = retrying.run_id.clone();
-        store
-        .with_transaction(|tx| {
-            let changed = tx
-                .connection()
-                .execute(
-                    "UPDATE job_runs SET state = 'retrying' WHERE workspace_id = ?1 AND run_id = ?2",
-                    ["ws", retrying_run_id.as_str()],
-                )
-                .unwrap();
-            assert_eq!(changed, 1, "retrying fixture run exists");
-            Ok(())
-        })
-        .unwrap();
-
-        let occupancy = jobs.drain_leaf_occupancy().unwrap();
+        let retrying = fixture.leaf("task_claimed_local_pipeline", "ORB-TEST");
+        let terminal = fixture.leaf("task_claimed_pr_pipeline", "ORB-OLD");
+        finish(fixture.jobs.as_ref(), &terminal.run_id);
+        fixture.mark_retrying(&retrying.run_id);
+        let occupancy = fixture.occupancy();
         assert_eq!(
             occupancy.occupied, CEILING,
             "the retrying leaf occupies capacity and the terminal leaf is excluded"
         );
+        let got = occupancy.per_pipeline.get("task_claimed_local_pipeline");
         assert_eq!(
-            occupancy.per_pipeline.get("task_claimed_local_pipeline"),
+            got,
             Some(&1),
             "retrying claimed leaves count toward their pipeline"
         );
-        assert_eq!(
-            occupancy.per_pipeline.get("task_claimed_pr_pipeline"),
-            None,
-            "terminal leaf history does not count"
-        );
-
-        let destination = pull_destination();
-        let request = pull_request(&parent.run_id, "retrying-leaf-at-capacity");
+        let got = occupancy.per_pipeline.get("task_claimed_pr_pipeline");
+        assert_eq!(got, None, "terminal leaf history does not count");
+        let ok = !fixture.admit("retrying-leaf-at-capacity", CEILING);
         assert!(
-            jobs.allocate_pull_request(&destination, &request, CEILING)
-                .unwrap()
-                .is_none(),
+            ok,
             "a retrying claimed leaf prevents admission at the ceiling"
         );
     }
 );
-
 /// Record a schema-valid before-landing admission result, as the leaf's
 /// `landing_review_gate_admit` checkpoint does.
 fn checkpoint_landing_review(jobs: &dyn JobRunStoreBackend, run_id: &str, applies: bool) {
@@ -779,175 +627,117 @@ fn checkpoint_landing_review(jobs: &dyn JobRunStoreBackend, run_id: &str, applie
         serde_json::json!({}),
     );
     let output = if applies {
-        serde_json::to_value(orbit_types::workflow::ReviewGateAdmissionOutput::Admitted(
-            Box::new(orbit_types::workflow::ReviewGateAdmitted {
-                decision: orbit_types::workflow::ReviewGateDecision::Admitted,
-                held_attempt_id: None,
-                first_task_id: "ORB-REVIEW".into(),
-                attempt_id: "attempt".into(),
-                attempt_index: 1,
-                lineage_key: "lineage".into(),
-                timing: orbit_types::workflow::ReviewTiming::BeforeLanding,
-                timing_source: "workspace".into(),
-                reviewer: orbit_types::workflow::ReviewGateReviewer {
-                    crew: "reviewers".into(),
-                    crew_source: "workspace".into(),
-                    provider: "codex".into(),
-                    model: "review-model".into(),
-                    reasoning_effort: None,
-                    eligible_pool: Vec::new(),
-                },
-                owed_evidence: Vec::new(),
-                owner_owed_evidence: Vec::new(),
-                host_validation: Vec::new(),
-                base_sha: "0".repeat(40),
-                base_tree: "0".repeat(40),
-                head_sha: "1".repeat(40),
-                head_tree: "1".repeat(40),
-                implementation_commit_count: 1,
-                task_meaning_digest: "digest".into(),
-                task_selectors: BTreeMap::new(),
-                evidence_carry: serde_json::Value::Null,
-                manifest_artifact: "manifest.json".into(),
-                report_artifact: "report.md".into(),
-                budget: orbit_types::workflow::ReviewBudget::default(),
-                remaining: orbit_types::workflow::ReviewConsumption { seconds: 1800 },
-                started_at: Utc::now(),
-            }),
-        ))
-        .unwrap()
+        let admitted: orbit_types::workflow::ReviewGateAdmitted =
+            serde_json::from_value(serde_json::json!({
+                "decision": "admitted", "first_task_id": "ORB-REVIEW",
+                "attempt_id": "attempt", "attempt_index": 1, "lineage_key": "lineage",
+                "timing": "before-landing", "timing_source": "workspace",
+                "reviewer": {"crew": "reviewers", "crew_source": "workspace",
+                    "provider": "codex", "model": "review-model"},
+                "base_sha": "0".repeat(40), "base_tree": "0".repeat(40),
+                "head_sha": "1".repeat(40), "head_tree": "1".repeat(40),
+                "implementation_commit_count": 1, "task_meaning_digest": "digest",
+                "task_selectors": {}, "manifest_artifact": "manifest.json",
+                "report_artifact": "report.md",
+                "budget": orbit_types::workflow::ReviewBudget::default(),
+                "remaining": {"seconds": 1800}, "started_at": Utc::now(),
+            }))
+            .unwrap();
+        let admitted =
+            orbit_types::workflow::ReviewGateAdmissionOutput::Admitted(Box::new(admitted));
+        serde_json::to_value(admitted).unwrap()
     } else {
-        serde_json::to_value(
-            orbit_types::workflow::ReviewGateAdmissionOutput::NotApplicable(
-                orbit_types::workflow::ReviewGateNotApplicable::new(
-                    "review_before_landing_off",
-                    None,
-                ),
-            ),
-        )
-        .unwrap()
+        let na =
+            orbit_types::workflow::ReviewGateNotApplicable::new("review_before_landing_off", None);
+        serde_json::to_value(orbit_types::workflow::ReviewGateAdmissionOutput::NotApplicable(na))
+            .unwrap()
     };
     state.record_pipeline_output("landing_review_gate_admit", output);
     jobs.write_run_state(run_id, &state).unwrap();
 }
-
-// [ORB-15194] A claimed leaf in its before-landing review keeps its slot in
-// the occupancy reading but admits a replacement beside it, and no more than
-// the drain's ceiling of reviewing leaves do.
+// [ORB-15194] A reviewing claimed leaf keeps its slot but admits one replacement, up to the ceiling of reviewing leaves.
 allocation_test!(
     reviewing_claimed_leaves_admit_replacements_up_to_the_ceiling,
     {
         const CEILING: usize = 2;
-        let root = TempDir::new().unwrap();
-        let jobs =
-            workspace_job_run_store(Store::open(&root.path().join("pull.db")).unwrap(), "ws");
-        let parent = pull_parent(jobs.as_ref(), "workspace_pull_pipeline", None);
-        let destination = pull_destination();
-        let leaf = |task: &str| {
-            jobs.insert_job_run(
-                "task_claimed_pr_pipeline",
-                1,
-                Utc::now(),
-                Some(serde_json::json!({ "task_ids": [task] })),
-                None,
-            )
-            .unwrap()
-            .run_id
-        };
+        let fixture = PullFixture::new("workspace_pull_pipeline", None);
+        let jobs = fixture.jobs.clone();
+        let leaf = |task: &str| fixture.leaf("task_claimed_pr_pipeline", task).run_id;
         let mut requests = 0;
         let mut admit = || {
             requests += 1;
-            let request = pull_request(&parent.run_id, &format!("request-{requests}"));
-            jobs.allocate_pull_request(&destination, &request, CEILING)
-                .unwrap()
-                .is_some()
+            fixture.admit(&format!("request-{requests}"), CEILING)
         };
-
         let implementing = leaf("ORB-IMPL");
         checkpoint_landing_review(jobs.as_ref(), &implementing, false);
         let reviewing = leaf("ORB-REVIEW");
         checkpoint_landing_review(jobs.as_ref(), &reviewing, true);
-        let occupancy = jobs.drain_leaf_occupancy().unwrap();
+        let occupancy = fixture.occupancy();
         assert_eq!(
             (occupancy.occupied, occupancy.reviewing),
             (CEILING, 1),
             "the reviewing leaf still occupies its slot and is reported apart"
         );
+        let ok = admit();
         assert!(
-            admit(),
+            ok,
             "a full drain admits a replacement beside its reviewing leaf"
         );
         assert!(!admit(), "only one replacement per reviewing leaf");
-
         // The other leaf reaches its review too: one more replacement.
         checkpoint_landing_review(jobs.as_ref(), &implementing, true);
         assert!(admit(), "each reviewing leaf admits its own replacement");
         assert!(!admit());
-
         // A reviewing leaf past the ceiling's worth frees nothing more.
         let third = leaf("ORB-REVIEW-3");
         checkpoint_landing_review(jobs.as_ref(), &third, true);
-        let occupancy = jobs.drain_leaf_occupancy().unwrap();
+        let occupancy = fixture.occupancy();
+        let got = (occupancy.occupied, occupancy.reviewing);
         assert_eq!(
-            (occupancy.occupied, occupancy.reviewing),
+            got,
             (CEILING + 3, 3),
             "every live leaf and admission still occupies a slot"
         );
+        let ok = !admit();
         assert!(
-            !admit(),
+            ok,
             "at most the ceiling of reviewing leaves admit replacements"
         );
     }
 );
-
+// --------------------------------------------------------------------------- Coordinated
+// admission and handoff
 // ---------------------------------------------------------------------------
-// Coordinated admission and handoff
-// ---------------------------------------------------------------------------
-
 allocation_test!(reserved_key_publishes_a_new_bundle_before_replaying, {
     let owner = Coordinated::fixture();
     for (key, digest) in [("automation", None), ("desktop", Some("payload-digest"))] {
-        let params = TaskCreateParams {
-            actor: "system".into(),
-            title: "Recover an interrupted keyed creation".into(),
-            description: String::new(),
-            acceptance_criteria: Vec::new(),
-            plan: String::new(),
-            context_files: Vec::new(),
-            created_by: Some("system".into()),
-            status: TaskStatus::Proposed,
-            priority: TaskPriority::Medium,
-            complexity: None,
-            task_type: TaskType::Chore,
-            ..task_params("", &[])
-        };
+        let mut params = task_params("Recover an interrupted keyed creation", &[]);
+        params.actor = "system".into();
+        params.created_by = Some("system".into());
+        params.description = String::new();
+        params.acceptance_criteria = Vec::new();
+        params.plan = String::new();
+        params.status = TaskStatus::Proposed;
+        params.priority = TaskPriority::Medium;
+        params.complexity = None;
+        params.task_type = TaskType::Chore;
         let id = owner.registry.allocate_task_id(PARTITION_ID).unwrap();
         let input_digest = digest
             .map(str::to_string)
             .unwrap_or_else(|| lower_hex(Sha256::digest(serde_json::to_vec(&params).unwrap())));
-        // Crash injection: durable key admission succeeded, but bundle
-        // publication never ran. Reservation alone is not a creation replay.
-        rusqlite::Connection::open(task_registry_path(owner.root()))
-            .unwrap()
-            .execute(
-                "INSERT INTO task_action_keys VALUES (?1, ?2, ?3, ?4)",
-                rusqlite::params![PARTITION_ID, key, id, input_digest],
-            )
-            .unwrap();
-        assert!(owner.backends.task.task.get_task(&id).unwrap().is_none());
+        // Crash injection: durable key admission succeeded, but bundle publication never ran.
+        // Reservation alone is not a creation replay.
+        let conn = rusqlite::Connection::open(task_registry_path(owner.root())).unwrap();
+        conn.execute(
+            "INSERT INTO task_action_keys VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![PARTITION_ID, key, id, input_digest],
+        )
+        .unwrap();
+        assert!(owner.stored_task(&id).is_none());
+        let tasks = &owner.backends.task.task;
         let create = || match digest {
-            Some(digest) => {
-                owner
-                    .backends
-                    .task
-                    .task
-                    .create_desktop_task(params.clone(), key, digest)
-            }
-            None => owner
-                .backends
-                .task
-                .task
-                .create_task_idempotent(params.clone(), key),
+            Some(digest) => tasks.create_desktop_task(params.clone(), key, digest),
+            None => tasks.create_task_idempotent(params.clone(), key),
         };
         let (created, replayed) = create().expect("recover reserved key");
         assert_eq!(created.id, id, "recovery uses the reserved task identity");
@@ -956,18 +746,15 @@ allocation_test!(reserved_key_publishes_a_new_bundle_before_replaying, {
         assert!(replayed, "a published bundle is a replay");
         assert_eq!(existing, created);
     }
-    assert_eq!(owner.backends.task.task.list_tasks().unwrap().len(), 2);
+    assert_eq!(owner.task_store().list_tasks().unwrap().len(), 2);
 });
-
-/// One owner composition over a root directory. Opening a second one on the
-/// same root is what a second process (or a restart) does.
+/// One owner composition over a root; a second open on the same root is a second process/restart.
 struct Coordinated {
     registry: TaskRegistryStore,
     backends: CoordinatedWorkspaceBackends,
     orbit_dir: PathBuf,
     _root: Option<TempDir>,
 }
-
 impl Coordinated {
     fn fixture() -> Self {
         let root = TempDir::new().unwrap();
@@ -975,17 +762,14 @@ impl Coordinated {
         owner._root = Some(root);
         owner
     }
-
     fn open(root: &Path) -> Self {
         Self::open_bound(root, PARTITION_ID, None)
     }
-
     fn open_with_fingerprint(root: &Path, partition_id: &str, fingerprint: &str) -> Self {
         Self::open_bound(root, partition_id, Some(fingerprint))
     }
-
     fn open_bound(root: &Path, partition_id: &str, fingerprint: Option<&str>) -> Self {
-        let registry = TaskRegistryStore::open(&task_registry_path(root)).unwrap();
+        let registry = registry_at(root);
         let binding = bind_workspace(&registry, root, partition_id, fingerprint);
         let store = Store::open(&root.join("state.sqlite")).unwrap();
         let backends =
@@ -998,55 +782,61 @@ impl Coordinated {
             _root: None,
         }
     }
-
     fn root(&self) -> &Path {
         self.orbit_dir.parent().unwrap().parent().unwrap()
     }
-
     fn reopen(&self) -> Self {
         Self::open(self.root())
     }
-
-    fn task(&self, id: &str) -> orbit_types::task::Task {
-        self.backends.task.task.get_task(id).unwrap().unwrap()
+    fn task_store(&self) -> &Arc<dyn orbit_store::contracts::TaskStoreBackend> {
+        &self.backends.task.task
     }
-
+    fn artifact_store(&self) -> &Arc<dyn orbit_store::contracts::TaskArtifactStoreBackend> {
+        &self.backends.task.artifact
+    }
+    fn task(&self, id: &str) -> orbit_types::task::Task {
+        self.task_store().get_task(id).unwrap().unwrap()
+    }
     fn artifacts(&self, id: &str) -> Vec<TaskArtifact> {
-        self.backends
-            .task
-            .artifact
+        self.artifact_store()
             .get_task_artifacts(id)
             .unwrap()
             .unwrap()
     }
-
     fn artifact(&self, id: &str, path: &str) -> Option<TaskArtifact> {
-        self.backends
-            .task
-            .artifact
-            .get_task_artifact(id, path)
-            .unwrap()
+        self.artifact_store().get_task_artifact(id, path).unwrap()
     }
-
-    fn mutate(
+    fn mutate(&self, auth: &ClaimInvocation, id: &str, mutation: &ClaimMutation) -> ClaimResult {
+        let boundary = &self.backends.commit_boundary;
+        boundary.mutate_execution_claim(Some(auth), id, mutation)
+    }
+    fn put_evidence(
         &self,
         auth: &ClaimInvocation,
-        mutation_id: &str,
-        mutation: &ClaimMutation,
-    ) -> Result<ClaimMutationResult, OrbitError> {
-        self.backends
-            .commit_boundary
-            .mutate_execution_claim(Some(auth), mutation_id, mutation)
+        id: &str,
+        arts: Vec<TaskArtifact>,
+    ) -> ClaimResult {
+        let mutation = ClaimMutation::Evidence(claim_evidence(arts));
+        self.mutate(auth, id, &mutation)
     }
-
+    fn bind_claim(
+        &self,
+        auth: &ClaimInvocation,
+        claim: &ExecutionClaim,
+        ship: AdmissionShipContract,
+    ) -> ClaimResult {
+        let mutation = ClaimMutation::Bind {
+            run: leaf_run(claim),
+            ship,
+        };
+        self.mutate(auth, "bind", &mutation)
+    }
     fn create_task(&self, title: &str) -> orbit_types::task::Task {
         self.create_task_in(title, &["src/lib.rs"])
     }
-
     fn create_task_in(&self, title: &str, selectors: &[&str]) -> orbit_types::task::Task {
         self.create_task_with_status(title, selectors, TaskStatus::Backlog, None)
     }
-
     fn create_task_with_status(
         &self,
         title: &str,
@@ -1054,36 +844,28 @@ impl Coordinated {
         status: TaskStatus,
         parent_id: Option<String>,
     ) -> orbit_types::task::Task {
-        self.backends
-            .task
-            .task
-            .create_task(TaskCreateParams {
-                parent_id,
-                status,
-                ..task_params(title, selectors)
-            })
-            .expect("create task")
+        let params = TaskCreateParams {
+            parent_id,
+            status,
+            ..task_params(title, selectors)
+        };
+        self.task_store().create_task(params).expect("create task")
     }
-
     fn task_status(&self, id: &str) -> TaskStatus {
         self.task(id).status
     }
-
     fn active_reservations(&self) -> Vec<ActiveTaskReservation> {
         self.backends
             .reservation
             .inspect_active_task_reservations(&self.orbit_dir.to_string_lossy(), Some(PARTITION_ID))
             .unwrap()
     }
-
     fn claims(&self) -> Vec<ExecutionClaim> {
         self.backends.commit_boundary.execution_claims().unwrap()
     }
-
     fn try_pull(&self, request: &AdmissionRequest) -> Result<AdmissionLookup, OrbitError> {
         self.try_pull_with_ordering(request, &AdmissionOrdering::default())
     }
-
     fn try_pull_with_ordering(
         &self,
         request: &AdmissionRequest,
@@ -1091,7 +873,6 @@ impl Coordinated {
     ) -> Result<AdmissionLookup, OrbitError> {
         self.try_pull_as("machine-a", request, ordering)
     }
-
     fn try_pull_as(
         &self,
         machine_id: &str,
@@ -1114,19 +895,64 @@ impl Coordinated {
             &|_, _, _| Ok(None),
         )
     }
-
     fn pull(&self, request: &AdmissionRequest) -> AdmissionReceipt {
         match self.try_pull(request).expect("pull") {
             AdmissionLookup::Found { receipt, .. } => *receipt,
             other => panic!("expected a receipt: {other:?}"),
         }
     }
-
     fn landing_starts(&self) -> Vec<LandingStartRequest> {
-        self.backends.task.task.landing_start_requests().unwrap()
+        self.task_store().landing_start_requests().unwrap()
+    }
+    fn stored_task(&self, id: &str) -> Option<orbit_types::task::Task> {
+        self.task_store().get_task(id).unwrap()
+    }
+    fn bundle_path(&self, task_id: &str) -> PathBuf {
+        self.registry
+            .canonical_task_bundle_path(PARTITION_ID, task_id)
+            .unwrap()
+    }
+    fn update_evidence(
+        &self,
+        auth: &ClaimInvocation,
+        id: &str,
+        arts: Vec<TaskArtifact>,
+    ) -> ClaimResult {
+        let mutation = ClaimMutation::Update(ClaimWorkerUpdate {
+            evidence: claim_evidence(arts),
+            ..Default::default()
+        });
+        self.mutate(auth, id, &mutation)
+    }
+    fn upsert_artifacts(
+        &self,
+        task_id: &str,
+        artifacts: Vec<TaskArtifact>,
+    ) -> Result<(), OrbitError> {
+        let params = TaskArtifactUpdateParams {
+            origin: None,
+            actor: "codex".to_string(),
+            owner_run_id: None,
+            writer: None,
+            upsert_artifacts: artifacts,
+        };
+        self.artifact_store().upsert_task_artifacts(task_id, params)
+    }
+    fn fail_claim(
+        &self,
+        auth: &ClaimInvocation,
+        id: &str,
+        summary: &str,
+        artifacts: Vec<TaskArtifact>,
+    ) -> ClaimResult {
+        let mutation = ClaimMutation::Fail(ClaimEvidence {
+            summary: Some(summary.to_string()),
+            artifacts,
+            ..Default::default()
+        });
+        self.mutate(auth, id, &mutation)
     }
 }
-
 fn task_params(title: &str, selectors: &[&str]) -> TaskCreateParams {
     TaskCreateParams {
         actor: "codex".into(),
@@ -1140,38 +966,16 @@ fn task_params(title: &str, selectors: &[&str]) -> TaskCreateParams {
         ..create_params(title, TaskStatus::Backlog)
     }
 }
-
 fn owner_request(id: &str) -> AdmissionRequest {
-    AdmissionRequest {
-        labels: Vec::new(),
-        request_id: id.into(),
-        caller_version: "test".into(),
-        caller_schema: orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
-        caller_fingerprint: None,
-        caller_before_pr: false,
-        review_gate: false,
-        run_context: AdmissionRunContext {
-            run_id: "drain".into(),
-            job_name: "auto".into(),
-            machine_name: Some("untrusted-label".into()),
-        },
-        ship: AdmissionShipContract {
-            mode: "pr".into(),
-            base_branch: "agent-main".into(),
-            landing_branch: "agent-main".into(),
-            before_pr: false,
-            before_landing: false,
-            completion: "review".into(),
-            authorization_reference: None,
-            review: None,
-        },
-        crews: None,
-        os: None,
-        browser_kit: false,
-        admissible: None,
-    }
+    admission_request(
+        id,
+        "test",
+        "drain",
+        "auto",
+        Some("untrusted-label"),
+        ship_contract("pr", "agent-main"),
+    )
 }
-
 fn race_pulls(
     first: &Coordinated,
     a: AdmissionRequest,
@@ -1191,10 +995,7 @@ fn race_pulls(
         [a.join().unwrap(), b.join().unwrap()]
     })
 }
-
-// Two owner compositions (two processes) replay the same request at the
-// same instant: one claim and one reservation exist, and both callers get
-// the identical receipt.
+// Two compositions replay one request at once: one claim, one reservation, identical receipts.
 allocation_test!(simultaneous_retries_of_one_request_create_one_claim, {
     let owner = Coordinated::fixture();
     owner.create_task("work");
@@ -1211,9 +1012,7 @@ allocation_test!(simultaneous_retries_of_one_request_create_one_claim, {
     assert_eq!(owner.active_reservations().len(), 1);
     assert_eq!(owner.claims().len(), 1);
 });
-
-// Distinct concurrent requests race over two tasks that share a file: at
-// most one claims, the other is deferred, and only one reservation exists.
+// Distinct concurrent requests over overlapping tasks: at most one claims, one reservation exists.
 allocation_test!(
     distinct_concurrent_requests_never_claim_overlapping_tasks,
     {
@@ -1222,25 +1021,21 @@ allocation_test!(
         owner.create_task("two");
         let other = owner.reopen();
         let receipts = race_pulls(&owner, owner_request("a"), &other, owner_request("b"));
+        let got = receipts.iter().filter(|r| r.claim.is_some()).count();
         assert_eq!(
-            receipts.iter().filter(|r| r.claim.is_some()).count(),
-            1,
+            got, 1,
             "overlapping footprints admit one claim: {receipts:?}"
         );
         assert_eq!(owner.active_reservations().len(), 1);
         assert_eq!(owner.claims().len(), 1);
     }
 );
-
 const OWNER_POLICY: &str = "workspace-config:workflow.distributed_completion";
 const REPOSITORY: &str = "owner/repository";
 const REVIEW_CREW: &str = "reviewer";
-
 /// One way a handoff's review evidence is spoiled before acceptance.
 type Tamper = fn(&mut Delivery);
-
-/// An admitted and bound claim with its owner-held validation logs and the
-/// handoff a worker would submit for it.
+/// An admitted, bound claim with owner-held validation logs and its worker handoff.
 struct Delivery {
     owner: Coordinated,
     claim: ExecutionClaim,
@@ -1250,18 +1045,11 @@ struct Delivery {
     /// The owner's own judgement of the handoff's known-red logs.
     known_red: Vec<KnownRedObservation>,
 }
-
 impl Delivery {
     fn admit(ship: AdmissionShipContract) -> Self {
-        Self::admit_in(ship, &["src/lib.rs"])
+        Self::admit_requiring(ship, &["src/lib.rs"], &["build", "test"])
     }
-
-    fn admit_in(ship: AdmissionShipContract, selectors: &[&str]) -> Self {
-        Self::admit_requiring(ship, selectors, &["build", "test"])
-    }
-
-    /// An admitted claim whose owner requires `required`, handed off with one
-    /// passing log per required command.
+    /// Admit a claim whose owner requires `required`, with one passing log per command.
     fn admit_requiring(ship: AdmissionShipContract, selectors: &[&str], required: &[&str]) -> Self {
         let owner = Coordinated::fixture();
         owner.create_task_in("typed handoff", selectors);
@@ -1270,16 +1058,7 @@ impl Delivery {
         request.review_gate = ship.before_pr;
         let claim = owner.pull(&request).claim.expect("claim");
         let unbound = claim_worker(&claim, false);
-        owner
-            .mutate(
-                &unbound,
-                "bind",
-                &ClaimMutation::Bind {
-                    run: leaf_run(&claim),
-                    ship,
-                },
-            )
-            .expect("bind");
+        owner.bind_claim(&unbound, &claim, ship).expect("bind");
         let handoff = handoff_with_logs(&owner, &claim, required);
         Self {
             owner,
@@ -1289,40 +1068,33 @@ impl Delivery {
             known_red: Vec::new(),
         }
     }
-
     fn assert_status(&self, status: TaskStatus) {
-        assert_eq!(
-            self.owner.task_status(&self.claim.task_id),
-            status,
-            "{}",
-            self.claim.task_id
-        );
+        let got = self.owner.task_status(&self.claim.task_id);
+        assert_eq!(got, status, "{}", self.claim.task_id);
     }
-
     fn observation(&self, policy: Option<&str>) -> HandoffObservation {
+        let review = self
+            .handoff
+            .review
+            .evidence()
+            .map(|evidence| HandoffReviewObservation {
+                reviewed_base_sha: evidence.reviewed_base_sha.clone(),
+                reviewed_base_is_ancestor: true,
+                repository: REPOSITORY.into(),
+            });
         HandoffObservation {
             footprint_widening: self.handoff.footprint_widening.clone(),
             candidate: self.handoff.candidate.clone(),
             required_commands: self.required.clone(),
             owner_completion_authority: policy.map(str::to_string),
-            review: self
-                .handoff
-                .review
-                .evidence()
-                .map(|evidence| HandoffReviewObservation {
-                    reviewed_base_sha: evidence.reviewed_base_sha.clone(),
-                    reviewed_base_is_ancestor: true,
-                    repository: REPOSITORY.into(),
-                }),
+            review,
             known_red: self.known_red.clone(),
             light_delivery: Vec::new(),
         }
     }
-
     fn worker(&self) -> ClaimInvocation {
         claim_worker(&self.claim, true)
     }
-
     fn operator(&self) -> ClaimInvocation {
         ClaimInvocation::trusted_operator(
             self.claim.task_id.clone(),
@@ -1330,62 +1102,46 @@ impl Delivery {
             "owner-operator".into(),
         )
     }
-
-    fn accept(&self, policy: Option<&str>) -> Result<ClaimMutationResult, OrbitError> {
+    fn accept(&self, policy: Option<&str>) -> ClaimResult {
         self.accept_observed(self.observation(policy))
     }
-
-    fn accept_observed(
-        &self,
-        observation: HandoffObservation,
-    ) -> Result<ClaimMutationResult, OrbitError> {
-        self.owner.mutate(
-            &self.worker().with_handoff_observation(observation),
-            "handoff",
-            &ClaimMutation::AcceptHandoff(self.handoff.clone()),
-        )
+    fn accept_observed(&self, observation: HandoffObservation) -> ClaimResult {
+        let worker = self.worker().with_handoff_observation(observation);
+        let mutation = ClaimMutation::AcceptHandoff(self.handoff.clone());
+        self.owner.mutate(&worker, "handoff", &mutation)
     }
-
-    /// Persist `certificate` on the owner as the leaf's claim evidence and
-    /// make the handoff carry it as its before-PR review.
+    /// Persist `certificate` as claim evidence and carry it as the handoff's before-PR review.
     fn reviewed(&mut self, certificate: &ReviewCertificate) {
         let content = serde_json::to_vec(certificate).unwrap();
         let reference = HandoffArtifactRef {
             path: REVIEW_GATE_ARTIFACT.into(),
             sha256: lower_hex(Sha256::digest(&content)),
         };
+        let artifacts = vec![json_artifact(reference.path.clone(), content)];
+        let id = format!("review-certificate-{}", certificate.verdict.as_str());
         self.owner
-            .mutate(
-                &self.worker(),
-                &format!("review-certificate-{}", certificate.verdict.as_str()),
-                &ClaimMutation::Evidence(claim_evidence(vec![TaskArtifact {
-                    path: reference.path.clone(),
-                    content,
-                    media_type: "application/json".into(),
-                    created_by: None,
-                }])),
-            )
+            .put_evidence(&self.worker(), &id, artifacts)
             .expect("persist the certificate on the owner");
+        let evidence = HandoffReviewEvidence {
+            attempt_id: certificate.attempt_id.clone(),
+            verdict: certificate.verdict,
+            reviewed_head_sha: self.handoff.candidate.candidate.commit.clone(),
+            reviewed_base_sha: certificate.base.commit.clone(),
+            reviewer_commit: certificate
+                .repair_commits
+                .last()
+                .map(|repair| repair.commit.clone()),
+            reviewer_crew: certificate.reviewer.crew.clone(),
+            reviewer_run_id: "leaf".into(),
+            certificate: reference,
+            artifacts: vec![],
+            host_evidence: vec![],
+        };
         self.handoff.review = HandoffReview {
             policy: ReviewTiming::BeforePr,
-            disposition: HandoffReviewDisposition::BeforePr(Box::new(HandoffReviewEvidence {
-                attempt_id: certificate.attempt_id.clone(),
-                verdict: certificate.verdict,
-                reviewed_head_sha: self.handoff.candidate.candidate.commit.clone(),
-                reviewed_base_sha: certificate.base.commit.clone(),
-                reviewer_commit: certificate
-                    .repair_commits
-                    .last()
-                    .map(|repair| repair.commit.clone()),
-                reviewer_crew: certificate.reviewer.crew.clone(),
-                reviewer_run_id: "leaf".into(),
-                certificate: reference,
-                artifacts: vec![],
-                host_evidence: vec![],
-            })),
+            disposition: HandoffReviewDisposition::BeforePr(Box::new(evidence)),
         };
     }
-
     fn review_evidence(&mut self) -> &mut HandoffReviewEvidence {
         match &mut self.handoff.review.disposition {
             HandoffReviewDisposition::BeforePr(evidence)
@@ -1393,40 +1149,30 @@ impl Delivery {
             HandoffReviewDisposition::NotRequired => panic!("the handoff carries no review"),
         }
     }
-
-    fn approve(&self) -> Result<ClaimMutationResult, OrbitError> {
-        let accepted = self
-            .owner
-            .backends
-            .commit_boundary
-            .accepted_handoff(&self.claim.claim_id)?;
-        self.owner.mutate(
-            &self
-                .operator()
-                .with_handoff_observation(self.observation(None)),
-            "approval",
-            &ClaimMutation::ApproveHandoff {
-                handoff_id: accepted.handoff_id,
-                candidate: self.handoff.candidate.clone(),
-            },
-        )
+    fn approve(&self) -> ClaimResult {
+        let boundary = &self.owner.backends.commit_boundary;
+        let accepted = boundary.accepted_handoff(&self.claim.claim_id)?;
+        let operator = self
+            .operator()
+            .with_handoff_observation(self.observation(None));
+        let mutation = ClaimMutation::ApproveHandoff {
+            handoff_id: accepted.handoff_id,
+            candidate: self.handoff.candidate.clone(),
+        };
+        self.owner.mutate(&operator, "approval", &mutation)
     }
-
-    fn merge_intent(&self, policy: Option<&str>) -> Result<ClaimMutationResult, OrbitError> {
-        self.owner.mutate(
-            &self
-                .operator()
-                .with_handoff_observation(self.observation(policy)),
-            "merge-intent",
-            &ClaimMutation::MergeIntent {
-                intent_id: "sent-merge".into(),
-                resolved: false,
-                evidence: "pinned provider request".into(),
-            },
-        )
+    fn merge_intent(&self, policy: Option<&str>) -> ClaimResult {
+        let operator = self
+            .operator()
+            .with_handoff_observation(self.observation(policy));
+        let mutation = ClaimMutation::MergeIntent {
+            intent_id: "sent-merge".into(),
+            resolved: false,
+            evidence: "pinned provider request".into(),
+        };
+        self.owner.mutate(&operator, "merge-intent", &mutation)
     }
 }
-
 fn claim_worker(claim: &ExecutionClaim, bound: bool) -> ClaimInvocation {
     ClaimInvocation::trusted_worker(
         claim.task_id.clone(),
@@ -1435,28 +1181,24 @@ fn claim_worker(claim: &ExecutionClaim, bound: bool) -> ClaimInvocation {
         bound.then(|| leaf_run(claim)),
     )
 }
-
 fn claim_evidence(artifacts: Vec<TaskArtifact>) -> ClaimEvidence {
     ClaimEvidence {
         artifacts,
         ..Default::default()
     }
 }
-
 fn leaf_run(claim: &ExecutionClaim) -> ClaimRun {
     ClaimRun {
         machine_id: claim.executed_on.machine_id.clone(),
         run_id: "leaf".into(),
     }
 }
-
 fn done_ship() -> AdmissionShipContract {
     let mut ship = owner_request("first").ship;
     ship.completion = "done".into();
     ship.authorization_reference = Some(OWNER_POLICY.into());
     ship
 }
-
 /// The worker's handoff over a pinned candidate, with one validation log per
 /// command in `commands` persisted on the owner as claim evidence.
 fn handoff_with_logs(
@@ -1464,59 +1206,35 @@ fn handoff_with_logs(
     claim: &ExecutionClaim,
     commands: &[&str],
 ) -> TaskHandoff {
-    let mut handoff = TaskHandoff {
-        schema_version: 1,
-        workspace_id: PARTITION_ID.into(),
-        task_id: claim.task_id.clone(),
-        claim_id: claim.claim_id.clone(),
-        machine_id: claim.executed_on.machine_id.clone(),
-        run_id: "leaf".into(),
-        candidate: HandoffCandidate {
-            repository: REPOSITORY.into(),
-            source_branch: "attempt/leaf".into(),
-            base_branch: "agent-main".into(),
-            landing_branch: "agent-main".into(),
-            candidate: SourceRevision {
-                commit: "a".repeat(40),
-                tree: "b".repeat(40),
-            },
-            base: SourceRevision {
-                commit: "c".repeat(40),
-                tree: "d".repeat(40),
-            },
-            delivery: HandoffDelivery::PullRequest { number: 42 },
+    let mut handoff: TaskHandoff = serde_json::from_value(serde_json::json!({
+        "schema_version": 1, "workspace_id": PARTITION_ID, "task_id": claim.task_id,
+        "claim_id": claim.claim_id, "machine_id": claim.executed_on.machine_id,
+        "run_id": "leaf",
+        "candidate": {
+            "repository": REPOSITORY, "source_branch": "attempt/leaf",
+            "base_branch": "agent-main", "landing_branch": "agent-main",
+            "candidate": {"commit": "a".repeat(40), "tree": "b".repeat(40)},
+            "base": {"commit": "c".repeat(40), "tree": "d".repeat(40)},
+            "delivery": {"kind": "pull_request", "number": 42},
         },
-        review: HandoffReview::not_required(),
-        execution_summary: "Outcome: success\nRequired checks passed for pinned candidate".into(),
-        validation: vec![],
-        footprint_widening: vec![],
-        owed_criteria: vec![],
-        regression_from: vec![],
-    };
+        "review": HandoffReview::not_required(),
+        "execution_summary": "Outcome: success\nRequired checks passed for pinned candidate",
+        "validation": [],
+    }))
+    .unwrap();
     let artifacts = commands
         .iter()
         .map(|command| {
-            let log = HandoffValidationLog {
-                schema_version: 1,
-                workspace_id: handoff.workspace_id.clone(),
-                task_id: handoff.task_id.clone(),
-                claim_id: handoff.claim_id.clone(),
-                machine_id: handoff.machine_id.clone(),
-                run_id: handoff.run_id.clone(),
-                candidate: handoff.candidate.clone(),
-                tested_head: handoff.candidate.candidate.commit.clone(),
-                command: (*command).into(),
-                exit_code: 0,
-                output: format!("{command} captured output"),
-                known_red: None,
-                flaky: None,
-            };
-            TaskArtifact {
-                path: format!("{command}.json"),
-                content: serde_json::to_vec(&log).unwrap(),
-                media_type: "application/json".into(),
-                created_by: None,
-            }
+            let log = serde_json::json!({
+                "schema_version": 1, "workspace_id": handoff.workspace_id,
+                "task_id": handoff.task_id, "claim_id": handoff.claim_id,
+                "machine_id": handoff.machine_id, "run_id": handoff.run_id,
+                "candidate": handoff.candidate,
+                "tested_head": handoff.candidate.candidate.commit,
+                "command": command, "exit_code": 0,
+                "output": format!("{command} captured output"),
+            });
+            json_artifact(format!("{command}.json"), serde_json::to_vec(&log).unwrap())
         })
         .collect::<Vec<_>>();
     handoff.validation = artifacts
@@ -1531,22 +1249,16 @@ fn handoff_with_logs(
     }
     let worker = claim_worker(claim, true);
     owner
-        .mutate(
-            &worker,
-            "validation-logs",
-            &ClaimMutation::Evidence(claim_evidence(artifacts)),
-        )
+        .put_evidence(&worker, "validation-logs", artifacts)
         .expect("persist owner logs");
     handoff
 }
-
-// Completion authority is the owner policy the claim was admitted under,
-// still granted by the owner when the handoff arrives and when it lands.
+// Completion authority is the admission-time owner policy, rechecked at handoff and at landing.
 allocation_test!(
     handoff_authorization_follows_the_owner_policy_at_admission,
     {
-        // A `done` contract admitted under the policy is authorized at acceptance
-        // and its landing request is pending.
+        // A `done` contract admitted under the policy is authorized at acceptance and its landing
+        // request is pending.
         let granted = Delivery::admit(done_ship());
         granted.accept(Some(OWNER_POLICY)).expect("handoff");
         granted.assert_status(TaskStatus::Review);
@@ -1557,63 +1269,47 @@ allocation_test!(
         let withdrawn = granted
             .merge_intent(None)
             .expect_err("withdrawn policy fences landing");
-        assert!(
-            withdrawn.to_string().contains("policy withdrawn"),
-            "{withdrawn}"
-        );
+        let ok = withdrawn.to_string().contains("policy withdrawn");
+        assert!(ok, "{withdrawn}");
         granted
             .merge_intent(Some(OWNER_POLICY))
             .expect("policy still granted");
-
-        // The same contract, accepted while the owner grants no policy or another
-        // one, waits in review for an operator.
+        // The same contract, accepted while the owner grants no policy or another one, waits in review
+        // for an operator.
         for policy in [None, Some("workspace-config:some.other_key")] {
             let waiting = Delivery::admit(done_ship());
             waiting
                 .accept(policy)
                 .expect("a valid delivery is still accepted");
             waiting.assert_status(TaskStatus::Review);
-            assert!(
-                waiting.owner.landing_starts().is_empty(),
-                "no authority for {policy:?}"
-            );
+            let ok = waiting.owner.landing_starts().is_empty();
+            assert!(ok, "no authority for {policy:?}");
             waiting.approve().expect("operator approves");
             assert_eq!(waiting.owner.landing_starts().len(), 1);
         }
-
-        // A `review` contract is never authorized by a policy the owner grants
-        // after admission.
+        // A `review` contract is never authorized by a policy the owner grants after admission.
         let review = Delivery::admit(owner_request("first").ship);
         review.accept(Some(OWNER_POLICY)).expect("handoff");
         assert!(review.owner.landing_starts().is_empty());
     }
 );
-
-// An owner whose `workflow.required_validation_commands` is empty requires
-// no check: it accepts a handoff carrying no validation logs, authorizes it
-// under its completion policy and lets it land. The handoff's other checks
-// still hold — a candidate the owner observes differently is refused, and an
-// owner that does require commands refuses the same log-free handoff.
+// An owner requiring no commands accepts and lands a log-free handoff; candidate integrity and a requiring owner still refuse it.
 allocation_test!(
     an_owner_requiring_no_commands_accepts_and_lands_a_handoff_without_logs,
     {
         let delivery = Delivery::admit_requiring(done_ship(), &["src/lib.rs"], &[]);
         assert!(delivery.handoff.validation.is_empty());
-
         let mut moved = delivery.observation(Some(OWNER_POLICY));
         moved.candidate.candidate.commit = "e".repeat(40);
         let moved = delivery
             .owner
-            .backends
-            .commit_boundary
-            .mutate_execution_claim(
-                Some(&delivery.worker().with_handoff_observation(moved)),
+            .mutate(
+                &delivery.worker().with_handoff_observation(moved),
                 "moved",
                 &ClaimMutation::AcceptHandoff(delivery.handoff.clone()),
             )
             .expect_err("candidate integrity still gates a handoff with no required commands");
         assert!(moved.to_string().contains("candidate"), "{moved}");
-
         delivery
             .accept(Some(OWNER_POLICY))
             .expect("no required command is no gate");
@@ -1624,22 +1320,17 @@ allocation_test!(
         delivery
             .merge_intent(Some(OWNER_POLICY))
             .expect("landing rechecks the same empty requirement");
-
         let mut requiring = Delivery::admit_requiring(done_ship(), &["src/lib.rs"], &[]);
         requiring.required = vec!["build".into()];
         let refused = requiring
             .accept(Some(OWNER_POLICY))
             .expect_err("a required command needs its log");
-        assert!(
-            refused.to_string().contains("required validation missing"),
-            "{refused}"
-        );
+        let ok = refused.to_string().contains("required validation missing");
+        assert!(ok, "{refused}");
         requiring.assert_status(TaskStatus::InProgress);
     }
 );
-
-// Validation evidence replaced in owner storage after acceptance blocks an
-// operator's approval and, once approved, the landing itself.
+// Replaced handoff evidence blocks approval and, once approved, landing.
 allocation_test!(replaced_handoff_evidence_blocks_approval_and_landing, {
     for approved in [false, true] {
         let delivery = Delivery::admit(owner_request("first").ship);
@@ -1647,17 +1338,15 @@ allocation_test!(replaced_handoff_evidence_blocks_approval_and_landing, {
         if approved {
             delivery.approve().expect("approve over intact evidence");
         }
-        // Owner storage replaced behind the claim, not an authorized
-        // post-handoff worker write: a well-formed log for the same candidate
-        // whose bytes no longer match the digest the handoff pinned.
+        // Owner storage replaced behind the claim, not an authorized post-handoff worker write: a well-
+        // formed log for the same candidate whose bytes no longer match the digest the handoff pinned.
         let log = delivery
             .owner
-            .registry
-            .canonical_task_bundle_path(PARTITION_ID, &delivery.claim.task_id)
-            .unwrap()
+            .bundle_path(&delivery.claim.task_id)
             .join("artifacts/files/build.json");
+        let ok = log.is_file();
         assert!(
-            log.is_file(),
+            ok,
             "the owner holds the validation log at {}",
             log.display()
         );
@@ -1666,25 +1355,16 @@ allocation_test!(replaced_handoff_evidence_blocks_approval_and_landing, {
         replaced["output"] = "replaced output".into();
         std::fs::write(&log, serde_json::to_vec(&replaced).unwrap()).unwrap();
         if approved {
-            assert!(
-                delivery.merge_intent(None).is_err(),
-                "landing must refuse replaced evidence"
-            );
+            let ok = delivery.merge_intent(None).is_err();
+            assert!(ok, "landing must refuse replaced evidence");
         } else {
-            assert!(
-                delivery.approve().is_err(),
-                "approval must refuse replaced evidence"
-            );
+            let ok = delivery.approve().is_err();
+            assert!(ok, "approval must refuse replaced evidence");
             assert!(delivery.owner.landing_starts().is_empty());
         }
     }
 });
-
-// Owner acceptance journals selectors, provenance history and the enlarged
-// review lock together. ORB-13990: a claimed implementer may change any path
-// the work requires, so every path an owner can track widens — another
-// crate, docs, a new top-level `tests/` file. Only metadata, environment
-// and non-normal paths are refused, leaving the claim and task unchanged.
+// [ORB-13990] Widening accepts any safe tracked path (other crates, docs, new tests); only metadata, environment and non-normal paths are refused.
 allocation_test!(handoff_widening_accepts_any_safe_path_and_replays_once, {
     for (path, allowed) in [
         ("crates/touched/src/split/new.rs", true),
@@ -1696,9 +1376,11 @@ allocation_test!(handoff_widening_accepts_any_safe_path_and_replays_once, {
         ("crates/touched/.orbit/new", false),
         ("crates/touched/../other/src/lib.rs", false),
     ] {
-        let mut delivery = Delivery::admit_in(
-            owner_request("template").ship,
+        let ship = owner_request("template").ship;
+        let mut delivery = Delivery::admit_requiring(
+            ship,
             &["file:crates/touched/src/lib.rs"],
+            &["build", "test"],
         );
         delivery.handoff.footprint_widening = vec![path.into()];
         let before = delivery.owner.task(&delivery.claim.task_id);
@@ -1736,11 +1418,8 @@ allocation_test!(handoff_widening_accepts_any_safe_path_and_replays_once, {
                     other => panic!("the widening is a typed decision: {other:?}"),
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(
-                widenings.len(),
-                1,
-                "replay must not duplicate widening history"
-            );
+            let got = widenings.len();
+            assert_eq!(got, 1, "replay must not duplicate widening history");
             assert_eq!(widenings[0].step, ContextWideningStep::Implement);
             assert_eq!(widenings[0].run_id, delivery.handoff.run_id);
             assert_eq!(widenings[0].selectors, vec![format!("file:{path}")]);
@@ -1749,25 +1428,18 @@ allocation_test!(handoff_widening_accepts_any_safe_path_and_replays_once, {
             // Admission replay remains the immutable original receipt.
             let mut request = owner_request("first");
             request.ship = owner_request("template").ship;
-            assert_eq!(
-                delivery.owner.pull(&request).claim.unwrap().footprint,
-                delivery.claim.footprint
-            );
+            let got = delivery.owner.pull(&request).claim.unwrap().footprint;
+            assert_eq!(got, delivery.claim.footprint);
         } else {
             let error = result.unwrap_err().to_string();
             assert!(error.contains(path), "exact refused path: {error}");
-            assert_eq!(
-                delivery.owner.task(&delivery.claim.task_id).context_files,
-                before.context_files
-            );
+            let got = delivery.owner.task(&delivery.claim.task_id).context_files;
+            assert_eq!(got, before.context_files);
             delivery.assert_status(TaskStatus::InProgress);
         }
     }
 });
-
-// The widening request must equal the owner's independently observed diff,
-// while a competing claim or lock on the added path no longer refuses it:
-// footprint locks are a scheduling hint, not a delivery gate.
+// Widening must equal the owner's observed diff; competing claims/locks no longer refuse it (scheduling hint, not a gate).
 allocation_test!(
     handoff_widening_accepts_locked_paths_and_refuses_observation_mismatch,
     {
@@ -1778,50 +1450,42 @@ allocation_test!(
         observed.footprint_widening.clear();
         let error = delivery
             .owner
-            .backends
-            .commit_boundary
-            .mutate_execution_claim(
-                Some(&delivery.worker().with_handoff_observation(observed)),
+            .mutate(
+                &delivery.worker().with_handoff_observation(observed),
                 "mismatch",
                 &ClaimMutation::AcceptHandoff(delivery.handoff.clone()),
             )
             .unwrap_err()
             .to_string();
+        let ok = error.contains(path);
         assert!(
-            error.contains(path),
+            ok,
             "request must equal independently observed diff: {error}"
         );
         delivery.assert_status(TaskStatus::InProgress);
-
         for lock in ["claim", "reservation", "status"] {
             let mut delivery = Delivery::admit(owner_request("template").ship);
-            let competitor = delivery
-                .owner
-                .create_task_in("competing", &["file:src/new/nested.rs"]);
+            let owner = &delivery.owner;
+            let competitor = owner.create_task_in("competing", &["file:src/new/nested.rs"]);
             match lock {
                 "claim" => {
-                    delivery
-                        .owner
+                    owner
                         .pull(&owner_request("second"))
                         .claim
                         .expect("second claim");
                 }
                 "reservation" => {
-                    let reserved = delivery
-                        .owner
+                    let file = format!("file:{path}");
+                    let reserved = owner
                         .backends
                         .reservation
                         .reserve_task_reservation(
                             orbit_store::contracts::TaskReservationReserveParams {
-                                workspace_orbit_dir: delivery
-                                    .owner
-                                    .orbit_dir
-                                    .to_string_lossy()
-                                    .into_owned(),
+                                workspace_orbit_dir: owner.orbit_dir.to_string_lossy().into_owned(),
                                 workspace_id: Some(PARTITION_ID.into()),
                                 task_ids: vec![competitor.id.clone()],
-                                requested_files: vec![format!("file:{path}")],
-                                stored_files: vec![format!("file:{path}")],
+                                requested_files: vec![file.clone()],
+                                stored_files: vec![file],
                                 actor: "owner".into(),
                                 ttl_seconds: 600,
                                 owner_run_id: None,
@@ -1832,8 +1496,7 @@ allocation_test!(
                     assert!(reserved.reserved);
                 }
                 _ => {
-                    delivery
-                        .owner
+                    owner
                         .backends
                         .commit_boundary
                         .commit_task_transition(
@@ -1856,11 +1519,9 @@ allocation_test!(
         }
     }
 );
-
+// --------------------------------------------------------------------------- Before-PR review
+// contract and evidence [ORB-13895]
 // ---------------------------------------------------------------------------
-// Before-PR review contract and evidence [ORB-13895]
-// ---------------------------------------------------------------------------
-
 fn before_pr_ship() -> AdmissionShipContract {
     let mut ship = owner_request("first").ship;
     ship.before_pr = true;
@@ -1874,117 +1535,61 @@ fn before_pr_ship() -> AdmissionShipContract {
     });
     ship
 }
-
-/// The certificate a leaf's gate would issue for `handoff`: the reviewer
-/// examined an implementation and fixed its findings in the candidate's
-/// last commit.
+/// The certificate a leaf's gate would issue for `handoff` (reviewed, with findings fixed in the last commit).
 fn certificate(handoff: &TaskHandoff, verdict: ReviewVerdict) -> ReviewCertificate {
-    let commit = |revision: &SourceRevision, subject: &str| CommitIdentity {
-        commit: revision.commit.clone(),
-        tree: revision.tree.clone(),
-        author: "implementer".into(),
-        committer: "implementer".into(),
-        subject: subject.into(),
+    let commit = |revision: &SourceRevision, subject: &str| {
+        serde_json::json!({
+            "commit": revision.commit, "tree": revision.tree,
+            "author": "implementer", "committer": "implementer", "subject": subject,
+        })
     };
     let reviewed = SourceRevision {
         commit: "e".repeat(40),
         tree: "f".repeat(40),
     };
-    ReviewCertificate {
-        schema_version: REVIEW_CONTRACT_VERSION,
-        attempt_id: "attempt-1".into(),
-        lineage_key: "lineage".into(),
-        task_ids: vec![handoff.task_id.clone()],
-        task_meaning_digest: "meaning".into(),
-        repository: REPOSITORY.into(),
-        base: handoff.candidate.base.clone(),
-        implementation_commits: vec![commit(&reviewed, "implement")],
-        reviewed_candidate: reviewed,
-        final_candidate: handoff.candidate.candidate.clone(),
-        repair_commits: vec![commit(&handoff.candidate.candidate, "reviewer fixes")],
-        verdict,
-        assurance: verdict.assurance(),
-        findings: vec![],
-        validation: ["build", "test"]
-            .into_iter()
-            .map(|command| ReviewValidation {
-                id: None,
-                command: command.into(),
-                outcome: ValidationOutcome::Passed,
-                role: ValidationRole::Required,
-                note: None,
-                check: None,
-                control: None,
-                sources: vec![],
-                mutation_target: Vec::new(),
-                repaired_blob: Default::default(),
-                deferred: Vec::new(),
-                baseline: None,
-            })
-            .collect(),
-        required_validation_commands: Some(vec!["build".into(), "test".into()]),
-        baseline_commands: Vec::new(),
-        validation_complete: verdict.passed(),
-        reviewer: ReviewerIdentity {
-            crew: REVIEW_CREW.into(),
-            provider: "provider".into(),
-            model: "model".into(),
-            reasoning_effort: None,
-            implementer_model: None,
-            same_model_as_implementer: false,
-        },
-        consumed: ReviewConsumption::default(),
-        budget: ReviewBudget { minutes: 45 },
-        escalation: None,
-        retained_obligations: vec![],
-        retired_validation: vec![],
-        validation_scope: vec![],
-        selectors_widened: vec![],
-        evidence_carried: None,
-        baseline_red: Vec::new(),
-        host_overrides: Vec::new(),
-        known_red: Vec::new(),
-        host_evidence: Vec::new(),
-        issued_at: Utc::now(),
-        owed_evidence: Vec::new(),
-        owner_owed_evidence: Vec::new(),
-        host_validation: Vec::new(),
-        resumed_hold_attempt: None,
-    }
+    serde_json::from_value(serde_json::json!({
+        "schema_version": REVIEW_CONTRACT_VERSION, "attempt_id": "attempt-1",
+        "lineage_key": "lineage", "task_ids": [handoff.task_id],
+        "task_meaning_digest": "meaning", "repository": REPOSITORY,
+        "base": handoff.candidate.base,
+        "reviewed_candidate": reviewed,
+        "final_candidate": handoff.candidate.candidate,
+        "implementation_commits": [commit(&reviewed, "implement")],
+        "repair_commits": [commit(&handoff.candidate.candidate, "reviewer fixes")],
+        "verdict": verdict, "assurance": verdict.assurance(), "findings": [],
+        "validation": (["build", "test"].iter().map(|command| serde_json::json!({
+            "command": command, "outcome": "passed", "role": "required",
+        })).collect::<Vec<_>>()),
+        "required_validation_commands": ["build", "test"],
+        "validation_complete": verdict.passed(),
+        "reviewer": {"crew": REVIEW_CREW, "provider": "provider", "model": "model",
+            "same_model_as_implementer": false},
+        "consumed": {"seconds": 0}, "budget": {"minutes": 45},
+        "issued_at": Utc::now(),
+    }))
+    .unwrap()
 }
-
-// An owner with `review.before_pr` on pins its review contract (crew,
-// budget, contract version) into the claim it admits, but only to a PR leaf
-// that declares it runs the gate; a pull without that declaration is
-// refused. A before-PR contract without its review
-// terms is malformed. The executor's own switch never refuses [ORB-13908].
+// A before-PR owner pins its review contract on the claim, only to a gate-declaring PR leaf; termless contracts are malformed [ORB-13908].
 allocation_test!(
     a_before_pr_owner_captures_its_review_contract_on_the_claim,
     {
         let owner = Coordinated::fixture();
         owner.create_task("reviewed work");
-
         let mut request = owner_request("ungated");
         request.ship = before_pr_ship();
         let refused = owner
             .try_pull(&request)
             .expect_err("a leaf that runs no gate is refused");
-        assert!(
-            refused.to_string().contains("before_pr_unsupported"),
-            "{refused}"
-        );
-
+        let ok = refused.to_string().contains("before_pr_unsupported");
+        assert!(ok, "{refused}");
         let mut termless = owner_request("termless");
         termless.ship = before_pr_ship();
         termless.ship.review = None;
         termless.review_gate = true;
         let malformed = owner.try_pull(&termless).expect_err("malformed contract");
-        assert!(
-            malformed.to_string().contains("invalid_input"),
-            "{malformed}"
-        );
+        let ok = malformed.to_string().contains("invalid_input");
+        assert!(ok, "{malformed}");
         assert!(owner.claims().is_empty(), "nothing was admitted");
-
         let mut gated = owner_request("gated");
         gated.ship = before_pr_ship();
         gated.review_gate = true;
@@ -1992,7 +1597,6 @@ allocation_test!(
         assert!(receipt.claim.is_some(), "a gate-running leaf is admitted");
         assert_eq!(receipt.request.ship.review, before_pr_ship().review);
         assert_eq!(owner.claims().len(), 1);
-
         let unreviewed = Coordinated::fixture();
         unreviewed.create_task("unreviewed work");
         let mut executor_on = owner_request("executor-before-pr");
@@ -2004,13 +1608,7 @@ allocation_test!(
         );
     }
 );
-
-// A before-PR claim's handoff is accepted only with passing evidence for
-// the handed-off head on a base the owner holds, reviewed by the captured
-// crew under the captured contract, and bound by the certificate the owner
-// holds; every other disposition is refused with a typed reason and leaves
-// the task in progress. A claim without the contract refuses evidence it
-// never asked for.
+// Before-PR handoffs need passing evidence for the handed-off head on an owner-held base, by the captured crew/contract, bound by the held certificate; other dispositions are typed refusals.
 allocation_test!(
     before_pr_handoffs_are_accepted_only_with_matching_passing_evidence,
     {
@@ -2020,15 +1618,12 @@ allocation_test!(
             delivery.reviewed(&certificate);
             (delivery, certificate)
         };
-
         let (delivery, issued) = reviewed(ReviewVerdict::AcceptWithFixes);
         delivery.accept(None).expect("passing evidence is accepted");
         delivery.assert_status(TaskStatus::Review);
+        let boundary = &delivery.owner.backends.commit_boundary;
         assert_eq!(
-            delivery
-                .owner
-                .backends
-                .commit_boundary
+            boundary
                 .accepted_review_certificate(&delivery.claim.claim_id)
                 .unwrap(),
             Some(issued),
@@ -2037,7 +1632,6 @@ allocation_test!(
         delivery
             .approve()
             .expect("approval rechecks the pinned review evidence");
-
         let refusals: [(&str, HandoffReviewRefusal, Tamper); 6] = [
             (
                 "no evidence",
@@ -2074,17 +1668,12 @@ allocation_test!(
             change(&mut delivery);
             let error = delivery.accept(None).expect_err(case).to_string();
             assert!(error.contains(refusal.as_str()), "{case}: {error}");
-            assert_eq!(
-                delivery.owner.task_status(&delivery.claim.task_id),
-                TaskStatus::InProgress,
-                "{case}"
-            );
+            let got = delivery.owner.task_status(&delivery.claim.task_id);
+            assert_eq!(got, TaskStatus::InProgress, "{case}");
         }
-
-        // [ORB-14684] The certificate carries the owner's captured
-        // `review.baseline_commands`: a leaf that drops the list, and with it
-        // the rule that a listed check's failure is never a diagnostic, is
-        // refused; the captured list is accepted.
+        // [ORB-14684] The certificate carries the owner's captured `review.baseline_commands`: a leaf
+        // that drops the list, and with it the rule that a listed check's failure is never a diagnostic,
+        // is refused; the captured list is accepted.
         let mut listed = before_pr_ship();
         listed.review.as_mut().unwrap().baseline_commands = vec!["heavy suite".into()];
         let mut dropped = Delivery::admit(listed.clone());
@@ -2102,7 +1691,6 @@ allocation_test!(
         kept.reviewed(&captured);
         kept.accept(None)
             .expect("a certificate carrying the captured list is accepted");
-
         // The owner's own observation decides ancestry and repository identity.
         let (delivery, _) = reviewed(ReviewVerdict::Accept);
         let mut unrelated = delivery.observation(None);
@@ -2122,7 +1710,6 @@ allocation_test!(
         let mut unobserved = delivery.observation(None);
         unobserved.review = None;
         assert!(delivery.accept_observed(unobserved).is_err());
-
         let mut unasked = Delivery::admit(owner_request("first").ship);
         let certificate = certificate(&unasked.handoff, ReviewVerdict::Accept);
         unasked.reviewed(&certificate);
@@ -2133,7 +1720,6 @@ allocation_test!(
         );
     }
 );
-
 fn text_artifact(path: &str, body: &str) -> TaskArtifact {
     TaskArtifact {
         path: path.to_string(),
@@ -2142,31 +1728,20 @@ fn text_artifact(path: &str, body: &str) -> TaskArtifact {
         created_by: None,
     }
 }
-
 #[cfg(unix)]
 allocation_test!(
     validation_artifact_directories_are_private_under_shared_umask,
     {
         use std::os::unix::fs::PermissionsExt;
-
-        // SAFETY: the fixture runs alone in an isolated child, so the process-wide
-        // umask cannot affect another test or the launching process.
+        // SAFETY: the fixture runs alone in an isolated child, so the process-wide umask cannot affect
+        // another test or the launching process.
         unsafe { libc::umask(0o002) };
         let owner = Coordinated::fixture();
         let task = owner.create_task("private validation artifacts");
         owner
-            .backends
-            .task
-            .artifact
-            .upsert_task_artifacts(
+            .upsert_artifacts(
                 &task.id,
-                TaskArtifactUpdateParams {
-                    origin: None,
-                    actor: "codex".to_string(),
-                    owner_run_id: None,
-                    writer: None,
-                    upsert_artifacts: vec![text_artifact("ordinary.json", "ordinary artifact")],
-                },
+                vec![text_artifact("ordinary.json", "ordinary artifact")],
             )
             .expect("ordinary artifact writer");
         let claim = owner
@@ -2177,58 +1752,45 @@ allocation_test!(
         let artifact_path = format!("validation/{}/0.json", claim.claim_id);
         let content = "{\"exit_code\":0,\"output\":\"passed\"}";
         owner
-            .mutate(
+            .put_evidence(
                 &worker,
                 "validation-log",
-                &ClaimMutation::Evidence(claim_evidence(vec![text_artifact(
-                    &artifact_path,
-                    content,
-                )])),
+                vec![text_artifact(&artifact_path, content)],
             )
             .expect("claim validation evidence writer");
-        let files = owner
-            .registry
-            .canonical_task_bundle_path(PARTITION_ID, &task.id)
-            .unwrap()
-            .join("artifacts/files");
+        let files = owner.bundle_path(&task.id).join("artifacts/files");
         for path in [
             &files,
             &files.join("validation"),
             &files.join("validation").join(&claim.claim_id),
         ] {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
             assert_eq!(
-                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                mode,
                 0o700,
-                "validation artifact directories must be owner-only under umask 0002: {}",
+                "owner-only validation dir under umask 0002: {}",
                 path.display()
             );
         }
-        assert_eq!(
-            std::fs::read(files.join(&artifact_path)).unwrap(),
-            content.as_bytes()
-        );
+        let got = std::fs::read(files.join(&artifact_path)).unwrap();
+        assert_eq!(got, content.as_bytes());
         let stored = owner.artifacts(&task.id);
+        let found = stored
+            .iter()
+            .any(|a| a.path == artifact_path && a.content == content.as_bytes());
         assert!(
-            stored
-                .iter()
-                .any(|artifact| artifact.path == artifact_path
-                    && artifact.content == content.as_bytes()),
+            found,
             "the validation log remains readable through the artifact-store boundary"
         );
     }
 );
-
 fn invalid_input(error: OrbitError) -> String {
     match error {
         OrbitError::InvalidInput(message) => message,
         other => panic!("expected InvalidInput before commit, got {other}"),
     }
 }
-
-// Non-canonical claim artifact paths must not be stored raw. A trailing
-// slash or repeated separator is written under the canonical path, and two
-// spellings of one path are refused before the journal decision, so a later
-// `get_task` can still read the bundle.
+// Claim evidence stores canonical artifact paths; two spellings of one path are refused before commit.
 allocation_test!(claim_evidence_stores_canonical_artifact_paths, {
     let owner = Coordinated::fixture();
     let task = owner.create_task("artifact paths");
@@ -2237,83 +1799,39 @@ allocation_test!(claim_evidence_stores_canonical_artifact_paths, {
     assert_eq!(claim.task_id, task.id);
     let unbound = claim_worker(&claim, false);
     let worker = claim_worker(&claim, true);
-
-    let duplicate = owner
-        .mutate(
-            &unbound,
-            "evidence-duplicate",
-            &ClaimMutation::Evidence(claim_evidence(vec![
-                text_artifact("a/b", "one"),
-                text_artifact("a//b", "two"),
-            ])),
-        )
-        .expect_err("both spellings of one path");
-    assert!(
-        invalid_input(duplicate).contains("duplicate artifact path"),
-        "Evidence of a/b and a//b is refused before commit"
-    );
-    assert!(
-        owner
-            .backends
-            .task
-            .task
-            .get_task(&task.id)
-            .unwrap()
-            .is_some(),
-        "a refused Evidence leaves the task readable"
-    );
+    let artifacts = vec![text_artifact("a/b", "one"), text_artifact("a//b", "two")];
+    let result = owner.put_evidence(&unbound, "evidence-duplicate", artifacts);
+    let duplicate = result.expect_err("both spellings of one path");
+    let ok = invalid_input(duplicate).contains("duplicate artifact path");
+    assert!(ok, "Evidence of a/b and a//b is refused before commit");
+    let ok = owner.stored_task(&task.id).is_some();
+    assert!(ok, "a refused Evidence leaves the task readable");
+    let got = owner.artifacts(&task.id);
     assert_eq!(
-        owner.artifacts(&task.id),
+        got,
         Vec::<TaskArtifact>::new(),
         "a refused Evidence commits no artifact"
     );
-
+    let artifacts = vec![text_artifact("notes/", "note")];
+    let result = owner.put_evidence(&unbound, "evidence-notes", artifacts);
+    result.expect("store notes/ under its canonical path");
     owner
-        .mutate(
-            &unbound,
-            "evidence-notes",
-            &ClaimMutation::Evidence(claim_evidence(vec![text_artifact("notes/", "note")])),
-        )
-        .expect("store notes/ under its canonical path");
-    owner
-        .mutate(
-            &unbound,
-            "bind",
-            &ClaimMutation::Bind {
-                run: leaf_run(&claim),
-                ship: request.ship,
-            },
-        )
+        .bind_claim(&unbound, &claim, request.ship)
         .expect("bind");
-    owner
-        .mutate(
-            &worker,
-            "update-separator",
-            &ClaimMutation::Update(ClaimWorkerUpdate {
-                evidence: claim_evidence(vec![text_artifact("a//b", "body")]),
-                ..Default::default()
-            }),
-        )
-        .expect("store a//b under its canonical path");
-
-    let refused_fail = owner
-        .mutate(
-            &worker,
-            "fail-duplicate",
-            &ClaimMutation::Fail(ClaimEvidence {
-                summary: Some("blocked".to_string()),
-                artifacts: vec![text_artifact("a/b", "one"), text_artifact("a//b", "two")],
-                ..Default::default()
-            }),
-        )
-        .expect_err("Fail carrying both spellings");
+    let artifacts = vec![text_artifact("a//b", "body")];
+    let result = owner.update_evidence(&worker, "update-separator", artifacts);
+    result.expect("store a//b under its canonical path");
+    let artifacts = vec![text_artifact("a/b", "one"), text_artifact("a//b", "two")];
+    let result = owner.fail_claim(&worker, "fail-duplicate", "blocked", artifacts);
+    let refused_fail = result.expect_err("Fail carrying both spellings");
     assert!(
         invalid_input(refused_fail).contains("duplicate artifact path"),
         "Fail of a/b and a//b is refused before commit"
     );
     assert_eq!(owner.task_status(&task.id), TaskStatus::InProgress);
+    let got = owner.claims()[0].phase;
     assert_eq!(
-        owner.claims()[0].phase,
+        got,
         ExecutionClaimPhase::Running,
         "a refused Fail does not settle the claim"
     );
@@ -2327,47 +1845,28 @@ allocation_test!(claim_evidence_stores_canonical_artifact_paths, {
         "Evidence and Update persist canonical paths"
     );
     let manifest = owner
-        .backends
-        .task
-        .artifact
+        .artifact_store()
         .get_task_artifact_manifest(&task.id)
         .unwrap()
         .unwrap();
     for file in &manifest {
+        let got = file.blob.clone();
         assert_eq!(
-            file.blob,
+            got,
             format!("files/{}", file.path),
             "manifest blob matches the canonical file"
         );
     }
-
-    owner
-        .mutate(
-            &worker,
-            "fail-notes",
-            &ClaimMutation::Fail(ClaimEvidence {
-                summary: Some("stopped".to_string()),
-                artifacts: vec![text_artifact("notes/", "final")],
-                ..Default::default()
-            }),
-        )
-        .expect("Fail stores a canonical path");
+    let artifacts = vec![text_artifact("notes/", "final")];
+    let result = owner.fail_claim(&worker, "fail-notes", "stopped", artifacts);
+    result.expect("Fail stores a canonical path");
     assert_eq!(owner.task_status(&task.id), TaskStatus::Blocked);
-    assert!(
-        owner
-            .backends
-            .task
-            .task
-            .get_task(&task.id)
-            .unwrap()
-            .is_some(),
-        "get_task succeeds after a Fail that carried notes/"
-    );
+    let ok = owner.stored_task(&task.id).is_some();
+    assert!(ok, "get_task succeeds after a Fail that carried notes/");
     let notes = owner.artifact(&task.id, "notes/").expect("canonical notes");
     assert_eq!(notes.path, "notes");
     assert_eq!(notes.content, b"final");
 });
-
 fn jsonl_rows<T: serde::de::DeserializeOwned>(path: &Path) -> Vec<T> {
     std::fs::read_to_string(path)
         .unwrap()
@@ -2375,12 +1874,7 @@ fn jsonl_rows<T: serde::de::DeserializeOwned>(path: &Path) -> Vec<T> {
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
 }
-
-// A plain write dies after appending and before publishing `task.yaml`,
-// leaving `.pending-write.yaml`. The next writer is a claim Evidence commit
-// that changes no status: it must roll the aborted rows back first, or it
-// reuses their IDs, keeps the aborted status event as the last one, and
-// leaves a bundle that no longer reads.
+// A leftover `.pending-write.yaml` is rolled back by the next claim Evidence commit before it writes, so no aborted row or ID survives.
 allocation_test!(
     coordinated_commit_rolls_back_a_leftover_pending_write_first,
     {
@@ -2388,29 +1882,24 @@ allocation_test!(
         let task = owner.create_task("pending write");
         let claim = owner.pull(&owner_request("pending")).claim.expect("claim");
         assert_eq!(owner.task_status(&task.id), TaskStatus::InProgress);
-        let bundle = owner
-            .registry
-            .canonical_task_bundle_path(PARTITION_ID, &task.id)
-            .unwrap();
+        let bundle = owner.bundle_path(&task.id);
         let events_path = bundle.join(TASK_EVENTS_FILE_NAME);
         let comments_path = bundle.join(TASK_COMMENTS_FILE_NAME);
         let description_path = bundle.join(TASK_DESCRIPTION_FILE_NAME);
-
-        // Steps 1 and 2 of the bundle write protocol, then a crash: the pending
-        // record holds the pre-image, the rows and document rewrite are applied,
-        // and the envelope is never published.
-        let documents: BTreeMap<String, String> = [
+        // Steps 1 and 2 of the bundle write protocol, then a crash: the pending record holds the pre-
+        // image, the rows and document rewrite are applied, and the envelope is never published.
+        let mut documents = BTreeMap::new();
+        for name in [
             TASK_DESCRIPTION_FILE_NAME,
             TASK_ACCEPTANCE_FILE_NAME,
             TASK_PLAN_FILE_NAME,
             TASK_EXECUTION_SUMMARY_FILE_NAME,
-        ]
-        .into_iter()
-        .map(|name| {
-            let body = std::fs::read_to_string(bundle.join(name)).unwrap();
-            (name.to_string(), body)
-        })
-        .collect();
+        ] {
+            documents.insert(
+                name.to_string(),
+                std::fs::read_to_string(bundle.join(name)).unwrap(),
+            );
+        }
         let pending = serde_json::json!({
             "schema_version": 1,
             "events_len": std::fs::metadata(&events_path).unwrap().len(),
@@ -2418,37 +1907,27 @@ allocation_test!(
             "envelope_sha256": lower_hex(Sha256::digest(std::fs::read(bundle.join(TASK_ENVELOPE_FILE_NAME)).unwrap())),
             "documents": documents,
         });
-        std::fs::write(
-            bundle.join(".pending-write.yaml"),
-            serde_yaml::to_string(&pending).unwrap(),
-        )
-        .unwrap();
+        let pending_yaml = serde_yaml::to_string(&pending).unwrap();
+        std::fs::write(bundle.join(".pending-write.yaml"), pending_yaml).unwrap();
         let events: Vec<TaskEventRowV2> = jsonl_rows(&events_path);
         let comments: Vec<TaskCommentRowV2> = if comments_path.exists() {
             jsonl_rows(&comments_path)
         } else {
             Vec::new()
         };
-        let aborted_event = TaskEventRowV2 {
-            schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-            event_id: format!("EV-{:04}", events.len() + 1),
-            at: Utc::now(),
-            by: "aborted-writer".into(),
-            event_type: "status_changed".into(),
-            note: None,
-            from_status: Some(TaskStatus::InProgress),
-            to_status: Some(TaskStatus::Done),
-            operation_id: None,
-            decision: None,
-        };
-        let aborted_comment = TaskCommentRowV2 {
-            schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
-            comment_id: format!("C-{:04}", comments.len() + 1),
-            at: Utc::now(),
-            by: "aborted-writer".into(),
-            body: "aborted".into(),
-            operation_id: None,
-        };
+        let aborted_event: TaskEventRowV2 = serde_json::from_value(serde_json::json!({
+            "schema_version": TASK_ARTIFACT_SCHEMA_VERSION,
+            "event_id": format!("EV-{:04}", events.len() + 1), "at": Utc::now(),
+            "by": "aborted-writer", "type": "status_changed",
+            "from_status": "in_progress", "to_status": "done",
+        }))
+        .unwrap();
+        let aborted_comment: TaskCommentRowV2 = serde_json::from_value(serde_json::json!({
+            "schema_version": TASK_ARTIFACT_SCHEMA_VERSION,
+            "comment_id": format!("C-{:04}", comments.len() + 1), "at": Utc::now(),
+            "by": "aborted-writer", "body": "aborted",
+        }))
+        .unwrap();
         let append = |path: &Path, row: String| {
             use std::io::Write;
             let mut file = std::fs::OpenOptions::new()
@@ -2464,41 +1943,28 @@ allocation_test!(
             serde_json::to_string(&aborted_comment).unwrap(),
         );
         std::fs::write(&description_path, "aborted description").unwrap();
-
         let unbound = claim_worker(&claim, false);
+        let evidence = ClaimMutation::Evidence(ClaimEvidence {
+            comment: Some("kept".into()),
+            ..Default::default()
+        });
         owner
-            .mutate(
-                &unbound,
-                "evidence-after-abort",
-                &ClaimMutation::Evidence(ClaimEvidence {
-                    comment: Some("kept".into()),
-                    ..Default::default()
-                }),
-            )
+            .mutate(&unbound, "evidence-after-abort", &evidence)
             .expect("evidence commit");
-
         let read = owner
-            .backends
-            .task
-            .task
-            .get_task(&task.id)
-            .expect("the bundle reads after the coordinated commit")
-            .unwrap();
+            .stored_task(&task.id)
+            .expect("the bundle reads after the coordinated commit");
         assert_eq!(read.status, TaskStatus::InProgress);
         assert_eq!(read.description, task.description);
-        assert!(
-            !bundle.join(".pending-write.yaml").exists(),
-            "the leftover pending write is settled"
-        );
+        let ok = !bundle.join(".pending-write.yaml").exists();
+        assert!(ok, "the leftover pending write is settled");
         let events: Vec<TaskEventRowV2> = jsonl_rows(&events_path);
         let comments: Vec<TaskCommentRowV2> = jsonl_rows(&comments_path);
-        assert!(
-            events.iter().all(|event| event.by != "aborted-writer")
-                && comments
-                    .iter()
-                    .all(|comment| comment.by != "aborted-writer"),
-            "no aborted row survives: {events:?} {comments:?}"
-        );
+        let ok = events.iter().all(|event| event.by != "aborted-writer")
+            && comments
+                .iter()
+                .all(|comment| comment.by != "aborted-writer");
+        assert!(ok, "no aborted row survives: {events:?} {comments:?}");
         assert!(comments.iter().any(|comment| comment.body == "kept"));
         let event_ids: HashSet<_> = events.iter().map(|event| &event.event_id).collect();
         let comment_ids: HashSet<_> = comments.iter().map(|comment| &comment.comment_id).collect();
@@ -2506,11 +1972,9 @@ allocation_test!(
         assert_eq!(comment_ids.len(), comments.len(), "comment IDs are unique");
     }
 );
-
 fn review_report(verdict: &str) -> TaskArtifact {
     review_report_with(verdict, r#"{"command":"make ci-fast","outcome":"passed"}"#)
 }
-
 fn review_report_with(verdict: &str, validation: &str) -> TaskArtifact {
     TaskArtifact {
         path: REVIEW_REPORT_ARTIFACT.to_string(),
@@ -2522,12 +1986,7 @@ fn review_report_with(verdict: &str, validation: &str) -> TaskArtifact {
         created_by: None,
     }
 }
-
-// [ORB-14370] A claimed reviewer's live report put reaches the owner as a
-// worker update, while it can still correct the report: it is held to the
-// record-id contract and its refusal names the record. The evidence a claim
-// settles after the reviewer stopped is retained without that check (see
-// `racing_report_writers_each_retain_their_revision`).
+// [ORB-14370] A claimed reviewer's live report put is held to record ids and refusals name the record.
 allocation_test!(a_claimed_reviewers_live_report_put_is_held_to_record_ids, {
     let owner = Coordinated::fixture();
     let task = owner.create_task("claimed review report");
@@ -2536,26 +1995,9 @@ allocation_test!(a_claimed_reviewers_live_report_put_is_held_to_record_ids, {
     let unbound = claim_worker(&claim, false);
     let worker = claim_worker(&claim, true);
     owner
-        .mutate(
-            &unbound,
-            "bind",
-            &ClaimMutation::Bind {
-                run: leaf_run(&claim),
-                ship: request.ship,
-            },
-        )
+        .bind_claim(&unbound, &claim, request.ship)
         .expect("bind");
-    let put = |id: &str, artifact: TaskArtifact| {
-        owner.mutate(
-            &worker,
-            id,
-            &ClaimMutation::Update(ClaimWorkerUpdate {
-                evidence: claim_evidence(vec![artifact]),
-                ..Default::default()
-            }),
-        )
-    };
-
+    let put = |id: &str, artifact: TaskArtifact| owner.update_evidence(&worker, id, vec![artifact]);
     for (case, verdict, validation, refusal) in [
         (
             "update-without-id",
@@ -2585,15 +2027,11 @@ allocation_test!(a_claimed_reviewers_live_report_put_is_held_to_record_ids, {
         let result = put(case, review_report_with(verdict, validation));
         if let Some(reason) = refusal {
             let message = invalid_input(result.expect_err(case));
-            assert!(
-                message.contains(reason),
-                "{case}: refusal names the record: {message}"
-            );
+            let ok = message.contains(reason);
+            assert!(ok, "{case}: refusal names the record: {message}");
             if case == "update-without-id" {
-                assert!(
-                    owner.artifact(&task.id, REVIEW_REPORT_ARTIFACT).is_none(),
-                    "{case}: a refused put stores no report"
-                );
+                let ok = owner.artifact(&task.id, REVIEW_REPORT_ARTIFACT).is_none();
+                assert!(ok, "{case}: a refused put stores no report");
             }
         } else {
             result.unwrap_or_else(|error| panic!("{case}: accepted revision: {error}"));
@@ -2611,12 +2049,7 @@ allocation_test!(a_claimed_reviewers_live_report_put_is_held_to_record_ids, {
         "only the accepted revisions are retained"
     );
 });
-
-// Two compositions commit a claimed reviewer's report revisions at the same
-// instant (a retry racing its replacement): the commit boundary serializes
-// them, the report history retains both, and no writer may supply the
-// history itself. Settled evidence arrives after the reviewer stopped, so
-// its id-less records are retained rather than refused [ORB-14370].
+// Racing report revisions are both retained in history; no writer may supply the history itself [ORB-14370].
 allocation_test!(racing_report_writers_each_retain_their_revision, {
     let owner = Coordinated::fixture();
     let task = owner.create_task("review report");
@@ -2624,25 +2057,11 @@ allocation_test!(racing_report_writers_each_retain_their_revision, {
     let worker = claim_worker(&claim, false);
     let other = owner.reopen();
     let put = |store: &Coordinated, artifact: TaskArtifact| {
-        store.backends.task.artifact.upsert_task_artifacts(
-            &task.id,
-            TaskArtifactUpdateParams {
-                origin: None,
-                actor: "codex".to_string(),
-                owner_run_id: None,
-                writer: None,
-                upsert_artifacts: vec![artifact],
-            },
-        )
+        store.upsert_artifacts(&task.id, vec![artifact])
     };
     let evidence = |store: &Coordinated, id: &str, artifact: TaskArtifact| {
-        store.mutate(
-            &worker,
-            id,
-            &ClaimMutation::Evidence(claim_evidence(vec![artifact])),
-        )
+        store.put_evidence(&worker, id, vec![artifact])
     };
-
     let barrier = Barrier::new(2);
     std::thread::scope(|scope| {
         let first = scope.spawn(|| {
@@ -2656,23 +2075,18 @@ allocation_test!(racing_report_writers_each_retain_their_revision, {
         first.join().unwrap().expect("the first revision");
         second.join().unwrap().expect("the second revision");
     });
-
     let history = owner
         .artifact(&task.id, REVIEW_REPORT_HISTORY_ARTIFACT)
-        .expect("the store wrote the report history");
+        .expect("history");
     let history = ReviewReportHistory::parse(&history.content).unwrap();
-    let verdicts = history
+    let verdicts: Vec<_> = history
         .for_attempt("rvw-1")
         .map(|revision| revision.verdict)
-        .collect::<Vec<_>>();
-    assert_eq!(
-        verdicts.len(),
-        2,
-        "both revisions are retained: {verdicts:?}"
-    );
+        .collect();
+    let got = verdicts.len();
+    assert_eq!(got, 2, "both revisions are retained: {verdicts:?}");
     assert!(verdicts.contains(&ReviewVerdict::Incomplete));
     assert!(verdicts.contains(&ReviewVerdict::Accept));
-
     let forged = text_artifact(REVIEW_REPORT_HISTORY_ARTIFACT, "{}");
     assert!(invalid_input(put(&owner, forged.clone()).unwrap_err()).contains("reserved"));
     assert!(
