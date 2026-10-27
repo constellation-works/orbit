@@ -191,7 +191,9 @@ impl RunDisplayStep {
         {
             value["exit_code"] = output["exit_code"].clone();
         }
-        value["output"] = json!(output);
+        if let Some(output) = output {
+            value["output"] = output;
+        }
         value
     }
 }

@@ -250,15 +250,18 @@ fn run(runtime: &OrbitRuntime, input: &Value, limit: usize) -> Result<Value, Orb
             .map(|step| {
                 let output = step.command_output_summary(state.as_ref());
                 let exit_code = step.exit_code.map(|code| json!(code)).or_else(|| output.as_ref().map(|output| output["exit_code"].clone()));
-                json!({
+                let mut step_value = json!({
                     "step_index":step.step_index, "target_id":step.target_id,
                     "target_type":step.target_type, "state":step.state,
                     "started_at":step.started_at, "finished_at":step.finished_at,
                     "duration_ms":step.duration_ms, "exit_code":exit_code,
                     "error_code":step.error_code,
                     "error_message":step.error_message.as_deref().map(|message| bounded_redacted_text(message,4096).0),
-                    "output":output,
-                })
+                });
+                if let Some(output) = output {
+                    step_value["output"] = output;
+                }
+                step_value
             })
             .collect::<Vec<_>>()
     );
