@@ -1,0 +1,4 @@
+[
+  {"argv": ["search"], "golden": "search.txt"},
+  {"argv": ["search", "reindex"], "golden": "search-reindex.txt"}
+]

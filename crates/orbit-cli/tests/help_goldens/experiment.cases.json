@@ -1,0 +1,16 @@
+[
+  {"argv": ["experiment"], "golden": "experiment/root.txt"},
+  {"argv": ["experiment", "create"], "golden": "experiment/create.txt"},
+  {"argv": ["experiment", "update"], "golden": "experiment/update.txt"},
+  {"argv": ["experiment", "clone"], "golden": "experiment/clone.txt"},
+  {"argv": ["experiment", "start"], "golden": "experiment/start.txt"},
+  {"argv": ["experiment", "pause"], "golden": "experiment/pause.txt"},
+  {"argv": ["experiment", "resume"], "golden": "experiment/resume.txt"},
+  {"argv": ["experiment", "reweight"], "golden": "experiment/reweight.txt"},
+  {"argv": ["experiment", "assign"], "golden": "experiment/assign.txt"},
+  {"argv": ["experiment", "conclude"], "golden": "experiment/conclude.txt"},
+  {"argv": ["experiment", "abandon"], "golden": "experiment/abandon.txt"},
+  {"argv": ["experiment", "show"], "golden": "experiment/show.txt"},
+  {"argv": ["experiment", "list"], "golden": "experiment/list.txt"},
+  {"argv": ["experiment", "readout"], "golden": "experiment/readout.txt"}
+]

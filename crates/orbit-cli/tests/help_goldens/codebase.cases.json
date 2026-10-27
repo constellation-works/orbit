@@ -1,0 +1,6 @@
+[
+  {"argv": ["codebase"], "golden": "codebase/root.txt"},
+  {"argv": ["codebase", "analytics"], "golden": "codebase/analytics.txt"},
+  {"argv": ["codebase", "show"], "golden": "codebase/show.txt"},
+  {"argv": ["codebase", "related"], "golden": "codebase/related.txt"}
+]

@@ -1,0 +1,8 @@
+[
+  {"argv": ["plugin"], "golden": "plugin/root.txt"},
+  {"argv": ["plugin", "upgrade"], "golden": "plugin/upgrade.txt"},
+  {"argv": ["plugin", "remove"], "golden": "plugin/remove.txt"},
+  {"argv": ["plugin", "validate"], "golden": "plugin/validate.txt"},
+  {"argv": ["plugin", "scaffold"], "golden": "plugin/scaffold.txt"},
+  {"argv": ["plugin", "test"], "golden": "plugin/test.txt"}
+]

@@ -1,8 +1,8 @@
 ---
 title: Operations as Data — Migration Cookbook
 owner: claude
-last_updated: 2026-10-21
-last_validated: 2026-10-21
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Accepted
 feature: operations-as-data
 doc_role: reference
@@ -272,8 +272,11 @@ maintenance subcommands separate. Root-only inheritance and audit suffixes stay
 in the CLI surface table.
 
 Now cash in Step 0: commit the captured help files as
-`crates/orbit-cli/tests/help_goldens/<noun>/*.txt` and add each argv to `CASES`
-in `crates/orbit-cli/tests/output/help_goldens.rs`.
+`crates/orbit-cli/tests/help_goldens/<noun>/*.txt` and bind each explicit argv
+to its golden path in the family's `<noun>.cases.json` under `help_goldens/`.
+The harness discovers these files without a shared registration edit. See
+[CLI help goldens](../../../../CONTRIBUTING.md#cli-help-goldens) for the fixture
+format and the normal and explicit-update commands.
 
 ### Step 7. Derive the handler table
 

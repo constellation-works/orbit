@@ -1,0 +1,13 @@
+[
+  {"argv": ["auto-task"], "golden": "auto-task/root.txt"},
+  {"argv": ["auto-task", "add"], "golden": "auto-task/add.txt"},
+  {"argv": ["auto-task", "list"], "golden": "auto-task/list.txt"},
+  {"argv": ["auto-task", "show"], "golden": "auto-task/show.txt"},
+  {"argv": ["auto-task", "update"], "golden": "auto-task/update.txt"},
+  {"argv": ["auto-task", "toggle"], "golden": "auto-task/toggle.txt"},
+  {"argv": ["auto-task", "delete"], "golden": "auto-task/delete.txt"},
+  {"argv": ["auto-task", "restore"], "golden": "auto-task/restore.txt"},
+  {"argv": ["auto-task", "mint"], "golden": "auto-task/mint.txt"},
+  {"argv": ["auto-task", "recover"], "golden": "auto-task/recover.txt"},
+  {"argv": ["auto-task", "reset"], "golden": "auto-task/reset.txt"}
+]

@@ -1,0 +1,11 @@
+[
+  {"argv": ["friction"], "golden": "friction/root.txt"},
+  {"argv": ["friction", "add"], "golden": "friction/add.txt"},
+  {"argv": ["friction", "list"], "golden": "friction/list.txt"},
+  {"argv": ["friction", "show"], "golden": "friction/show.txt"},
+  {"argv": ["friction", "stats"], "golden": "friction/stats.txt"},
+  {"argv": ["friction", "tags"], "golden": "friction/tags.txt"},
+  {"argv": ["friction", "update"], "golden": "friction/update.txt"},
+  {"argv": ["friction", "resolve"], "golden": "friction/resolve.txt"},
+  {"argv": ["friction", "rehome"], "golden": "friction/rehome.txt"}
+]

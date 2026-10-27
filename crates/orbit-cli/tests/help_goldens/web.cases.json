@@ -1,0 +1,6 @@
+[
+  {"argv": ["web"], "golden": "web.txt"},
+  {"argv": ["web", "open"], "golden": "web/open.txt"},
+  {"argv": ["web", "serve"], "golden": "web/serve.txt"},
+  {"argv": ["web", "connect"], "golden": "web/connect.txt"}
+]

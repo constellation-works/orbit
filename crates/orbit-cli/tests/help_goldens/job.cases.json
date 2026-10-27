@@ -1,0 +1,3 @@
+[
+  {"argv": ["job", "resume"], "golden": "job/resume.txt"}
+]

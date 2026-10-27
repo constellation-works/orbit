@@ -1,0 +1,3 @@
+[
+  {"argv": ["config", "show"], "golden": "config-show.txt"}
+]

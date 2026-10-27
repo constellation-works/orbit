@@ -1,0 +1,4 @@
+[
+  {"argv": ["host", "add"], "golden": "host/add.txt"},
+  {"argv": ["host", "remove"], "golden": "host/remove.txt"}
+]

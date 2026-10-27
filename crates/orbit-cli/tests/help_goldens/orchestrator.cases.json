@@ -1,0 +1,5 @@
+[
+  {"argv": ["orchestrator"], "golden": "orchestrator/root.txt"},
+  {"argv": ["orchestrator", "scorecard"], "golden": "orchestrator/scorecard.txt"},
+  {"argv": ["orchestrator", "show"], "golden": "orchestrator/show.txt"}
+]
