@@ -495,9 +495,12 @@ is always kept. `gc runs` never touches a held run or one still in flight, so
 the same unregistered workspace ids. The same pass prunes the host's
 per-minute run and host resource history (`run_resource_minutes`,
 `host_resource_minutes`) and admission forecasts older than 30 days, whatever the
-run window. Auto-concurrency profiles and forecast accuracy keep their supported
-30-day window. Durable lock-denial facts and commit outcomes preserve Lock
-contention and succeeded implement_one durations after pruning; upgrade backfills
+run window, except the rows its counts keep at any age: each workspace, work class
+and complexity's newest `max(200, machine.auto_concurrency.profile_window)`
+deliveries, the newest 10,000 forecasts, and host minutes from the oldest kept
+forecast onward. Auto-concurrency profiles and forecast accuracy keep working on
+those rows; older raw samples outside them are lost.
+Durable lock-denial facts and commit outcomes preserve Lock contention and succeeded implement_one durations after pruning; upgrade backfills
 existing evidence before GC. Health Events, Incidents, Denials, `orbit audit` and
 the diagnostics friction view lose raw history past the audit cutoff with no
 rollups. Task-store Codebase rankings, `orbit task flow` and friction stats keep
