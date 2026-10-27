@@ -43,6 +43,25 @@ impl Store {
             let workspace_id = params.workspace_id.as_deref();
             let expired_leases =
                 expire_leases(tx, &params.workspace_orbit_dir, workspace_id, &now)?;
+            if let Some(limit) = params.active_lease_limit {
+                let active = active_principal_leases(
+                    tx,
+                    &params.workspace_orbit_dir,
+                    workspace_id,
+                    &params.principal,
+                    &now,
+                )?;
+                if active >= limit {
+                    return Ok(LeaseInsertResult {
+                        lease: None,
+                        conflicts: Vec::new(),
+                        queued_ahead: Vec::new(),
+                        queue_position: None,
+                        expired_leases,
+                        active_lease_limit_reached: Some(active),
+                    });
+                }
+            }
             let mut conflicts = Vec::new();
             let mut queued_ahead = Vec::new();
             if params.mode == LeaseMode::Hard {
@@ -71,6 +90,7 @@ impl Store {
                     queued_ahead,
                     queue_position: None,
                     expired_leases,
+                    active_lease_limit_reached: None,
                 });
             }
 
@@ -161,6 +181,7 @@ impl Store {
                 queued_ahead,
                 queue_position,
                 expired_leases,
+                active_lease_limit_reached: None,
             })
         })
     }
@@ -390,6 +411,34 @@ impl Store {
             Ok(LeaseListResult { leases, expired_leases })
         })
     }
+}
+
+/// The principal's active (granted or queued) leases in the workspace,
+/// counted in the caller's transaction so concurrent requests cannot both
+/// pass a limit.
+fn active_principal_leases(
+    tx: &crate::StoreTx<'_>,
+    workspace_orbit_dir: &str,
+    workspace_id: Option<&str>,
+    principal: &str,
+    now: &str,
+) -> Result<u32, OrbitError> {
+    let sql = format!(
+        "SELECT COUNT(*) FROM task_reservations
+         WHERE {}
+           AND {LEASE_ROWS}
+           AND principal = ?3
+           AND released_at IS NULL
+           AND expires_at > ?4",
+        reservation_scope_clause(TaskReservationScope::Files),
+    );
+    tx.tx
+        .query_row(
+            &sql,
+            params![workspace_id, workspace_orbit_dir, principal, now],
+            |row| row.get(0),
+        )
+        .map_err(sqlite_store_error)
 }
 
 /// Active leases, oldest first; binds ?1 and ?2 as

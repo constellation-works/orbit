@@ -492,6 +492,7 @@ impl Store {
                 queue_position: None,
                 deadlocks: Vec::new(),
                 expired_leases,
+                selector_limit_exceeded: false,
             };
             let Some(lease) =
                 load_lease(tx, dir, workspace_id, &params.lease_id)?.filter(|lease| {
@@ -511,6 +512,13 @@ impl Store {
                 })
                 .cloned()
                 .collect::<Vec<_>>();
+            if let Some(max) = params.max_selectors
+                && lease.selectors.len() + lease.queued_selectors.len() + selectors.len()
+                    > max as usize
+            {
+                result.selector_limit_exceeded = true;
+                return Ok(result);
+            }
             let (added, queued, conflicts) = if lease.mode == LeaseMode::Hard {
                 let holders = holder_conflicts(tx, dir, workspace_id, &selectors, &lease.lease_id)?;
                 let conflicts = params

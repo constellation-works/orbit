@@ -113,7 +113,8 @@ renewal, release and lazy expiry each write a `lease` audit event.
 
 ## 3. Granting, queueing and the drain
 
-**Advisory** requests are always granted at once. The lease is recorded as a holder of its paths,
+**Advisory** requests are always granted at once, within a lease token's resource bounds
+(§7.2). The lease is recorded as a holder of its paths,
 every overlapping lease holder gets an `overlap` notice (drain tasks never receive notices), and nothing is refused. Under
 the conflict budget an advisory lease counts toward `holders(path)`, so a busy path costs drain
 candidates more, but it never makes one wait by itself.
@@ -480,7 +481,39 @@ The server checks the serialized response size before writing any frame bytes. A
 that would exceed 64 KiB becomes a bounded `frame_too_large` operation error; the connection
 remains usable. If a request just granted a lease whose success response is too large, the
 server releases that grant before returning the error. The grant and compensating release
-retain their normal audit rows, and the intake operation is audited as a failure.
+retain their normal audit rows, and the intake operation is audited as a failure. That release
+is a backstop only: a compensated grant has already written its `overlap` notices, so the
+runtime sizes token answers before writing (below) and a token request does not reach it.
+
+**Token resource bounds.** A token's request rate alone does not bound the owner's work: at 20
+writes a minute and a 4-hour TTL it allows about 4,800 unexpired disjoint leases, and each
+later directory request would write an `overlap` notice to every one and answer with every
+selector pair. So the runtime bounds token callers (`LeaseTokenGrant`), before any write:
+
+- **Active leases.** At most 64 active (granted or queued) leases per principal in a workspace.
+  `Store::insert_lease` counts the principal's active lease rows in its immediate transaction,
+  so concurrent requests cannot both pass, and a replacement token for the same principal, a
+  listener restart or an Orbit Web restart starts from the same count. Rows written over SSH
+  under the same principal count too. Past the limit the request answers `granted: false`,
+  `reason: "active_lease_limit"`, with the count and limit, writes no row or notice, and is
+  audited as a `lease.request.refused` denial. A release or expiry frees a place.
+- **Selectors.** A token's lease holds and waits for at most 64 selectors together. A request
+  over it is refused with `invalid_input`; an expansion is checked in the runtime and again in
+  `Store::expand_lease`'s transaction, and refused unchanged. So one request writes at most one
+  `overlap` notice per active holder, and compares at most 64 selectors with each holder's.
+- **Answer size.** The intake passes its frame limit as the grant's `max_response_bytes`. The
+  runtime sizes the largest answer the request or expansion could get with empty holder lists
+  (its selectors, tags, branches and a worst-case lease record), plus a 512-byte margin; when that
+  cannot fit, it is refused with `invalid_input` before anything is written. Otherwise
+  `overlaps`, `conflicts` and `queued_ahead` are built only until the remaining budget is spent,
+  never as a full cross product, oldest holder first, and the answer carries `truncated: true`.
+  A truncated grant is delivered, not released, so each `overlap` notice names a lease that
+  exists. `check`, a read, answers per path and stays bounded only by the frame.
+
+Notices and ended lease rows are retained as before, so history grows with the write budget,
+but no longer by more than one notice per active holder for each write. SSH and dashboard
+callers keep their documented semantics: no lease, selector or answer limit, and
+`truncated` is always false.
 
 With the §7.1 prerequisite in force, an agent running as the operator can still stop Orbit Web,
 or edit the operator's configuration to turn intake off or name another peer user. That denies
