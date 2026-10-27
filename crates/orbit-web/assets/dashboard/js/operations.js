@@ -3266,7 +3266,7 @@ function forecastHead(label, ...meta) {
   ]);
 }
 
-function forecastBlock(forecast, { retained, statuses = null, windowEnded = false }) {
+function forecastBlock(forecast, { retained, statuses = null, windowNote = null }) {
   const hypothetical = forecast.mode === "shadow";
   const at = forecastBuiltAt(forecast);
   const block = el("div", { class: retained ? "drain-forecast-retained" : "drain-forecast-built" });
@@ -3279,7 +3279,7 @@ function forecastBlock(forecast, { retained, statuses = null, windowEnded = fals
       el("span", { class: `drain-forecast-mode${hypothetical ? " shadow" : ""}`, text: hypothetical ? "shadow · hypothetical" : (forecast.mode || "forecast") }),
     ),
     ...[
-      windowEnded ? el("p", { class: "drain-forecast-ended", text: "window ended · nothing running" }) : null,
+      windowNote ? el("p", { class: "drain-forecast-ended", text: windowNote }) : null,
       forecastPeaks(forecast),
       forecastDecisions(forecast, hypothetical, { retained, statuses: retained ? statuses : null }),
     ].filter(Boolean),
@@ -3347,13 +3347,20 @@ function forecastTaskStatuses(payload, forecast) {
 }
 
 // A retained forecast whose drain has ended, with no pull drain and no
-// winding-down children, is not a live window.
-function retainedWindowEnded(payload, forecast) {
-  if (forecast?.drain_live !== false) return false;
+// winding-down children, is not a live window. Shared occupancy is read apart
+// from the drain's own phase, so the note claims nothing is running only when
+// that count is exactly zero. A positive count names the other work, and an
+// unknown count says only that the window ended.
+function retainedWindowNote(payload, forecast) {
+  if (forecast?.drain_live !== false) return null;
   const capacity = payload?.capacity || {};
-  if (capacity.pull_drain_run_id) return false;
+  if (capacity.pull_drain_run_id) return null;
   const phase = capacity.drain_phase;
-  return phase == null || phase === "idle";
+  if (phase != null && phase !== "idle") return null;
+  const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
+  if (busy === 0) return "window ended · nothing running";
+  if (busy > 0) return "window ended · other work running";
+  return "window ended";
 }
 
 // The last local pass's gap-fit forecast. Readiness puts the pass on
@@ -3388,7 +3395,7 @@ function autoDrainForecast(payload) {
     section.append(forecastBlock(retainedForecast, {
       retained: true,
       statuses: forecastTaskStatuses(payload, retainedForecast),
-      windowEnded: retainedWindowEnded(payload, retainedForecast),
+      windowNote: retainedWindowNote(payload, retainedForecast),
     }));
   }
   placeBacklogForecast(section);

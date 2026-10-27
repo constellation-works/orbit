@@ -1795,6 +1795,11 @@ const historyForecast = {
   task_titles: { 'ORB-18901': 'Back in backlog', 'ORB-18918': 'Guarded head' },
   task_statuses: { 'ORB-18908': 'done', 'ORB-18901': 'done', 'ORB-18918': 'backlog' },
 };
+// Shared occupancy readiness reports beside an ended window: an empty pool, an
+// independent delivery holding two slots, and a count the host cannot read.
+const emptyPool = { active_leaf_runs: 0, free_slots: 4, occupancy: { phases: { implementing: 0, lock_waiting: 0, post_implementation: 0, unknown: 0 } } };
+const independentLeafPool = { active_leaf_runs: 2, free_slots: 2, occupancy: { phases: { implementing: 2, lock_waiting: 0, post_implementation: 0, unknown: 0 } } };
+const unreadablePool = { active_leaf_runs: null, free_slots: null, occupancy: null };
 const renderDrainForecastScenario = async scenario => {
   const terminal = scenario === 'terminal';
   drainPhase = terminal ? 'idle' : 'draining';
@@ -1806,14 +1811,14 @@ const renderDrainForecastScenario = async scenario => {
     : null;
   const forecast = terminal ? historyForecast : { ...enforceForecast, drain_live: true };
   drainCapacityOverride = terminal
-    ? { admission_forecast: forecast, last_admission_forecast: forecast }
+    ? { ...emptyPool, admission_forecast: forecast, last_admission_forecast: forecast }
     : { admission_forecast: forecast };
   await fetchAndRenderAutoDrainPane();
 };
 globalThis.setDrainForecastScenarioForScreenshot = renderDrainForecastScenario;
 const historyStatus = (root, id) => root.querySelector(`a[href*="${id}"]`)?.closest('li')?.querySelector('.drain-forecast-task-status')?.textContent;
 drainTasksOverride = [{ task_id: 'ORB-18901', status: 'backlog', eligible: false, reason: 'gap_fit' }];
-drainCapacityOverride = { last_admission_forecast: historyForecast };
+drainCapacityOverride = { ...emptyPool, last_admission_forecast: historyForecast };
 await fetchAndRenderAutoDrainPane();
 const ended = forecastCard().querySelector('.drain-forecast-retained');
 const endedText = ended?.textContent || '';
@@ -1821,6 +1826,31 @@ assert(ended?.querySelector('.drain-forecast-ended')?.textContent === 'window en
 assert(endedText.includes('Admitted at 03:59 UTC') && endedText.includes('Held at 03:59 UTC') && endedText.includes('Starvation guard protected at 03:59 UTC'), `retained decisions name when they were made (ORB-18957): ${endedText}`);
 assert(!/\bAdmitted (?!at )/.test(endedText) && !/\bHeld (?!at )/.test(endedText) && !endedText.includes('Starvation guard protects'), `a retained forecast has no present-tense admission line (ORB-18957): ${endedText}`);
 assert(historyStatus(ended, 'ORB-18908') === ' · done' && historyStatus(ended, 'ORB-18901') === ' · backlog' && historyStatus(ended, 'ORB-18918') === ' · backlog', `each retained task shows its current status (ORB-18957): done=${historyStatus(ended, 'ORB-18908')} held=${historyStatus(ended, 'ORB-18901')} guard=${historyStatus(ended, 'ORB-18918')}`);
+// [ORB-19042] The ended window names the shared occupancy readiness reports beside
+// it. An independent delivery holding a slot is other work, so its payload must
+// not read as an empty ended window. A count that cannot be read says only that
+// the window ended, and a winding-down drain is not ended, even with an empty pool.
+const beforeEndedNotes = { drainPhase, drainRunId, pullDrainRunId, pullDrainStopped };
+const endedNote = async ({ phase = 'idle', pool = emptyPool } = {}) => {
+  drainPhase = phase;
+  drainRunId = null;
+  pullDrainRunId = null;
+  pullDrainStopped = false;
+  drainCapacityOverride = { ...pool, last_admission_forecast: historyForecast };
+  await fetchAndRenderAutoDrainPane();
+  return forecastCard()?.querySelector('.drain-forecast-retained .drain-forecast-ended')?.textContent ?? null;
+};
+const idleWithLeaf = await endedNote({ pool: independentLeafPool });
+const emptyIdle = await endedNote();
+const unreadableIdle = await endedNote({ pool: unreadablePool });
+const windingDown = await endedNote({ phase: 'winding_down' });
+drainPhase = beforeEndedNotes.drainPhase;
+drainRunId = beforeEndedNotes.drainRunId;
+pullDrainRunId = beforeEndedNotes.pullDrainRunId;
+pullDrainStopped = beforeEndedNotes.pullDrainStopped;
+assert(idleWithLeaf === 'window ended · other work running' && emptyIdle === 'window ended · nothing running' && idleWithLeaf !== emptyIdle, `an ended window with an independent leaf and an empty ended window say distinct things (ORB-19042): ${idleWithLeaf} / ${emptyIdle}`);
+assert(unreadableIdle === 'window ended', `an ended window whose occupancy is unknown claims neither idle nor other work (ORB-19042): ${unreadableIdle}`);
+assert(windingDown === null, `a winding-down drain is not an ended window, even with an empty pool (ORB-19042): ${windingDown}`);
 // A terminal pass that built its forecast is the same history, even while
 // readiness returns it in both the current-pass and last-built fields.
 const previousDrainState = { drainPhase, drainRunId, pullDrainRunId, pullDrainStopped };
@@ -1856,7 +1886,7 @@ const liveRetainedText = liveRetained?.textContent || '';
 assert(!liveRetained.querySelector('.drain-forecast-ended') && liveRetainedText.includes('Admitted at 03:59 UTC') && !/\bAdmitted (?!at )/.test(liveRetainedText), `a live drain keeps a retained forecast in the past without saying the window ended (ORB-18957): ${liveRetainedText}`);
 drainPhase = 'idle';
 drainTasksOverride = null;
-drainCapacityOverride = { last_admission_forecast: { ...historyForecast, mode: 'shadow' } };
+drainCapacityOverride = { ...emptyPool, last_admission_forecast: { ...historyForecast, mode: 'shadow' } };
 await fetchAndRenderAutoDrainPane();
 const shadowRetained = forecastCard().querySelector('.drain-forecast-retained');
 const shadowRetainedText = shadowRetained?.textContent || '';
