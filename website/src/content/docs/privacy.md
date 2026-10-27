@@ -66,8 +66,12 @@ does not contact any AI provider's API.
 Delivery workflows run `git push` and `git fetch` against your repository's
 remotes. They use the GitHub CLI (`gh`) to open, update, and merge pull requests
 and to read code-scanning and Dependabot alerts. These requests go to the Git
-host you configured, under that host's terms. The scheduled routines that ship
-with Orbit are all disabled until you enable them.
+host you configured, under that host's terms. Scheduled routines that contact
+GitHub or perform delivery are shipped disabled until you enable them. The
+crew-performance refresh is a local exception: it is seeded enabled and
+scheduled hourly. While `workflow.crew_performance` is `off` (the default),
+its action skips the scan and writes no snapshot. It fires only while the
+host's Orbit scheduler clock is running.
 
 ### Task publication (optional)
 
