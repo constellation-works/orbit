@@ -136,7 +136,9 @@ budgets, thresholds, profiles or persistent settings.
 
 History is normally pruned after 30 days by run GC, which keeps the newest
 10,000 forecasts and the host minutes they pair with whatever their age, and
-each key's newest 200 deliveries. An explicit earlier timestamp can select
+each key's newest 200 deliveries by admission, plus its newest 200 eligible
+completed deliveries by finish time and the newest 200 of their current
+regime (or more when the configured profile window is larger). An explicit earlier timestamp can select
 surviving rows, but cannot recover pruned measurements
 or infer historical source/settings. This reporting change does not establish
 calibration or enforcement readiness. See

@@ -12,7 +12,8 @@ use rusqlite::{TransactionBehavior, params, params_from_iter};
 
 use crate::Store;
 use crate::contracts::{
-    AdmissionForecastPoint, AdmissionForecastRecord, DeliveryRunInterval, DeliveryRunResources,
+    AdmissionForecastPoint, AdmissionForecastRecord, CPU_ACCOUNTING_LINUX, CPU_ACCOUNTING_MACOS,
+    CPU_ACCOUNTING_MACOS_TREE_ONLY, DeliveryRunInterval, DeliveryRunResources,
     DeliveryRunsFreshness, HostResourceMinute, ResourceHistoryKeep, ResourceMinuteLoad,
     ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
 };
@@ -357,9 +358,27 @@ impl ResourceUsageStoreBackend for Store {
         limit: usize,
     ) -> Result<usize, OrbitError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        // Keep an ineligible marker until its good siblings have been pruned.
+        // Otherwise the next batch can mistake a partial delivery for a profile.
+        let order = if matches!(table, ResourceMinutesTable::Run) {
+            format!(
+                " ORDER BY CASE WHEN resumed != 0 OR \
+                 (cpu_accounting IS NULL AND {}) OR \
+                 (cpu_accounting IS NOT NULL AND cpu_accounting NOT IN ('{}', '{}', '{}')) OR \
+                 NOT EXISTS (SELECT 1 FROM job_runs j WHERE j.workspace_id = r.workspace_id \
+                     AND j.run_id = r.run_id AND j.job_id IS NOT NULL AND j.finished_at IS NOT NULL) \
+                 THEN 1 ELSE 0 END",
+                if cfg!(target_os = "linux") { 0 } else { 1 },
+                CPU_ACCOUNTING_LINUX,
+                CPU_ACCOUNTING_MACOS,
+                CPU_ACCOUNTING_MACOS_TREE_ONLY
+            )
+        } else {
+            String::new()
+        };
         let sql = format!(
             "DELETE FROM {table} WHERE rowid IN ( \
-                 SELECT rowid FROM {table} WHERE {predicate} LIMIT ?3)",
+                 SELECT r.rowid FROM {table} r WHERE {predicate}{order} LIMIT ?3)",
             table = table.table_name(),
             predicate = prunable(table)
         );
@@ -390,18 +409,21 @@ fn prune_bounds(
 /// The rows of `table` retention may remove: older than the cutoff `?1` and
 /// not among the `?2` that [`ResourceHistoryKeep`] holds.
 ///
-/// - A run minute stays while its delivery is among the newest `?2` of its
-///   workspace, work class and complexity, by admission.
+/// - A run minute stays for the newest `?2` deliveries by admission, and
+///   the newest `?2` profile-eligible deliveries and the newest `?2` of
+///   their current regime by finish time, per key. A delivery with recent
+///   minutes keeps its older minutes too.
 /// - A forecast stays while it is among the newest `?2`.
 /// - A host minute stays from the minute the oldest of the newest `?2`
 ///   forecasts was made in, so every kept forecast can still pair with the
 ///   minutes it forecast.
-fn prunable(table: ResourceMinutesTable) -> &'static str {
+fn prunable(table: ResourceMinutesTable) -> String {
     match table {
         ResourceMinutesTable::Run => {
             // One text key per delivery: SQLite builds a scalar `NOT IN`
             // list once, where a row-value one is rescanned per row.
-            "minute_started_at < ?1 AND (delivery_admitted_at IS NULL \
+            format!(
+                "minute_started_at < ?1 AND (delivery_admitted_at IS NULL \
                  OR workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
                  NOT IN ( \
                      SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
@@ -414,19 +436,87 @@ fn prunable(table: ResourceMinutesTable) -> &'static str {
                                       work_class, complexity \
                                FROM run_resource_minutes \
                                WHERE delivery_admitted_at IS NOT NULL)) \
-                     WHERE newest <= ?2))"
+                     WHERE newest <= ?2) \
+                 AND workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                 NOT IN ( \
+                     SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                     FROM (SELECT *, ROW_NUMBER() OVER ( \
+                         PARTITION BY workspace_id, work_class, \
+                             CASE WHEN substr(work_class, 1, 10) = 'auto-task:' THEN '' ELSE IFNULL(complexity, '') END \
+                         ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS newest \
+                         FROM (SELECT r.workspace_id, r.task_id, r.delivery_admitted_at, \
+                                      MIN(r.work_class) AS work_class, MIN(r.complexity) AS complexity, \
+                                      MAX(julianday(j.finished_at)) AS finished \
+                               FROM run_resource_minutes r LEFT JOIN job_runs j \
+                                 ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id \
+                               WHERE r.delivery_admitted_at IS NOT NULL \
+                               GROUP BY r.workspace_id, r.task_id, r.delivery_admitted_at \
+                               HAVING MAX(CASE WHEN r.resumed != 0 OR j.job_id IS NULL \
+                                   OR j.finished_at IS NULL OR \
+                                   (r.cpu_accounting IS NULL AND {null_untrusted}) OR \
+                                   (r.cpu_accounting IS NOT NULL AND r.cpu_accounting NOT IN \
+                                       ('{linux}', '{macos}', '{macos_tree}')) \
+                                   THEN 1 ELSE 0 END) = 0)) \
+                     WHERE newest <= ?2) \
+                 AND workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                 NOT IN ( \
+                     WITH eligible AS ( \
+                         SELECT r.workspace_id, r.task_id, r.delivery_admitted_at, \
+                             MIN(r.work_class) AS work_class, \
+                             CASE WHEN substr(MIN(r.work_class), 1, 10) = 'auto-task:' \
+                                  THEN '' ELSE IFNULL(MIN(r.complexity), '') END AS complexity, \
+                             MAX(julianday(j.finished_at)) AS finished, \
+                             (SELECT (SELECT COALESCE(m.crew_model, jj.crew_model) FROM run_resource_minutes m \
+                                  WHERE m.workspace_id = rr.workspace_id AND m.run_id = rr.run_id \
+                                    AND (m.crew_model IS NOT NULL OR jj.crew_model IS NOT NULL) \
+                                  ORDER BY m.minute_index DESC LIMIT 1) AS model \
+                              FROM run_resource_minutes rr LEFT JOIN job_runs jj \
+                                ON jj.workspace_id = rr.workspace_id AND jj.run_id = rr.run_id \
+                              WHERE rr.workspace_id = r.workspace_id AND rr.task_id = r.task_id \
+                                AND rr.delivery_admitted_at = r.delivery_admitted_at \
+                              GROUP BY rr.run_id HAVING model IS NOT NULL ORDER BY rr.run_id LIMIT 1) AS model, \
+                             (SELECT m.orbit_version FROM run_resource_minutes m \
+                              WHERE m.workspace_id = r.workspace_id AND m.task_id = r.task_id \
+                                AND m.delivery_admitted_at = r.delivery_admitted_at \
+                                AND m.orbit_version IS NOT NULL \
+                              ORDER BY m.run_id, m.minute_index DESC LIMIT 1) AS version \
+                         FROM run_resource_minutes r LEFT JOIN job_runs j \
+                           ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id \
+                         WHERE r.delivery_admitted_at IS NOT NULL \
+                         GROUP BY r.workspace_id, r.task_id, r.delivery_admitted_at \
+                         HAVING MAX(CASE WHEN r.resumed != 0 OR j.job_id IS NULL \
+                             OR j.finished_at IS NULL OR (r.cpu_accounting IS NULL AND {null_untrusted}) OR \
+                             (r.cpu_accounting IS NOT NULL AND r.cpu_accounting NOT IN \
+                                 ('{linux}', '{macos}', '{macos_tree}')) THEN 1 ELSE 0 END) = 0), \
+                     ranked AS (SELECT *, \
+                         ROW_NUMBER() OVER (PARTITION BY workspace_id, work_class, complexity, model, version \
+                             ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS newest, \
+                         FIRST_VALUE(model) OVER (PARTITION BY workspace_id, work_class, complexity \
+                             ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS current_model, \
+                         FIRST_VALUE(version) OVER (PARTITION BY workspace_id, work_class, complexity \
+                             ORDER BY finished DESC, delivery_admitted_at DESC, task_id DESC) AS current_version \
+                         FROM eligible) \
+                     SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                     FROM ranked WHERE newest <= ?2 AND model IS current_model AND version IS current_version) \
+                 AND workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                 NOT IN (SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                     FROM run_resource_minutes WHERE delivery_admitted_at IS NOT NULL \
+                     AND minute_started_at >= ?1))",
+                null_untrusted = if cfg!(target_os = "linux") { 0 } else { 1 },
+                linux = CPU_ACCOUNTING_LINUX,
+                macos = CPU_ACCOUNTING_MACOS,
+                macos_tree = CPU_ACCOUNTING_MACOS_TREE_ONLY
+            )
         }
-        ResourceMinutesTable::Host => {
-            "minute_at < ?1 AND minute_at < IFNULL(( \
+        ResourceMinutesTable::Host => "minute_at < ?1 AND minute_at < IFNULL(( \
                  SELECT substr(MIN(forecast_at), 1, 17) || '00.000000Z' FROM ( \
                      SELECT forecast_at FROM admission_forecasts \
                      ORDER BY forecast_at DESC LIMIT ?2)), ?1)"
-        }
-        ResourceMinutesTable::AdmissionForecast => {
-            "forecast_at < ?1 AND rowid NOT IN ( \
+            .into(),
+        ResourceMinutesTable::AdmissionForecast => "forecast_at < ?1 AND rowid NOT IN ( \
                  SELECT rowid FROM admission_forecasts \
                  ORDER BY forecast_at DESC LIMIT ?2)"
-        }
+            .into(),
     }
 }
 

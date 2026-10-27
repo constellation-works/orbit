@@ -206,7 +206,9 @@ pub struct PullForecastDecision {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceHistoryKeep {
     /// The newest deliveries, by admission, of each workspace, work class
-    /// and complexity whose run minutes stay.
+    /// and complexity whose run minutes stay, plus the newest eligible
+    /// completed deliveries and the newest in their current regime by finish
+    /// time for each profile key.
     pub deliveries_per_key: usize,
     /// The newest admission forecasts that stay, with the host minutes from
     /// the oldest of them on.

@@ -982,6 +982,132 @@ fn profiles_keep_their_newest_deliveries_after_a_month_without_any() {
     assert_eq!(found.source, ProfileSource::Exact);
 }
 
+/// GC must retain the usable window even when newer deliveries cannot train it.
+#[test]
+fn gc_preserves_profiles_behind_ineligible_deliveries() {
+    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let workspace = fixture.workspace.clone();
+    fixture.days_ago.set(60);
+    for index in 0..5 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-good-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(1, (index + 1) as f64, GIB)],
+        );
+    }
+    // A batch must not remove the resumed half first and make its sibling
+    // appear eligible on the next pass.
+    let batched_runs = fixture.delivery(
+        &workspace,
+        "ORB-batched",
+        "change",
+        Some("medium"),
+        vec![
+            RunSeed {
+                resumed: true,
+                ..RunSeed::flat(1000, 99.0, GIB)
+            },
+            RunSeed::finished("task_auto_pipeline", 1001, vec![50.0], vec![GIB]),
+        ],
+    );
+    fixture.days_ago.set(40);
+    for index in 0..201 {
+        let resumed = RunSeed {
+            resumed: true,
+            ..RunSeed::flat(1, 99.0, GIB)
+        };
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-bad-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(1, 50.0, GIB), resumed],
+        );
+    }
+    fixture.runtime.gc_runs(true, Some(30)).unwrap();
+    assert!(
+        fixture
+            .store
+            .run_resource_minutes(&workspace, &batched_runs[1])
+            .unwrap()
+            .is_empty()
+    );
+    let found = fixture
+        .runtime
+        .resource_profile_for(&ProfileLookup::new(
+            workspace,
+            "change",
+            Some("medium".into()),
+            false,
+        ))
+        .unwrap();
+    assert_eq!(found.source, ProfileSource::Exact);
+    let profile = found.profile.unwrap();
+    assert_eq!(profile.delivery_count, 4);
+    assert_eq!(profile.series[0].cpu_cores, 3.5);
+    assert_eq!(
+        profile
+            .deliveries
+            .iter()
+            .map(|d| d.task_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["ORB-good-4", "ORB-good-3", "ORB-good-2", "ORB-good-1"]
+    );
+}
+
+/// Retention must keep the newest profile regime's window across intervening regimes.
+#[test]
+fn gc_preserves_the_current_regime_window() {
+    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let workspace = fixture.workspace.clone();
+    fixture.days_ago.set(80);
+    for index in 0..4 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-a-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(1, 2.0, GIB)],
+        );
+    }
+    fixture.regime.borrow_mut().0 = Some("other".into());
+    for index in 0..201 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-b-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(1, 4.0, GIB)],
+        );
+    }
+    fixture.regime.borrow_mut().0 = None;
+    fixture.delivery(
+        &workspace,
+        "ORB-a-new",
+        "change",
+        Some("medium"),
+        vec![RunSeed::flat(1, 2.0, GIB)],
+    );
+    for index in 0..201 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-resumed-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed {
+                resumed: true,
+                ..RunSeed::flat(1, 9.0, GIB)
+            }],
+        );
+    }
+    fixture.runtime.gc_runs(true, Some(30)).unwrap();
+    let profile = fixture.profile("change", Some("medium"));
+    assert_eq!(profile.delivery_count, 4);
+    assert_eq!(profile.series[0].cpu_cores, 2.0);
+}
+
 /// A crew model or Orbit release change makes earlier deliveries stale: the
 /// window follows the newest regime, topped up from earlier ones only to the
 /// minimum, so the change never empties the key.
