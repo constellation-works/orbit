@@ -191,12 +191,10 @@ pub(crate) fn execute(
                 serde_json::to_value(runtime.worker_claim_steering(&worker_auth(binding))?)
             }
             "dependency" => match runtime.resolve_dependency_task(id)? {
-                orbit_store::RegisteredTaskResolution::Resolved(task) => serde_json::to_value(task),
-                _ => {
-                    return Err(OrbitError::InvalidInput(
-                        "owner dependency unavailable".into(),
-                    ));
+                orbit_store::RegisteredTaskResolution::Resolved(task) => {
+                    serde_json::to_value(Some(task))
                 }
+                _ => serde_json::to_value(Option::<orbit_types::task::Task>::None),
             },
             _ => {
                 return Err(OrbitError::InvalidInput(

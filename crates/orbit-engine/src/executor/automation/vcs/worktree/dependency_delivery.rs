@@ -106,19 +106,22 @@ pub(in crate::executor::automation) fn ensure_dependencies_delivered_into_base<
             {
                 continue;
             }
-            let dependency = match host.get_task(&dependency_id) {
-                Ok(dependency) => dependency,
+            // A dependency may be owned by another workspace on this
+            // machine; read it through its registered owner, the way
+            // `resolved_dependencies` does, not workspace-locally.
+            let Some(dependency) = host.get_dependency_task(&dependency_id)? else {
                 // A dangling dependency belongs to the lifecycle gate, not to
                 // us: there is no completed work to look for.
-                Err(OrbitError::NotFound { .. }) => continue,
-                Err(error) => return Err(error),
+                continue;
             };
             // An archived dependency counts as completed when it reached
             // `done` before the archive, exactly as admission counts it.
             let completed = dependency.status.satisfies_dependency()
                 || (dependency.status == TaskStatus::Archived
                     && archived_task_completed_before_archive(
-                        &host.get_task_history(&dependency_id)?,
+                        &host
+                            .get_dependency_history(&dependency_id)?
+                            .unwrap_or_default(),
                     ));
             if !completed {
                 continue;

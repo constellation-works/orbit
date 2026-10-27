@@ -2452,6 +2452,88 @@ fn a_shutdown_inside_the_hold_horizon_refuses_pull_claims_and_one_beyond_it_requ
     assert_eq!(pulls(&pair), 1, "a schedule past the horizon is admitted");
 }
 
+/// A dependency on another workspace's task, on the same owner: update
+/// accepts it, show resolves it, and the claim-side dependency lookup that
+/// `worktree_setup` uses resolves it through its registered owner instead
+/// of failing with `task not found`. A dangling dependency reads as absent,
+/// not as an error.
+fn cross_workspace_dependency_resolves_through_claim_lookup() {
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    std::fs::create_dir_all(&global).unwrap();
+    let open = |name: &str| {
+        let repo = root.path().join(name);
+        std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+        (
+            OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap(),
+            repo,
+        )
+    };
+    let (owner_b, repo_b) = open("repo_b");
+    let (owner_a, repo_a) = open("repo_a");
+    assert_ne!(
+        owner_a.workspace_id().unwrap(),
+        owner_b.workspace_id().unwrap()
+    );
+
+    let prerequisite = backlog_task(&owner_b, &repo_b, "src/dep.rs", None);
+    for status in [
+        orbit_types::task::TaskStatus::InProgress,
+        orbit_types::task::TaskStatus::Review,
+        orbit_types::task::TaskStatus::Done,
+    ] {
+        owner_b
+            .update_task_as_human(
+                &prerequisite,
+                TaskUpdateParams {
+                    status: Some(status),
+                    execution_summary: Some("Prerequisite complete.".into()),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .expect("prerequisite moves toward done in its own workspace");
+    }
+
+    let dependent = backlog_task(&owner_a, &repo_a, "src/main.rs", None);
+    owner_a
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": dependent, "dependencies": [prerequisite], "model": "codex"}),
+        )
+        .expect("cross-workspace dependency is accepted at update time");
+    let shown = owner_a
+        .run_tool("orbit.task.show", json!({"id": dependent}))
+        .expect("show dependent");
+    assert_eq!(
+        shown["resolved_dependencies"],
+        json!([format!("{prerequisite} [done]")]),
+        "{shown}"
+    );
+
+    // The workspace-local read the claim used before cannot see it; the
+    // owner-qualified dependency lookup can.
+    assert!(
+        owner_a.get_task(&prerequisite).is_err(),
+        "the prerequisite is not in the dependent's workspace"
+    );
+    let resolved = RuntimeHost::get_dependency_task(&owner_a, &prerequisite)
+        .expect("dependency lookup")
+        .expect("cross-workspace dependency resolves through its owner");
+    assert_eq!(resolved.id, prerequisite);
+    assert_eq!(resolved.status, orbit_types::task::TaskStatus::Done);
+    let history = RuntimeHost::get_dependency_history(&owner_a, &prerequisite)
+        .expect("dependency history")
+        .expect("cross-workspace dependency history resolves");
+    assert!(!history.is_empty(), "history is read from the owner");
+
+    // A dangling dependency is absent, not a `not_found` failure.
+    assert_eq!(
+        RuntimeHost::get_dependency_task(&owner_a, "ORB-999999").unwrap(),
+        None
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     pull_admission_preserves_execution_machine_name_scenarios,
@@ -2466,7 +2548,8 @@ crate::scenario_table!(
     an_older_owner_is_refused_before_a_newer_request_is_sent,
     fingerprintless_older_revision_pull_keeps_the_invalid_input_refusal,
     probe_fingerprint_tracks_request_types_and_refuses_changed_shapes,
-    owner_checks_fingerprint_before_deserializing_an_incompatible_pull
+    owner_checks_fingerprint_before_deserializing_an_incompatible_pull,
+    cross_workspace_dependency_resolves_through_claim_lookup
 );
 
 crate::scenario_table!(

@@ -142,6 +142,15 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
         NullRuntimeHost::get_task_history(self, task_id)
     }
+    fn get_dependency_task(&self, task_id: &str) -> Result<Option<Task>, OrbitError> {
+        NullRuntimeHost::get_dependency_task(self, task_id)
+    }
+    fn get_dependency_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        NullRuntimeHost::get_dependency_history(self, task_id)
+    }
     fn list_tasks_filtered(
         &self,
         status: Option<TaskStatus>,

@@ -326,6 +326,34 @@ fn pipeline_acting(middle: &str, step_recovery: bool) -> JobV2 {
     job
 }
 
+/// `setup → <step_id:action> → deliver`, otherwise exactly [`pipeline`].
+fn pipeline_step_acting(step_id: &str, action: &str) -> JobV2 {
+    let step = |id: &str, action: &str| {
+        json!({
+            "id": id,
+            "spec": { "type": "deterministic", "action": action, "config": {} },
+        })
+    };
+    let asset = json!({
+        "schemaVersion": 2,
+        "kind": "Job",
+        "metadata": { "name": "final_recovery_fixture" },
+        "spec": {
+            "state": "enabled",
+            "kind": "workflow",
+            "steps": [step("setup", "setup"), step(step_id, action), step("deliver", "deliver")],
+        },
+    });
+    let mut job = load_job_asset(&asset.to_string())
+        .expect("fixture job loads")
+        .spec;
+    job.failure_activity = Some("handoff".to_string());
+    job.resolved_failure_activity = Some(deterministic_activity("handoff"));
+    job.final_recovery_activity = Some("decide".to_string());
+    job.resolved_final_recovery_activity = Some(deterministic_activity("decide"));
+    job
+}
+
 struct Run {
     result: Result<JobOutcome, DispatchError>,
     /// `(outcome, decision)` of every `job.final_recovery_attempted` event.
@@ -1024,6 +1052,61 @@ fn transient_infrastructure_is_escalated_without_an_agent() {
         assert_eq!(host.count("decide"), 1, "{case}: the agent judges it");
         assert_eq!(host.applications()[0].infrastructure, None, "{case}");
     }
+}
+
+/// A `worktree_setup` failure caused by a dependency lookup `not_found` is
+/// not transient: final recovery must not dispatch an agent that could
+/// requeue it on an unchanged environment. The same text from another step
+/// still reaches the agent.
+fn worktree_setup_dependency_not_found_skips_final_recovery() {
+    // The failing step is the job's `worktree_setup` step; its action is
+    // scripted here so the host, not the engine's own worktree code, fails it
+    // with the owner lookup's `not_found` text.
+    let job = pipeline_step_acting("worktree_setup", "worktree_fails");
+    let host = RecoveryHost::new([
+        (
+            "worktree_fails",
+            vec![Reply::Diagnostic(
+                "remote tool failed (not_found): hm_test: task not found: ORB-99999".into(),
+            )],
+        ),
+        ("decide", vec![escalate()]),
+    ]);
+    let skipped = run(&job, &host, None);
+    assert!(skipped.result.is_err());
+    assert_eq!(host.count("decide"), 0, "no recovery agent is dispatched");
+    assert!(
+        host.applications().is_empty(),
+        "no resume or requeue decision is applied"
+    );
+    assert_eq!(host.count("handoff"), 1, "the failure path still runs");
+    assert_eq!(skipped.attempts, [attempt("skipped", None)]);
+    assert!(
+        skipped
+            .details
+            .first()
+            .and_then(|detail| detail.as_deref())
+            .is_some_and(|detail| detail.contains("could not resolve a dependency")),
+        "the skip is recorded: {:?}",
+        skipped.details
+    );
+
+    let host = RecoveryHost::new([
+        (
+            "work",
+            vec![Reply::Diagnostic(
+                "remote tool failed (not_found): hm_test: task not found: ORB-99999".into(),
+            )],
+        ),
+        ("decide", vec![escalate()]),
+    ]);
+    let other = run(&pipeline(false), &host, None);
+    assert!(other.result.is_err());
+    assert_eq!(
+        host.count("decide"),
+        1,
+        "the same text from another step reaches the agent"
+    );
 }
 
 fn an_empty_crew_pool_skips_final_recovery() {
@@ -1739,6 +1822,10 @@ fn recovery_contracts_4() {
             (
                 "transient_infrastructure_is_escalated_without_an_agent",
                 transient_infrastructure_is_escalated_without_an_agent,
+            ),
+            (
+                "worktree_setup_dependency_not_found_skips_final_recovery",
+                worktree_setup_dependency_not_found_skips_final_recovery,
             ),
         ]);
     });
