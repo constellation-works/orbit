@@ -115,6 +115,19 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
                 "Repair the managed catalog path, then run `orbit doctor --fix-stale-artifacts`."
                     .to_string(),
             ),
+            _ if catalog.left_out.contains(name) => (
+                format!(
+                    "`{name}` is a shipped default the workspace seeding policy leaves out; \
+                     {}",
+                    if provenance.is_removable() {
+                        "its content is unmodified, so it can be retired safely"
+                    } else {
+                        "it was locally modified, so it will be preserved outside the active \
+                         catalog rather than deleted"
+                    }
+                ),
+                "Run `orbit workspace sync`.".to_string(),
+            ),
             _ if provenance.is_removable() => (
                 format!(
                     "`{name}` is a managed default this Orbit no longer ships; its content is \

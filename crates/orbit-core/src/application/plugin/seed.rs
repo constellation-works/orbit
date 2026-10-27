@@ -401,3 +401,20 @@ fn write_manifest(path: &Path, manifest: &PluginAssetManifest) -> Result<(), Orb
     atomic_write_text(path, &encoded)
         .map_err(|error| OrbitError::Io(format!("write {}: {error}", path.display())))
 }
+
+/// The definitions plugins seeded into `dir`, by seeded name, with the
+/// namespace of the plugin that seeded each.
+pub(crate) fn plugin_seeded_definitions(
+    dir: &Path,
+) -> Result<BTreeMap<String, String>, OrbitError> {
+    let manifest = read_manifest(&dir.join(PLUGIN_ASSET_MANIFEST_FILE))?;
+    Ok(manifest
+        .assets
+        .into_iter()
+        .filter_map(|(file_name, record)| {
+            file_name
+                .strip_suffix(".yaml")
+                .map(|name| (name.to_string(), record.plugin))
+        })
+        .collect())
+}

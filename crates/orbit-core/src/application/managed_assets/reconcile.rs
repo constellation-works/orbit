@@ -62,6 +62,37 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
     files: &'a [(&'a str, &'a str)],
     overwrite: bool,
     mode: ManagedAssetReconcileMode,
+    render: impl FnMut(&'a str, &'a str) -> Result<Cow<'a, str>, OrbitError>,
+) -> Result<ManagedAssetReconciliation, OrbitError> {
+    reconcile_managed_assets_left_out(
+        dir,
+        asset_kind,
+        layout,
+        files,
+        &BTreeSet::new(),
+        overwrite,
+        mode,
+        render,
+    )
+}
+
+/// [`reconcile_managed_assets_in_mode`] for a catalog whose seeding policy
+/// leaves out the shipped defaults in `left_out`; `files` holds only the
+/// defaults it seeds.
+///
+/// A left-out default is reconciled as a retired one: an Orbit-written copy
+/// is removed by its recorded digest and a locally modified one is preserved
+/// outside the active catalog. Its operator opt-out is kept, so restoring the
+/// default policy later does not recreate a default the operator deleted.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reconcile_managed_assets_left_out<'a>(
+    dir: &Path,
+    asset_kind: &str,
+    layout: ManagedAssetLayout,
+    files: &'a [(&'a str, &'a str)],
+    left_out: &BTreeSet<&str>,
+    overwrite: bool,
+    mode: ManagedAssetReconcileMode,
     mut render: impl FnMut(&'a str, &'a str) -> Result<Cow<'a, str>, OrbitError>,
 ) -> Result<ManagedAssetReconciliation, OrbitError> {
     validate_managed_asset_name(asset_kind, ManagedAssetLayout::YamlStem, "asset kind")?;
@@ -82,7 +113,9 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
             manifest
                 .opted_out
                 .iter()
-                .filter(|name| current_names.contains(name.as_str()))
+                .filter(|name| {
+                    current_names.contains(name.as_str()) || left_out.contains(name.as_str())
+                })
                 .cloned()
                 .collect()
         })
@@ -142,6 +175,7 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
                     ),
                 )
             })?;
+            let is_left_out = left_out.contains(name.as_str());
             if sha256_hex(content.as_bytes()) == *managed_digest {
                 if mode == ManagedAssetReconcileMode::Apply {
                     fs::remove_file(&path).map_err(|error| {
@@ -175,7 +209,14 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
                     retired_preservation_path(dir, asset_kind, layout, name)
                 };
                 let warning = format!(
-                    "retired managed {asset_kind} `{name}` was locally modified; Orbit {} it from the active catalog and preserved it at '{}'. Review that file, then migrate it under a new user-authored name or delete it",
+                    "{} was locally modified; Orbit {} it from the active catalog and preserved it at '{}'. Review that file, then migrate it under a new user-authored name or delete it",
+                    if is_left_out {
+                        format!(
+                            "managed {asset_kind} `{name}`, which the workspace seeding policy leaves out,"
+                        )
+                    } else {
+                        format!("retired managed {asset_kind} `{name}`")
+                    },
                     if mode == ManagedAssetReconcileMode::Apply {
                         "removed"
                     } else {
@@ -195,7 +236,9 @@ pub(crate) fn reconcile_managed_assets_in_mode<'a>(
                 name: name.clone(),
                 path,
                 outcome: ManagedAssetOutcome::Retired,
-                detail: None,
+                detail: is_left_out.then(|| {
+                    format!("the workspace seeding policy leaves out shipped {asset_kind} `{name}`")
+                }),
             });
             result.retired += 1;
         }

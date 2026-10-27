@@ -194,6 +194,13 @@ impl OrbitRuntime {
                     "auto-task '{name}' is not a shipped default; only shipped defaults can be restored"
                 ))
             })?;
+            // Sync would retire it again on its next pass.
+            if !self.workspace_seeding_policies()?.auto_tasks.includes(name) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "shipped auto-task '{name}' is left out by `seeding.auto_tasks`; add it to \
+                     that policy, then run `orbit workspace sync` to seed it"
+                )));
+            }
             let path = definition_path(&self.paths().local_dir, name);
             let collection = self.validated_auto_tasks(name)?;
             if path.exists()

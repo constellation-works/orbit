@@ -132,7 +132,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 
-### Shipped (33)
+### Shipped (34)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -146,6 +146,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
 | [Crew Performance](./design/crew-performance/1_scope.md) | Operator picks a workflow.crew_performance default from the shadow share report | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | — | claude |
+| [Distributions](./design/distributions/1_scope.md) | Count left-out defaults on the dashboard Automation view; decide whether routines need a per-name delete verb beside the list policy | claude |
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |
 | [Finding Verification](./design/finding-verification/1_overview.md) | — | claude |
@@ -199,6 +200,7 @@ a conservative title/status fallback.
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | Scope: a crew-level env list, so one crew can run on a different provider account (an API key with prepaid credits) than the rest of its provider | Draft | claude |
 | [Crew Performance](./design/crew-performance/1_scope.md) | Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative) | Draft | claude |
 | [Distributed Drain](./design/distributed-drain/1_overview.md) | Run the workspace drain on more than one host against one owner store — followers pull one task at a time from the owner's ready queue over federated MCP, validate where they built, and land through the owner. | Draft | claude |
+| [Distributions](./design/distributions/1_scope.md) | Scope: persisted `seeding.routines` and `seeding.auto_tasks` policies over Orbit's shipped default routines and auto-tasks, honoured by every seeding path with digest-based retirement, plus `orbit workspace init --preset <file>` that applies a policy, enables plugin-seeded definitions and sets config without granting consent | Accepted | claude |
 | [Executors](./design/executors/4_decisions.md) | Decision log for executor registration, the local-shell executor, and the (now retired) External Executor Protocol. | Draft | claude |
 | [Experiments](./design/experiments/1_scope.md) | Scope: operator-defined experiments whose arms overlay instructions, skills, tools, crews or allowlisted config on a task's runs; sticky random assignment at admission, durable SQLite records, per-arm outcome analysis with intervals, and an operator decision that files the promotion | Draft | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Scope: task-pilot leaves a bounded, revision-keyed code map (explore brief) as a task artifact, and the implementer starts from it instead of exploring cold; includes the three-arm trial and the slice breakdown | Draft | claude |

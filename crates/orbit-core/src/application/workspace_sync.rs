@@ -1,6 +1,7 @@
 //! Explicit convergence of the managed definitions used by one workspace.
 
 use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -12,9 +13,11 @@ use super::job::DEFAULT_JOB_FILES;
 use super::managed_assets::{
     ManagedAssetAction, ManagedAssetLayout, ManagedAssetOutcome, ManagedAssetReconcileMode,
     ManagedAssetReconciliation, reconcile_managed_assets_in_mode,
+    reconcile_managed_assets_left_out,
 };
-use super::routines::materialize::reconcile_default_routines;
+use super::routines::materialize::reconcile_default_routines_for_policy;
 use super::routines::seed::RoutineSeedIdentity;
+use super::seeding_policy::{seeded_defaults, workspace_seeding_policies};
 use super::skill::{DEFAULT_SKILL_FILES, inject_skill_template_tokens};
 use crate::application::auto_tasks::retired::retire_replaced_auto_tasks;
 use crate::application::auto_tasks::settings::migrate_settings_only_forks;
@@ -101,10 +104,12 @@ impl WorkspaceManagedArtifactSyncReport {
 
 /// Reconcile the host-global and workspace-local managed definitions used by
 /// one already-initialized workspace. This use case deliberately knows
-/// nothing about workspace registration, identity, role, config, or scheduler
-/// cursor contents, so callers cannot accidentally turn convergence into bootstrap:
+/// nothing about workspace registration, identity, role, or scheduler cursor
+/// contents, so callers cannot accidentally turn convergence into bootstrap:
 /// the caller supplies the registered `base_branch` the delivery defaults are
-/// rendered against, exactly as it supplies the routine identity.
+/// rendered against, exactly as it supplies the routine identity. The one
+/// config it reads is the workspace seeding policy (`seeding.routines`,
+/// `seeding.auto_tasks`), so no seeding path can bypass it.
 pub fn reconcile_workspace_managed_artifacts(
     global_root: &Path,
     workspace_orbit_root: &Path,
@@ -162,6 +167,7 @@ fn reconcile_managed_artifacts(
 ) -> Result<WorkspaceManagedArtifactSyncReport, OrbitError> {
     crate::bootstrap::product_profile::ProductProfile::Orbit
         .validate_roots(&[global_root, workspace_orbit_root])?;
+    let policies = workspace_seeding_policies(global_root, workspace_orbit_root)?;
     let mut report = WorkspaceManagedArtifactSyncReport {
         check: mode == ManagedAssetReconcileMode::Check,
         actions: Vec::new(),
@@ -222,6 +228,12 @@ fn reconcile_managed_artifacts(
     // moved into the settings table first, so reconciliation below finds the
     // restored body managed instead of preserving the fork [ORB-14909].
     let auto_tasks_root = auto_tasks_dir(workspace_orbit_root);
+    let seeded_auto_tasks = seeded_defaults(DEFAULT_AUTO_TASK_FILES, &policies.auto_tasks);
+    let left_out_auto_tasks: BTreeSet<&str> = DEFAULT_AUTO_TASK_FILES
+        .iter()
+        .map(|(name, _)| *name)
+        .filter(|name| !policies.auto_tasks.includes(name))
+        .collect();
     let reconcile_auto_tasks = || {
         // A seeded copy of a default a routine replaced is retired first, by
         // its retired template's provenance, so a settings-only fork of it is
@@ -237,11 +249,12 @@ fn reconcile_managed_artifacts(
         } else {
             migrate_settings_only_forks(&auto_tasks_root, base_branch, mode)?
         };
-        let mut auto_tasks = reconcile_managed_assets_in_mode(
+        let mut auto_tasks = reconcile_managed_assets_left_out(
             &auto_tasks_root,
             "auto_task",
             ManagedAssetLayout::YamlStem,
-            DEFAULT_AUTO_TASK_FILES,
+            &seeded_auto_tasks,
+            &left_out_auto_tasks,
             false,
             mode,
             |name, content| {
@@ -300,11 +313,12 @@ fn reconcile_managed_artifacts(
     );
 
     if let Some(routine_identity) = routine_identity {
-        let routines = reconcile_default_routines(
+        let routines = reconcile_default_routines_for_policy(
             &workspace_orbit_root.join("routines"),
             routine_identity,
             false,
             mode,
+            &policies.routines,
         )?;
         append_actions(
             &mut report,

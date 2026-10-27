@@ -574,6 +574,8 @@ warning. A `[crews.system]` table you define is an ordinary crew.
 | `lease.listener.limits.max_tracked_keys` | **Advanced. Global only.** integer · **Default:** `4096`<br>Maximum rate-limit identities, including two shared overflow buckets. Valid range: `3`–`65536`. |
 | `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused with an error naming this key; drafts can still be defined, edited, shown and abandoned. |
 | `experiments.max_running` | **Advanced.** integer · **Default:** `3`<br>Experiments that may run at once in this workspace (`1`–`20`). Starting or resuming one beyond it is refused; a paused experiment does not count. |
+| `seeding.routines` | string or array&lt;string&gt; · **Default:** `all`<br>Which of Orbit's shipped default routines this workspace seeds: `"all"`, `"none"`, or a list of their file stems (`["worktree_gc", "store_gc"]`). A list seeds exactly those names, so a default a later release adds is not seeded. An unknown name fails config load with the name. `orbit workspace init`, `--force` re-init, `orbit workspace sync` and the seeding `orbit init` runs after an upgrade all honour it. Narrowing it retires a left-out default Orbit seeded and you never edited; an edited copy moves to `.orbit/.retired-managed/`. Widening it seeds the default again on the next sync. |
+| `seeding.auto_tasks` | string or array&lt;string&gt; · **Default:** `all`<br>The same policy for shipped default auto-tasks, by auto-task name (`["doc-duties", "qa-sweep"]`). An opt-out you recorded with `orbit auto-task delete` is kept while the policy leaves the default out. |
 | `experiments.config_keys` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Config keys an experiment arm's `config` overlay may set. Starting an experiment whose arm sets any other key is refused. |
 | `pr.close_on_terminal` | **Advanced.** bool · **Default:** `true`<br>Close a task's open Orbit-authored pull requests, including preservation PRs for blocked tasks, when the task lands, is rejected, or is archived, with a comment naming the landing or decision. Branches are kept; a forge error is a warning, never a failure. |
 | `pr.delivery_authors` | **Advanced.** array&lt;string&gt; · **Default:** `[]`<br>Forge logins whose pull requests count as Orbit-authored for `pr.close_on_terminal` and for settling a task to done from its delivery pull request merged outside Orbit. Empty means the login the forge CLI is authenticated as on this machine. |
@@ -998,6 +1000,27 @@ an ellipsis, and kept whole in the commit body. A subject template must carry
 the `[{{task_id}}]` marker Orbit uses to recognise delivered work. A branch
 template must contain `{{task_id}}` and `{{hash}}`; a branch name that would
 contain `..`, start with `-`, or break Git's ref-name rules is refused.
+
+## Workspace presets
+
+`orbit workspace init --preset <file>` applies a preset, a TOML file a distribution ships to set a workspace up in one step. Pass `--force` as well to apply one to a registered workspace.
+
+```toml
+name = "graph-distro"            # required: 1-64 of A-Z a-z 0-9 . _ -
+
+[seeding]                        # seeding.routines / seeding.auto_tasks
+routines = ["worktree_gc"]
+auto_tasks = "none"
+
+[enable]                         # plugin-seeded definitions to switch on
+routines = ["graph-refresh"]
+auto_tasks = ["graph-reindex"]
+
+[config]                         # workspace keys `orbit config set` accepts
+"workflow.crew_performance" = "off"
+```
+
+Orbit checks the whole file before it writes anything. It refuses an unknown field, a `[config]` key or value `orbit config set` would refuse, and an `[enable]` name that no enabled plugin seeded into this workspace. A preset never grants plugin permissions or enables a plugin, so a grant, permission, plugin or `plugin_enablement` field is refused too; run `orbit plugin enable <plugin>` yourself first. The `[seeding]` and `[config]` keys are written to `.orbit/config.toml` before the defaults are seeded. The preset's name and the `sha256:` digest of the file are recorded in `.orbit/state/workspace-preset.json`, and `orbit workspace show` reports them along with the seeding policy.
 
 ## Workspace build output
 

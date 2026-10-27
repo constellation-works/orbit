@@ -66,7 +66,7 @@ pub enum ConfigSection {
     /// flag, not a key.
     Review,
     /// Everything else: `automation.*`, `runtime.*`, `tasks.*`,
-    /// `pr.*`, `plugin.*`.
+    /// `pr.*`, `plugin.*`, `seeding.*`.
     Housekeeping,
 }
 

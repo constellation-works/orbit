@@ -2277,6 +2277,8 @@ After creating or reusing a PR, Orbit unions the allowlisted tags present on eve
 | `worktree.reclaim` | `["target", ".orbit/tmp/*-target", ".orbit/tmp/base-wt"]` | **Advanced.** Relative rebuildable path globs reclaimed in kept terminal worktrees; an explicit list replaces earlier layers, `[]` disables. `*` stays within a component; a whole-component `**` spans components. Absolute, parent or root-matching patterns fail load. Registration, worker, symlink, confinement and Git content gates protect candidates and tracked files. See [worktree reclamation](runbooks/worktree-reclaim.md). |
 | `worktree.reclaim_below_free_mib` | unset | **Advanced.** Also reclaim during admission while free space beneath the state directory is below this, oldest terminal worktrees first; active runs stay protected. |
 | `worktree.parked_reclaim_after_hours` | `336` | **Advanced.** Hours a task must stay parked in `someday`, counted from that status change, before worktree GC removes a terminal run's worktree serving it (0..=876000). A live worker, an unsettled claim or a Git worktree lock keeps it, and a clean worktree whose run branch holds commits no other ref reaches and `origin` lacks stays with its branch (`skipped:unpublished_commits`). See [parked tasks](runbooks/worktree-reclaim.md#worktrees-of-parked-tasks). |
+| `seeding.routines` | `all` | Which shipped default routines this workspace seeds: `"all"`, `"none"` or a list of file stems. See [below](#seeding--which-shipped-defaults-a-workspace-carries). |
+| `seeding.auto_tasks` | `all` | Which shipped default auto-tasks this workspace seeds: `"all"`, `"none"` or a list of names. See [below](#seeding--which-shipped-defaults-a-workspace-carries). |
 | `decision_channel.enabled` | `false` | Raise decision requests for work held on a human decision. |
 | `security_alert_sweep.min_severity` | `moderate` | **Advanced.** Lowest Dependabot and Code scanning severity the security alert sweep files. See [below](#security_alert_sweep--security-finding-severity). |
 
@@ -2427,6 +2429,54 @@ Each dispatch a live arm changes records an `activity.experiment_overlay_applied
 `orbit experiment conclude <experiment> [--arm <arm>] --reason <text>` (tool `orbit.experiment.conclude`, dashboard `POST /api/diagnostics/experiments/<id>/conclude`) concludes a running or paused experiment. The conclusion event stores the readout JSON at that moment, which `orbit experiment show` returns, so the decision can be read against the numbers it was made on. A chosen arm files one proposed task in this workspace naming the experiment, the arm, the readout verdict and the overlay; omitting the arm files nothing. Assignment stops; tasks already assigned keep their arm. Concluding changes no configuration or repository file. Only an operator may conclude.
 
 After the horizon, if no treatment wins and any primary comparison lacks an interval, the verdict is `inconclusive`, with a reason naming the treatment and metric. This includes no settled primary outcomes, fewer than two outcomes in either arm of a used complexity cell, or no common measured complexity cell. `no difference` requires a measured comparison; a treatment with a complete winning comparison can still win.
+
+### `[seeding]` — which shipped defaults a workspace carries
+
+Orbit ships default routines (`.orbit/routines/`) and auto-tasks (`.orbit/auto_tasks/`) and seeds every one into a workspace. Two keys narrow that, per workspace or globally ([design](design/distributions/1_scope.md)):
+
+| Key | Default | What it does |
+|---|---|---|
+| `seeding.routines` | `"all"` | `"all"`, `"none"`, or a list of shipped routine file stems (`["worktree_gc", "store_gc"]`). |
+| `seeding.auto_tasks` | `"all"` | `"all"`, `"none"`, or a list of shipped auto-task names (`["doc-duties", "qa-sweep"]`). |
+
+```toml
+[seeding]
+routines = ["worktree_gc", "store_gc"]
+auto_tasks = "none"
+```
+
+- **Every seeding path honours it.** `orbit workspace init`, `orbit workspace init --force`, `orbit workspace sync` and the create-only seeding `orbit init` runs over registered workspaces after an upgrade all reconcile through the policy. `"all"` also seeds a default a later release adds; `"none"` and a list never do.
+- **Admission.** A list name Orbit has never shipped fails config load, `orbit config set` and every seeding command, naming the key, the name and the shipped names. A name a later release retired still loads and simply seeds nothing. `orbit config keys` lists both keys.
+- **Narrowing retires by digest.** A default the policy leaves out is retired exactly as a default a release dropped: an unedited file Orbit seeded is removed, and a locally edited one moves under `.orbit/.retired-managed/` with a warning to migrate it under a new user-authored name. A file Orbit never recorded is left alone.
+- **Widening reseeds.** Adding a name back, or returning to `"all"`, seeds the shipped file again on the next sync.
+- **Opt-outs.** An opt-out recorded with `orbit auto-task delete` survives while the policy leaves that auto-task out. `orbit auto-task restore` refuses a left-out name and names the policy. For routines, a list policy is the durable per-name opt-out.
+- **Diagnostics.** `orbit workspace show` prints both policies, the defaults they leave out, and the applied preset (JSON `seeding` and `preset`). `orbit doctor` does not report a left-out default as missing, and its `seeding-policy` row warns while `workflow.crew_performance` is not `off` and `seeding.routines` leaves out `crew_performance_refresh`, since nothing then refreshes the snapshot crew draws read.
+
+#### Workspace presets
+
+`orbit workspace init --preset <file>` applies a preset: a TOML file a distribution ships to set a workspace up in one step. The same flag works with `--force` on a registered workspace.
+
+```toml
+name = "graph-distro"            # required: 1-64 of [A-Za-z0-9._-]
+
+[seeding]                        # optional: written as seeding.routines / seeding.auto_tasks
+routines = ["worktree_gc"]
+auto_tasks = "none"
+
+[enable]                         # optional: plugin-seeded definitions to switch on
+routines = ["graph-refresh"]
+auto_tasks = ["graph-reindex"]
+
+[config]                         # optional: workspace keys, nested tables or dotted keys
+"workflow.crew_performance" = "off"
+[config.review]
+minutes = 45
+```
+
+- **Validated whole, before any write.** An unknown field in any table, a `[config]` key or value `orbit config set` refuses for this workspace, a `seeding.*` key under `[config]`, a blank or unseeded `[enable]` name, or a file over 256 KiB is refused, and nothing is written or registered.
+- **No consent.** A preset never grants plugin permissions or enables a plugin: a `grant`, `grants`, `permissions`, `plugin`, `plugins`, `enable_plugins` or `plugin_enablement` field, at the top level or under `[enable]`, and any `plugin_enablement*` key under `[config]`, is refused. `[enable]` only switches on a definition an already enabled plugin seeded into this workspace (the name `orbit routine list` or `orbit auto-task list` shows), so run `orbit plugin enable <plugin>` first, then `orbit workspace init --force --preset <file>`.
+- **Order.** The `[seeding]` and `[config]` keys are written to `.orbit/config.toml` in one validated save before defaults are seeded, so the first seeding already follows the policy. `[enable]` is applied after seeding.
+- **Provenance.** The preset's `name` and `sha256:` digest of the file bytes are recorded with the apply time in `.orbit/state/workspace-preset.json`. `orbit workspace init` prints them with the definitions it enabled, and `orbit workspace show` reports them.
 
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 

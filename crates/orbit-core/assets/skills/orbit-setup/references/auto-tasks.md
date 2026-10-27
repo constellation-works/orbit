@@ -299,6 +299,16 @@ reset before it stays applied, recorded as its own audited reset.
   does not ship and a definition that already exists. `auto-task add` under a
   deleted default's name creates your own definition instead; the opt-out
   stays, so reseeds never overwrite it.
+- To keep a whole workspace to a chosen set of shipped defaults, set
+  `seeding.auto_tasks` (and `seeding.routines` for routines) to `"none"` or
+  a list of names instead of deleting them one by one. Every seeding path,
+  upgrades included, honours it; narrowing it retires the left-out defaults
+  Orbit seeded and you never edited, and an edited one is preserved under
+  `.orbit/.retired-managed/`. `restore` refuses a name the policy leaves out.
+  `orbit workspace init --preset <file>` applies a policy, plugin-seeded
+  enables and config keys from one reviewed file; the
+  [configuration reference](https://orbit-cli.com/reference/config/#workspace-presets)
+  has its format.
 
 A user-authored definition records no opt-out: delete simply removes it.
 `delete` and `restore` are not on MCP; over MCP, disable a definition instead.
