@@ -7,9 +7,11 @@
 // Pure vanilla JS, split into ES modules with no build step.
 //
 // The forecast is per workspace; the aggregate view shows the usual
-// placeholder. The lookback and arrivals toggles refetch: only the default
-// view (30 days, no arrivals, the live drain ceiling) is the one stored and
-// scored.
+// placeholder. The history and arrivals toggles refetch: only the default
+// view (30 days reaching back to at least the newest 50 completions, no
+// arrivals, the live drain ceiling) is the one stored and scored. History is
+// counted in tasks, `Last 200` or `Last 500`, or in days; a month without
+// deliveries leaves the default and the counted views with history.
 
 import {
   el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
@@ -31,7 +33,14 @@ function el(tag, opts = {}, children = []) {
 const BODY = "forecast-body";
 const COUNT = "forecast-count";
 const ENDPOINT = "/api/diagnostics/backlog_forecast";
-const LOOKBACKS = [[14, "14d"], [30, "30d"], [90, "90d"]];
+// History selection: the default lookback (30 days, at least the newest 50
+// completions), the newest N completions whatever their age, or 90 days.
+const HISTORIES = [
+  ["default", "30d · ≥50", "The last 30 days, reaching back to at least the newest 50 completed tasks: the stored forecast"],
+  ["tasks:200", "Last 200", "The newest 200 completed tasks, whatever their age"],
+  ["tasks:500", "Last 500", "The newest 500 completed tasks, whatever their age"],
+  ["days:90", "90d", "The last 90 days, reaching back to at least the newest 50 completed tasks"],
+];
 const ARRIVALS = [["off", "No arrivals"], ["on", "Recent arrivals"]];
 const COMPLEXITY_LABELS = {
   low: "Low", medium: "Medium", hard: "Hard", xhard: "Xhard", unassessed: "Unassessed",
@@ -73,7 +82,7 @@ const WAITS = [
 // The schedule table lists this many tasks in dispatch order.
 const SCHEDULE_ROWS = 50;
 
-const view = { lookback: 30, arrivals: "off" };
+const view = { history: "default", arrivals: "off" };
 let lastPayload = null;
 let requestScope = null;
 
@@ -83,17 +92,20 @@ function clearForecast() {
   if (count) count.textContent = "—";
 }
 
-// Default lookback and arrivals off omit the query, matching the stored forecast.
-export function backlogForecastPath({ lookback = 30, arrivals = "off" } = {}) {
+// The default history and arrivals off omit the query, matching the stored
+// forecast. `history` is `tasks:<n>` or `days:<n>`.
+export function backlogForecastPath({ history = "default", arrivals = "off" } = {}) {
   const params = new URLSearchParams();
-  if (lookback !== 30) params.set("lookback_days", String(lookback));
+  const [kind, count] = String(history).split(":");
+  if (kind === "tasks" && count) params.set("history_tasks", count);
+  if (kind === "days" && count && count !== "30") params.set("lookback_days", count);
   if (arrivals === "on") params.set("arrivals", "on");
   const query = params.toString();
   return query ? `${ENDPOINT}?${query}` : ENDPOINT;
 }
 
 function endpoint() {
-  return backlogForecastPath({ lookback: view.lookback, arrivals: view.arrivals });
+  return backlogForecastPath({ history: view.history, arrivals: view.arrivals });
 }
 
 export function fetchBacklogForecast(options) {
@@ -273,9 +285,9 @@ export function drainBacklogForecastLink(summary) {
 // ---- forecast -------------------------------------------------------------
 
 function seg(label, options, current, onPick) {
-  return el("div", { class: "mx-seg", role: "group", "aria-label": label }, options.map(([key, text]) => {
+  return el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": label }, options.map(([key, text, title]) => {
     const on = key === current;
-    const button = el("button", { class: on ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, "aria-pressed": on ? "true" : "false" });
+    const button = el("button", { class: on ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, title: title || null, "aria-pressed": on ? "true" : "false" });
     button.addEventListener("click", () => {
       if (on) return;
       onPick(key);
@@ -343,15 +355,23 @@ function arrivalsLine() {
   ]);
 }
 
+// The sample the forecast drew from: n deliveries, and how far back they reach.
+function historyText(inputs) {
+  const n = `n=${inputs.history_deliveries ?? 0} deliveries`;
+  const since = inputs.lookback_start ? ` since ${formatDateTime(inputs.lookback_start)}` : "";
+  if (inputs.history_tasks != null) return `${n}${since} (the newest ${inputs.history_tasks} completions)`;
+  return `${n}${since} (${inputs.lookback_days ?? "?"} days, at least the newest ${inputs.min_history_tasks ?? 50} completions)`;
+}
+
 function forecastCard() {
   const inputs = lastPayload.inputs || {};
   const forecast = lastPayload.forecast || {};
   const backlog = lastPayload.backlog || {};
   const tools = el("div", { class: "mx-trend-tools" }, [
-    seg("History lookback", LOOKBACKS, view.lookback, (key) => { view.lookback = key; }),
+    seg("Delivery history", HISTORIES, view.history, (key) => { view.history = key; }),
     seg("Arrivals", ARRIVALS, view.arrivals, (key) => { view.arrivals = key; }),
   ]);
-  const meta = `${backlog.backlog ?? 0} backlog · ${backlog.in_progress ?? 0} in progress · ${backlog.blocked ?? 0} blocked · ${inputs.history_deliveries ?? 0} deliveries in ${inputs.lookback_days ?? "?"} days`;
+  const meta = `${backlog.backlog ?? 0} backlog · ${backlog.in_progress ?? 0} in progress · ${backlog.blocked ?? 0} blocked · ${historyText(inputs)}`;
   const children = [
     el("div", { class: "mx-card-head" }, [
       el("h2", { class: "mx-card-title", text: "Time to drain and cost" }),
@@ -371,7 +391,9 @@ function forecastCard() {
   } else if (!inputs.history_deliveries) {
     children.push(el("div", { class: "mx-empty" }, [
       el("div", { class: "mx-empty-title", text: "No delivery history to sample" }),
-      el("div", { class: "mx-empty-detail", text: `No task finished with recorded agent runs in the last ${inputs.lookback_days} days. Widen the lookback.` }),
+      el("div", { class: "mx-empty-detail", text: inputs.history_tasks != null
+        ? `None of the newest ${inputs.history_tasks} completed tasks has recorded agent runs.`
+        : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.` }),
     ]));
   } else {
     children.push(el("div", { class: "mx-series fc-kpis" }, [

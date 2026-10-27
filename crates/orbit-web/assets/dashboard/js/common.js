@@ -392,7 +392,8 @@ export function syncWindowSelectors() {
   ]) {
     const selector = document.getElementById(id);
     if (!selector) continue;
-    syncWindowTabState(selector, target);
+    // A panel holding its own count window (last N) shows that instead.
+    syncWindowTabState(selector, selector.dataset.panelWindow || target);
   }
   const toolsMeta = document.getElementById("tools-meta");
   if (toolsMeta) {
@@ -402,9 +403,29 @@ export function syncWindowSelectors() {
   }
 }
 
-function activateWindowTab(tab, allowed) {
+// `opts.panelWindows` are a panel's own windows (a count of recent units)
+// that never become the shared calendar window; `opts.onPanelWindow(value)`
+// stores one (null leaves it for the shared window) and says if it changed.
+function activateWindowTab(tab, allowed, opts) {
   const next = tab && tab.dataset.window;
-  if (!next || !allowed.includes(next) || next === currentWindow) return;
+  if (!next) return;
+  const onPanelWindow = opts.onPanelWindow;
+  if (onPanelWindow && (opts.panelWindows || []).includes(next)) {
+    if (onPanelWindow(next)) {
+      syncWindowSelectors();
+      notifyScopeChange();
+    }
+    return;
+  }
+  if (!allowed.includes(next)) return;
+  const leftPanelWindow = onPanelWindow ? onPanelWindow(null) : false;
+  if (next === currentWindow) {
+    if (leftPanelWindow) {
+      syncWindowSelectors();
+      notifyScopeChange();
+    }
+    return;
+  }
   setWindow(next);
   persistScopeToUrl();
   syncWindowSelectors();
@@ -419,7 +440,7 @@ export function wireWindowSelector(selectorId, opts = {}) {
   selector.addEventListener("click", (event) => {
     const tab = event.target && event.target.closest(".scoreboard-window-seg");
     if (!tab || !selector.contains(tab)) return;
-    activateWindowTab(tab, allowed);
+    activateWindowTab(tab, allowed, opts);
   });
   selector.addEventListener("keydown", (event) => {
     const tab = event.target && event.target.closest(".scoreboard-window-seg");
@@ -436,7 +457,7 @@ export function wireWindowSelector(selectorId, opts = {}) {
     event.preventDefault();
     const nextTab = tabs[nextIndex];
     nextTab.focus();
-    activateWindowTab(nextTab, allowed);
+    activateWindowTab(nextTab, allowed, opts);
   });
 }
 

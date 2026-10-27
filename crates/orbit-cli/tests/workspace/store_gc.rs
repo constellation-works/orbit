@@ -424,63 +424,85 @@ fn run_retention_drops_terminal_state_and_keeps_run_history() {
 
 /// The per-minute run and host resource history, and the admission forecasts
 /// checked against it, are pruned by run retention after 30 days, host-wide,
-/// whatever window the run sweep uses.
+/// whatever window the run sweep uses, except the newest deliveries of each
+/// profile key and the newest forecasts with the host minutes they pair with:
+/// a month without deliveries must not empty profiles or the accuracy report.
 fn run_retention_prunes_resource_minutes_past_thirty_days() {
     let fixture = Fixture::new();
-    let stamp = |days: i64| {
-        (chrono::Utc::now() - chrono::Duration::days(days))
-            .to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
-    };
+    let now = chrono::Utc::now();
+    let stamp =
+        |at: chrono::DateTime<chrono::Utc>| at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    let days = |days: i64| now - chrono::Duration::days(days);
     {
-        let db = fixture.db();
-        for (workspace, run_id, days) in [
-            ("ws_a", "jrun-old", 31),
-            ("ws_b", "jrun-other-workspace", 45),
-            ("ws_a", "jrun-recent", 29),
-        ] {
-            db.execute(
+        let mut db = fixture.db();
+        let tx = db.transaction().unwrap();
+        let mut runs = vec![
+            // Alone in its key: kept however old, so the key keeps a profile.
+            ("ws_b", "jrun-other-workspace".to_string(), days(45)),
+            ("ws_a", "jrun-recent".to_string(), days(29)),
+        ];
+        // 201 old deliveries of one key: with the recent one, the oldest two
+        // fall outside the newest 200.
+        for index in 0..201 {
+            runs.push((
+                "ws_a",
+                format!("jrun-old-{index}"),
+                days(31) - chrono::Duration::minutes(index),
+            ));
+        }
+        for (workspace, run_id, at) in &runs {
+            tx.execute(
                 "INSERT INTO run_resource_minutes (workspace_id, run_id, minute_index, \
                      minute_started_at, task_id, work_class, complexity, resumed, \
                      delivery_admitted_at, cpu_cores, memory_bytes, samples) \
-                 VALUES (?1, ?2, 0, ?3, 'ORB-1', 'change', 'hard', 0, ?3, 1.5, 1024, 12)",
-                params![workspace, run_id, stamp(days)],
+                 VALUES (?1, ?2, 0, ?3, ?2, 'change', 'hard', 0, ?3, 1.5, 1024, 12)",
+                params![workspace, run_id, stamp(*at)],
             )
             .unwrap();
         }
-        for days in [40, 31, 1] {
-            db.execute(
+        for age in [40, 31, 1] {
+            tx.execute(
                 "INSERT INTO host_resource_minutes (minute_at, cpu_cores, cpu_count, \
                      memory_bytes, memory_total_bytes, samples, recorded_by_run_id) \
                  VALUES (?1, 3.0, 16, 1024, 4096, 12, 'jrun-old')",
-                params![stamp(days)],
+                params![stamp(days(age))],
             )
             .unwrap();
         }
-        for (workspace, days) in [("ws_a", 31), ("ws_b", 60), ("ws_a", 2)] {
-            db.execute(
+        // 10,001 forecasts: the oldest falls outside the newest 10,000, and
+        // the 31-day one stays with the host minutes from its minute on.
+        let mut forecasts = vec![("ws_b", days(60)), ("ws_a", days(31))];
+        for index in 0..9_999 {
+            forecasts.push(("ws_a", days(2) + chrono::Duration::seconds(index)));
+        }
+        for (workspace, at) in forecasts {
+            tx.execute(
                 "INSERT INTO admission_forecasts (workspace_id, run_id, forecast_at, mode, \
                      cpu_count, memory_total_bytes, points_json, admitted_json, \
                      fit_admitted_json, fit_skipped_json) \
                  VALUES (?1, 'jrun-drain', ?2, 'shadow', 16, 4096, '[]', '[]', '[]', '[]')",
-                params![workspace, stamp(days)],
+                params![workspace, stamp(at)],
             )
             .unwrap();
         }
+        tx.commit().unwrap();
     }
 
     let plan = fixture.json(&["gc", "runs", "--json"]);
     let tables = plan["resource_minutes"].as_array().unwrap();
     assert_eq!(tables[0]["table"], "run_resource_minutes");
     assert_eq!(tables[0]["retention_days"], 30);
+    assert_eq!(tables[0]["kept_newest"], 200);
     assert_eq!(tables[0]["rows"], 2);
     assert_eq!(tables[1]["table"], "host_resource_minutes");
-    assert_eq!(tables[1]["rows"], 2);
+    assert_eq!(tables[1]["rows"], 1);
     assert_eq!(tables[2]["table"], "admission_forecasts");
     assert_eq!(tables[2]["retention_days"], 30);
-    assert_eq!(tables[2]["rows"], 2);
+    assert_eq!(tables[2]["kept_newest"], 10_000);
+    assert_eq!(tables[2]["rows"], 1);
     assert_eq!(
         fixture.count("SELECT COUNT(*) FROM run_resource_minutes"),
-        3
+        203
     );
 
     let applied = fixture.json(&[
@@ -492,21 +514,35 @@ fn run_retention_prunes_resource_minutes_past_thirty_days() {
         "--json",
     ]);
     assert_eq!(applied["resource_minutes"][0]["rows_removed"], 2);
-    assert_eq!(applied["resource_minutes"][1]["rows_removed"], 2);
-    assert_eq!(applied["resource_minutes"][2]["rows_removed"], 2);
+    assert_eq!(applied["resource_minutes"][1]["rows_removed"], 1);
+    assert_eq!(applied["resource_minutes"][2]["rows_removed"], 1);
     assert_eq!(
-        fixture.count("SELECT COUNT(*) FROM run_resource_minutes WHERE run_id = 'jrun-recent'"),
-        1
+        fixture.count(
+            "SELECT COUNT(*) FROM run_resource_minutes \
+             WHERE run_id IN ('jrun-old-199', 'jrun-old-200')"
+        ),
+        0,
+        "the two oldest deliveries of the key went"
     );
     assert_eq!(
-        fixture.count("SELECT COUNT(*) FROM run_resource_minutes"),
-        1
+        fixture.count(
+            "SELECT COUNT(*) FROM run_resource_minutes \
+             WHERE run_id IN ('jrun-recent', 'jrun-other-workspace', 'jrun-old-198')"
+        ),
+        3
     );
     assert_eq!(
         fixture.count("SELECT COUNT(*) FROM host_resource_minutes"),
-        1
+        2
     );
-    assert_eq!(fixture.count("SELECT COUNT(*) FROM admission_forecasts"), 1);
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM admission_forecasts WHERE workspace_id = 'ws_b'"),
+        0
+    );
+    assert_eq!(
+        fixture.count("SELECT COUNT(*) FROM admission_forecasts"),
+        10_000
+    );
 }
 
 /// `orbit gc journal` plans by default and deletes applied commit journal

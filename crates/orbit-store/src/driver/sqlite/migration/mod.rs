@@ -76,7 +76,8 @@ use plugins::{
 };
 use resource_minutes::{
     apply_admission_forecasts, apply_forecast_attribution, apply_host_resource_minutes,
-    apply_pull_forecast_decisions, apply_run_resource_minutes, apply_worker_cpu_accounting,
+    apply_pull_forecast_decisions, apply_resource_minute_regime, apply_run_resource_minutes,
+    apply_worker_cpu_accounting,
 };
 use retention_analytics::apply_retention_analytics;
 use routine::apply_routine_scheduler_schema;

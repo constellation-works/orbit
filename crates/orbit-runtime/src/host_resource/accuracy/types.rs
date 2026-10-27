@@ -2,26 +2,52 @@
 
 use std::collections::BTreeMap;
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use orbit_types::workflow::{DrainPassCounters, DrainPassOutcome};
 use serde::Serialize;
 
-use crate::host_resource::profile::PROFILE_HISTORY_DAYS;
+/// Recorded forecasts the default selection reads: the newest this many,
+/// whatever their age, so a break between drains never empties the report.
+pub const DEFAULT_ACCURACY_FORECASTS: usize = 5_000;
+/// Admission forecasts retention keeps whatever their age, with the host
+/// minutes they pair with.
+pub const ACCURACY_FORECASTS_KEPT: usize = 10_000;
 
 /// An operator-selected cohort of stored forecasts, with inclusive time bounds.
 /// Drain and mode are exact matches; these rows do not attest source or settings.
 #[derive(Debug, Clone, Serialize)]
 pub struct AccuracySelection {
+    /// The oldest forecast considered. With `last`, the report replaces it
+    /// with the oldest forecast the count selected, when that is later.
     pub since: DateTime<Utc>,
+    /// Only the newest this many forecasts that match the other bounds.
+    pub last: Option<usize>,
     pub drain: Option<String>,
     pub mode: Option<String>,
 }
 
 impl AccuracySelection {
-    /// The legacy population: all drains and modes over the last 30 days.
-    pub fn last_30_days(report_at: DateTime<Utc>) -> Self {
+    /// The default population: the newest [`DEFAULT_ACCURACY_FORECASTS`]
+    /// forecasts of every drain and mode, whatever their age.
+    pub fn latest() -> Self {
+        Self::last(DEFAULT_ACCURACY_FORECASTS)
+    }
+
+    /// The newest `count` forecasts of every drain and mode.
+    pub fn last(count: usize) -> Self {
         Self {
-            since: report_at - Duration::days(PROFILE_HISTORY_DAYS),
+            since: DateTime::UNIX_EPOCH,
+            last: Some(count),
+            drain: None,
+            mode: None,
+        }
+    }
+
+    /// Every forecast of every drain and mode made at or after `since`.
+    pub fn since(since: DateTime<Utc>) -> Self {
+        Self {
+            since,
+            last: None,
             drain: None,
             mode: None,
         }

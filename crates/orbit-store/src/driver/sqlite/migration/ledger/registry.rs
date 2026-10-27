@@ -631,12 +631,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_task_reservation_lease_queue,
     },
+    // Resource profiles by regime: the crew model and Orbit version each run
+    // minute was sampled under. Two nullable columns; an older binary never
+    // reads them, and the minutes it writes read here as having no regime.
+    Migration {
+        version: 68,
+        name: "resource_minute_regime",
+        compat: MigrationCompatibility::Additive,
+        apply: super::super::apply_resource_minute_regime,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 67;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 68;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

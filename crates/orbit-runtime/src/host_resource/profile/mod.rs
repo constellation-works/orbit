@@ -12,7 +12,15 @@
 //!   counted from admission. A delivery with a resumed or retried run, or a
 //!   run still live, is left out.
 //! - **Window.** The last `profile_window` completed deliveries of the key,
-//!   admitted within [`PROFILE_HISTORY_DAYS`].
+//!   whatever their age, so a month without deliveries leaves every profile
+//!   as it was. Staleness comes from a regime change instead: each delivery
+//!   carries the crew model and Orbit version its runs were sampled under,
+//!   and the window keeps only deliveries of the newest delivery's regime.
+//!   While that regime has fewer than `min_profile_deliveries`, the newest
+//!   earlier deliveries top the window up to that minimum, so a change never
+//!   empties a key. Retention keeps the newest
+//!   [`RESOURCE_HISTORY_DELIVERIES_PER_KEY`] deliveries of each key past its
+//!   age cutoff.
 //! - **Per minute.** `alive` is the fraction still running, `cpu` the mean
 //!   cores and `mem` the 90th-percentile memory over the deliveries alive
 //!   then, each with its spread; memory also keeps its mean, from which the
@@ -38,12 +46,12 @@ mod cache;
 mod lookup;
 
 pub(crate) use build::{ProfileBounds, build_profiles, template_task_ids};
-pub(crate) use cache::ResourceProfileCache;
+pub(crate) use cache::{ResourceProfileCache, build_uncached};
 pub use lookup::{ProfileLookup, ProfileMatch, ProfileSource};
 
-/// Profiles read deliveries admitted within this many days, the retention of
-/// `run_resource_minutes`.
-pub const PROFILE_HISTORY_DAYS: i64 = 30;
+/// Deliveries of each workspace, work class and complexity whose run minutes
+/// retention keeps whatever their age, or `profile_window` when larger.
+pub const RESOURCE_HISTORY_DELIVERIES_PER_KEY: usize = 200;
 
 /// Cores above which a no-diff delivery's minute looks like build work.
 pub const BUILD_LIKE_CORES: f64 = 1.0;
@@ -107,6 +115,16 @@ pub struct ProfileMinute {
     pub memory_stddev_bytes: f64,
 }
 
+/// What a delivery ran under: a change of either makes earlier samples stale.
+#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+pub struct ProfileRegime {
+    /// The crew model of its runs; `None` when none named one, or the
+    /// minutes predate regime recording.
+    pub crew_model: Option<String>,
+    /// The Orbit version that sampled it; `None` before regime recording.
+    pub orbit_version: Option<String>,
+}
+
 /// One delivery in a profile's window.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ProfileDelivery {
@@ -116,6 +134,7 @@ pub struct ProfileDelivery {
     /// Minutes from admission to the last run's end.
     pub minutes: u32,
     pub run_ids: Vec<String>,
+    pub regime: ProfileRegime,
 }
 
 /// A delivery behind a no-diff profile's build flag.
@@ -153,7 +172,17 @@ pub struct ProfileQuantile<T> {
 pub struct ResourceProfile {
     pub key: ProfileKey,
     pub base_class: BaseClass,
+    /// The samples the profile used: deliveries in its window.
     pub delivery_count: usize,
+    /// The regime of the key's newest delivery, which the window follows.
+    /// A class-wide profile spans complexities and crews, so its regime is
+    /// left empty; its window is the union of its keys' windows.
+    pub regime: ProfileRegime,
+    /// Deliveries in the window from an earlier regime, topping a regime
+    /// with fewer than `min_profile_deliveries` up to that minimum.
+    pub prior_regime_deliveries: usize,
+    /// Deliveries of the key left out because an earlier regime ran them.
+    pub excluded_prior_regime: usize,
     /// Fewer deliveries than `min_profile_deliveries`: a lookup falls back
     /// past this key.
     pub sparse: bool,

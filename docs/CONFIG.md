@@ -291,8 +291,9 @@ passes; the shadow columns stay on shadow passes. JSON adds
 `enforce_admitted`, `gap_held` (the task ids) and `pull_held` without
 changing the existing shadow fields.
 `--since <RFC3339>`, `--drain <RUN>` and `--mode shadow|enforce` intersect to
-select a cohort; without filters the report uses all drains and modes from
-the last 30 days. Both output formats identify that selection and report
+select a cohort; without filters the report uses the newest 5000 forecasts
+of every drain and mode, whatever their age, and `--last <N>` the newest
+`N` (alone or with the other selectors). Both output formats identify that selection and report
 time. Only fully ended target minutes with measurements form error pairs.
 `pending` counts future/incomplete minutes, even with a partial measured row;
 `missing` counts ended minutes with no row. `missing` splits into `unsampled`

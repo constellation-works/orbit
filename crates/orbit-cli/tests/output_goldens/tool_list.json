@@ -254,7 +254,7 @@
       },
       {
         "name": "window",
-        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach). Default: 30d.",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach), or over the newest delivery attempts the scan holds: last50, last200 or last500. Default: 30d.",
         "param_type": "string",
         "required": false
       },
@@ -318,7 +318,7 @@
       },
       {
         "name": "window",
-        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach). Default: 30d.",
+        "description": "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach), or over the newest delivery attempts the scan holds: last50, last200 or last500. Default: 30d.",
         "param_type": "string",
         "required": false
       },

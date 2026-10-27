@@ -16,12 +16,14 @@ use std::time::{Duration, Instant, SystemTime};
 use chrono::{DateTime, Utc};
 use orbit_common::storage::blob_sweep::{self, AuditBlobRoot, SweepEntry, SweepOutcome};
 use orbit_store::contracts::{
-    AuditRetentionTable, JournalRetentionCandidates, ResourceMinutesTable,
+    AuditRetentionTable, JournalRetentionCandidates, ResourceHistoryKeep, ResourceMinutesTable,
     ResourceUsageStoreBackend, RetentionIdSource, RetentionSelection, RetentionWorkspaceScope,
     StoreRetentionBackend, StoreSpace,
 };
 use serde::Serialize;
 
+use crate::runtime::host_resource::accuracy::ACCURACY_FORECASTS_KEPT;
+use crate::runtime::host_resource::profile::RESOURCE_HISTORY_DELIVERIES_PER_KEY;
 use crate::{OrbitError, OrbitRuntime};
 
 /// Rows one retention write transaction deletes or archives at most.
@@ -29,8 +31,10 @@ const RETENTION_BATCH_ROWS: usize = 1_000;
 /// Pause between batches, so a queued writer gets the lock.
 const BATCH_PAUSE: Duration = Duration::from_millis(20);
 /// Per-minute run and host resource history, and the admission forecasts
-/// checked against it, are kept this long, whatever the configured windows:
-/// profiles and the accuracy report read the last 30 days.
+/// checked against it, are kept at least this long. Older rows stay while
+/// they belong to the newest deliveries of their profile key or the newest
+/// forecasts ([`ResourceHistoryKeep`]), so a break never empties the history
+/// profiles and the accuracy report read.
 pub const RESOURCE_MINUTES_RETENTION_DAYS: u32 = 30;
 /// A blob written or reused this recently is never swept, whatever the
 /// reference scan saw: it covers a write published while the scan ran.
@@ -115,6 +119,10 @@ pub struct AuditGcReport {
 pub struct ResourceMinutesRetentionReport {
     pub table: &'static str,
     pub retention_days: u32,
+    /// Older rows stay while they belong to this many newest deliveries of
+    /// each profile key (run minutes) or newest forecasts (forecasts and the
+    /// host minutes they pair with).
+    pub kept_newest: usize,
     pub rows: u64,
     pub rows_removed: u64,
 }
@@ -290,7 +298,8 @@ impl OrbitRuntime {
     /// `retention.runs_days`; both require at least 30 days for reliability
     /// dedupe and forecast-accuracy limiter shares. The host's per-minute resource
     /// history and admission forecasts older than
-    /// [`RESOURCE_MINUTES_RETENTION_DAYS`] go in the same pass.
+    /// [`RESOURCE_MINUTES_RETENTION_DAYS`] go in the same pass, except the
+    /// newest deliveries of each profile key and the newest forecasts.
     pub fn gc_runs(
         &self,
         apply: bool,
@@ -329,16 +338,27 @@ impl OrbitRuntime {
             0
         };
         let resource_cutoff = cutoff_for(RESOURCE_MINUTES_RETENTION_DAYS)?;
+        let keep = ResourceHistoryKeep {
+            deliveries_per_key: usize::try_from(self.auto_concurrency_settings().profile_window)
+                .unwrap_or(usize::MAX)
+                .max(RESOURCE_HISTORY_DELIVERIES_PER_KEY),
+            forecasts: ACCURACY_FORECASTS_KEPT,
+        };
         let mut resource_minutes = Vec::new();
         for table in [
             ResourceMinutesTable::Run,
             ResourceMinutesTable::Host,
             ResourceMinutesTable::AdmissionForecast,
         ] {
-            let rows = store.resource_minutes_older_than(table, resource_cutoff)?;
+            let rows = store.resource_minutes_older_than(table, resource_cutoff, keep)?;
             let rows_removed = if apply && rows > 0 {
                 run_batches(&mut writes, || {
-                    store.prune_resource_minutes_batch(table, resource_cutoff, RETENTION_BATCH_ROWS)
+                    store.prune_resource_minutes_batch(
+                        table,
+                        resource_cutoff,
+                        keep,
+                        RETENTION_BATCH_ROWS,
+                    )
                 })?
             } else {
                 0
@@ -346,6 +366,12 @@ impl OrbitRuntime {
             resource_minutes.push(ResourceMinutesRetentionReport {
                 table: table.table_name(),
                 retention_days: RESOURCE_MINUTES_RETENTION_DAYS,
+                kept_newest: match table {
+                    ResourceMinutesTable::Run => keep.deliveries_per_key,
+                    ResourceMinutesTable::Host | ResourceMinutesTable::AdmissionForecast => {
+                        keep.forecasts
+                    }
+                },
                 rows,
                 rows_removed,
             });

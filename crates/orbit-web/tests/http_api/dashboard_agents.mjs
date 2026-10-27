@@ -135,7 +135,7 @@ for (const role of ROLES) {
 const layout = make('main', 'agents-main', panes.analytics);
 for (const id of ['agents-title', 'agents-count', 'agents-meta', 'agents-body']) make('div', id, layout);
 const windows = make('div', 'agents-window-selector', layout);
-for (const value of ['1h', '24h', '7d', '30d', 'all']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
+for (const value of ['last50', 'last200', 'last500', '1h', '24h', '7d', '30d', 'all']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
 
 const document = {
   activeElement: null,
@@ -257,6 +257,13 @@ common.setWindow('30d');
 await settle();
 agents.wireAgentControls();
 assert.equal(agents.getAgentsRole(), 'orchestrators', 'Orchestrators is the default role');
+// The panel opens on its own count window; a calendar tab hands it back to
+// the shared window.
+assert.equal(windows.dataset.panelWindow, 'last200', 'the panel defaults to the newest 200 delivery attempts');
+const thirtyDays = windows.children.find(tab => tab.dataset.window === '30d');
+thirtyDays.closest = () => thirtyDays;
+for (const listener of windows.listeners.click) listener({ target: thirtyDays });
+assert.equal(windows.dataset.panelWindow, '', 'a calendar tab leaves the count window');
 
 // One refresh reads the role's scorecard and the attribution strip together,
 // and every other role's scorecard for its tab count.

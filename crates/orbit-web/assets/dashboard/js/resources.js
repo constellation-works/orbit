@@ -9,7 +9,10 @@
 // view shows the usual placeholder rather than merging workspaces.
 //
 // View state (work class, units, hidden series, hover minute) is local and
-// re-renders from the cached payload without a fetch. CPU, memory and the
+// re-renders from the cached payload without a fetch. The history selector
+// is counted in deliveries, not days, and refetches: the default is the
+// window admission prices with (`profile_window`), and `Last 200` or `All
+// kept` profile more of each key's retained deliveries without changing it. CPU, memory and the
 // still-running strip share one x-axis and one hover cursor.
 
 import {
@@ -49,8 +52,11 @@ const BASE_CLASSES = [
 ];
 const TEMPLATE_PREFIX = "auto-task:";
 const UNITS = [["abs", "Cores · GiB"], ["pct", "% of host"]];
+// Deliveries per profile: `null` is admission's own `profile_window`.
+const HISTORIES = [[null, null], ["200", "Last 200"], ["all", "All kept"]];
 
 const view = {
+  last: null,
   workClass: null,
   unit: "abs",
   hidden: {},
@@ -81,7 +87,8 @@ export function fetchAndRenderResources() {
     requestScope = `${revision}`;
     clearResources();
   }
-  return requestPanel(BODY, ENDPOINT, () => fetchJson(ENDPOINT), (payload) => {
+  const path = view.last ? `${ENDPOINT}?last=${encodeURIComponent(view.last)}` : ENDPOINT;
+  return requestPanel(BODY, path, () => fetchJson(path), (payload) => {
     if (getWorkspaceRevision() !== revision) return;
     lastPayload = payload;
     renderResources();
@@ -244,8 +251,9 @@ function emptySection() {
   return el("section", { class: "mx-card rp-card", "aria-label": "Resource profiles" }, [
     el("div", { class: "mx-empty" }, [
       el("div", { class: "mx-empty-title", text: "No resource profiles on this host for this workspace yet" }),
-      el("div", { class: "mx-empty-detail", text: `A profile is learned from the CPU and memory each delivery's workers recorded on this host. It appears once a delivery the drain admitted here finishes; each covers the last ${p.profile_window} completed deliveries of its kind within 30 days.` }),
+      el("div", { class: "mx-empty-detail", text: `A profile is learned from the CPU and memory each delivery's workers recorded on this host. It appears once a delivery the drain admitted here finishes; each covers the last ${p.profile_window} completed deliveries of its kind, whatever their age.` }),
     ]),
+    el("div", { class: "rp-head" }, [historyPicker()]),
     metaLine(),
   ]);
 }
@@ -262,6 +270,7 @@ function profileSection() {
   return el("section", { class: "mx-card rp-card", "aria-label": "Resource profiles" }, [
     el("div", { class: "rp-head" }, [
       classPicker(classes, workClass),
+      historyPicker(),
       unitPicker(),
     ]),
     el("p", { class: "mx-blurb", text: "What one delivery costs on this host, minute by minute since the drain admitted it: the curves admission forecasts with. Each minute averages the deliveries still running then, so the tail reflects only long runs." }),
@@ -290,6 +299,36 @@ function classPicker(classes, current) {
       view.hover = null;
       rerender();
       focusIn(`.rp-classes [data-work-class="${CSS.escape(entry.key)}"]`);
+    });
+    return button;
+  }));
+}
+
+/// Deliveries per profile, counted rather than dated: a month without
+/// deliveries leaves every choice as it was.
+function historyPicker() {
+  const window = lastPayload.profile_window;
+  const options = HISTORIES
+    .map(([key, text]) => [key, text || `Last ${window}`])
+    .filter(([key]) => key == null || key !== String(window));
+  const current = lastPayload.last ?? null;
+  return el("div", { class: "mx-seg rp-history", role: "group", "aria-label": "Deliveries per profile" }, options.map(([key, text]) => {
+    const on = key === current;
+    const button = el("button", {
+      class: on ? "mx-seg-btn on" : "mx-seg-btn",
+      type: "button",
+      text,
+      "aria-pressed": on ? "true" : "false",
+      title: key == null
+        ? `The last ${window} deliveries of each kind: the window admission prices with`
+        : (key === "all" ? "Every delivery of each kind this host keeps" : `The last ${key} deliveries of each kind`),
+    });
+    button.dataset.history = key ?? "window";
+    button.addEventListener("click", () => {
+      if (view.last === key) return;
+      view.last = key;
+      view.hover = null;
+      fetchAndRenderResources();
     });
     return button;
   }));
@@ -617,7 +656,7 @@ function profileTable(all, u) {
       el("th", { scope: "row" }, [
         el("span", { class: `rp-row-name rp-s-${series.key}` }, [el("span", { class: "mx-swatch", "aria-hidden": "true" }), series.label]),
       ]),
-      el("td", { class: "num", text: `${series.deliveries}${series.sparse ? " (sparse)" : ""}` }),
+      el("td", { class: "num", text: `${series.deliveries}${series.sparse ? " (sparse)" : ""}`, title: regimeTitle(p) }),
       el("td", { class: "num", text: `${series.horizon}m` }),
       el("td", { class: "num", text: `${u.cpuText(peakCpu.value)} @ +${peakCpu.minute ?? 0}m` }),
       el("td", { class: "num", text: `${u.memText(peakMem.value)} @ +${peakMem.minute ?? 0}m` }),
@@ -634,11 +673,22 @@ function profileTable(all, u) {
   ]);
 }
 
+/// Which regime a profile's window follows, and what an earlier one added
+/// or lost.
+function regimeTitle(profile) {
+  const regime = profile.regime || {};
+  const parts = [`crew model ${regime.crew_model || "unrecorded"}`, `Orbit ${regime.orbit_version || "unrecorded"}`];
+  if (profile.prior_regime_deliveries) parts.push(`${profile.prior_regime_deliveries} from an earlier regime top it up to the minimum`);
+  if (profile.excluded_prior_regime) parts.push(`${profile.excluded_prior_regime} earlier-regime deliveries left out`);
+  return parts.join(" · ");
+}
+
 function metaLine() {
   const p = lastPayload;
+  const window = p.last == null ? p.profile_window : (p.last === "all" ? "every kept" : p.last);
   const parts = [
     `built ${formatDateTime(p.built_at)}`,
-    `each profile: last ${p.profile_window} completed deliveries of its kind within 30 days`,
+    `each profile: last ${window} completed deliveries of its kind under its newest crew model and Orbit version, whatever their age`,
     `sparse below ${p.min_profile_deliveries}`,
     p.host ? hostText(p.host) : "host size unavailable",
     `admit at ${p.admit_cpu_percent}% cpu · ${p.admit_memory_percent}% memory`,

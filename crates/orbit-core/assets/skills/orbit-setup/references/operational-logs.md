@@ -147,7 +147,8 @@ orbit config show
 
 Profiles summarize per-delivery CPU and memory by workspace, work class and
 complexity on this host; `auto-task:<template>` profiles omit complexity.
-They use recent completed deliveries from the last 30 days, excluding resumed
+They use each key's last `profile_window` completed deliveries, whatever their
+age, under the newest crew model and Orbit version, excluding resumed
 or retried deliveries. Sparse keys fall back to broader profiles; inspect
 sample counts and spread before drawing conclusions. `BUILD_FLAG` identifies
 no-diff work using more than one core for two consecutive minutes, with its

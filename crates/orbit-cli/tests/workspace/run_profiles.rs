@@ -404,12 +404,23 @@ fn accuracy_selects_a_cohort_and_rejects_invalid_selectors_without_mutation() {
     let legacy: Value =
         serde_json::from_str(&fixture.stdout(&["run", "profiles", "--accuracy", "--json"]))
             .unwrap();
-    assert_eq!(legacy["forecasts"], 5);
+    // The default reads the newest forecasts whatever their age, so the one
+    // older than 30 days counts and the effective since is its time.
+    assert_eq!(legacy["forecasts"], 6);
     assert_eq!(legacy["selection"]["drain"], Value::Null);
     assert_eq!(legacy["selection"]["mode"], Value::Null);
-    let report_at: DateTime<Utc> = legacy["report_at"].as_str().unwrap().parse().unwrap();
     let lower: DateTime<Utc> = legacy["since"].as_str().unwrap().parse().unwrap();
-    assert_eq!(report_at - lower, chrono::Duration::days(30));
+    assert_eq!(lower, since - chrono::Duration::days(31));
+    let newest: Value = serde_json::from_str(&fixture.stdout(&[
+        "run",
+        "profiles",
+        "--accuracy",
+        "--last",
+        "2",
+        "--json",
+    ]))
+    .unwrap();
+    assert_eq!(newest["forecasts"], 2, "{newest:#}");
     for selectors in [
         vec!["--drain", "jrun-absent"],
         vec!["--since", "2999-01-01T00:00:00Z"],

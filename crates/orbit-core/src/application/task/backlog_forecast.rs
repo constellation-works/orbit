@@ -32,6 +32,12 @@
 //!   size and baseline [ORB-18689] (`resource_fit.rs`). The ceiling stays the
 //!   upper bound; gap fit only holds work below it.
 //!
+//! - The lookback is counted in tasks as well as days: it reaches back past
+//!   its days to the newest [`MIN_HISTORY_TASKS`] completions, so a month
+//!   without deliveries never leaves the forecast without history.
+//!   `history_tasks` instead selects the newest N completions, whatever
+//!   their age.
+//!
 //! The canonical forecast (default lookback, the live ceiling, no arrivals)
 //! is stored at most once per workspace per [`STORE_INTERVAL_MINUTES`], and
 //! the owner clock records it even without reads; every request scores the
@@ -68,6 +74,11 @@ use review_modes::{ReviewHistory, ReviewMode};
 const DEFAULT_LOOKBACK_DAYS: i64 = 30;
 const MIN_LOOKBACK_DAYS: i64 = 7;
 const MAX_LOOKBACK_DAYS: i64 = 180;
+/// The default lookback reaches back past its days to at least this many
+/// completed deliveries.
+const MIN_HISTORY_TASKS: usize = 50;
+/// The most completed deliveries `history_tasks` may select.
+const MAX_HISTORY_TASKS: usize = 5_000;
 /// The most leaf runs a request may simulate.
 const MAX_CONCURRENCY: u32 = 64;
 /// Days the arrival rate is measured over.
@@ -95,6 +106,9 @@ const SWEEP_TAGS: [&str; 7] = [
 
 struct Options {
     lookback_days: i64,
+    /// History is the newest this many completions, whatever their age,
+    /// instead of `lookback_days`.
+    history_tasks: Option<usize>,
     concurrency: Option<u32>,
     arrivals: bool,
 }
@@ -103,17 +117,43 @@ impl Options {
     /// Only the canonical forecast is stored, so calibration compares like
     /// with like.
     fn canonical(&self) -> bool {
-        self.lookback_days == DEFAULT_LOOKBACK_DAYS && self.concurrency.is_none() && !self.arrivals
+        self.lookback_days == DEFAULT_LOOKBACK_DAYS
+            && self.history_tasks.is_none()
+            && self.concurrency.is_none()
+            && !self.arrivals
     }
 }
 
+/// How far back delivery history reaches. The default is the canonical
+/// lookback.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BacklogForecastHistory {
+    /// Completions in the last this many days (7–180, default 30), and at
+    /// least the newest 50.
+    pub lookback_days: Option<i64>,
+    /// Only the newest this many completions (1–5000), whatever their age.
+    pub history_tasks: Option<usize>,
+}
+
 fn parse_options(
-    lookback_days: Option<i64>,
+    history: BacklogForecastHistory,
     concurrency: Option<u32>,
     arrivals: Option<&str>,
 ) -> Result<Options, OrbitError> {
     let invalid = |message: String| OrbitError::InvalidInput(message);
-    let lookback_days = lookback_days.unwrap_or(DEFAULT_LOOKBACK_DAYS);
+    if history.lookback_days.is_some() && history.history_tasks.is_some() {
+        return Err(invalid(
+            "lookback_days and history_tasks are alternatives: give one".to_string(),
+        ));
+    }
+    if let Some(tasks) = history.history_tasks
+        && !(1..=MAX_HISTORY_TASKS).contains(&tasks)
+    {
+        return Err(invalid(format!(
+            "history_tasks must be between 1 and {MAX_HISTORY_TASKS}"
+        )));
+    }
+    let lookback_days = history.lookback_days.unwrap_or(DEFAULT_LOOKBACK_DAYS);
     if !(MIN_LOOKBACK_DAYS..=MAX_LOOKBACK_DAYS).contains(&lookback_days) {
         return Err(invalid(format!(
             "lookback_days must be between {MIN_LOOKBACK_DAYS} and {MAX_LOOKBACK_DAYS}"
@@ -137,6 +177,7 @@ fn parse_options(
     };
     Ok(Options {
         lookback_days,
+        history_tasks: history.history_tasks,
         concurrency,
         arrivals,
     })
@@ -306,7 +347,12 @@ fn calculate_backlog_forecast(
     now: DateTime<Utc>,
 ) -> Result<Value, OrbitError> {
     let preparation_started = std::time::Instant::now();
-    let lookback_start = now - Duration::days(options.lookback_days);
+    // A day lookback, unless history is counted in tasks alone.
+    let day_start = options
+        .history_tasks
+        .is_none()
+        .then(|| now - Duration::days(options.lookback_days));
+    let min_history = options.history_tasks.unwrap_or(MIN_HISTORY_TASKS);
     let arrival_start = now - Duration::days(ARRIVAL_DAYS);
     let tasks: HashMap<String, Task> = runtime
         .list_task_metadata()?
@@ -331,12 +377,12 @@ fn calculate_backlog_forecast(
     }
     stored.sort_by_key(|row| std::cmp::Reverse(row.forecast_at));
     let oldest_forecast = stored.iter().map(|forecast| forecast.forecast_at).min();
-    let transitions_since = [Some(lookback_start), Some(arrival_start), oldest_forecast]
+    let transitions_since = [day_start, Some(arrival_start), oldest_forecast]
         .into_iter()
         .flatten()
         .min();
     let mut done_at: HashMap<String, DateTime<Utc>> = HashMap::new();
-    let mut history_rows = Vec::new();
+    let mut completions = Vec::new();
     let mut histories: HashMap<String, Option<Vec<TaskHistoryEntry>>> = HashMap::new();
     // The index dates terminal rows by updated_at, which later comments or
     // artifacts can advance. Use it only to narrow candidates: an actual
@@ -344,26 +390,81 @@ fn calculate_backlog_forecast(
     // event log once, using the latest entry into done (including creation
     // in done) for both history membership and calibration. Never substitute
     // mutable metadata when an older task has no recorded done event.
+    let completed_at = |runtime: &OrbitRuntime,
+                        histories: &mut HashMap<String, Option<Vec<TaskHistoryEntry>>>,
+                        task_id: &str| {
+        cached_history(runtime, histories, task_id).and_then(|task_history| {
+            task_history
+                .iter()
+                .rev()
+                .find(|entry| entry.to_status == Some(TaskStatus::Done))
+                .map(|entry| entry.at)
+        })
+    };
     for row in runtime
         .task_terminal_transitions(transitions_since)?
         .into_iter()
         .filter(|row| row.status == TaskStatus::Done)
     {
-        let Some(task_history) = cached_history(runtime, &mut histories, &row.task_id) else {
-            continue;
-        };
-        let completed_at = task_history
-            .iter()
-            .rev()
-            .find(|entry| entry.to_status == Some(TaskStatus::Done))
-            .map(|entry| entry.at);
-        if let Some(at) = completed_at {
+        if let Some(at) = completed_at(runtime, &mut histories, &row.task_id) {
             done_at.insert(row.task_id.clone(), at);
-            if at >= lookback_start {
-                history_rows.push(row);
+            completions.push((at, row));
+        }
+    }
+    // Count floor: too few completions inside the day lookback (or a task
+    // count was asked for) reaches back, newest first, until the newest
+    // `min_history` completions are known. Rows dated before the
+    // `min_history`-th newest completion cannot complete after it, so the
+    // walk stops there.
+    let in_days = completions
+        .iter()
+        .filter(|(at, _)| day_start.is_none_or(|start| *at >= start))
+        .count();
+    if in_days < min_history {
+        let mut older: Vec<_> = runtime
+            .task_terminal_transitions(None)?
+            .into_iter()
+            .filter(|row| {
+                row.status == TaskStatus::Done
+                    && transitions_since.is_some_and(|since| row.at < since)
+            })
+            .collect();
+        older.sort_by_key(|row| std::cmp::Reverse(row.at));
+        for row in older {
+            let mut newest: Vec<DateTime<Utc>> = completions.iter().map(|(at, _)| *at).collect();
+            newest.sort_unstable_by_key(|at| std::cmp::Reverse(*at));
+            if newest.get(min_history - 1).is_some_and(|nth| row.at < *nth) {
+                break;
+            }
+            if let Some(at) = completed_at(runtime, &mut histories, &row.task_id) {
+                done_at.insert(row.task_id.clone(), at);
+                completions.push((at, row));
             }
         }
     }
+    completions.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    let counted_start = completions
+        .get(min_history.min(completions.len()).saturating_sub(1))
+        .map(|(at, _)| *at);
+    let lookback_start = match (day_start, counted_start) {
+        // Too few completions in the days: reach back to the counted ones.
+        (Some(days), Some(counted)) if in_days < min_history => days.min(counted),
+        (Some(days), _) => days,
+        (None, Some(counted)) => counted,
+        (None, None) => now - Duration::days(DEFAULT_LOOKBACK_DAYS),
+    };
+    let mut history_rows: Vec<_> = completions
+        .into_iter()
+        .filter(|(at, _)| *at >= lookback_start)
+        .map(|(_, row)| row)
+        .collect();
+    if let Some(tasks) = options.history_tasks {
+        history_rows.truncate(tasks);
+    }
+    // Index order, oldest first, as the day lookback has always read them.
+    history_rows.sort_by_key(|row| row.at);
+    // The span the lookback covers, which the return window extends.
+    let lookback_days = (now - lookback_start).num_days().max(1);
 
     // Attempts and returns come from status history. Returns are observed
     // from 90 days before the lookback, so a recent lookback need not prove
@@ -922,6 +1023,8 @@ fn calculate_backlog_forecast(
     let inputs = json!({
         "lookback_days": options.lookback_days,
         "lookback_start": lookback_start.to_rfc3339(),
+        "history_tasks": options.history_tasks,
+        "min_history_tasks": min_history,
         "concurrency": concurrency,
         "concurrency_source": concurrency_source,
         "auto_concurrency_mode": runtime.auto_concurrency_settings().mode,
@@ -948,7 +1051,7 @@ fn calculate_backlog_forecast(
                 counts
             }),
             "live_episodes": live_episodes,
-            "return_window_days": options.lookback_days + outcomes::RETURN_WINDOW_DAYS,
+            "return_window_days": lookback_days + outcomes::RETURN_WINDOW_DAYS,
             "return_horizon_hours": RETURN_HORIZON_HOURS,
             "returns": {
                 "waits": waits.len(),
@@ -1133,17 +1236,19 @@ fn calculate_backlog_forecast(
 impl OrbitRuntime {
     /// Forecast this workspace's backlog and score earlier stored forecasts.
     ///
-    /// Defaults use 30 days of history, the live drain ceiling and no arrivals.
-    /// Canonical reads may record a snapshot when the hourly slot is free.
-    /// Lookbacks outside 7–180 days, concurrency outside 1–64 and arrivals
-    /// other than `on` or `off` are invalid inputs.
+    /// Defaults use 30 days of history, reaching back to at least the newest
+    /// 50 completions, the live drain ceiling and no arrivals. Canonical
+    /// reads may record a snapshot when the hourly slot is free. Lookbacks
+    /// outside 7–180 days, history counts outside 1–5000, both together,
+    /// concurrency outside 1–64 and arrivals other than `on` or `off` are
+    /// invalid inputs.
     pub fn backlog_forecast(
         &self,
-        lookback_days: Option<i64>,
+        history: BacklogForecastHistory,
         concurrency: Option<u32>,
         arrivals: Option<&str>,
     ) -> Result<Value, OrbitError> {
-        let options = parse_options(lookback_days, concurrency, arrivals)?;
+        let options = parse_options(history, concurrency, arrivals)?;
         calculate_backlog_forecast(self, &options, Utc::now())
     }
 
@@ -1173,7 +1278,7 @@ impl OrbitRuntime {
         }) {
             return Ok(());
         }
-        let options = parse_options(None, None, None)?;
+        let options = parse_options(BacklogForecastHistory::default(), None, None)?;
         calculate_backlog_forecast(self, &options, now)?;
         Ok(())
     }
