@@ -46,11 +46,13 @@ impl PatternRedactor {
                 r#""authorization":"[REDACTED_AUTH]""#,
             ),
             (
-                Regex::new(r#"(?i)"x-api-key"\s*:\s*"[^"]*""#).expect("valid regex"),
+                Regex::new(r#"(?i)"x-api-key"\s*:\s*"(?:\\[^\r\n]|[^"\\\r\n])*""#)
+                    .expect("valid regex"),
                 r#""x-api-key":"[REDACTED_AUTH]""#,
             ),
             (
-                Regex::new(r#"(?i)"api[_-]?key"\s*:\s*"[^"]*""#).expect("valid regex"),
+                Regex::new(r#"(?i)"api[_-]?key"\s*:\s*"(?:\\[^\r\n]|[^"\\\r\n])*""#)
+                    .expect("valid regex"),
                 r#""api_key":"[REDACTED_AUTH]""#,
             ),
             // Same-line API-key assignments (`key=value` / `key: value`),
@@ -61,14 +63,28 @@ impl PatternRedactor {
             // readable. An empty value has nothing to mask.
             (
                 Regex::new(
-                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?\s*[:=]\s*["'])(?:\[REDACTED[A-Z_]+\]|[^"'\r\n]+)(["'])"#,
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?\s*[:=]\s*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]${4}",
             ),
             (
                 Regex::new(
-                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?\s*[:=]\s*["'])(?:\[REDACTED[A-Z_]+\]|[^"'\r\n]+)(["'])"#,
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?\s*[:=]\s*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${4}",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?\s*[:=]\s*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${3}",
+            ),
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?\s*[:=]\s*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]${3}",
