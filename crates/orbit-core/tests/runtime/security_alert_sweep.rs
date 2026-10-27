@@ -6,7 +6,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_tools::ToolContext;
-use orbit_types::task::{CodeScanningAlertEvidence, TaskDecision, TaskRelationType};
+use orbit_types::task::{CodeScanningAlertEvidence, TaskDecision, TaskRelation, TaskRelationType};
 use serde_json::{Value, json};
 
 fn fixture(global: Option<&str>, workspace: Option<&str>) -> (tempfile::TempDir, OrbitRuntime) {
@@ -522,6 +522,76 @@ fn rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling() {
     assert_eq!(refiled["filed_count"], 1, "{refiled}");
 }
 
+fn rejected_source_uses_supersedes_before_legacy_consolidation_comments() {
+    for (typed, terminal) in [(true, false), (true, true), (false, false)] {
+        let (root, runtime) = fixture(None, None);
+        let snapshot = || code_snapshot(484, "rust/cleartext-logging", "crates/a/src/lib.rs");
+        let first = file(&runtime, snapshot(), None);
+        let source_id = first["filed"][0]["task_id"].as_str().unwrap();
+        let decoy = runtime
+            .add_task(TaskAddParams {
+                title: "Unrelated repair".to_string(),
+                complexity: TaskComplexity::Medium,
+                ..Default::default()
+            })
+            .unwrap();
+        // No copied exact tag or matching prose: only the inbound relation
+        // (or the old consolidation comment) can identify this owner.
+        let owner = runtime
+            .add_task(TaskAddParams {
+                title: "Replacement repair".to_string(),
+                complexity: TaskComplexity::Medium,
+                relations: if typed {
+                    vec![TaskRelation {
+                        relation_type: TaskRelationType::Supersedes,
+                        target: source_id.to_string(),
+                        regression: None,
+                    }]
+                } else {
+                    Vec::new()
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        if terminal {
+            runtime
+                .reject_task(&owner.id, "No longer covers the alert".to_string(), None)
+                .unwrap();
+        }
+        let named_owner = if typed { &decoy.id } else { &owner.id };
+        runtime
+            .reject_task(
+                source_id,
+                format!("Consolidated into covering task {named_owner}"),
+                Some(format!(
+                    "Consolidated into covering task {named_owner}: the same rule, scanner message, and analysis cover every alert in that group, so one task now owns the shared repair. This task's per-alert evidence and dependencies were carried over."
+                )),
+            )
+            .unwrap();
+        assert!(runtime.get_task(source_id).unwrap().relations.is_empty());
+        // Open the persisted fixture again, including the legacy record with
+        // only the consolidation comment and no Supersedes relation.
+        drop(runtime);
+        let runtime = OrbitRuntime::from_roots(
+            &root.path().join("home/.orbit"),
+            &root.path().join("repo/.orbit"),
+        )
+        .unwrap();
+        let repeated = file(&runtime, snapshot(), None);
+        if terminal {
+            assert_eq!(repeated["filed_count"], 1, "{repeated}");
+            assert_eq!(repeated["skipped_existing"], json!([]), "{repeated}");
+        } else {
+            assert_eq!(repeated["filed_count"], 0, "{repeated}");
+            assert_eq!(repeated["skipped_existing"][0]["task_id"], owner.id);
+            assert_eq!(
+                repeated["skipped_existing"][0]["match_kind"],
+                "confirmed_duplicate"
+            );
+        }
+    }
+}
+
 fn typed_evidence(number: u64, line: u64) -> CodeScanningAlertEvidence {
     CodeScanningAlertEvidence {
         repository: "acme/orbit".to_string(),
@@ -978,5 +1048,6 @@ crate::scenario_table!(
     rejected_owner_distinguishes_punctuation_only_path_and_rule_changes,
     rejected_grouped_owner_refills_alert_moved_onto_a_sibling_location,
     rejection_naming_a_covering_task_does_not_suppress_code_scanning_refiling,
+    rejected_source_uses_supersedes_before_legacy_consolidation_comments,
     typed_code_scanning_evidence_consolidates_despite_edited_prose
 );
