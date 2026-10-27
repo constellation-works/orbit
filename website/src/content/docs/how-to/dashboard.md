@@ -165,7 +165,7 @@ prove that a particular task or run succeeded.
 | **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the auto-drain card, a simple **Start a window** card, the locks held and a live log; an open task takes its place. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
-| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, and **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**). See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
+| **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
 | **Automation** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Jobs**. |
 | **Knowledge** | Friction records. |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
@@ -987,6 +987,77 @@ priced implementation. Cost only places tasks in tiers; it is never scored.
 With **all** selected, Agents covers the last 90 days. From a terminal,
 `orbit agents scorecard --role <role>` prints the same ranking and
 `orbit agents show --role <role> --crew <crew>` one row's tasks.
+
+### Experiments
+
+Open **Experiments** (`#analytics/experiments`) to watch the experiments
+running in the selected workspace: which arm each enrolled task drew, how
+close each arm is to its minimum sample, and what the readout says so far.
+Experiments are per workspace, so **All workspaces** shows the usual
+placeholder asking you to select one. Define, start, pause, and reweight
+experiments from a terminal; this view reads them and, for an operator,
+concludes one. See [Run an experiment](../experiments/).
+
+The list sorts running first, then paused, draft, concluded, and
+abandoned, newest first within a status. Each entry shows the hypothesis,
+status and mode badges (`shadow` assigns and applies nothing), the current
+segment, the primary metric, `min <n> per arm` and `max <n> days` when set,
+and one progress bar per arm: enrolled tasks toward the minimum sample,
+with the current segment's enrollment in the bar's tooltip. Forced
+assignments left out of the readout and tasks excluded for a surface
+conflict are counted under the bars, and a concluded experiment names the
+arm it concluded with. With no experiments, the view says so and names
+`orbit experiment create`.
+
+Open one experiment (`#analytics/experiments/<id>`) for its detail. The
+header gives status, mode, segment, primary metric, minimum sample, when
+it started, its horizon (`max_days` after start), and the readout's
+as-of time, with the verdict badge — `collecting`, `no verdict`,
+`winner <arm>`, `no difference`, or `inconclusive` — and the reasons
+behind it. A concluded experiment links its promotion task from the
+header when concluding filed one.
+
+Below the header:
+
+- **Health** lists the readout's warnings, or says there are none: arm
+  counts that do not match the weights (sample ratio), an arm that
+  received more than one overlay digest (drift), outcomes still open, and
+  a primary metric with no source series yet. Its margin counts tasks
+  still in flight and landed tasks still inside the 14-day regression
+  window, and forced assignments left out of every estimate are added as
+  their own warning.
+- **Arms** has one card per arm with its weight, the primary metric's mean
+  and 95% interval, `n` with settled and open counts, each guardrail's
+  status (`ok`, `breached`, `straddles`, or `unknown`), a `drifted` tag
+  when the arm's digest changed, and its standing against the verdict.
+- **Difference from control** is a forest plot: one row per treatment arm
+  and measured metric, the dot the difference from control and the bar
+  its 95% interval, post-stratified by complexity, each metric on its own
+  scale around zero. A bar that crosses zero is a difference the sample
+  cannot tell from none. Metrics with no source series are listed as not
+  measured yet.
+- **Cumulative primary metric** draws each arm's cumulative mean over
+  settled tasks by assignment bucket; **By complexity** tables the
+  primary metric's difference within each complexity, with both arms'
+  counts; **Crew mix** shows the implementing crew per arm, which balances
+  only in expectation because the crew draw is independent of the arm.
+- **Timeline** lists every event in order — created, edited, cloned,
+  started, paused, resumed, reweighted, arm retired, concluded,
+  abandoned — with its time, segment, actor, reason, and, for a
+  conclusion, the chosen arm, the readout snapshot's verdict, and the
+  promotion task when one was filed.
+
+An unknown experiment ID shows "Experiment not found" with the server's
+message and a link back to the list, not a blank panel.
+
+With an [operator session](#authorization), a running or paused
+experiment also shows a **Conclude** card: pick the winning arm (or **No
+winner**), give a reason — the button refuses an empty one — and submit.
+Choosing an arm files one proposed task to make that arm's overlay the
+default; no winner files nothing. Concluding changes no configuration or
+repository file, and the card says so. Without operator authority, or
+once the experiment has concluded or been abandoned, the card is absent
+and the view is read-only.
 
 ## Automation
 

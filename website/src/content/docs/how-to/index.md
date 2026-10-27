@@ -50,6 +50,10 @@ agent can do most of them for you with the bundled `orbit-setup` or
     <h3>Write an Activity</h3>
     <p>Define your own agent or deterministic step in activity YAML.</p>
   </a>
+  <a class="orbit-card" href="./experiments/">
+    <h3>Run an Experiment</h3>
+    <p>Compare control and treatment arms, read intervals and the verdict, and conclude without changing configuration automatically.</p>
+  </a>
 </div>
 
 ## Operate
