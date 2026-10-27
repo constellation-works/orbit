@@ -110,7 +110,7 @@ impl Store {
         let conn = self.read()?;
         for chunk in run_ids.chunks(AUDIT_RUN_ID_CHUNK) {
             let (where_clause, mut params) =
-                run_ids_filter_sql(workspace_id, chunk, source, body_kind, false);
+                run_ids_filter_sql(workspace_id, chunk, source, body_kind, true);
             let limit_idx = params.len() + 1;
             params.push(Box::new(per_run_limit as i64));
             let sql = format!(

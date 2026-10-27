@@ -31,7 +31,7 @@ pub(super) fn run_ids_filter_sql(
         params.push(Box::new(body_kind.to_string()));
     }
     if require_event_id {
-        conditions.push("json_extract(payload_json, '$.event_id') IS NOT NULL".to_string());
+        conditions.push("json_type(payload_json, '$.event_id') = 'text'".to_string());
     }
     let start = params.len() + 1;
     let placeholders = (0..run_ids.len())

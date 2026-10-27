@@ -511,3 +511,52 @@ fn older_envelope_proofs_are_reparsed_before_parent_selection() {
         .unwrap();
     assert_eq!(proofs[&child.id].fingerprint, rows[&child.id].fingerprint());
 }
+
+#[test]
+fn residual_continuation_counts_before_cursor_on_index_and_scan() {
+    if !allocation_admission_isolated(
+        "task_index::residual_continuation_counts_before_cursor_on_index_and_scan",
+    ) {
+        return;
+    }
+    let root = TempDir::new().unwrap();
+    let owner = Coordinated::open(root.path());
+    for title in ["keep one", "drop", "keep two"] {
+        owner.create_task(title);
+    }
+    let backend = &owner.backends.task.task;
+    for selective in [false, true] {
+        let predicate =
+            |task: &orbit_types::task::Task, _: &std::collections::BTreeMap<String, TaskStatus>| {
+                !selective || task.title.starts_with("keep")
+            };
+        let first = backend
+            .query_task_rows(&TaskListFilter::default(), 1, Some(&predicate))
+            .unwrap();
+        let row = &first.items[0].task;
+        let filter = TaskListFilter {
+            scan_before: Some((row.created_at, row.id.clone())),
+            ..Default::default()
+        };
+        let indexed = backend
+            .query_task_rows(&filter, 10, Some(&predicate))
+            .unwrap();
+        assert_eq!(indexed.total_without_cursor, if selective { 2 } else { 3 });
+        assert_eq!(indexed.total, indexed.total_without_cursor - 1);
+        let sql = rusqlite::Connection::open(task_registry_path(root.path())).unwrap();
+        sql.execute("UPDATE task_bundle_index SET updated_at = 'stale'", [])
+            .unwrap();
+        let scan = observer(root.path())
+            .task
+            .query_task_rows(&filter, 10, Some(&predicate))
+            .unwrap();
+        assert_eq!(
+            (scan.total, scan.total_without_cursor),
+            (indexed.total, indexed.total_without_cursor)
+        );
+        assert_eq!(
+            scan.items.iter().map(|r| &r.task.id).collect::<Vec<_>>(),
+            indexed.items.iter().map(|r| &r.task.id).collect::<Vec<_>>()
+        );
+    }
+}

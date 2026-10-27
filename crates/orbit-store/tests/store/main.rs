@@ -220,3 +220,5 @@ include!("store_readiness.rs");
 include!("store_retention.rs");
 include!("task_mutations.rs");
 include!("task_registry_ledger.rs");
+
+include!("v2_audit_presence.rs");

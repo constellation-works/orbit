@@ -315,3 +315,39 @@ fn cause_keys_are_stable_across_repeated_computation_and_input_order() {
             .all(|(_, key)| key.starts_with("cause-") && key.len() == 22)
     );
 }
+
+#[test]
+fn cluster_root_uses_earliest_timestamp_then_id() {
+    for tied in [false, true] {
+        let early = Row {
+            activity: Some("compile"),
+            ..Row::new("job worker", "run-root", 1, "runner crashed")
+        };
+        let late = Row {
+            activity: Some("guard"),
+            ..Row::new(
+                "job worker",
+                "run-root",
+                if tied { 1 } else { 2 },
+                "runner crashed",
+            )
+        };
+        let events = vec![event(1, &early), event(2, &late)];
+        let forward = group_failure_incidents(&events);
+        let reversed = group_failure_incidents(&events.into_iter().rev().collect::<Vec<_>>());
+        assert_eq!(forward.len(), 1);
+        assert_eq!(forward[0].activity_id.as_deref(), Some("compile"));
+        assert_eq!(forward[0].activity_id, reversed[0].activity_id);
+        assert_eq!(forward[0].message, reversed[0].message);
+        assert_eq!(forward[0].cause, reversed[0].cause);
+        assert_eq!(
+            (
+                forward[0].event_count,
+                forward[0].root_event_count,
+                forward[0].events.len()
+            ),
+            (2, 2, 2)
+        );
+        assert_eq!(forward[0].events, reversed[0].events);
+    }
+}
