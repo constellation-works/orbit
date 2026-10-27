@@ -74,6 +74,10 @@ include shared leaf occupancy, matching the workspace Drain card.
 
 The browser combines this endpoint across the serving host's registered hosts
 through `/api/on/<host>/fleet/drains`, with at most three requests in flight.
+Completed hosts are shown as partial results while outstanding hosts are
+marked `loading` (distinct from idle and unavailable); when a pending host
+succeeds or fails, only its rows update and ready rows and the selected
+workspace are preserved. Partial results are not cached as a fresh snapshot.
 A snapshot is kept for 60 seconds, longer than the dashboard's 30-second panel
 poll, and that poll paints the indicator from the snapshot instead of asking
 again. The snapshot is warmed once hosts are known and refreshed on its own

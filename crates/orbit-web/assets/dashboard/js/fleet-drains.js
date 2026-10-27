@@ -11,6 +11,24 @@ let cached = null;
 let pending = null;
 let cachedAt = 0;
 let cachedKey = '';
+let partialPayload = null;
+const partialListeners = new Set();
+
+function publishPartial(rows, sources) {
+  const items = [];
+  for (let index = 0; index < sources.length; index++) {
+    if (rows[index]) items.push(...rows[index]);
+    else items.push({ host: sources[index].name, phase: 'loading', pending: true });
+  }
+  partialPayload = { items };
+  for (const listener of [...partialListeners]) {
+    try { listener(partialPayload); } catch (error) { console.error(error); }
+  }
+}
+
+export function peekFleetPartial() {
+  return partialPayload;
+}
 
 function fleetSources() {
   const hosts = getRegisteredHosts();
@@ -29,14 +47,24 @@ export function peekFleetDrains() {
   return { payload: cached, fresh: Date.now() - cachedAt < FLEET_CACHE_MS };
 }
 
-export function fetchFleetDrains({ force = false } = {}) {
+export function fetchFleetDrains({ force = false, onPartial = null } = {}) {
   const sources = fleetSources();
   const key = fleetKey(sources);
-  if (!force && key === cachedKey && cached && Date.now() - cachedAt < FLEET_CACHE_MS) return Promise.resolve(cached);
-  if (key === cachedKey && pending) return pending;
-  if (key !== cachedKey) cached = null;
+  if (typeof onPartial === 'function') partialListeners.add(onPartial);
+  if (!force && key === cachedKey && cached && Date.now() - cachedAt < FLEET_CACHE_MS) {
+    if (typeof onPartial === 'function') partialListeners.delete(onPartial);
+    return Promise.resolve(cached);
+  }
+  if (key === cachedKey && pending) {
+    if (partialPayload && typeof onPartial === 'function') {
+      try { onPartial(partialPayload); } catch (error) { console.error(error); }
+    }
+    return pending;
+  }
+  if (key !== cachedKey) { cached = null; partialPayload = null; }
   cachedKey = key;
   const rows = new Array(sources.length);
+  publishPartial(rows, sources);
   let next = 0;
   const read = async () => {
     while (next < sources.length) {
@@ -50,6 +78,7 @@ export function fetchFleetDrains({ force = false } = {}) {
       } catch (error) {
         rows[index] = [{ host: host.name, phase: 'unavailable', error: error.message || 'Host unavailable' }];
       }
+      if (cachedKey === key) publishPartial(rows, sources);
     }
   };
   const request = Promise.all(Array.from({ length: Math.min(3, sources.length) }, read)).then(() => ({ items: rows.flat() }));
@@ -59,6 +88,8 @@ export function fetchFleetDrains({ force = false } = {}) {
       cached = payload;
       cachedAt = Date.now();
       pending = null;
+      partialPayload = null;
+      partialListeners.clear();
     }
     return payload;
   });
@@ -70,8 +101,10 @@ export function fleetDrainLabel(payload) {
   const draining = known.filter(row => ['draining', 'pulling'].includes(row.phase)).length;
   const winding = known.filter(row => row.phase === 'winding_down').length;
   const unavailable = rows.some(row => row.error);
+  const loading = rows.some(row => row.pending);
+  if (loading && !known.length && !unavailable) return 'Fleet loading…';
   if (unavailable && known.every(row => row.error)) return 'Fleet unavailable';
-  return `${draining ? `${draining} of ${known.length} workspaces draining` : winding ? `${winding} of ${known.length} workspaces winding down` : `Fleet idle · ${known.length} workspaces`}${unavailable ? ' · partial' : ''}`;
+  return `${draining ? `${draining} of ${known.length} workspaces draining` : winding ? `${winding} of ${known.length} workspaces winding down` : `Fleet idle · ${known.length} workspaces`}${unavailable ? ' · partial' : ''}${loading ? ' · loading' : ''}`;
 }
 
 const LIVE_PHASES = ['draining', 'pulling', 'winding_down'];
@@ -162,6 +195,13 @@ function unavailableRow(row) {
   return item;
 }
 
+function loadingRow(row) {
+  const item = el('li', { class: 'fleet-row fleet-loading' });
+  item.setAttribute('data-phase', 'loading');
+  item.append(field('phase', 'Phase', 'loading…', 'fleet-phase'));
+  return item;
+}
+
 // One group per host, in registry order. Live drains lead their group; the
 // rest keep the host's order (the sort is stable). Idle rows show a muted dot and slots only.
 export function renderFleetDrains(payload, selectScope) {
@@ -175,13 +215,15 @@ export function renderFleetDrains(payload, selectScope) {
   for (const [host, rows] of groups) {
     const isLive = row => Number(LIVE_PHASES.includes(row.phase));
     const ranked = [...rows].sort((a, b) => isLive(b) - isLive(a));
-    const known = rows.filter(row => row.workspace_id && !row.error);
+    const known = rows.filter(row => row.workspace_id && !row.error && !row.pending);
+    const loading = rows.some(row => row.pending);
     const live = known.filter(isLive).length;
-    const count = known.length ? `${known.length} workspace${known.length === 1 ? '' : 's'}${live ? ` · ${live} live` : ''}` : 'unavailable';
+    const count = known.length ? `${known.length} workspace${known.length === 1 ? '' : 's'}${live ? ` · ${live} live` : ''}${loading ? ' · loading' : ''}` : loading ? 'loading' : 'unavailable';
     const section = el('section', { class: 'fleet-host' });
-    section.append(el('h3', { class: 'fleet-host-name' }, [el('span', { text: host }), el('span', { class: known.length ? 'fleet-host-count' : 'fleet-host-count fleet-host-down', text: count })]));
+    section.setAttribute('data-host-state', loading ? 'loading' : known.length ? 'ready' : 'unavailable');
+    section.append(el('h3', { class: 'fleet-host-name' }, [el('span', { text: host }), el('span', { class: known.length ? 'fleet-host-count' : loading ? 'fleet-host-count fleet-host-loading' : 'fleet-host-count fleet-host-down', text: count })]));
     const list = el('ul', { class: 'fleet-rows' });
-    for (const row of ranked) list.append(row.workspace_id && !row.error ? workspaceRow(row, selectScope) : unavailableRow(row));
+    for (const row of ranked) list.append(row.pending ? loadingRow(row) : row.workspace_id && !row.error ? workspaceRow(row, selectScope) : unavailableRow(row));
     section.append(list);
     root.append(section);
   }

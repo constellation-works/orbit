@@ -3746,10 +3746,44 @@ function autoDrainStartFoot(payload, form) {
 // A panel poll paints the snapshot it already has. Opening the fleet card
 // refetches only once that snapshot is older than the fleet cadence. The
 // indicator timer, not this poll, is what asks the hosts again.
-function loadFleetSnapshot({ refreshWhenStale }) {
+function loadFleetSnapshot({ refreshWhenStale, onPartial = null }) {
   const seen = peekFleetDrains();
   if (seen && (!refreshWhenStale || seen.fresh)) return Promise.resolve(seen.payload);
-  return fetchFleetDrains();
+  return fetchFleetDrains({ onPartial });
+}
+
+let aggregateFleetToken = 0;
+
+function paintAggregateFleet(payload) {
+  setDrainReadiness({});
+  hideDrainPageExtras();
+  for (const id of ["drain-waits-panel", "drain-fleet-panel"]) {
+    const panel = $(id);
+    if (panel) panel.hidden = true;
+  }
+  const pass = $("drain-pass-body");
+  if (pass) pass.textContent = "";
+  hideDrainStarted();
+  updateDrainIndicators('fleet', 'Fleet drains');
+  const card = $("auto-drain-panel");
+  if (card) {
+    card.dataset.drainState = 'fleet';
+    const title = card.querySelector('.drain-title');
+    if (title) title.textContent = 'Fleet drains';
+  }
+  const pill = $("auto-drain-phase");
+  if (pill) pill.dataset.drainState = 'fleet';
+  const dot = $("auto-drain-dot");
+  if (dot) dot.className = 'drain-dot';
+  const body = $("auto-drain-body");
+  if (body) body.replaceChildren(renderFleetDrains(payload, context.selectFleetScope));
+  for (const id of START_CARDS) clearStartCard(id);
+  const label = $("auto-drain-phase-label");
+  if (label) label.textContent = "Fleet";
+  const when = $("auto-drain-when");
+  if (when) when.textContent = "";
+  renderFleetIndicator(payload);
+  renderDrainFleet(payload);
 }
 
 function renderDrainFleet(payload) {
@@ -3779,7 +3813,7 @@ let fleetRefreshStarted = false;
 // One read after hosts are known, then again on the fleet cadence. This is
 // not a panel-poll job: a view's 30s refresh must not fan out to every host.
 export function startFleetIndicatorRefresh() {
-  const refresh = () => fetchFleetDrains({ force: true }).then(payload => {
+  const refresh = () => fetchFleetDrains({ force: true, onPartial: payload => paintFleetSurfaces(payload) }).then(payload => {
     const seen = peekFleetDrains();
     if (seen && seen.payload === payload) paintFleetSurfaces(payload);
   });
@@ -3808,7 +3842,7 @@ export function startFleetIndicatorRefresh() {
     paintFleetSurfaces(seen.payload);
     return Promise.resolve(seen.payload);
   }
-  return fetchFleetDrains().then(payload => {
+  return fetchFleetDrains({ onPartial: payload => paintFleetSurfaces(payload) }).then(payload => {
     paintFleetSurfaces(payload);
     return payload;
   });
@@ -3817,36 +3851,11 @@ export function startFleetIndicatorRefresh() {
 function fetchAndRenderAutoDrain() {
   const workspace = selectedWorkspace();
   if (!workspace) {
-    return requestPanel("auto-drain-body", "fleet", () => loadFleetSnapshot({ refreshWhenStale: true }), payload => {
-      setDrainReadiness({});
-      hideDrainPageExtras();
-      for (const id of ["drain-waits-panel", "drain-fleet-panel"]) {
-        const panel = $(id);
-        if (panel) panel.hidden = true;
-      }
-      const pass = $("drain-pass-body");
-      if (pass) pass.textContent = "";
-      hideDrainStarted();
-      updateDrainIndicators('fleet', 'Fleet drains');
-      const card = $("auto-drain-panel");
-      if (card) {
-        card.dataset.drainState = 'fleet';
-        const title = card.querySelector('.drain-title');
-        if (title) title.textContent = 'Fleet drains';
-      }
-      const pill = $("auto-drain-phase");
-      if (pill) pill.dataset.drainState = 'fleet';
-      const dot = $("auto-drain-dot");
-      if (dot) dot.className = 'drain-dot';
-      const body = $("auto-drain-body");
-      body.replaceChildren(renderFleetDrains(payload, context.selectFleetScope));
-      for (const id of START_CARDS) clearStartCard(id);
-      const label = $("auto-drain-phase-label");
-      if (label) label.textContent = "Fleet";
-      const when = $("auto-drain-when");
-      if (when) when.textContent = "";
-      renderFleetIndicator(payload);
-      renderDrainFleet(payload);
+    const token = ++aggregateFleetToken;
+    const revision = getWorkspaceRevision();
+    const guard = () => token === aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
+    return requestPanel("auto-drain-body", "fleet", () => loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } }), payload => {
+      paintAggregateFleet(payload);
     }, "auto-drain-phase-label");
   }
   const concurrency = dockHome() === "tasks"
@@ -3861,7 +3870,7 @@ function fetchAndRenderAutoDrain() {
     rendered = payload;
     renderAutoDrain(payload);
   }, "auto-drain-phase-label");
-  const fleet = loadFleetSnapshot({ refreshWhenStale: false }).then(payload => {
+  const fleet = loadFleetSnapshot({ refreshWhenStale: false, onPartial: payload => { if (visit.isCurrent()) { renderFleetIndicator(payload); renderDrainFleet(payload); } } }).then(payload => {
     if (visit.isCurrent()) {
       renderFleetIndicator(payload);
       renderDrainFleet(payload);
