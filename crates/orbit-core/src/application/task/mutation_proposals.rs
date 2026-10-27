@@ -259,11 +259,17 @@ impl OrbitRuntime {
         for task_id in task_ids {
             let task = self.get_task(task_id)?;
             let mut failures = Vec::new();
+            let mut attempted_keys = BTreeSet::new();
             for stored in self.stored_mutation_proposals(task_id)? {
                 if applied(&stored) {
                     continue;
                 }
                 let current = &stored.reviewed;
+                // All snapshots were loaded before any receipt was written. A
+                // key attempted earlier in this pass must not run again.
+                if attempted_keys.contains(&current.proposal.idempotency_key) {
+                    continue;
+                }
                 let approved = reviewed.iter().any(|record| {
                     record.artifact == current.artifact
                         && record.sha256 == current.sha256
@@ -288,6 +294,7 @@ impl OrbitRuntime {
                     continue;
                 }
                 let receipt = self.apply_mutation_proposal(&task, current, run_id, attempt_id)?;
+                attempted_keys.insert(current.proposal.idempotency_key.clone());
                 if let Some(error) = &receipt.error {
                     failures.push(format!("{} failed to apply: {error}", current.artifact));
                 }

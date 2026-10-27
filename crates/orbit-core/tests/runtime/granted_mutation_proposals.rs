@@ -178,6 +178,53 @@ fn approved_proposal_applies_once_case() {
     assert!(receipt(&fixture, &changed).is_none());
 }
 
+fn same_key_paths_apply_once_case() {
+    let mut fixture = Fixture::granted(ReviewTiming::BeforePr, &["orbit.auto_task.mint"]);
+    fixture
+        .runtime
+        .run_tool(
+            "orbit.auto_task.add",
+            json!({
+                "name": DEFINITION,
+                "description": "disposable definition",
+                "schedule": {"every_minutes": 60},
+                "template": {"title": "Counted proposal effect"},
+            }),
+        )
+        .unwrap();
+    let draft = json!({"tool": "orbit.auto_task.mint", "input": {"name": DEFINITION}, "rationale": "First reason."});
+    let mut second = draft.clone();
+    second["rationale"] = json!("Another reason.");
+    put(&fixture, PROPOSAL, &draft).unwrap();
+    put(&fixture, "mutation-proposals/second.json", &second).unwrap();
+    let proposal: MutationProposal = artifact(&fixture, PROPOSAL).unwrap();
+    let other: MutationProposal = artifact(&fixture, "mutation-proposals/second.json").unwrap();
+    assert_eq!(proposal.idempotency_key, other.idempotency_key);
+    fixture.admit();
+    let manifest: ReviewManifest = artifact(&fixture, REVIEW_MANIFEST_ARTIFACT).unwrap();
+    assert_eq!(manifest.mutation_proposals.len(), 2);
+    fixture.report("accept");
+    fixture.settle().unwrap();
+    let count = || {
+        fixture
+            .runtime
+            .list_tasks()
+            .unwrap()
+            .iter()
+            .filter(|task| task.title == "[auto-task] Counted proposal effect")
+            .count()
+    };
+    assert_eq!(count(), 1, "one live invocation per key");
+    let applied = receipt(&fixture, &proposal).unwrap();
+    assert_eq!(applied.state, MutationReceiptState::Applied);
+    assert_eq!(applied.proposal_artifact, PROPOSAL);
+    fixture.settle().unwrap();
+    put(&fixture, "mutation-proposals/third.json", &second).unwrap();
+    fixture.settle().unwrap();
+    assert_eq!(count(), 1);
+    assert_eq!(receipt(&fixture, &proposal), Some(applied));
+}
+
 fn failed_application_is_visible_case() {
     let mut fixture = granted_fixture();
     put(
@@ -745,6 +792,7 @@ crate::scenario_table!(
     granted_mutation_proposal_scenarios,
     admitted_proposal_changes_nothing_live_case,
     approved_proposal_applies_once_case,
+    same_key_paths_apply_once_case,
     failed_application_is_visible_case,
     run_without_review_refuses_proposals_case,
     unapplied_proposal_blocks_completion_case,
