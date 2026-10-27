@@ -32,6 +32,8 @@ pub(in crate::executor::automation::vcs) enum HeadCheckEvidence {
     /// Not a failure a code repair can clear, or not one this read could
     /// establish, for this reason.
     Stop(String),
+    /// The cited failure needs the base's own result before any repair.
+    WaitForBase(String),
 }
 
 /// Read the failed jobs behind `failed` on `head`, the exact commit the
@@ -115,7 +117,8 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
             ));
         }
         match super::suspect::watcher_suspicion(host, workspace, head, base_branch, job, &log) {
-            Ok(Some(reason)) | Err(reason) => return HeadCheckEvidence::Stop(reason),
+            Ok(Some(reason)) => return HeadCheckEvidence::WaitForBase(reason),
+            Err(reason) => return HeadCheckEvidence::Stop(reason),
             Ok(None) => {}
         }
         details.push(format!(

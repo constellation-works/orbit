@@ -2244,6 +2244,167 @@ fn auto_fix_waits_for_an_unmoved_red_base_and_repairs_a_candidate_failure() {
     );
 }
 
+/// A base hold must survive the public job boundary, including a conflicting
+/// PR and jobs with retry, step, final and failure recovery configured.
+#[test]
+fn base_check_holds_never_dispatch_candidate_recovery() {
+    isolated(
+        "auto_fix::base_check_holds_never_dispatch_candidate_recovery",
+        |sandbox| {
+            for case in cases("suspect red dirty_suspect dirty_red held_then_dirty candidate") {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = docs_only_pr(row);
+                    let log = if case == "candidate" {
+                        "error: candidate failure\n --> README.md:1:1\n"
+                    } else {
+                        "error: source failure\n --> src/contract:1:1\n"
+                    };
+                    plant_commit_ci(&fx, &fx.candidate, 11, "failure", log);
+                    plant_commit_ci(
+                        &fx,
+                        &fx.base_sha,
+                        21,
+                        if case.ends_with("red") {
+                            "failure"
+                        } else {
+                            "success"
+                        },
+                        log,
+                    );
+                    fx.script_checks(if case == "held_then_dirty" {
+                        &["failure", "dirty_failure"]
+                    } else if case.starts_with("dirty_") {
+                        &["dirty_failure"]
+                    } else {
+                        &["failure"]
+                    });
+                    let context = host.task(TASK_ID).context_files;
+                    let mut input = auto_fix_input(&fx);
+                    input["max_wait_seconds"] = json!(15);
+                    input["poll_interval_seconds"] = json!(5);
+                    for action in [
+                        "unexpected_step",
+                        "unexpected_conflict",
+                        "unexpected_final",
+                        "unexpected_failure",
+                    ] {
+                        host.script(action, json!({}));
+                    }
+                    host.script(
+                        "test_checkpoint",
+                        json!({"phase":"commit", "task_id":TASK_ID, "commit_sha":fx.candidate}),
+                    );
+                    let mut job = job_asset(json!([
+                        {"id":"commit", "target":"activity:checkpoint", "recovery_activity":"step_failure_recovery"},
+                        {"id":"complete_pr", "target":"activity:pr_complete", "recovery_activity":"pr_conflict_recovery", "default_input":input,
+                         "retry":{"max_attempts":if case == "candidate" { 1 } else { 2 },"initial_backoff_ms":1}}
+                    ]));
+                    job.failure_activity = Some("unexpected_failure".into());
+                    job.final_recovery_activity = Some("unexpected_final".into());
+                    let result = run_job(
+                        &host,
+                        job,
+                        &[
+                            ("checkpoint", "test_checkpoint"),
+                            ("pr_complete", "pr_complete"),
+                            ("step_failure_recovery", "unexpected_step"),
+                            ("pr_conflict_recovery", "unexpected_conflict"),
+                            ("unexpected_final", "unexpected_final"),
+                            ("unexpected_failure", "unexpected_failure"),
+                        ],
+                        RUN_ID,
+                        json!({}),
+                        None,
+                    );
+                    if case == "candidate" {
+                        assert!(
+                            scripted_ran(&host, "unexpected_step"),
+                            "candidate checks still dispatch recovery: {result:?}"
+                        );
+                        assert_eq!(repair_attempts(&host).len(), 1);
+                        return;
+                    }
+                    let error = result.expect_err(case);
+                    assert_eq!(
+                        error.failure_code(),
+                        "delivery_base_checks_pending",
+                        "{case}: {error}"
+                    );
+                    assert!(
+                        matches!(error, DispatchError::DeliveryRefused { .. }),
+                        "{case}: typed hold"
+                    );
+                    assert!(repair_attempts(&host).is_empty(), "{case}");
+                    assert!(
+                        fx.status_reads() >= 2,
+                        "{case}: poll the base before holding"
+                    );
+                    for action in [
+                        "unexpected_step",
+                        "unexpected_conflict",
+                        "unexpected_final",
+                        "unexpected_failure",
+                    ] {
+                        assert!(
+                            !scripted_ran(&host, action),
+                            "{case}: {action} must not run"
+                        );
+                    }
+                    assert!(host.widenings().is_empty(), "{case}");
+                    assert_eq!(host.task(TASK_ID).context_files, context, "{case}");
+                    assert!(
+                        !host
+                            .history(TASK_ID)
+                            .iter()
+                            .any(|entry| entry.event == "context_files_widened"),
+                        "{case}"
+                    );
+                    assert_eq!(fx.head(), fx.candidate, "{case}: no repair commit");
+                    assert_eq!(
+                        fx.remote_tip(BRANCH),
+                        fx.candidate,
+                        "{case}: no repair push"
+                    );
+                    assert_eq!(
+                        fs::read_to_string(fx.repo.join("src/contract")).unwrap(),
+                        "broken\n",
+                        "{case}: cited file unchanged"
+                    );
+                    assert_nothing_landed(&fx, &host, TaskStatus::Review, case);
+                    assert!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .any(|entry| entry.event == "pr_auto_fix_base_red"),
+                        "{case}"
+                    );
+                    if case == "suspect" {
+                        // A later watcher re-observes the held PR. Only a
+                        // base pass newer than the failure clears suspicion.
+                        for (sha, field, time) in [
+                            (&fx.candidate, "completed_at", "2026-10-27T05:00:00Z"),
+                            (&fx.base_sha, "started_at", "2026-10-27T05:01:00Z"),
+                        ] {
+                            let path = fx.forge.join("commit-ci").join(sha).join("jobs.json");
+                            let mut jobs: Value =
+                                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+                            jobs["jobs"][0][field] = json!(time);
+                            fs::write(path, serde_json::to_vec(&jobs).unwrap()).unwrap();
+                        }
+                        let mut next = auto_fix_input(&fx);
+                        next["run_id"] = json!("jrun-base-recheck");
+                        let error = action(&host, "pr_complete", &next).unwrap_err();
+                        assert!(
+                            is_check_repair(&error.to_string()),
+                            "fresh base result releases the hold: {error}"
+                        );
+                        assert_eq!(repair_attempts(&host).len(), 1);
+                    }
+                });
+            }
+        },
+    );
+}
+
 /// A base that moved to a commit whose same job has not concluded is still
 /// the inherited failure. That poll admits no repair: the attempt waits until
 /// the tip job finishes, when a success can refresh and a failure can be

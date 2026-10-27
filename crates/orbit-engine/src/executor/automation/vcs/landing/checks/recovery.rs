@@ -59,8 +59,6 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
     actions: Vec<String>,
     /// Latest required-check read during failure classification; diagnostics only.
     pub(in crate::executor::automation::vcs) required_observation: Option<Value>,
-    /// Latest suspicion, retained in timeout evidence while polling the base.
-    pub(in crate::executor::automation::vcs) base_suspicion: Option<String>,
 }
 
 impl CheckRecovery {
@@ -83,6 +81,10 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     Acted,
     /// Every failed job was already acted on; keep waiting.
     Wait,
+    /// A base-suspect failure waits without authorizing candidate recovery.
+    WaitForBase(String),
+    /// A confirmed red base holds this landing without any recovery.
+    HoldForBase(String),
     /// Stop for the one automatic repair, with this evidence.
     Repair(String),
     /// [ORB-16890] That repair is spent: stop so the owner returns the task
@@ -261,12 +263,9 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     let evidence = |outcome: &str| format!("{reason}; {classified}; {outcome}");
 
     match class {
-        CheckFailureClass::BaseSuspect => {
-            recovery.base_suspicion = Some(evidence(
-                "waiting for a fresh base check within the landing deadline; no candidate repair",
-            ));
-            Ok(CheckRecoveryStep::Wait)
-        }
+        CheckFailureClass::BaseSuspect => Ok(CheckRecoveryStep::WaitForBase(evidence(
+            "waiting for a fresh base check within the landing deadline; no candidate repair",
+        ))),
         CheckFailureClass::Transient if !recovery.rerun => {
             let runs: BTreeSet<u64> = jobs.iter().filter_map(|job| job.run_id).collect();
             for run_id in runs {
@@ -309,13 +308,13 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         CheckFailureClass::Inherited
             if recovery.updated || head != context.candidate.candidate.commit =>
         {
-            Ok(CheckRecoveryStep::Stop(evidence(
+            Ok(CheckRecoveryStep::HoldForBase(evidence(
                 "it failed again after one branch update, so the candidate stays in review",
             )))
         }
         CheckFailureClass::Inherited => {
             let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) else {
-                return Ok(CheckRecoveryStep::Stop(evidence(
+                return Ok(CheckRecoveryStep::HoldForBase(evidence(
                     "the base branch has not moved past it, so the base is still red and the \
                      candidate stays in review",
                 )));

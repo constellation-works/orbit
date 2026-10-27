@@ -305,6 +305,32 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
         // failure fixed yet. A later poll that is no longer that hold must
         // not keep the reason.
         let mut base_red_reason: Option<String> = None;
+        // A conflicting PR can still carry an inherited or base-suspect
+        // check failure. Decide that hold before admitting a rebase repair.
+        if matches!(state, PrMergeState::Conflict)
+            && let Some(auto_fix) = auto_fix
+        {
+            let failed = super::super::super::landing::checks::failed_checks(&status);
+            if !failed.is_empty()
+                && let Some(reason) = red_base_wait(
+                    host,
+                    auto_fix,
+                    input,
+                    workspace_path,
+                    pr_number,
+                    &status,
+                    &failed,
+                )
+            {
+                record_base_path(
+                    host,
+                    auto_fix,
+                    "pr_auto_fix_base_red",
+                    &json!({"failed_head":status.head_sha,"reason":reason}),
+                )?;
+                base_red_reason = Some(reason);
+            }
+        }
         if let Some(auto_fix) = auto_fix
             && !base_refresh_wait
             && matches!(
@@ -345,6 +371,7 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
             );
         }
         match state {
+            _ if base_red_reason.is_some() => {}
             _ if infrastructure_wait => {}
             PrMergeState::Merged if watch_only => {
                 return Ok(Delivery::Watched(json!({
@@ -743,7 +770,10 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
 
         if waited_seconds >= max_wait_seconds {
             if let Some(reason) = base_red_reason.as_deref() {
-                return Err(stopped(pr_number, reason));
+                return Err(hold_auto_fix_stop(
+                    stopped(pr_number, reason),
+                    DeliveryRefusal::BaseChecksPending,
+                ));
             }
             return Err(merge_wait_timeout(
                 pr_number,
@@ -760,7 +790,10 @@ pub(super) fn drive_pr_to_merged<H: RuntimeHost + ?Sized>(
 
         if waited_seconds >= max_wait_seconds {
             if let Some(reason) = base_red_reason.as_deref() {
-                return Err(stopped(pr_number, reason));
+                return Err(hold_auto_fix_stop(
+                    stopped(pr_number, reason),
+                    DeliveryRefusal::BaseChecksPending,
+                ));
             }
             return Err(merge_wait_timeout(
                 pr_number,

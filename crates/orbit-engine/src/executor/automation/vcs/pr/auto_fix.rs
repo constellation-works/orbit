@@ -471,6 +471,12 @@ pub(super) fn repair_failed_checks<H: RuntimeHost + ?Sized>(
             annotations,
         } => (evidence, annotations),
         HeadCheckEvidence::Stop(reason) => return stopped(pr_number, &reason),
+        HeadCheckEvidence::WaitForBase(reason) => {
+            return hold_auto_fix_stop(
+                stopped(pr_number, &reason),
+                DeliveryRefusal::BaseChecksPending,
+            );
+        }
     };
     if !annotations.is_empty()
         && let Err(error) =

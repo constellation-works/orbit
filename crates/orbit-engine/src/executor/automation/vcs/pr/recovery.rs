@@ -72,6 +72,9 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
         ) {
             HeadCheckEvidence::Repair { evidence, .. } => evidence,
             HeadCheckEvidence::Stop(reason) => reason,
+            HeadCheckEvidence::WaitForBase(reason) => {
+                return Ok(CompletionRecoveryChecks::Wait(reason));
+            }
         };
         failures.push(json!({"name":name,"workflow":check.workflow_name,"evidence":detail}));
     }

@@ -69,6 +69,7 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             read_pr_status_before(host, &workspace, &pr_number, deadline_ms)?
         };
         diagnostic["pr"] = diagnostics::status(&status);
+        diagnostic["base_suspicion"] = Value::Null;
         diagnostic["required_checks"] = json!({"state":"not_collected"});
         diagnostic["unreported_wait"] = json!({"state":"not_collected"});
         diagnostic["status_observations"] = json!(
@@ -336,12 +337,23 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             if let Some(observation) = recovery.required_observation.take() {
                 diagnostic["required_checks"] = observation;
             }
-            if let Some(suspicion) = recovery.base_suspicion.as_ref() {
-                diagnostic["base_suspicion"] = json!(suspicion);
-            }
             match recovered {
                 CheckRecoveryStep::Acted => continue,
                 CheckRecoveryStep::Wait => waiting_on_recovery = true,
+                CheckRecoveryStep::WaitForBase(reason) => {
+                    diagnostic["base_suspicion"] = json!(reason);
+                    waiting_on_recovery = true;
+                }
+                CheckRecoveryStep::HoldForBase(reason) => {
+                    return Err(hold_pr(
+                        host,
+                        context,
+                        &diagnostic,
+                        false,
+                        DeliveryRefusal::BaseChecksPending,
+                        &reason,
+                    )?);
+                }
                 CheckRecoveryStep::Repair(evidence) => {
                     return Err(stop_pr(host, context, &diagnostic, true, &evidence)?);
                 }
@@ -574,6 +586,19 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
         format!(" (owed hosted checks not yet passed: {})", owed.join(", "))
     };
     waiting.push_str(&unreported.timeout_note());
+    if let Some(suspicion) = diagnostic["base_suspicion"].as_str() {
+        return hold_pr(
+            host,
+            context,
+            diagnostic,
+            false,
+            DeliveryRefusal::BaseChecksPending,
+            &format!(
+                "pull request #{number} is waiting for the base's own check result after \
+                 {max_wait_seconds}s: {suspicion}; the candidate stays in review"
+            ),
+        );
+    }
     stop_pr(
         host,
         context,
