@@ -55,6 +55,11 @@ pub struct FinalRecoveryRequest {
     pub requeue_bound: FinalRecoveryRequeueBound,
 }
 
+/// Phrase every already-terminal refusal reason contains. The job adapter
+/// settles that run; a refusal for any other reason stays an escalation so
+/// the failure path can still preserve the run's work.
+pub(crate) const TERMINAL_REFUSAL_MARK: &str = "final recovery never reopens settled work";
+
 /// What the applier did with a decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FinalRecoveryOutcome {
