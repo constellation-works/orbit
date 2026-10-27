@@ -148,8 +148,16 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
                 .get("regression")
                 .map(|regression| {
                     let part = |key| regression.get(key).and_then(Value::as_str);
+                    let sites = regression
+                        .get("sites")
+                        .and_then(Value::as_array)
+                        .map(|sites| {
+                            let sites = sites.iter().filter_map(Value::as_str).collect::<Vec<_>>();
+                            format!(", sites: {}", sites.join(", "))
+                        })
+                        .unwrap_or_default();
                     format!(
-                        " (nature: {}, escape: {})",
+                        " (nature: {}, escape: {}{sites})",
                         part("nature").unwrap_or_default(),
                         part("escape").unwrap_or_default()
                     )

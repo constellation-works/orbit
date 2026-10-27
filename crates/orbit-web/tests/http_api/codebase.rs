@@ -1245,6 +1245,7 @@ analytics_test!(
                     Some(RegressionClassification {
                         nature: RegressionNature::BrokeExisting,
                         escape: RegressionEscape::NoTest,
+                        sites: Vec::new(),
                     }),
                 ),
                 tags: vec!["delivery-code-review".into()],
@@ -1275,6 +1276,7 @@ analytics_test!(
                     Some(RegressionClassification {
                         nature: RegressionNature::Unclassified,
                         escape: RegressionEscape::Unclassified,
+                        sites: Vec::new(),
                     }),
                 ),
                 tags: vec!["qa-sweep:dashboard".into()],

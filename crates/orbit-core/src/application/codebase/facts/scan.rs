@@ -380,7 +380,7 @@ fn pending_links(tasks: &[Task]) -> Vec<PendingLink> {
                 pending.push(PendingLink::new(
                     relation.target.to_string(),
                     task,
-                    relation.regression,
+                    relation.regression.clone(),
                 ));
             }
         }

@@ -32,7 +32,7 @@ pub(in crate::application::agents) fn scan(
     for task in &tasks {
         for relation in &task.relations {
             if relation.relation_type == TaskRelationType::RegressionFrom
-                && let Some(classification) = relation.regression
+                && let Some(classification) = relation.regression.clone()
             {
                 regressions.push(RegressionLink {
                     culprit: relation.target.to_string(),

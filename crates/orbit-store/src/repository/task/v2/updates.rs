@@ -309,7 +309,7 @@ impl TaskV2Store {
                                 relation.relation_type == TaskRelationType::RegressionFrom
                                     && relation.target == target
                             })
-                            .and_then(|relation| relation.regression);
+                            .and_then(|relation| relation.regression.clone());
                         TaskRelation {
                             relation_type: TaskRelationType::RegressionFrom,
                             target,

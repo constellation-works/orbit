@@ -44,12 +44,48 @@ pub enum RegressionEscape {
     Unclassified,
 }
 
+/// Most defect sites one `regression_from` link may name.
+pub const MAX_REGRESSION_SITES: usize = 8;
+
 /// The optional `regression` payload of a `regression_from` relation.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RegressionClassification {
     pub nature: RegressionNature,
     pub escape: RegressionEscape,
+    /// Where the defect lives: canonical `symbol:` or `file:` selectors of
+    /// the code that is wrong, as opposed to everything the culprit touched.
+    /// Absent on links filed without it. Builds that predate the field read
+    /// a task carrying it as damaged, so writers persist it only once
+    /// `workflow.regression_risk.record_sites` is on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sites: Vec<String>,
+}
+
+impl RegressionClassification {
+    /// Check the shape of [`Self::sites`]: at most [`MAX_REGRESSION_SITES`],
+    /// no duplicates, each a `symbol:` or `file:` selector. Callers that can
+    /// resolve selectors also canonicalize them against the workspace.
+    pub fn validate_sites(&self) -> Result<(), String> {
+        if self.sites.len() > MAX_REGRESSION_SITES {
+            return Err(format!(
+                "`regression.sites` names {} sites; at most {MAX_REGRESSION_SITES} are allowed",
+                self.sites.len()
+            ));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for site in &self.sites {
+            if !(site.starts_with("symbol:") || site.starts_with("file:")) {
+                return Err(format!(
+                    "`regression.sites` entry {site:?} must be a `symbol:` or `file:` selector"
+                ));
+            }
+            if !seen.insert(site.as_str()) {
+                return Err(format!("`regression.sites` repeats {site:?}"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// History event recording which context files an agent prompt marked as

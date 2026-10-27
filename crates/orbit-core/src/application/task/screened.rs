@@ -9,7 +9,8 @@
 //! about to create, and they have no one to warn.
 
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, backlog_footprint_warning};
+use orbit_common::fs::selector::canonical_selector;
+use orbit_types::task::{Task, TaskRelation, backlog_footprint_warning};
 
 use crate::OrbitRuntime;
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
@@ -119,6 +120,7 @@ impl OrbitRuntime {
         digest: Option<&str>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        let site_warnings = self.admit_regression_sites(Some(&mut params.relations))?;
         params.context_creation = if screen.allow_missing_context {
             self.authorize_missing_context(&params.context_files)?
         } else {
@@ -139,6 +141,7 @@ impl OrbitRuntime {
             self.add_task_validated(params, agent, model, action_key, digest)?;
         warnings.extend(parent_warning);
         warnings.extend(dependency_warnings);
+        warnings.extend(site_warnings);
         warnings.extend(compute_task_add_warnings(&requested_context_files, &task));
         // [ORB-15191] Filed straight into the backlog with no footprint, a
         // live drain admits it before a pilot can prepare one.
@@ -265,6 +268,7 @@ impl OrbitRuntime {
         write: impl FnOnce(TaskUpdateParams) -> Result<Task, OrbitError>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
+        let site_warnings = self.admit_regression_sites(params.relations.as_mut())?;
         let mut context_files_unverified = Vec::new();
         if let Some(candidates) = params.context_files.as_deref() {
             params.context_creation = if screen.allow_missing_context {
@@ -285,6 +289,7 @@ impl OrbitRuntime {
             .as_deref()
             .map(|dependencies| self.unreadable_dependency_warnings(dependencies))
             .unwrap_or_default();
+        warnings.extend(site_warnings);
 
         // Only readiness-field writes repeat the footprint warning. Comments
         // and other metadata edits still project the task's readiness, but
@@ -301,6 +306,47 @@ impl OrbitRuntime {
             task,
             warnings,
             context_files_unverified,
+        })
+    }
+
+    /// Canonicalize and shape-check the `regression.sites` of `relations`,
+    /// then drop them, with a warning, unless
+    /// `workflow.regression_risk.record_sites` is on. Builds that predate the
+    /// field read a task carrying it as damaged, so the operator turns
+    /// recording on only once every host reading the workspace knows it.
+    fn admit_regression_sites(
+        &self,
+        relations: Option<&mut Vec<TaskRelation>>,
+    ) -> Result<Vec<String>, OrbitError> {
+        let Some(relations) = relations else {
+            return Ok(Vec::new());
+        };
+        let record = self.regression_risk_settings().record_sites;
+        let mut dropped = 0;
+        for regression in relations
+            .iter_mut()
+            .filter_map(|relation| relation.regression.as_mut())
+        {
+            for site in &mut regression.sites {
+                *site = canonical_selector(site).map_err(|error| {
+                    OrbitError::InvalidInput(format!("invalid `regression.sites` entry: {error}"))
+                })?;
+            }
+            regression
+                .validate_sites()
+                .map_err(OrbitError::InvalidInput)?;
+            if !record {
+                dropped += regression.sites.len();
+                regression.sites.clear();
+            }
+        }
+        Ok(if dropped == 0 {
+            Vec::new()
+        } else {
+            vec![format!(
+                "{dropped} `regression.sites` entries were not recorded: \
+                 `workflow.regression_risk.record_sites` is off"
+            )]
         })
     }
 

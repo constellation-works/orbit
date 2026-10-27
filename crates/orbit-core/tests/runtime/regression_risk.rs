@@ -74,11 +74,12 @@ impl Fixture {
         let broke = Some(RegressionClassification {
             nature: RegressionNature::BrokeExisting,
             escape: RegressionEscape::NoTest,
+            sites: Vec::new(),
         });
         fx.fix(
             &format!("Restore the cache key in {}", hot[0]),
             &hot[0],
-            broke,
+            broke.clone(),
         );
         fx.fix(
             &format!("Restore the eviction in {}", hot[1]),
