@@ -207,9 +207,10 @@ pub(crate) fn pull_refill(
         },
     };
     // A settlement the owner refused holds new requests until it is
-    // accepted; this pass still delivers it once its backoff is due.
+    // accepted, except a delivery-evidence refusal, which holds only that
+    // settlement; this pass still delivers refused settlements once due.
     let settlement_held = match refused_settlements(&drain, &destination) {
-        Ok(refused) => !refused.is_empty(),
+        Ok(refused) => refused.iter().any(|refused| refused.holds_admission()),
         Err(failure) => {
             error.get_or_insert(failure.to_string());
             true
@@ -479,7 +480,11 @@ pub(crate) fn pull_refill(
         error.get_or_insert(failure.to_string());
         Vec::new()
     });
-    admitting &= refused.is_empty();
+    let holding_refused: Vec<_> = refused
+        .iter()
+        .filter(|refused| refused.holds_admission())
+        .collect();
+    admitting &= holding_refused.is_empty();
     // An unreadable count is not zero: the drain must not finish while it
     // cannot tell whether a settlement is still owed.
     let unsettled = match drain.unsettled(&destination) {
@@ -573,14 +578,26 @@ pub(crate) fn pull_refill(
          `crews.excluded`, fix the providers, and start a new drain"
             .to_string()
     };
+    let delivery_refused = refused.len() - holding_refused.len();
     let refusal = refusal
         .or_else(|| {
-            (!refused.is_empty()).then(|| {
+            (!holding_refused.is_empty()).then(|| {
                 format!(
                     "settlement_refused: the owner refused {} recorded settlement(s) while \
                      holding their claims, so no new claim is requested; `orbit run show \
                      {run_id}` names the reason and the remedy",
-                    refused.len()
+                    holding_refused.len()
+                )
+            })
+        })
+        .or_else(|| {
+            (delivery_refused > 0 && admitted == 0).then(|| {
+                format!(
+                    "delivery_settlement_refused: the owner refused {delivery_refused} \
+                     delivery-evidence settlement(s) while holding their claims; those \
+                     settlements back off and close once the owner ends their claims, \
+                     and other work is still admitted; `orbit run show {run_id}` names \
+                     the reason and the remedy"
                 )
             })
         })
@@ -658,6 +675,7 @@ pub(crate) fn pull_refill(
         "admitting": admitting,
         "refusal": refusal,
         "settlement_refused": refused.len(),
+        "settlement_refused_holding": holding_refused.len(),
         "crews": crews,
         "admission_fit": admission_fit.flatten(),
         "consecutive_failures": consecutive_failures,

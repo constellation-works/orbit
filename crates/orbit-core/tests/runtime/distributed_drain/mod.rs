@@ -210,6 +210,8 @@ struct Wire {
     /// while it keeps the claim, as an owner whose configuration cannot
     /// accept a handoff does.
     refuse_settle: Mutex<Option<String>>,
+    /// Send handoffs to the real owner observation path.
+    observe_handoffs: Mutex<bool>,
     /// When set, the owner accepts a handoff into its claim journal, with
     /// the candidate the handoff names standing in for its provider read.
     accept_handoffs: Mutex<bool>,
@@ -361,6 +363,7 @@ impl DrainOwnerTransport for Wire {
         let local = *self.local.lock().unwrap();
         if name == "orbit.drain.claim.settle"
             && !local
+            && !*self.observe_handoffs.lock().unwrap()
             && let Some(handoff) = input["settlement"].get("AcceptHandoff")
             && handoff["candidate"]["delivery"]["kind"] != "no_diff"
             && self.owner.inspect_execution_claims()?.iter().any(|state| {
@@ -727,6 +730,7 @@ impl Pair {
             fingerprint: Mutex::default(),
             gateless: Mutex::default(),
             refuse_settle: Mutex::default(),
+            observe_handoffs: Mutex::default(),
             accept_handoffs: Mutex::default(),
             local: Mutex::default(),
             prefix_hosts: Mutex::default(),

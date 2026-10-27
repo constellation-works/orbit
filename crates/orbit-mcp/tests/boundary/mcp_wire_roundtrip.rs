@@ -1252,3 +1252,47 @@ async fn host_metadata_drives_selector_echo_and_presentation_without_builtin_nam
         .unwrap()
         .unwrap();
 }
+
+struct DeliveryRefusalHost;
+impl McpHost for DeliveryRefusalHost {
+    fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
+        Ok(vec![definition("demo.echo")])
+    }
+    fn call_tool(&self, _: &str, _: Value, _: ToolSessionContext) -> Result<Value, OrbitError> {
+        Err(OrbitError::DeliveryRefused {
+            refusal: orbit_types::workflow::DeliveryRefusal::HeadChanged,
+            message: "published head differs from pull request head".into(),
+        })
+    }
+}
+
+#[tokio::test]
+async fn delivery_refusal_crosses_the_mcp_wire() {
+    let server = OrbitToolServer::new_with_context(
+        Arc::new(DeliveryRefusalHost),
+        ToolSessionContext::trusted_local(None, None, None),
+    );
+    let (client_io, server_io) = duplex(64 * 1024);
+    let server_task = tokio::spawn(async move {
+        server
+            .serve(server_io)
+            .await
+            .unwrap()
+            .waiting()
+            .await
+            .unwrap();
+    });
+    let client = ClientInfo::default().serve(client_io).await.unwrap();
+    let result = client
+        .peer()
+        .call_tool(call("demo_echo", json!({"value":"head"})))
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, Some(true));
+    assert_eq!(
+        result.structured_content.unwrap()["code"],
+        "delivery_head_changed"
+    );
+    client.cancel().await.unwrap();
+    server_task.await.unwrap();
+}
