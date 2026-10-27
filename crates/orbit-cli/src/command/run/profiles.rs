@@ -21,15 +21,18 @@ const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
 #[derive(Args)]
 #[command(
     about = "Show what each kind of delivery costs on this host, minute by minute",
-    after_help = "One resource profile per workspace, work class and complexity, from the CPU and memory\nrecent deliveries recorded. `--accuracy` instead compares admission forecasts with the\nhost's measured load. Read-only.\n\nExamples:\n  orbit run profiles\n  orbit run profiles --json\n  orbit run profiles --accuracy\n  orbit run profiles --accuracy --wide\n  orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json"
+    after_help = "One resource profile per workspace, work class and complexity, from the CPU and memory\nrecent deliveries recorded. `--accuracy` instead compares admission forecasts with the\nhost's measured load: by default the newest 5000 forecasts, whatever their age. Read-only.\n\nExamples:\n  orbit run profiles\n  orbit run profiles --json\n  orbit run profiles --accuracy\n  orbit run profiles --accuracy --last 500\n  orbit run profiles --accuracy --wide\n  orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json"
 )]
 pub struct RunProfilesArgs {
     /// Compare recorded admission forecasts with the host's measured load
     #[arg(long)]
     pub accuracy: bool,
-    /// Include forecasts at or after this RFC3339 timestamp (accuracy only)
+    /// Include forecasts at or after this RFC3339 timestamp; without --last, every one of them (accuracy only)
     #[arg(long, requires = "accuracy", value_name = "TIMESTAMP")]
     pub since: Option<DateTime<Utc>>,
+    /// Include only the newest N matching forecasts, whatever their age (accuracy only)
+    #[arg(long, requires = "accuracy", value_name = "N", value_parser = clap::value_parser!(u32).range(1..))]
+    pub last: Option<u32>,
     /// Select an exact drain run id (accuracy only)
     #[arg(long, requires = "accuracy", value_name = "RUN")]
     pub drain: Option<String>,
@@ -45,10 +48,20 @@ impl Execute for RunProfilesArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.accuracy {
             let report_at = Utc::now();
-            let mut selection = AccuracySelection::last_30_days(report_at);
-            if let Some(since) = self.since {
-                selection.since = since;
-            }
+            // A time bound alone selects every forecast since then, as it
+            // always has; otherwise the newest forecasts, whatever their age.
+            let mut selection = match (self.since, self.last) {
+                (Some(since), None) => AccuracySelection::since(since),
+                (since, last) => {
+                    let mut selection = last.map_or_else(AccuracySelection::latest, |last| {
+                        AccuracySelection::last(usize::try_from(last).unwrap_or(usize::MAX))
+                    });
+                    if let Some(since) = since {
+                        selection.since = since;
+                    }
+                    selection
+                }
+            };
             selection.drain = self.drain;
             selection.mode = self.mode;
             return accuracy(runtime, selection, report_at, self.wide);

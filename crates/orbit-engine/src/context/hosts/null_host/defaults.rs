@@ -162,6 +162,19 @@ pub trait NullRuntimeHost: Send + Sync {
     fn get_task_history(&self, _task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {
         Ok(Vec::new())
     }
+    fn get_dependency_task(&self, task_id: &str) -> Result<Option<Task>, OrbitError> {
+        match NullRuntimeHost::get_task(self, task_id) {
+            Ok(task) => Ok(Some(task)),
+            Err(OrbitError::NotFound { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+    fn get_dependency_history(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        Ok(Some(NullRuntimeHost::get_task_history(self, task_id)?))
+    }
     fn list_tasks_filtered(
         &self,
         status: Option<TaskStatus>,

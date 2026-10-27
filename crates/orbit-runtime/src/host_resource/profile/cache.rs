@@ -3,11 +3,11 @@
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{DeliveryRunsFreshness, ResourceUsageStoreBackend};
 
-use super::{PROFILE_HISTORY_DAYS, ProfileBounds, ProfileSet, build_profiles, template_task_ids};
+use super::{ProfileBounds, ProfileSet, build_profiles, template_task_ids};
 
 /// Which of the given template task ids carry `no-diff-expected`.
 pub(crate) type NoDiffTasks<'a> =
@@ -51,14 +51,7 @@ impl ResourceProfileCache {
         {
             return Ok(Arc::clone(&cached.profiles));
         }
-        let runs = store.delivery_run_resources(now - Duration::days(PROFILE_HISTORY_DAYS))?;
-        let templates = template_task_ids(&runs);
-        let tagged = if templates.is_empty() {
-            BTreeSet::new()
-        } else {
-            no_diff_tasks(&templates)?
-        };
-        let profiles = Arc::new(build_profiles(runs, &tagged, bounds, now));
+        let profiles = Arc::new(build_uncached(store, no_diff_tasks, bounds, now)?);
         *slot = Some(Cached {
             freshness,
             bounds,
@@ -66,4 +59,24 @@ impl ResourceProfileCache {
         });
         Ok(profiles)
     }
+}
+
+/// Profiles built straight from the store, bypassing and leaving the cache:
+/// what a reader asking for another window gets.
+pub(crate) fn build_uncached(
+    store: &dyn ResourceUsageStoreBackend,
+    no_diff_tasks: NoDiffTasks<'_>,
+    bounds: ProfileBounds,
+    now: DateTime<Utc>,
+) -> Result<ProfileSet, OrbitError> {
+    // Every retained delivery, whatever its age: retention keeps the newest
+    // of each key, so a break leaves the windows as they were.
+    let runs = store.delivery_run_resources(DateTime::UNIX_EPOCH)?;
+    let templates = template_task_ids(&runs);
+    let tagged = if templates.is_empty() {
+        BTreeSet::new()
+    } else {
+        no_diff_tasks(&templates)?
+    };
+    Ok(build_profiles(runs, &tagged, bounds, now))
 }

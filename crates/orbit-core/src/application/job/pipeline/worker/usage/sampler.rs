@@ -104,6 +104,8 @@ pub(crate) struct RunResourceSampler {
     workspace_id: String,
     run_id: String,
     class: DeliveryResourceClass,
+    /// The run's crew model, the regime its minutes are profiled under.
+    crew_model: Option<String>,
     started_at: DateTime<Utc>,
     /// Minute index of `started_at`: past the last minute an earlier worker
     /// of the same run recorded, so a restarted worker never overwrites it.
@@ -205,6 +207,7 @@ impl RunResourceSampler {
             workspace_id,
             run_id,
             class,
+            crew_model: None,
             started_at,
             first_minute,
             run: None,
@@ -212,6 +215,13 @@ impl RunResourceSampler {
             host: None,
             last_host: None,
         }
+    }
+
+    /// Record `crew_model` on every minute, as the regime the run's resource
+    /// profile samples ran under.
+    pub(crate) fn with_crew_model(mut self, crew_model: Option<String>) -> Self {
+        self.crew_model = crew_model;
+        self
     }
 
     /// Take one sample at `at`, writing every minute it completes.
@@ -403,6 +413,8 @@ impl RunResourceSampler {
             },
             memory_bytes: minute.memory_max,
             samples: minute.samples,
+            crew_model: self.crew_model.clone(),
+            orbit_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
         if let Err(error) = self.store.record_run_resource_minute(&row) {
             tracing::debug!(
@@ -513,16 +525,19 @@ impl OrbitRuntime {
         let class = self.delivery_resource_class(run, adopted)?;
         let store: Arc<dyn ResourceUsageStoreBackend> = Arc::new(self.sqlite_store().ok()?);
         let workspace_id = self.workspace_id().ok()?;
-        ResourceSamplerThread::spawn(RunResourceSampler::from_process_tree(
-            store,
-            super::tree::session_tree_reader(std::process::id()),
-            orbit_common::process::ancestry::process_start_and_parent,
-            PathBuf::from("/proc"),
-            workspace_id,
-            run.run_id.clone(),
-            class,
-            Utc::now(),
-        ))
+        ResourceSamplerThread::spawn(
+            RunResourceSampler::from_process_tree(
+                store,
+                super::tree::session_tree_reader(std::process::id()),
+                orbit_common::process::ancestry::process_start_and_parent,
+                PathBuf::from("/proc"),
+                workspace_id,
+                run.run_id.clone(),
+                class,
+                Utc::now(),
+            )
+            .with_crew_model(run.crew_model.clone()),
+        )
     }
 
     /// [`Self::start_resource_sampler`] for the scope this worker resolved.
@@ -539,14 +554,17 @@ impl OrbitRuntime {
         let class = self.delivery_resource_class(run, adopted)?;
         let store: Arc<dyn ResourceUsageStoreBackend> = Arc::new(self.sqlite_store().ok()?);
         let workspace_id = self.workspace_id().ok()?;
-        ResourceSamplerThread::spawn(RunResourceSampler::new(
-            store,
-            scope,
-            PathBuf::from("/proc"),
-            workspace_id,
-            run.run_id.clone(),
-            class,
-            Utc::now(),
-        ))
+        ResourceSamplerThread::spawn(
+            RunResourceSampler::new(
+                store,
+                scope,
+                PathBuf::from("/proc"),
+                workspace_id,
+                run.run_id.clone(),
+                class,
+                Utc::now(),
+            )
+            .with_crew_model(run.crew_model.clone()),
+        )
     }
 }

@@ -13,8 +13,8 @@ use rusqlite::{TransactionBehavior, params, params_from_iter};
 use crate::Store;
 use crate::contracts::{
     AdmissionForecastPoint, AdmissionForecastRecord, DeliveryRunInterval, DeliveryRunResources,
-    DeliveryRunsFreshness, HostResourceMinute, ResourceMinuteLoad, ResourceMinutesTable,
-    ResourceUsageStoreBackend, RunResourceMinute,
+    DeliveryRunsFreshness, HostResourceMinute, ResourceHistoryKeep, ResourceMinuteLoad,
+    ResourceMinutesTable, ResourceUsageStoreBackend, RunResourceMinute,
 };
 
 use super::codec::{RUN_MINUTE_COLUMNS, host_minutes, run_minute_from_row, stamp, unsigned};
@@ -46,8 +46,9 @@ impl ResourceUsageStoreBackend for Store {
                     INSERT INTO run_resource_minutes (
                         workspace_id, run_id, minute_index, minute_started_at, task_id,
                         work_class, complexity, resumed, delivery_admitted_at,
-                        cpu_cores, memory_bytes, samples, cpu_accounting
-                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                        cpu_cores, memory_bytes, samples, cpu_accounting,
+                        crew_model, orbit_version
+                    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                     ON CONFLICT (workspace_id, run_id, minute_index) DO UPDATE SET
                         minute_started_at = excluded.minute_started_at,
                         task_id = excluded.task_id,
@@ -58,7 +59,9 @@ impl ResourceUsageStoreBackend for Store {
                         cpu_cores = excluded.cpu_cores,
                         memory_bytes = excluded.memory_bytes,
                         samples = excluded.samples,
-                        cpu_accounting = excluded.cpu_accounting
+                        cpu_accounting = excluded.cpu_accounting,
+                        crew_model = excluded.crew_model,
+                        orbit_version = excluded.orbit_version
                     "#,
                     params![
                         minute.workspace_id,
@@ -74,6 +77,8 @@ impl ResourceUsageStoreBackend for Store {
                         bytes(minute.memory_bytes),
                         minute.samples,
                         minute.cpu_accounting,
+                        minute.crew_model,
+                        minute.orbit_version,
                     ],
                 )
                 .map(|_| ())
@@ -138,7 +143,8 @@ impl ResourceUsageStoreBackend for Store {
                 r#"
                 SELECT r.workspace_id, r.run_id, j.job_id, r.task_id, r.work_class,
                        r.complexity, r.resumed, r.delivery_admitted_at, j.finished_at,
-                       r.minute_started_at, r.cpu_cores, r.memory_bytes, r.cpu_accounting, r.samples
+                       r.minute_started_at, r.cpu_cores, r.memory_bytes, r.cpu_accounting, r.samples,
+                       COALESCE(r.crew_model, j.crew_model), r.orbit_version
                 FROM run_resource_minutes r
                 LEFT JOIN job_runs j
                   ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
@@ -162,6 +168,8 @@ impl ResourceUsageStoreBackend for Store {
                         .get::<_, Option<String>>(8)?
                         .map(|at| crate::parse_timestamp(&at))
                         .transpose()?,
+                    crew_model: row.get(14)?,
+                    orbit_version: row.get(15)?,
                     minutes: Vec::new(),
                 };
                 let minute = ResourceMinuteLoad {
@@ -182,6 +190,14 @@ impl ResourceUsageStoreBackend for Store {
                     if last.workspace_id == run.workspace_id && last.run_id == run.run_id =>
                 {
                     last.resumed |= run.resumed;
+                    // Minutes come oldest first: the newest that recorded a
+                    // regime names the run's.
+                    if run.crew_model.is_some() {
+                        last.crew_model = run.crew_model;
+                    }
+                    if run.orbit_version.is_some() {
+                        last.orbit_version = run.orbit_version;
+                    }
                     last.minutes.push(minute);
                 }
                 _ => {
@@ -319,20 +335,16 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
     ) -> Result<u64, OrbitError> {
         let conn = self.read()?;
-        let sql = match table {
-            ResourceMinutesTable::Run => {
-                "SELECT COUNT(*) FROM run_resource_minutes WHERE minute_started_at < ?1"
-            }
-            ResourceMinutesTable::Host => {
-                "SELECT COUNT(*) FROM host_resource_minutes WHERE minute_at < ?1"
-            }
-            ResourceMinutesTable::AdmissionForecast => {
-                "SELECT COUNT(*) FROM admission_forecasts WHERE forecast_at < ?1"
-            }
-        };
-        conn.query_row(sql, params![stamp(cutoff)], |row| row.get::<_, i64>(0))
+        let sql = format!(
+            "SELECT COUNT(*) FROM {} WHERE {}",
+            table.table_name(),
+            prunable(table)
+        );
+        let (cutoff, kept) = prune_bounds(table, cutoff, keep);
+        conn.query_row(&sql, params![cutoff, kept], |row| row.get::<_, i64>(0))
             .map(unsigned)
             .map_err(sqlite_store_error)
     }
@@ -341,29 +353,80 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         table: ResourceMinutesTable,
         cutoff: DateTime<Utc>,
+        keep: ResourceHistoryKeep,
         limit: usize,
     ) -> Result<usize, OrbitError> {
         let limit = i64::try_from(limit).unwrap_or(i64::MAX);
-        let sql = match table {
-            ResourceMinutesTable::Run => {
-                "DELETE FROM run_resource_minutes WHERE rowid IN ( \
-                     SELECT rowid FROM run_resource_minutes \
-                     WHERE minute_started_at < ?1 LIMIT ?2)"
-            }
-            ResourceMinutesTable::Host => {
-                "DELETE FROM host_resource_minutes WHERE rowid IN ( \
-                     SELECT rowid FROM host_resource_minutes WHERE minute_at < ?1 LIMIT ?2)"
-            }
-            ResourceMinutesTable::AdmissionForecast => {
-                "DELETE FROM admission_forecasts WHERE rowid IN ( \
-                     SELECT rowid FROM admission_forecasts WHERE forecast_at < ?1 LIMIT ?2)"
-            }
-        };
+        let sql = format!(
+            "DELETE FROM {table} WHERE rowid IN ( \
+                 SELECT rowid FROM {table} WHERE {predicate} LIMIT ?3)",
+            table = table.table_name(),
+            predicate = prunable(table)
+        );
+        let (cutoff, kept) = prune_bounds(table, cutoff, keep);
         self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
             tx.connection()
-                .execute(sql, params![stamp(cutoff), limit])
+                .execute(&sql, params![cutoff, kept, limit])
                 .map_err(sqlite_store_error)
         })
+    }
+}
+
+/// [`prunable`]'s `?1`, the cutoff, and `?2`, how many of the table's own
+/// kind `keep` holds: deliveries per key for run minutes, forecasts for
+/// forecasts and host minutes.
+fn prune_bounds(
+    table: ResourceMinutesTable,
+    cutoff: DateTime<Utc>,
+    keep: ResourceHistoryKeep,
+) -> (String, i64) {
+    let kept = match table {
+        ResourceMinutesTable::Run => keep.deliveries_per_key,
+        ResourceMinutesTable::Host | ResourceMinutesTable::AdmissionForecast => keep.forecasts,
+    };
+    (stamp(cutoff), i64::try_from(kept).unwrap_or(i64::MAX))
+}
+
+/// The rows of `table` retention may remove: older than the cutoff `?1` and
+/// not among the `?2` that [`ResourceHistoryKeep`] holds.
+///
+/// - A run minute stays while its delivery is among the newest `?2` of its
+///   workspace, work class and complexity, by admission.
+/// - A forecast stays while it is among the newest `?2`.
+/// - A host minute stays from the minute the oldest of the newest `?2`
+///   forecasts was made in, so every kept forecast can still pair with the
+///   minutes it forecast.
+fn prunable(table: ResourceMinutesTable) -> &'static str {
+    match table {
+        ResourceMinutesTable::Run => {
+            // One text key per delivery: SQLite builds a scalar `NOT IN`
+            // list once, where a row-value one is rescanned per row.
+            "minute_started_at < ?1 AND (delivery_admitted_at IS NULL \
+                 OR workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                 NOT IN ( \
+                     SELECT workspace_id || char(31) || task_id || char(31) || delivery_admitted_at \
+                     FROM ( \
+                         SELECT workspace_id, task_id, delivery_admitted_at, \
+                                ROW_NUMBER() OVER ( \
+                                    PARTITION BY workspace_id, work_class, IFNULL(complexity, '') \
+                                    ORDER BY delivery_admitted_at DESC, task_id DESC) AS newest \
+                         FROM (SELECT DISTINCT workspace_id, task_id, delivery_admitted_at, \
+                                      work_class, complexity \
+                               FROM run_resource_minutes \
+                               WHERE delivery_admitted_at IS NOT NULL)) \
+                     WHERE newest <= ?2))"
+        }
+        ResourceMinutesTable::Host => {
+            "minute_at < ?1 AND minute_at < IFNULL(( \
+                 SELECT substr(MIN(forecast_at), 1, 17) || '00.000000Z' FROM ( \
+                     SELECT forecast_at FROM admission_forecasts \
+                     ORDER BY forecast_at DESC LIMIT ?2)), ?1)"
+        }
+        ResourceMinutesTable::AdmissionForecast => {
+            "forecast_at < ?1 AND rowid NOT IN ( \
+                 SELECT rowid FROM admission_forecasts \
+                 ORDER BY forecast_at DESC LIMIT ?2)"
+        }
     }
 }
 

@@ -59,6 +59,10 @@ struct Fixture {
     workspace: String,
     /// Admission times are spaced so every delivery is distinct.
     next_admission: std::cell::Cell<i64>,
+    /// How many days before now the first admission falls.
+    days_ago: std::cell::Cell<i64>,
+    /// The crew model and Orbit version seeded minutes record.
+    regime: std::cell::RefCell<(Option<String>, Option<String>)>,
 }
 
 impl Fixture {
@@ -83,13 +87,15 @@ impl Fixture {
             store,
             workspace,
             next_admission: std::cell::Cell::new(0),
+            days_ago: std::cell::Cell::new(2),
+            regime: std::cell::RefCell::new((None, None)),
         }
     }
 
     fn admission(&self) -> DateTime<Utc> {
         let index = self.next_admission.get();
         self.next_admission.set(index + 1);
-        Utc::now() - Duration::days(2) + Duration::hours(index)
+        Utc::now() - Duration::days(self.days_ago.get()) + Duration::hours(index)
     }
 
     /// Seed one delivery of `task` in `workspace` and return its run ids.
@@ -147,6 +153,8 @@ impl Fixture {
                     cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
                     memory_bytes: *memory,
                     samples: 12,
+                    crew_model: self.regime.borrow().0.clone(),
+                    orbit_version: self.regime.borrow().1.clone(),
                 })
                 .unwrap();
         }
@@ -934,3 +942,101 @@ crate::scenario_table!(
     no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design,
     profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes
 );
+
+/// A month off must not blank admission: the newest deliveries of each key
+/// still make its profile when every one of them is older than 30 days.
+#[test]
+fn profiles_keep_their_newest_deliveries_after_a_month_without_any() {
+    let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
+    let workspace = fixture.workspace.clone();
+    fixture.days_ago.set(45);
+    for index in 0..5 {
+        fixture.delivery(
+            &workspace,
+            &format!("ORB-old-{index}"),
+            "change",
+            Some("medium"),
+            vec![RunSeed::flat(4, 2.0, GIB)],
+        );
+    }
+
+    let profile = fixture.profile("change", Some("medium"));
+    assert_eq!(
+        profile.delivery_count, 4,
+        "the window is the last profile_window deliveries, whatever their age"
+    );
+    assert!(!profile.sparse);
+    assert_eq!(
+        profile.deliveries[0].task_id, "ORB-old-4",
+        "the window starts at the newest delivery"
+    );
+    let found = fixture
+        .runtime
+        .resource_profile_for(&ProfileLookup::new(
+            workspace.clone(),
+            "change",
+            Some("medium".into()),
+            false,
+        ))
+        .unwrap();
+    assert_eq!(found.source, ProfileSource::Exact);
+}
+
+/// A crew model or Orbit release change makes earlier deliveries stale: the
+/// window follows the newest regime, topped up from earlier ones only to the
+/// minimum, so the change never empties the key.
+#[test]
+fn a_regime_change_drops_earlier_deliveries_once_the_new_regime_has_enough() {
+    let fixture = Fixture::new("min_profile_deliveries = 2\nprofile_window = 10\n");
+    let workspace = fixture.workspace.clone();
+    let seed = |task: String| {
+        fixture.delivery(
+            &workspace,
+            &task,
+            "change",
+            Some("hard"),
+            vec![RunSeed::flat(3, 1.0, GIB)],
+        );
+    };
+    *fixture.regime.borrow_mut() = (Some("model-a".into()), Some("1.0.0".into()));
+    for index in 0..4 {
+        seed(format!("ORB-a-{index}"));
+    }
+    *fixture.regime.borrow_mut() = (Some("model-b".into()), Some("1.1.0".into()));
+    seed("ORB-b-0".into());
+
+    let profile = fixture.profile("change", Some("hard"));
+    assert_eq!(profile.regime.crew_model.as_deref(), Some("model-b"));
+    assert_eq!(profile.regime.orbit_version.as_deref(), Some("1.1.0"));
+    assert_eq!(
+        (
+            profile.delivery_count,
+            profile.prior_regime_deliveries,
+            profile.excluded_prior_regime
+        ),
+        (2, 1, 3),
+        "one new delivery, topped up with the newest earlier one to the minimum"
+    );
+    assert!(!profile.sparse);
+    assert_eq!(profile.deliveries[1].task_id, "ORB-a-3");
+
+    for index in 1..3 {
+        seed(format!("ORB-b-{index}"));
+    }
+    let profile = fixture.profile("change", Some("hard"));
+    assert_eq!(
+        (
+            profile.delivery_count,
+            profile.prior_regime_deliveries,
+            profile.excluded_prior_regime
+        ),
+        (3, 0, 4),
+        "the new regime has enough deliveries: earlier ones are excluded"
+    );
+    assert!(
+        profile
+            .deliveries
+            .iter()
+            .all(|delivery| delivery.regime.crew_model.as_deref() == Some("model-b"))
+    );
+}

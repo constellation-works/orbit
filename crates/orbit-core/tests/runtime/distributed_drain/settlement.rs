@@ -397,13 +397,21 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
     let pulls = pair.wire.calls("orbit.task.pull").len();
 
     for _ in 0..5 {
-        let pass = pair.pass(&drain);
+        // The pending settlement occupies only one of two slots. Even the
+        // pass that first observes the policy refusal must hold new claims.
+        let pass = pair.pass_with(&drain, 2);
+        assert_eq!(
+            pair.wire.calls("orbit.task.pull").len(),
+            pulls,
+            "a newly observed policy refusal must hold the free slot: {pass}"
+        );
         assert!(
             pass["error"].is_null(),
             "a refusal is not a failed pass: {pass}"
         );
         assert_eq!(pass["admitting"], false, "{pass}");
         assert_eq!(pass["settlement_refused"], 1, "{pass}");
+        assert_eq!(pass["settlement_refused_holding"], 1, "{pass}");
         assert_eq!(pass["degraded"], false, "{pass}");
         assert!(
             error_of(&pass).is_empty()
@@ -429,6 +437,7 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
         .pull_drain_refused_settlements(&drain)
         .unwrap();
     assert_eq!(refused.len(), 1, "{refused:?}");
+    assert_eq!(refused[0].code.as_deref(), Some("policy_denied"));
     assert!(
         refused[0].reason.contains("refused protected path"),
         "{refused:?}"
@@ -475,6 +484,38 @@ fn a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_acc
         pair.wire.calls("orbit.task.pull").len() > pulls,
         "requests resume once nothing owed is refused"
     );
+}
+
+/// A newly refused settlement holds fresh admission without preventing the
+/// same pass from reconciling the other pending records for that owner.
+fn a_new_policy_refusal_holds_new_claims_but_reconciles_other_pending_records() {
+    let pair = Pair::new(3);
+    let drain = pair.run_drain();
+    let first = pair.running_leaf(&drain, 1);
+    let second = pair.running_leaf(&drain, 2);
+    pair.leaf_hands_off(&first);
+    pair.leaf_hands_off(&second);
+    *pair.wire.refuse_settle.lock().unwrap() = Some(PROTECTED_PATH_WIDENING.into());
+    let pulls = pair.wire.calls("orbit.task.pull").len();
+
+    let pass = pair.pass_with(&drain, 3);
+    assert_eq!(
+        pair.wire.calls("orbit.task.pull").len(),
+        pulls,
+        "policy refusals must hold the spare slot: {pass}"
+    );
+    assert!(pass["error"].is_null(), "{pass}");
+    assert_eq!(pass["settlement_refused_holding"], 2, "{pass}");
+    assert_eq!(pair.wire.calls("orbit.drain.claim.settle").len(), 2);
+    for leaf in [&first, &second] {
+        let record = pair.admission(leaf);
+        assert_eq!(record.phase, LocalPullPhase::Settling);
+        assert_eq!(
+            record.settlement_refusal.unwrap().code.as_deref(),
+            Some("policy_denied"),
+            "both pending records must reconcile in the held pass"
+        );
+    }
 }
 
 /// A delivery-evidence refusal (the PR head moved past the published
@@ -758,6 +799,7 @@ crate::scenario_table!(
     a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once,
     a_recovered_claim_closes_its_pending_handoff_before_observing_the_pr,
     a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_accepts,
+    a_new_policy_refusal_holds_new_claims_but_reconciles_other_pending_records,
     an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff,
     a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends,
     a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep

@@ -335,6 +335,8 @@ a.agents-cause-note { display: inline-flex; align-items: center; min-height: 44p
   .agents-score-col > .agents-bar { width: 40px; }
   .agents-score-value { min-width: 0; margin-left: 6px; }
   #agents-roles { overflow-x: auto; scrollbar-width: none; }
+  /* Count and calendar windows together outgrow a phone: wrap them. */
+  #agents-window-selector { flex-wrap: wrap; max-width: 100%; }
 }
 
 /* Pilots: one assessed-by-observed tier matrix per row. */

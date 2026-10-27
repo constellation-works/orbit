@@ -4,6 +4,7 @@ mod add;
 mod artifact_export;
 mod automation_port;
 mod backlog_forecast;
+pub use backlog_forecast::BacklogForecastHistory;
 mod baseline_hold;
 mod baseline_repair;
 pub(crate) mod batch_prepare;

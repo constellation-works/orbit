@@ -113,8 +113,8 @@ admission rule excludes build-heavy QA sweeps declared by
 **History.** Each host keeps one SQLite database, `~/.orbit/orbit.db`, shared
 by its workspaces. The `job_runs` table holds each run's start, end and host.
 The task id is in `input_json`, and complexity is in the task index. The
-`run_resource_minutes` and `host_resource_minutes` tables hold 30 days of
-per-minute CPU and memory history (§2).
+`run_resource_minutes` and `host_resource_minutes` tables hold per-minute
+CPU and memory history, kept by count as well as age (§2).
 
 ## 2. Sampling each task
 
@@ -173,9 +173,20 @@ class in `worker/delivery_class.rs`, the host reads in
   a retry run, an adopted run, a run resuming checkpoints or a carried
   candidate (`resume_candidate`, `claim_repair`), and a run an earlier worker
   already sampled.
-- **Retention.** 30 days for both tables, whatever `retention.runs_days` says.
-  `orbit gc runs --apply`, and so the `store-gc` routine, prunes them
-  host-wide.
+- **Retention.** Rows past 30 days are pruned, whatever
+  `retention.runs_days` says, except what the count-based readers still
+  need. A run minute stays while its delivery is among the newest
+  `max(200, profile_window)` deliveries of its (workspace, work class,
+  complexity) key. An admission forecast stays while it is among the newest
+  10,000, and a host minute while it is no older than the oldest kept
+  forecast's minute. A month with no deliveries therefore leaves the
+  profiles and the accuracy report as they were. `orbit gc runs --apply`,
+  and so the `store-gc` routine, prunes them host-wide and reports the
+  count it kept (`kept_newest`).
+- **Regime.** Each run minute records the crew model the run was assembled
+  for and the Orbit version that sampled it (`crew_model`,
+  `orbit_version`, migration v68). Older minutes have neither; a minute
+  without a crew model reads the run's `job_runs.crew_model`.
 - **macOS process tree.** macOS has no scopes. Every 5 s the worker sums
   its own process tree and the orphans it adopts below (`SessionTree` and
   `TreeCpuAccount` in `ancestry.rs`). A process's total is its own CPU plus the CPU of the
@@ -423,7 +434,27 @@ historical evidence. This changes profile inputs only; admission mode and
 the shadow rollout remain unchanged.
 
 A **resource profile** for one key is built from that key's most recent
-completed deliveries: the last 50, within 30 days.
+completed deliveries: the last `profile_window` (50), however old. Its
+window follows the newest delivery's **regime**, its crew model and Orbit
+version:
+
+- Deliveries of the newest delivery's regime come first, newest first.
+- Earlier-regime deliveries are added, newest first, only while the window
+  holds fewer than `min_profile_deliveries`. Past that minimum they are
+  left out: a new model or Orbit build changes what one delivery costs, so
+  an older regime's samples would mislead admission once the new one has
+  enough of its own.
+- A class-wide fallback profile (the fallback chain below) unions each key's current-regime
+  deliveries.
+- Each profile reports `delivery_count`, its `regime`,
+  `prior_regime_deliveries` (earlier-regime deliveries that topped it up)
+  and `excluded_prior_regime` (those left out).
+
+The window has no age cap. `PROFILE_HISTORY_DAYS` (30) once kept a profile
+to the last 30 days; it is retired, because a month without deliveries
+then emptied every profile and admission fell back to its least specific
+estimate exactly when the host resumed. Count and regime bound staleness
+instead, and count-aware retention keeps the deliveries the window reads.
 
 For each minute `m` since admission, the profile holds:
 
@@ -1156,7 +1187,7 @@ Limitations:
 | `orbit run profiles` | Implemented: the profiles per workspace, work class and complexity: deliveries (sparse below `min_profile_deliveries`), horizon, peak CPU and memory and when they occur, the nearest-rank p50 and p90 of each delivery's single-minute peak CPU and memory (CPU_P50, CPU_P90, MEM_P50, MEM_P90; these stay high when peaks fall in different minutes, unlike the mean-series peak, and a sparse profile still shows them; §3.3), and the CPU and memory spread. Flags no-diff profiles with build-like load and names the deliveries behind each flag (§3.2). `--json` includes `delivery_peak_cpu` and `delivery_peak_memory_bytes` (`p50`, `p90`) with the full series |
 | `orbit run profiles --accuracy` | Implemented (§8.1): composable forecast-time `--since`, exact `--drain` and recorded `--mode` cohorts; mature measured pairs, pending and missing counts per offset, with missing split into unsampled (no delivery live), partial (a delivery overlapped the minute but none saw it whole) and gap (a delivery ran for the whole minute and wrote no host row); shadow decisions and enforce admissions, gap-fit holds and pull holds per drain; each drain's limiter shares from `drain_pass_counters`. `--json` includes the effective selection, raw pairs and `limiters` |
 | Per-drain mode | Implemented for local drains: CLI `--auto-concurrency off|shadow|enforce`, registered MCP `orbit.workflow.auto` start `auto_concurrency`, and dashboard HTTP start `auto_concurrency` all use Core submission. At durable admission, `input.auto_concurrency_source` records explicit or configured mode. Explicit overrides survive resume/restart; configured local and pull drains follow the host mode on the next admission pass. Each pass snapshots `[machine.auto_concurrency]` and effective `workflow.provider_limit_*` policy, with global/workspace config mtimes caching resolution. Changes to mode, thresholds, profile bounds or provider overrides need no restart. Invalid config warns and retains both last-known-good policies until a valid edit. Running leaves continue. Throttle, ceilings and accuracy lineage retain their existing behavior. Stop/resize and explicit pull overrides are refused before effects. |
-| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its current effective mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory over the first hour as sparklines against the current admit thresholds (peak bars for a record without `series`), headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` as **Last forecast** when readiness has one. A retained forecast reads as history: past, time-anchored decisions (`Admitted at 03:59 UTC`, `Held at 03:59 UTC`), each task's current status, and `window ended · nothing running` when that drain has ended and shared occupancy (`active_leaf_runs`) is zero; `window ended · other work running` when it is above zero, and `window ended` when it is unknown. A live pass keeps `Admitted`, `Held` and `Starvation guard protects`. A live shadow forecast says `Would admit` and `Would hold`; a retained shadow forecast says `Would have admitted at 03:59 UTC`. Analytics › Resources (`GET /api/resource-profiles`) charts the selected workspace's profiles on the host per work class, complexities overlaid: mean CPU with a ±1 sd band, p90 and mean memory and the alive share against minutes since admission, in cores and GiB or percent of host with the admit thresholds ([user interface](../user-interface/2_design.md#5b-analytics--resources)). Forecast curves against measured load with running tasks stacked remain future work. |
+| Dashboard | Implemented: an operator launch choice of inherited host mode, off, shadow or enforce. The form reads current inherited host mode from readiness, sends the actual option, and shows the receipt's durable effective mode; the live window shows its current effective mode. The Drain card shows the recorded forecast from readiness: its time, CPU and memory over the first hour as sparklines against the current admit thresholds (peak bars for a record without `series`), headroom, admitted tasks with their profile source, and a candidate enforce held. A pass that built none says `no forecast this pass` and shows `last_admission_forecast` as **Last forecast** when readiness has one. A retained forecast reads as history: past, time-anchored decisions (`Admitted at 03:59 UTC`, `Held at 03:59 UTC`), each task's current status, and `window ended · nothing running` when that drain has ended and shared occupancy (`active_leaf_runs`) is zero; `window ended · other work running` when it is above zero, and `window ended` when it is unknown. A live pass keeps `Admitted`, `Held` and `Starvation guard protects`. A live shadow forecast says `Would admit` and `Would hold`; a retained shadow forecast says `Would have admitted at 03:59 UTC`. Analytics › Resources (`GET /api/resource-profiles`) charts the selected workspace's profiles on the host per work class, complexities overlaid: mean CPU with a ±1 sd band, p90 and mean memory and the alive share against minutes since admission, in cores and GiB or percent of host with the admit thresholds ([user interface](../user-interface/2_design.md#5b-analytics--resources)). Its history selector counts deliveries, never days: admission's own `profile_window` (default), the last 200, or every kept delivery (`?last=<n>|all`, 1 to 1,000), each profile naming its delivery count and regime. Forecast curves against measured load with running tasks stacked remain future work. |
 
 `max_active_leaf_runs` keeps its meaning: the operator's ceiling, enforced
 first.
@@ -1317,9 +1348,12 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   `fit_skipped`). A task held on one pass and admitted on another counts in
   both. Enforce pull requests held because no work fit are `PULL_HELD` /
   `pull_held`. Existing shadow JSON fields are unchanged.
-- **Selection and retention.** Without filters the report reads all drains
-  and recorded modes over the last 30 days. Optional `--since` selects
-  forecasts at or after an RFC3339 timestamp; `--drain` matches an exact
+- **Selection and retention.** Without filters the report reads the newest
+  5,000 forecasts of every drain and recorded mode, whatever their age, so
+  a break between drains never empties it. `--last <N>` selects the newest
+  `N` forecasts instead; the effective `since` is then the oldest selected
+  forecast. Optional `--since` selects forecasts at or after an RFC3339
+  timestamp (every one of them, unless `--last` also caps the count); `--drain` matches an exact
   drain run id and `--mode shadow|enforce` matches the stored mode. Supplied
   filters intersect, applying equally to forecasts, pairs, errors and local
   or pull decisions. Forecasts after `report_at` are excluded. Text echoes
@@ -1331,7 +1365,8 @@ Implemented for local and pull drains, with local passes in `workspace_auto/clas
   modes, empty drain ids and a since later than report time are rejected;
   selectors require `--accuracy`. Rows are pruned with the resource history
   by `orbit gc runs --apply` after 30 days, whatever `retention.runs_days`
-  says. An earlier explicit since can read older surviving rows, but cannot
+  says, except the newest 10,000 forecasts and the host minutes they need.
+  The dashboard's accuracy figures read the default selection. An earlier explicit since can read older surviving rows, but cannot
   restore pruned history. The report reads evidence without changing it.
 - **Attribution limits.** Forecast rows record mode and drain, but do not
   attest source revision, build-budget settings or admission thresholds.

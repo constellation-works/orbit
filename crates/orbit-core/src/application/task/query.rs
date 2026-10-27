@@ -65,11 +65,39 @@ impl OrbitRuntime {
         id: &str,
     ) -> Result<RegisteredTaskResolution, OrbitError> {
         if self.worker_invocation().is_some() {
-            return self
-                .read_owner(id, "dependency")
-                .map(|task| RegisteredTaskResolution::Resolved(Box::new(task)));
+            // The owner answers `Option<Task>`: `null` for a dangling or
+            // foreign prerequisite. An older owner instead refuses that case
+            // with `owner dependency unavailable`; treat that exact refusal
+            // as the same `Missing` answer rather than a failure.
+            let task: Option<Task> = match self.read_owner(id, "dependency") {
+                Ok(task) => task,
+                Err(error) if is_legacy_dependency_unavailable(&error) => None,
+                Err(error) => return Err(error),
+            };
+            return Ok(match task {
+                Some(task) => RegisteredTaskResolution::Resolved(Box::new(task)),
+                None => RegisteredTaskResolution::Missing,
+            });
         }
         self.stores().tasks().registered_task(id)
+    }
+
+    /// A dependency's body through its registered owner, or `None` when no
+    /// workspace registered on this machine owns it.
+    pub fn get_dependency_task(&self, id: &str) -> Result<Option<Task>, OrbitError> {
+        Ok(match self.resolve_dependency_task(id)? {
+            RegisteredTaskResolution::Resolved(task) => Some(*task),
+            RegisteredTaskResolution::Missing | RegisteredTaskResolution::ForeignAuthority => None,
+        })
+    }
+
+    /// A dependency's history through its registered owner, or `None` when
+    /// no workspace registered on this machine owns it.
+    pub fn get_dependency_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
+        self.dependency_history(id)
     }
 
     /// Whether a dependency id names a task this machine can read.
@@ -591,4 +619,11 @@ impl OrbitRuntime {
         }
         self.stores().tasks().search_tasks_filtered(query, tags)
     }
+}
+
+/// Whether `error` is an older owner's refusal of an unavailable dependency
+/// projection, which a current owner answers as `null` instead.
+fn is_legacy_dependency_unavailable(error: &OrbitError) -> bool {
+    let text = error.to_string();
+    text.contains("owner dependency unavailable")
 }

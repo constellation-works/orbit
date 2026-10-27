@@ -97,7 +97,7 @@ impl Fixture {
     fn forecast(&self, mode: &str) -> Value {
         let mut forecast = self
             .runtime(mode)
-            .backlog_forecast(None, Some(4), None)
+            .backlog_forecast(Default::default(), Some(4), None)
             .unwrap();
         // This fixture isolates resource fit, without regression-fix history.
         let predictions = forecast["forecast"]["task_predictions"].take();
@@ -152,6 +152,8 @@ fn profile_delivery(runtime: &OrbitRuntime, cores: f64) {
                 cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
                 memory_bytes: GIB,
                 samples: 12,
+                crew_model: None,
+                orbit_version: None,
             })
             .unwrap();
     }

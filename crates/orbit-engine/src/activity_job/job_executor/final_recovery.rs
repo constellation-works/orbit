@@ -182,6 +182,16 @@ pub(super) fn attempt_final_recovery(
              candidate was not judged",
         );
     }
+    // A `worktree_setup` that could not find a dependency is not transient:
+    // the dependency is either resolvable through its registered owner or
+    // it is not, and re-running unchanged cannot change that answer. No
+    // recovery agent requeues it.
+    if is_worktree_setup_dependency_not_found(&step.id, error) {
+        return skip(
+            "worktree_setup could not resolve a dependency (task not found); \
+             re-running unchanged cannot resolve it",
+        );
+    }
     let Some(task_id) = single_task_id(&ctx.input) else {
         return skip(
             "final recovery decides for exactly one task; this run carries none or several",
@@ -704,6 +714,19 @@ fn conclude(
             FinalRecoveryVerdict::Escalated
         }
     }
+}
+
+/// Whether `error` is a `worktree_setup` failure caused by a dependency
+/// lookup that found no task. Only the step's own deterministic failure
+/// counts, and only when it carries the remote `not_found` / `task not
+/// found` text the owner lookup produces.
+fn is_worktree_setup_dependency_not_found(step_id: &str, error: &DispatchError) -> bool {
+    if step_id != "worktree_setup" {
+        return false;
+    }
+    let message = error.to_string();
+    message.contains("task not found")
+        && (message.contains("not_found") || message.contains("NotFound"))
 }
 
 /// The one task this run carries, from `task_id` or a one-element `task_ids`.

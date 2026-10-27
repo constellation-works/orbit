@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-25
+last_updated: 2026-10-27
 last_validated: 2026-10-26
 status: Draft
 feature: agent-scorecards
@@ -39,7 +39,7 @@ Every role tab has the same layout:
 
 Reviewers also carry a **provisional** banner under the strip while any review in the window is younger than the 30-day miss lookback (§4.4). It counts those reviews against the window's total. A reviewer whose accept rate is well above its peers' carries an `accepts often` tag under its name in the ranking (§5.3). A role module supplies the banner and the row tags through optional hooks beside its panel.
 
-The view follows the shared dashboard window: 1h, 24h, 7d, 30d or 90d. `all` is accepted and treated as 90d, and labelled `all (90d)` (§8). It is read-only and scoped to the selected workspace; the aggregate view shows the usual placeholder. It builds HTML with `el()` and the radar with inline SVG. The dashboard is dark-only. The layout keeps its ranking table in an `overflow-x` box and stacks the detail column under the ranking at phone width.
+The view opens on a count window, `last 200`, and offers `last 50` and `last 500` beside the calendar windows 1h, 24h, 7d, 30d and 90d (`all` is accepted and treated as 90d, and labelled `all (90d)`, §8). A count window is the panel's own: it reaches back to the start of the newest 200 delivery attempts, so a quiet month still ranks the crews that did the work, and it never becomes the shared dashboard window. A calendar tab hands the view back to the shared window. The meta line names the count and the date it reaches back to. It is read-only and scoped to the selected workspace; the aggregate view shows the usual placeholder. It builds HTML with `el()` and the radar with inline SVG. The dashboard is dark-only. The layout keeps its ranking table in an `overflow-x` box and stacks the detail column under the ranking at phone width.
 
 ### 1.1 Agent profile radar
 
@@ -465,7 +465,7 @@ GET /api/agents/attribution?window=
 
 **Scorecard** answers:
 
-- `role`, `window`, `requested_window`, `since`, `min_support`, `computed_at`, `cache_ttl_seconds`, `tasks_scanned`. `window` is the window served: `all` is requested as `all` and served as `90d`;
+- `role`, `window`, `requested_window`, `since`, `min_support`, `computed_at`, `cache_ttl_seconds`, `tasks_scanned`. `window` is the window served: `all` is requested as `all` and served as `90d`; `window_attempts` is a count window's size (null for a calendar window);
 - `status`: `ok`, or `not_computed` while a role's track has not landed. A `not_computed` role still returns its `terms`, with empty `rows`.
 - `unit` (label of the role's unit);
 - `fleet_average`;
@@ -512,6 +512,8 @@ One `AgentFacts` scan per workspace serves all four roles and the attribution st
 - task-pilot receipts and the codebase facts the pilot terms need (landed files, base-conflict blocks, lock denials with their holders, lock-wait episodes), from the incremental Analytics › Codebase scan (`codebase_scan`), whose stored per-task facts keep the pilot receipts. A failed codebase scan leaves the pilots role without rows and logs a warning rather than failing the other roles.
 
 It reads at most 90 days back. `all` is served as 90 days, so the scan stays bounded however old the workspace gets.
+
+**Count windows.** `last50`, `last200` and `last500` select by delivery attempts rather than time: the window starts at the start of the `N`th newest implementation attempt in the scan (the oldest when the scan holds fewer, the scan's reach when it holds none) and ends now, and every role slices its own unit from that start as for a calendar window. Window membership, attribution and the shared score are unchanged. They reach no further than the scan's 90 days, so a workspace idle for longer still shows nothing. The implementers `--by-type --shadow` report reads recorded crew draws rather than the scan and refuses a count window.
 
 The server keeps one scan per workspace runtime for five minutes, single-flight, like the orchestrator scan. When the cached scan is stale, the next request is answered from it while one background refresh runs. A scan more than an hour past its five minutes is not served; the request waits for a new one. Changing the role, window or minimum support, or opening a detail, only slices the cached facts.
 

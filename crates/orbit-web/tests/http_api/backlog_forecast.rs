@@ -477,7 +477,20 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
 
             let server = fixture.server(false);
             let before = json_ok(server.get(ENDPOINT));
-            assert_eq!(before["inputs"]["history_deliveries"], 1);
+            // Fewer than 50 completions in 30 days: the floor reaches back to
+            // the 40-day-old one, and the lookback starts at its completion.
+            assert_eq!(before["inputs"]["history_deliveries"], 2);
+            let lookback_start: DateTime<Utc> = before["inputs"]["lookback_start"]
+                .as_str()
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert!(
+                (now - lookback_start - Duration::days(40))
+                    .num_minutes()
+                    .abs()
+                    < 60
+            );
             assert_eq!(before["inputs"]["history_without_invocations"], 0);
             assert_eq!(before["arrivals"]["done_per_day"], 0.14);
             let calibration = &before["calibration"];
@@ -510,9 +523,10 @@ fn terminal_comments_preserve_completion_history_and_calibration() {
                     "terminal metadata must not move a settled forecast's actuals"
                 );
                 assert_eq!(
-                    after["inputs"]["history_deliveries"], 1,
-                    "touching an old delivery must not move it into the lookback"
+                    after["inputs"]["lookback_start"], before["inputs"]["lookback_start"],
+                    "touching an old delivery must not move its completion"
                 );
+                assert_eq!(after["inputs"]["history_deliveries"], 2);
                 assert_eq!(
                     after["arrivals"]["done_per_day"], 0.14,
                     "terminal metadata is not a new completion"

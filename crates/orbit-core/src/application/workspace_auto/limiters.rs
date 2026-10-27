@@ -12,13 +12,12 @@ use crate::application::contracts::PULL_DRAIN_JOB;
 use crate::runtime::host_resource::accuracy::{AccuracySelection, DrainLimiters, ForecastAccuracy};
 
 impl OrbitRuntime {
-    /// How the admission forecasts recorded on this host over the last
-    /// 30 days compare with its measured minutes, how each drain's shadow and
-    /// enforce decisions compare with what it admitted, and what limited each
-    /// drain's admission passes.
+    /// How the newest admission forecasts recorded on this host, whatever
+    /// their age, compare with its measured minutes, how each drain's shadow
+    /// and enforce decisions compare with what it admitted, and what limited
+    /// each drain's admission passes.
     pub fn forecast_accuracy(&self) -> Result<ForecastAccuracy, OrbitError> {
-        let report_at = Utc::now();
-        self.forecast_accuracy_selected(AccuracySelection::last_30_days(report_at), report_at)
+        self.forecast_accuracy_selected(AccuracySelection::latest(), Utc::now())
     }
 
     /// The report over a selected cohort of recorded forecasts, bounded above

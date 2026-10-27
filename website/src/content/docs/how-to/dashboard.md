@@ -573,8 +573,11 @@ marked fleet-wide. Resources are learned on the host you are viewing.
 Switching hosts shows the profiles that host learned.
 
 The address keeps the host, the workspace, and the dashboard time window
-(`1h`, `24h`, `7d`, `30d`, or **all**). Metrics, Cost, and Agents follow it.
-Codebase and Reliability keep the windows named below. What each agent role
+(`1h`, `24h`, `7d`, `30d`, or **all**). Metrics and Cost follow it, and so
+do Agents when you pick a time window there. Codebase and Reliability keep
+the windows named below. Views that rate each delivery (Resources, Forecast
+and, by default, Agents) count deliveries instead, so a month without work
+does not empty them. What each agent role
 is scored on, and `orbit agents scorecard`, are in [Agents](#agents).
 
 ### Metrics
@@ -708,10 +711,17 @@ The host default is `machine.auto_concurrency.mode`. See
 
 A profile is learned from the CPU and memory that delivery's workers recorded
 on this host. It appears once a delivery the drain admitted here finishes.
-Each profile keeps the most recent completed deliveries of its kind that were
-admitted within 30 days. How many it keeps is
-`machine.auto_concurrency.profile_window` (default 50). The page prints the
-number in effect, the host's cores and memory, and the admit thresholds.
+Each profile keeps the most recent completed deliveries of its kind, however
+old. How many it keeps is `machine.auto_concurrency.profile_window` (default
+50). When the crew model or Orbit version changes, the profile follows the
+newest one and keeps older deliveries only until it has
+`machine.auto_concurrency.min_profile_deliveries` of the new kind; hover a
+delivery count to see which. The page prints the number in effect, the
+host's cores and memory, and the admit thresholds.
+
+The history selector beside the work class shows more deliveries without
+changing admission: **Last 50** (admission's own window), **Last 200**, or
+**All kept**.
 
 **Work class** is **Change**, **No-diff**, then each auto-task template that
 already has a profile. Change and no-diff split by complexity: **Low**,
@@ -769,8 +779,9 @@ orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --mode enforce
 orbit run profiles --accuracy --drain <run-id> --json
 ```
 
-`--accuracy` reads forecasts from drains in `shadow` or `enforce` over the
-last 30 days, unless `--since` sets an RFC3339 bound. Error is forecast minus
+`--accuracy` reads the newest 5000 forecasts from drains in `shadow` or
+`enforce`, whatever their age; `--last <N>` reads another count and `--since`
+sets an RFC3339 bound. Error is forecast minus
 measured, so a positive CPU error means the forecast was high. The summary is
 one row per offset (`+5m`, `+10m`, `+20m`, `+30m`): pairs, mean CPU error and
 mean absolute error in cores, how often the CPU forecast was under, mean
@@ -806,8 +817,12 @@ it has left.
   A quantile reads `—` when its measure is unavailable. Missing simulated
   totals sort after known totals; p50 or p90 is unavailable if its rank falls
   among those missing totals.
-- **14d**, **30d**, and **90d** choose the lookback. A longer one samples more
-  tasks but older behavior.
+- The history selector chooses the finished tasks sampled. The default is
+  the last 30 days, reaching further back when those hold fewer than 50
+  finished tasks, so a quiet month still forecasts. **Last 200** and **Last
+  500** sample that many of the newest finished tasks, whatever their age;
+  **90d** samples 90 days. The figures name how many tasks they sampled and
+  since when. More tasks means older behavior.
 - **No arrivals**, the default, assumes nothing new is filed. The strip
   beside it shows how many tasks were filed a day over the last week
   (auto-tasks, sweeps, other filings) and how many were done, so you can see
@@ -900,7 +915,11 @@ dashboard window of `1h` or **all** uses `24h`, named on the cards.
 ## Agents
 
 **Agents** is an Analytics view. It ranks the crews and models behind each
-agent role in the selected workspace and time window. Pick a role from the
+agent role in the selected workspace. The window starts at **last 200**: the
+newest 200 delivery attempts, whatever their age (**last 50** and **last 500**
+are beside it). A time window (`1h` to **all**, 90 days) follows the
+dashboard's window instead. Count windows reach back no further than 90 days.
+Pick a role from the
 tabs above the panel; each tab shows how many rows it ranks. A role whose
 scorecard is not computed yet says so and lists the terms it will be scored
 on.

@@ -7,7 +7,10 @@ Options:
           Compare recorded admission forecasts with the host's measured load
 
       --since <TIMESTAMP>
-          Include forecasts at or after this RFC3339 timestamp (accuracy only)
+          Include forecasts at or after this RFC3339 timestamp; without --last, every one of them (accuracy only)
+
+      --last <N>
+          Include only the newest N matching forecasts, whatever their age (accuracy only)
 
       --drain <RUN>
           Select an exact drain run id (accuracy only)
@@ -30,11 +33,12 @@ Global options (see 'orbit --help' for descriptions):
 
 One resource profile per workspace, work class and complexity, from the CPU and memory
 recent deliveries recorded. `--accuracy` instead compares admission forecasts with the
-host's measured load. Read-only.
+host's measured load: by default the newest 5000 forecasts, whatever their age. Read-only.
 
 Examples:
   orbit run profiles
   orbit run profiles --json
   orbit run profiles --accuracy
+  orbit run profiles --accuracy --last 500
   orbit run profiles --accuracy --wide
   orbit run profiles --accuracy --since 2026-10-15T00:00:00Z --drain <RUN> --mode enforce --json
