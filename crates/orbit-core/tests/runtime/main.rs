@@ -39,6 +39,7 @@ mod agent_sandbox_mask;
 mod artifact_tools;
 mod audit_commit_report;
 mod auto_task_update;
+mod backlog_resource_fit;
 mod backlog_review_modes;
 mod baseline_hold_refresh;
 mod baseline_hold_tick;

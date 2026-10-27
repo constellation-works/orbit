@@ -137,7 +137,8 @@ fn block_history_frees_slots_requeues_and_leaves_work_undrained() {
             let first = backlog_task(&clean, "First", &["file:a.rs"], &[], &[]);
             let second = backlog_task(&clean, "Second", &["file:b.rs"], &[], &[]);
             let clean = forecast(&clean);
-            assert_eq!(clean["model_version"], 5);
+            // Outcomes arrived in model 5; later factors retain them.
+            assert!(clean["model_version"].as_u64().unwrap() >= 5);
             assert_eq!(clean["inputs"]["admission_factors"]["outcomes"], 1);
             assert_eq!(
                 clean["inputs"]["outcomes"]["episodes"],
@@ -318,12 +319,19 @@ fn abandoned_and_blocked_tasks_do_not_corrupt_settled_actuals() {
             let pending = row(5, 1);
             assert_eq!(pending["pending"], 1);
             assert_eq!(pending["settled"], false);
-            let current = &calibration["forecast_level"];
+            // Model 5's own calibration, which later versions keep apart.
+            let five = calibration["by_model_version"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["model_version"] == 5)
+                .unwrap();
+            let current = &five["forecast_level"];
             assert_eq!(current["time_to_drain_hours"]["n"], 0);
             assert_eq!(current["settled"], 1);
             assert_eq!(current["not_drained"], 1);
             // The delivered task is scored in both model-5 forecasts.
-            assert_eq!(calibration["task_level"]["hours"]["n"], 2);
+            assert_eq!(five["task_level"]["hours"]["n"], 2);
         },
     );
 }
