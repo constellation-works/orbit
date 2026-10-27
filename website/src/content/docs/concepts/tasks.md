@@ -16,7 +16,11 @@ Every task needs an observable outcome. Don't file one as a scratch note.
 
 A task can also declare `required_tools`: Orbit tools its agent needs beyond
 the activity's baseline. They are fixed at creation; see
-[Transition rules](#transition-rules).
+[Transition rules](#transition-rules). An operator can also grant named
+read-safe tools to the implementer through `granted_tools`. A grant is
+accepted only while the task is `proposed`, `backlog` or `someday` and no
+run has started; the implementer lifts that tool's deny entry, a mutating
+tool stays denied, and a non-empty grant keeps the task on its owner host.
 
 A task can also name the tasks it waits on and link to related work. See
 [Dependencies and relations](#dependencies-and-relations).
