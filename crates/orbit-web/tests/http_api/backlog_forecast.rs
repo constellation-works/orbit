@@ -644,7 +644,8 @@ fn dependency_chain_runs_in_sequence_despite_free_slots() {
             let c = backlog_task(&fixture, "Chain C", &["file:c.rs"], &[], &[&b]);
             let server = fixture.server(false);
             let forecast = json_ok(server.get(&format!("{ENDPOINT}&concurrency=4")));
-            assert_eq!(forecast["model_version"], 3);
+            // Admission arrived in model 3; later sampling factors retain it.
+            assert!(forecast["model_version"].as_u64().unwrap() >= 3);
             // Every draw is one hour, so every iteration drains in exactly the
             // chain's three hours: never in the one hour three free slots give.
             assert_eq!(

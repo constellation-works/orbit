@@ -135,6 +135,14 @@ pub(in crate::application) trait TaskJobPort {
     /// The persisted pipeline state of `run_id`, as stored.
     fn stored_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError>;
 
+    /// Whether a recorded run contributes a delivery's enforced review mode,
+    /// excluding coordinator, pilot and after-landing review work.
+    fn is_forecast_delivery_run(&self, run: &JobRun) -> bool;
+
+    /// The built-in delivery route pending `task` would take; custom routes
+    /// return `None` because their review steps are not known here.
+    fn forecast_task_delivery_mode(&self, task: &Task) -> Result<Option<ShipMode>, OrbitError>;
+
     /// The preservation record for a published owner run of `task`, when it
     /// published through its own pipeline.
     fn published_owner_preservation(

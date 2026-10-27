@@ -5,7 +5,7 @@ last_updated: 2026-10-26
 last_validated: 2026-10-26
 status: Draft
 stage: building
-next: "Implement the remaining v2 factors: review modes [ORB-18687], outcomes [ORB-18688], resource fit [ORB-18689] and rework [ORB-18691]."
+next: "Implement the remaining v2 factors: outcomes [ORB-18688], resource fit [ORB-18689] and rework [ORB-18691]."
 feature: backlog-forecast
 doc_role: scope
 type: design
@@ -15,7 +15,7 @@ tags: [backlog-forecast, backlog-forecast-v2, analytics-metrics]
 
 # Scope: backlog forecast v2 from drain admission
 
-Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], and [ORB-18686] shipped the admission factor as `MODEL_VERSION` **3** (see [Shipped so far](#shipped-so-far)); the remaining v2 rules and fields are planned until their tasks land. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
+Status: v1 shipped in [ORB-18385]; v2 scoped by [ORB-18685], with six implementation tasks below. The per-task riskiness estimator shipped in [ORB-18690], [ORB-18686] shipped the admission factor, and [ORB-18687] shipped review-mode sampling as `MODEL_VERSION` **4** (see [Shipped so far](#shipped-so-far)); the remaining v2 rules and fields are planned until their tasks land. “v2” names the feature revision; implementations increment `MODEL_VERSION` from the value they find.
 
 Bearing: Orbit records managed invocations, task status history, leaf occupancy, admission decisions and host resource profiles. The shared service is `crates/orbit-core/src/application/task/backlog_forecast.rs`, with simulation in `backlog_forecast/model.rs` and scoring in `backlog_forecast/scoring.rs`. It serves the owner sweep clock and `crates/orbit-web/src/api/diagnostics/backlog_forecast/`. The drain already owns the admission rules this forecast must reuse ([auto-concurrency](../auto-concurrency/2_design.md), [distributed drain](../distributed-drain/1_overview.md)).
 
@@ -32,6 +32,15 @@ Bearing: Orbit records managed invocations, task status history, leaf occupancy,
 - **Latency.** On dk-server-1, release build, a 200-task backlog (10% without context files, 10% directory selectors, every fifth depending on an earlier task, mixed priorities, 5 slots, 40 history deliveries) at 1000 iterations: HTTP p50 0.280 s, p95 0.310 s; simulation about 0.27 s and preparation about 6 ms; peak RSS +12.8 MB. At 400 tasks p95 is 1.21 s (pairwise passes grow quadratically), so 200 is the measured limit for the 1-second target.
 
 Interim limits until the remaining factors land: review lock holders are counted in coverage, not simulated (`assumptions.review_lock_holders: "not_modelled"`); arrivals take a slot but hold no lock (`arrival_conflicts: "slot_only"`, conflict donors arrive with [ORB-18691]); static eligibility (complexity, pilot, route, crew, OS and label gates), published resumes and leaf-occupancy lineage are not replayed (`static_eligibility: "not_modelled"`), and the census and expiry inputs are frozen at forecast time.
+
+[ORB-18687] (`MODEL_VERSION` 4, `inputs.admission_factors.review_modes: 1`, admission remains 1) adds review-conditioned delivery sampling:
+
+- Historical rows carry `none`, `before_pr`, `before_landing`, `mixed` or `unknown`. The accounting projection now retains workspace-scoped run and activity IDs without hydrating tool traces. Each distinct linked delivery run is read once and joined to its captured admission and executed reviewer steps. Missing or contradictory evidence stays unknown; coordinator/pilot work and after-landing review tasks do not add a review layer to the delivery.
+- Pending and proposed tasks resolve the current review snapshot through the review admission authority, with delivery-route conflicts and unsupported custom routes reported as unknown. In-progress tasks retain their run's captured admission. Pending `no-diff-expected` tasks assume the no-diff exemption; `skip-review` alone cannot prove a future candidate stays inside light-delivery paths, so the forecast conservatively retains policy until a run records a verified exemption. The prediction and stored task carry `review_mode`, `review_mode_source`, `review_mode_fallback` and `cell_samples`.
+- At five rows per pool, resolution tries complexity/crew/mode, complexity/mode, then workspace/mode, before dropping mode and trying the original complexity/crew, complexity and workspace pools. The response's basis values are `cell`, `review_complexity`, `review_workspace`, `mode_pooled_cell`, `complexity`, `workspace` and `none`. Metric redraws stay inside that same resolved pool. Unknown mode is missing evidence and always uses the explicit mode-pooled fallback.
+- Backlog and proposed coverage add `review_mode_fallbacks` (tasks whose resolution dropped mode, including no history), `review_mode_unknown` (tasks with an unknown assumption) and `history_review_mode_unknown` (history deliveries with unknown evidence). `inputs.history_review_modes` reports the historical mode counts. Existing thin-cell, complexity and workspace counts include the corresponding mode-preserving fallback levels.
+
+This factor retains v1's completed-delivery sampling unit, invocation union hours and in-progress spent subtraction. Episode/return/review-residual phases remain [ORB-18688]'s work; returns will resolve the then-current policy when that factor ships. It changes sample selection, not event scheduling.
 
 ## Problem
 
@@ -93,7 +102,7 @@ Paths beginning `admission/` above are under `crates/orbit-core/src/application/
 
 The cell becomes **complexity × effective crew pool × actual enforced review mode**, with modes `none`, `before_pr`, `before_landing`, `mixed` and `unknown`. `mixed` means attempts in one delivery used different enforced modes; it is history, not a pending policy choice. After-landing `delivery-code-review` tasks are separate work, not a before-landing mode on their originating delivery.
 
-`InvocationRecord` (`crates/orbit-store/src/contracts/invocation.rs`) carries `job_run_id`, `activity_id` and task linkage, but **no review-timing flag**; the current `InvocationSpend` projection even omits run/activity IDs. Read/join the underlying records, scoped by workspace and run, to the run's captured `ReviewAdmission` (`crates/orbit-types/src/workflow/review/admission.rs`) and actual step execution. `agent_review_repair` is used by both the `review` and `landing_review` steps in `assets/jobs/task_pr_pipeline.yaml`; its activity name alone cannot distinguish timing. A linked reviewer invocation plus the captured timing/step evidence classifies the layer actually run. Use verified no-diff/light-delivery exemptions as `none`; absence of an invocation alone proves neither exemption nor no-review. Missing or contradictory joins yield `unknown`, counted in coverage. No new historical flag is assumed.
+`InvocationRecord` (`crates/orbit-store/src/contracts/invocation.rs`) carries `job_run_id`, `activity_id` and task linkage, but **no review-timing flag**. The accounting fact and `InvocationSpend` projections retain the run/activity IDs without hydrating tool traces. Join those workspace-scoped projections to the run's captured `ReviewAdmission` (`crates/orbit-types/src/workflow/review/admission.rs`) and actual step execution. `agent_review_repair` is used by both the `review` and `landing_review` steps in `assets/jobs/task_pr_pipeline.yaml`; its activity name alone cannot distinguish timing. A linked reviewer invocation plus the captured timing/step evidence classifies the layer actually run. Use verified no-diff/light-delivery exemptions as `none`; absence of an invocation alone proves neither exemption nor no-review. Missing or contradictory joins yield `unknown`, counted in coverage. No new historical flag is assumed.
 
 For pending work resolve current effective review admission with `crates/orbit-core/src/application/review/admission.rs`, including route, host-specific before-landing policy and applicable exemptions. A running task retains its captured admission even if configuration changed. Returns capture the current snapshot policy for a new attempt; prior spend retains its historical mode. Record the assumed mode and source per task.
 
@@ -258,7 +267,7 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 | Task | Deliverable |
 |---|---|
 | [ORB-18686] | Event-driven dependency/lock/footprint/reservation admission, shared adapter/order, dependency coverage, parallelism/critical path/start predictions, versioned scoring and latency evidence. |
-| [ORB-18687] | Invocation/run-derived review-mode cells, pending policy resolution and counted fallbacks. |
+| [ORB-18687] | Shipped: invocation/run-derived review-mode cells, pending/captured policy resolution, provenance and counted fallbacks (model 4, factor 1). |
 | [ORB-18688] | Episode outcomes, censored/age-conditioned blocked returns, review residual phases, incomplete probabilities and outcome-aware scoring. |
 | [ORB-18689] | Execution-host profile/capacity inputs and shared gap fit, mode/host coverage and resource diagnostics. Remote telemetry transport stays deferred. |
 | [ORB-18690] | Shipped: reusable per-task riskiness estimator (version 1) and task API/list/detail UI, with support and no-estimate states. |

@@ -156,6 +156,7 @@ pub(super) fn map_invocation_accounting_fact(
 
     Ok(InvocationAccountingFact {
         id: row.get(0)?,
+        job_run_id: row.get(11)?,
         ts,
         model,
         input_tokens,
