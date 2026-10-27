@@ -1,8 +1,8 @@
+use orbit_core::application::job::RunFailureCause;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
     JobRunState, JobRunTrigger, JobRunTriggerKind, PipelineState, run_id_role,
 };
-use serde::Serialize;
 use serde_json::Value;
 
 /// One text vocabulary for readiness payloads and recorded drain waits.
@@ -156,15 +156,7 @@ impl WaitingTaskFormatter {
     }
 }
 
-/// A failed run with no failed descendant, in child-dispatch traversal order.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub(crate) struct RunRootCause {
-    pub(crate) run_id: String,
-    pub(crate) step: Option<String>,
-    pub(crate) message: Option<String>,
-}
-
-pub(crate) fn format_root_cause_lines(causes: &[RunRootCause]) -> Vec<String> {
+pub(crate) fn format_root_cause_lines(causes: &[RunFailureCause]) -> Vec<String> {
     causes
         .iter()
         .enumerate()
