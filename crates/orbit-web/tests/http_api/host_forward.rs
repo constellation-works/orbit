@@ -761,11 +761,17 @@ fn forward_failures_are_typed_and_bounded() {
 /// The reserved local port is released before ssh binds it. A healthy
 /// dashboard that takes it first, reporting another machine, must never be
 /// read as the tunnel: the request fails with ssh's own exit, not a 409.
-#[test]
-fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
+/// With `preoccupied`, an unrelated counted listener already holds each
+/// reserved port before the fixture tries to bind it, modelling the
+/// parallel-process port race deterministically.
+fn foreign_listener_scenario(preoccupied: bool) {
     isolated(
-        "host_forward::a_foreign_listener_on_the_reserved_port_is_never_the_tunnel",
-        || {
+        if preoccupied {
+            "host_forward::a_preoccupied_reserved_port_is_never_the_tunnel"
+        } else {
+            "host_forward::a_foreign_listener_on_the_reserved_port_is_never_the_tunnel"
+        },
+        move || {
             let a = Fixture::new();
             write_hosts(
                 &a,
@@ -808,9 +814,42 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
                     );
                     let call = stub.calls()[before + allocation].clone();
                     let reserved = forwarded_port(&call);
-                    let foreign = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
-                        .expect("the selected port is free until ssh binds it");
-                    foreign_probes.push(serve_dashboard(foreign, Some(foreign_identity.clone())));
+                    // Deterministic variant: an unrelated listener wins the
+                    // race for the reserved port before the fixture binds it.
+                    let preoccupying_probes = if preoccupied {
+                        let unrelated = TcpListener::bind((Ipv4Addr::LOCALHOST, reserved))
+                            .expect("the pre-occupying listener binds the free reserved port");
+                        Some(serve_dashboard(unrelated, Some(foreign_identity.clone())))
+                    } else {
+                        None
+                    };
+                    match TcpListener::bind((Ipv4Addr::LOCALHOST, reserved)) {
+                        Ok(foreign) => {
+                            foreign_probes
+                                .push(serve_dashboard(foreign, Some(foreign_identity.clone())));
+                            if let Some(probes) = preoccupying_probes {
+                                foreign_probes.push(probes);
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
+                            // The port is already held: that holder is the
+                            // foreign occupant. Its counted listener is the
+                            // probe target in the deterministic variant; in
+                            // the original scenario an external holder cannot
+                            // be counted, so the 502/exit-255, reaping and
+                            // no-spawn assertions below prove it is never
+                            // trusted as the tunnel.
+                            match preoccupying_probes {
+                                Some(probes) => foreign_probes.push(probes),
+                                None => {
+                                    foreign_probes.push(Arc::new(AtomicUsize::new(0)));
+                                }
+                            }
+                        }
+                        Err(error) => {
+                            panic!("bind foreign listener on reserved port {reserved}: {error}")
+                        }
+                    }
                     if host == "deadhost" {
                         stub.release();
                     } else {
@@ -851,6 +890,19 @@ fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
             }
         },
     );
+}
+
+#[test]
+fn a_foreign_listener_on_the_reserved_port_is_never_the_tunnel() {
+    foreign_listener_scenario(false);
+}
+
+/// Deterministic regression for the parallel-runner port race: the
+/// selected port is already held by an unrelated listener when the
+/// fixture tries to bind it as the foreign listener.
+#[test]
+fn a_preoccupied_reserved_port_is_never_the_tunnel() {
+    foreign_listener_scenario(true);
 }
 
 #[test]

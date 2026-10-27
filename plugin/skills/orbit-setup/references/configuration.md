@@ -144,6 +144,57 @@ them to `[review]` and the auto-task flag. `operation.review_reviewer_starts` an
 `orbit config show --all` reports the review timing and the after-landing switch with
 their sources; `--json` includes the same `review` object, and the default text view prints the `review.*` rows without that summary.
 
+## Experiments
+
+Experiments compare a control arm with one or more treatments for agent work.
+Each treatment can vary instructions, skills, tools, crew or an allowlisted
+configuration value. The `[experiments]` table is workspace policy:
+
+| Key | Default | Bound or effect |
+|---|---|---|
+| `experiments.enabled` | `false` | Boolean switch that permits experiments to start. |
+| `experiments.max_running` | `3` | Advanced integer from `1` to `20`; maximum running experiments in the workspace. |
+| `experiments.config_keys` | `[]` | Advanced list of config keys an experiment may override. Empty allows no config overlays. |
+
+For workspace policy, add or merge this table in
+`<workspace>/.orbit/config.toml`:
+
+```toml
+[experiments]
+enabled = true
+max_running = 2
+config_keys = ["workflow.explore.max_calls_per_run"]
+```
+
+Each overlay config key must be in both the built-in typed allowlist and
+`experiments.config_keys`; the workspace list alone does not add support. The
+current built-in allowlist contains `workflow.explore.max_calls_per_run`, an
+integer from `1` to `100`. Use `orbit config show --all` to inspect effective
+values with their source, or `orbit config get <key>` for one value.
+
+An operator creates an experiment as a draft, edits a draft with `update`, or
+copies a definition into a new draft with `clone`. `start` opens the first
+segment and freezes the definition. Operators may `pause` and `resume`,
+`reweight` a running or paused experiment to open a new segment, or `assign` an
+unassigned nonterminal task to an active arm of a running shadow experiment.
+They finish with `conclude` (recording a chosen arm or no choice) or
+`abandon` (without a conclusion). An agent session may only use these
+read-only commands:
+
+- `orbit experiment list`
+- `orbit experiment show <id>`
+- `orbit experiment readout <id>`
+
+The other experiment operations are operator-only.
+
+Choose `shadow` to record assignments without applying treatments. Choose
+`live` to apply the assigned arm's instructions, skills, tools, crew and
+allowlisted config values to work. Readouts calculate per-arm outcomes from
+the recorded assignments and work records. For the list and readouts, use
+`orbit experiment list`, `orbit experiment show <id>` and
+`orbit experiment readout <id>`, or open the dashboard's **Analytics ›
+Experiments** page for per-arm enrollment and readouts.
+
 ## Review finding verification and owed host evidence
 
 These settings govern review findings and the checks an owner may owe after a

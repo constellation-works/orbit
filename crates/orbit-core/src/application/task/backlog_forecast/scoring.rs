@@ -8,6 +8,14 @@
 //! an exclusion is not scored as a whole, since its totals covered work that
 //! no longer exists.
 //!
+//! From model 5 [ORB-18688] a rejected or archived task is a genuine
+//! outcome the forecast samples, not an exclusion: it is abandoned, its
+//! spend after the forecast counts toward the totals, and a forecast whose
+//! other tasks are done is settled without draining (`not_drained`), so
+//! its time to drain is never scored from the tasks that happened to
+//! finish. A blocked task stays pending. Earlier versions keep their
+//! original exclusions.
+//!
 //! Hits are kept per model version: a version's quantiles mean something
 //! different from another's, so the top-level hit rates describe the
 //! current version alone and `by_model_version` holds every version's own.
@@ -32,6 +40,8 @@ struct StoredTask {
 }
 
 const METRICS: [&str; 3] = ["hours", "tokens", "usd"];
+/// The first model version that samples abandoned work.
+const ABANDONED_OUTCOME_VERSION: u32 = 5;
 const TOTALS: [&str; 3] = ["time_to_drain_hours", "tokens", "usd"];
 
 /// How many actuals fell at or under p50 and p90.
@@ -98,6 +108,9 @@ struct VersionHits {
     forecasts: u64,
     task: [Hits; 3],
     total: [Hits; 3],
+    /// Settled forecasts, and those of them that never drained.
+    settled: u64,
+    not_drained: u64,
 }
 
 impl VersionHits {
@@ -114,6 +127,8 @@ impl VersionHits {
             "time_to_drain_hours": self.total[0].to_json(),
             "tokens": self.total[1].to_json(),
             "usd": self.total[2].to_json(),
+            "settled": self.settled,
+            "not_drained": self.not_drained,
         })
     }
 }
@@ -140,6 +155,8 @@ pub(super) fn score_backlog_forecasts(
         let mut excluded = Excluded::default();
         let mut pending = 0u64;
         let mut done = 0u64;
+        let mut abandoned = 0u64;
+        let samples_abandoned = forecast.model_version >= ABANDONED_OUTCOME_VERSION;
         let mut last_done: Option<DateTime<Utc>> = None;
         let mut tokens_total = Some(0.0);
         let mut usd_total = Some(0.0);
@@ -148,12 +165,26 @@ pub(super) fn score_backlog_forecasts(
                 excluded.missing += 1;
                 continue;
             };
-            if matches!(task.status, TaskStatus::Rejected | TaskStatus::Archived) {
+            let ended_unfinished =
+                matches!(task.status, TaskStatus::Rejected | TaskStatus::Archived);
+            if ended_unfinished && !samples_abandoned {
                 excluded.rejected += 1;
                 continue;
             }
             if complexity_bucket(task.complexity.map(|c| c.as_str())) != stored_task.complexity {
                 excluded.rescoped += 1;
+                continue;
+            }
+            if ended_unfinished {
+                // What it spent before ending counts; it never delivered,
+                // so its own hours are not scored.
+                abandoned += 1;
+                let used = super::forecast_usage(
+                    runs.get(&stored_task.id).map_or(&[][..], Vec::as_slice),
+                    Some(forecast.forecast_at),
+                );
+                tokens_total = tokens_total.zip(used.tokens).map(|(sum, one)| sum + one);
+                usd_total = usd_total.zip(used.usd).map(|(sum, one)| sum + one);
                 continue;
             }
             if task.status != TaskStatus::Done {
@@ -180,17 +211,24 @@ pub(super) fn score_backlog_forecasts(
                 }
             }
         }
-        let settled = pending == 0 && done > 0;
+        let settled = pending == 0 && done + abandoned > 0;
         let whole = settled && excluded.total() == 0;
+        let drained = abandoned == 0;
         let actual = settled.then(|| {
             let drain = last_done
+                .filter(|_| drained)
                 .map(|at| round((at - forecast.forecast_at).num_seconds().max(0) as f64 / 3600.0));
             json!({
+                "drained": drained,
                 "time_to_drain_hours": drain,
                 "tokens": tokens_total.map(round),
                 "usd": usd_total.map(round),
             })
         });
+        if whole {
+            hits.settled += 1;
+            hits.not_drained += u64::from(!drained);
+        }
         if whole && let Some(actual) = &actual {
             for (index, key) in TOTALS.iter().enumerate() {
                 if let Some(value) = actual[*key].as_f64() {
@@ -208,6 +246,7 @@ pub(super) fn score_backlog_forecasts(
             "tasks": stored_tasks.len(),
             "done": done,
             "pending": pending,
+            "abandoned": abandoned,
             "excluded": excluded.to_json(),
             "settled": settled,
             "scored_whole": whole,

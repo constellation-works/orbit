@@ -43,7 +43,7 @@ const UNFORECASTABLE_LABELS = {
   review: "waits on work in review", blocked: "waits on blocked work", someday: "waits on someday work",
   proposed: "waits on unapproved work", rejected: "waits on rejected work", archived: "waits on archived work",
   external_work: "waits on another workspace", missing: "waits on a missing task", cycle: "dependency cycle",
-  upstream: "behind unforecastable work",
+  upstream: "behind unforecastable work", return_unsupported: "blocked, with no return history",
 };
 const WAITS = [
   ["dependency", "Dependencies", "Waiting for an earlier task in this forecast to finish."],
@@ -51,6 +51,7 @@ const WAITS = [
   ["reservation", "Surface reservations", "Higher-priority lock-blocked work reserved an overlapping surface."],
   ["footprint", "Unknown footprint", "An editing task without context files runs alone, or waits for the tree to be free."],
   ["capacity", "Capacity", "Ready and unblocked, but every slot is taken."],
+  ["return", "Returns", "Blocked, or blocked by an attempt, and waiting for a sampled return to the queue."],
 ];
 // The schedule table lists this many tasks in dispatch order.
 const SCHEDULE_ROWS = 50;
@@ -333,7 +334,7 @@ function forecastCard() {
     seg("History lookback", LOOKBACKS, view.lookback, (key) => { view.lookback = key; }),
     seg("Arrivals", ARRIVALS, view.arrivals, (key) => { view.arrivals = key; }),
   ]);
-  const meta = `${backlog.backlog ?? 0} backlog · ${backlog.in_progress ?? 0} in progress · ${inputs.history_deliveries ?? 0} deliveries in ${inputs.lookback_days ?? "?"} days`;
+  const meta = `${backlog.backlog ?? 0} backlog · ${backlog.in_progress ?? 0} in progress · ${backlog.blocked ?? 0} blocked · ${inputs.history_deliveries ?? 0} deliveries in ${inputs.lookback_days ?? "?"} days`;
   const children = [
     el("div", { class: "mx-card-head" }, [
       el("h2", { class: "mx-card-title", text: "Time to drain and cost" }),
@@ -341,7 +342,7 @@ function forecastCard() {
     ]),
     el("p", { class: "mx-blurb" }, [
       `${meta}. Simulated ${inputs.iterations ?? 0} times on ${capacityText(inputs)}. `,
-      infoHint("Each task draws a completed delivery's wall time, tokens and cost from tasks of the same complexity and crew pool, falling back to its complexity, then to all deliveries, when there are too few. Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Review, blocked and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet."),
+      infoHint("Each task draws a completed delivery's wall time, tokens and cost from tasks of the same complexity and crew pool, falling back to its complexity, then to all deliveries, when there are too few. Each simulated drain admits work as the drain does: in dispatch order, after its dependencies finish, never beside a task whose files overlap, an editing task without context files alone, and behind surfaces reserved by higher-priority work. Each attempt first draws a recorded attempt of the same pool: one that blocked, failed or was abandoned frees its slot when that attempt did, then requeues, waits for a return drawn from how long blocked work took to come back (or never does), or stops. Blocked tasks start out waiting for that return. Review and someday tasks are left out, and so is work that depends on them; in-progress tasks count only their remaining work. Review locks, static eligibility and arrivals' files are not modelled yet."),
       lastPayload.model_version != null ? el("span", { class: "fc-model mx-muted", text: ` Model v${lastPayload.model_version}.` }) : null,
     ]),
   ];
@@ -489,6 +490,12 @@ function coverageCard() {
     ["Unforecastable dependency", coverage.dependency_unforecastable, "Depends on work the drain will not start (in review, blocked, someday, unapproved, elsewhere or missing), sits behind such work, or is on a dependency cycle. Left out of the full totals."],
     ["Unverifiable dependencies", coverage.unverifiable_dependencies, "Dependencies this workspace cannot verify. The drain treats them as satisfied, and so does the forecast."],
     ["Review lock overlaps", coverage.review_lock_overlaps, "Overlaps files a task in review still locks. The forecast does not model when review releases them."],
+    ["Blocked", coverage.blocked, "Blocked now: each waits for a return drawn from how long blocked work took to come back, given how long it has waited."],
+    ["Attempt-outcome fallbacks", coverage.outcome_fallbacks, `Fewer than ${lastPayload.inputs?.min_cell_samples ?? 5} recorded attempts of the same complexity, crew pool and review mode: outcomes sampled from a wider pool.`],
+    ["No attempt history", coverage.outcome_no_history, "No recorded attempt to sample: every first attempt is assumed to deliver."],
+    ["No return history", coverage.return_unsupported, "Blocked, with no recorded wait to draw a return from. Left out of the full totals."],
+    ["Unknown return tail", coverage.return_tail_unsupported, "Recorded waits run out before 90 days: a draw past the last one counts as no return."],
+    ["Unknown elapsed time", coverage.phase_age_unknown, "Running or blocked, but the history does not say since when: treated as just started."],
     ["Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens in the pool used by recent arrivals."],
     ["Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost in the pool used by recent arrivals."],
   ];
@@ -496,7 +503,7 @@ function coverageCard() {
     el("dt", {}, [label, " ", infoHint(hint)]),
     el("dd", { class: value ? "fc-warn" : null, text: String(value ?? 0) }),
   ])));
-  const left = `${backlog.review ?? 0} in review and ${backlog.blocked ?? 0} blocked are not forecast.`;
+  const left = `${backlog.review ?? 0} in review are not forecast.`;
   const arrivalNote = `Recent arrivals sample all ${arrivals.deliveries ?? 0} history deliveries for both the backlog and if-approved totals. A sampled arrival missing tokens or cost makes that iteration's total unavailable for that metric; duration remains independent. Missing totals sort last, so p50 or p90 can show —. These gaps do not affect the no-arrivals forecast.`;
   return card("Coverage", `${coverage.tasks ?? 0} initial tasks forecast`, [list, el("p", { class: "mx-blurb", text: arrivalNote }), el("p", { class: "mx-blurb", text: left })]);
 }

@@ -238,3 +238,152 @@ fn an_unmarked_cli_failure_still_fails_the_local_run() {
     }
     local_provider_outcome("unrelated fixture stderr tail", None);
 }
+
+#[test]
+fn declared_blocker_holds_the_local_run_and_passes_parent_guard() {
+    if !super::dispatch_admission::isolated(
+        "local_provider_holds::declared_blocker_holds_the_local_run_and_passes_parent_guard",
+    ) {
+        return;
+    }
+    let fx = fixture(
+        "[workflow]\ndefault_crew = \"fixture\"\n\n[crews.fixture]\nprovider = \"codex\"\nmodel = \"fixture-model\"\n",
+    );
+    let output = json!({"schemaVersion": 1, "status": "success", "result": {"blocker": {"kind": "operator_approval_required", "evidence": "operator decision required"}}, "error": null});
+    let cli = FakeCodex::named(&fx.repo, "codex", "");
+    std::fs::write(
+        &cli.path,
+        format!("#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{}'\n", output),
+    )
+    .unwrap();
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let mut executor: ExecutorResource = serde_yaml::from_str(
+        &std::fs::read_to_string(assets.join("executors/codex.yaml")).unwrap(),
+    )
+    .unwrap();
+    executor.spec.command = Some(cli.path.display().to_string());
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    fx.runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+    let jobs = fx.runtime.global_root().join("resources/jobs");
+    std::fs::create_dir_all(&jobs).unwrap();
+    let mut job = implementation_job(Provider::Codex);
+    job.steps.remove(0);
+    job.steps[0].recovery_activity = None;
+    job.steps[0].resolved_recovery_activity = None;
+    job.failure_activity = None;
+    job.resolved_failure_activity = None;
+    job.final_recovery_activity = None;
+    job.resolved_final_recovery_activity = None;
+    std::fs::write(jobs.join("task_pr_pipeline.yaml"), json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_pr_pipeline"}, "spec": job}).to_string()).unwrap();
+    let task = fx.task("fixture");
+    let input = json!({"task_ids": [task], "crew": "fixture"});
+    let run = fx
+        .runtime
+        .insert_job_run("task_pr_pipeline", 1, Utc::now(), Some(input.clone()), None)
+        .unwrap();
+    fx.runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), run.job_id, input),
+        )
+        .unwrap();
+    fx.runtime
+        .apply_task_automation_update(
+            &task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::InProgress),
+                job_run_id: Some(run.run_id.clone()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let _ = fx.runtime.execute_pipeline_run_worker(&run.run_id);
+    let stored = fx.runtime.show_job_run(&run.run_id).unwrap();
+    assert_eq!(fx.status(&task), TaskStatus::Blocked);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    assert!(
+        history
+            .last()
+            .unwrap()
+            .note
+            .as_deref()
+            .unwrap()
+            .contains("error_code=task_blocked_by_agent"),
+        "{history:?}"
+    );
+    assert_eq!(stored.state, JobRunState::Held, "{:?}", stored.steps);
+    let diagnostic = stored.steps.last().unwrap();
+    assert_eq!(
+        diagnostic.error_code.as_deref(),
+        Some("task_blocked_by_agent")
+    );
+    assert!(
+        diagnostic
+            .error_message
+            .as_deref()
+            .unwrap()
+            .contains("kind=operator_approval_required")
+    );
+    let waited = fx
+        .runtime
+        .wait_pipeline_runs(std::slice::from_ref(&run.run_id), 1, 1, None)
+        .unwrap();
+    let parent = jobs.join("blocker_parent.yaml");
+    std::fs::write(&parent, json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "blocker_parent"}, "spec": {"state": "enabled", "steps": [{"id": "guard", "spec": {"type": "deterministic", "action": "pipeline_success_guard", "config": {}}, "default_input": {"result": "{{ input.result }}"}}]}}).to_string()).unwrap();
+    let result = fx
+        .runtime
+        .run_job_v2_from_yaml(&parent, json!({"result": waited.results[0]}))
+        .unwrap();
+    assert!(result.success, "{:?}", result.message);
+
+    let claimed = jobs.join("task_claimed_pr_pipeline.yaml");
+    std::fs::write(&claimed, json!({"schemaVersion": 2, "kind": "Job", "metadata": {"name": "task_claimed_pr_pipeline"}, "spec": job}).to_string()).unwrap();
+    let leaf = fx
+        .runtime
+        .run_job_v2_from_yaml(&claimed, json!({"crew": "fixture"}))
+        .unwrap();
+    let leaf_run = fx.runtime.show_job_run(&leaf.run_id).unwrap();
+    assert_eq!(leaf_run.state, JobRunState::Held, "{:?}", leaf_run.steps);
+    let waited = fx
+        .runtime
+        .wait_pipeline_runs(&[leaf.run_id], 1, 1, None)
+        .unwrap();
+    let parent_result = fx
+        .runtime
+        .run_job_v2_from_yaml(&parent, json!({"result": waited.results[0]}))
+        .unwrap();
+    assert!(parent_result.success, "{:?}", parent_result.message);
+
+    for result in [
+        json!({}),
+        json!({"blocker": {"kind": "", "evidence": "invalid"}}),
+    ] {
+        let failed = json!({"schemaVersion": 1, "status": "failed", "result": result, "error": {"code": "example_failure", "message": "ordinary failure"}});
+        std::fs::write(
+            &cli.path,
+            format!(
+                "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' '{}'\nexit 1\n",
+                failed
+            ),
+        )
+        .unwrap();
+        let outcome = fx
+            .runtime
+            .run_job_v2_from_yaml(&claimed, json!({"crew": "fixture"}))
+            .unwrap();
+        let stored = fx.runtime.show_job_run(&outcome.run_id).unwrap();
+        assert_eq!(
+            stored.state,
+            JobRunState::Failed,
+            "{failed}: {:?}",
+            stored.steps
+        );
+    }
+}
