@@ -153,6 +153,8 @@ fn claim_settle(
     let attribution = ClaimAttribution {
         crew: optional_string(input, "crew"),
         crew_model: optional_string(input, "crew_model"),
+        branch: optional_string(input, "branch"),
+        worktree_path: optional_string(input, "worktree_path"),
     };
     let result = runtime.serve_claim_settle(
         session,

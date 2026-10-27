@@ -911,6 +911,18 @@
         "description": "Optional. The model the leaf's crew resolved to. Attribution only, like `crew`.",
         "param_type": "string",
         "required": false
+      },
+      {
+        "name": "branch",
+        "description": "Optional. The branch the leaf run's worktree recorded. Attribution only, like `crew`; the owner shows it so an operator can inspect the run.",
+        "param_type": "string",
+        "required": false
+      },
+      {
+        "name": "worktree_path",
+        "description": "Optional. The absolute path of the leaf run's worktree on the executing machine. Attribution only, like `branch`.",
+        "param_type": "string",
+        "required": false
       }
     ]
   },

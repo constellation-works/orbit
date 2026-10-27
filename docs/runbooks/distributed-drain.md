@@ -1389,6 +1389,8 @@ settlement each leaf sent: its kind, evidence class (`provider_unavailable`,
 `baseline_red`, `forge_unavailable`, `evidence_hold`, `final_recovery`,
 `failure`, or `summary` for an untyped one), typed failure class, crew and the
 model it resolved to (`crew_model`, absent from a follower that predates it),
+the leaf's worktree `branch` and absolute `worktree_path` on the follower (also
+absent from a follower that predates them; the task detail panel shows them),
 failed step and bounded reason. A typed handoff keeps the same record for the
 agent scorecards, but this listing leaves it out. Settled claims carry no in-flight attempt, so this
 listing needs no operator capability; the `run-failure-patterns` auto-task

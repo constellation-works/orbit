@@ -168,9 +168,11 @@ impl PullPeer for RoutedPullPeer<'_> {
             "settlement": encode(settlement)?,
         });
         // The leaf's crew and model ride beside the settlement, since a typed
-        // handoff carries no evidence to hold them. An owner that predates
-        // the fields warns and ignores them. Attribution only: an unreadable
-        // leaf run sends none rather than failing the delivery.
+        // handoff carries no evidence to hold them, and so do the branch and
+        // worktree path its `worktree` step recorded, which the owner shows
+        // for inspecting the run here. An owner that predates the fields
+        // warns and ignores them. Attribution only: an unreadable leaf run
+        // sends none rather than failing the delivery.
         let leaf = admission
             .leaf_run_id
             .as_deref()
@@ -178,9 +180,12 @@ impl PullPeer for RoutedPullPeer<'_> {
             .flatten();
         if let (Some(leaf), Some(object)) = (leaf, input.as_object_mut()) {
             let attribution = leaf_attribution(&leaf);
+            let worktree = self.runtime.recorded_run_worktree(&leaf.run_id);
             for (key, value) in [
                 ("crew", attribution.crew),
                 ("crew_model", attribution.crew_model),
+                ("branch", worktree.branch),
+                ("worktree_path", worktree.worktree_path),
             ] {
                 if let Some(value) = value {
                     object.insert(key.into(), Value::String(value));

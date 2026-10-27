@@ -296,6 +296,18 @@ const CLAIM_SETTLE: OperationSpec<DrainVerb> = OperationSpec {
             false,
             "Optional. The model the leaf's crew resolved to. Attribution only, like `crew`.",
         ),
+        param(
+            "branch",
+            ParamType::String,
+            false,
+            "Optional. The branch the leaf run's worktree recorded. Attribution only, like `crew`; the owner shows it so an operator can inspect the run.",
+        ),
+        param(
+            "worktree_path",
+            ParamType::String,
+            false,
+            "Optional. The absolute path of the leaf run's worktree on the executing machine. Attribution only, like `branch`.",
+        ),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
