@@ -5,10 +5,11 @@
 //! (`tests/http_api/lease_listener.rs`).
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+use std::io::Write;
 use std::net::SocketAddr;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::Router;
@@ -31,6 +32,20 @@ use crate::lease_intake::{IntakeLimits, LeaseIntakeSocket};
 use crate::state::{DashboardState, SINGLE_WORKSPACE_ID};
 
 const PEER: &str = "192.0.2.10:50000";
+
+#[derive(Clone)]
+struct TraceCapture(Arc<Mutex<Vec<u8>>>);
+
+impl Write for TraceCapture {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
 
 fn provisioned_store(home: &Path) -> LeaseTokenStore {
     std::fs::create_dir_all(home).unwrap();
@@ -156,6 +171,16 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     ) {
         return;
     }
+    let trace = TraceCapture(Arc::new(Mutex::new(Vec::new())));
+    let trace_writer = trace.clone();
+    tracing::subscriber::set_global_default(
+        tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::TRACE)
+            .with_writer(move || trace_writer.clone())
+            .finish(),
+    )
+    .unwrap();
     let _env = orbit_common::test_env::scoped([
         ("ORBIT_AGENT_NAME", Some("orbit-web-test")),
         ("ORBIT_AGENT_MODEL", Some("orbit-web-test")),
@@ -217,6 +242,8 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
         HardLeasePermission::Never,
     );
 
+    std::fs::write(repo_root.join("src").join(&alice), "fixture").unwrap();
+
     let tokio = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -230,7 +257,10 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     let accept = {
         let _entered = tokio.enter();
         socket
-            .serve(DashboardState::single(runtime), IntakeLimits::default())
+            .serve(
+                DashboardState::single(Arc::clone(&runtime)),
+                IntakeLimits::default(),
+            )
             .unwrap()
     };
     tokio.spawn(accept);
@@ -254,6 +284,46 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
     let mut revoker = LeaseTokenStore::open_in_orbit_home(&home).unwrap();
 
     tokio.block_on(async {
+        for path in [alice.clone(), format!("%6F{}", &alice[1..])] {
+            let (status, _, response) = send(
+                &router,
+                "GET",
+                &format!("/api/leases/{path}"),
+                PEER,
+                &[("authorization", &bearer(&alice))],
+                None,
+            )
+            .await;
+            assert_eq!(status, StatusCode::BAD_REQUEST, "{response}");
+            assert!(
+                !response.to_string().contains(&alice),
+                "secret in response: {response}"
+            );
+            assert!(
+                !response.to_string().contains(&path),
+                "encoded secret in response: {response}"
+            );
+        }
+        for priority in ["high", "normal"] {
+            let (status, _, response) = send(
+                &router,
+                "POST",
+                "/api/leases",
+                PEER,
+                &[("authorization", &bearer(&alice))],
+                Some(json!({"selectors": [format!("file:src/{alice}")], "priority": priority})),
+            )
+            .await;
+            assert_eq!(
+                status,
+                if priority == "high" {
+                    StatusCode::BAD_REQUEST
+                } else {
+                    StatusCode::OK
+                },
+                "{response}"
+            );
+        }
         let (status, _, granted) = send(
             &router,
             "POST",
@@ -409,6 +479,58 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
             .unwrap();
         drop(stalled);
     });
+    let trace_output = String::from_utf8(trace.0.lock().unwrap().clone()).unwrap();
+    assert!(!trace_output.contains(&alice));
+    assert!(!trace_output.contains(&format!("%6F{}", &alice[1..])));
+    let events = runtime
+        .list_audit_events(None, None, None, None, 100)
+        .unwrap();
+    let intake: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event.command == "lease.intake.show"
+                && event.status == orbit_types::telemetry::AuditEventStatus::Failure
+        })
+        .collect();
+    assert_eq!(intake.len(), 2);
+    for event in intake {
+        let row = serde_json::to_string(event).unwrap();
+        assert!(!row.contains(&alice), "secret in owner audit: {row}");
+        assert!(!row.contains(&format!("%6F{}", &alice[1..])));
+        let payload: Value = serde_json::from_str(event.arguments_json.as_ref().unwrap()).unwrap();
+        assert_eq!(payload["principal"], "alice");
+        assert_eq!(payload["token_id"], alice_id);
+        assert_eq!(payload["operation"], "show");
+        assert_eq!(payload["outcome"], "error");
+        assert!(
+            payload["client_address"]
+                .as_str()
+                .unwrap()
+                .contains("192.0.2.10")
+        );
+    }
+    for command in ["lease.request.granted", "lease.request.refused"] {
+        let event = events
+            .iter()
+            .find(|event| {
+                event.command == command
+                    && event
+                        .arguments_json
+                        .as_deref()
+                        .is_some_and(|payload| payload.contains("[REDACTED_SECRET]"))
+            })
+            .expect("redacted selector audit row");
+        let payload: Value = serde_json::from_str(event.arguments_json.as_ref().unwrap()).unwrap();
+        assert!(!event.arguments_json.as_ref().unwrap().contains(&alice));
+        assert_eq!(payload["principal"], "alice");
+        assert_eq!(payload["token_id"], alice_id);
+        assert!(
+            payload["client_address"]
+                .as_str()
+                .unwrap()
+                .contains("192.0.2.10")
+        );
+    }
     assert!(
         audit_rows(&home).is_empty(),
         "operations that reached Orbit are audited there, not by the listener"

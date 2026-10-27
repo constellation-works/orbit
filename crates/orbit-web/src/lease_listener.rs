@@ -411,7 +411,8 @@ fn backend_refusal(status: StatusCode, body: Value, reason: &'static str) -> Res
 
 /// Map an intake refusal to HTTP. Codes from Orbit's operation dispatch were
 /// audited there; anything else stopped at the socket and is audited here.
-fn intake_error_response(error: LeaseIntakeError) -> Response {
+fn intake_error_response(mut error: LeaseIntakeError) -> Response {
+    error.message = orbit_common::security::redaction::redact_all(&error.message);
     let status = match error.code.as_str() {
         "scope_refused" => StatusCode::FORBIDDEN,
         "lease_not_held" => StatusCode::NOT_FOUND,
