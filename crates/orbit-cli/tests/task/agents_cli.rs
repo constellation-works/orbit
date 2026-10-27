@@ -458,6 +458,60 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         refused.contains("nobody"),
         "a crew with no row is refused by name: {refused}"
     );
+    // [ORB-19171] The missing-row refusal keeps crew, role and window and
+    // offers a usable scorecard or window-selection next step instead of
+    // implying the crew is unconfigured: a configured crew with no work in
+    // the window also has no row.
+    for part in [
+        "orchestrators",
+        "30d",
+        "scorecard",
+        "orbit agents scorecard --role orchestrators",
+        "--window",
+        "no work in the window has no row",
+    ] {
+        assert!(
+            refused.contains(part),
+            "the missing-row refusal names a recovery step ({part}): {refused}"
+        );
+    }
+    for part in ["unconfigured", "not configured", "unknown crew"] {
+        assert!(
+            !refused.contains(part),
+            "the missing-row refusal must not mislabel the crew ({part}): {refused}"
+        );
+    }
+
+    // The tool surface refuses with the same code and recovery step.
+    let refused = fixture
+        .command(&[
+            "tool",
+            "run",
+            "orbit.agents.show",
+            "--input",
+            &json!({ "role": "orchestrators", "crew": "nobody" }).to_string(),
+        ])
+        .assert()
+        .failure()
+        .get_output()
+        .stderr
+        .clone();
+    let refused: Value = serde_json::from_slice(&refused).unwrap();
+    assert_eq!(refused["code"], "invalid_input", "{refused}");
+    let message = refused["error"].as_str().unwrap();
+    for part in [
+        "nobody",
+        "orchestrators",
+        "30d",
+        "orbit.agents.scorecard",
+        "window",
+        "no work in the window has no row",
+    ] {
+        assert!(
+            message.contains(part),
+            "the tool refusal names a recovery step ({part}): {message}"
+        );
+    }
 }
 
 /// A crew that ran two models in the window has two implementers rows, so

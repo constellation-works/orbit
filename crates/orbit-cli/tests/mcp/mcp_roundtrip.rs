@@ -910,6 +910,39 @@ fn task_update_refusal_names_a_reachable_status() {
     );
 }
 
+/// [ORB-19171] A missing scorecard row over MCP still refuses with
+/// `invalid_input`, keeps crew, role and window, and offers a usable
+/// scorecard or window-selection next step instead of implying the crew is
+/// unconfigured: a configured crew with no work in the window also has no
+/// row. The fixture workspace holds no agent rows, as in the report.
+#[test]
+fn agents_show_missing_row_names_scorecard_and_window_recovery() {
+    let (_workspace, mut client) = McpWorkspace::served();
+
+    let refused = client.assert_tool_error(
+        "orbit_agents_show",
+        json!({ "role": "implementers", "crew": "missing-crew", "model": "codex" }),
+        "invalid_input",
+    );
+    assert_message_parts(
+        &refused,
+        &[
+            "missing-crew",
+            "implementers",
+            "30d",
+            "orbit_agents_scorecard",
+            "window",
+            "no work in the window has no row",
+        ],
+    );
+    for part in ["unconfigured", "not configured", "unknown crew"] {
+        assert!(
+            !message_contains(&refused, part),
+            "the missing-row refusal must not mislabel the crew ({part}): {refused}"
+        );
+    }
+}
+
 #[test]
 fn agent_task_deletion_is_denied_through_every_dispatch_path() {
     if crate::isolated_test::run_in_child_with_env(

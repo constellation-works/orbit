@@ -214,13 +214,21 @@ pub fn agent_detail(
     let row = match matching.as_slice() {
         [row] => row,
         [] => {
+            // Core cannot tell which surface called, so the refusal names each
+            // surface's scorecard and window selectors, as the ambiguous-row
+            // branch below names each surface's model selector.
             return Err(OrbitError::InvalidInput(format!(
-                "no {} row for crew '{crew}'{} in the {} window",
+                "no {} row for crew '{crew}'{} in the {} window; list the {} rows with orbit agents scorecard --role {} (CLI), orbit.agents.scorecard with role {} (orbit tool run), orbit_agents_scorecard with role {} (MCP) or the {} scorecard endpoint (dashboard API), or retry with a wider window via --window (CLI), window (MCP and orbit tool run) or the window query parameter (dashboard API). A crew with no work in the window has no row",
                 role.as_str(),
                 model
                     .map(|model| format!(" and model '{model}'"))
                     .unwrap_or_default(),
                 query.window,
+                role.as_str(),
+                role.as_str(),
+                role.as_str(),
+                role.as_str(),
+                role.as_str(),
             )));
         }
         _ => {
