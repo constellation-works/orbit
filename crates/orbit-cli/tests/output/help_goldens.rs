@@ -124,6 +124,7 @@ const CASES: &[(&[&str], &str)] = &[
     (&["task", "review-reset"], "task/review-reset.txt"),
     (&["task", "requeue"], "task/requeue.txt"),
     (&["task", "retry-handoff"], "task/retry-handoff.txt"),
+    (&["task", "settle-merged"], "task/settle-merged.txt"),
     (&["task", "reconcile-review"], "task/reconcile-review.txt"),
     (
         &["task", "reconcile-review", "inspect"],

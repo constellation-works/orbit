@@ -102,6 +102,7 @@ impl FakeForge {
                 author: author.to_string(),
             },
             base_branch: base.to_string(),
+            head_sha: "0dbd8e2000000000000000000000000000000000".to_string(),
             merge_commit: MERGE_COMMIT.to_string(),
         }
     }
@@ -984,6 +985,140 @@ fn the_operator_settles_one_task_from_a_merge_older_than_the_listing() {
         .settle_externally_merged_task(&reviewed)
         .expect_err("a done task does not settle again");
     assert!(refused.to_string().contains("'done'"), "{refused}");
+}
+
+crate::scenario_table!(
+    recovered_rescued_delivery,
+    a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle
+);
+
+fn a_recovered_claim_with_an_unrecorded_rescued_pr_can_settle() {
+    let fx = Fixture::new();
+    let (task, claim_id, worker) = fx.bound_claim(4940, LANDING, false);
+    let handoff = TaskHandoff {
+        schema_version: 1,
+        workspace_id: fx.runtime.workspace_id().unwrap(),
+        task_id: task.clone(),
+        claim_id: claim_id.clone(),
+        machine_id: "follower".into(),
+        run_id: "leaf-4940".into(),
+        candidate: HandoffCandidate {
+            repository: "owner/repository".into(),
+            source_branch: format!("orbit/{task}-47642870"),
+            base_branch: fx.base.clone(),
+            landing_branch: LANDING.into(),
+            candidate: SourceRevision {
+                commit: "42bfe17000000000000000000000000000000000".into(),
+                tree: "b".repeat(40),
+            },
+            base: SourceRevision {
+                commit: "c".repeat(40),
+                tree: "d".repeat(40),
+            },
+            delivery: HandoffDelivery::PullRequest { number: 4940 },
+        },
+        review: HandoffReview {
+            policy: ReviewTiming::None,
+            disposition: HandoffReviewDisposition::NotRequired,
+        },
+        execution_summary: "Follower candidate is complete".into(),
+        validation: vec![],
+        footprint_widening: vec![],
+        owed_criteria: vec![],
+        regression_from: vec![],
+    };
+    let observation = HandoffObservation {
+        candidate: handoff.candidate.clone(),
+        required_commands: vec!["newly-required-check".into()],
+        footprint_widening: vec![],
+        owner_completion_authority: None,
+        review: None,
+        known_red: vec![],
+        light_delivery: vec![],
+    };
+    let refusal = fx
+        .runtime
+        .mutate_execution_claim(
+            Some(&worker.with_handoff_observation(observation)),
+            "refused-handoff",
+            &ClaimMutation::AcceptHandoff(handoff),
+        )
+        .expect_err("the owner's newly required validation was not in the follower handoff");
+    assert!(refusal.to_string().contains("validation"), "{refusal}");
+    fx.runtime
+        .recover_claim_as_operator(
+            &claim_id,
+            "running",
+            TaskStatus::Blocked,
+            "operator",
+            "Follower stopped; its refused handoff's PR was rescued by hand",
+            "recover-rescued",
+        )
+        .unwrap();
+    fx.forge.merge_recent(4940, &task, BOT, LANDING);
+    assert!(fx.runtime.get_task(&task).unwrap().external_refs.is_empty());
+    assert!(
+        fx.boundary()
+            .find_accepted_handoff(&claim_id)
+            .unwrap()
+            .is_none()
+    );
+    let merged = fx.forge.0.lock().unwrap().recent[0].clone();
+    for case in [
+        "other-branch",
+        "other-base",
+        "other-author",
+        "other-task",
+        "missing-head",
+    ] {
+        let mut wrong = merged.clone();
+        match case {
+            "other-branch" => wrong.pull.head_branch = "unrelated-branch".into(),
+            "other-base" => wrong.base_branch = fx.base.clone(),
+            "other-author" => wrong.pull.author = "unrelated-author".into(),
+            "other-task" => wrong.pull.body = "Delivers some other task".into(),
+            _ => wrong.head_sha.clear(),
+        }
+        fx.forge.0.lock().unwrap().recent[0] = wrong;
+        fx.runtime
+            .settle_recovered_claim_merge(
+                &task,
+                &claim_id,
+                4940,
+                "42bfe17000000000000000000000000000000000",
+            )
+            .expect_err(case);
+        assert_eq!(fx.status(&task), TaskStatus::Blocked, "{case}");
+    }
+    fx.forge.0.lock().unwrap().recent[0] = merged;
+    fx.runtime
+        .settle_recovered_claim_merge(
+            &task,
+            &claim_id,
+            4940,
+            "42bfe17000000000000000000000000000000000",
+        )
+        .expect("an operator can settle the recovered delivery without force");
+    assert_eq!(fx.status(&task), TaskStatus::Done);
+    assert_eq!(fx.claim_phase(&claim_id), ExecutionClaimPhase::Revoked);
+    let history = fx.runtime.get_task_history(&task).unwrap();
+    let note = history
+        .iter()
+        .find(|entry| entry.event == EXTERNAL_MERGE_SETTLED_EVENT)
+        .unwrap()
+        .note
+        .as_deref()
+        .unwrap();
+    for evidence in [
+        "operator-rescued",
+        &claim_id,
+        "42bfe17000000000000000000000000000000000",
+        "0dbd8e2000000000000000000000000000000000",
+        MERGE_COMMIT,
+        LANDING,
+    ] {
+        assert!(note.contains(evidence), "missing {evidence}: {note}");
+    }
 }
 
 #[test]

@@ -1700,6 +1700,32 @@ also refused when the handoff's pull request is unmerged or merged into another
 branch, or when only some other pull request merged. A handoff whose authority was
 never revoked is refused too: approval or the owner's landing job completes it.
 
+### After recovering a refused follower handoff
+
+A refused follower handoff may have recorded no delivery PR on the owner. If an
+operator then rebased and merged that PR, first recover the stopped claim to
+`blocked` with `orbit task recover-claim`. In the owning checkout, settle it with:
+
+```bash
+orbit task settle-merged <task-id> --recovered-claim <claim-id> --pull-request <number> --published-head <full-original-commit>
+```
+
+Use the follower's original published candidate for `--published-head`, before
+the operator's rebase. This is an explicit operator attestation when the refused
+handoff left no owner-held candidate. The owner reads the PR's merged head and
+merge commit from the forge, verifies its delivery branch, task identity and
+delivery author, and requires a merge into the original admission's landing
+branch. A missing or expired receipt, a later claim, a live run, a dispatched
+landing attempt, unresolved merge intent or an owed post-deploy criterion refuses
+settlement. Existing preserved or accepted candidate evidence must agree with
+the supplied PR, branch and original head.
+
+History records the merge commit and both heads as `operator-rescued`, labeling
+the original head `operator-reported`. The task reaches `done` without `--force`;
+the recovered claim stays `revoked`. The follower's next settlement delivery sees
+that ended claim before observing the obsolete PR head, closes its local pending
+record with one warning, and does not retry it on later passes.
+
 ## Replay from the beginning
 
 When checkpoint outputs are invalid or the run must start from step zero:

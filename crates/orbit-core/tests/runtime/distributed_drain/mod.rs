@@ -363,6 +363,10 @@ impl DrainOwnerTransport for Wire {
             && !local
             && let Some(handoff) = input["settlement"].get("AcceptHandoff")
             && handoff["candidate"]["delivery"]["kind"] != "no_diff"
+            && self.owner.inspect_execution_claims()?.iter().any(|state| {
+                state.claim.claim_id == input["claim_id"].as_str().unwrap_or_default()
+                    && state.claim.phase.is_unsettled()
+            })
         {
             if *self.accept_handoffs.lock().unwrap() {
                 self.accept(serde_json::from_value(handoff.clone()).unwrap())?;

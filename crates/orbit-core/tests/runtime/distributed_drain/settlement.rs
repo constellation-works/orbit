@@ -310,6 +310,60 @@ fn a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once() {
 const PROTECTED_PATH_WIDENING: &str =
     "footprint widening refused protected path: .orbit/config.toml";
 
+/// A recovered claim must be refused before observing the obsolete PR head:
+/// otherwise a forge error hides the revocation and every sweep retries it.
+fn a_recovered_claim_closes_its_pending_handoff_before_observing_the_pr() {
+    let pair = Pair::new(1);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let claim = pair.owner_claim_for_leaf(&leaf);
+    pair.leaf_hands_off(&leaf);
+    pair.wire
+        .owner
+        .recover_claim_as_operator(
+            claim["claim"]["claim_id"].as_str().unwrap(),
+            "running",
+            orbit_types::task::TaskStatus::Blocked,
+            "operator",
+            "The follower stopped; the PR was rescued by hand",
+            "recover-pending-handoff",
+        )
+        .unwrap();
+    // Ended claims reach the real owner rather than the transport's fake PR.
+    // This checkout has no published candidate, so observing it would fail.
+    let log = pair._root.path().join("obsolete-settlement.log");
+    let subscriber = tracing_subscriber::fmt()
+        .without_time()
+        .with_ansi(false)
+        .with_max_level(tracing::Level::WARN)
+        .with_writer(std::sync::Mutex::new(std::fs::File::create(&log).unwrap()))
+        .finish();
+    let _logging = tracing::subscriber::set_default(subscriber);
+    let settled = pair.pass(&drain);
+    assert!(settled["error"].is_null(), "{settled}");
+    assert_eq!(pair.follower.pending_pull_settlements().unwrap().count, 0);
+    let closed = pair.follower.pull_leaf_claim(&leaf).unwrap().unwrap();
+    assert_eq!(closed.settlement_phase, "settled");
+    assert!(closed.refusal.as_deref().unwrap().contains("already ended"));
+    assert_eq!(pair.owner_status(&task), "blocked");
+    let calls = pair.wire.calls("orbit.drain.claim.settle").len();
+    pair.pass(&drain);
+    assert_eq!(
+        pair.wire.calls("orbit.drain.claim.settle").len(),
+        calls,
+        "a closed settlement is not sent again"
+    );
+    let warnings = std::fs::read_to_string(log).unwrap();
+    assert_eq!(
+        warnings
+            .matches("closing an undeliverable pull settlement")
+            .count(),
+        1,
+        "{warnings}"
+    );
+}
+
 impl Pair {
     /// Let `leaf`'s settlement backoff elapse, as the clock passing it would.
     pub(super) fn elapse_settlement_backoff(&self, leaf: &str) -> SettlementRefusal {
@@ -605,6 +659,7 @@ crate::scenario_table!(
     operator_cancelled_claimed_leaf_returns_to_backlog_with_reason,
     lost_pull_and_bind_replies_recover_the_same_claim_and_leaf_exactly_once,
     a_settlement_whose_reply_is_lost_is_redelivered_and_applied_once,
+    a_recovered_claim_closes_its_pending_handoff_before_observing_the_pr,
     a_settlement_the_owner_refuses_while_holding_its_claim_backs_off_until_it_accepts,
     an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff,
     a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends,

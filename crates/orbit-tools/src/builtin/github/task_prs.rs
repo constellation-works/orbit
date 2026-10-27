@@ -13,9 +13,9 @@ const OPEN_PR_FIELDS: &str = "number,headRefName,body,author";
 /// Upper bound on open PRs read per lookup. `gh` paginates up to it.
 const OPEN_PR_LIMIT: &str = "500";
 
-/// What a merged PR adds to the match fields: the branch it merged into and
-/// the commit it merged as.
-const MERGE_FIELDS: &str = "baseRefName,mergeCommit";
+/// What a merged PR adds: the branch it merged into, its merge commit and
+/// the head it merged from, including an operator's rebase.
+const MERGE_FIELDS: &str = "baseRefName,mergeCommit,headRefOid";
 
 /// How many of the most recently merged PRs one lookup reads. A delivery
 /// merged further back is settled through its own number instead.

@@ -144,7 +144,7 @@ fn settle_merged_batch_settles_each_status_and_skips_unmerged() {
             std::fs::create_dir_all(&bin).unwrap();
             let merged = |n: u64, id: &str| {
                 format!(
-                    "*\"pr view {n}\"*) cat <<'JSON'\n{{\"number\":{n},\"state\":\"MERGED\",\"headRefName\":\"orbit/{id}-47642870\",\"baseRefName\":\"agent-main\",\"body\":\"Delivers {id}.\",\"author\":{{\"login\":\"orbit-bot\"}},\"mergeCommit\":{{\"oid\":\"03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9\"}}}}\nJSON\n;;\n"
+                    "*\"pr view {n}\"*) cat <<'JSON'\n{{\"number\":{n},\"state\":\"MERGED\",\"headRefName\":\"orbit/{id}-47642870\",\"baseRefName\":\"agent-main\",\"headRefOid\":\"9b4c1e0f2d3a4b5c6d7e8f9091a2b3c4d5e6f708\",\"body\":\"Delivers {id}.\",\"author\":{{\"login\":\"orbit-bot\"}},\"mergeCommit\":{{\"oid\":\"03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9\"}}}}\nJSON\n;;\n"
                 )
             };
             let script = format!(
@@ -266,7 +266,7 @@ fn settle_merged_settles_only_when_pr_merged() {
             let bin = fixture.path("bin");
             std::fs::create_dir_all(&bin).unwrap();
             let script = format!(
-                "#!/bin/sh\ncase \"$*\" in\n*\"api user\"*) echo orbit-bot ;;\n*\"pr view 42\"*) cat <<'JSON'\n{{\"number\":42,\"state\":\"MERGED\",\"headRefName\":\"orbit/{merged_id}-47642870\",\"baseRefName\":\"agent-main\",\"body\":\"Delivers {merged_id}.\",\"author\":{{\"login\":\"orbit-bot\"}},\"mergeCommit\":{{\"oid\":\"03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9\"}}}}\nJSON\n;;\n*\"pr view 43\"*) cat <<'JSON'\n{{\"number\":43,\"state\":\"OPEN\",\"headRefName\":\"orbit/{open_id}-47642870\",\"baseRefName\":\"agent-main\",\"body\":\"Delivers {open_id}.\",\"author\":{{\"login\":\"orbit-bot\"}}}}\nJSON\n;;\n*) echo '[]' ;;\nesac\n"
+                "#!/bin/sh\ncase \"$*\" in\n*\"api user\"*) echo orbit-bot ;;\n*\"pr view 42\"*) cat <<'JSON'\n{{\"number\":42,\"state\":\"MERGED\",\"headRefName\":\"orbit/{merged_id}-47642870\",\"baseRefName\":\"agent-main\",\"headRefOid\":\"9b4c1e0f2d3a4b5c6d7e8f9091a2b3c4d5e6f708\",\"body\":\"Delivers {merged_id}.\",\"author\":{{\"login\":\"orbit-bot\"}},\"mergeCommit\":{{\"oid\":\"03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9\"}}}}\nJSON\n;;\n*\"pr view 43\"*) cat <<'JSON'\n{{\"number\":43,\"state\":\"OPEN\",\"headRefName\":\"orbit/{open_id}-47642870\",\"baseRefName\":\"agent-main\",\"body\":\"Delivers {open_id}.\",\"author\":{{\"login\":\"orbit-bot\"}}}}\nJSON\n;;\n*) echo '[]' ;;\nesac\n"
             );
             std::fs::write(bin.join("gh"), script).unwrap();
             use std::os::unix::fs::PermissionsExt;
