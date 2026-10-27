@@ -9,6 +9,13 @@ use crate::context::RuntimeHost;
 use super::super::landing::checks::{HeadCheckEvidence, head_check_evidence};
 use super::answers::{CheckState, read_required_checks};
 
+/// Whether current checks authorize a complete recovery diagnosis.
+pub(crate) enum CompletionRecoveryChecks {
+    Ready(Value),
+    /// Re-observe in a later run without dispatching a repair agent.
+    Wait(String),
+}
+
 /// Observe every required failure on the current head, independently of the
 /// earlier step error. A partial or changing rollup cannot authorize a recovery
 /// diagnosis. Completion already spent its bounded watch waiting for settlement;
@@ -18,7 +25,7 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
     workspace: &Path,
     input: &Value,
     task_id: &str,
-) -> Result<Value, String> {
+) -> Result<CompletionRecoveryChecks, String> {
     let pr = super::super::super::input::input_string_field(input, "pr_number")
         .or_else(|| {
             host.get_task(task_id)
@@ -36,7 +43,9 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
         .iter()
         .any(|check| matches!(check.state, None | Some(CheckState::Pending)))
     {
-        return Err("completion recovery required checks have not all concluded; no complete failure diagnosis is available".into());
+        return Ok(CompletionRecoveryChecks::Wait(
+            "completion recovery required checks have not all concluded; wait for a complete failure diagnosis".into(),
+        ));
     }
     let mut failures = Vec::new();
     for check in required
@@ -75,5 +84,7 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
     {
         return Err("completion recovery required checks changed while collecting evidence".into());
     }
-    Ok(json!({"head_sha":required.head_sha,"failed_checks":failures}))
+    Ok(CompletionRecoveryChecks::Ready(
+        json!({"head_sha":required.head_sha,"failed_checks":failures}),
+    ))
 }

@@ -392,6 +392,31 @@ pub(super) fn attempt_final_recovery(
         return conclude(job, ctx, step, activity, &application, None, None);
     }
 
+    let recovery_input =
+        match final_recovery_input(job, ctx, step_index, &task_id, &worktree, error_message) {
+            Ok(FinalRecoveryInput::Wait(reason)) => {
+                // Completion spent its watch budget. Preserve the publication and
+                // use the existing bounded requeue, rather than starting another
+                // watch or asking an agent to diagnose unconcluded checks.
+                let application = FinalRecoveryApplication {
+                    task_id,
+                    failed_step_id: step.id.clone(),
+                    decision: FinalRecoveryDecision::Requeue { reason },
+                    resume_step_index: None,
+                    preserved_steps: Vec::new(),
+                    repair_commit: None,
+                    resume_context: None,
+                    workspace_path: worktree.workspace_path.into(),
+                    completion_done: ctx.input.get("completion").and_then(Value::as_str)
+                        == Some("done"),
+                    infrastructure: None,
+                };
+                return conclude(job, ctx, step, activity, &application, None, None);
+            }
+            Ok(FinalRecoveryInput::Ready(input)) => Ok(input),
+            Err(error) => Err(error),
+        };
+
     // These observations belong to the engine, not the activity's response.
     // A worktree without a resolvable HEAD may still settle a task, but cannot
     // authorize a moved HEAD in a later commit step.
@@ -408,7 +433,7 @@ pub(super) fn attempt_final_recovery(
         &["symbolic-ref", "--quiet", "HEAD"],
     )
     .ok();
-    let dispatch = final_recovery_input(job, ctx, step_index, &task_id, &worktree, error_message)
+    let dispatch = recovery_input
         .map(|mut input| {
             if let Some(refusal) = &absorbed_refusal {
                 input["absorbed_refusal"] = refusal.evidence();
@@ -719,6 +744,11 @@ fn run_worktree(job: &JobV2, ctx: &ExecCtx<'_>, step_index: usize) -> Option<Run
     })
 }
 
+enum FinalRecoveryInput {
+    Ready(Value),
+    Wait(String),
+}
+
 fn final_recovery_input(
     job: &JobV2,
     ctx: &ExecCtx<'_>,
@@ -726,7 +756,7 @@ fn final_recovery_input(
     task_id: &str,
     worktree: &RunWorktree,
     error_message: &str,
-) -> Result<Value, String> {
+) -> Result<FinalRecoveryInput, String> {
     let step = &job.steps[step_index];
     let mut input = serde_json::json!({
         "task_id": task_id,
@@ -768,6 +798,14 @@ fn final_recovery_input(
                     rendered,
                     task_id,
                 )?;
+                let checks = match checks {
+                    crate::executor::automation::vcs::CompletionRecoveryChecks::Ready(checks) => {
+                        checks
+                    }
+                    crate::executor::automation::vcs::CompletionRecoveryChecks::Wait(reason) => {
+                        return Ok(FinalRecoveryInput::Wait(reason));
+                    }
+                };
                 if checks.to_string().len() > MAX_RECOVERY_ERROR_MESSAGE_BYTES {
                     return Err("completion recovery check evidence exceeds its input budget; refusing an incomplete diagnosis".into());
                 }
@@ -786,7 +824,7 @@ fn final_recovery_input(
             input[key] = Value::String(value.clone());
         }
     }
-    Ok(input)
+    Ok(FinalRecoveryInput::Ready(input))
 }
 
 /// Dispatch the activity under its configured crew, returning its output and

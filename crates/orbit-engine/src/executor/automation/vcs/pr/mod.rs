@@ -53,4 +53,4 @@ pub(in crate::executor::automation::vcs) use open::{
     close_earlier_task_pull_requests, open_or_reuse_unchecked,
 };
 pub(in crate::executor::automation) use promote::pr_promote;
-pub(crate) use recovery::completion_recovery_checks;
+pub(crate) use recovery::{CompletionRecoveryChecks, completion_recovery_checks};

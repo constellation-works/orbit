@@ -865,12 +865,20 @@ fn reserved_refresh_observes_lost_unapplied_and_pending_outcomes_without_another
                         ("replay", started),
                         ("expired resume", deadline + 1),
                     ] {
+                        let clock = std::rc::Rc::new(std::cell::Cell::new(now));
+                        let read_clock = std::rc::Rc::clone(&clock);
+                        let wait_clock = std::rc::Rc::clone(&clock);
                         let result = orbit_engine::test_support::with_prerequisite_clock(
-                            move || now,
+                            move || read_clock.get(),
                             |_, _| {},
                             || {
                                 orbit_engine::test_support::with_vcs_retry_wait(
-                                    |_| {},
+                                    move |duration| {
+                                        wait_clock.set(
+                                            wait_clock.get()
+                                                + u64::try_from(duration.as_millis()).unwrap(),
+                                        );
+                                    },
                                     || action(&host, "pr_complete", &input),
                                 )
                             },
@@ -1281,15 +1289,17 @@ pub(crate) fn adopted_policy_cases(cases: &[&str]) {
                     }
                 }
             }
-            let result = execute_deterministic_action(
-                &host,
-                "handoff_land",
-                &json!({}),
-                &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":0}),
-                false,
-                &HashMap::new(),
-                None,
-            );
+            let result = super::with_completion_clock(|| {
+                execute_deterministic_action(
+                    &host,
+                    "handoff_land",
+                    &json!({}),
+                    &json!({"handoff_id":"accepted-fixture","run_id":RUN_ID,"max_wait_seconds":0}),
+                    false,
+                    &HashMap::new(),
+                    None,
+                )
+            });
             let should_merge = matches!(*case, "empty" | "no-rule" | "success");
             if should_merge {
                 assert_eq!(

@@ -79,7 +79,7 @@ fn reserve_base_update(host: &DeliveryHost, head: &str, base_sha: &str) {
     );
 }
 
-fn deterministic_activity(name: &str, action: &str) -> ActivityV2 {
+pub(super) fn pr_landing_fixture_activity(name: &str, action: &str) -> ActivityV2 {
     ActivityV2 {
         description: name.into(),
         input_schema_json: Value::Null,
@@ -102,7 +102,7 @@ fn run_job(
 ) -> JobResult {
     let mut catalog = V2ActivityCatalog::new();
     for &(name, action) in activities {
-        catalog.insert(name.to_string(), deterministic_activity(name, action));
+        catalog.insert(name.to_string(), pr_landing_fixture_activity(name, action));
     }
     resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
     let audit = tempfile::tempdir().unwrap();
@@ -2612,6 +2612,12 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
                             recovery.is_none(),
                             "partial checks cannot authorize a base-only diagnosis"
                         );
+                        let applied = host.scripted_inputs.lock().unwrap();
+                        assert_eq!(
+                            applied["applied_final_recovery"]["decision"], "requeue",
+                            "pending checks must wait for another observation, not block for a human"
+                        );
+                        assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
                     }
                     assert!(fx.merge_requests().is_empty());
                     assert_eq!(fx.head(), fx.candidate);
