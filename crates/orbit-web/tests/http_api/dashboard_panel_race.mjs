@@ -438,4 +438,50 @@ for (const [label, fail] of [
   assert.ok(!forecastBody().includes('does not offer this view'), `${label} must not read as a host without the view: ${forecastBody()}`);
 }
 
+const forecastPayload = unfinished => ({
+  inputs: { concurrency: 2, concurrency_source: 'requested', history_deliveries: 5, iterations: 100, lookback_days: 30 },
+  backlog: { backlog: 2, in_progress: 0 },
+  forecast: {
+    tasks: 2,
+    time_to_drain_hours: { p50: 1, p90: 2 },
+    usd: { p50: 1, p90: 2 },
+    tokens: { p50: 1, p90: 2 },
+    effective_parallelism: { p50: 1, p90: 2 },
+    critical_path_hours: { p50: 1, p90: 2 },
+    drain_probability: 0.75,
+    completion_probability: 0.25,
+    not_expected_to_drain: unfinished,
+  },
+  arrivals: {},
+  coverage: {},
+  calibration: {},
+});
+const renderForecast = async unfinished => {
+  const before = pending.length;
+  const loadForecast = forecast.fetchAndRenderForecast();
+  assert.equal(pending.length, before + 1, 'forecast summary requests its payload');
+  assert.equal(pending.at(-1).url.pathname, '/api/diagnostics/backlog_forecast');
+  pending.at(-1).resolve(response(forecastPayload(unfinished)));
+  await loadForecast;
+  await settle();
+  return forecastBody();
+};
+
+const forecastWithUnfinishedTasks = await renderForecast(1.5);
+assert.ok(forecastWithUnfinishedTasks.includes('1.50 tasks unfinished on average'),
+  `unfinished tasks render as a two-decimal count: ${forecastWithUnfinishedTasks}`);
+assert.ok(!forecastWithUnfinishedTasks.includes('150%'),
+  `unfinished-task count is not rendered as a percentage: ${forecastWithUnfinishedTasks}`);
+assert.ok(forecastWithUnfinishedTasks.includes('75% of runs'),
+  `drain probability remains a percentage of runs: ${forecastWithUnfinishedTasks}`);
+assert.ok(forecastWithUnfinishedTasks.includes('the initial tasks all finish in 25%'),
+  `completion probability remains a percentage of runs: ${forecastWithUnfinishedTasks}`);
+
+const forecastWithNoUnfinishedTasks = await renderForecast(0);
+assert.ok(!forecastWithNoUnfinishedTasks.includes('unfinished on average'),
+  `a zero unfinished count omits the clause: ${forecastWithNoUnfinishedTasks}`);
+assert.ok(forecastWithNoUnfinishedTasks.includes('75% of runs')
+  && forecastWithNoUnfinishedTasks.includes('the initial tasks all finish in 25%'),
+`zero-count drain odds keep both probability percentages: ${forecastWithNoUnfinishedTasks}`);
+
 console.log('audit, codebase, cost, plugin, and forecast panel behaviors passed');
