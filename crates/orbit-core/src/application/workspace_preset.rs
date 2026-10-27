@@ -33,6 +33,7 @@ use orbit_config::{
 use serde::{Deserialize, Serialize};
 
 use crate::OrbitRuntime;
+use crate::application::job::DEFAULT_JOB_FILES;
 use crate::application::plugin::seed::plugin_seeded_definitions;
 use crate::application::routines::set_routine_enabled;
 use crate::application::routines::status::checkout_edit_report;
@@ -190,7 +191,7 @@ impl WorkspacePreset {
         // Loadability is decided before the config store is staged, so a
         // missing or unloadable definition refuses the preset with no write.
         self.require_plugin_seeded(workspace_orbit_root)?;
-        self.require_seeded_definitions_load(workspace_orbit_root)?;
+        self.require_seeded_definitions_load(global_root, workspace_orbit_root)?;
         if self.sets_config() {
             let path = workspace_orbit_root.join("config.toml");
             let store = self.staged_store(global_root, &path, WorkspaceInitMode::SeedFromGlobal)?;
@@ -286,20 +287,26 @@ impl WorkspacePreset {
     }
 
     /// Refuse an `[enable]` name whose seeded file is missing or does not
-    /// load. Catalog membership is resolved again when the preset is enabled,
-    /// after bootstrap has seeded jobs and loaded plugins; replaying that
-    /// lookup before registration would reject a definition the enable step
-    /// can still load. A callback that accepts every parsed target still
-    /// drops a missing file, a parse failure and an invalid trigger.
+    /// load. Routine targets resolve against the effective post-bootstrap
+    /// catalog computed in memory (see
+    /// [`effective_routine_catalog_lookup`]), so a target bootstrap would
+    /// seed still passes while an unresolvable one refuses before any
+    /// write. Catalog membership is resolved again when the preset is
+    /// enabled, after bootstrap has seeded jobs and loaded plugins.
     fn require_seeded_definitions_load(
         &self,
+        global_root: &Path,
         workspace_orbit_root: &Path,
     ) -> Result<(), OrbitError> {
-        self.require_routines_load(workspace_orbit_root)?;
+        self.require_routines_load(global_root, workspace_orbit_root)?;
         self.require_auto_tasks_load(workspace_orbit_root)
     }
 
-    fn require_routines_load(&self, workspace_orbit_root: &Path) -> Result<(), OrbitError> {
+    fn require_routines_load(
+        &self,
+        global_root: &Path,
+        workspace_orbit_root: &Path,
+    ) -> Result<(), OrbitError> {
         if self.enable_routines.is_empty() {
             return Ok(());
         }
@@ -307,14 +314,9 @@ impl WorkspacePreset {
             workspace: "workspace".to_string(),
             orbit_dir: workspace_orbit_root.to_path_buf(),
         };
-        let collection = collect_routines_with_skips(
-            &[source],
-            &|_root, _job| RoutineCatalogLookup {
-                resolves: true,
-                error: None,
-            },
-            &|_path, _definition| None,
-        );
+        let catalog_lookup = effective_routine_catalog_lookup(global_root, workspace_orbit_root);
+        let collection =
+            collect_routines_with_skips(&[source], &catalog_lookup, &|_path, _definition| None);
         let dir = workspace_orbit_root.join(ROUTINES_DIR);
         for name in &self.enable_routines {
             if collection.routines.iter().any(|loaded| {
@@ -438,6 +440,75 @@ fn seeded_file_matches(dir: &Path, name: &str, loaded_path: &Path, loaded_name: 
             .is_some_and(|(seeded, loaded)| seeded == loaded)
 }
 
+/// The routine-target catalog lookup for the workspace as it will exist
+/// after bootstrap, computed without writing anything.
+///
+/// Bootstrap seeds the shipped default jobs into the global jobs directory
+/// (`seed_default_jobs` over [`DEFAULT_JOB_FILES`]), so those names resolve
+/// even when that directory has not been seeded yet. The remaining layers
+/// mirror runtime execution membership: explicit `ORBIT_JOB_DIR` /
+/// `ORBIT_V2_JOB_DIR` directories, the global on-disk jobs, and the
+/// workspace on-disk jobs, parsed best-effort so a malformed file reports
+/// as a catalog error exactly as the runtime loader reports it. Plugin job
+/// files need a runtime plugin load and are resolved again at enable time;
+/// `enable_preset_definitions` re-checks every routine before enabling
+/// anything, so a target only a plugin layer supplies cannot partially
+/// apply there either.
+fn effective_routine_catalog_lookup(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+) -> impl Fn(&Path, &str) -> RoutineCatalogLookup {
+    use orbit_engine::activity_job::{V2JobCatalog, catalog_error_to_orbit};
+
+    let global_jobs_dir = global_root.join("resources/jobs");
+    let workspace_jobs_dir = workspace_orbit_root.join("resources/jobs");
+    let mut dirs: Vec<PathBuf> = Vec::new();
+    if let Some(raw) = std::env::var("ORBIT_JOB_DIR")
+        .ok()
+        .or_else(|| std::env::var("ORBIT_V2_JOB_DIR").ok())
+    {
+        dirs.extend(
+            raw.split(':')
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from),
+        );
+    }
+    dirs.push(global_jobs_dir);
+    dirs.push(workspace_jobs_dir);
+
+    let mut catalog = V2JobCatalog::new();
+    let mut errors: Vec<String> = Vec::new();
+    let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
+    for dir in &dirs {
+        let canonical = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.clone());
+        if !seen.insert(canonical) || !dir.is_dir() {
+            continue;
+        }
+        match catalog.load_dir_prefer_existing_best_effort(dir) {
+            Ok(parse_errors) => errors.extend(
+                parse_errors
+                    .into_iter()
+                    .map(|error| catalog_error_to_orbit(error).to_string()),
+            ),
+            Err(error) => errors.push(catalog_error_to_orbit(error).to_string()),
+        }
+    }
+    let mut names: std::collections::BTreeSet<String> = catalog
+        .iter()
+        .map(|(name, _, _)| name.to_string())
+        .collect();
+    names.extend(
+        DEFAULT_JOB_FILES
+            .iter()
+            .map(|(name, _)| (*name).to_string()),
+    );
+    let error = (!errors.is_empty()).then(|| errors.join("; "));
+    move |_root, job| RoutineCatalogLookup {
+        resolves: names.contains(job),
+        error: error.clone(),
+    }
+}
+
 /// Refusal for one `[enable]` name, naming that definition.
 fn unloadable_definition(
     preset: &str,
@@ -523,6 +594,30 @@ impl OrbitRuntime {
         preset: &WorkspacePreset,
     ) -> Result<Vec<String>, OrbitError> {
         preset.require_plugin_seeded(&self.shared_root())?;
+        // Resolve every routine before enabling anything: the status report
+        // is where the runtime catalog and plugin skips apply, so a routine
+        // that does not load there must not leave an auto-task from the
+        // same preset already enabled.
+        let report = if preset.enable_routines.is_empty() {
+            None
+        } else {
+            Some(checkout_edit_report(self)?)
+        };
+        if let Some(report) = &report {
+            for name in &preset.enable_routines {
+                report
+                    .statuses
+                    .iter()
+                    .map(|status| &status.routine)
+                    .find(|routine| routine.definition.name == *name)
+                    .ok_or_else(|| {
+                        OrbitError::InvalidInput(format!(
+                            "plugin-seeded routine '{name}' does not load in this workspace; run \
+                             `orbit routine list` to see why"
+                        ))
+                    })?;
+            }
+        }
         let mut changed = Vec::new();
         for name in &preset.enable_auto_tasks {
             let before = self
@@ -533,8 +628,7 @@ impl OrbitRuntime {
                 changed.push(name.clone());
             }
         }
-        if !preset.enable_routines.is_empty() {
-            let report = checkout_edit_report(self)?;
+        if let Some(report) = &report {
             for name in &preset.enable_routines {
                 let routine = report
                     .statuses
