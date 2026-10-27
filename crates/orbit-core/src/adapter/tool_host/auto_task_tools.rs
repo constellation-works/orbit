@@ -95,7 +95,8 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
                 row.effective_enabled,
                 row.skipped_reason.as_deref(),
             )?;
-            listed["last_fire"] = last_fire_json(runtime, row.cursor.as_ref())?;
+            listed["last_fire"] =
+                last_fire_json(runtime, &row.listed.definition, row.cursor.as_ref())?;
             Ok(listed)
         })
         .collect::<Result<Vec<Value>, OrbitError>>()?;
@@ -105,8 +106,15 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
 /// Project only the latest scheduler fire or recorded precondition skip.
 fn last_fire_json(
     runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
     cursor: Option<&AutoTaskCursor>,
 ) -> Result<Value, OrbitError> {
+    // Delivery schedules never write the time cursor, so their latest fire
+    // lives in scheduler-owned automation state and receipts instead. A
+    // leftover cursor from an earlier time schedule must not shadow it.
+    if matches!(definition.schedule, AutoTaskSchedule::Deliveries { .. }) {
+        return delivery_last_fire_json(runtime, definition);
+    }
     let Some(cursor) = cursor else {
         return Ok(Value::Null);
     };
@@ -120,7 +128,84 @@ fn last_fire_json(
     let Some(at) = &cursor.last_fired_at else {
         return Ok(Value::Null);
     };
-    let task_status = match cursor.last_task_id.as_deref() {
+    fired_json(runtime, at.clone(), cursor.last_task_id.clone())
+}
+
+/// The latest delivery fire from scheduler-owned records: the active
+/// batch's minted task, or the newest accepted receipt's task once no
+/// batch is active. Only bounded time/task/status fields are projected;
+/// no run ids, logs or step output are read.
+fn delivery_last_fire_json(
+    runtime: &OrbitRuntime,
+    definition: &AutoTaskDefinition,
+) -> Result<Value, OrbitError> {
+    // Without a registered machine identity this host owns no delivery
+    // consumer, so it cannot have a delivery fire to report.
+    let Ok(consumer) =
+        crate::application::automation::consumer_key(runtime, "auto-task", &definition.name)
+    else {
+        return Ok(Value::Null);
+    };
+    let store = runtime.automation_store()?;
+    let state = store.automation_state(&consumer)?;
+    let active = state
+        .as_ref()
+        .and_then(|state| state.active.as_ref())
+        .and_then(|attempt| {
+            attempt
+                .action_id
+                .as_ref()
+                .map(|task_id| (attempt.batch.created_at, task_id.clone()))
+        });
+    // Receipts return newest first, so one row bounds the completed case.
+    let receipt = store
+        .automation_receipts(&consumer, 1)?
+        .into_iter()
+        .next()
+        .map(|receipt| (receipt.accepted_at, receipt.action_id));
+    // The newer record wins: an active batch minted after the last
+    // accepted receipt, otherwise that receipt's task.
+    let latest = match (active, receipt) {
+        (Some(active), Some(receipt)) => {
+            if active.0 >= receipt.0 {
+                Some(active)
+            } else {
+                Some(receipt)
+            }
+        }
+        (Some(active), None) => Some(active),
+        (None, Some(receipt)) => Some(receipt),
+        (None, None) => None,
+    };
+    let Some((recorded_at, task_id)) = latest else {
+        return Ok(Value::Null);
+    };
+    // Prefer the minted task's own creation time (the actual fire time,
+    // including a reissued attempt over an older batch); the recorded
+    // batch/receipt time is the fallback when the task is gone.
+    match runtime.get_task(&task_id) {
+        Ok(task) => Ok(json!({
+            "kind": "fired",
+            "at": task.created_at,
+            "task_id": task_id,
+            "task_status": task.status,
+        })),
+        Err(OrbitError::NotFound { .. }) => Ok(json!({
+            "kind": "fired",
+            "at": recorded_at,
+            "task_id": task_id,
+            "task_status": Value::Null,
+        })),
+        Err(error) => Err(error),
+    }
+}
+
+fn fired_json(
+    runtime: &OrbitRuntime,
+    at: String,
+    task_id: Option<String>,
+) -> Result<Value, OrbitError> {
+    let task_status = match task_id.as_deref() {
         Some(task_id) => match runtime.get_task(task_id) {
             Ok(task) => Some(task.status),
             Err(OrbitError::NotFound { .. }) => None,
@@ -131,7 +216,7 @@ fn last_fire_json(
     Ok(json!({
         "kind": "fired",
         "at": at,
-        "task_id": cursor.last_task_id,
+        "task_id": task_id,
         "task_status": task_status,
     }))
 }
