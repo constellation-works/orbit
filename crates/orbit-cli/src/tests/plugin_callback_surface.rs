@@ -60,3 +60,27 @@ fn the_tool_call_entry_points_are_the_only_ones_a_plugin_backend_may_use() {
         );
     }
 }
+
+#[test]
+fn recover_claim_commands_parse_with_each_phase_used_by_settlement_refusals() {
+    for phase in ["claimed", "running", "repair_pending", "handed_off"] {
+        let argv = [
+            "orbit",
+            "task",
+            "recover-claim",
+            "claim-1",
+            "--phase",
+            phase,
+            "--status",
+            "blocked",
+            "--reason",
+            "operator-confirmed",
+            "--request",
+            "request-1",
+        ];
+        assert!(
+            Cli::try_parse_from(argv).is_ok(),
+            "the suggested command for observed phase {phase} must parse"
+        );
+    }
+}

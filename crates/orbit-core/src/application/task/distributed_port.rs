@@ -7,7 +7,21 @@
 //! close a cycle. This port is the way in: `distributed` implements it on
 //! [`OrbitRuntime`](crate::OrbitRuntime), so composing the runtime binds it.
 
+use orbit_store::contracts::ExecutionClaimPhase;
 use orbit_types::workflow::PipelineState;
+
+/// The persisted label accepted by operator claim-recovery commands.
+pub(crate) fn execution_claim_phase_label(phase: ExecutionClaimPhase) -> &'static str {
+    match phase {
+        ExecutionClaimPhase::Claimed => "claimed",
+        ExecutionClaimPhase::Running => "running",
+        ExecutionClaimPhase::HandedOff => "handed_off",
+        ExecutionClaimPhase::RepairPending => "repair_pending",
+        ExecutionClaimPhase::Failed => "failed",
+        ExecutionClaimPhase::Revoked => "revoked",
+        ExecutionClaimPhase::Landed => "landed",
+    }
+}
 
 /// The crew-accounting read task code calls, implemented by `distributed`.
 pub(in crate::application) trait TaskDistributedPort {

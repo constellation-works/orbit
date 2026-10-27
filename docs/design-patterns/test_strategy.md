@@ -237,6 +237,12 @@ Removing tests still passes with stale baseline entries; those entries do not ad
 
 Admitted unit tests:
 
+- `orbit-cli`'s `tests/plugin_callback_surface.rs::recover_claim_commands_parse_with_each_phase_used_by_settlement_refusals`
+  verifies the required recover-claim options parse with each phase used by
+  settlement refusal guidance. The runtime producer coverage lives in
+  `orbit-core`; this focused parser check exercises the CLI grammar without
+  needing owner claim state or dispatching the recovery command.
+
 - `orbit-core`'s `dispatch/tests/claimed_owner/pagination.rs::claimed_task_detail_pages_preserve_broker_scope_and_owner_validation`
   reproduces F2026-10-599 through the public broker socket and real owner task-tool
   dispatch, in an isolated child. It verifies bounded pages and owner validation

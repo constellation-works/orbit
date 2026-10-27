@@ -225,6 +225,11 @@ impl Fixture {
 
     /// A running execution claim of `task_id` on `shared.txt`.
     fn claim(&self, task_id: &str, run_id: &str) {
+        self.claim_with_phase(task_id, run_id, "running");
+    }
+
+    /// A live execution claim in `phase` on `shared.txt`.
+    fn claim_with_phase(&self, task_id: &str, run_id: &str, phase: &str) {
         let claim_id = format!("claim-{run_id}");
         let claim = json!({
             "claim_id": claim_id,
@@ -235,7 +240,7 @@ impl Fixture {
             "footprint": ["file:shared.txt"],
             "reservation_id": format!("res-{run_id}"),
             "reservation_expires_at": (Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
-            "phase": "running",
+            "phase": phase,
         });
         rusqlite::Connection::open(self.runtime.global_root().join("orbit.db"))
             .unwrap()
@@ -303,10 +308,20 @@ impl Fixture {
         landing: &str,
         done: bool,
     ) -> (String, String, ClaimInvocation) {
+        self.bound_claim_with_mode(number, landing, done, "pr")
+    }
+
+    fn bound_claim_with_mode(
+        &self,
+        number: u64,
+        landing: &str,
+        done: bool,
+        mode: &str,
+    ) -> (String, String, ClaimInvocation) {
         let task = self.add_task("Claimed delivery", TaskStatus::Backlog, &[]);
         let boundary = self.boundary();
         let ship = AdmissionShipContract {
-            mode: "pr".into(),
+            mode: mode.into(),
             base_branch: self.base.clone(),
             landing_branch: landing.into(),
             before_pr: false,
@@ -335,12 +350,18 @@ impl Fixture {
             admissible: None,
         };
         let repo = self._root.path().join("repo");
+        let location = ExecutionLocation {
+            machine_id: "follower".into(),
+            machine_name: None,
+        };
+        let identity = if mode == "local" {
+            AdmissionIdentity::trusted_local(location)
+        } else {
+            AdmissionIdentity::trusted_remote(location)
+        };
         let AdmissionLookup::Found { receipt, .. } = boundary
             .admit_task(
-                &AdmissionIdentity::trusted_remote(ExecutionLocation {
-                    machine_id: "follower".into(),
-                    machine_name: None,
-                }),
+                &identity,
                 &request,
                 &AdmissionOrdering::default(),
                 "test",
@@ -455,8 +476,24 @@ impl Fixture {
     /// goes as far as `authority` says, through the owner's own landing
     /// mutations and operator console.
     fn handed_off(&self, number: u64, authority: Authority) -> Handoff {
+        self.handed_off_with_delivery(number, authority, HandoffDelivery::PullRequest { number })
+    }
+
+    /// A follower's leaf hands off `delivery`, then follows `authority`.
+    fn handed_off_with_delivery(
+        &self,
+        number: u64,
+        authority: Authority,
+        delivery: HandoffDelivery,
+    ) -> Handoff {
         let authorized = authority != Authority::Unapproved;
-        let (task, claim_id, worker) = self.bound_claim(number, LANDING, authorized);
+        let mode = if matches!(&delivery, HandoffDelivery::LocalCandidate) {
+            "local"
+        } else {
+            "pr"
+        };
+        let (task, claim_id, worker) =
+            self.bound_claim_with_mode(number, LANDING, authorized, mode);
         let handoff = TaskHandoff {
             schema_version: 1,
             workspace_id: self.runtime.workspace_id().unwrap(),
@@ -477,7 +514,7 @@ impl Fixture {
                     commit: "c".repeat(40),
                     tree: "d".repeat(40),
                 },
-                delivery: HandoffDelivery::PullRequest { number },
+                delivery,
             },
             review: HandoffReview {
                 policy: ReviewTiming::None,
@@ -1102,6 +1139,61 @@ fn a_handed_off_claim_refuses_settlement_unless_its_revoked_handoffs_own_pr_merg
             );
         }
     }
+}
+
+#[test]
+fn external_merge_recovery_suggestions_include_the_observed_claim_phase() {
+    for phase in ["claimed", "running", "repair_pending"] {
+        let fx = Fixture::new();
+        let task = fx.add_task("Live claim refusal", TaskStatus::InProgress, &[4935]);
+        let run_id = format!("live-{phase}");
+        fx.claim_with_phase(&task, &run_id, phase);
+        fx.forge.merge_recent(4935, &task, BOT, &fx.base);
+
+        let refusal = fx
+            .runtime
+            .settle_externally_merged_task(&task)
+            .expect_err("a live claim refuses settlement")
+            .to_string();
+        let expected = format!(
+            "orbit task recover-claim claim-{run_id} --phase {phase} --status blocked --reason <reason> --request <key>"
+        );
+        assert!(refusal.contains(&expected), "{phase}: {refusal}");
+    }
+
+    for (case, authority) in [
+        ("unapproved", Authority::Unapproved),
+        ("authorized-pending", Authority::Authorized),
+    ] {
+        let fx = Fixture::new();
+        let handoff = fx.handed_off(4936, authority);
+        fx.forge.merge_recent(4936, &handoff.task, BOT, LANDING);
+
+        let refusal = fx
+            .runtime
+            .settle_externally_merged_task(&handoff.task)
+            .expect_err(case)
+            .to_string();
+        let expected = format!(
+            "orbit task recover-claim {} --phase handed_off --status blocked --reason <reason> --request <key>",
+            handoff.claim_id
+        );
+        assert!(refusal.contains(&expected), "{case}: {refusal}");
+    }
+
+    let fx = Fixture::new();
+    let handoff =
+        fx.handed_off_with_delivery(4937, Authority::Revoked, HandoffDelivery::LocalCandidate);
+    let refusal = fx
+        .runtime
+        .settle_externally_merged_task(&handoff.task)
+        .expect_err("a revoked handoff without a pull request refuses settlement")
+        .to_string();
+    let expected = format!(
+        "orbit task recover-claim {} --phase handed_off --status blocked --reason <reason> --request <key>",
+        handoff.claim_id
+    );
+    assert!(refusal.contains(&expected), "{refusal}");
 }
 
 #[test]

@@ -94,6 +94,7 @@ pub use decision_channel::{
 pub use decision_dkim::test_support::with_decision_dkim_resolver;
 pub use decision_dkim::{DkimTxtResolver, DkimVerifyError, SystemDkimTxtResolver};
 pub(in crate::application) use distributed_port::TaskDistributedPort;
+pub(crate) use distributed_port::execution_claim_phase_label;
 pub use escalation_triage_steps::{
     PILOT_WARNING_TRIAGED_EVENT, PilotWarningDecision, PilotWarningTriageRequest,
 };
