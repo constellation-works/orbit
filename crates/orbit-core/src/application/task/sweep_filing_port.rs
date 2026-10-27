@@ -10,12 +10,46 @@
 
 use orbit_engine::DispatchError;
 use orbit_types::task::Task;
+use serde::Serialize;
 use serde_json::Value;
+
+/// Whether a pilot's admission authority permits promotion.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PromotionDecision {
+    Promote,
+    Withhold,
+}
+
+/// Closure fields appended after admission and approval, in persisted order.
+#[derive(Default, Serialize)]
+pub(crate) struct AdmissionClosure {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) closed: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) covering_commits: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) not_closed_reason: Option<String>,
+}
+
+/// A CI-sweep admission record, with fields in their persisted insertion order.
+#[derive(Serialize)]
+pub(crate) struct CiSweepAdmissionDecision {
+    pub(crate) task_id: String,
+    pub(crate) decision: PromotionDecision,
+    pub(crate) classification: String,
+    pub(crate) promotion_authorized: bool,
+    pub(crate) failure_key: String,
+    pub(crate) source: Value,
+    pub(crate) evidence: Value,
+    #[serde(flatten)]
+    pub(crate) closure: AdmissionClosure,
+}
 
 /// What CI-sweep admission decided for a validated assessment.
 pub(crate) enum CiSweepAdmission {
     /// The admission decision apply records.
-    Decision(Value),
+    Decision(Box<CiSweepAdmissionDecision>),
     /// The task outcome of a filing another admission already met.
     Superseded(Value),
 }
