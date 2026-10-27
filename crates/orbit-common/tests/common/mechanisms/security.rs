@@ -297,6 +297,7 @@ fn redact_all_masks_embedded_quotes_in_api_key_assignments() {
             (r#"abcdefgh\"ijklmnop"#, '"'),
             (r"abcdefgh\'ijklmnop", '\''),
             (r"abcdefgh\\", '"'),
+            (r"abcdefgh\", '\''),
         ] {
             let raw = format!("{key}={quote}{value}{quote} after");
             let redacted = redact_all(&raw);

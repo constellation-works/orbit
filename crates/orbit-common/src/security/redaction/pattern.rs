@@ -77,6 +77,17 @@ impl PatternRedactor {
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]${4}",
             ),
+            // Literal single-quoted values ending in one backslash: the
+            // escape-aware entry above consumes the closing quote as an
+            // escape, so this ordered fallback (no quote in the value body,
+            // final backslash before the terminator) masks them instead.
+            (
+                Regex::new(
+                    r#"(?i)(^|[^\p{L}\p{N}_-])(((?:[a-z0-9]+[_-])*api[_-]?key)["'\)\]]?[ \t]*[:=][ \t]*')(?:[^'\r\n]*\\)(')"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${4}",
+            ),
             (
                 Regex::new(
                     r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*")(?:\\[^\r\n]|[^"\\\r\n])+(\")"#,
@@ -87,6 +98,15 @@ impl PatternRedactor {
             (
                 Regex::new(
                     r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*')(?:\\[^\r\n]|[^'\\\r\n])+(')"#,
+                )
+                .expect("valid regex"),
+                "${1}${2}[REDACTED_AUTH]${3}",
+            ),
+            // Camel-case counterpart of the literal trailing-backslash
+            // fallback above.
+            (
+                Regex::new(
+                    r#"(^|[^\p{L}\p{N}_-])((?:[A-Za-z0-9_-]*?(?:[a-z0-9](?:Api|API)|[A-Z]Api|API)(?i:key))["'\)\]]?[ \t]*[:=][ \t]*')(?:[^'\r\n]*\\)(')"#,
                 )
                 .expect("valid regex"),
                 "${1}${2}[REDACTED_AUTH]${3}",
