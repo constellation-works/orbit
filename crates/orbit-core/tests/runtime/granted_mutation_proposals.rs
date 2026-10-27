@@ -661,6 +661,7 @@ fn external_merge_runtime(fixture: &Fixture) -> OrbitRuntime {
             author: "orbit-bot".to_string(),
         },
         base_branch: base,
+        head_sha: "0dbd8e2000000000000000000000000000000000".to_string(),
         merge_commit: "03f7af7d6a1b2c3d4e5f60718293a4b5c6d7e8f9".to_string(),
     };
     fixture

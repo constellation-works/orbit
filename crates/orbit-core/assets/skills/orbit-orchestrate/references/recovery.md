@@ -186,6 +186,26 @@ same files does not refuse it. History records it as `external_merge_settled`, w
 landing note naming the PR and merge commit
 ([stuck job runs](https://github.com/constellation-works/orbit/blob/main/docs/runbooks/stuck-job-runs.md#a-delivery-pull-request-merged-outside-orbit)).
 
+If a follower's handoff was refused before its PR was recorded, and an operator
+rebased and merged that PR, recover the stopped claim to `blocked` first. Then,
+in the owning checkout, use one audited settlement command:
+
+```bash
+orbit task settle-merged <task-id> --recovered-claim <claim-id> --pull-request <number> --published-head <full-original-commit>
+```
+
+The original head is the follower's published candidate before the rebase. It is
+an operator attestation when the refused handoff left no owner-held candidate;
+existing candidate evidence must agree. The owner verifies the PR's delivery
+branch, task identity and delivery author, its merged head and merge commit,
+and the original admission's landing branch. Missing or expired receipts, later
+claims, live runs, dispatched landing attempts, unresolved merge intents and owed
+post-deploy criteria refuse settlement. History records `operator-rescued`, the
+operator-reported original head and the forge's merged head and merge commit.
+The task reaches `done` without force and the claim stays `revoked`. The follower
+closes its pending settlement on the next delivery, logs that once and stops
+retrying; the obsolete PR head is not observed again.
+
 When the work landed some other way (a commit, or a PR that is not the task's
 delivery PR), close the task rather than rerunning it. First confirm that no
 run is live on it and that the merged commit meets its acceptance criteria.

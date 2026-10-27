@@ -37,6 +37,8 @@ pub struct MergedPullRequest {
     pub pull: ForgePullRequest,
     /// The branch it merged into.
     pub base_branch: String,
+    /// The PR head observed after merge, including an operator's rebase.
+    pub head_sha: String,
     /// The commit it merged as.
     pub merge_commit: String,
 }
@@ -311,7 +313,7 @@ impl TaskPrForge for GhTaskPrForge {
             .map(Some)
             .ok_or_else(|| {
                 OrbitError::Execution(format!(
-                    "gh pr view #{number} did not report its head branch, author, base branch \
+                    "gh pr view #{number} did not report its head branch, head commit, author, base branch \
                      and merge commit"
                 ))
             })
@@ -436,6 +438,7 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
     Some(MergedPullRequest {
         pull: pull_request_from_json(entry)?,
         base_branch: non_empty(entry.get("baseRefName"))?,
+        head_sha: non_empty(entry.get("headRefOid"))?,
         merge_commit: non_empty(entry.pointer("/mergeCommit/oid"))?,
     })
 }

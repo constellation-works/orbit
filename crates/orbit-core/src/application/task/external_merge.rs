@@ -46,6 +46,13 @@
 //! authorization, records no merge intent or landing attempt, and leaves the
 //! revoked landing request revoked.
 //!
+//! An operator-recovered claim has already ended as `revoked`. When its
+//! refused handoff recorded no PR, the explicit rescued-delivery route accepts
+//! the claim, PR number and operator-reported original head. It verifies the
+//! original admission and the merged PR's task identity, author and landing
+//! branch, then settles the task under its write lock, retaining the ended
+//! claim and recording both heads. See [`OrbitRuntime::settle_recovered_claim_merge`].
+//!
 //! Entry points run it. Each `orbit run auto` admission pass settles from
 //! one listing of the most recently merged PRs, and reads the forge only when
 //! a candidate task has a PR to match. Each scheduler clock tick
@@ -78,6 +85,8 @@ use super::pr_closure::unsettled_claim_reason;
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecords, TaskWorkspaceAutoPort};
 use crate::runtime::task_pr_forge::MergedPullRequest;
+
+mod rescued;
 
 /// The statuses a task settles from.
 const SETTLEABLE_STATUSES: [TaskStatus; 3] = [
@@ -624,7 +633,7 @@ impl OrbitRuntime {
             Some(revoked) => {
                 self.write_revoked_handoff_settlement(&candidate.task, revoked, landing, actor)
             }
-            None => self.write_external_merge_settlement_as(&candidate.task, landing, actor),
+            None => self.write_external_merge_settlement_as(&candidate.task, landing, actor, None),
         }
     }
 
@@ -705,11 +714,15 @@ impl OrbitRuntime {
         observed: &Task,
         landing: &MergedPullRequest,
         actor: Option<&str>,
+        rescue: Option<&rescued::RecoveredMerge>,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         let history_actor = actor.unwrap_or(SYSTEM_ACTOR_LABEL).to_string();
         let id = observed.id.as_str();
         let number = landing.pull.number;
-        let (landed, note) = landing_note(landing);
+        let (landed, note) = match rescue {
+            Some(rescue) => rescue.landing_note(landing),
+            None => landing_note(landing),
+        };
         let mut written = None;
         self.stores().tasks().with_task_write_lock(id, &mut || {
             let task = self.get_task(id)?;
@@ -724,6 +737,9 @@ impl OrbitRuntime {
             }
             if let Some(live) = self.live_task_delivery(&task) {
                 return Err(refused(id, &live));
+            }
+            if let Some(rescue) = rescue {
+                self.check_recovered_merge(&task, rescue, landing)?;
             }
             if let Some(owed) = self.owed_settlement_hold(id) {
                 return Err(refused(id, &owed));

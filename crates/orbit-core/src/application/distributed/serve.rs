@@ -291,6 +291,14 @@ impl crate::OrbitRuntime {
                 Ok(result)
             }
             ClaimMutation::AcceptHandoff(handoff) => {
+                // Recovery ends the claim even if this immutable handoff now
+                // names a stale PR head. Refuse before any forge observation,
+                // so the follower can reconcile and close its pending record.
+                if !claim.phase.is_unsettled() {
+                    return Err(refused(
+                        "stale_claim: the owner already ended this claim; its pending handoff is obsolete",
+                    ));
+                }
                 let deadline = std::time::Instant::now() + self.claim_known_red_budget;
                 let mut observation = self.observe_claim_handoff(&handoff, is_remote(session))?;
                 let known_red = self.observe_known_red(&handoff, &observation, deadline)?;
