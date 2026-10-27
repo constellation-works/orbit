@@ -1250,38 +1250,133 @@ fn final_recovery_injects_only_its_runs_bounded_evidence_in_order() {
     assert!(!log.contains("foreign-log"));
 }
 
-fn final_recovery_escalates_instead_of_dropping_records_that_cannot_fit() {
-    let host = RecoveryHost::new([("work", vec![Reply::Fail]), ("decide", vec![escalate()])]);
-    let events = (0..500)
-        .map(|_| {
+fn final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows() {
+    for (attempt_count, distinct_failures) in [(500, 5), (500, 500), (1000, 1000)] {
+        let host = RecoveryHost::new([
+            ("work", vec![Reply::Fail]),
             (
-                RUN_ID,
-                V2AuditEventKind::StepPostRecoveryAttempt {
-                    step_id: "prior-step".to_string(),
-                    recovery_activity: "older-recovery".to_string(),
-                    outcome: "error".to_string(),
-                    error_message: Some("failed ".repeat(100)),
-                    output: None,
-                },
-            )
-        })
-        .collect();
-    let run = run_with_evidence(&pipeline(false), &host, None, events);
-    assert!(run.result.is_err());
-    assert_eq!(
-        host.count("decide"),
-        0,
-        "never dispatch an unbounded or incomplete attempt array"
-    );
-    let applications = host.applications();
-    let FinalRecoveryDecision::Escalate { diagnosis, .. } = &applications[0].decision else {
-        panic!("oversized audit evidence must escalate");
-    };
-    assert!(
-        diagnosis.contains("step-recovery evidence exceeds"),
-        "{diagnosis}"
-    );
-    assert_eq!(host.count("handoff"), 1);
+                "decide",
+                vec![Reply::Ok(
+                    json!({"decision": "requeue", "reason": "retry later"}),
+                )],
+            ),
+        ]);
+        let events = (0..attempt_count)
+            .map(|index| {
+                (
+                    RUN_ID,
+                    V2AuditEventKind::StepPostRecoveryAttempt {
+                        step_id: "prior-step".to_string(),
+                        recovery_activity: "older-recovery".to_string(),
+                        outcome: "error".to_string(),
+                        error_message: Some(format!(
+                            "failure-{}: {}",
+                            index % distinct_failures,
+                            "failed 界\"\n".repeat(100)
+                        )),
+                        output: Some(json!({"attempt_index": index})),
+                    },
+                )
+            })
+            .collect();
+        let run = run_with_evidence(&pipeline(false), &host, None, events);
+        assert!(
+            run.result.is_err(),
+            "a settled recovery preserves the original job failure"
+        );
+        assert_eq!(
+            host.count("decide"),
+            1,
+            "oversized evidence must still reach the final-recovery activity"
+        );
+        assert!(matches!(
+            host.applications()[0].decision,
+            FinalRecoveryDecision::Requeue { .. }
+        ));
+        let input = &host.inputs("decide")[0];
+        let attempts = input["step_recovery_attempts"].as_array().unwrap();
+        assert!(
+            serde_json::to_vec(attempts).unwrap().len() <= 64 * 1024,
+            "the serialized evidence, including the summary, stays within its bound"
+        );
+        let summary = &attempts[0];
+        assert_eq!(summary["truncated"], true);
+        assert_eq!(summary["run_id"], RUN_ID);
+        assert_eq!(summary["audit_reference"]["run_id"], RUN_ID);
+        assert_eq!(
+            summary["omitted_attempts"].as_u64().unwrap() as usize,
+            attempt_count + 1 - attempts.len()
+        );
+        let signatures = summary["failure_signatures"].as_array().unwrap();
+        let omitted_signatures = summary["omitted_failure_signatures"].as_u64().unwrap() as usize;
+        assert_eq!(signatures.len() + omitted_signatures, distinct_failures);
+        assert_eq!(
+            signatures
+                .iter()
+                .map(|signature| signature["count"].as_u64().unwrap())
+                .sum::<u64>()
+                + summary["omitted_signature_attempts"].as_u64().unwrap(),
+            attempt_count as u64
+        );
+        assert_eq!(
+            summary["audit_reference"]["event_kinds"],
+            json!(["step.recovery_attempted", "step.post_recovery_attempt"])
+        );
+        assert!(summary["original_serialized_bytes"].as_u64().unwrap() > 64 * 1024);
+        assert_eq!(
+            signatures
+                .iter()
+                .map(|signature| signature["sha256"].as_str().unwrap())
+                .collect::<std::collections::HashSet<_>>()
+                .len(),
+            signatures.len()
+        );
+        if distinct_failures <= 500 {
+            assert_eq!(
+                omitted_signatures, 0,
+                "every attempt's signature fits even when details do not"
+            );
+        } else {
+            assert!(
+                omitted_signatures > 0,
+                "unbounded signature cardinality is counted and points to the audit"
+            );
+        }
+        if distinct_failures == 5 {
+            for signature in signatures {
+                assert_eq!(signature["failed_step_id"], "prior-step");
+                assert_eq!(signature["activity"], "older-recovery");
+                assert_eq!(signature["phase"], "post_recovery");
+                assert_eq!(signature["outcome"], "error");
+                assert!(
+                    signature["error_message"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("failure-")
+                );
+            }
+        } else {
+            assert!(
+                signatures
+                    .iter()
+                    .all(|signature| signature.get("error_message").is_none()),
+                "many distinct failures retain compact hashes and counts"
+            );
+        }
+        assert!(
+            attempts.len() > 1,
+            "retain detailed recent attempts as well as signatures"
+        );
+        assert!(attempts[1..].windows(2).all(|pair| {
+            pair[0]["output"]["attempt_index"].as_u64().unwrap() + 1
+                == pair[1]["output"]["attempt_index"].as_u64().unwrap()
+        }));
+        assert_eq!(
+            attempts.last().unwrap()["output"]["attempt_index"],
+            attempt_count - 1
+        );
+        assert_eq!(host.count("handoff"), 0);
+    }
 }
 
 fn final_recovery_keeps_post_recovery_output_when_a_later_step_fails() {
@@ -1630,8 +1725,8 @@ fn recovery_contracts_4() {
                 final_recovery_injects_only_its_runs_bounded_evidence_in_order,
             ),
             (
-                "final_recovery_escalates_instead_of_dropping_records_that_cannot_fit",
-                final_recovery_escalates_instead_of_dropping_records_that_cannot_fit,
+                "final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows",
+                final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows,
             ),
             (
                 "final_recovery_keeps_post_recovery_output_when_a_later_step_fails",

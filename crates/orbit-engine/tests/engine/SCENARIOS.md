@@ -56,7 +56,7 @@ after the wrapper signals that its queue interval earned the capped credit.
 - `a_failure_before_the_worktree_exists_skips_final_recovery`
 - `failed_recovery_dispatch_is_injected_before_final_recovery`
 - `final_recovery_injects_only_its_runs_bounded_evidence_in_order`
-- `final_recovery_escalates_instead_of_dropping_records_that_cannot_fit`
+- `final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows`
 - `final_recovery_keeps_post_recovery_output_when_a_later_step_fails`
 - `final_recovery_resume_checkpoints_the_latest_conflict_diagnostics`
 

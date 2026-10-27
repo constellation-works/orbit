@@ -777,7 +777,7 @@ fn final_recovery_input(
             .iter().map(|step| step.id.clone()).collect::<Vec<_>>(),
         "crew_config_key": FINAL_RECOVERY_CREWS_KEY,
     });
-    inject_recovery_evidence(ctx, &mut input)?;
+    recovery::evidence::inject_final_recovery_evidence(ctx, &mut input)?;
     if let JobV2StepBody::Target(target) = &step.body {
         let completion = matches!(&target.spec, ActivityV2Spec::Deterministic(spec)
             if spec.action == "pr_complete");
