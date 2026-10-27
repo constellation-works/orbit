@@ -26,9 +26,10 @@ pub struct MidRunSteeringSettings {
     pub max_rounds: u8,
 }
 
-/// Admitted `workflow.regression_risk.*`: whether implement and review
-/// prompts mark regression-prone context files, and the gates a file must
-/// pass to be marked.
+/// Admitted `workflow.regression_risk.*`: settings for prompt marks on
+/// regression-prone context files and task riskiness scores. `enabled` gates
+/// marks only; `window_days` and `min_support` size both, while
+/// `threshold_percent` and `max_files` govern marks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RegressionRiskSettings {
     /// `workflow.regression_risk.enabled` (default `true`).

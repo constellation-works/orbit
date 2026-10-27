@@ -200,7 +200,12 @@ Tasks are grouped in the order you act on them: **Awaiting approval**
 (`proposed`), review, blocked, in progress, then backlog. Each row shows the
 title on its first line and the full task ID on its second, followed by what a
 backlog task waits on (`Waits on ORB-77`, `Throttled`) or where a running or
-blocked task's run is. Each row carries the action its group waits on:
+blocked task's run is. It also shows regression risk as a percentage, with
+`~` for partial support, or `no estimate` with one of four reasons: `no files`
+(no context files), `no paths` (selectors identify no file or directory),
+`thin history` (too few done tasks touched its paths in the window), or
+`unavailable` (the estimate could not be computed). Focus or hover the value
+for its explanation. Each row carries the action its group waits on:
 **Approve** on a proposed task, **Ship** on a backlog task, and **View run**
 on a task in progress.
 
@@ -240,7 +245,12 @@ live `orbit.log` tail you can filter to **all**, **err**, **deny**, or
 A task's detail leads with **Details**: status, complexity, crew, the
 operating systems it can run on, who created and carried it, its run and the
 machine it ran on, its pull request, when it was created and updated, and its
-tags. A circled *i* beside a value explains it on hover or focus. Its tabs are
+tags, and a **Risk** chip with the regression-risk score. The **Regression
+risk** breakdown gives the same estimate, its window and support, driving
+paths, and any limits. Partial support uses `~`; no-estimate reasons are the
+same as on the row. The score uses `window_days` and `min_support` even when
+`workflow.regression_risk.enabled` is off, since that switch controls prompt
+marks only. A circled *i* beside a value explains it on hover or focus. Its tabs are
 **Overview**, **Delivery** (only for a task with a delivery claim), **History**,
 **Runs**, [**Artifacts**](../../concepts/tasks/#task-artifacts), and
 **Comments**. The Artifacts tab lists files already stored on the task and

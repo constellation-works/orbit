@@ -153,20 +153,20 @@ macro_rules! with_tail_keys {
     },
     workflow_regression_risk_enabled: bool => bool {
         key: "workflow.regression_risk.enabled", value_type: "bool",
-        description: "Mark regression-prone context files in implement and review prompts.",
+        description: "Whether implement and review prompts mark regression-prone context files; task riskiness scoring remains active when marks are off.",
         section: ConfigSection::Delivery, order: 150,
         resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
     },
     workflow_regression_risk_window_days: u32 => u32 {
         key: "workflow.regression_risk.window_days", value_type: "integer",
-        description: "Trailing days of delivered tasks a regression-risk mark is computed over.",
+        description: "Trailing days of done tasks used for task riskiness scores and regression-risk prompt marks.",
         section: ConfigSection::Delivery, order: 151,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_count(raw, 30, 365, "workflow.regression_risk.window_days"),
     },
     workflow_regression_risk_min_support: u32 => u32 {
         key: "workflow.regression_risk.min_support", value_type: "integer",
-        description: "Touching tasks a file needs in the window before it can be marked.",
+        description: "Minimum task support used for riskiness scores and required before a context file can be marked.",
         section: ConfigSection::Delivery, order: 152,
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_count(raw, 5, 10_000, "workflow.regression_risk.min_support"),
