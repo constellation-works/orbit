@@ -1,4 +1,4 @@
-// Usage: node dashboard_task_panel_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/task-panel-browser
+// Usage: node dashboard_task_panel_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/task-panel-browser [--save-refresh]
 // Drives the shipped Tasks view with disposable API data: a row opens its
 // detail in the side pane beside a list that keeps its place, the pane's tabs,
 // width and keyboard, the full-page route and its way back, deep links, row
@@ -9,6 +9,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkTaskPresentation } from './dashboard_task_presentation_browser.mjs';
+import { checkTaskSaveRefresh } from './dashboard_task_save_refresh_browser.mjs';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
@@ -76,6 +77,7 @@ const sampleCriteria = [
 ];
 const full = task => ({
   ...task, projection: undefined,
+  status_transitions: task.status_transitions.map(transition => ({ ...transition, required_field: null })),
   description: task.description || '## Why\\n\\nOperators compare tasks side by side. ' + task.title + ' needs a **clear** spec.\\n\\n- keep the list still\\n- show the detail beside it',
   acceptance_criteria: task.acceptance_criteria || ['The list keeps its scroll position', 'The panel opens beside the list'],
   plan: '1. Read the code\\n2. Change it', complexity: 'medium', type: 'feature', tags: ['dashboard', 'ui'],
@@ -89,6 +91,7 @@ globalThis.panelFixture = {
   holdCommentPost: false, releaseCommentPost: null, failCommentPost: false,
   ships: [], holdShipPost: false, releaseShipPost: null,
   deliveryClaim: false, readiness: [], lifecycle: [],
+  holdTaskList: false, releaseTaskList: null,
 };
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
@@ -97,7 +100,16 @@ globalThis.fetch = async (input, options = {}) => {
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
   if (api === '/api/workspaces') return json([{ id: 'one', name: 'one', status: 'active', is_default: true }]);
   if (api === '/api/hosts') return json({ hosts: [{ name: 'owner', machine_id: 'owner-id', local: true }] });
-  if (api === '/api/tasks') return json({ items: globalThis.panelFixture.tasks, total: globalThis.panelFixture.tasks.length, limit: 50, truncated: false });
+  if (api === '/api/tasks') {
+    const selected = tasks.find(task => task.id === url.searchParams.get('detail'));
+    // Serialize before the barrier, as a server response computed before PATCH.
+    const response = json({ items: tasks, total: tasks.length, limit: 50, truncated: false, ...(selected ? { detail: full(selected) } : {}) });
+    if (globalThis.panelFixture.holdTaskList) {
+      globalThis.panelFixture.holdTaskList = false;
+      await new Promise(resolve => { globalThis.panelFixture.releaseTaskList = resolve; });
+    }
+    return response;
+  }
   if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
   if (api === '/api/crews') return json({ default_crew: 'opus', crews: [{ name: 'opus' }, { name: 'sol' }] });
   if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: globalThis.panelFixture.readiness });
@@ -162,7 +174,10 @@ globalThis.fetch = async (input, options = {}) => {
       globalThis.panelFixture.patches.push({ id: task.id, body });
       if (Object.hasOwn(body, 'crew')) task.crew = body.crew;
       if (Object.hasOwn(body, 'not_before')) { task.not_before = body.not_before || null; task.scheduled_hold = Boolean(body.not_before); }
-      if (body.status) task.status = body.status;
+      if (body.status) {
+        task.status = body.status;
+        task.status_transitions = [{ status: task.status === 'backlog' ? 'in-progress' : 'backlog' }];
+      }
       if (body.acceptance_criteria) task.acceptance_criteria = body.acceptance_criteria;
       if (body.context_files) task.context_files = body.context_files;
     }
@@ -224,7 +239,7 @@ const waitShown = async (page, id) => {
   await page.waitForFunction(id => new URLSearchParams(location.hash.split('?')[1] || '').get('open') === id, id);
 };
 
-try {
+async function checkTaskPanel() {
   // Scheduling lives in the metadata card; editing still sets and clears it.
   for (const width of [1440, 375]) {
     const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
@@ -1297,6 +1312,11 @@ try {
     results.regressionFromClassification = true;
   }
 
+}
+
+try {
+  await checkTaskSaveRefresh({ openPage, row, pane, waitShown, capture, results, evidence });
+  if (!process.argv.includes('--save-refresh')) await checkTaskPanel();
   fs.writeFileSync(path.join(evidence, 'task-panel-result.json'), JSON.stringify({ passed: true, ...results }, null, 2));
   console.log('Dashboard task panel browser checks passed.');
 } finally {
