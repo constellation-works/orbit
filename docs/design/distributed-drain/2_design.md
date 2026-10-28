@@ -1112,13 +1112,22 @@ A failed pull request check, owed or not, is classified from its failed-step log
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
 within the inherited-recovery budget below; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
-once. An untouched-path failure waits for fresh base evidence: a successful completed push run
-of the same job on the accepted base or a descendant through the landing tip counts even if that
-tip has since moved, provided both run and job started after the failed candidate job completed.
-The lookup is bounded to 100 recent base-branch push runs and retains the latest per workflow and
-commit. A fresh pass classifies the failure `flaky`, sharing the transient rerun budget; a passing
-rerun clears it, while the same signature failing again becomes `candidate` without another base
-wait. Reruns record `ci_check_rerun` history with the head, run and failed-job identities.
+once. An untouched-path failure waits for same-check base evidence: a successful completed push
+run of the same job on the accepted base or a descendant through the landing tip authorizes one
+rerun of the failed `pull_request` run on its unchanged head. The base run may predate the
+candidate failure; there is no run-time or job-start freshness test. Orbit requests
+`gh run rerun <id> --failed`, and GitHub retains the original event's `GITHUB_SHA` and
+`GITHUB_REF` on a rerun ([GitHub documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)).
+Orbit CI's candidate-build jobs explicitly check out `github.event.pull_request.head.sha`; they do
+not build a merge with the current base. The change-scope job uses the event merge ref only for
+GitHub API path classification and does not build candidate code. The lookup is bounded to 100
+recent base-branch push runs and retains the latest run per workflow and commit; evidence outside
+that window cannot authorize repair. A passing rerun clears the failure; the same signature
+failing again while the same-check base run passes makes the failure `candidate`. Without both
+results, `handoff_land` stops in review after
+`max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
+whichever comes first. Each observation cycle rechecks the failed job against the accepted base
+ancestry. Reruns record `ci_check_rerun` history with the head, run and failed-job identities.
 `candidate` is a repairable stop whose evidence carries the failed job, its signature and a log
 excerpt. An `inherited` failure that still fails after an update onto a passing base tip
 the head contains is the candidate's and takes that same repairable stop [ORB-16322]. When the automatic

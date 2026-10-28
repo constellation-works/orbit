@@ -237,15 +237,20 @@ The owner enforces what it is owed in two places:
   caused gets the claim's one automatic repair
   ([distributed drain runbook](distributed-drain.md)). A new failure whose
   log cites only files the candidate did not change is base-suspect: it waits
-  for a same-check base result and an unchanged-head `pull_request` rerun,
-  which evaluates the PR head as a merge with the current base. An earlier green
-  base run alone never attributes the failure to the candidate;
-  it only allows that PR rerun. A passing rerun clears the failure, while the
-  same signature failing again with a successful same-check run on the accepted
-  base ancestry enters candidate recovery. If the evidence remains incomplete,
+  for a successful same-check push run on the accepted base ancestry, then
+  requests one `gh run rerun <id> --failed` for the original `pull_request`
+  run on its unchanged head. A qualifying base run may predate the candidate
+  failure; it authorizes the rerun but does not attribute the failure. GitHub
+  retains the original event's `GITHUB_SHA` and `GITHUB_REF` on a rerun
+  ([GitHub documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)),
+  and Orbit CI's candidate-build jobs check out
+  `github.event.pull_request.head.sha`; they do not build a merge with the
+  current base. A passing rerun clears the failure, while the same signature
+  failing again with a successful same-check run on the accepted base ancestry
+  enters candidate recovery. If the evidence remains incomplete,
   `handoff_land` stops in review after `max_base_ci_cycles` observation cycles
-  (default 3) or `max_wait_seconds`, whichever comes first, and names the
-  missing evidence. Branch protection may still treat a skipped or
+  (default 3) or `max_wait_seconds` (default 3600 seconds), whichever comes
+  first, and names the missing evidence. Branch protection may still treat a skipped or
   neutral required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
 
