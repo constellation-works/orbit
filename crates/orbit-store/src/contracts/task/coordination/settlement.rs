@@ -428,6 +428,12 @@ pub enum ClaimMutation {
         request_key: String,
         job_run_id: String,
     },
+    /// Record in task history that the live landing attempt waits for its
+    /// base to recover. Changes no attempt, authority, phase or status.
+    RecordLandingWait {
+        handoff_id: String,
+        reason: String,
+    },
     /// Complete an authorized landing against verified external merge evidence.
     /// Refused while a merge intent is unresolved or the authority is stale.
     CompleteLanding {
@@ -448,6 +454,10 @@ pub enum ClaimMutation {
         base_branch: String,
         merge_commit: String,
         note: String,
+        /// Independently verified by the owner for a stopped authorized handoff.
+        /// Absent on the historical operator-revoked settlement path.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        verified_candidate_head: Option<String>,
     },
     /// Stop the live attempt with durable evidence, leaving the task in review.
     /// A `repairable` stop — the candidate conflicts with, or is stale

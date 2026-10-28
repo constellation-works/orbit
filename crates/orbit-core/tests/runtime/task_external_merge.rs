@@ -56,6 +56,8 @@ enum Authority {
     Unapproved,
     /// Accepted under a `done` contract: the owner's landing job carries it.
     Authorized,
+    /// Its authorized landing stopped while its claim still holds completion authority.
+    Stopped,
     /// Authorized, its landing attempt stopped, then revoked by an operator:
     /// the observed release-prep case.
     Revoked,
@@ -495,6 +497,37 @@ impl Fixture {
         };
         let (task, claim_id, worker) =
             self.bound_claim_with_mode(number, LANDING, authorized, mode);
+        let (candidate_revision, base_revision) = if authority == Authority::Stopped {
+            let repo = self.runtime.paths().repo_root.clone();
+            settlement_git(&repo, &["init", "-q", "-b", &self.base]);
+            settlement_git(&repo, &["add", "shared.txt"]);
+            settlement_git(&repo, &["commit", "-qm", "base"]);
+            let base = settlement_revision(&repo, "HEAD");
+            if self.base != LANDING {
+                settlement_git(&repo, &["branch", LANDING]);
+            }
+            settlement_git(
+                &repo,
+                &["checkout", "-qb", &format!("orbit/{task}-47642870")],
+            );
+            std::fs::write(repo.join("delivery.txt"), "candidate\n").unwrap();
+            settlement_git(&repo, &["add", "delivery.txt"]);
+            settlement_git(&repo, &["commit", "-qm", "candidate"]);
+            let candidate = settlement_revision(&repo, "HEAD");
+            settlement_git(&repo, &["checkout", "-q", &self.base]);
+            (candidate, base)
+        } else {
+            (
+                SourceRevision {
+                    commit: "a".repeat(40),
+                    tree: "b".repeat(40),
+                },
+                SourceRevision {
+                    commit: "c".repeat(40),
+                    tree: "d".repeat(40),
+                },
+            )
+        };
         let handoff = TaskHandoff {
             schema_version: 1,
             workspace_id: self.runtime.workspace_id().unwrap(),
@@ -507,14 +540,8 @@ impl Fixture {
                 source_branch: format!("orbit/{task}-47642870"),
                 base_branch: self.base.clone(),
                 landing_branch: LANDING.into(),
-                candidate: SourceRevision {
-                    commit: "a".repeat(40),
-                    tree: "b".repeat(40),
-                },
-                base: SourceRevision {
-                    commit: "c".repeat(40),
-                    tree: "d".repeat(40),
-                },
+                candidate: candidate_revision,
+                base: base_revision,
                 delivery,
             },
             review: HandoffReview {
@@ -559,7 +586,7 @@ impl Fixture {
         };
         if matches!(
             authority,
-            Authority::Revoked | Authority::RevokedWhileDispatched
+            Authority::Revoked | Authority::RevokedWhileDispatched | Authority::Stopped
         ) {
             landing(
                 "dispatch",
@@ -569,7 +596,7 @@ impl Fixture {
                 },
             );
         }
-        if authority == Authority::Revoked {
+        if matches!(authority, Authority::Revoked | Authority::Stopped) {
             landing(
                 "stop",
                 ClaimMutation::StopLanding {
@@ -1354,6 +1381,7 @@ fn the_owner_store_settles_a_revoked_handoff_and_its_task_in_one_write_or_neithe
                 base_branch: branch.into(),
                 merge_commit: MERGE_COMMIT.into(),
                 note: format!("settled from pull request #{number}"),
+                verified_candidate_head: None,
             },
         )
     }
@@ -1651,4 +1679,176 @@ fn clock_tick_forge_failure_does_not_fail_the_tick() {
     let outcome = tick(&fx, false, false);
     assert_eq!(outcome.external_merge_settlements.len(), 1);
     assert_eq!(fx.status(&task), TaskStatus::Done);
+}
+
+fn settlement_git(repo: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args([
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.invalid",
+        ])
+        .args(args)
+        .current_dir(repo)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn settlement_revision(repo: &Path, reference: &str) -> SourceRevision {
+    SourceRevision {
+        commit: settlement_git(repo, &["rev-parse", reference]),
+        tree: settlement_git(repo, &["rev-parse", &format!("{reference}^{{tree}}")]),
+    }
+}
+
+#[test]
+fn stopped_handoff_settles_a_deleted_branch_after_two_operator_updates() {
+    for foreign in [false, true] {
+        let fx = Fixture::with_config(
+            "[workflow]\nbase_branch = \"release-landing\"\ndistributed_completion = \"done\"\n",
+        );
+        let handoff = fx.handed_off(4938, Authority::Stopped);
+        let repo = fx.runtime.paths().repo_root.clone();
+        let accepted = fx.runtime.accepted_task_handoff(&handoff.claim_id).unwrap();
+        let candidate = &accepted.handoff.candidate;
+        let remote = fx._root.path().join("remote.git");
+        settlement_git(
+            &repo,
+            &["clone", "-q", "--bare", ".", remote.to_str().unwrap()],
+        );
+        let mut head = candidate.candidate.commit.clone();
+        for update in 1..=2 {
+            let base_tree = settlement_git(&remote, &["rev-parse", &format!("{LANDING}^{{tree}}")]);
+            let base = settlement_git(
+                &remote,
+                &[
+                    "commit-tree",
+                    &base_tree,
+                    "-p",
+                    LANDING,
+                    "-m",
+                    &format!("base update {update}"),
+                ],
+            );
+            settlement_git(
+                &remote,
+                &["update-ref", &format!("refs/heads/{LANDING}"), &base],
+            );
+            let tree = settlement_git(&remote, &["merge-tree", "--write-tree", &head, &base]);
+            head = settlement_git(
+                &remote,
+                &[
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &head,
+                    "-p",
+                    &base,
+                    "-m",
+                    "operator base update",
+                ],
+            );
+        }
+        if foreign {
+            let tree = settlement_git(&remote, &["rev-parse", &format!("{head}^{{tree}}")]);
+            head = settlement_git(
+                &remote,
+                &[
+                    "commit-tree",
+                    &tree,
+                    "-p",
+                    &head,
+                    "-m",
+                    "foreign source commit",
+                ],
+            );
+        }
+        let tree = settlement_git(&remote, &["rev-parse", &format!("{head}^{{tree}}")]);
+        let merge = settlement_git(
+            &remote,
+            &[
+                "commit-tree",
+                &tree,
+                "-p",
+                LANDING,
+                "-m",
+                "external squash merge",
+            ],
+        );
+        settlement_git(
+            &remote,
+            &["update-ref", &format!("refs/heads/{LANDING}"), &merge],
+        );
+        settlement_git(&remote, &["update-ref", "refs/pull/4938/head", &head]);
+        settlement_git(
+            &remote,
+            &[
+                "update-ref",
+                "-d",
+                &format!("refs/heads/{}", candidate.source_branch),
+            ],
+        );
+        settlement_git(
+            &repo,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        let absent = std::process::Command::new("git")
+            .args(["cat-file", "-e", &head])
+            .current_dir(&repo)
+            .output()
+            .unwrap();
+        assert!(
+            !absent.status.success(),
+            "updated PR head starts outside the owner checkout"
+        );
+        fx.forge.merge_recent(4938, &handoff.task, "alice", LANDING);
+        {
+            let mut state = fx.forge.0.lock().unwrap();
+            state.recent[0].head_sha = head.clone();
+            state.recent[0].merge_commit = merge.clone();
+        }
+        let result = fx.runtime.settle_externally_merged_tasks();
+        if foreign {
+            assert!(result.unwrap().is_empty());
+            let error = fx
+                .runtime
+                .settle_externally_merged_task(&handoff.task)
+                .unwrap_err();
+            assert!(error.to_string().contains("reconcile_review"), "{error}");
+            assert_eq!(fx.status(&handoff.task), TaskStatus::Review);
+            assert_eq!(
+                fx.claim_phase(&handoff.claim_id),
+                ExecutionClaimPhase::HandedOff
+            );
+        } else {
+            assert_eq!(result.unwrap().len(), 1);
+            assert_eq!(fx.status(&handoff.task), TaskStatus::Done);
+            assert_eq!(
+                fx.claim_phase(&handoff.claim_id),
+                ExecutionClaimPhase::Landed
+            );
+            assert_eq!(
+                fx.runtime.landing_attempts().unwrap()[0].state,
+                LandingAttemptState::Merged
+            );
+            assert_eq!(
+                fx.runtime.landing_start_requests().unwrap()[0].state,
+                LandingStartState::Completed
+            );
+            let history = fx.runtime.get_task_history(&handoff.task).unwrap();
+            assert!(
+                history
+                    .iter()
+                    .any(|row| row.event == EXTERNAL_MERGE_SETTLED_EVENT
+                        && row.note.as_ref().is_some_and(|note| note.contains(&head)))
+            );
+        }
+    }
 }

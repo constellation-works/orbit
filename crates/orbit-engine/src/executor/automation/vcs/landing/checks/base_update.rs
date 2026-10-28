@@ -16,56 +16,45 @@ pub(super) fn contains(workspace: &Path, ancestor: &str, descendant: &str) -> bo
 }
 
 /// Whether `head` is a provider branch update of the validated `candidate`:
-/// a two-parent merge of the candidate with a commit the landing ref already
-/// contains, whose tree is exactly the clean merge of the two.
-///
-/// Fetches the head branch first when the object is not in the owner
-/// checkout. Any answer this cannot read is a refusal.
+/// a first-parent chain of two-parent merges, each with a base commit the
+/// landing ref contains and exactly the clean tree of its parents.
+/// Any answer this cannot read is a refusal.
 pub(in crate::executor::automation::vcs) fn verified_base_update(
     workspace: &Path,
     candidate: &str,
     head: &str,
-    head_branch: &str,
     landing_ref: &str,
 ) -> Result<(), String> {
-    let object = format!("{head}^{{commit}}");
-    if !git_command_success(workspace, &["cat-file", "-e", &object]).unwrap_or(false)
-        && git_command_success(workspace, &["remote", "get-url", "origin"]).unwrap_or(false)
-    {
-        let _ = git_command_success(
+    let mut current = head.to_string();
+    while current != candidate {
+        let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", &current])
+            .map_err(|error| format!("head {current} cannot be read: {error}"))?;
+        let parents: Vec<&str> = parents.split_whitespace().skip(1).collect();
+        let [previous, base_side] = parents.as_slice() else {
+            return Err(format!(
+                "head {current} is not a two-parent base merge of candidate {candidate}"
+            ));
+        };
+        if !contains(workspace, base_side, landing_ref) {
+            return Err(format!(
+                "head {current} merges {base_side}, which landing ref '{landing_ref}' does not contain"
+            ));
+        }
+        let merged = git_output(
             workspace,
-            &["fetch", "--no-tags", "--quiet", "origin", head_branch],
-        );
-    }
-    let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", head])
-        .map_err(|error| format!("head {head} cannot be read: {error}"))?;
-    let parents: Vec<&str> = parents.split_whitespace().skip(1).collect();
-    let [first, second] = parents.as_slice() else {
-        return Err(format!("head {head} is not a two-parent merge"));
-    };
-    let base_side = match (*first == candidate, *second == candidate) {
-        (true, false) => *second,
-        (false, true) => *first,
-        _ => return Err(format!("head {head} does not merge candidate {candidate}")),
-    };
-    if !contains(workspace, base_side, landing_ref) {
-        return Err(format!(
-            "head {head} merges {base_side}, which landing ref '{landing_ref}' does not contain"
-        ));
-    }
-    let merged = git_output(
-        workspace,
-        &["merge-tree", "--write-tree", candidate, base_side],
-    )
-    .map_err(|error| {
-        format!("candidate {candidate} does not merge cleanly with {base_side}: {error}")
-    })?;
-    let tree = git_output(workspace, &["rev-parse", &format!("{head}^{{tree}}")])
-        .map_err(|error| format!("head {head} has no readable tree: {error}"))?;
-    if merged.lines().next().map(str::trim) != Some(tree.trim()) {
-        return Err(format!(
-            "head {head} changes more than the merge of candidate {candidate} with {base_side}"
-        ));
+            &["merge-tree", "--write-tree", previous, base_side],
+        )
+        .map_err(|error| {
+            format!("head {previous} does not merge cleanly with {base_side}: {error}")
+        })?;
+        let tree = git_output(workspace, &["rev-parse", &format!("{current}^{{tree}}")])
+            .map_err(|error| format!("head {current} has no readable tree: {error}"))?;
+        if merged.lines().next().map(str::trim) != Some(tree.trim()) {
+            return Err(format!(
+                "head {current} changes more than the merge of {previous} with {base_side}"
+            ));
+        }
+        current = (*previous).to_string();
     }
     Ok(())
 }
@@ -119,26 +108,46 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
     if !contains(workspace, &candidate.base.commit, &landing) {
         return Err(refuse("landing base rewound or unrelated".into()));
     }
-    verified_base_update(
-        workspace,
-        &candidate.candidate.commit,
-        head,
-        &candidate.source_branch,
-        &landing,
-    )
-    .map_err(refuse)?;
-    let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", head])?;
-    let base_side = parents
-        .split_whitespace()
-        .skip(1)
-        .find(|parent| *parent != candidate.candidate.commit)
-        .ok_or_else(|| refuse("base parent unavailable".into()))?;
-    if !contains(workspace, &candidate.base.commit, base_side)
-        || contains(workspace, base_side, &candidate.candidate.commit)
-    {
-        return Err(refuse(
-            "provider base parent is rewound, unrelated or has not advanced".into(),
-        ));
+    if remote && !contains(workspace, head, head) {
+        let _ = git_command_success(
+            workspace,
+            &[
+                "fetch",
+                "--no-tags",
+                "--quiet",
+                "origin",
+                &candidate.source_branch,
+            ],
+        );
+        if !contains(workspace, head, head) {
+            // GitHub retains this ref after deleting a merged source branch,
+            // including when the landing branch received a squash commit.
+            let _ = git_command_success(
+                workspace,
+                &[
+                    "fetch",
+                    "--no-tags",
+                    "--quiet",
+                    "origin",
+                    &format!("refs/pull/{number}/head"),
+                ],
+            );
+        }
+    }
+    verified_base_update(workspace, &candidate.candidate.commit, head, &landing).map_err(refuse)?;
+    if head != candidate.candidate.commit {
+        let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", head])?;
+        let base_side = parents
+            .split_whitespace()
+            .nth(2)
+            .ok_or_else(|| refuse("base parent unavailable".into()))?;
+        if !contains(workspace, &candidate.base.commit, base_side)
+            || contains(workspace, base_side, &candidate.candidate.commit)
+        {
+            return Err(refuse(
+                "provider base parent is rewound, unrelated or has not advanced".into(),
+            ));
+        }
     }
     if matches!(
         super::super::super::pr::classify_pr_state(status),

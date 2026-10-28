@@ -560,6 +560,21 @@ impl TaskCommitBoundary {
                     )?;
                     state.last_event = "landing_dispatched".into();
                 }
+                ClaimMutation::RecordLandingWait { handoff_id, reason } => {
+                    if !auth.operator
+                        || claim.phase != ExecutionClaimPhase::HandedOff
+                        || state.landing_invalidated
+                    {
+                        return Err(invalid("current operator landing context required"));
+                    }
+                    if reason.trim().is_empty() {
+                        return Err(invalid("a landing wait requires a reason"));
+                    }
+                    self.check_live_landing_attempt(auth, handoff_id)?;
+                    params.status_note = Some(reason.clone());
+                    state.last_event =
+                        orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT.into();
+                }
                 ClaimMutation::CompleteLanding {
                     handoff_id,
                     evidence: proof,
@@ -584,6 +599,7 @@ impl TaskCommitBoundary {
                     base_branch,
                     merge_commit,
                     note,
+                    verified_candidate_head,
                 } => {
                     if note.trim().is_empty() {
                         return Err(invalid("external merge settlement requires a landing note"));
@@ -595,17 +611,22 @@ impl TaskCommitBoundary {
                         *pull_request,
                         base_branch,
                         merge_commit,
+                        verified_candidate_head.as_deref(),
                         &crate::repository::task::v2::task_history_from_events(
                             bundle.events.clone(),
                         ),
                     )?;
-                    // `Revoked`, not `Landed`: `Landed` says the owner's landing
-                    // consumer verified the merge under a current completion
-                    // authorization, and this handoff's authorization was
-                    // withdrawn. The claim ends as revoked work does; the task's
-                    // history and its landing note record the external merge.
-                    state.claim.phase = ExecutionClaimPhase::Revoked;
-                    state.landing_invalidated = true;
+                    if self.handoff_authority_revoked(handoff_id)? {
+                        state.claim.phase = ExecutionClaimPhase::Revoked;
+                        state.landing_invalidated = true;
+                    } else {
+                        self.complete_external_merge_attempt(
+                            handoff_id,
+                            note,
+                            &mut handoff_effects,
+                        )?;
+                        state.claim.phase = ExecutionClaimPhase::Landed;
+                    }
                     release = true;
                     params.status = Some(TaskStatus::Done);
                     params.status_note = Some(note.clone());

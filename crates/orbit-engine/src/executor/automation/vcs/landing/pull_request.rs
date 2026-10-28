@@ -137,6 +137,9 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             let observed = observe_candidate(context, Some(&status), view).map_err(|error| {
                 stop_pr(host, context, &diagnostic, false, &error.to_string()).unwrap_or(error)
             })?;
+            // A merge with no intent of ours is the operator's; the completion
+            // record carries that in its history note.
+            evidence["external_merge"] = json!(intent.is_none());
             if let Some(intent_id) = intent {
                 record(
                     host,
@@ -338,21 +341,24 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 diagnostic["required_checks"] = observation;
             }
             match recovered {
-                CheckRecoveryStep::Acted => continue,
+                CheckRecoveryStep::Acted => {
+                    recovery.waiting_for_base = None;
+                    continue;
+                }
                 CheckRecoveryStep::Wait => waiting_on_recovery = true,
                 CheckRecoveryStep::WaitForBase(reason) => {
                     diagnostic["base_suspicion"] = json!(reason);
+                    if recovery.waiting_for_base.as_deref() != Some(&reason) {
+                        let note = json!({
+                            "state": "waiting_for_base",
+                            "reason": reason,
+                            "head": status.head_sha,
+                            "deadline_ms": deadline_ms,
+                        });
+                        host.record_handoff_landing_wait(&context.handoff_id, &note.to_string())?;
+                        recovery.waiting_for_base = Some(reason);
+                    }
                     waiting_on_recovery = true;
-                }
-                CheckRecoveryStep::HoldForBase(reason) => {
-                    return Err(hold_pr(
-                        host,
-                        context,
-                        &diagnostic,
-                        false,
-                        DeliveryRefusal::BaseChecksPending,
-                        &reason,
-                    )?);
                 }
                 CheckRecoveryStep::Repair(evidence) => {
                     return Err(stop_pr(host, context, &diagnostic, true, &evidence)?);
@@ -595,7 +601,7 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
             DeliveryRefusal::BaseChecksPending,
             &format!(
                 "pull request #{number} is waiting for the base's own check result after \
-                 {max_wait_seconds}s: {suspicion}; the candidate stays in review"
+                 {max_wait_seconds}s: the base never recovered before the landing deadline; {suspicion}; the candidate stays in review"
             ),
         );
     }

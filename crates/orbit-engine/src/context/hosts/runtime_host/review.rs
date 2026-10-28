@@ -151,6 +151,15 @@ macro_rules! review_methods {
         /// transaction; an error refuses the step.
         fn record_handoff_landing(&self, update: &HandoffLandingUpdate) -> Result<(), OrbitError>;
 
+        /// Record in task history that a live landing attempt waits for its
+        /// base with `reason`, through the claim the landing holds. Its
+        /// attempt, authority and deadline are unchanged; an error refuses it.
+        fn record_handoff_landing_wait(
+            &self,
+            handoff_id: &str,
+            reason: &str,
+        ) -> Result<(), OrbitError>;
+
         // ── Claimed distributed leaf execution [ORB-12616] ─────────────────
 
         /// The machine this runtime executes on, as the
