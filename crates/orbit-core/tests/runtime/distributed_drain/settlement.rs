@@ -789,6 +789,136 @@ fn a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep() {
     );
 }
 
+/// [ORB-19486] A replayed settlement returns its original receipt but must
+/// not re-apply its crew attribution after an operator re-pinned the task.
+fn replayed_settlement_leaves_newer_crew_unchanged(
+    mutation: ClaimMutation,
+    expected_phase: orbit_store::contracts::ExecutionClaimPhase,
+) {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    let session = ToolSessionContext {
+        caller_machine_id: Some(FOLLOWER.into()),
+        process_machine_id: Some(OWNER.into()),
+        transport: Some(McpTransport::SshMcp),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let attribution = orbit_store::contracts::ClaimAttribution {
+        crew: Some("luna".into()),
+        ..Default::default()
+    };
+    let crew_entries_before = pair.owner_task(&task)["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|entry| entry["event"] == "crew_assigned")
+        .count();
+    let first = pair
+        .wire
+        .owner
+        .serve_claim_settle(
+            &session,
+            &claim.claim_id,
+            Some(&leaf),
+            mutation.clone(),
+            attribution.clone(),
+        )
+        .expect("first settlement");
+    assert_eq!(first.phase, expected_phase);
+    let after_first = pair.owner_task(&task);
+    assert_eq!(after_first["crew"], "luna", "{after_first:#}");
+    assert_eq!(
+        after_first["crew_source"], "redraw:claimed_leaf",
+        "{after_first:#}"
+    );
+    assert_eq!(
+        after_first["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "crew_assigned")
+            .count(),
+        crew_entries_before + 1,
+        "first settlement writes its crew exactly once: {after_first:#}"
+    );
+
+    pair.wire
+        .owner
+        .update_task_as_human(
+            &task,
+            orbit_core::application::task::TaskUpdateParams {
+                crew: Some(Some("opus".into())),
+                ..Default::default()
+            },
+            "human:fixture".into(),
+        )
+        .expect("operator crew update");
+    let after_update = pair.owner_task(&task);
+    assert_eq!(after_update["crew"], "opus", "{after_update:#}");
+
+    let replay = pair
+        .wire
+        .owner
+        .serve_claim_settle(
+            &session,
+            &claim.claim_id,
+            Some(&leaf),
+            mutation,
+            attribution,
+        )
+        .expect("replayed settlement returns the original receipt");
+    assert_eq!(replay, first);
+    let after_replay = pair.owner_task(&task);
+    for field in ["crew", "crew_source", "history"] {
+        assert_eq!(
+            after_replay[field], after_update[field],
+            "{field} changed on replay"
+        );
+    }
+    assert_eq!(
+        after_replay["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "crew_assigned")
+            .count(),
+        // The operator update may add its own entry; the first settlement
+        // added exactly one and the replay added none.
+        after_update["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "crew_assigned")
+            .count(),
+        "{after_replay:#}"
+    );
+}
+
+fn a_replayed_fail_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged() {
+    replayed_settlement_leaves_newer_crew_unchanged(
+        ClaimMutation::Fail(ClaimEvidence {
+            summary: Some("leaf failed".into()),
+            ..Default::default()
+        }),
+        orbit_store::contracts::ExecutionClaimPhase::Failed,
+    );
+}
+
+fn a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged() {
+    replayed_settlement_leaves_newer_crew_unchanged(
+        ClaimMutation::Release(ClaimEvidence {
+            summary: Some("leaf released".into()),
+            ..Default::default()
+        }),
+        orbit_store::contracts::ExecutionClaimPhase::Revoked,
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
@@ -802,7 +932,9 @@ crate::scenario_table!(
     a_new_policy_refusal_holds_new_claims_but_reconciles_other_pending_records,
     an_operator_stop_delivers_a_refused_settlement_without_waiting_for_its_backoff,
     a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends,
-    a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep
+    a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep,
+    a_replayed_fail_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged,
+    a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged
 );
 
 #[cfg(unix)]

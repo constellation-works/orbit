@@ -56,6 +56,28 @@ impl OrbitRuntime {
         // settlement stands, the leaf's crew is written back to the task,
         // since the leaf drew it on its executor [ORB-19416].
         let leaf_crew = attribution.crew.clone();
+        // Fence the post-receipt write-back against replay [ORB-19486]: a
+        // replayed Fail/Release finds its claim already settled, and a
+        // replayed handoff finds its accepted handoff already recorded.
+        // Attribution is not part of the receipt identity, so it must not
+        // become new mutation authority on replay. Snapshot the task crew
+        // before the mutation so a delayed write also cannot overwrite a
+        // crew recorded after this snapshot.
+        let first_settlement = match &settlement {
+            ClaimMutation::AcceptHandoff(_) => {
+                claim.phase.is_unsettled()
+                    && matches!(
+                        self.stores().tasks().find_accepted_handoff(&claim.claim_id),
+                        Ok(None)
+                    )
+            }
+            ClaimMutation::Fail(_) | ClaimMutation::Release(_) => claim.phase.is_unsettled(),
+            _ => false,
+        };
+        let recorded_crew = self
+            .get_task(&claim.task_id)
+            .ok()
+            .and_then(|task| task.crew);
         let context = ClaimInvocation::trusted_worker(
             claim.task_id.clone(),
             claim.claim_id.clone(),
@@ -135,7 +157,12 @@ impl OrbitRuntime {
                  revocation and recovery are owner-operator actions",
             )),
         }?;
-        self.write_back_claimed_leaf_crew(&claim.task_id, leaf_crew.as_deref());
+        self.write_back_claimed_leaf_crew(
+            &claim.task_id,
+            leaf_crew.as_deref(),
+            first_settlement,
+            recorded_crew.as_deref(),
+        );
         Ok(result)
     }
 

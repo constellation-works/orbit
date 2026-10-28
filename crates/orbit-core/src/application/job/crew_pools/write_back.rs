@@ -82,8 +82,6 @@ pub(crate) struct PendingCrewWriteBack {
 enum CrewWriteGuard<'a> {
     /// The backfill, which also repairs terminal tasks because analytics read them.
     Any,
-    /// A claimed leaf's write-back, which leaves terminal tasks alone.
-    Open,
     /// An admission's write-back, which leaves terminal tasks alone and any task
     /// whose crew is no longer `recorded`: a newer change to the task owns it.
     Recorded(Option<&'a str>),
@@ -109,20 +107,6 @@ pub struct TaskCrewChange {
 }
 
 impl OrbitRuntime {
-    /// Record `crew` as the crew `task_id` runs as, with `written`'s
-    /// provenance and a `crew_assigned` history entry, as one locked record
-    /// update. Nothing is written when the task already names `crew`, is
-    /// terminal, or `crew` is blank. Returns whether it wrote.
-    pub(crate) fn write_back_task_crew(
-        &self,
-        task_id: &str,
-        crew: &str,
-        written: &AdmittedCrewSource,
-    ) -> Result<bool, OrbitError> {
-        self.write_task_crew(task_id, crew, written, CrewWriteGuard::Open)
-            .map(|change| change.is_some())
-    }
-
     /// The write-back of a crew an admitted run drew, applied only while the
     /// task still names the crew the draw read [ORB-19485].
     pub(crate) fn write_back_admitted_task_crew(
@@ -142,7 +126,24 @@ impl OrbitRuntime {
     /// The owner's write-back of the crew a claimed leaf reported at
     /// settlement. Best effort: the settlement already stands, and a later
     /// admission or the backfill writes the crew again.
-    pub(crate) fn write_back_claimed_leaf_crew(&self, task_id: &str, crew: Option<&str>) {
+    ///
+    /// Fenced against replay [ORB-19486]: `first_settlement` is false when
+    /// the pre-mutation claim snapshot was already settled, so a replayed
+    /// receipt never re-applies its attribution. `recorded_crew` is the
+    /// task crew read before the settlement mutation; the write lands only
+    /// while the task still names it, so a delayed write cannot overwrite
+    /// a crew a newer claim, delivery or operator update recorded after
+    /// that snapshot.
+    pub(crate) fn write_back_claimed_leaf_crew(
+        &self,
+        task_id: &str,
+        crew: Option<&str>,
+        first_settlement: bool,
+        recorded_crew: Option<&str>,
+    ) {
+        if !first_settlement {
+            return;
+        }
         let Some(crew) = crew.and_then(non_empty) else {
             return;
         };
@@ -157,11 +158,19 @@ impl OrbitRuntime {
                 AdmittedCrewSource::redraw_reason("claimed_leaf")
             }
         };
-        if let Err(error) = self.write_back_task_crew(task_id, crew, &written) {
-            tracing::warn!(
-                task_id,
-                "could not write the claimed leaf's crew back to its task: {error}"
-            );
+        match self.write_task_crew(
+            task_id,
+            crew,
+            &written,
+            CrewWriteGuard::Recorded(recorded_crew),
+        ) {
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    task_id,
+                    "could not write the claimed leaf's crew back to its task: {error}"
+                );
+            }
         }
     }
 
@@ -263,7 +272,6 @@ impl OrbitRuntime {
                 let current = self.get_task(task_id)?;
                 let refused = match guard {
                     CrewWriteGuard::Any => false,
-                    CrewWriteGuard::Open => current.status.is_terminal(),
                     CrewWriteGuard::Recorded(recorded) => {
                         current.status.is_terminal() || current.crew.as_deref() != recorded
                     }
