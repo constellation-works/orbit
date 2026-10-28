@@ -28,7 +28,14 @@ const tasks = statuses.map((status, index) => ({
   ...(index === 5 ? { not_before: '2099-02-01T10:00:00Z', scheduled_hold: true } : {}),
   ...(index === 4 ? { not_before: '2026-10-18T10:00:00Z', started_at: '2026-10-18T12:00:00Z' } : {}),
   ...(index === 3 ? { riskiness: { state: 'no_footprint' } } : {}),
-  ...(index === 4 ? { riskiness: { state: 'estimated', probability: 0.23 } } : {}),
+  ...(index === 4 ? { riskiness: {
+    estimator_version: 2, state: 'estimated', probability: 0.23, basis: 'declared_files', basis_fallback: null, size: 23,
+    fit: { observations: 1203, regressed: 166, intercept: -2.9, slope: 0.45 },
+    size_band: { tasks: 412, regressed: 61, rate: 61 / 412 }, support_state: 'full',
+    window_days: 30, min_support: 5, observed_through: '2026-10-27T05:00:00Z',
+    workspace: { tasks: 1203, regressed: 166, base_rate: 167 / 1205 },
+    anchors: 23, unsupported_selectors: 0, driving_files: [], adjustment: null,
+  } } : {}),
   status_transitions: [{ status: status === 'backlog' ? 'in-progress' : 'backlog' }],
   comment_count: index === 1 ? 0 : 2, artifact_count: 1,
   ...(index === 2 ? {
@@ -265,7 +272,11 @@ try {
     await waitShown(page, 'PANEL-5');
     const riskBreakdown = pane(page).locator('.task-risk');
     await riskBreakdown.locator('summary').click();
-    assert.match(await riskBreakdown.locator('.task-risk-lead').textContent(), /Regression risk 23%/);
+    assert.equal(await riskBreakdown.locator('.task-risk-lead').textContent(), 'Regression risk 23% · 23 declared files');
+    const riskLines = await riskBreakdown.locator('.task-risk-line').allTextContents();
+    assert.equal(riskLines[0], 'Of the 412 recent done tasks this size or larger, 61 regressed (15%)', 'The breakdown shows the size-band calibration evidence');
+    assert.ok(!riskLines.some(line => /crew|Driving files/i.test(line)), `Riskiness attributes no file or crew: ${riskLines}`);
+    await capture(page, `task-risk-breakdown-dark-${width}.png`);
     const started = pane(page).locator('.task-started-at');
     assert.equal(await started.count(), 1, 'A task with started_at shows its Actual start beside Scheduled (scheduled-tasks scope: the started-at time must be shown beside the scheduled time once known)');
     assert.equal(await started.locator('.label').textContent(), 'Actual start');

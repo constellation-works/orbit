@@ -57,9 +57,8 @@ pub(in crate::application) use pilot::{
 };
 pub use regression::RegressionFilter;
 pub use riskiness::{
-    AdjustmentState, RiskinessAdjustment, RiskinessAnchor, RiskinessBase, RiskinessGroup,
-    RiskinessState, SupportState, TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskiness,
-    TaskRiskinessModel,
+    BasisFallback, RiskinessBase, RiskinessBasis, RiskinessFit, RiskinessSizeBand, RiskinessState,
+    SupportState, TASK_RISKINESS_ESTIMATOR_VERSION, TaskRiskiness, TaskRiskinessModel,
 };
 use sections::{Params, ROW_LIMIT, Rollup};
 

@@ -33,12 +33,27 @@ fn link(target: &str) -> TaskRelation {
     }
 }
 
+const WIDE: [&str; 3] = ["file:risky.rs", "file:risky-a.rs", "file:risky-b.rs"];
+
 fn measured_history(fixture: &Fixture, lag: Duration, missing_usd: bool) {
+    seeded_history(fixture, lag, missing_usd, false);
+}
+
+/// Five regressed origins, five clean tasks and five fixes. `sized` varies
+/// their footprints so riskiness, which fits size alone, has a slope:
+/// three-file tasks regress more often (4 of 9) than one-file tasks (1 of
+/// 6), with both outcomes at each size. Otherwise every task declares one
+/// file.
+fn seeded_history(fixture: &Fixture, lag: Duration, missing_usd: bool, sized: bool) {
     let now = Utc::now();
     for index in 0..5 {
         let risky = completed(fixture, now - Duration::days(2) - lag);
         edit_task(fixture, &risky, |task| {
-            task.context_files = vec!["file:risky.rs".into()]
+            task.context_files = if index == 0 || !sized {
+                vec!["file:risky.rs".into()]
+            } else {
+                WIDE.iter().map(|path| (*path).into()).collect()
+            }
         });
         let safe = completed(fixture, now - Duration::days(2));
         edit_task(fixture, &safe, |task| {
@@ -46,7 +61,11 @@ fn measured_history(fixture: &Fixture, lag: Duration, missing_usd: bool) {
         });
         let fix = completed(fixture, now - Duration::days(1));
         edit_task(fixture, &fix, |task| {
-            task.context_files = vec![format!("file:fix-{index}.rs")];
+            let suffixes: &[&str] = if sized { &["", "-a", "-b"] } else { &[""] };
+            task.context_files = suffixes
+                .iter()
+                .map(|suffix| format!("file:fix-{index}{suffix}.rs"))
+                .collect();
             task.created_at = now - Duration::days(2);
             task.relations = vec![link(&risky)];
         });
@@ -69,17 +88,15 @@ fn measured_history(fixture: &Fixture, lag: Duration, missing_usd: bool) {
     }
 }
 
-fn risk_forecast(path: Option<&str>, lag: Duration, missing_usd: bool) -> Value {
+fn risk_forecast(paths: &[&str], lag: Duration, missing_usd: bool) -> Value {
+    sized_risk_forecast(paths, lag, missing_usd, false)
+}
+
+fn sized_risk_forecast(paths: &[&str], lag: Duration, missing_usd: bool, sized: bool) -> Value {
     let fixture = Fixture::new();
-    measured_history(&fixture, lag, missing_usd);
+    seeded_history(&fixture, lag, missing_usd, sized);
     for _ in 0..3 {
-        backlog_task(
-            &fixture,
-            "Future work",
-            &path.into_iter().collect::<Vec<_>>(),
-            &[],
-            &[],
-        );
+        backlog_task(&fixture, "Future work", paths, &[], &[]);
     }
     let server = fixture.server(false);
     json_ok(server.get(&format!("{ENDPOINT}&concurrency=1")))
@@ -90,8 +107,8 @@ fn regression_draws_add_cost_time_and_count_prior_fallbacks() {
     isolated(
         "backlog_rework::regression_draws_add_cost_time_and_count_prior_fallbacks",
         || {
-            let high = risk_forecast(Some("file:risky.rs"), Duration::hours(1), false);
-            let low = risk_forecast(Some("file:safe.rs"), Duration::hours(1), false);
+            let high = sized_risk_forecast(&WIDE, Duration::hours(1), false, true);
+            let low = sized_risk_forecast(&["file:safe.rs"], Duration::hours(1), false, true);
             assert!(high["model_version"].as_u64().unwrap() > 7);
             assert_eq!(high["inputs"]["admission_factors"]["regression_rework"], 1);
             assert_eq!(high["coverage"]["risk_prior_fallbacks"], 0);
@@ -113,7 +130,7 @@ fn regression_draws_add_cost_time_and_count_prior_fallbacks() {
                         .unwrap()
             );
             assert_eq!(high["forecast"]["regression_rework"]["generation_limit"], 1);
-            let prior = risk_forecast(None, Duration::hours(1), false);
+            let prior = risk_forecast(&[], Duration::hours(1), false);
             assert_eq!(prior["coverage"]["risk_prior_fallbacks"], 3);
             assert_eq!(prior["coverage"]["risk_unestimated"], 0);
             assert!(
@@ -133,14 +150,14 @@ fn regression_detection_lags_and_unknown_costs_are_not_discarded() {
     isolated(
         "backlog_rework::regression_detection_lags_and_unknown_costs_are_not_discarded",
         || {
-            let delayed = risk_forecast(Some("file:risky.rs"), Duration::days(10), false);
+            let delayed = risk_forecast(&["file:risky.rs"], Duration::days(10), false);
             assert!(
                 delayed["forecast"]["time_to_drain_hours"]["p50"]
                     .as_f64()
                     .unwrap()
                     >= 240.0
             );
-            let outside = risk_forecast(Some("file:risky.rs"), Duration::days(100), false);
+            let outside = risk_forecast(&["file:risky.rs"], Duration::days(100), false);
             // The old origins are outside the risk window, so these tasks use a
             // supported workspace prior, without inventing a UI estimate.
             assert!(
@@ -154,7 +171,7 @@ fn regression_detection_lags_and_unknown_costs_are_not_discarded() {
                 0.0
             );
             assert_eq!(outside["forecast"]["usd"]["p90"], 3.0);
-            let missing = risk_forecast(Some("file:risky.rs"), Duration::hours(1), true);
+            let missing = risk_forecast(&["file:risky.rs"], Duration::hours(1), true);
             assert!(missing["forecast"]["usd"]["p90"].is_null());
             assert!(missing["forecast"]["tokens"]["p90"].as_f64().unwrap() > 0.0);
         },
