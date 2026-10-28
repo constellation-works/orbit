@@ -212,3 +212,11 @@ export function plural(count, word) {
 export function taskDispatchIdentity(task) {
   return `${task.workspace_id || getWorkspace() || ''}:${task.id}`;
 }
+
+export const MUTATION_UNDO_WINDOW_MS = 8000;
+
+// `os:` tags route a task to a host of that OS, so they read apart from the
+// labels around them.
+export function isOsTag(tag) {
+  return typeof tag === "string" && tag.toLowerCase().startsWith("os:");
+}

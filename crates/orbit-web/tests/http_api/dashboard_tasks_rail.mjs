@@ -164,9 +164,14 @@ const load = name => {
   }
   return modules.get(name);
 };
+// Each module links once. A module another import reaches while it is still
+// linking waits for that link, so its dependencies exist before instantiation.
+const linking = new Map();
 const linker = async specifier => {
-  const module = load(specifier.replace(/^\.\//, ''));
-  if (module.status === 'unlinked') await module.link(linker);
+  const name = specifier.replace(/^\.\//, '');
+  const module = load(name);
+  if (!linking.has(name)) linking.set(name, module.link(linker));
+  await linking.get(name);
   return module;
 };
 const tasksModule = load('tasks.js');
