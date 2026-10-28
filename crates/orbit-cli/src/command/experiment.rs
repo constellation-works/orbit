@@ -278,6 +278,34 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
 
     let mut empty = Vec::new();
     for metric in value["metrics"].as_array().into_iter().flatten() {
+        if metric["metric"] == "cost_usd"
+            && metric["arms"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .any(|arm| arm["cost_coverage"].is_object())
+        {
+            blocks.push(Block::text(
+                "\nCost coverage (settled tasks; estimates use token prices, incomplete costs are excluded):",
+            ));
+            let mut coverage = Table::new(vec![
+                Column::new("ARM"),
+                Column::new("REPORTED").number(),
+                Column::new("ESTIMATED").number(),
+                Column::new("UNMEASURED").number(),
+                Column::new("OPEN").number(),
+            ]);
+            for arm in metric["arms"].as_array().into_iter().flatten() {
+                coverage.add_row(vec![
+                    text(&arm["arm"]),
+                    text(&arm["cost_coverage"]["reported"]),
+                    text(&arm["cost_coverage"]["estimated"]),
+                    text(&arm["cost_coverage"]["unmeasured"]),
+                    text(&arm["open"]),
+                ]);
+            }
+            blocks.push(Block::table(coverage));
+        }
         let has_data = metric["arms"]
             .as_array()
             .into_iter()

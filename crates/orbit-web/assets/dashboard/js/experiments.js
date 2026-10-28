@@ -555,10 +555,12 @@ function armVerdict(arm, verdict, concludedArm) {
 
 function armCards(experiment, readout, primary, color) {
   const arms = readout.arms || [];
+  const cost = (readout.metrics || []).find((metric) => metric.metric === "cost_usd");
   const guardrails = readout.guardrails || [];
   const unit = primary?.unit;
   const cards = arms.map((arm) => {
     const estimate = primary?.arms?.find((row) => row.arm === arm.name);
+    const coverage = cost?.arms?.find((row) => row.arm === arm.name)?.cost_coverage;
     const interval = fmtInterval(estimate?.mean_interval, unit);
     const state = armVerdict(arm, readout.verdict, experiment.concluded_arm);
     const rails = guardrails.map((rail) => {
@@ -583,6 +585,11 @@ function armCards(experiment, readout, primary, color) {
         estimate ? ` · ${estimate.n} settled` : "",
         estimate?.open ? ` · ${estimate.open} open` : "",
       ]),
+      coverage ? el("span", {
+        class: "mx-sc-foot ex-arm-cost",
+        text: `Cost: ${coverage.reported} reported · ${coverage.estimated} estimated · ${coverage.unmeasured} unmeasured`,
+        title: "Settled tasks: reported means every invocation has a provider cost; estimated uses token prices for at least one invocation. Tasks missing any cost are unmeasured and excluded from cost comparisons. Open tasks are separate.",
+      }) : null,
       rails.length ? el("ul", { class: "ex-rails", "aria-label": "Guardrails" }, rails) : null,
       el("span", { class: `ex-arm-verdict ex-arm-verdict-${state.replace(/\W+/g, "-").replace(/-$/, "")}`, text: state }),
     ]);

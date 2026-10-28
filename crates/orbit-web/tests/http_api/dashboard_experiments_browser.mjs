@@ -189,11 +189,11 @@ const readout = {
   experiment: { primary_metric: 'pass_rate', min_sample: 20, started_at: starts[0], max_days: 14 },
   verdict: { state: 'collecting', label: 'collecting' },
   warnings: [],
-  enrollment: { analysed: 2, forced_excluded: 0 },
-  lagging: { open_tasks: 0, open_regression_windows: 0, regression_window_days: 14 },
+  enrollment: { analysed: 15, forced_excluded: 0 },
+  lagging: { open_tasks: 3, open_regression_windows: 0, regression_window_days: 14 },
   arms: [
-    { name: 'control', control: true, weight: 1, n: 1 },
-    { name: 'candidate', control: false, weight: 1, n: 2 },
+    { name: 'control', control: true, weight: 1, n: 8 },
+    { name: 'candidate', control: false, weight: 1, n: 7 },
   ],
   guardrails: [],
   metrics: [{
@@ -205,6 +205,15 @@ const readout = {
     arms: [
       { arm: 'control', mean: 0, n: 1 },
       { arm: 'candidate', mean: 0.5, n: 2 },
+    ],
+    differences: [],
+  }, {
+    metric: 'cost_usd', unit: 'usd', kind: 'mean', better: 'lower', measured: true,
+    arms: [
+      { arm: 'control', mean: 1.25, n: 5, unmeasured: 1, open: 2,
+        cost_coverage: { reported: 2, estimated: 3, unmeasured: 1 } },
+      { arm: 'candidate', mean: 0.75, n: 4, unmeasured: 2, open: 1,
+        cost_coverage: { reported: 4, estimated: 0, unmeasured: 2 } },
     ],
     differences: [],
   }],
@@ -335,6 +344,10 @@ function chartLabels() {
 setExperimentId('exp-intraday');
 await fetchAndRenderExperiments();
 assert.equal(getClockZone(), 'utc', 'the chart opens on the UTC dashboard clock');
+assert.deepEqual(experimentsBody.querySelectorAll('.ex-arm-cost').map(node => node.textContent), [
+  'Cost: 2 reported · 3 estimated · 1 unmeasured',
+  'Cost: 4 reported · 0 estimated · 2 unmeasured',
+], 'cost coverage stays visible when cost is not the primary metric');
 
 const winner = experimentsBody.querySelector('select.ex-conclude-control');
 const reason = experimentsBody.querySelector('textarea.ex-conclude-control');
@@ -560,13 +573,20 @@ async function checkCumulativeTooltipBounds() {
           const names = ['controlWithAnUnbrokenArmNameThatIsLong', 'candidateWithAnUnbrokenArmNameThatIsLong'];
           currentExperiment.arms.forEach((arm, index) => { arm.name = names[index]; });
           currentReadout.arms.forEach((arm, index) => { arm.name = names[index]; });
-          currentReadout.metrics[0].arms.forEach((arm, index) => { arm.arm = names[index]; });
+          currentReadout.metrics.forEach(metric => metric.arms.forEach((arm, index) => { arm.arm = names[index]; }));
           currentReadout.cumulative.arms.forEach((arm, index) => { arm.arm = names[index]; });
         }
         await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&case=${width}-${scenario}#analytics/experiments/exp-intraday`);
         await page.waitForFunction(() => window.fixtureReady);
         assert.equal(await page.locator('.ex-cum-col').count(), 3);
         if (scenario === 'short') {
+          if (!suffix) {
+            assert.deepEqual(await page.locator('.ex-arm-cost').allTextContents(), [
+              'Cost: 2 reported · 3 estimated · 1 unmeasured',
+              'Cost: 4 reported · 0 estimated · 2 unmeasured',
+            ], 'the readout distinguishes reported, estimated and unmeasured cost');
+          }
+          await page.locator('.ex-arms').locator('..').screenshot({ path: path.join(evidence, `cost-coverage-dark-${width}${suffix}.png`) });
           const winner = page.locator('select.ex-conclude-control');
           const reason = page.locator('textarea.ex-conclude-control');
           await winner.selectOption('candidate');

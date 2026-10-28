@@ -3,13 +3,13 @@ use std::collections::BTreeSet;
 use orbit_store::contracts::ExperimentRecord;
 
 use crate::application::experiment::readout::outcomes::{
-    Better, Kind, MetricSpec, Outcome, TaskOutcome,
+    Better, CostSource, Kind, MetricSpec, Outcome, TaskOutcome,
 };
 use crate::application::experiment::readout::stats::Cell;
 
 use super::model::{
-    ArmEstimate, ComplexityDifference, Difference, DifferenceEstimate, Estimate, ReadoutMetric,
-    SegmentEstimate,
+    ArmEstimate, ComplexityDifference, CostCoverage, Difference, DifferenceEstimate, Estimate,
+    ReadoutMetric, SegmentEstimate,
 };
 use super::stats;
 
@@ -74,6 +74,15 @@ pub(super) fn metric_readout(
                 ),
                 open: count(&arm.name, Outcome::Open),
                 unmeasured: count(&arm.name, Outcome::Unmeasured),
+                cost_coverage: (spec.name == "cost_usd").then(|| CostCoverage {
+                    reported: mine()
+                        .filter(|task| task.cost_source == Some(CostSource::Reported))
+                        .count(),
+                    estimated: mine()
+                        .filter(|task| task.cost_source == Some(CostSource::Estimated))
+                        .count(),
+                    unmeasured: count(&arm.name, Outcome::Unmeasured),
+                }),
                 segments: segments
                     .into_iter()
                     .map(|segment| SegmentEstimate {

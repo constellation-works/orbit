@@ -151,7 +151,20 @@ pub struct ArmEstimate {
     pub open: usize,
     /// Settled tasks with no value in the records.
     pub unmeasured: usize,
+    /// Settled-task cost provenance, present only for `cost_usd`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cost_coverage: Option<CostCoverage>,
     pub segments: Vec<SegmentEstimate>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CostCoverage {
+    /// Every invocation has a valid provider-reported cost.
+    pub reported: usize,
+    /// Every invocation is priced, using a token-price estimate for at least one.
+    pub estimated: usize,
+    /// No invocations, or at least one invocation cannot be priced.
+    pub unmeasured: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

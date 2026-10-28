@@ -394,8 +394,8 @@ impl RuntimeKernel {
     }
 
     /// This workspace's managed invocations recorded at or after `since`
-    /// (all of them for `None`), oldest first, each with its provider cost
-    /// and normalized token total.
+    /// (all of them for `None`), oldest first, each with its provider cost,
+    /// table-derived cost and normalized token total.
     pub fn invocation_spend(
         &self,
         since: Option<DateTime<Utc>>,
@@ -415,6 +415,7 @@ impl RuntimeKernel {
                 ts: fact.ts,
                 task_ids: fact.task_ids.clone(),
                 provider_cost_usd: fact.provider_cost_usd.filter(|cost| valid_cost(*cost)),
+                derived_cost_usd: fact.derived_cost_usd.filter(|cost| valid_cost(*cost)),
                 normalized_tokens: normalized_token_total(fact),
                 duration_ms: fact.duration_ms,
             })

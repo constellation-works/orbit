@@ -1,8 +1,8 @@
 ---
 title: "Scope: randomized experiments over agent treatments"
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 stage: building
 next: "Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today)"
@@ -194,6 +194,26 @@ overlay digest.
 | Done rate | Terminal status |
 | Escaped regressions | `regression_from` relations within 14 days of landing, any escape class (the scorecards charge only some classes; the experiment counts them all) |
 | Lines changed | Landed diff stats ([ORB-18383]) |
+
+`cost_usd` uses each invocation's valid provider-reported dollars first, then
+its token-derived estimate from the shared, versioned configuration data in
+`crates/orbit-common/assets/model_prices.yaml`. Rates are keyed by model and
+effective date, with provider input/cache semantics handled by shared accounting;
+the experiment has no provider-specific prices or pricing branches. A task is
+measured only when **every** linked invocation can be priced. No invocations,
+an unknown model or invalid token split without reported cost makes its
+whole cost unmeasured; partial sums never enter estimates, differences or the
+cumulative series. A valid reported zero remains measured.
+
+For the `cost_usd` metric, each arm's `cost_coverage` reports settled task counts:
+`reported` when every invocation reports cost, `estimated` when at least one
+uses the price table and all are priced, and `unmeasured` otherwise. Reported
+plus estimated equals the metric's measured `n`; unmeasured matches its
+`unmeasured` count. In-flight tasks stay in `open`, outside these counts.
+The CLI prints coverage even with no measured costs, and dashboard arm cards
+show it regardless of the primary metric. Models absent from the shared table
+remain unmeasured until pricing data is available; they are never assumed free.
+Cost and coverage are recomputed on read from the raw invocation records.
 
 The experiment names one primary metric and any number of guardrails
 (`delivery_done_rate: -5pt`, `escaped_regressions: +0`). The readout computes, per arm and
