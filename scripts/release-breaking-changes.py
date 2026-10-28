@@ -216,7 +216,11 @@ def detect_help_removals(git, parent, commit, changed):
 def schema_facts(schema, path, facts):
     """Flatten the structural facts of a JSON schema; descriptions are skipped."""
     if isinstance(schema, bool):
-        facts.setdefault("schema_nodes", set()).add(path)
+        # Only `true` is an existing location: it accepts everything, so
+        # requiring a child there rejects previously valid input. `false`
+        # accepts nothing, so relaxing it to an object only admits input.
+        if schema:
+            facts.setdefault("schema_nodes", set()).add(path)
         return
     if not isinstance(schema, dict):
         return
