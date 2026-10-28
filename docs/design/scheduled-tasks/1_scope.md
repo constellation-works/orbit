@@ -174,9 +174,11 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
     (`reclaim_task_for_resumed_run` in `application/job/resume/plan.rs`)
     readmits a `backlog` task only for a completion repair of a requeue made
     by its own lineage's final recovery, that is, a task that had already
-    started. Source repair can also readmit `review`, `blocked`, or `backlog`
-    tasks: failed published sources with final-recovery evidence and
-    acknowledged superseded sources can be eligible outside review. The hold
+    started. Source repair can also readmit `review`, `in-progress`, `blocked`,
+    or `backlog` tasks. A reserved admission's `in-progress` stage, failed
+    published sources with final-recovery evidence (`blocked` or `backlog`),
+    and acknowledged superseded sources (`in-progress`, `blocked`, or
+    `backlog`) can be eligible outside review. The hold
     applies to backlog, not blocked tasks. Claim recovery
     (`recover_claim_as_operator` in `application/review/handoff.rs`) and
     requeue (`application/task/requeue.rs`) only move a task to `blocked`
