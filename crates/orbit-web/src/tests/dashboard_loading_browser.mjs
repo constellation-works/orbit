@@ -120,7 +120,7 @@ async function assertFrictionTaskLinks(page) {
       if (await page.locator('#task-filter .chip[data-status="done"]').getAttribute('aria-pressed') !== 'false') {
         throw new Error('Opening a friction task must retain the normal Tasks route status filter');
       }
-      if (await page.locator('#tasks-body .task-action-notice').count()) {
+      if (await page.locator('#tasks-notices .task-action-notice').count()) {
         throw new Error('Opening a friction task must not fall back to copying its ID');
       }
       if (status === 'backlog') {

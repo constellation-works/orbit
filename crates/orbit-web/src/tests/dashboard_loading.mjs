@@ -288,7 +288,7 @@ const auditHeadPage = await fetchJsonPage('/api/audit?limit=50');
 check(auditHeadPage.header('x-audit-next-before') === 'fixture-audit-cursor', 'continuing audit fixture response exposes its paging cursor');
 const auditTerminalPage = await fetchJsonPage('/api/audit?limit=50&before=fixture-audit-cursor');
 check(auditTerminalPage.header('x-audit-next-before') === null, 'terminal audit fixture response exposes an absent cursor as null');
-check(text('tasks-body').includes('Loading'), 'cold Tasks must visibly load');
+check(text('tasks-messages').includes('Loading'), 'cold Tasks must visibly load');
 check(!text('tasks-body').includes('No tasks'), 'cold Tasks cannot claim empty');
 for (const request of pendingReads.splice(0)) release(request, list([]));
 await settle();
@@ -413,6 +413,10 @@ const surfaces = [
   { route: 'operations/routines', body: 'routines-body', path: '/api/routines', empty: { routines: [], clock: {} }, emptyText: 'No routines' },
 ];
 for (const surface of surfaces) {
+  // A list that names a message area (`data-messages`, the Tasks list) keeps
+  // its load note there, beside its rows.
+  const messages = node(surface.body).dataset.messages;
+  const shown = () => text(surface.body) + (messages ? text(messages) : '');
   heldPath = surface.path;
   setWorkspace('one');
   setWorkspace('two');
@@ -420,10 +424,10 @@ for (const surface of surfaces) {
   setActiveTab(surface.route);
   await settle();
   if (!pendingReads.length) { refresh(); await settle(); }
-  check(text(surface.body).includes('Loading'), `${surface.route}: cold load visible`);
-  check(!text(surface.body).includes(surface.emptyText), `${surface.route}: cold load cannot be empty`);
+  check(shown().includes('Loading'), `${surface.route}: cold load visible`);
+  check(!shown().includes(surface.emptyText), `${surface.route}: cold load cannot be empty`);
   check(busy(surface.body) === 'true', `${surface.route}: loading marked busy`);
-  const status = Array.from(node(surface.body).children).find(child => child.dataset.panelStatus);
+  const status = Array.from(node(messages || surface.body).children).find(child => child.dataset.panelStatus);
   const attribute = name => status?.getAttribute ? status.getAttribute(name) : status?.[name];
   check(attribute('role') === 'status' && attribute('aria-live') === 'polite', `${surface.route}: accessible loading feedback`);
   if (status.getBoundingClientRect) {
@@ -432,23 +436,23 @@ for (const surface of surfaces) {
   }
   for (const request of pendingReads.splice(0)) release(request);
   await settle();
-  check(text(surface.body).includes(marker), `${surface.route}: loaded data visible`);
-  check(text(surface.body).includes('Updated.'), `${surface.route}: success visible`);
+  check(shown().includes(marker), `${surface.route}: loaded data visible`);
+  check(shown().includes('Updated.'), `${surface.route}: success visible`);
 
   marker = 'late-old-scope';
   refresh(); await settle();
   const old = pendingReads.splice(0);
-  check(text(surface.body).includes('Refreshing') && text(surface.body).includes('current-scope-data'), `${surface.route}: refresh retains labeled data`);
+  check(shown().includes('Refreshing') && shown().includes('current-scope-data'), `${surface.route}: refresh retains labeled data`);
   check(!node('refresh-btn').disabled, `${surface.route}: refresh remains usable`);
   setWorkspace('one');
-  check(!text(surface.body).includes('current-scope-data'), `${surface.route}: workspace change clears synchronously`);
+  check(!shown().includes('current-scope-data'), `${surface.route}: workspace change clears synchronously`);
   marker = 'new-scope-data';
   refresh(); await settle();
   for (const request of pendingReads.splice(0)) release(request);
   await settle();
   for (const request of old) release(request);
   await settle();
-  check(text(surface.body).includes('new-scope-data') && !text(surface.body).includes('late-old-scope'), `${surface.route}: old scope response discarded`);
+  check(shown().includes('new-scope-data') && !shown().includes('late-old-scope'), `${surface.route}: old scope response discarded`);
 
   marker = 'older-overlap'; refresh(); await settle();
   const earlier = pendingReads.splice(0);
@@ -457,30 +461,30 @@ for (const surface of surfaces) {
   await settle();
   for (const request of earlier) release(request);
   await settle();
-  check(text(surface.body).includes('newer-overlap') && !text(surface.body).includes('older-overlap'), `${surface.route}: latest request wins`);
+  check(shown().includes('newer-overlap') && !shown().includes('older-overlap'), `${surface.route}: latest request wins`);
 
   marker = 'late-before-roundtrip'; refresh(); await settle();
   const roundtrip = pendingReads.splice(0);
   setWorkspace('two'); setWorkspace('one');
   for (const request of roundtrip) release(request);
   await settle();
-  check(text(surface.body).includes('Loading') && !text(surface.body).includes('late-before-roundtrip'), `${surface.route}: A→B→A rejects old response`);
+  check(shown().includes('Loading') && !shown().includes('late-before-roundtrip'), `${surface.route}: A→B→A rejects old response`);
   marker = 'newer-overlap'; refresh(); await settle();
   for (const request of pendingReads.splice(0)) release(request);
   await settle();
   refresh(); await settle();
   for (const request of pendingReads.splice(0)) request.reject(new TypeError('Fixture refresh failure'));
   await settle();
-  check(text(surface.body).includes('stale data') && text(surface.body).includes('newer-overlap'), `${surface.route}: refresh failure retains labeled stale data`);
+  check(shown().includes('stale data') && shown().includes('newer-overlap'), `${surface.route}: refresh failure retains labeled stale data`);
   check(busy(surface.body) === 'false', `${surface.route}: failure clears busy`);
   setWorkspace('two'); refresh(); await settle();
   for (const request of pendingReads.splice(0)) request.reject(new TypeError('Fixture cold failure'));
   await settle();
-  check(text(surface.body).includes('Unable to load') && !text(surface.body).includes(surface.emptyText), `${surface.route}: cold error differs from empty`);
+  check(shown().includes('Unable to load') && !shown().includes(surface.emptyText), `${surface.route}: cold error differs from empty`);
   refresh(); await settle();
   for (const request of pendingReads.splice(0)) release(request, surface.empty);
   await settle();
-  check(text(surface.body).includes(surface.emptyText) && !text(surface.body).includes('Unable to load'), `${surface.route}: empty success recovers`);
+  check(shown().includes(surface.emptyText) && !shown().includes('Unable to load'), `${surface.route}: empty success recovers`);
 }
 heldPath = null;
 terminalRunFixture = true;
