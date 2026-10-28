@@ -1,5 +1,6 @@
 //! Experiment reweight events distinguish weight edits from arm retirement.
 
+use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
@@ -207,6 +208,82 @@ fn disabled_setting_stops_new_enrollment_but_keeps_sticky_rows() {
     );
 }
 
+#[test]
+fn start_refuses_after_experiments_are_disabled_on_an_open_runtime() {
+    if !super::dispatch_admission::isolated(
+        "experiment_lifecycle::start_refuses_after_experiments_are_disabled_on_an_open_runtime",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let config_path = workspace.join("config.toml");
+    std::fs::write(&config_path, "[experiments]\nenabled = true\n").unwrap();
+    let actor = ExperimentActor {
+        actor: "experiment-lifecycle-test".into(),
+        reason: None,
+    };
+
+    // This runtime keeps the enabled settings snapshot after the operator
+    // disables experiments, just like a long-lived drain process.
+    let stale_runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let experiment_id = draft_experiment(&stale_runtime, "disabled-before-start", actor.clone());
+
+    std::fs::write(&config_path, "[experiments]\nenabled = false\n").unwrap();
+
+    let error = stale_runtime
+        .change_experiment(&experiment_id, ExperimentChange::Start, actor)
+        .unwrap_err();
+    assert!(
+        matches!(&error, OrbitError::PolicyDenied(message) if message.contains("experiments.enabled")),
+        "start must refuse on the current config, got {error:?}"
+    );
+    assert_eq!(
+        stale_runtime
+            .experiment_view(&experiment_id)
+            .unwrap()
+            .status,
+        "draft"
+    );
+}
+
+#[test]
+fn start_accepts_after_experiments_are_enabled_on_an_open_runtime() {
+    if !super::dispatch_admission::isolated(
+        "experiment_lifecycle::start_accepts_after_experiments_are_enabled_on_an_open_runtime",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let config_path = workspace.join("config.toml");
+    std::fs::write(&config_path, "[experiments]\nenabled = false\n").unwrap();
+    let actor = ExperimentActor {
+        actor: "experiment-lifecycle-test".into(),
+        reason: None,
+    };
+
+    // This runtime keeps the disabled settings snapshot after the operator
+    // enables experiments, so start must read the current config as admission does.
+    let stale_runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let experiment_id = draft_experiment(&stale_runtime, "enabled-before-start", actor.clone());
+
+    std::fs::write(&config_path, "[experiments]\nenabled = true\n").unwrap();
+
+    let started = stale_runtime
+        .change_experiment(&experiment_id, ExperimentChange::Start, actor)
+        .unwrap();
+    assert_eq!(started.status, "running");
+}
+
 fn capture_job(root: &std::path::Path) -> std::path::PathBuf {
     let job_path = root.join("task_local_pipeline.yaml");
     std::fs::write(
@@ -331,7 +408,15 @@ fn reweight_events_classify_weight_edits_separately_from_retirements() {
 }
 
 fn started_experiment(runtime: &OrbitRuntime, name: &str, actor: ExperimentActor) -> String {
-    let experiment = runtime
+    let experiment_id = draft_experiment(runtime, name, actor.clone());
+    runtime
+        .change_experiment(&experiment_id, ExperimentChange::Start, actor)
+        .unwrap();
+    experiment_id
+}
+
+fn draft_experiment(runtime: &OrbitRuntime, name: &str, actor: ExperimentActor) -> String {
+    runtime
         .create_experiment(
             name,
             ExperimentDefinitionInput {
@@ -343,11 +428,8 @@ fn started_experiment(runtime: &OrbitRuntime, name: &str, actor: ExperimentActor
                 primary_metric: Some("implement_tokens".into()),
                 ..ExperimentDefinitionInput::default()
             },
-            actor.clone(),
+            actor,
         )
-        .unwrap();
-    runtime
-        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
-        .unwrap();
-    experiment.id
+        .unwrap()
+        .id
 }
