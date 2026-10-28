@@ -213,9 +213,11 @@ orbit experiment assign brief-v2 --task <task-id> --arm brief-v2
 ```
 
 Forced assignment needs a running experiment in either mode (shadow or live),
-an unassigned nonterminal task, and an active arm. It records `forced: true`.
-Existing assignments and exclusions are immutable — a task that already has one is
-refused — and a task whose surface another experiment owns is refused.
+a nonterminal task without an arm assignment or with an `explicit_crew`
+exclusion for this experiment, and an active arm. It records `forced: true`.
+The force replaces only that `explicit_crew` exclusion; existing arm assignments
+and other exclusions for the experiment, including `surface_conflict`, stay
+sticky. A task whose surface another experiment owns is still refused.
 Forced assignments are left out of every readout estimate and counted
 separately (see below), so use them to smoke-test an arm, not to gather
 evidence.
