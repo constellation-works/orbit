@@ -25,10 +25,6 @@ mod retention;
 pub type ValidationHold<'a> =
     dyn Fn(&Task, &[TaskComment], &[TaskHistoryEntry]) -> Result<Option<String>, OrbitError> + 'a;
 
-/// Owner experiment-assignment callback, invoked before claim persistence.
-pub type ExperimentCapture<'a> =
-    dyn Fn(&Task) -> Result<orbit_types::workflow::CapturedExperiments, OrbitError> + 'a;
-
 /// Owner callback invoked only for the selected task, before claim persistence.
 pub type AdmissionGuidanceCapture<'a> =
     dyn Fn(&Task) -> Result<AdmissionTaskGuidance, OrbitError> + 'a;
@@ -302,41 +298,6 @@ impl TaskCommitBoundary {
                         task_id: task.id.clone(),
                         assignments: Vec::new(),
                     },
-                    explore_brief: None,
-                })
-            },
-        )
-    }
-
-    /// Admission with the owner's experiment assignment callback. Callers
-    /// that also capture an explore brief use [`Self::admit_task_with_guidance`].
-    #[allow(clippy::too_many_arguments)]
-    pub fn admit_task_with_experiments(
-        &self,
-        identity: &AdmissionIdentity,
-        request: &AdmissionRequest,
-        ordering: &AdmissionOrdering,
-        owner_version: &str,
-        repo_root: &Path,
-        orbit_dir: &Path,
-        admission_holds: &BTreeMap<String, String>,
-        held: &BTreeMap<String, String>,
-        validation_hold: &ValidationHold<'_>,
-        experiment_capture: &ExperimentCapture<'_>,
-    ) -> Result<AdmissionLookup, OrbitError> {
-        self.admit_task_with_guidance(
-            identity,
-            request,
-            ordering,
-            owner_version,
-            repo_root,
-            orbit_dir,
-            admission_holds,
-            held,
-            validation_hold,
-            &|task| {
-                Ok(AdmissionTaskGuidance {
-                    experiments: experiment_capture(task)?,
                     explore_brief: None,
                 })
             },
