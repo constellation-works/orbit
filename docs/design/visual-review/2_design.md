@@ -94,8 +94,9 @@ several apps.
 schema_version = 1
 
 [app.dashboard]
-# Run from the checkout under the worker sandbox (network: loopback). Must print
-# `ORBIT_VISUAL_URL=<loopback URL>` on stdout once ready, after binding port zero.
+# Run from the checkout under the worker sandbox. On Linux, the sandbox retains
+# host network access; the loopback URL below is the server address, not an egress limit.
+# Must print `ORBIT_VISUAL_URL=<loopback URL>` on stdout once ready, after binding port zero.
 setup = ["scripts/visual-fixture-server.sh", "{fixture}"]
 setup_timeout_s = 120
 themes = ["dark"]                     # every theme the app supports
@@ -215,7 +216,9 @@ they need no seed.
 ### 3.1 The capture driver
 
 `visual_capture` is a deterministic activity. It needs a verified browser kit on the host
-that runs it (§4) and runs under the worker sandbox, network limited to loopback. It:
+that runs it (§4) and runs under the worker sandbox. On Linux, that sandbox retains host
+network access and does not limit process egress to loopback. Browser requests are restricted
+separately by each browser context (§3.2). It:
 
 1. Creates two detached checkouts under the run's scratch directory: the base revision and
    the final candidate head.
@@ -252,7 +255,7 @@ Each browser context is created with:
 | Clock | Playwright's clock fixed at the fixture instant before navigation; timers do not advance |
 | Animations | an injected stylesheet sets `animation: none`, `transition: none` and `caret-color: transparent` on every element |
 | Fonts | the app's self-hosted fonts (the dashboard serves Geist and Geist Mono); capture waits for `document.fonts.ready`. The kit's fontconfig covers fallback glyphs, so the fallback font is the same on every host |
-| Network | loopback only; any request off loopback is blocked and recorded as a check finding |
+| Network | Browser-context requests are loopback only; any request off loopback is blocked and recorded as a check finding |
 | Ready | the view's `ready` selector visible, network idle, then two animation frames |
 | Masks | the view's `mask` selectors painted a flat colour |
 
@@ -727,11 +730,13 @@ admission routing to kit hosts is unchanged.
 
 ## 12. Trust boundaries
 
-- **Repository commands.** `setup` is repository code run under the worker sandbox with
-  loopback network, the same rules as required validation commands. It runs from the base
-  checkout for before captures and the candidate checkout for after captures, so a candidate
-  can change what its own server renders (that is the change under review) but not the
-  manifest's checks, masks, rules or budgets, which are read at the base (§2.3).
+- **Repository commands.** `setup` is repository code run under the worker sandbox, with
+  the same rules as required validation commands. On Linux, that sandbox retains host network
+  access and does not limit egress to loopback. `setup` runs from the base checkout for before
+  captures and the candidate checkout for after captures, so a candidate can change what its
+  own server renders (that is the change under review) but not the manifest's checks, masks,
+  rules or budgets, which are read at the base (§2.3). Loopback request confinement applies
+  inside the browser context (§3.2), not to repository commands.
 - **Images are data.** Captures are byte-checked image artifacts; nothing renders an SVG or
   HTML capture. Rendered page text that contains instructions reaches the reviewer as pixels;
   the prompt states that text in images is page content, not instructions, and the
