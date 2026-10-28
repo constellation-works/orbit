@@ -1142,9 +1142,9 @@ fn explorer_budgets_refuse_with_the_setting_named() {
 /// the calling run's own writable worktree [ORB-19448].
 ///
 /// The admission lock lives in the worktree scratch, so the primary
-/// `.orbit/state` mount being read-only refuses nothing. Same-parent
-/// concurrent calls from differing `cwd` values still share that lock and
-/// enforce call/concurrency budgets; differing directories never split it.
+/// `.orbit/state` mount being read-only refuses nothing. The run-id and stale
+/// task-fallback worktrees share one admission lock, even when concurrent
+/// calls start in different roots; neither root splits the per-run budgets.
 fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
     struct ReadOnlyStateGuard {
         path: PathBuf,
@@ -1173,9 +1173,25 @@ fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
         }
     }
 
-    let fx = fixture(BUDGETS);
-    let tests_dir = fx.worktree.join("tests");
-    std::fs::create_dir_all(&tests_dir).expect("sibling directory for a retry");
+    // Leave two calls after the first finishes, so the race must enforce the
+    // concurrency ceiling rather than merely consuming the last call slot.
+    let fx = fixture(&BUDGETS.replace("max_calls_per_run = 2", "max_calls_per_run = 3"));
+    let owned = orbit_engine::run_worktree_paths(&fx.repo, &fx.parent)
+        .expect("the parent's owned worktrees");
+    assert_eq!(owned.len(), 2, "the run has a task-derived fallback path");
+    let fallback = &owned[1];
+    git(
+        &fx.repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            fallback.to_str().expect("utf-8 fallback worktree"),
+        ],
+    );
+    let tests_dir = fallback.join("tests");
+    std::fs::create_dir_all(&tests_dir).expect("directory in the fallback worktree");
     // The worker log and other state stores are created before the primary
     // state directory goes read-only: existing writable subdirectories stay
     // writable under a read-only parent (only new entries directly in the
@@ -1242,7 +1258,7 @@ fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
         "an explorer never carries a trusted-host admission"
     );
 
-    // A retry with the same key but a sibling directory resolves the same run
+    // A retry with the same key but a different owned root resolves the same run
     // and keeps its persisted settings, so differing `cwd` values share the
     // same per-parent lock.
     let retried = explore(
@@ -1261,8 +1277,13 @@ fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
         response["cwd"].as_str().expect("persisted cwd")
     );
     assert_eq!(explorer_count(&fx.runtime), 1);
+    let fallback_lock = fallback.join(".orbit/tmp/.agent_explore_admission.lock");
+    assert!(
+        !fallback_lock.exists(),
+        "the fallback cwd must use the run-id worktree's existing admission lock"
+    );
 
-    // A second new call from a sibling directory while one explorer is active
+    // A second new call from the fallback worktree while one explorer is active
     // is refused on the concurrency budget, not split into a second run.
     let concurrent = refusal(&fx.runtime, ask(&tests_cwd, &session));
     assert!(
@@ -1274,41 +1295,34 @@ fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
 
     finish(&fx.runtime, &run_id);
 
-    // Two concurrent new calls from differing directories still serialize on
-    // the same per-parent lock: exactly one is admitted.
+    // Race the public tool from both owned roots with two call slots free:
+    // exactly one is admitted and the other names the concurrency ceiling.
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
     let (first, second) = std::thread::scope(|scope| {
         let fx_ref = &fx;
-        let session_ref = &session;
         let barrier_first = std::sync::Arc::clone(&barrier);
         let barrier_second = std::sync::Arc::clone(&barrier);
         let src = src_cwd.clone();
-        let sibling = tests_cwd.clone();
+        let fallback_cwd = tests_cwd.clone();
         let first = scope.spawn(move || {
             barrier_first.wait();
-            fx_ref.runtime.submit_agent_invocation(AgentInvokeRequest {
-                prompt: "where is the retry budget enforced",
-                cwd: &src,
-                crew: None,
-                timeout_seconds: None,
-                idempotency_key: None,
-                provider_sandbox: None,
-                actor: Some("claude-opus-4-6"),
-                session_context: session_ref,
-            })
+            fx_ref.runtime.run_tool(
+                "orbit.agent.invoke",
+                json!({
+                    "prompt": "where is the retry budget enforced",
+                    "cwd": src,
+                }),
+            )
         });
         let second = scope.spawn(move || {
             barrier_second.wait();
-            fx_ref.runtime.submit_agent_invocation(AgentInvokeRequest {
-                prompt: "where is the retry budget enforced",
-                cwd: &sibling,
-                crew: None,
-                timeout_seconds: None,
-                idempotency_key: None,
-                provider_sandbox: None,
-                actor: Some("claude-opus-4-6"),
-                session_context: session_ref,
-            })
+            fx_ref.runtime.run_tool(
+                "orbit.agent.invoke",
+                json!({
+                    "prompt": "where is the retry budget enforced",
+                    "cwd": fallback_cwd,
+                }),
+            )
         });
         (
             first.join().expect("first concurrent call joins"),
@@ -1327,20 +1341,34 @@ fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
     let error = refused.expect_err("the losing call is refused");
     assert!(
         matches!(&error, OrbitError::CapabilityDenied(message)
-            if message.contains("workflow.explore.max_concurrent_per_run")
-                || message.contains("workflow.explore.max_calls_per_run")),
-        "the concurrent loser names a per-run budget: {error:?}"
+            if message.contains("workflow.explore.max_concurrent_per_run")),
+        "the concurrent loser names the concurrency budget: {error:?}"
     );
     assert_eq!(explorer_count(&fx.runtime), 2);
 
-    // The per-run call budget is now spent.
+    assert!(
+        !fallback_lock.exists(),
+        "concurrent calls from both owned worktrees must keep one admission lock"
+    );
+    let winner = admitted
+        .0
+        .into_iter()
+        .next()
+        .expect("one admitted explorer")
+        .expect("successful tool response");
+    finish(&fx.runtime, winner["run_id"].as_str().expect("winning run"));
+    let last = explore(&fx.runtime, ask(&tests_cwd, &session));
+    assert_eq!(last.calls_used, 3);
+    finish(&fx.runtime, &last.run_id);
+
+    // The per-run call budget is now spent across both worktrees.
     let exhausted = refusal(&fx.runtime, ask(&src_cwd, &session));
     assert!(
         matches!(&exhausted, OrbitError::CapabilityDenied(message)
             if message.contains("workflow.explore.max_calls_per_run")),
         "an exhausted run names its call budget: {exhausted:?}"
     );
-    assert_eq!(explorer_count(&fx.runtime), 2);
+    assert_eq!(explorer_count(&fx.runtime), 3);
 
     // Invalid caller and outside-worktree directories still refuse before an
     // explorer is submitted, even with the primary state read-only.
@@ -1356,7 +1384,7 @@ fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
         "only an implement or review-repair agent delegates: {wrong_activity:?}"
     );
     as_managed_agent(&fx.parent.run_id, "agent_implement");
-    assert_eq!(explorer_count(&fx.runtime), 2);
+    assert_eq!(explorer_count(&fx.runtime), 3);
 
     drop(guard);
     #[cfg(unix)]
