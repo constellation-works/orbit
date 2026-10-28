@@ -216,7 +216,9 @@ function setRoleCount(forRole, payload) {
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const ranked = rows.filter((row) => row.rank != null).length;
   node.textContent = `${ranked} ranked`;
-  node.title = `${plural(ranked, "ranked row")}; ${rows.length - ranked} below ${payload.min_support} ${payload.unit}`;
+  const unjudged = rows.filter((row) => row.unjudged).length;
+  node.title = `${plural(ranked, "ranked row")}; ${rows.length - ranked - unjudged} below ${payload.min_support} ${payload.unit}`
+    + (unjudged ? `; ${unjudged} unjudged` : "");
 }
 
 function rows() {
@@ -346,6 +348,7 @@ function render() {
     meta.textContent = scorecard.status === "ok"
       ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
         + ` · ${role === "implementers" && implementerTier ? `${implementerTier} tier · ` : ""}rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked`
+        + (ranking.some((row) => row.unjudged) ? " · unjudged rows are listed last, without a score" : "")
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
   }
   const panel = ROLE_PANELS[role];
@@ -517,7 +520,7 @@ function rankingNode(ranking) {
       el("span", { class: "agents-model", text: row.model }),
     ]);
     select.addEventListener("click", () => selectRow(row));
-    const tags = panel && panel.rowTags ? panel.rowTags(row) : [];
+    const tags = [...(row.unjudged ? [unjudgedTag()] : []), ...(panel && panel.rowTags ? panel.rowTags(row) : [])];
     if (tags.length) select.append(el("span", { class: "agents-tags" }, tags));
     const nameCell = el("th", { class: "agents-name" }, [select]);
     nameCell.setAttribute("scope", "row");
@@ -534,14 +537,14 @@ function rankingNode(ranking) {
       td.dataset.term = term.key;
       return td;
     });
-    const score = el("td", { class: "agents-score-col" }, [
-      scoreBar(row.score, scale),
-      el("span", { class: "agents-score-value", text: number(row.score) }),
-    ]);
+    const score = el("td", { class: "agents-score-col" }, row.unjudged
+      ? [el("span", { class: "agents-score-value agents-unjudged", text: "unjudged" })]
+      : [scoreBar(row.score, scale), el("span", { class: "agents-score-value", text: number(row.score) })]);
     const note = panel && panel.scoreNote ? panel.scoreNote(row) : null;
     if (note) score.append(el("span", { class: "agents-score-note", text: note.text, title: note.detail }));
     const classes = ["agents-row"];
-    if (row.below_support) classes.push("agents-row-below");
+    if (row.below_support || row.unjudged) classes.push("agents-row-below");
+    if (row.unjudged) classes.push("agents-row-unjudged");
     if (isSelected) classes.push("is-selected");
     const tr = el("tr", { class: classes.join(" ") }, [
       el("td", { class: "agents-num agents-rank", text: row.rank == null ? "—" : String(row.rank) }),
@@ -564,9 +567,22 @@ function rankingNode(ranking) {
   return node;
 }
 
+// The tag beside an unjudged row's name: none of its units is judged yet,
+// so it has no score or rank.
+function unjudgedTag() {
+  const tag = el("span", {
+    class: "agents-tag agents-tag-unjudged",
+    text: "unjudged",
+    title: "No unit of this row is judged yet, so it has no score or rank and stays out of the fleet average.",
+  });
+  tag.dataset.tag = "unjudged";
+  return tag;
+}
+
 // How the row's score came from its raw score: smoothing only pulls a row
 // above the fleet average down.
 function rawText(row) {
+  if (row.unjudged) return "Not judged yet: no unit of this row has an outcome, so it has no score or rank and stays out of the fleet average.";
   const average = scorecard.fleet_average;
   return typeof average === "number" && row.raw > average
     ? `raw ${number(row.raw)}, pulled down toward the fleet average ${number(average)} over ${plural(row.units, "unit")}`
@@ -597,7 +613,7 @@ function radarNode(row) {
       axes.push({ key, label: stat.label.replace(/ \(not scored\)$/, ""), weight: -1, unscored: true });
     }
   }
-  const below = (each) => each.below_support || each.units < scorecard.min_support;
+  const below = (each) => each.below_support || each.unjudged || each.units < scorecard.min_support;
   const count = (axis, each) => axis.unscored
     ? (each.stats || []).find((stat) => stat.key === axis.key)?.value
     : each.counts && each.counts[axis.key];
@@ -606,6 +622,7 @@ function radarNode(row) {
     ? (each.units > 0 && Number.isFinite(count(axis, each)) ? count(axis, each) * 100 / each.units : null)
     : each.per_100 && each.per_100[axis.key];
   const gap = (axis, each) => {
+    if (each.unjudged) return "not judged yet";
     if (below(each)) return "too little evidence to compare";
     if (REVIEW_RATE_TERMS.has(axis.key) && reviewedUnits(each) === 0) return "no reviewed deliveries";
     if (provisionalTerm(axis, each) || (axis.key === "missed_regressions" && each.provisional > 0)) return "provisional";
@@ -718,7 +735,7 @@ function radarNode(row) {
   return el("section", { class: `agents-radar${below(row) ? " is-muted" : ""}`, "aria-label": "Agent profile" }, [
     el("h4", { text: "Agent profile" }),
     el("p", { class: "agents-muted", text: "Outward is better · each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis." }),
-    ...(below(row) ? [el("p", { class: "agents-radar-note", text: "Too little evidence to compare: below minimum support." })] : []),
+    ...(below(row) ? [el("p", { class: "agents-radar-note", text: row.unjudged ? "Nothing to compare: no unit of this row is judged yet." : "Too little evidence to compare: below minimum support." })] : []),
     plot,
     el("p", { class: "agents-radar-legend" }, [el("span", { class: "agents-radar-own-key", text: "Selected agent" }), el("span", { class: "agents-radar-fleet-key", text: "Fleet median" })]),
     labels, tooltip, table,
@@ -786,13 +803,13 @@ function detailNode(rankedRow) {
 
   const children = [
     el("header", { class: "agents-detail-head" }, [
-      el("span", { class: "agents-detail-rank", text: rankedRow.rank == null ? `below ${scorecard.min_support}` : `#${rankedRow.rank}` }),
+      el("span", { class: "agents-detail-rank", text: rankedRow.unjudged ? "unjudged" : rankedRow.rank == null ? `below ${scorecard.min_support}` : `#${rankedRow.rank}` }),
       el("h3", { text: row.crew }),
       el("span", { class: "agents-model", text: row.model }),
     ]),
     el("div", { class: "agents-detail-score" }, [
       el("strong", { text: number(rankedRow.score) }),
-      el("span", { text: tierView ? `${implementerTier} tier crew score` : "score" }),
+      el("span", { text: rankedRow.unjudged ? "no score until a unit is judged" : tierView ? `${implementerTier} tier crew score` : "score" }),
     ]),
     ...(tierView ? [el("p", { class: "agents-detail-note", text: `${rankedRow.units} tasks in this tier. Tier crew scores use two-sided shrinkage toward 100 with 30 tasks of reference evidence. All tiers score: ${number(row.score)}. The profile, breakdown and unscored context below cover all tiers.` })] : []),
     el("p", { class: "agents-detail-raw", text: `${tierView ? "All tiers: " : ""}${rawText(row)}` }),
@@ -812,7 +829,7 @@ function detailNode(rankedRow) {
 
 // The roles whose terms weigh regressions or findings by severity.
 const SEVERITY_ROLES = new Set(["reviewers"]);
-const SEVERITY_HOW = "Regressions and findings count by severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one escaped or missed regression costs twice its weight, from −16 for critical to −0.5 for nit. A review-job finding counts once finding verification CONFIRMS it, at the severity the verifier rated, and a review gate finding at the reviewer's own; a regression link counts at its recorded severity, which verification replaces when it confirms the finding that filed it, and a link stored without one counts as medium.";
+const SEVERITY_HOW = "Regressions and findings count by severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one escaped or missed regression costs twice its weight, from −16 for critical to −0.5 for nit. A review-job finding counts once finding verification CONFIRMS it, at the severity the verifier rated, or, with no verification verdict, once its task lands, at the highest severity rated on its own regression links, else low; a review gate finding counts at the reviewer's own. A regression link counts at its recorded severity, which verification replaces when it confirms the finding that filed it, and a link stored without one counts as medium.";
 
 function howNode() {
   const list = el("dl", { class: "agents-how-terms" });

@@ -1,7 +1,7 @@
 ---
 title: Agent Scorecards — Design
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-10-28
 last_validated: 2026-10-26
 status: Draft
 feature: agent-scorecards
@@ -32,7 +32,7 @@ The core, dashboard and role tracks have landed. Sections marked **Current** des
 Every role tab has the same layout:
 
 1. **Who each problem counts against.** One bar across the window's problems, split by owning role plus a **Not scored** segment, with the current role highlighted and each legend entry linking to its role. This strip is how a reader sees the one-owner rule at work.
-2. **Ranking.** One row per crew and model: rank, crew and model, support (the role's unit of work), four or five role-specific columns, and the score as a bar and number. A row is a button that selects it. Rows below the minimum support are greyed, tagged `below 10` and listed last.
+2. **Ranking.** One row per crew and model: rank, crew and model, support (the role's unit of work), four or five role-specific columns, and the score as a bar and number. A row is a button that selects it. Rows below the minimum support are greyed, tagged `below 10` and listed last. An unjudged row (§4.3) is greyed, tagged `unjudged`, shows `unjudged` instead of a score and listed after them.
 3. **Detail** (right column) for the selected row: rank, score, raw score and the fleet average it was pulled toward, an **Agent profile** radar comparing its rates with the ranked fleet (§1.1), a **Score breakdown** (each term's weight, contribution and bar), and **Shown, not scored** (cost, time and other context).
 4. **How the score works.** A disclosure listing every term with its weight and definition, plus the smoothing formula.
 5. **One role-specific panel**, for the roles that have one. Orchestrators show where each orchestrator's rework went by cause. Implementers show no panel: the score-against-cost chart and first-reviews tier comparison were removed as a product decision, so the ranking, detail column and disclosure are the whole tab. Reviewers show how each reviewer's verdicts turned out, and flag an accept rate well above peers. Pilots show assessed tier against observed tier.
@@ -190,7 +190,7 @@ Implementers instead start at 100 and sum weighted actual-minus-expected rates f
 
 ### 4.2 Smoothing toward the fleet average
 
-The **fleet average** is the mean raw score over every row of the role in the window, weighted by each row's units. A row's **score** is:
+The **fleet average** is the mean raw score over every judged row of the role in the window (§4.3), weighted by each row's units. A row's **score** is:
 
 ```
 score = min(raw, (units × raw + K × fleet_average) ÷ (units + K)),   K = 30
@@ -202,7 +202,9 @@ Shrinking toward the average narrows a small row's lead but cannot reverse it: w
 
 ### 4.3 Minimum support
 
-Rows with fewer than 10 units (`min_support`, default 10, at least 1) are `below_support`. They are greyed, listed after every supported row, and have no rank. Their scores are still computed and shown. A term with its own denominator (§4.1) has its own minimum support, which `min_support` does not change: the pilots' warning terms need 10 settled assessments (`warning_min_support`).
+Rows with fewer than 10 units (`min_support`, default 10, at least 1) are `below_support`. They are greyed, listed after every supported row, and have no rank. Their scores are still computed and shown.
+
+A row none of whose units has been judged yet is `unjudged` (reviewers only, §5.3). It has no rank and no score (`raw` and `score` are null), is greyed with an `unjudged` tag, is listed after every other row, and is left out of the fleet average, so rows waiting for an outcome neither rank at 0 nor drag the average down. A term with its own denominator (§4.1) has its own minimum support, which `min_support` does not change: the pilots' warning terms need 10 settled assessments (`warning_min_support`).
 
 ### 4.4 Windows and late evidence
 
@@ -218,7 +220,7 @@ Today's per-8-active-hours rate toggle is dropped: active hours mean something o
 
 Review findings and `regression_from` links share one severity scale with constant weights: critical 8, high 4, medium 2, low 1, nit 0.25 ([ORB-19304]). A held finding adds its weight to **Findings that held**; a missed regression adds its severity weight to the reviewer term. Escaped regressions retain their severity-weighted count as unscored implementer context (§5.2). Every other problem counts 1. The rubric with examples is in the orbit skill's task-fields reference.
 
-A regression link records `severity_source`: `filer`, `verified`, `operator`, `backfill` or `default`. A new classified link must carry a severity. Finding verification runs as a different crew from the filer. When it confirms a review-filed finding, its rating replaces the filer's on that finding's links as `verified`, and an `operator` rating stands. So a reviewer cannot earn more by inflating its own findings. Without verification the filer's value scores, and a link stored before severity existed counts as `medium` (`default`). Review gate findings are not verified and count at the reviewer's own severity; a value off the scale counts 1.
+A regression link records `severity_source`: `filer`, `verified`, `operator`, `backfill` or `default`. A new classified link must carry a severity. Finding verification runs as a different crew from the filer. When it confirms a review-filed finding, its rating replaces the filer's on that finding's links as `verified`, and an `operator` rating stands. So a reviewer cannot earn more by inflating its own findings. Without verification the filer's value scores, and a link stored before severity existed counts as `medium` (`default`). Review gate findings are not verified and count at the reviewer's own severity; a value off the scale counts 1. A review-job finding that lands without a verification verdict (§5.3) counts at the highest severity rated on its own `regression_from` links, the only typed record of its severity at filing, and as `low` when it has none.
 
 ## 5. Roles
 
@@ -407,15 +409,22 @@ Unit: **settled reviews**, meaning review gate attempts by the row's crew and mo
 
 | Term | Weight | Definition |
 |---|---|---|
-| Findings that held | +1 | Findings repaired by the reviewer and validated, open findings on a `reject` that the next implementation run changed a cited path to address, and review-job findings finding verification CONFIRMED; each weighted by severity (§4.6): critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding counts at the verifier's severity, a review gate finding at the reviewer's own. |
+| Findings that held | +1 | Findings repaired by the reviewer and validated, open findings on a `reject` that the next implementation run changed a cited path to address, and review-job findings finding verification CONFIRMED or, with no verdict, whose task landed; each weighted by severity (§4.6): critical 8, high 4, medium 2, low 1, nit 0.25. A CONFIRMED finding counts at the verifier's severity, an unverified landed one at the highest severity rated on its own `regression_from` links (else `low`), a review gate finding at the reviewer's own. |
 | Fixes that held | +1 | `accept_with_fixes` verdicts whose fixes passed owner revalidation and whose task has no regression with escape `review_missed`. |
-| Rejected findings | −1 | Findings closed by an authorized decision (`Disposed`), and findings a review job filed as tasks that finding verification REJECTED. |
+| Rejected findings | −1 | Findings closed by an authorized decision (`Disposed`), and findings a review job filed as tasks that finding verification REJECTED. A filed finding dropped without a verdict costs nothing (see below). |
 | False rejects | −2 | `reject` verdicts where the next implementation run changed none of the rejected findings' cited paths and the next review accepted. |
 | Failed fixes | −1 | Reviewer fixes that failed owner revalidation and were escalated. |
 | Missed regressions | −2 | Regressions with escape `review_missed` against tasks the row's review accepted, whenever filed, each counted at its severity weight (§4.6), so one costs −16 (critical) to −0.5 (nit). |
 | Incomplete reviews | −0.5 | `incomplete` verdicts not caused by infrastructure. |
 
 An accept rate never enters the score. A reviewer earns only for verdicts that turned out right. See [Score accuracy, never the volume of objections](./4_decisions.md#score-accuracy-never-the-volume-of-objections). The reject rate, the number of findings and cost are not terms either.
+
+How a review job's filed findings are judged:
+
+- A recorded finding verification verdict wins: CONFIRMED holds, REJECTED counts as a rejected finding, whatever became of the task.
+- Without a verdict, the finding's task outcome judges it. Verification is off by default (`review.verify_findings`), so this is the common case. A task that landed (done, or archived after done) held. A task still open is not judged yet: it earns and costs nothing.
+- A task rejected or archived without landing is judged but **neutral**. A drop should count against the reviewer only when the record shows the finding was wrong, not when it was a duplicate, won't-fix or superseded. Task history carries no typed drop reason: a rejection's note is free text and its `decision` field records no such reason. So every drop without a verdict is neutral, and only finding verification's REJECTED verdict, which carries a typed `rejection.reason`, costs the reviewer.
+- A review job unit is judged when any of its findings has a verdict or a landed or dropped task. A row is **unjudged** (§4.3) when none of its units is judged: it has no review gate settlement, no charge, and no judged review job unit.
 
 How a `reject` is judged:
 
@@ -439,7 +448,7 @@ Shown, not scored (each row's `stats`):
 
 Cost per review is not shown: no record ties a review gate attempt's cost to its settlement.
 
-The role panel, **How verdicts turned out**, splits each reviewer's settled reviews into: accepted and held up, caught a real problem (a finding or fix that held, or a CONFIRMED review-job finding), false alarm (a false reject, or a review job whose verified findings were all REJECTED), missed a regression (a passed review a `review_missed` regression came back to), and unresolved (not judged yet, incomplete, or fixes that failed).
+The role panel, **How verdicts turned out**, splits each reviewer's settled reviews into: accepted and held up, caught a real problem (a finding or fix that held, or a review-job finding CONFIRMED or, unverified, landed), false alarm (a false reject, or a review job none of whose findings held and at least one was REJECTED), missed a regression (a passed review a `review_missed` regression came back to), and unresolved (not judged yet, incomplete, fixes that failed, or a review job whose findings were dropped without a verdict). Unjudged rows are greyed there too. "How the score works" adds how filed findings are judged and what an unjudged row is.
 
 ### 5.4 Pilots
 
@@ -515,13 +524,13 @@ GET /api/agents/attribution?window=
 - `role`, `window`, `requested_window`, `since`, `min_support`, `computed_at`, `cache_ttl_seconds`, `tasks_scanned`. `window` is the window served: `all` is requested as `all` and served as `90d`; `window_attempts` is a count window's size (null for a calendar window);
 - `status`: `ok`, or `not_computed` while a role's track has not landed. A `not_computed` role still returns its `terms`, with empty `rows`.
 - `unit` (label of the role's unit);
-- `fleet_average`;
+- `fleet_average`, over the judged rows;
 - `terms`: `key`, `label`, `weight`, `definition`, `group`, and `unit` on a term rated per 100 of its own unit (the pilots' warning terms);
 - `provisional`: for reviewers, the rows' provisional reviews in total; null for the other roles;
 - `rows`, best first;
 - pilots only: `warning_min_support`, and `sources.missed_scope_blocks` as `{available, triage_records, detail}`.
 
-Each row carries `crew`, `model`, `units`, `below_support`, `rank` (null below support), `counts` and `per_100` (term key to number), `raw`, `score`, `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: a display-only denominator for the radar's review-derived axes (§1.1), never a scoring denominator. A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support).
+Each row carries `crew`, `model`, `units`, `below_support`, `unjudged` (§4.3; only reviewer rows can be true), `rank` (null below support or unjudged), `counts` and `per_100` (term key to number), `raw` and `score` (null on an unjudged row), `runs_without_model`, `provisional` (reviewers), and `stats` (the not-scored context: key, label, value). An implementers row also carries `reviewed_units`, the count of its tasks with a settled first review: a display-only denominator for the radar's review-derived axes (§1.1), never a scoring denominator. A row of a role with per-term denominators (pilots) also carries `term_units` (term key to its own units) and `provisional_terms` (the keys below their own minimum support).
 
 **Detail** carries the scorecard header, `fleet_average`, `provisional`, the selected `row`, and `terms`. Each term carries its key, label, weight, group, count, `per_100`, contribution and `tasks`, largest count first, plus `units` and `provisional` when it has its own denominator. Each task carries `task_id`, `title`, `status`, `count` and `occurrences` (`at`, `detail`, `run_id`).
 
@@ -540,7 +549,7 @@ The dashboard reads only these routes. The `/api/orchestrators/*` routes were re
 
 **Current.**
 
-`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
+`orbit agents scorecard --role <role> [--window <w>] [--min-support <n>] [--json]` and `orbit agents show --role <role> --crew <crew> [--model <model>] [--window <w>] [--min-support <n>] [--json]` print the same payloads as `/api/agents/<role>/scorecard` and `/api/agents/<role>/detail`. The table view lists each row's rank (`below` under the minimum support, `unjudged` for an unjudged row, whose score shows `-`), crew, model, units, score and term counts. Stdout carries only those rows, so plain and piped output is tab-separated records (with `--header`, the column header first); the selection line, the units footer and the empty-state line go to stderr, and a role with no row prints nothing on stdout. `show` lists each term's weight, count, rate and contribution, then the tasks behind every nonzero count. Implementers also show the 100-point base and an expected-count column; their scorecard footer explains the same-tier reference. The read-only MCP tools `orbit.agents.scorecard` and `orbit.agents.show` take the same arguments as `role`, `window`, `min_support` and, for `show`, `crew` and `row_model`. The row's model travels as `row_model` because `model` is every tool's caller attribution. A role outside the four is refused, naming the choices. A crew with several rows in the window is refused without a model, naming the selector for each surface (`--model`, `row_model`, or the dashboard's `model` query parameter) and the candidate models.
 
 Each of those scans once per call and reports `cache_ttl_seconds: 0`. The definitions live in `orbit-common`'s `governance::agents` registry; the tools call `OrbitRuntime::agent_role_scorecard` and `agent_role_detail`, which scan and slice like the API without keeping the scan.
 

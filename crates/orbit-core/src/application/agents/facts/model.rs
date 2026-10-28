@@ -264,6 +264,10 @@ pub(in crate::application::agents) struct FiledFinding {
     /// verifier rated.
     pub(in crate::application::agents) verdict:
         Option<(FindingVerdict, DateTime<Utc>, Option<DefectSeverity>)>,
+    /// The highest severity rated on the finding's own `regression_from`
+    /// links: the one record of a finding's severity outside verification.
+    /// `None` when it has no link, or only links stored without a severity.
+    pub(in crate::application::agents) severity: Option<DefectSeverity>,
 }
 
 /// A typed `regression_from` link: `regressing` regressed `culprit`.

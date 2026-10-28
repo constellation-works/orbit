@@ -233,6 +233,15 @@ pub(super) fn task_facts(
             .map(|relation| relation.target.to_string()),
         verdict: latest_verification(history)
             .map(|record| (record.verdict, record.verified_at, record.severity)),
+        severity: task
+            .relations
+            .iter()
+            .filter(|relation| relation.relation_type == TaskRelationType::RegressionFrom)
+            .filter_map(|relation| relation.regression.as_ref())
+            .filter(|regression| !regression.severity_unrated())
+            .map(|regression| regression.severity)
+            // The scale orders most severe first.
+            .min(),
     });
 
     records.sort_by_key(|record| record.at);

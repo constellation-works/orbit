@@ -5,7 +5,8 @@
 //! score (or 100 plus weighted deviations when the role supplies
 //! expectations), pulls each row above the fleet average down toward it in
 //! proportion to how little work backs it, and ranks the rows that meet the
-//! minimum support.
+//! minimum support. A row none of whose units is judged yet has no score
+//! and no rank, and stays out of the fleet average.
 
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
@@ -123,6 +124,9 @@ pub(super) struct RowInput<'a> {
     /// a display-only denominator for review-derived rates, never a
     /// scoring denominator, so it never makes a term provisional.
     pub(super) reviewed_units: Option<usize>,
+    /// No unit of the row has been judged yet (reviewers only): it gets no
+    /// score or rank, is listed last, and stays out of the fleet average.
+    pub(super) unjudged: bool,
 }
 
 impl RowInput<'_> {
@@ -152,8 +156,9 @@ pub(super) struct Scored<'a> {
 }
 
 /// Score and order `rows`: rows meeting `min_support` first, best score
-/// first, each ranked; the rest after them without a rank. Also returns the
-/// fleet average, the units-weighted mean raw score; `None` without units.
+/// first, each ranked; then the rest without a rank, and unjudged rows last.
+/// Also returns the fleet average, the units-weighted mean raw score of the
+/// judged rows; `None` without judged units.
 pub(super) fn score<'a>(
     terms: &[Term],
     rows: Vec<RowInput<'a>>,
@@ -187,10 +192,10 @@ pub(super) fn score<'a>(
             }
         })
         .collect();
-    let units: f64 = scored.iter().map(|row| row.input.units as f64).sum();
+    let judged = || scored.iter().filter(|row| !row.input.unjudged);
+    let units: f64 = judged().map(|row| row.input.units as f64).sum();
     let fleet_average = (units > 0.0).then(|| {
-        scored
-            .iter()
+        judged()
             .map(|row| row.input.units as f64 * row.raw)
             .sum::<f64>()
             / units
@@ -203,8 +208,10 @@ pub(super) fn score<'a>(
         }
     }
     scored.sort_by(|left, right| {
-        left.below_support
-            .cmp(&right.below_support)
+        left.input
+            .unjudged
+            .cmp(&right.input.unjudged)
+            .then(left.below_support.cmp(&right.below_support))
             .then(
                 right
                     .score
@@ -217,7 +224,7 @@ pub(super) fn score<'a>(
     });
     for (index, row) in scored
         .iter_mut()
-        .filter(|row| !row.below_support)
+        .filter(|row| !row.below_support && !row.input.unjudged)
         .enumerate()
     {
         row.rank = Some(index + 1);
@@ -245,7 +252,7 @@ impl Scored<'_> {
         self.input.crew == crew && self.input.model == model
     }
 
-    /// The ranking row.
+    /// The ranking row. An unjudged row's `raw` and `score` are null.
     pub(super) fn row(&self, terms: &[Term]) -> Value {
         let counts: serde_json::Map<String, Value> = terms
             .iter()
@@ -261,11 +268,12 @@ impl Scored<'_> {
             "model": self.input.model,
             "units": self.input.units,
             "below_support": self.below_support,
+            "unjudged": self.input.unjudged,
             "rank": self.rank,
             "counts": counts,
             "per_100": per_100,
-            "raw": number(self.raw),
-            "score": number(self.score),
+            "raw": (!self.input.unjudged).then(|| number(self.raw)),
+            "score": (!self.input.unjudged).then(|| number(self.score)),
             "runs_without_model": self.input.runs_without_model,
             "provisional": self.input.provisional,
             "stats": self.input.stats.iter().map(|stat| json!({
