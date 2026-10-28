@@ -618,23 +618,21 @@
 .task-lifecycle-step.current .task-lifecycle-label { color: var(--fg-strong); font-weight: 600; }
 
 /* The delivery stage closes the detail band above the tabs, using the same
-   past/current/future language as the lifecycle strip, but thinner. The
-   current segment takes extra width so it stays readable at 375px. */
+   past/current/future language and spacing as the lifecycle strip, but thinner. */
 .task-stage {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
-  gap: 3px;
+  gap: 4px;
   min-width: 0;
 }
-.task-stage-step { flex: 1 1 0; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.task-stage-step.current { flex-grow: 2.6; }
+.task-stage-step { flex: 1 1 0; display: flex; flex-direction: column; gap: 7px; min-width: 0; }
 .task-stage-bar { height: 2px; border-radius: 2px; background: var(--border); }
 .task-stage-step.past .task-stage-bar { background: color-mix(in srgb, var(--fg-mute) 50%, transparent); }
 .task-stage-step.current .task-stage-bar { background: var(--state-running); }
 .task-stage-label {
-  font-size: 10.5px;
+  font-size: 11px;
   color: var(--fg-mute);
   white-space: nowrap;
   overflow: hidden;

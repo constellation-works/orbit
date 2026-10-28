@@ -421,7 +421,7 @@ spec:
     # head, natively outside the agent sandbox; admission hands those results
     # to the reviewer and settlement decides the gates from them.
     - id: landing_review_gate_admit
-      stage: { id: landing_review, label: Landing review }
+      stage: { id: landing_review, label: Review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
