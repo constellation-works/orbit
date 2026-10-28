@@ -1400,6 +1400,20 @@ fn auto_readiness_explains_the_tasks_it_names() {
             assert_eq!(combined["detail_tasks"][0]["task_id"], proposed.id.as_str());
             assert_eq!(combined["detail_tasks"][0]["reason"], "not_backlog");
 
+            let missing_detail = json_ok(server.get(&format!(
+                "/api/workflows/auto/readiness?workspace={WS}&concurrency=1&also_task=HF-404404"
+            )));
+            assert_eq!(
+                missing_detail["tasks"], listing["tasks"],
+                "a missing optional detail leaves the bounded snapshot intact"
+            );
+            assert_eq!(missing_detail["detail_tasks"], json!([]));
+            assert_eq!(missing_detail["detail_unavailable"]["task_id"], "HF-404404");
+            assert_eq!(
+                missing_detail["detail_unavailable"]["reason"],
+                "task_not_found"
+            );
+
             for bad in ["HF-404404", "not%20an%20id"] {
                 let response = server.get(&format!(
                     "/api/workflows/auto/readiness?workspace={WS}&task={bad}"
