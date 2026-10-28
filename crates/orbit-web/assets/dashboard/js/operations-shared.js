@@ -1,4 +1,4 @@
-import { bindTaskLink, detailsPanel, el, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, onWorkspaceChange, runHref, fmtDuration, normalizeTaskStatus } from './common.js';
+import { bindTaskLink, detailsPanel, el, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, onWorkspaceChange, runHref, fmtDuration, normalizeTaskStatus, relativeTime } from './common.js';
 import { navigateToRun } from './router.js';
 
 export const operationsState = {
@@ -343,27 +343,6 @@ export async function runOperation({ selection, key, feedbackId, pending, failur
 // jobs are all "a named thing, its trigger, when it fires next, what happened
 // last time, one control" — so they share one grid row, one switch and one
 // group header instead of three card vocabularies.
-
-export function relativeTime(value, now = Date.now()) {
-  if (!value) return null;
-  const at = new Date(value).getTime();
-  if (Number.isNaN(at)) return null;
-  const diff = at - now;
-  const abs = Math.abs(diff);
-  if (abs < 45_000) return diff > 0 ? "in under a minute" : "just now";
-  let text;
-  if (abs < 86_400_000) {
-    // Round the total once; rounding the remainder can carry into a "60 min".
-    const totalMinutes = Math.round(abs / 60_000);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    if (hours === 0) text = `${minutes} min`;
-    else text = minutes ? `${hours} h ${minutes} min` : `${hours} h`;
-  } else {
-    text = `${Math.round(abs / 86_400_000)} d`;
-  }
-  return diff > 0 ? `in ${text}` : `${text} ago`;
-}
 
 export function durationText(ms) {
   const text = fmtDuration(ms);

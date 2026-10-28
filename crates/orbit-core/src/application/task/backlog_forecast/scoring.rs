@@ -62,6 +62,21 @@ const ABANDONED_OUTCOME_VERSION: u32 = 5;
 pub(super) const ATTEMPT_USAGE_VERSION: u32 = 10;
 const TOTALS: [&str; 3] = ["time_to_drain_hours", "tokens", "usd"];
 
+/// A stored row's `result_json` without the served response snapshot beside
+/// its quantiles, which scoring never reads; skipping it keeps scoring 60+
+/// rows from materializing every snapshot. Unreadable JSON scores as null.
+fn stored_quantiles(result_json: &str) -> Value {
+    #[derive(Deserialize)]
+    struct StoredResult {
+        #[serde(default, rename = "snapshot")]
+        _snapshot: serde::de::IgnoredAny,
+        #[serde(flatten)]
+        quantiles: serde_json::Map<String, Value>,
+    }
+    serde_json::from_str::<StoredResult>(result_json)
+        .map_or(Value::Null, |result| Value::Object(result.quantiles))
+}
+
 /// What a stored task's hour quantiles measure in `version`.
 fn task_hours_measure(version: u32) -> &'static str {
     if version >= ATTEMPT_USAGE_VERSION {
@@ -211,7 +226,7 @@ pub(super) fn score_backlog_forecasts(
         hits.forecasts += 1;
         let stored_tasks: Vec<StoredTask> =
             serde_json::from_str(&forecast.tasks_json).unwrap_or_default();
-        let result: Value = serde_json::from_str(&forecast.result_json).unwrap_or(Value::Null);
+        let result = stored_quantiles(&forecast.result_json);
         let mut excluded = Excluded::default();
         let mut pending = 0u64;
         let mut done = 0u64;

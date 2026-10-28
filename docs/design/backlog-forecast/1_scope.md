@@ -1,7 +1,7 @@
 ---
 title: "Scope: backlog forecast v2 from drain admission"
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-10-28
 last_validated: 2026-10-27
 status: Draft
 stage: building
@@ -28,6 +28,40 @@ Nearby-size fits [ORB-19376] are model version **13**: the size fit centers
 its log-size covariate and detects separation by size threshold instead of
 capping parameter magnitudes, so finite fits at nearby sizes estimate rather
 than collapsing to the fallback prior, with no other forecast change.
+
+Stored read path [ORB-19615], with no model version change: the default
+read serves the newest stored forecast instead of recomputing it.
+
+- **Persisted fields.** A row the sweep-tick write or a canonical live read
+  stores keeps its `result_json` quantiles, which scoring reads, and adds
+  `result_json.snapshot`: the whole response as computed at store time,
+  including `calibration`, `coverage`, `proposed_coverage`, `assumptions`,
+  `arrivals`, `backlog`, `if_approved` and `forecast.task_predictions`. Its
+  calibration scores the stored rows plus the new one, as the following
+  read would. The field is additive in the existing TEXT column, with no
+  SQL migration; scoring ignores it, and older rows without it are scored
+  as before but never served.
+- **Read path.** The canonical query (no `history_tasks`, the default
+  lookback, no `concurrency`, arrivals off, no `refresh`) serves the newest
+  row's snapshot when that row is from the current `model_version`, carries
+  the snapshot and is no older than two store intervals (120 minutes). The
+  response is the snapshot with `served_from: "stored"`, its own
+  `generated_at`, `stored.latest_at` set to the row's time and
+  `stored.recorded: null`; serving writes nothing. Otherwise, and for every
+  non-canonical query, it computes live as before, with `served_from:
+  "live"`; a live canonical read still fills a free hourly slot.
+- **Calibration freshness.** A served snapshot's calibration is frozen at
+  store time, so it can be up to about an hour (at most two intervals)
+  behind tasks that finished since. A live read shows current calibration.
+- **Refresh.** `refresh=1` computes live and returns that result. It stores
+  a row only when the existing 60-minute check would accept one anyway,
+  through the same transaction, so it never replaces or bypasses the newest
+  row and the hourly cadence calibration relies on is unchanged. The hourly
+  refresh is the existing owner sweep-tick write; there is no second writer.
+- **Dashboard.** Analytics › Forecast shows the forecast's source and age
+  (`Stored 23 min ago` or `Live`) beside a Refresh control that sends
+  `refresh=1`. The Calibration card keeps the absolute latest stored time
+  and notes when its scores are the stored ones.
 
 Scheduled starts [ORB-19215] are model version **11**, admission factor revision
 **2**. Each pending task waits until its `not_before` instant before entering
@@ -307,7 +341,7 @@ Forecast work stays on the blocking compute path, outside task commit-boundary/a
 
 No new admission settings. `lookback_days`, `concurrency` and `arrivals=on` retain their query meanings; `history_tasks` selects a count of completions instead of `lookback_days`. Resource and review policy come from the selected drain snapshot; risk uses the existing window/support settings plus a versioned estimator. All assumptions, fallbacks, horizon and host identity are returned.
 
-- `GET /api/diagnostics/backlog_forecast?workspace=…[&lookback_days=…|&history_tasks=…][&concurrency=…][&arrivals=on]`: existing read-only service apart from throttled snapshot writes.
+- `GET /api/diagnostics/backlog_forecast?workspace=…[&lookback_days=…|&history_tasks=…][&concurrency=…][&arrivals=on][&refresh=1]`: existing read-only service apart from throttled snapshot writes. The canonical query serves the newest fresh stored snapshot; `refresh=1` computes live ([stored read path](#shipped-so-far)).
 - Analytics › Forecast: a history selector (default 30 days with the 50-completion floor, last 200, last 500, 90 days) naming the completions and their start beside the figures; existing time/USD/token tiles, complexity table, arrival and coverage/calibration panels; add effective parallelism, critical path, waits, completion/non-drain probability, rework and version/host labels. Per-task schedule details expose predicted start range/order with support, rather than a deterministic promise.
 - Tasks drain card: retain the p50–p90 line and whole-dollar cost when known, tooltip counts/exact cost/tokens and link to Analytics › Forecast [ORB-18533]. A failed/unavailable forecast leaves primary controls usable. With v2 incomplete/unknown totals, explain the reason instead of presenting a partial backlog as drained.
 - Task rows/detail and their APIs: the shared `riskiness` object and support tooltip described above. Implementers update [user interface](../user-interface/2_design.md) with their shipped UI and capture screenshots then; this scope changes no rendered view. Shipped in the user interface design's Tasks section.
@@ -372,5 +406,6 @@ All six implementation tasks carry `backlog-forecast-v2` and depend on this scop
 - [ORB-18691] — implements forecast regression rework.
 - [ORB-18859] — stores retry-inclusive per-task work and spend (model 10).
 - [ORB-19361] — replaces the per-file riskiness estimator with the size-based fit (model 12).
+- [ORB-19615] — serves the default read from the stored snapshot, with `refresh=1` for a live recompute.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

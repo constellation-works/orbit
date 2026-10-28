@@ -98,9 +98,17 @@ fn clock_records_canonical_forecasts_without_endpoint_reads() {
             assert_eq!(inputs["lookback_days"], 30);
             assert_eq!(inputs["arrivals"], false);
 
+            // The default read serves the clock's snapshot, recording nothing.
             let server = fixture.server(false);
             let read = json_ok(server.get(ENDPOINT));
-            assert_eq!(read["stored"]["recorded"], false);
+            assert_eq!(read["served_from"], "stored");
+            assert_eq!(read["stored"]["recorded"], Value::Null);
+            assert_eq!(
+                DateTime::parse_from_rfc3339(read["generated_at"].as_str().unwrap())
+                    .unwrap()
+                    .timestamp_micros(),
+                now.timestamp_micros()
+            );
             let mut read_inputs = read["inputs"].clone();
             let mut stored_inputs = inputs;
             read_inputs
@@ -112,17 +120,23 @@ fn clock_records_canonical_forecasts_without_endpoint_reads() {
                 .unwrap()
                 .remove("lookback_start");
             assert_eq!(read_inputs, stored_inputs);
-            // Per-task predictions are stored with each task, not twice.
+            // Scoring reads the quantiles beside the served snapshot; per-task
+            // predictions are scored from each stored task.
             let mut read_forecast = read["forecast"].clone();
             let predictions = read_forecast
                 .as_object_mut()
                 .unwrap()
                 .remove("task_predictions")
                 .unwrap();
-            assert_eq!(
-                read_forecast,
-                serde_json::from_str::<Value>(&rows[0].result_json).unwrap()
-            );
+            let mut stored_result: Value = serde_json::from_str(&rows[0].result_json).unwrap();
+            let snapshot = stored_result
+                .as_object_mut()
+                .unwrap()
+                .remove("snapshot")
+                .unwrap();
+            assert_eq!(read_forecast, stored_result);
+            assert_eq!(snapshot["calibration"], read["calibration"]);
+            assert_eq!(snapshot["coverage"], read["coverage"]);
             let stored_tasks: Value = serde_json::from_str(&rows[0].tasks_json).unwrap();
             assert_eq!(
                 stored_tasks[0]["predicted_start_hours"],
@@ -261,7 +275,7 @@ fn clock_records_blocked_only_cohort_without_endpoint_reads() {
 
             let server = fixture.server(false);
             let read = json_ok(server.get(ENDPOINT));
-            assert_eq!(read["stored"]["recorded"], false);
+            assert_eq!(read["served_from"], "stored");
             assert_eq!(read["backlog"]["blocked"], 1);
             drop(server);
 
@@ -277,6 +291,117 @@ fn clock_records_blocked_only_cohort_without_endpoint_reads() {
                 2,
                 "replica cannot fill a free slot"
             );
+        },
+    );
+}
+
+fn forecastable(fixture: &Fixture) {
+    completed(fixture, Utc::now() - Duration::days(1));
+    fixture
+        .runtime
+        .add_task(TaskAddParams {
+            title: "Forecast backlog".into(),
+            status: Some(TaskStatus::Backlog),
+            ..Default::default()
+        })
+        .unwrap();
+}
+
+#[test]
+fn default_read_serves_the_fresh_snapshot_and_other_reads_compute_live() {
+    isolated(
+        "backlog_forecast::default_read_serves_the_fresh_snapshot_and_other_reads_compute_live",
+        || {
+            let fixture = Fixture::new();
+            forecastable(&fixture);
+            let server = fixture.server(false);
+
+            // No stored row: computed live, and the free slot is filled.
+            let first = json_ok(server.get(ENDPOINT));
+            assert_eq!(first["served_from"], "live");
+            assert_eq!(first["stored"]["recorded"], true);
+            let rows = fixture.runtime.backlog_forecasts(10).unwrap();
+            assert_eq!(rows.len(), 1);
+
+            let served = json_ok(server.get(ENDPOINT));
+            assert_eq!(served["served_from"], "stored");
+            assert_eq!(served["generated_at"], first["generated_at"]);
+            assert_eq!(served["timing"], first["timing"], "not recomputed");
+            assert_eq!(served["calibration"], first["calibration"]);
+
+            for query in [
+                "&lookback_days=60",
+                "&history_tasks=10",
+                "&concurrency=2",
+                "&arrivals=on",
+                "&refresh=1",
+            ] {
+                let read = json_ok(server.get(&format!("{ENDPOINT}{query}")));
+                assert_eq!(read["served_from"], "live", "{query}");
+                assert_ne!(read["generated_at"], first["generated_at"], "{query}");
+            }
+            // Refresh keeps the hourly throttle and never replaces the row.
+            let refreshed = json_ok(server.get(&format!("{ENDPOINT}&refresh=1")));
+            assert_eq!(refreshed["stored"]["recorded"], false);
+            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap(), rows);
+            assert_eq!(
+                server.get(&format!("{ENDPOINT}&refresh=yes")).status(),
+                axum::http::StatusCode::BAD_REQUEST
+            );
+        },
+    );
+}
+
+#[test]
+fn stale_and_legacy_rows_compute_live_and_stay_readable() {
+    isolated(
+        "backlog_forecast::stale_and_legacy_rows_compute_live_and_stay_readable",
+        || {
+            // Within two store intervals the clock's snapshot is served.
+            let fixture = Fixture::new();
+            forecastable(&fixture);
+            forecast_tick(&fixture, Utc::now() - Duration::minutes(110), false);
+            let server = fixture.server(false);
+            assert_eq!(json_ok(server.get(ENDPOINT))["served_from"], "stored");
+            drop(server);
+
+            // Older than that: computed live, which fills the free slot.
+            let fixture = Fixture::new();
+            forecastable(&fixture);
+            forecast_tick(&fixture, Utc::now() - Duration::minutes(121), false);
+            let server = fixture.server(false);
+            let stale = json_ok(server.get(ENDPOINT));
+            assert_eq!(stale["served_from"], "live");
+            assert_eq!(stale["stored"]["recorded"], true);
+            assert_eq!(json_ok(server.get(ENDPOINT))["served_from"], "stored");
+            drop(server);
+
+            // A row as stored before the snapshot field is scored, never served.
+            let fixture = Fixture::new();
+            forecastable(&fixture);
+            forecast_tick(&fixture, Utc::now() - Duration::minutes(5), false);
+            fixture
+                .runtime
+                .sqlite_store()
+                .unwrap()
+                .with_transaction(|tx| {
+                    tx.connection()
+                        .execute_batch(
+                            "UPDATE backlog_forecasts SET result_json = json_remove(result_json, '$.snapshot');",
+                        )
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                })
+                .unwrap();
+            let server = fixture.server(false);
+            let legacy = json_ok(server.get(ENDPOINT));
+            assert_eq!(legacy["served_from"], "live");
+            assert_eq!(legacy["stored"]["recorded"], false);
+            assert_eq!(
+                legacy["calibration"]["forecasts"].as_array().unwrap().len(),
+                1
+            );
+            assert_eq!(fixture.runtime.backlog_forecasts(10).unwrap().len(), 1);
         },
     );
 }

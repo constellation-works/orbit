@@ -60,15 +60,5 @@ pub(super) fn calculate_backlog_forecast(
         now,
     };
     let inputs = projection::forecast_inputs(&context);
-    let (stored_now, stored, calibration) =
-        persistence::persist_forecast(&context, &inputs, stored)?;
-    projection::forecast_result(
-        &context,
-        inputs,
-        stored_now,
-        &stored,
-        calibration,
-        preparation_ms,
-        simulation_ms,
-    )
+    persistence::persist_forecast(&context, inputs, stored, preparation_ms, simulation_ms)
 }

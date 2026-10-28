@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
-use chrono::Duration;
+use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::StoredBacklogForecast;
 use serde_json::{Value, json};
+
+use crate::OrbitRuntime;
 
 use super::{model, projection, scoring};
 
@@ -11,12 +13,54 @@ use super::{model, projection, scoring};
 pub(super) const STORE_INTERVAL_MINUTES: i64 = 60;
 /// Stored forecasts the scoring pass reads, newest first.
 pub(super) const SCORED_FORECASTS: usize = 60;
+/// The key in a stored row's `result_json` holding the whole response as it
+/// was computed at store time. Rows stored before it have only the forecast
+/// quantiles, which scoring reads; the key is additive and scoring ignores it.
+const SNAPSHOT_KEY: &str = "snapshot";
 
+/// The newest stored canonical forecast's response, when it carries the
+/// stored snapshot, is from the current model and is no older than two
+/// store intervals. Its calibration is the one scored at store time.
+pub(super) fn stored_forecast_response(
+    runtime: &OrbitRuntime,
+    now: DateTime<Utc>,
+) -> Result<Option<Value>, OrbitError> {
+    let Some(latest) = runtime.backlog_forecasts(1)?.into_iter().next() else {
+        return Ok(None);
+    };
+    if latest.model_version != model::MODEL_VERSION
+        || latest.forecast_at <= now - Duration::minutes(2 * STORE_INTERVAL_MINUTES)
+    {
+        return Ok(None);
+    }
+    let Ok(mut result) = serde_json::from_str::<Value>(&latest.result_json) else {
+        return Ok(None);
+    };
+    let Some(mut response) = result
+        .get_mut(SNAPSHOT_KEY)
+        .map(Value::take)
+        .filter(Value::is_object)
+    else {
+        return Ok(None);
+    };
+    response["served_from"] = json!("stored");
+    // This read recorded nothing; the snapshot's own write is `latest_at`.
+    response["stored"]["recorded"] = Value::Null;
+    response["stored"]["latest_at"] = json!(latest.forecast_at.to_rfc3339());
+    Ok(Some(response))
+}
+
+/// Store the canonical forecast when its hourly slot is free, then build the
+/// response. A stored row carries that response under [`SNAPSHOT_KEY`], with
+/// calibration scored as if the row were already stored, so a later default
+/// read can serve it without recomputing.
 pub(super) fn persist_forecast(
     context: &projection::ForecastProjection,
-    inputs: &Value,
-    mut stored: Vec<StoredBacklogForecast>,
-) -> Result<(Option<bool>, Vec<StoredBacklogForecast>, Value), OrbitError> {
+    inputs: Value,
+    stored: Vec<StoredBacklogForecast>,
+    preparation_ms: f64,
+    simulation_ms: f64,
+) -> Result<Value, OrbitError> {
     let runtime = context.runtime;
     let options = context.options;
     let now = context.now;
@@ -32,6 +76,17 @@ pub(super) fn persist_forecast(
     let plan = &context.prepared.plan;
     let admission = &context.prepared.admission;
     let forecast = context.forecast;
+    let score = |stored: &[StoredBacklogForecast]| {
+        scoring::score_backlog_forecasts(
+            stored,
+            tasks,
+            done_at,
+            runs,
+            task_episodes,
+            model::MODEL_VERSION,
+            now,
+        )
+    };
 
     let mut stored_now = None;
     let backlog_count = items.iter().filter(|item| !item.proposed).count();
@@ -95,12 +150,13 @@ pub(super) fn persist_forecast(
                 })
             })
             .collect();
-        // Per-task predictions are stored once, with each task above.
+        // Per-task predictions are stored with each task above for scoring;
+        // the snapshot keeps the response as served.
         let mut result = forecast.backlog.clone();
         if let Some(result) = result.as_object_mut() {
             result.remove("task_predictions");
         }
-        let row = StoredBacklogForecast {
+        let mut row = StoredBacklogForecast {
             workspace_id: String::new(),
             forecast_at: now,
             model_version: model::MODEL_VERSION,
@@ -108,31 +164,44 @@ pub(super) fn persist_forecast(
             result_json: result.to_string(),
             tasks_json: Value::Array(stored_tasks).to_string(),
         };
-        match runtime.record_backlog_forecast(row, Duration::minutes(STORE_INTERVAL_MINUTES)) {
-            Ok(written) => stored_now = Some(written),
-            Err(error) => tracing::warn!(%error, "backlog forecast: not stored"),
-        }
-    }
-    if stored_now == Some(true) {
-        for row in runtime.backlog_forecasts(SCORED_FORECASTS)? {
-            if !stored
-                .iter()
-                .any(|existing| existing.forecast_at == row.forecast_at)
-            {
-                stored.push(row);
+        // The transaction stays the authority; this skips building a
+        // snapshot the throttle would refuse.
+        let slot_free = stored.first().is_none_or(|latest| {
+            latest.forecast_at <= now - Duration::minutes(STORE_INTERVAL_MINUTES)
+        });
+        if slot_free {
+            let mut with_row = stored.clone();
+            with_row.push(row.clone());
+            with_row.sort_by_key(|row| std::cmp::Reverse(row.forecast_at));
+            let calibration = score(&with_row);
+            let response = projection::forecast_result(
+                context,
+                inputs.clone(),
+                Some(true),
+                &with_row,
+                calibration,
+                preparation_ms,
+                simulation_ms,
+            )?;
+            result[SNAPSHOT_KEY] = response.clone();
+            row.result_json = result.to_string();
+            match runtime.record_backlog_forecast(row, Duration::minutes(STORE_INTERVAL_MINUTES)) {
+                Ok(true) => return Ok(response),
+                Ok(false) => stored_now = Some(false),
+                Err(error) => tracing::warn!(%error, "backlog forecast: not stored"),
             }
+        } else {
+            stored_now = Some(false);
         }
-        stored.sort_by_key(|row| std::cmp::Reverse(row.forecast_at));
     }
-    let calibration = scoring::score_backlog_forecasts(
+    let calibration = score(&stored);
+    projection::forecast_result(
+        context,
+        inputs,
+        stored_now,
         &stored,
-        tasks,
-        done_at,
-        runs,
-        task_episodes,
-        model::MODEL_VERSION,
-        now,
-    );
-
-    Ok((stored_now, stored, calibration))
+        calibration,
+        preparation_ms,
+        simulation_ms,
+    )
 }

@@ -9,14 +9,16 @@
 // The forecast is per workspace; the aggregate view shows the usual
 // placeholder. The history and arrivals toggles refetch: only the default
 // view (30 days reaching back to at least the newest 50 completions, no
-// arrivals, the live drain ceiling) is the one stored and scored. History is
+// arrivals, the live drain ceiling) is the one stored and scored, and is read
+// from the newest stored snapshot when one is fresh; Refresh recomputes it
+// live. History is
 // counted in tasks, `Last 200` or `Last 500`, or in days; a month without
 // deliveries leaves the default and the counted views with history.
 
 import {
   el as makeEl, syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision,
   onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint,
-  scopedHashHref, bindTaskLink,
+  scopedHashHref, bindTaskLink, relativeTime,
 } from './common.js';
 
 const $ = (id) => document.getElementById(id);
@@ -94,13 +96,14 @@ function clearForecast() {
 }
 
 // The default history and arrivals off omit the query, matching the stored
-// forecast. `history` is `tasks:<n>` or `days:<n>`.
-export function backlogForecastPath({ history = "default", arrivals = "off" } = {}) {
+// forecast. `history` is `tasks:<n>` or `days:<n>`; `refresh` computes live.
+export function backlogForecastPath({ history = "default", arrivals = "off", refresh = false } = {}) {
   const params = new URLSearchParams();
   const [kind, count] = String(history).split(":");
   if (kind === "tasks" && count) params.set("history_tasks", count);
   if (kind === "days" && count && count !== "30") params.set("lookback_days", count);
   if (arrivals === "on") params.set("arrivals", "on");
+  if (refresh) params.set("refresh", "1");
   const query = params.toString();
   return query ? `${ENDPOINT}?${query}` : ENDPOINT;
 }
@@ -118,7 +121,9 @@ export function placeholdForecastAggregate() {
   renderPanelPlaceholder(BODY);
 }
 
-export function fetchAndRenderForecast() {
+// `refresh` recomputes live; the panel scope stays the view's path, so the
+// current forecast stays up while it runs.
+export function fetchAndRenderForecast({ refresh = false } = {}) {
   if (isAggregateView()) {
     placeholdForecastAggregate();
     return Promise.resolve();
@@ -129,7 +134,8 @@ export function fetchAndRenderForecast() {
     clearForecast();
   }
   const path = endpoint();
-  return requestPanel(BODY, path, () => fetchJson(path), (payload) => {
+  const request = refresh ? backlogForecastPath({ ...view, refresh: true }) : path;
+  return requestPanel(BODY, path, () => fetchJson(request), (payload) => {
     if (getWorkspaceRevision() !== revision) return;
     lastPayload = payload;
     renderForecast();
@@ -364,6 +370,26 @@ function historyText(inputs) {
   return `${n}${since} (${inputs.lookback_days ?? "?"} days, at least the newest ${inputs.min_history_tasks ?? 50} completions)`;
 }
 
+// Where this forecast came from and how old it is, beside a Refresh that
+// recomputes it live. The absolute stored time is in the Calibration card.
+function sourceTools() {
+  const stored = lastPayload.served_from === "stored";
+  const age = relativeTime(lastPayload.generated_at);
+  const text = stored ? `Stored ${age ?? "earlier"}` : "Live";
+  const title = lastPayload.generated_at ? `Computed ${formatDateTime(lastPayload.generated_at)}` : null;
+  const button = el("button", { class: "mx-seg-btn", type: "button", text: "Refresh", title: "Recompute this forecast live now", "aria-label": "Refresh forecast" });
+  button.addEventListener("click", () => {
+    button.disabled = true;
+    fetchAndRenderForecast({ refresh: true })
+      .catch((error) => console.error("Failed to refresh backlog forecast", error))
+      .finally(() => { button.disabled = false; });
+  });
+  return el("div", { class: "fc-source-tools" }, [
+    el("span", { class: "fc-source mx-muted", text, title }),
+    el("div", { class: "mx-seg", role: "group", "aria-label": "Forecast refresh" }, [button]),
+  ]);
+}
+
 function forecastCard() {
   const inputs = lastPayload.inputs || {};
   const forecast = lastPayload.forecast || {};
@@ -371,6 +397,7 @@ function forecastCard() {
   const tools = el("div", { class: "mx-trend-tools" }, [
     seg("Delivery history", HISTORIES, view.history, (key) => { view.history = key; }),
     seg("Arrivals", ARRIVALS, view.arrivals, (key) => { view.arrivals = key; }),
+    sourceTools(),
   ]);
   const meta = `${backlog.backlog ?? 0} backlog · ${backlog.in_progress ?? 0} in progress · ${backlog.blocked ?? 0} blocked · ${historyText(inputs)}`;
   const children = [
@@ -643,9 +670,11 @@ function calibrationCard() {
   const calibration = lastPayload.calibration || {};
   const stored = lastPayload.stored || {};
   const forecasts = calibration.forecasts || [];
-  const meta = stored.latest_at ? `latest stored ${formatDateTime(stored.latest_at)}` : "none stored yet";
+  const served = lastPayload.served_from === "stored";
+  const latest = stored.latest_at ? `latest stored ${formatDateTime(stored.latest_at)}` : "none stored yet";
+  const meta = served ? `${latest} · scored when stored` : latest;
   const blurb = el("p", { class: "mx-blurb" }, [
-    `The default forecast is stored at most once every ${stored.min_interval_minutes ?? 60} minutes while this view is open, then scored as its tasks finish. A well-calibrated forecast has about 50% of actuals under p50 and 90% under p90. `,
+    `The default forecast is stored at most once every ${stored.min_interval_minutes ?? 60} minutes, then scored as its tasks finish. The default view shows that stored forecast with the calibration scored when it was stored; Refresh scores it now. A well-calibrated forecast has about 50% of actuals under p50 and 90% under p90. `,
     infoHint("Removed or re-scoped tasks, and done tasks with no agent runs after the forecast, are left out and counted. Rejected and archived tasks are also excluded under model versions before 5; from version 5 they count as abandoned, with their post-forecast cost and token usage retained in actual totals. A forecast is scored as a whole once no tasks are pending, at least one task is done or abandoned, and none was left out. An abandoned task can settle the cohort without a drain, so any settled cohort with an abandoned task is scored as not drained and has no time-to-drain actual."),
   ]);
   if (!forecasts.length) {

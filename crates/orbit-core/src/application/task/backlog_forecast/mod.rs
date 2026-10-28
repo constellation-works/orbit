@@ -40,8 +40,10 @@
 //!
 //! The canonical forecast (default lookback, the live ceiling, no arrivals)
 //! is stored at most once per workspace per [`persistence::STORE_INTERVAL_MINUTES`], and
-//! the owner clock records it even without reads; every request scores the
-//! newest stored forecasts.
+//! the owner clock records it even without reads. A stored row carries the
+//! whole response as a snapshot, which a canonical read serves while it is
+//! fresh, calibration included; every live request scores the newest stored
+//! forecasts.
 
 mod dependencies;
 mod model;
