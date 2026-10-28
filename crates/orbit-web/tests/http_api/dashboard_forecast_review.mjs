@@ -1,9 +1,11 @@
 // Analytics › Forecast must show review-mode uncertainty on the public
 // fetch/render path: a kept mode, a dropped mode, unknown current and
-// historical evidence, and an older response that omits those fields.
+// historical evidence, and an older response that omits those fields. An
+// explicit Live Refresh must also survive the dashboard's stored-read polls.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
+import test from 'node:test';
 
 const classesOf = node => String(node.className || '').split(/\s+/).filter(Boolean);
 class Node {
@@ -98,6 +100,8 @@ const ids = ['forecast-body', 'forecast-count'];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 const document = {
   activeElement: null,
+  hidden: false,
+  addEventListener() {},
   body: new Node('body'),
   createElement: tag => new Node(tag),
   createDocumentFragment: () => new Node('#fragment'),
@@ -116,8 +120,17 @@ const response = (payload, status = 200) => ({
 const fetch = (path, options = {}) => new Promise((resolve, reject) => pending.push({
   url: new URL(path, 'http://dashboard.test'), options, resolve, reject,
 }));
+let clock = 0;
+let timerId = 0;
+const timers = new Map();
+const schedule = (fn, delay) => {
+  const id = ++timerId;
+  timers.set(id, { fn, at: clock + delay });
+  return id;
+};
 const context = vm.createContext({
-  URLSearchParams, URL, AbortController, console, setTimeout, clearTimeout, fetch, document, window, Node,
+  URLSearchParams, URL, AbortController, console, fetch, document, window, Node,
+  setTimeout: schedule, clearTimeout: id => timers.delete(id),
 });
 const modules = new Map();
 const dir = new URL('../../assets/dashboard/js/', import.meta.url);
@@ -131,6 +144,9 @@ const load = name => {
 const forecastModule = load('forecast.js');
 await forecastModule.link(specifier => load(specifier.replace(/^\.\//, '')));
 await forecastModule.evaluate();
+const pollingModule = load('polling.js');
+await pollingModule.link(specifier => load(specifier.replace(/^\.\//, '')));
+await pollingModule.evaluate();
 const forecast = forecastModule.namespace;
 const common = modules.get('common.js').namespace;
 const body = () => document.getElementById('forecast-body');
@@ -329,3 +345,87 @@ assert.ok(!headers().includes('Review'), `older schedules omit the review column
 assert.deepEqual(coverageRow('Thin-cell fallbacks'), { text: '1', warn: true });
 
 console.log('forecast review-mode rendering passed');
+
+async function advanceClock(ms) {
+  const until = clock + ms;
+  for (;;) {
+    const next = [...timers].sort((a, b) => a[1].at - b[1].at)[0];
+    if (!next || next[1].at > until) break;
+    const [id, timer] = next;
+    timers.delete(id);
+    clock = timer.at;
+    timer.fn();
+    await settle();
+  }
+  clock = until;
+}
+
+function clickForecastControl(label) {
+  const button = [...body().querySelectorAll('button')].find(node => node.textContent === label);
+  assert.ok(button, `Forecast has the ${label} control`);
+  assert.ok(!button.disabled, `${label} is enabled`);
+  for (const listener of button.listeners.click || []) listener();
+  return button;
+}
+
+for (const overlap of [false, true]) {
+  await test(overlap ? 'a poll cannot supersede a pending Refresh' : 'Live Refresh survives two dashboard poll ticks', async () => {
+    common.setWorkspace(`ws-refresh-${overlap}`);
+    const stored = { ...payload(), served_from: 'stored', generated_at: '2026-10-28T20:00:00Z' };
+    const live = { ...payload(), served_from: 'live', generated_at: '2026-10-28T20:10:00Z' };
+    live.forecast.time_to_drain_hours = { p50: 2, p90: 4 };
+    let ticks = 0;
+    pollingModule.namespace.startDashboardPolling(() => {
+      ticks += 1;
+      return common.runPanelPoll(true, () => {
+        const before = pending.length;
+        const done = forecast.fetchAndRenderForecast();
+        for (const request of pending.slice(before)) {
+          assert.equal(request.url.searchParams.get('refresh'), null, 'polls use the stored read');
+          request.resolve(response(stored));
+        }
+        return done.then(() => true);
+      });
+    });
+    try {
+      await settle();
+      assert.match(body().querySelector('.fc-source').textContent, /^Stored /);
+      if (overlap) await advanceClock(29_000);
+      const beforeRefresh = pending.length;
+      const button = clickForecastControl('Refresh');
+      assert.equal(pending.length, beforeRefresh + 1);
+      const refresh = pending.at(-1);
+      assert.equal(refresh.url.searchParams.get('refresh'), '1', 'Refresh computes a live forecast');
+      assert.equal(button.disabled, true);
+      assert.match(text(), /6\.5h/, 'previous figures remain while Refresh computes');
+      if (overlap) {
+        await advanceClock(1_000);
+        assert.equal(ticks, 2, 'the poll starts while Refresh is still pending');
+      }
+      refresh.resolve(response(live));
+      await settle();
+      assert.equal(body().querySelector('.fc-source').textContent, 'Live', 'the Refresh result renders');
+      assert.equal(button.disabled, false);
+      const liveFigures = body().querySelector('.fc-kpi').textContent;
+      assert.match(liveFigures, /2\.0h/);
+      assert.match(liveFigures, /4\.0h/);
+      for (let tick = 1; tick <= 2; tick += 1) {
+        await advanceClock(30_000);
+        assert.equal(ticks, (overlap ? 2 : 1) + tick, 'the next poll tick executes');
+        assert.equal(body().querySelector('.fc-source').textContent, 'Live', 'polls preserve the Live source');
+        assert.equal(body().querySelector('.fc-kpi').textContent, liveFigures, 'polls preserve Live figures');
+      }
+      if (!overlap) {
+        const failedRefresh = forecast.fetchAndRenderForecast({ refresh: true });
+        pending.at(-1).resolve(response({ error: 'forecast store busy' }, 500));
+        await assert.rejects(failedRefresh, /forecast store busy/);
+        assert.match(text(), /Refresh failed; showing stale data/);
+        assert.equal(body().querySelector('.fc-kpi').textContent, liveFigures);
+        await render(stored);
+        assert.match(body().querySelector('.fc-source').textContent, /^Stored /, 'a failed Refresh releases polling');
+      }
+    } finally {
+      timers.clear();
+    }
+  });
+}

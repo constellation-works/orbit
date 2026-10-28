@@ -11,7 +11,8 @@
 // view (30 days reaching back to at least the newest 50 completions, no
 // arrivals, the live drain ceiling) is the one stored and scored, and is read
 // from the newest stored snapshot when one is fresh; Refresh recomputes it
-// live. History is
+// live and keeps that result until the workspace or forecast options change.
+// History is
 // counted in tasks, `Last 200` or `Last 500`, or in days; a month without
 // deliveries leaves the default and the counted views with history.
 
@@ -88,9 +89,11 @@ const SCHEDULE_ROWS = 50;
 const view = { history: "default", arrivals: "off" };
 let lastPayload = null;
 let requestScope = null;
+let liveRefresh = null;
 
 function clearForecast() {
   lastPayload = null;
+  liveRefresh = null;
   const count = $(COUNT);
   if (count) count.textContent = "—";
 }
@@ -122,24 +125,34 @@ export function placeholdForecastAggregate() {
 }
 
 // `refresh` recomputes live; the panel scope stays the view's path, so the
-// current forecast stays up while it runs.
+// current forecast stays up while it runs. Default polls share an explicit
+// Refresh's promise, including after it settles, until its view changes.
 export function fetchAndRenderForecast({ refresh = false } = {}) {
   if (isAggregateView()) {
     placeholdForecastAggregate();
     return Promise.resolve();
   }
   const revision = getWorkspaceRevision();
-  if (requestScope !== `${revision}`) {
-    requestScope = `${revision}`;
+  const path = endpoint();
+  const scope = `${revision}:${path}`;
+  if (requestScope !== scope) {
+    requestScope = scope;
     clearForecast();
   }
-  const path = endpoint();
+  if (!refresh && liveRefresh) return liveRefresh;
   const request = refresh ? backlogForecastPath({ ...view, refresh: true }) : path;
-  return requestPanel(BODY, path, () => fetchJson(request), (payload) => {
+  const pending = requestPanel(BODY, path, () => fetchJson(request), (payload) => {
     if (getWorkspaceRevision() !== revision) return;
     lastPayload = payload;
     renderForecast();
   }, COUNT);
+  if (!refresh) return pending;
+  const retained = pending.catch((error) => {
+    if (liveRefresh === retained) liveRefresh = null;
+    throw error;
+  });
+  liveRefresh = retained;
+  return retained;
 }
 
 onWorkspaceChange(() => {
