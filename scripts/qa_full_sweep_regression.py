@@ -355,7 +355,7 @@ def self_test():
         command = ["cargo", "test", "--no-fail-fast", "-p", "orbit-common", "--test", "test_env", "--locked"]
         for mode in ["success", "multiple-success", "nocapture", "directory-target", "outer-failure", "early-target-failure", "nonzero", "missing-target",
                      "wrong-target", "extra-target", "zero", "incomplete-rows", "child-only",
-                     "ambiguous", "truncated", "seatbelt", "ps", "unstable", "wrong-revision"]:
+                     "ambiguous", "truncated", "seatbelt", "ps", "unstable", "wrong-revision", "missing-status"]:
             execution = {"stdout": actual["stdout"], "stderr": actual["stderr"], "exit_code": 0,
                          "executed_command": [*command, "--", "--show-output"]}
             if mode == "outer-failure":
@@ -408,6 +408,9 @@ def self_test():
                 execution["source_stable"] = False
             elif mode == "wrong-revision":
                 execution["source_revision"] = "c" * 40
+            elif mode == "missing-status":
+                execution["exit_code"] = None
+                execution["outcome"] = "FAIL"
             (repo / "transcript.json").write_text(json.dumps(execution))
             # Run the public recorder first; feed its actual retained command
             # bytes to the public platform import, which shares emitter rules.
@@ -424,6 +427,8 @@ def self_test():
             for key in ["output_truncated", "source_stable", "source_revision"]:
                 if key in execution:
                     recorded[key] = execution[key]
+            if mode == "missing-status":
+                recorded.update(exit_code=None, outcome="FAIL")
             (repo / "transcript.json").write_text(json.dumps(recorded))
             report = sweep([native], f"native-{mode}")
             assert (report["decision"] == "PASS") == (mode in ["success", "multiple-success", "nocapture", "directory-target"]), (mode, report)
@@ -725,7 +730,7 @@ def retired_cases_orphan_proof_self_test(harness, scratch):
 
 
 def native_recorder_prefix_self_test(harness, scratch):
-    """Wrapper delimiters must not consume Cargo's separator or libtest options."""
+    """Exercise recorder arguments, shell status and retained execution evidence."""
     with tempfile.TemporaryDirectory(prefix="qa-native-prefix-", dir=scratch) as tmp:
         repo = Path(tmp)
         (repo / "Cargo.toml").write_text(
@@ -771,3 +776,60 @@ def native_recorder_prefix_self_test(harness, scratch):
             assert "test selected ... ok" in recorded["stdout"], (name, recorded)
             assert "selected test diagnostics" in recorded["stdout"], (name, recorded)
             assert "test result: ok. 1 passed; 0 failed;" in recorded["stdout"], (name, recorded)
+
+        driver = repo / "status-driver.py"
+        driver.write_text('''
+import importlib.util, sys
+from unittest import mock
+spec = importlib.util.spec_from_file_location("qa", sys.argv[1])
+qa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(qa)
+mode = sys.argv[2]
+real_run = qa.run
+def injected_run(*args, **kwargs):
+    if mode == "timeout":
+        kwargs["timeout"] = 0
+    if mode == "lost-result":
+        # Close the result pipe without a status; no command child is started.
+        with mock.patch.object(qa, "_PROCESS_SUPERVISOR",
+                               "import os, sys; os.close(int(sys.argv[1]))"):
+            return real_run(*args, **kwargs)
+    if mode == "unverified-cleanup":
+        # Closing the owner pipe still lets the supervisor sweep and join its
+        # group. The caller cannot verify its own sweep and must retain FAIL.
+        with mock.patch("os.killpg", side_effect=PermissionError("fixture cleanup refusal")):
+            return real_run(*args, **kwargs)
+    return real_run(*args, **kwargs)
+qa.run = injected_run
+sys.argv = [sys.argv[1], *sys.argv[3:]]
+qa.main()
+''')
+        for mode, code, expected_status in [
+            ("numeric-zero", 0, 0), ("numeric-seven", 7, 7), ("numeric-127", 127, 127),
+            ("timeout", 0, 1), ("lost-result", 0, 1), ("unverified-cleanup", 0, 1),
+        ]:
+            print(f"native recorder status regression: {mode}", flush=True)
+            command = [sys.executable, "-c",
+                       "import sys; print('retained stdout'); print('retained stderr', file=sys.stderr); "
+                       f"raise SystemExit({code})", "cargo", "test"]
+            records = repo / mode
+            child = subprocess.run(
+                [sys.executable, str(driver), str(harness), mode, "--repo-root", str(repo),
+                 "--native-execution-dir", str(records), "--record-native-command", *command],
+                cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+            recorded = json.loads(next(records.glob("*.json")).read_text())
+            assert child.returncode == expected_status, (mode, child.returncode, recorded)
+            expected_code = code if mode.startswith("numeric-") else None
+            assert recorded["exit_code"] == expected_code, (mode, recorded)
+            assert recorded["outcome"] == ("PASS" if expected_code == 0 else "FAIL"), (mode, recorded)
+            assert child.stdout == recorded["stdout"] and child.stderr == recorded["stderr"], (mode, recorded)
+            assert recorded["command"] == command, (mode, recorded)
+            if mode.startswith("numeric-") or mode == "unverified-cleanup":
+                assert recorded["stdout"] == "retained stdout\n", (mode, recorded)
+                assert recorded["stderr"].startswith("retained stderr\n"), (mode, recorded)
+            if mode == "timeout":
+                assert "timeout after 0s" in recorded["stderr"], recorded
+            elif mode == "lost-result":
+                assert "supervisor exited without a command result" in recorded["stderr"], recorded
+            elif mode == "unverified-cleanup":
+                assert not recorded["cleanup_verified"] and "fixture cleanup refusal" in recorded["stderr"], recorded

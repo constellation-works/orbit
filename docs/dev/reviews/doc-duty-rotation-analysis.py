@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Behavior regression for the doc-duties rotation rule.
+"""Manual historical analysis of the doc-duty starvation incident (ORB-15149).
 
-The rotation is an instruction algorithm in the bundled `doc-duties` template,
-not compiled code, so this script executes a reference model of that algorithm
-(carried per-path state, date precedence, repeat-skip hold, six-document batch)
-against a simulated task history that, like `orbit.task.list`, exposes only the
-newest 60 completed runs. It asserts outcomes (coverage, retained attempts,
-holds), never template wording; update the model together with the template's
-"Select a batch" and "Attach the ledger" sections.
+Run manually with python3 docs/dev/reviews/doc-duty-rotation-analysis.py.
+This standalone model does not read or execute the production template and
+provides no production regression coverage. Its corpus, history window and
+batch size are historical assumptions, not assertions about current policy.
+It preserves the window-only starvation control and carried-state analysis
+from that incident; production instructions remain canonical in the bundled
+doc-duties template. This analysis is deliberately excluded from CI.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ def corpus(count: int) -> dict[str, str]:
             for i in range(count)}
 
 
-class RotationTests(unittest.TestCase):
+class HistoricalRotationAnalysis(unittest.TestCase):
     def test_every_document_is_attempted_past_the_history_window(self):
         docs, history, seen = corpus(400), History(), set()
         for n in range(200):
@@ -142,11 +142,6 @@ class RotationTests(unittest.TestCase):
         state = {"docs/a.md": [{"attempted_on": day(5), "outcome": "clean"}]}
         batch, _ = select(docs, state)
         self.assertEqual(batch, ["docs/b.md", "docs/a.md"])
-
-    def test_ties_break_by_path_and_batch_is_six(self):
-        docs = {f"docs/{c}.md": day(-1) for c in "hgfedcba"}
-        batch, _ = select(docs, {})
-        self.assertEqual(batch, [f"docs/{c}.md" for c in "abcdef"])
 
     def test_v1_ledgers_in_window_carry_into_v2_state(self):
         docs, history = corpus(40), History()

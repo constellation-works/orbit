@@ -1621,7 +1621,9 @@ def record_native_execution(command, repo, directory):
         json.dump(evidence, stream, indent=2)
     print(evidence.get("stdout", ""), end="")
     print(evidence.get("stderr", ""), end="", file=sys.stderr)
-    return evidence["exit_code"]
+    # SystemExit(None) means shell success; retain unknown status in the raw
+    # evidence while making supervision/cleanup failures fail the workflow step.
+    return evidence["exit_code"] if evidence["exit_code"] is not None else 1
 
 
 def process_self_test():

@@ -82,6 +82,46 @@ class UnitTestRatchetTests(unittest.TestCase):
         self.assertEqual(self.run_inventory("--write-baseline", str(self.baseline)).returncode, 0)
         self.assertEqual(self.run_inventory("--check", str(self.baseline)).returncode, 0)
 
+    def test_fixture_literals_and_comments_do_not_consume_admissions(self):
+        phantom = "\n#[test]\nfn fixture_only() {}\n"
+        fixtures = [
+            f'pub const FIXTURE: &str = r#"{phantom}"#;\n',
+            f'pub const FIXTURE: &str = r###"quote: "## {phantom}"###;\n',
+            f'pub const FIXTURE: &str = r"{phantom}";\n',
+            f'pub const FIXTURE: &[u8] = br#"{phantom}"#;\n',
+            f'pub const FIXTURE: &CStr = cr#"{phantom}"#;\n',
+            r'pub const FIXTURE: &str = "escaped: \" ' + phantom + '";\n',
+            f'pub const FIXTURE: &[u8] = b"{phantom}";\n',
+            f'pub const FIXTURE: &CStr = c"{phantom}";\n',
+            f'/* outer /* nested */ {phantom} */\n',
+            f'/* // neither a line comment nor a string: r#" {phantom} */\n',
+            '// /* a block comment does not start here\n'
+            '// #[test]\n// fn fixture_only() {}\n',
+            '// A character quote must not start a multiline string.\n'
+            'const QUOTE: char = \'"\';\n'
+            "fn borrow<'a>(value: &'a str) -> &'a str { value }\n",
+        ]
+        for fixture in fixtures:
+            with self.subTest(fixture=fixture):
+                self.write("crates/alpha/src/lib.rs", fixture)
+                empty = {"test_function_paths": []}
+                self.baseline.write_text(json.dumps({"schema_version": 2, "crates": {"alpha": empty}}))
+                printed = self.run_inventory()
+                self.assertEqual(printed.returncode, 0, printed.stderr)
+                self.assertEqual(json.loads(printed.stdout)["crates"]["alpha"]["test_function_paths"], [])
+                checked = self.run_inventory("--check", str(self.baseline))
+                self.assertEqual(checked.returncode, 0, checked.stderr)
+                written = self.run_inventory("--write-baseline", str(self.baseline))
+                self.assertEqual(written.returncode, 0, written.stderr)
+                self.assertEqual(json.loads(self.baseline.read_text())["crates"]["alpha"], empty)
+
+                self.write("crates/alpha/src/lib.rs", fixture + '#[test] #[ignore = "a ] quote"] fn actual() {}\n')
+                self.assertEqual(self.run_inventory("--check", str(self.baseline)).returncode, 1)
+                self.assertEqual(self.run_inventory("--write-baseline", str(self.baseline)).returncode, 0)
+                self.assertEqual(json.loads(self.baseline.read_text())["crates"]["alpha"], {
+                    "test_function_paths": ["lib.rs::actual"],
+                })
+
     def test_names_functions_after_stacked_attributes_and_comments(self):
         self.write("crates/alpha/src/lib.rs", (
             "#[test]\n#[ignore = \"child fixture\"]\n#[cfg(unix)]\n"

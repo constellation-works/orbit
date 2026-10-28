@@ -21,7 +21,49 @@ from pathlib import Path
 SCHEMA_VERSION = 2
 TEST_ATTRIBUTE = re.compile(r"^\s*#\[(?:[A-Za-z_][A-Za-z0-9_]*::)*test\b")
 FUNCTION = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+(r#)?([A-Za-z_][A-Za-z0-9_]*)\b")
+RUST_TOKEN = re.compile(
+    r'''(?P<comment>//[^\n]*|/\*)|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")|'''
+    r'''(?P<literal>(?:b|c)?"(?:\\.|[^"\\])*"|'''
+    r'''b?'(?:\\(?:u\{[0-9A-Fa-f_]+\}|x[0-9A-Fa-f]{2}|.)|[^'\\\n])')|'''
+    r'''(?:r\#)?[A-Za-z_]\w*|\s+|.''',
+    re.DOTALL,
+)
+BLOCK_COMMENT_EDGE = re.compile(r"/\*|\*/")
 DEFAULT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def rust_code_only(text):
+    """Mask Rust literals and nested comments, preserving source line numbers.
+
+    Consume identifiers atomically so raw identifiers and lifetimes do not
+    start strings. Quotes and comment delimiters inside literals are data.
+    """
+    chunks = []
+    index = 0
+    while index < len(text):
+        token = RUST_TOKEN.match(text, index)
+        end = token.end()
+        if token["raw"] is not None:
+            closer = '"' + token["hashes"]
+            closing = text.find(closer, end)
+            if closing < 0:
+                raise ValueError("unterminated Rust raw string")
+            end = closing + len(closer)
+        elif token[0] == "/*":
+            depth = 1
+            for edge in BLOCK_COMMENT_EDGE.finditer(text, end):
+                depth += 1 if edge[0] == "/*" else -1
+                if depth == 0:
+                    end = edge.end()
+                    break
+            else:
+                raise ValueError("unterminated Rust block comment")
+        chunk = text[index:end]
+        if any(token[name] is not None for name in ("comment", "raw", "literal")):
+            chunk = re.sub(r"[^\n]+", lambda match: " " * len(match[0]), chunk)
+        chunks.append(chunk)
+        index = end
+    return "".join(chunks)
 
 
 def test_function_paths(text, relative_path):
@@ -33,7 +75,7 @@ def test_function_paths(text, relative_path):
     """
     paths = []
     pending = None
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in enumerate(rust_code_only(text).splitlines(), 1):
         if TEST_ATTRIBUTE.match(line):
             if pending is not None:
                 raise ValueError(f"{relative_path}:{pending}: test attribute has no function name")
