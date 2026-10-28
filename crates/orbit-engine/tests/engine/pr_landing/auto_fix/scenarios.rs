@@ -2818,6 +2818,30 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                         "auto_fix={auto_fix}: no step recovery"
                     );
                     assert!(repair_attempts(&host).is_empty());
+                    // The held first failure is retained without any
+                    // pre-seeded rerun record, so the repeated failure
+                    // below can be matched against it.
+                    let suspects: Vec<Value> = host
+                        .history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == "ci_base_suspect")
+                        .filter_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok())
+                        .collect();
+                    assert!(
+                        suspects.iter().any(|note| note["head"] == fx.candidate
+                            && note["run_id"] == 11
+                            && note["run_attempt"] == 1
+                            && note["check"] == "CI / test"
+                            && note["signature"] == "error: source failure"),
+                        "auto_fix={auto_fix}: first failure is recorded: {suspects:?}"
+                    );
+                    assert!(
+                        !host
+                            .history(TASK_ID)
+                            .iter()
+                            .any(|entry| entry.event == "ci_check_rerun"),
+                        "auto_fix={auto_fix}: no rerun record is pre-seeded"
+                    );
                     assert!(host.widenings().is_empty());
                     assert_eq!(host.task(TASK_ID).context_files, context);
                     assert!(
@@ -2837,19 +2861,11 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                         "older green base",
                     );
 
-                    // The same unchanged head now repeats the recorded failure.
-                    // Final recovery observes it independently, with auto-fix off.
+                    // The same unchanged head now repeats the failure the
+                    // first attempt recorded above. Final recovery observes
+                    // it independently, with auto-fix off and no pre-seeded
+                    // `ci_check_rerun` or `ci_base_suspect` history.
                     host.set_status(TASK_ID, TaskStatus::Review);
-                    seed_auto_fix_history(
-                        &host,
-                        "ci_check_rerun",
-                        &json!({
-                            "head":fx.candidate,"run_id":11,"jobs":[{
-                                "check":"CI / test","signature":"error: source failure",
-                                "job_id":12,"run_attempt":1,"completed_at":"2026-10-27T05:01:00Z"
-                            }]
-                        }),
-                    );
                     let dir = fx.forge.join("commit-ci").join(&fx.candidate);
                     let mut jobs = jobs_listing(12, &[("test", "failure")]);
                     jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");

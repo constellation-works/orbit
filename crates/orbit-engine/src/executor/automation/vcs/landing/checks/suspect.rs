@@ -62,7 +62,7 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     .map_err(|error| format!("the failed check's base could not be read: {error}"))?;
     let base = git_output(workspace, &["merge-base", head, tip.trim()])
         .map_err(|error| error.to_string())?;
-    untouched_base_evidence(
+    let evidence = untouched_base_evidence(
         host,
         workspace,
         head,
@@ -71,9 +71,9 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
         branch,
         job,
         paths,
-    )
-    .map(|evidence| match evidence {
-        UntouchedBaseEvidence::Waiting(reason) => Some(reason),
+    )?;
+    match evidence {
+        UntouchedBaseEvidence::Waiting(reason) => Ok(Some(reason)),
         UntouchedBaseEvidence::PassingBaseRun
             if !has_matching_candidate_rerun(
                 host,
@@ -85,15 +85,29 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
                 pr_number,
             ) =>
         {
-            Some(format!(
+            let reason = format!(
                 "base-suspect: '{}' has a successful same-check base run, but head {head} \
                  has no unchanged-head pull_request rerun with the same failure signature; \
                  a base pass alone does not authorize repair",
                 jobs::job_label(job),
-            ))
+            );
+            // Retain this first failure so a later unchanged-head rerun with
+            // the same signature can be matched by
+            // `has_matching_candidate_rerun`, even when no landing or
+            // auto-fix pass runs to record it (for example, completion's
+            // final recovery with auto-fix disabled).
+            let record = json!({
+                "base": tip.trim(), "head": head, "check": jobs::job_label(job),
+                "signature": signature, "run_id": job["run_id"], "job_id": job["job_id"],
+                "run_attempt": job["run_attempt"], "pr_number": pr_number,
+                "event": job["event"], "started_at": job["started_at"],
+                "completed_at": job["completed_at"], "reason": reason,
+            });
+            record_base_suspect(host, tasks, &record, None).map_err(|error| error.to_string())?;
+            Ok(Some(reason))
         }
-        UntouchedBaseEvidence::Unrelated | UntouchedBaseEvidence::PassingBaseRun => None,
-    })
+        UntouchedBaseEvidence::Unrelated | UntouchedBaseEvidence::PassingBaseRun => Ok(None),
+    }
 }
 
 /// The repository files a log cites at `head`. A relative citation must
