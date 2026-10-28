@@ -127,6 +127,18 @@ fn completion_refusals_hold_the_run_and_pass_its_parents() {
             Some(DeliveryRefusal::CompletionBudgetExpired),
             "auto_fix_stopped",
         ),
+        (
+            "required_checks_head_changed",
+            json!({"mergeStateStatus": "BLOCKED", "reviewDecision": "APPROVED", "statusCheckRollup": [{"name": "optional-check", "status": "COMPLETED", "conclusion": "FAILURE"}]}),
+            Some(DeliveryRefusal::HeadChanged),
+            "auto_fix_stopped: pull request #42 cannot be repaired automatically (required checks name another head)",
+        ),
+        (
+            "required_checks_transport_failure",
+            json!({"mergeStateStatus": "BLOCKED", "reviewDecision": "APPROVED", "statusCheckRollup": [{"name": "optional-check", "status": "COMPLETED", "conclusion": "FAILURE"}]}),
+            None,
+            "auto_fix_stopped",
+        ),
     ] {
         completion_outcome(case, patch, refusal, diagnostic);
     }
@@ -160,7 +172,12 @@ fn completion_outcome(
     std::fs::write(&status, observation.to_string()).unwrap();
     let gh = bin.join("gh");
     let calls = fx.repo.join("gh-calls");
-    let required_checks = json!({"data":{"repository":{"pullRequest":{"headRefOid":"published-head","commits":{"nodes":[{"commit":{"oid":"published-head","statusCheckRollup":null}}]}}}}});
+    let required_checks_head = if case == "required_checks_head_changed" {
+        "moved-head"
+    } else {
+        "published-head"
+    };
+    let required_checks = json!({"data":{"repository":{"pullRequest":{"headRefOid":required_checks_head,"commits":{"nodes":[{"commit":{"oid":required_checks_head,"statusCheckRollup":null}}]}}}}});
     std::fs::write(
         &gh,
         format!(
@@ -201,6 +218,31 @@ fn completion_outcome(
         )
         .unwrap();
     }
+    if matches!(
+        case,
+        "required_checks_head_changed" | "required_checks_transport_failure"
+    ) {
+        let matching_checks = json!({"data":{"repository":{"pullRequest":{"headRefOid":"published-head","commits":{"nodes":[{"commit":{"oid":"published-head","statusCheckRollup":null}}]}}}}});
+        let after_first_read = if case == "required_checks_head_changed" {
+            format!("printf '%s\\n' '{}'", required_checks)
+        } else {
+            "echo 'connect: connection refused (https://api.github.com/graphql)' >&2; exit 1".into()
+        };
+        let api_graphql_branch = format!(
+            "'api graphql') if [ \"$(grep -c '^api graphql$' '{}')\" -eq 1 ]; then printf '%s\\n' '{}' ; else {}; fi ;;",
+            calls.display(),
+            matching_checks,
+            after_first_read
+        );
+        std::fs::write(
+            &gh,
+            working_gh.replace(
+                &format!("'api graphql') printf '%s\\n' '{required_checks}' ;;"),
+                &api_graphql_branch,
+            ),
+        )
+        .unwrap();
+    }
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     let jobs = fx.runtime.global_root().join("resources/jobs");
     std::fs::create_dir_all(&jobs).unwrap();
@@ -213,13 +255,16 @@ fn completion_outcome(
                 "workspace_path": "{{ input.workspace_path }}",
                 "completed_task_ids": "{{ input.task_ids }}", "pr_number": "42",
                 "published_head_sha": "published-head",
-                "max_wait_seconds": if matches!(case, "deadline_parked" | "deadline_infrastructure" | "required_checks_unavailable") { 600 } else { 0 },
+                "max_wait_seconds": if matches!(case, "deadline_parked" | "deadline_infrastructure" | "required_checks_unavailable" | "required_checks_head_changed" | "required_checks_transport_failure") { 600 } else { 0 },
             },
         }]},
     }).to_string()).unwrap();
     if matches!(
         case,
-        "deadline_infrastructure" | "required_checks_unavailable"
+        "deadline_infrastructure"
+            | "required_checks_unavailable"
+            | "required_checks_head_changed"
+            | "required_checks_transport_failure"
     ) {
         let job_config = std::fs::read_to_string(&job).unwrap();
         let mut job_json: Value = serde_json::from_str(&job_config).unwrap();

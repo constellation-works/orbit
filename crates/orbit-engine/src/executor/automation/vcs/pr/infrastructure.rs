@@ -153,7 +153,10 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
             )
         })?;
     if policy.head_sha != head {
-        return Err(stopped(pr, "required checks name another head"));
+        return Err(hold_auto_fix_stop(
+            stopped(pr, "required checks name another head"),
+            DeliveryRefusal::HeadChanged,
+        ));
     }
     // Existing required failures retain the ordinary code-repair path.
     if status.status_checks.iter().flatten().any(|check| {
