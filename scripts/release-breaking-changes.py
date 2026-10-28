@@ -215,6 +215,9 @@ def detect_help_removals(git, parent, commit, changed):
 
 def schema_facts(schema, path, facts):
     """Flatten the structural facts of a JSON schema; descriptions are skipped."""
+    if isinstance(schema, bool):
+        facts.setdefault("schema_nodes", set()).add(path)
+        return
     if not isinstance(schema, dict):
         return
     facts.setdefault("schema_nodes", set()).add(path)
@@ -230,7 +233,7 @@ def schema_facts(schema, path, facts):
         for name, child in properties.items():
             schema_facts(child, f"{path}.{name}", facts)
     for key in ("items", "additionalProperties"):
-        if isinstance(schema.get(key), dict):
+        if isinstance(schema.get(key), (dict, bool)):
             schema_facts(schema[key], f"{path}[{key}]", facts)
     for key in ("anyOf", "oneOf", "allOf"):
         for index, child in enumerate(schema.get(key) or []):
@@ -278,11 +281,31 @@ def detect_mcp_changes(git, parent, commit, changed):
             if path in after.get("enum", {}):
                 for value in sorted(values - after["enum"][path]):
                     report(f"`{name}` `{path}` enum value {value} removed")
-        for path, required in sorted(after.get("required", {}).items()):
-            if path not in before.get("schema_nodes", set()):
+        # A required entry constrains its instance location: the schema path
+        # with combinator branches stripped. allOf branches all apply, so
+        # their required sets union at that location (branch renumbering on
+        # insertion is not a new constraint). anyOf/oneOf branches are
+        # alternatives, so a requirement inside one does not unconditionally
+        # constrain the location and stays additive; oneOf exclusivity
+        # changes are not modelled as newly-required properties.
+        def location(raw):
+            return re.sub(r"\{(?:anyOf|oneOf|allOf)\d+\}", "", raw)
+
+        def unconditional_required(facts):
+            grouped = {}
+            for raw, req in facts.get("required", {}).items():
+                if re.search(r"\{(?:anyOf|oneOf)\d+\}", raw):
+                    continue
+                grouped.setdefault(location(raw), set()).update(req)
+            return grouped
+
+        before_locations = {location(p) for p in before.get("schema_nodes", set())}
+        before_required = unconditional_required(before)
+        for loc, required in sorted(unconditional_required(after).items()):
+            if loc not in before_locations:
                 continue
-            for prop in sorted(required - before.get("required", {}).get(path, set())):
-                report(f"`{name}` property `{path}.{prop}` newly required")
+            for prop in sorted(required - before_required.get(loc, set())):
+                report(f"`{name}` property `{loc}.{prop}` newly required")
     return found
 
 
