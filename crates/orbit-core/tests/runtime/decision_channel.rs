@@ -2165,3 +2165,59 @@ fn a_channel_requiring_dkim_refuses_a_submission_without_a_raw_message() {
     assert_eq!(answered.state, DecisionRequestState::Answered);
     assert_eq!(fx.status(&task), TaskStatus::Backlog);
 }
+
+/// The decision-channel store holds every channel's key, so an agent sandbox
+/// masks it; on Linux a sentinel stands in for the directory. A nested
+/// `orbit` must refuse every channel read and write there, not read the
+/// sentinel as "no channel registered" or register into it [ORB-19338].
+#[test]
+fn a_masked_decision_channel_store_refuses_instead_of_reading_as_empty() {
+    let fx = fixture();
+    fx.register();
+    let (_task, request) = fx.blocked_task_with_request();
+    let token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &request.id)
+        .unwrap();
+    let store = fx.global.join("state/decision-channels");
+    let sentinel = store.join(orbit_core::runtime::plugin::sandbox_mask::PLUGIN_MASK_SENTINEL_FILE);
+    std::fs::write(&sentinel, b"masked").unwrap();
+    let before = std::fs::read(store.join("channels.json")).unwrap();
+
+    let refusals = [
+        fx.runtime.list_decision_channels().map(|_| ()).unwrap_err(),
+        fx.runtime
+            .register_decision_channel("sms", HUMAN, PLUGIN, vec![SENDER.to_string()])
+            .map(|_| ())
+            .unwrap_err(),
+        fx.runtime
+            .rotate_decision_channel_key(CHANNEL)
+            .map(|_| ())
+            .unwrap_err(),
+        fx.runtime
+            .mint_decision_token(CHANNEL, &request.id)
+            .map(|_| ())
+            .unwrap_err(),
+        fx.digest(Fixture::plugin_caller()).map(|_| ()).unwrap_err(),
+        fx.submit(&request, "1", &token, Fixture::plugin_caller())
+            .map(|_| ())
+            .unwrap_err(),
+    ];
+    for error in refusals {
+        assert!(
+            error
+                .to_string()
+                .contains("decision channel store is not visible from an agent sandbox"),
+            "{error}"
+        );
+    }
+    assert_eq!(std::fs::read(store.join("channels.json")).unwrap(), before);
+    assert_eq!(
+        fx.status(&request.task_id),
+        TaskStatus::Blocked,
+        "nothing was applied"
+    );
+
+    std::fs::remove_file(&sentinel).unwrap();
+    assert_eq!(fx.runtime.list_decision_channels().unwrap().len(), 1);
+}

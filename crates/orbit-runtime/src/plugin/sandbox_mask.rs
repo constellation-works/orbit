@@ -1,25 +1,27 @@
-//! The agent sandbox's mask over plugin state and the plugin secret store
-//! (design `docs/design/plugins/2_agent_call_broker.md` §6).
+//! The agent sandbox's mask over plugin state, the plugin secret store and
+//! the decision-channel key store (design
+//! `docs/design/plugins/2_agent_call_broker.md` §6).
 //!
-//! A host that sandboxes an agent hides `<global_root>/state/plugins/` and
-//! `<global_root>/state/plugin-secrets/` from it, for reads and writes. On
+//! A host that sandboxes an agent hides `<global_root>/state/plugins/`,
+//! `<global_root>/state/plugin-secrets/` and
+//! `<global_root>/state/decision-channels/` from it, for reads and writes. On
 //! Linux Bubblewrap binds a read-only sentinel directory over each tree; on
-//! macOS the agent profile denies both trees. Agent plugin calls reach the
+//! macOS the agent profile denies every tree. Agent plugin calls reach the
 //! backend through the run's broker instead, which runs on the host. Sandboxed
 //! agent launches also mask SSH control sockets resolved from the caller's
 //! home, independently of the configured plugin root.
 //!
 //! A nested `orbit` recognizes the mask before it reads or spawns anything:
 //! the sentinel file on Linux, a permission error on the tree on macOS. It
-//! then never runs a plugin call in-process, and the secret store never reads
-//! a masked tree as "nothing set".
+//! then never runs a plugin call in-process, and neither the secret store nor
+//! the decision-channel store reads a masked tree as "nothing set".
 
 use std::io;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 
-use super::paths::{plugin_secret_store_dir, plugin_state_root};
+use super::paths::{decision_channel_store_dir, plugin_secret_store_dir, plugin_state_root};
 
 /// The directory Bubblewrap binds over each masked tree, relative to the
 /// global root. It sits in the broker's host-owned root, which no agent
@@ -29,23 +31,39 @@ pub const PLUGIN_MASK_SENTINEL_DIR: &str = "state/plugin-broker/masked";
 /// plugin tree means the tree is the sentinel, not the host's directory.
 pub const PLUGIN_MASK_SENTINEL_FILE: &str = ".orbit-brokered";
 
-const SENTINEL_TEXT: &str = "Plugin state and secrets are not visible from an Orbit agent \
-                             sandbox; plugin calls from the agent run on the host.\n";
+const SENTINEL_TEXT: &str = "Plugin state, plugin secrets and decision-channel keys are not \
+                             visible from an Orbit agent sandbox; plugin calls from the agent \
+                             run on the host.\n";
 
-/// The trees an agent sandbox masks.
-pub fn plugin_masked_trees(global_root: &Path) -> [PathBuf; 2] {
+/// The trees an agent sandbox masks: plugin state, the plugin secret store
+/// and the decision-channel store, whose registrations carry each channel's
+/// token key.
+pub fn plugin_masked_trees(global_root: &Path) -> [PathBuf; 3] {
     [
         plugin_state_root(global_root),
         plugin_secret_store_dir(global_root),
+        decision_channel_store_dir(global_root),
     ]
 }
 
 /// Whether this process runs inside an agent sandbox that masks plugin state
 /// and secrets under `global_root`.
+///
+/// Only the two plugin trees answer this: it is what sends plugin calls to
+/// the broker, and a hidden decision-channel store says nothing about that.
 pub fn plugin_trees_masked(global_root: &Path) -> bool {
-    plugin_masked_trees(global_root)
-        .iter()
-        .any(|tree| tree_masked(tree))
+    [
+        plugin_state_root(global_root),
+        plugin_secret_store_dir(global_root),
+    ]
+    .iter()
+    .any(|tree| tree_masked(tree))
+}
+
+/// Whether the decision-channel store under `global_root` is hidden from this
+/// process, so a read must refuse rather than see no registered channel.
+pub fn decision_channel_store_masked(global_root: &Path) -> bool {
+    tree_masked(&decision_channel_store_dir(global_root))
 }
 
 /// Whether `tree` is hidden from this process: the Linux sentinel stands in
@@ -80,8 +98,8 @@ pub struct PreparedPluginMask {
     pub trees: Vec<PathBuf>,
 }
 
-/// Create both masked trees (`0700`) and the sentinel directory with its file,
-/// then return their physical paths.
+/// Create every masked tree (`0700`) and the sentinel directory with its
+/// file, then return their physical paths.
 ///
 /// Bubblewrap can only mount over a path that already exists, so the host
 /// creates what is missing before the agent starts. Every directory on the way

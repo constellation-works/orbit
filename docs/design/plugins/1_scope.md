@@ -839,9 +839,11 @@ become **readable**. Writable is a named inventory, never the roots:
 `mcp-callers.toml`, `clock.toml`, and the workspace's `plugins.yaml`, `routines/` and
 `auto_tasks/` stay read-only.
 
-**Unreadable trees.** `state/plugin-callbacks/`, `plugins/.grants/`, `state/plugins/` and
-`state/plugin-secrets/` have a broad read deny for every plugin child, regardless of manifest
-grants. On macOS, denied ancestors of an allowed state tree or single file admit metadata reads
+**Unreadable trees.** `state/plugin-callbacks/`, `plugins/.grants/`, `state/plugins/`,
+`state/plugin-secrets/` and core's decision-channel store `state/decision-channels/` have a
+broad read deny for every plugin child, regardless of manifest grants. The last keeps every
+channel's token key; a channel's bound plugin receives its own key only as `channel_key` in
+`context.secrets`, so nothing in it is granted back. On macOS, denied ancestors of an allowed state tree or single file admit metadata reads
 for path traversal, but no directory listing or content reads. Each child gets back exactly its
 own session record and own grant witness (single files), and its
 own `state/plugins/<ns>` (`{{plugin_state}}`, a whole tree); nothing in the secret store is
@@ -852,9 +854,10 @@ credential a plugin keeps in `{{plugin_state}}` is readable by that plugin alone
 dropped from the profile with a warning; no grant re-allows it. Writing `{{plugin_state}}`
 still needs an `fs.write` root there and the `fs` grant (§4.1 admission is unchanged). This is the inventory the agent sandbox grants a nested Orbit
 (`append_linux_runtime_write_roots` in `orbit-core`); widening it is a security decision
-[ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. Agent sandboxes also deny `state/plugins/`
-and `state/plugin-secrets/` for reads and writes: on Linux a read-only sentinel directory is
-bound over each tree, on macOS the profile ends with a deny for both. A backend an agent calls
+[ORB-12777] [ORB-12789] [ORB-12798] [ORB-12801]. Agent sandboxes also deny `state/plugins/`,
+`state/plugin-secrets/` and `state/decision-channels/` for reads and writes: on Linux a
+read-only sentinel directory is bound over each tree, on macOS the profile ends with a deny
+for each. A backend an agent calls
 is spawned by the run's broker on the host, outside that mask
 ([2_agent_call_broker.md](./2_agent_call_broker.md) §6). `plugins/`, `plugins/.grants/` and
 `state/plugin-callbacks/` are not masked. The witness under `plugins/` stays read-only

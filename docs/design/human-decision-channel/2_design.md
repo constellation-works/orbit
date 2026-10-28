@@ -1,8 +1,8 @@
 ---
 title: "Human decision channel — Design"
 owner: claude
-last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_updated: 2026-10-27
+last_validated: 2026-10-27
 status: Draft
 feature: human-decision-channel
 doc_role: design
@@ -209,6 +209,21 @@ a registration epoch). `orbit decision channel list` shows registrations.
 Registering requires the operator surface — it is refused from an agent envelope
 and from any plugin callback, so no running code can mint itself a human.
 
+The store is one file, `<global_root>/state/decision-channels/channels.json`,
+written through a staged file in the same directory, and every registration in it
+carries its channel's token key (§4). The directory is therefore a host secret
+like the plugin secret store: every plugin child is denied reading it, whatever it
+was granted (`orbit_tools` grants read access to the global root), and every
+sandboxed agent launch masks it for reads and writes, created before launch so a
+later registration stays hidden ([plugins](../plugins/1_scope.md) §4.3,
+[policy sandbox](../policy-sandbox/2_design.md)). Core refuses a hidden store as
+not visible rather than reading it as "no channel registered". Every channel
+read and write, the digest and submission included, runs where the store is
+visible: the operator CLI, or a callback from a backend the host runs outside the
+plugin sandbox. A confined backend's `orbit.decision.digest` and
+`orbit.decision.submit` callbacks are refused; submission never worked there,
+because a confined child cannot open the store lock.
+
 ### 3.3 The submission tool and the apply step
 
 One new governed operation, `orbit.decision.submit`, joins `GOVERNED_OPERATIONS`
@@ -259,7 +274,9 @@ credential, in layers; every layer must pass.
    `context.secrets`, never in argv, env, logs, or the manifest —
    [plugins](../plugins/1_scope.md) §3) *and* mirrored to core's channel store at
    registration, because core verifies (§3.3 step 4) and must not take the
-   plugin's word for it. Rotation: `orbit decision channel rotate-key email`
+   plugin's word for it. The bound plugin's only copy is `context.secrets`; the
+   store is denied to every plugin child and masked from agents (§3.2), so the
+   mirror never reaches another plugin. Rotation: `orbit decision channel rotate-key email`
    bumps `epoch`, invalidating every outstanding token; open requests are
    re-mailed by the next digest under fresh tokens. Routine rotation is an
    operator habit the runbook sets (suggested: on any suspicion, and at least

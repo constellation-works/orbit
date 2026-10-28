@@ -631,14 +631,15 @@ granting `unsandboxed`.
 ### 6.1 What is denied
 
 `<global_root>/state/plugins/` and `<global_root>/state/plugin-secrets/`, for reads and writes,
-on both platforms. The same mask also hides `clock.env`
+on both platforms. The same mask also hides core's decision-channel store
+`<global_root>/state/decision-channels/`, which keeps every channel's token key, and `clock.env`
 ([policy-sandbox design](../policy-sandbox/2_design.md)). Other nested-`orbit` reads under the
 global root are unchanged. That includes `plugins/`, `plugins/.grants/` (the loader verifies
 witnesses when it builds the tool surface) and `state/plugin-callbacks/`.
 
 ### 6.2 Mechanics
 
-- **Linux (Bubblewrap).** The host creates both directories if they are missing (mode `0700`)
+- **Linux (Bubblewrap).** The host creates every masked directory if it is missing (mode `0700`)
   and a read-only sentinel directory `<global_root>/state/plugin-broker/masked/` that holds
   one file, `.orbit-brokered`. The Bubblewrap plan then adds `--ro-bind <sentinel> <tree>` for
   each tree. It does this after every policy mount, so no earlier grant can expose the real
@@ -646,7 +647,7 @@ witnesses when it builds the tool surface) and `state/plugin-callbacks/`.
   `proc.spawn` children. Mounts that Bubblewrap creates cannot be undone by a
   process that has no capabilities, and a nested user namespace receives them locked.
 - **macOS (`sandbox-exec`).** The agent profile gets `(deny file-read* file-write*
-  (subpath <tree>))` for both trees, compiled from their physical paths (the same
+  (subpath <tree>))` for every tree, compiled from their physical paths (the same
   `/private/var` rule the plugin profile uses) after every allow, so the deny is the last
   match.
 

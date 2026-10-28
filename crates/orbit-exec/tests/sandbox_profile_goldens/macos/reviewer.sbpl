@@ -80,6 +80,8 @@
 (deny network-outbound (remote unix-socket (subpath "<HOME>/.orbit/state/plugins")))
 (deny file-read* file-write* (subpath "<HOME>/.orbit/state/plugin-secrets"))
 (deny network-outbound (remote unix-socket (subpath "<HOME>/.orbit/state/plugin-secrets")))
+(deny file-read* file-write* (subpath "<HOME>/.orbit/state/decision-channels"))
+(deny network-outbound (remote unix-socket (subpath "<HOME>/.orbit/state/decision-channels")))
 (deny file-read* file-write* (subpath "<HOME>/.orbit/ssh"))
 (deny network-outbound (remote unix-socket (subpath "<HOME>/.orbit/ssh")))
 (deny file-read* file-write* (literal "<HOME>/.orbit/clock.env"))

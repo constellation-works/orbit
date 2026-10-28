@@ -67,6 +67,7 @@
 (deny file-read* (subpath "<HOME>/.orbit/plugins/.grants"))
 (deny file-read* (subpath "<HOME>/.orbit/state/plugins"))
 (deny file-read* (subpath "<HOME>/.orbit/state/plugin-secrets"))
+(deny file-read* (subpath "<HOME>/.orbit/state/decision-channels"))
 (allow file-read-metadata (literal "<HOME>/.orbit/state/plugins"))
 (allow file-read* (subpath "<HOME>/.orbit/state/plugins/demo"))
 (deny network*)
