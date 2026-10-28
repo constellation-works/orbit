@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Overview
 owner: codex
-last_updated: 2026-10-20
-last_validated: 2026-10-24
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 stage: shipped
 next: "—"
@@ -114,14 +114,14 @@ authorization decision [ORB-12564]. `caller_ip` is likewise observational.
 
 ## Ownership
 
-| Concern | Owner |
-|---|---|
-| MCP framing, tool discovery, server identity context, TCP listener, direct SSH stdio proxy, and the federated mux | `orbit-mcp` |
-| Host identity and workspace-registry state | `orbit-registry` |
-| Server composition and server-local runtime selection | `orbit-cli` |
-| Domain validation, capability enforcement, sandboxing, audit persistence, and runtime authorization | `orbit-core` (with the session envelope composed by `orbit-mcp`) |
-| Canonical builtin tool definitions | `orbit-tools` |
-| HTTP UI and its own local-forward SSH connection | `orbit-web` |
+| Concern | Owner | Landed task evidence |
+|---|---|---|
+| MCP framing, tool discovery, server identity context, TCP listener, direct SSH proxy, and federated mux | `orbit-mcp` | [ORB-10806] added the listener; [ORB-15800] added SSH connection reuse; [ORB-11011] implemented the mux |
+| Host identity and workspace-registry state | `orbit-registry` | [ORB-17223] made discovery exclude removed checkouts |
+| Server composition and server-local runtime selection | `orbit-cli` | [ORB-17094] made local server modes honor the selected Orbit root |
+| Domain validation, capability enforcement, sandboxing, audit persistence, and runtime authorization | `orbit-core` (with the session envelope composed by `orbit-mcp`) | [ORB-12564] replaced destination caller policy with argv authority |
+| Canonical builtin tool definitions | `orbit-tools` | [ORB-18559] added policy-filtered recovery hints without aliases |
+| HTTP UI and its own local-forward SSH connection | `orbit-web` | Separate from MCP |
 
 `orbit-web` is a separate application surface. Its HTTP tunnel is not an MCP
 transport and is not reused by MCP.
@@ -152,9 +152,27 @@ their own scope. In direct mode it reports active logical workspaces with a
 registered checkout on the accepting machine; federated mode replaces that
 response
 with live descriptors for the accepting machine and configured destinations.
+[ORB-11015] implemented selector routing, [ORB-11016] registered federated serve,
+and [ORB-14449] added task-ID prefix routing. These are shipped extensions to
+direct v1; the document's Draft status does not mean they await implementation.
 
 The executable contract and validation map live in
 [`references/conformance-v1.yaml`](./references/conformance-v1.yaml). Detailed
 request flow is in [`2_design.md`](./2_design.md), future work in
 [`3_vision.md`](./3_vision.md), and the current decision set in
 [`4_decisions.md`](./4_decisions.md).
+
+## Task References
+
+- [ORB-10806] added the separate TCP listener command.
+- [ORB-11011] implemented the federated MCP mux.
+- [ORB-11015] routed workspace calls by host-qualified selector.
+- [ORB-11016] registered federated serve and documented its implementation.
+- [ORB-12564] made SSH destinations serve argv authority and removed caller authorization files.
+- [ORB-14449] routed id-only task calls by task-ID prefix.
+- [ORB-15800] added SSH connection reuse for direct and federated sessions.
+- [ORB-17094] made local MCP server modes honor root selection.
+- [ORB-17223] excluded removed checkouts from workspace discovery.
+- [ORB-18559] added policy-filtered recovery hints for unknown builtin tool names.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

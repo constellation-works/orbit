@@ -113,11 +113,12 @@ Where each feature in `docs/design/` stands, from the `stage` and `next` fields 
 entry doc. Stages run idea, designing, building, shipped, with parked for work on hold.
 Live task progress is in Orbit; this board records what the feature lead last set.
 
-### Building (7)
+### Building (8)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Backlog Forecast](./design/backlog-forecast/1_scope.md) | Review residual phases, shadow resource-fit counterfactuals, follower capacity and richer calibration remain open after the six v2 factors. | claude |
+| [Distributed Drain](./design/distributed-drain/1_overview.md) | Implement admission receipt compaction and accounting (ORB-19424). | claude |
 | [Experiments](./design/experiments/1_scope.md) | Raise a concluded-or-due experiment through the human decision channel (open; decision requests are task-bound today) | claude |
 | [Explore Brief](./design/explore-brief/1_scope.md) | Finish the remaining trial prerequisites before starting the three-arm trial | claude |
 | [Human Decision Channel](./design/human-decision-channel/1_scope.md) | Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446 | claude |
@@ -136,7 +137,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Visual Review](./design/visual-review/1_scope.md) | Daniel accepts or amends this design; implementation tasks are filed after acceptance | claude |
 
-### Shipped (35)
+### Shipped (34)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -149,7 +150,6 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Automation Triggers](./design/automation-triggers/1_overview.md) | — | codex |
 | [Crew Credentials](./design/crew-credentials/1_scope.md) | — | claude |
 | [Crew Performance](./design/crew-performance/1_scope.md) | Operator picks a workflow.crew_performance default from the shadow share report | claude |
-| [Distributed Drain](./design/distributed-drain/1_overview.md) | — | claude |
 | [Distributions](./design/distributions/1_scope.md) | — | claude |
 | [Executors](./design/executors/4_decisions.md) | — | claude |
 | [Federated MCP](./design/federated-mcp/1_overview.md) | — | grok |

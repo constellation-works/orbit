@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Design
 owner: codex
-last_updated: 2026-10-20
-last_validated: 2026-10-26
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 feature: mcp-bridge
 doc_role: design
@@ -115,7 +115,8 @@ ssh -T <ssh-host> orbit mcp serve --remote-caller-machine-id <audit-label>
 so the local proxy never sees or rewrites an MCP message. SSH handles transport,
 host verification, encryption, and access to the remote shell.
 
-The direct proxy and federated destination sessions share OpenSSH connections.
+The direct proxy and federated destination sessions share OpenSSH connections,
+implemented by [ORB-15800].
 Orbit supplies a generated `-F` config under `~/.orbit/ssh/` that includes
 `~/.ssh/config` and `/etc/ssh/ssh_config` before setting `ControlMaster auto`,
 `ControlPersist 60`, and a `ControlPath` based on OpenSSH's `%C` connection hash.
@@ -166,7 +167,8 @@ refused unless the operator asked for it explicitly, because the socket
 authenticates no client: local processes can reach its agent tool surface even
 when it binds loopback. A browser page can send HTTP requests to loopback, so
 the listener closes a connection unless its first byte is `{`. This check runs
-before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body.
+before rmcp can skip HTTP headers and dispatch JSON-RPC lines in the body
+([ORB-12929] closed that browser-originated request path).
 rmcp buffers a message until its newline with no ceiling of its own, so the
 listener also closes a session whose single message exceeds 8 MiB
 (`DEFAULT_MAX_MCP_MESSAGE_BYTES`) rather than let an unauthenticated peer grow
@@ -197,7 +199,7 @@ On the accepting server:
   logical workspaces with a checkout registered on that machine, including
   locally registered replicas. Discovery validates checkout roots against the
   filesystem in memory: a removed checkout is excluded immediately, without
-  persisting its status to the registry;
+  persisting its status to the registry ([ORB-17223] fixed stale discovery);
 - workspace-scoped tools accept a stable workspace selector from the call or
   initialization metadata;
 - the selector is resolved to a server-local checkout;
@@ -233,6 +235,7 @@ policy; runtime dispatch also filters disabled tools. Operator-only, inactive,
 hidden and ungranted candidates never supply hints. Ambiguous or unmatched names
 keep the original message. These hints register no aliases and preserve the
 not-found code, original requested name and audit failure classification.
+[ORB-18559] implemented these recovery hints.
 
 The adapter-owned UI
 presentation entrypoints are a separate wrapper: opening the control center or
@@ -294,3 +297,13 @@ contract to source and focused tests. The important behavioral gates are:
 - server identity and SSH caller-IP parsing;
 - discovery and unknown-name denial through one Core audit boundary; and
 - crate dependency-direction checks.
+
+## Task References
+
+- [ORB-12564] made SSH destinations serve argv authority and removed caller authorization files.
+- [ORB-12929] refused HTTP-framed requests before the listener can dispatch JSON-RPC bodies.
+- [ORB-15800] added SSH connection reuse for direct and federated sessions.
+- [ORB-17223] excluded removed checkouts from workspace discovery.
+- [ORB-18559] added policy-filtered recovery hints for unknown builtin tool names.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

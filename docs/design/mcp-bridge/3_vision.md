@@ -1,8 +1,8 @@
 ---
 title: Orbit MCP — Vision
 owner: codex
-last_updated: 2026-10-20
-last_validated: 2026-10-25
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 feature: mcp-bridge
 doc_role: vision
@@ -63,7 +63,8 @@ That rule continues to describe **current direct behavior** in
 [`2_design.md`](./2_design.md); the federated namespace follows the separate
 exception described below.
 
-The implemented federated MCP surface is an **explicit exception** to those v1
+The federated mux [ORB-11011] implemented and [ORB-11016] registered is an
+**explicit exception** to those v1
 no-relay / byte-transparent rules, **for the federated namespace only**. A mux
 in front of operator-configured destinations routes workspace-scoped calls by
 host-qualified selector. Id-only calls to id-routed task tools instead follow
@@ -72,9 +73,8 @@ SSH stdio to one chosen host is unchanged.
 
 The exception does **not** admit general workspace-owner discovery from
 repository identity, replication, relays-as-product, or fleet placement. Those
-stay out. The contract is
-[federated-mcp](../federated-mcp/specs/federated-workspace-mcp.md)
-([ORB-11009], citing [ORB-11008]).
+stay out. The [federated-mcp contract](../federated-mcp/specs/federated-workspace-mcp.md)
+was written by [ORB-11009] from the policy [ORB-11008] recorded.
 
 ## 6. Evaluation gates
 
@@ -99,6 +99,9 @@ transport and kernel contract is [`references/conformance-v1.yaml`](./references
 ## Task References
 
 - [ORB-11008] recorded federated MCP policy that this vision now excepts from v1 no-relay
-- [ORB-11009] admitted the federated-namespace mux exception in §5 without claiming it is implemented
+- [ORB-11009] wrote the federated contract and admitted its namespace-specific mux exception.
+- [ORB-11011] implemented the federated MCP mux.
+- [ORB-11016] registered federated serve and documented its implementation.
+- [ORB-14449] added task-ID prefix routing for id-only calls.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
