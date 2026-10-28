@@ -31,6 +31,12 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
+  # Symbol tables and names occupied 103 MiB of the 268 MiB CLI without
+  # debuginfo. Strip them to reduce archive packing, transfer and extraction
+  # on the critical path. Tests keep their compiled-in names and panic locations;
+  # coverage and release builds use their own workflows and profile settings.
+  CARGO_PROFILE_DEV_STRIP: "symbols"
+  CARGO_PROFILE_TEST_STRIP: "symbols"
   # [ORB-11390] The protected SSH process-metadata regression may self-skip in
   # restricted local/agent sandboxes, but ubuntu-latest must exercise it.
   ORBIT_REQUIRE_PROTECTED_SSH_REGRESSION: "1"
