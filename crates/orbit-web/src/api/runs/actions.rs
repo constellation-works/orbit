@@ -613,6 +613,9 @@ fn readiness_task_ids(raw: Option<&str>) -> Result<Vec<String>, String> {
 /// (the same snapshot `orbit run readiness` prints) rather than a
 /// dashboard-local recomputation of eligibility. `task` explains exactly
 /// those tasks, as `orbit run readiness <id>…` does; an unknown id is a 400.
+/// `also_task` adds one full entry beside the bounded list. If that task has
+/// disappeared from the workspace, the response keeps the bounded snapshot
+/// and reports its id in `detail_unavailable`.
 pub(in crate::api) async fn auto_drain_readiness(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
@@ -641,13 +644,22 @@ pub(in crate::api) async fn auto_drain_readiness(
             &allowed_crews,
         )?;
         if !also_task_ids.is_empty() {
-            let detail = runtime.workspace_auto_readiness(
+            match runtime.workspace_auto_readiness(
                 &also_task_ids,
                 query.concurrency,
                 query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
                 &allowed_crews,
-            )?;
-            payload["detail_tasks"] = detail["tasks"].clone();
+            ) {
+                Ok(detail) => payload["detail_tasks"] = detail["tasks"].clone(),
+                Err(orbit_core::OrbitError::InvalidInput(_)) => {
+                    payload["detail_tasks"] = json!([]);
+                    payload["detail_unavailable"] = json!({
+                        "task_id": also_task_ids[0],
+                        "reason": "task_not_found",
+                    });
+                }
+                Err(error) => return Err(error),
+            }
         }
         payload["start_options"] = drain_start_options(
             &runtime,
