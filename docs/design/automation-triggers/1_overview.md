@@ -1,7 +1,7 @@
 ---
 title: Automation Triggers — Overview
 owner: codex
-last_updated: 2026-10-09
+last_updated: 2026-10-27
 last_validated: 2026-10-27
 status: Draft
 stage: shipped
@@ -12,7 +12,7 @@ type: design
 summary: Proposed bounded state-driven triggers for routines and auto-tasks with durable work identity and honest coverage.
 tags: [automation-triggers, routines, auto-tasks, scheduling]
 paths: ["crates/orbit-core/src/application/routines/**", "crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/application/task/pilot/**"]
-related_features: [routines, auto-tasks, review-gate]
+related_features: [routines, auto-tasks, review-gate, condition-triggers]
 related_artifacts: [ORB-11315, ORB-11295, ORB-11314, ORB-11316]
 ---
 
@@ -47,8 +47,11 @@ and accepted coverage separate facts.
 
 Goals are predictable bounded work, explainable deferrals, recoverable batches,
 explicit authority, and fewer mechanical orchestration turns. Non-goals are a
-generic event bus, user expressions/scripts, arbitrary transition subscriptions,
-cross-host failover, automatic engineering decisions, or a second job scheduler.
+generic event bus, user scripts, arbitrary transition subscriptions, cross-host
+failover, automatic engineering decisions, or a second job scheduler. User
+expressions were a non-goal too. [Condition triggers](../condition-triggers/1_scope.md)
+reverse that for type-checked, side-effect-free predicates only, as a `condition`
+kind beside the typed kinds; scripts and the other non-goals stand.
 Delivery-triggered review is not a replacement for required PR review or QA.
 
 ## 2. Core Concepts
