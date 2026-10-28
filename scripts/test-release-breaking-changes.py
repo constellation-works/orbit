@@ -518,6 +518,20 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                  "required": ["value"]},
             ),
             (
+                "const matching an integer type still overlaps",
+                {"type": "object", "properties": {"value": {"type": "integer"}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"const": 42}},
+                 "required": ["value"]},
+            ),
+            (
+                "integral numeric const matches an existing number type",
+                {"type": "object", "properties": {"value": {"const": 42.0}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"type": "number"}},
+                 "required": ["value"]},
+            ),
+            (
                 "JSON numeric enum values compare mathematically",
                 {"type": "object", "properties": {"value": {"enum": [1]}},
                  "required": ["value"]},
@@ -602,6 +616,46 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_type_disjoint_const_oneof_alternative_is_additive(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema.pop("anyOf", None)
+        schema.pop("oneOf", None)
+        schema["type"] = "object"
+        schema["properties"] = {"value": {"oneOf": [{"type": "string"}]}}
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add string oneOf branch [ORB-72] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["properties"]["value"]["oneOf"].append({"const": 42})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Append const oneOf branch [ORB-73] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        with self.subTest(orientation="new const beside existing string"):
+            self.assertEqual(
+                (report["bump"], report["next_version"], self.signals(report)),
+                ("patch", "0.35.1", set()),
+            )
+
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["properties"]["value"]["oneOf"] = [{"const": 42}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Set const oneOf baseline [ORB-74] (#3)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["properties"]["value"]["oneOf"].insert(0, {"type": "string"})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Insert string oneOf branch [ORB-75] (#4)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        with self.subTest(orientation="new string beside existing const"):
+            self.assertEqual(
+                (report["bump"], report["next_version"], self.signals(report)),
+                ("patch", "0.35.1", set()),
+            )
 
     def test_removed_input_mcp_alternative_decides_minor(self):
         # Removing the branch that accepted mode-only requests rejects those
