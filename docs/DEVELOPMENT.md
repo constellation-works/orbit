@@ -517,10 +517,15 @@ phases.
 
 The workflow sets `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to
 `0`, so the job's dev and test builds, dependencies included, carry no
-debuginfo. Nothing in those jobs reads it: panic messages keep their source
-locations, and no job sets `RUST_BACKTRACE`. Coverage runs in its own workflow
-with line tables. A local build keeps the `[profile.dev]` line tables from
-`Cargo.toml`.
+debuginfo. It also sets `CARGO_PROFILE_DEV_STRIP` and
+`CARGO_PROFILE_TEST_STRIP` to `symbols`: symbol tables and symbol names still
+occupied 103 MiB of a 268 MiB CLI binary without debuginfo. Stripping at link
+time reduces the binaries that the test build archives, the transfer repacks
+and every shard extracts. Both profiles use the same setting so Cargo can
+reuse their artifacts. Tests keep their compiled-in names and panic source
+locations; no job sets `RUST_BACKTRACE`. Coverage runs in its own workflow
+with line tables, and release builds retain their own profile settings. A
+local build keeps the `[profile.dev]` line tables from `Cargo.toml`.
 `repository-guards` runs from the start of the pool and the exclusive lane to
 the later of their joins; in full mode that includes the overlapped build.
 These are wall seconds at Bash's one-second resolution with
