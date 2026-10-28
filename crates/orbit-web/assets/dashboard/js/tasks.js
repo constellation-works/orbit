@@ -173,6 +173,23 @@ const FIX_PR_FEEDBACK_MS = 20000;
 // Row shortcuts (Approve on proposed or review tasks, Ship on backlog): the
 // pending or failed state of each, keyed by task id, so a refresh repaints it.
 let quickActionState = new Map();
+// A failed row action stays visible long enough to be read, then clears
+// itself: about three minutes, after which the row loses `has-quick-error`
+// and its layout recovers.
+const QUICK_ACTION_ERROR_MS = 180_000;
+
+function pruneQuickActionErrors(now = Date.now()) {
+  let pruned = false;
+  for (const [id, state] of quickActionState) {
+    if (!state || state.kind !== "error") continue;
+    const at = typeof state.at === "number" ? state.at : 0;
+    if (now - at >= QUICK_ACTION_ERROR_MS) {
+      quickActionState.delete(id);
+      pruned = true;
+    }
+  }
+  return pruned;
+}
 
 function taskDispatchIdentity(task) {
   return `${task.workspace_id || getWorkspace() || ''}:${task.id}`;
@@ -6113,7 +6130,7 @@ function quickActionSignature(task) {
   const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
   const navigable = task.job_run_navigable === false ? "0" : "1";
   const pullRequest = pullRequestLink(task);
-  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}` : ""}`;
+  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}:${state.at || ""}` : ""}`;
 }
 
 function summaryExecutionLocation(machine) {
@@ -6231,13 +6248,17 @@ function buildQuickAction(task, context) {
   return cell;
 }
 
-function buildQuickActionError(task) {
+function buildQuickActionError(task, context) {
   const state = quickActionState.get(task.id);
   if (!state || state.kind !== "error") return null;
+  if (typeof state.at === "number" && Date.now() - state.at >= QUICK_ACTION_ERROR_MS) {
+    quickActionState.delete(task.id);
+    return null;
+  }
 
   const text = state.text;
   const runMatch = text.match(/\b(jrun-[a-zA-Z0-9_\-\.]+)\b/);
-  let wrap;
+  let message;
   if (runMatch) {
     const runId = runMatch[1];
     const idx = text.indexOf(runId);
@@ -6246,14 +6267,32 @@ function buildQuickActionError(task) {
     const link = el("a", { class: "task-quick-error-link", text: runId, title: `Open run ${runId}` });
     link.href = runHref(runId);
     link.addEventListener("click", (e) => e.stopPropagation());
-    wrap = el("div", { class: "task-quick-error", title: "" }, [
+    message = el("span", { class: "task-quick-error-message" }, [
       before,
       link,
       after,
     ]);
   } else {
-    wrap = el("div", { class: "task-quick-error", text, title: "" });
+    message = el("span", { class: "task-quick-error-message", text });
   }
+  const dismiss = el("button", {
+    class: "task-quick-error-dismiss",
+    text: "×",
+    title: "Dismiss this error",
+    "aria-label": `Dismiss error for ${task.id}`,
+  });
+  dismiss.type = "button";
+  dismiss.addEventListener("click", (event) => {
+    event.stopPropagation();
+    if (quickActionState.get(task.id) === state) {
+      quickActionState.delete(task.id);
+      renderTasks(taskList(context || paneContext), context || paneContext);
+    }
+  });
+  const wrap = el("div", { class: "task-quick-error", title: "" }, [
+    message,
+    dismiss,
+  ]);
   wrap.setAttribute("role", "status");
   wrap.setAttribute("aria-live", "assertive");
   stopRowInteraction(wrap);
@@ -6311,8 +6350,9 @@ async function runQuickAction(task, kind, context) {
     if (!visit.isCurrent()) return;
     quickActionState.set(task.id, { kind: "error", text: dispatched
       ? `${kind === "ship" ? "Ship" : "Approval"} was accepted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
-      : `${kind} failed: ${error.message || String(error)}` });
+      : `${kind} failed: ${error.message || String(error)}`, at: Date.now() });
     renderTasks(taskList(context), context);
+    scheduleFeedbackExpiry(quickActionState, task.id, context, QUICK_ACTION_ERROR_MS);
   }
 }
 
@@ -6468,6 +6508,9 @@ export function renderTasks(tasks, context) {
   const body = $("tasks-body");
   if (!body) return;
   paneContext = context;
+  // Expired row-action errors clear on the next render (the regular refresh
+  // included), so the row recovers its layout without operator action.
+  pruneQuickActionErrors();
   // j/k move like Down/Up, and while the pane is open it follows the row the
   // keyboard lands on.
   enableRovingRows(body, { letterKeys: true, onMove: followRovingSelection });
@@ -6606,7 +6649,7 @@ export function renderTasks(tasks, context) {
           titleCell,
           tags.length ? el("span", { class: "title-tags" }, tags) : null,
         ]);
-        const quickError = buildQuickActionError(t);
+        const quickError = buildQuickActionError(t, context);
         const statusFeedbackNode = buildFoldedStatusFeedback(t.id, context);
         const statusNote = statusFeedbackNode ? el("div", { class: "task-status-note" }, [statusFeedbackNode]) : null;
         if (statusNote) stopRowInteraction(statusNote);
