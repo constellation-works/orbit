@@ -595,6 +595,58 @@ fn regression_sites_relink_keeps_inherited_sites() {
     );
 }
 
+fn regression_severity_verified_resend_keeps_the_recorded_source() {
+    let fx = Fixture::new();
+    let target = fx.task.clone();
+    let checkout = fx.workspace.parent().unwrap().to_path_buf();
+    for (recorded, source) in [
+        ("filer", SeveritySource::Filer),
+        ("operator", SeveritySource::Operator),
+    ] {
+        let link = |severity_source: &str| {
+            json!({
+                "type": "regression_from", "target": target,
+                "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "high", "severity_source": severity_source}
+            })
+        };
+        let added = fx
+            .runtime
+            .run_tool(
+                "orbit.task.add",
+                json!({
+                    "title": "Hold a rated regression link", "complexity": "low", "model": "codex",
+                    "description": "Regression severity fixture", "workspace": checkout,
+                    "relations": [link(recorded)]
+                }),
+            )
+            .unwrap();
+        let id = added["id"].as_str().unwrap();
+        let stamped = fx.runtime.run_tool(
+            "orbit.task.update",
+            json!({"id": id, "model": "codex", "relations": [link("verified")]}),
+        );
+        assert!(
+            matches!(stamped, Err(OrbitError::InvalidInput(_))),
+            "a {recorded}-rated link re-sent as verified is refused, not stamped"
+        );
+        let stored = fx.runtime.get_task(id).unwrap();
+        let rated = stored
+            .relations
+            .iter()
+            .find_map(|r| r.regression.as_ref())
+            .unwrap();
+        assert_eq!(
+            rated.severity_source, source,
+            "the refused re-send leaves the {recorded} source in place"
+        );
+    }
+}
+
+crate::scenario_table!(
+    regression_severity_write_scenarios,
+    regression_severity_verified_resend_keeps_the_recorded_source,
+);
+
 crate::scenario_table!(
     regression_sites_write_invalid_scenarios,
     regression_sites_invalid_writes_are_rejected,
