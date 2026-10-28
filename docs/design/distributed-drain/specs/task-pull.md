@@ -1,7 +1,8 @@
 ---
 type: design
 summary: Spec for idempotent owner-side task admission, request receipts, execution claims, and lifecycle invariants.
-last_validated: 2026-10-19
+last_validated: 2026-10-28
+last_updated: 2026-10-28
 title: Spec — orbit.task.pull
 owner: claude
 status: Draft
@@ -16,8 +17,11 @@ related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-1
 `orbit.task.pull` creates at most one claim for an intended admission. The owner selects the first
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
-receipt. The internal store foundation now implements admission receipts, claims and replay,
-though tombstone compaction is not yet written. For follower execution, the five protocol
+receipt. The internal store foundation implements admission receipts, claims and replay.
+Operational admission-receipt compaction and storage accounting remain missing, tracked
+by [ORB-19424]: [ORB-15332] removed the unused compactor, and [ORB-17641] removed
+the unused accounting API. The retention requirements below remain the contract.
+For follower execution, the five protocol
 operations — the
 [preflight probe](../2_design.md#41-read-only-admission-probe),
 [receipt lookup](#read-only-receipt-reconciliation), `orbit.task.pull`,
@@ -254,7 +258,7 @@ for a pull drain as for a local one.
    These checks also apply to pull receipt replay; the separate read-only receipt lookup below
    is for reconciliation across configuration/upgrades.
 2. Begin the owner store transaction. Its substrate is the task/reservation commit boundary
-   [ORB-12528]: `with_admission` covers the readiness reads and `commit_task_transition`
+   [ORB-12528]; `with_admission` covers the readiness reads and `commit_task_transition`
    publishes the transition, history, reservation, and dependent coordination rows as one
    durable decision ([design pattern](../../../design-patterns/task_commit_boundary.md)).
    Receipts and claims are its dependent rows; their schema and replay rules are defined here,
@@ -383,7 +387,8 @@ is an advisory read of its original run, even after settlement; it grants no new
 
 For an already accepted handoff, retry and landing share the provider
 base-update proof: exact repository/PR/branches, fresh successful base fetch,
-base ancestry, two exact parents and the computed clean merge tree. The owner
+base ancestry, and a first-parent chain of two-parent base merges whose trees
+equal the clean merge of each hop's parents [ORB-19393]. The owner
 observes the stored acceptance and its original evidence; it never substitutes
 a certificate for the provider head. Initial settlement still requires the
 exact submitted head. Unknown or edited source, a foreign or rewound base,
@@ -425,8 +430,11 @@ run on the old head that no policy requires does not stop the path. The
 workflow scan authenticates path-filtered (`paths` or `paths-ignore`) PR
 workflows but derives no guaranteed contexts from them; they cannot justify
 a base update or prevent a sibling workflow from proving its own emission. The
-inherited-failure and absent-context paths share one durable owner-task
-reservation and absolute deadline across attempts and runs. Reservation
+inherited-failure and absent-context paths use durable owner-task reservations.
+Inherited recovery admits up to three updates per handoff, each onto a distinct
+base, while absent-context refresh and auto-fix retain their one-update limits
+[ORB-19393]. Each landing run keeps its own deadline; an explicit later retry
+does not inherit an already expired deadline. Reservation
 precedes the expected-head provider update; an unknown outcome is observed,
 never repeated. Current effective policy and every exact new-head required and
 owner-owed success gate the ordinary merge. Other conditional/dynamic or incomplete
@@ -853,3 +861,40 @@ transport, and `orbit run auto --pull <selector>` runs the refill loop as the
 `workspace_pull_pipeline` job. A local request the owner refused and holds no
 receipt for closes as `Refused` (a new terminal phase that releases its slot);
 see the caller-side implementation status in design §3.
+
+## Task References
+
+- [ORB-12488] — authored this design folder.
+- [ORB-12495] — added the probe, receipt lookup and claim listing.
+- [ORB-12500] — added published-PR observation and the shared entry-point admission decision.
+- [ORB-12528] — landed the task/reservation commit boundary.
+- [ORB-12616] — made the owner-local claimed leaf executable.
+- [ORB-13625] — enabled follower pull, routed owner coordination and the mutating runtime entry points.
+- [ORB-13895] — prepared [V1 review policy is none](../4_decisions.md#v1-review-policy-is-none) for before-PR review on claims and handoffs.
+- [ORB-13908] — enabled the before-PR review gate on claimed leaves.
+- [ORB-13918] — prevented pull from admitting a task already carried by an owner-local delivery run.
+- [ORB-13941] — filtered pull admission by runnable executor crews and provider availability.
+- [ORB-13992] — narrowed review admission to the captured `review.before_pr`; after-landing review never refuses a pull.
+- [ORB-14192] — bound required review validation evidence to the owner-admitted command list.
+- [ORB-14247] — stopped `no-diff-expected` tasks holding context locks.
+- [ORB-14257] — typed claimed-leaf failure classes; only candidate and task-input failures block, others release within a per-task budget; host failures suppress the host for the window; a claimed PR leaf continues a kept candidate it can fetch.
+- [ORB-14259] — added the verified NoDiff handoff for claimed work.
+- [ORB-14474] — enabled remote admission of no-diff-expected tasks through the NoDiff handoff.
+- [ORB-14684] — made captured baseline commands binding on claimed review settlement.
+- [ORB-14724] — moved candidate discovery outside the exclusive admission section and revalidated inside it.
+- [ORB-14791] — added a verified clean-base checkpoint for claimed no-diff-expected tasks.
+- [ORB-14849] — added before-landing review against the published PR head.
+- [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
+- [ORB-15192] — made before-landing review selectable by executor machine.
+- [ORB-15332] — removed the unused admission compaction helper without changing runtime behavior.
+- [ORB-15514] — reserved owner-admitted wave footprints before leaf dispatch.
+- [ORB-15573] — settled provider refusals as provider holds rather than candidate failures.
+- [ORB-15747] — replayed already-resolved test selectors on the claim host for clean-base native evidence.
+- [ORB-15764] — exempted no-diff-expected claimed deliveries from required validation, matching owner delivery.
+- [ORB-15774] — filtered pull admission by the executor host forecast’s admissible work profiles.
+- [ORB-17304] — ordered pull and owner-local admission against the live executor census (§2, §9).
+- [ORB-17641] — removed the unused admission receipt accounting API.
+- [ORB-19393] — verified base-merge chains, bounded inherited recovery and reconciliation of externally merged handoffs.
+- [ORB-19424] — tracks the missing operational admission receipt compaction and accounting.
+
+> Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

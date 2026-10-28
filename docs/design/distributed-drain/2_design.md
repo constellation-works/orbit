@@ -1,8 +1,8 @@
 ---
 title: Distributed Drain — Design
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-21
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 feature: distributed-drain
 doc_role: design
@@ -55,6 +55,8 @@ executor machine, upserted with each pull receipt and on each pass of the owner'
 live for ten minutes or while its machine holds a claim. Within a band, work only the
 requesting executor can run leads, and among the rest work fewer live executors can run;
 `workflow.admission_affinity` narrows that to a priority (`priority`) or turns it off.
+[ORB-14938] first added owner-relative OS affinity; the census [ORB-17304]
+implemented supersedes that narrower preference.
 
 `orbit.task.pull` is an owner-only `control_plane` tool; its contract is
 [specs/task-pull.md](./specs/task-pull.md). Candidate selection, readiness and footprint
@@ -78,6 +80,13 @@ stored result, never another task; the drain run ID is context, not an idempoten
 - No deletion may let an old ID become a new admission: v1 keeps compact tombstones forever and
   full receipts for unsettled claims, and exposes their counts and bytes. Bounded retention needs a
   protocol that rejects retired namespaces, not a time-based DELETE.
+
+**Implementation gap ([ORB-19424]).** The compaction and accounting requirements above
+remain committed scope. Current admission writes full receipts and can read legacy
+tombstones, but has no operational compactor or receipt-usage diagnostic. [ORB-15332]
+removed the unused `compact_admission` helper; [ORB-17641] removed the unused
+`admission_storage_usage` API. Those cleanups did not record a decision to withdraw
+the requirement. The settled claim-mutation receipt pruning in §3.1 is separate.
 
 The response carries the task, resolved ship inputs, and a **claim handle** (`claim_id`,
 `reservation_id`, reservation expiry, runtime execution machine). A claim identifies one attempt,
@@ -195,7 +204,7 @@ requesting identity's machine id: pull defers the task from every other
 machine with a `Machine requirement:` reason.
 
 **Eligibility.** Pull filters on the executor's host OS and its crews. The OS filter
-[ORB-14005]: each request carries the executor's OS (`AdmissionRequest::os`, protocol revision
+[ORB-14005] added it: each request carries the executor's OS (`AdmissionRequest::os`, protocol revision
 4), and the owner skips a ready candidate whose `os:` tags (`os:linux`, `os:macos`,
 `os:windows`; several mean any one) name no OS the executor runs, recording it in the receipt's
 `os_unavailable`. The tags are parsed once, by `orbit_types::task::TaskOsRequirement`, which the
@@ -412,7 +421,7 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   one. A current `Outcome: failed` is still refused before any Git mutation, and the claimed
   `git_commit` derives and writes no summary. An implementer that reported no summary is not
   refused, since its handoff carries the generic delivery statement. Without the binding, or on
-  a step handed no implementer output, the durable ORB-10313 gate applies unchanged. The
+  a step handed no implementer output, the durable gate [ORB-10313] added applies unchanged. The
   rejected alternative was having the owner clear the summary when it admits a claim. That
   erases the prior failure evidence, and it still leaves the leaf gating on owner state it
   cannot write.
@@ -969,6 +978,8 @@ them only. The other claim kinds stay, as do admission receipts.
 
 ### 3.2 Durable review and landing handoff
 
+[ORB-13992] separated before-PR admission from the after-landing review auto-task.
+
 **Handoff contents.** An idempotent submission of claim and execution run identity, repository
 and PR identity, source branch, published candidate head SHA, validated base SHA, intended base
 and landing branch, execution summary and validation artifact references.
@@ -1087,7 +1098,7 @@ polls before stopping as before; a readable policy with nothing unreported stops
 A failed pull request check, owed or not, is classified from its failed-step log with the CI sweep's
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
-once; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
+within the inherited-recovery budget below; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
 once. An untouched-path failure waits for fresh base evidence: a successful completed push run
 of the same job on the accepted base or a descendant through the landing tip counts even if that
 tip has since moved, provided both run and job started after the failed candidate job completed.
@@ -1096,8 +1107,8 @@ commit. A fresh pass classifies the failure `flaky`, sharing the transient rerun
 rerun clears it, while the same signature failing again becomes `candidate` without another base
 wait. Reruns record `ci_check_rerun` history with the head, run and failed-job identities.
 `candidate` is a repairable stop whose evidence carries the failed job, its signature and a log
-excerpt. An `inherited` failure that still fails after that one update, on a base tip where the same
-job passes, is the candidate's and takes that same repairable stop [ORB-16322]. When the automatic
+excerpt. An `inherited` failure that still fails after an update onto a passing base tip
+the head contains is the candidate's and takes that same repairable stop [ORB-16322]. When the automatic
 repair is already spent (a repair claim, or a task that already returned to the backlog for a landing
 repair), a `candidate` failure stops for a requeue instead of leaving the task in `review` [ORB-16890]:
 the stop revokes the handoff's authority, settles the claim `revoked` with a kept candidate that
@@ -1107,17 +1118,31 @@ prompt names the failed check and its signature, publishes its own pull request 
 the stopped one, and closes the stopped one once its own is open. After two requeues since the last
 `landing_repair_exhausted`, the next such stop settles the claim `failed`, still keeping the
 candidate, blocks the task with a comment carrying that stop and each counted requeue's note, and
-records `landing_repair_exhausted`. An unmoved red base, an inconclusive read, and a
-failure past the one-update or one-rerun budget stop in `review` with the classification and spend
-nothing further. A branch-updated head is merged only when it is a two-parent merge of the accepted
-candidate and a commit on the landing branch whose tree equals their clean `merge-tree`; the
-accepted candidate and its evidence stay the validated commit. A claimed leaf whose required
+records `landing_repair_exhausted`. An inherited failure on a still-red or unproven base waits within the landing deadline
+[ORB-19393]. After the first update, the same job must pass on a newer base commit the
+head does not contain before another update is reserved; the cumulative limit is three
+inherited updates per handoff, each onto a distinct base. The wait records
+`landing_waiting_for_base`; deadline expiry records that the base never recovered.
+Transient reruns retain their one-rerun budget. A branch-updated head is accepted only
+when its first-parent chain reaches the validated candidate and each hop has exactly
+two parents, a base-side commit on the landing branch, and the clean `merge-tree`
+of its parents. The accepted candidate and its evidence stay the validated commit. A claimed leaf whose required
 command failed on a red base that the follower has since recorded green releases `baseline_red`
 without a hold, keeping its candidate for the next claim. Owner-local candidates fast-forward the local landing branch and are verified
 from the ref; before the branch moves, the owner retains a direct landing intent naming the
 handoff's task, so delivery consumers attribute the fast-forward. No-diff delivery verifies its covering commit on the landing ref with no external
 call. Every completion re-runs authorization, candidate and validation checks inside the
 `review → done` transaction, and the activity's observation must equal the accepted candidate.
+
+**Externally merged handoffs ([ORB-19393]).** A live landing completes from the
+verified merged PR on its next poll. A stopped handoff uses the existing external-merge
+settlement, verifying the same base-only chain before atomically completing its task,
+claim, attempt and landing request. A missing deleted source branch can be recovered
+through `refs/pull/<n>/head`; a foreign or edited head still requires review reconciliation.
+This update landed during reconciliation as `b37482369495e62380cfdec9eb6e044d9a7fb9aa`,
+after the inspected checkout `9d7d87bc4f9d0196beb9d5b0a6749d796318ebb1`; its merged
+source, rather than the older one-update/direct-parent code at that checkout, was
+used for these landing details.
 
 ### Owner dashboard surface
 
@@ -1470,7 +1495,10 @@ reboot.
 
 ## 8. Required validation scenarios
 
-Acceptance criteria, not reported as passing.
+Acceptance criteria, not reported as passing. [ORB-12617] completed the mixed
+legacy/claimed admission and end-to-end fixture slice. The broader closing audit
+[ORB-12501] was explicitly deferred by the owner on 2026-09-20 and is now archived;
+this table retains its requirements without claiming the entire matrix was executed.
 
 | Scenario | Required result |
 |---|---|
@@ -1595,5 +1623,40 @@ Acceptance criteria, not reported as passing.
 - [ORB-17304] — ordered pull and owner-local admission against the live executor census (§2, §9).
 - [ORB-17292] — reported each claimed leaf's crew and model with its settlement and kept them on the owner's settlement record, handoffs included, for the agent scorecards.
 - [ORB-19270] — widened a claimed worker's task show and artifact get to the claimed workspace.
+- [ORB-10313] — refused unsuccessful execution outcomes before delivery mutates Git.
+- [ORB-12501] — owned the closing fault-matrix audit, explicitly deferred by the owner and now archived.
+- [ORB-12968] — held unattended admission when host shutdown or reboot is imminent.
+- [ORB-13625] — enabled follower pull, routed owner coordination and the mutating runtime entry points.
+- [ORB-13637] — added owner-policy completion authority for accepted handoffs.
+- [ORB-13639] — closed local settlements when the owner had already ended their claims.
+- [ORB-13892] — added graceful pull cancellation, forced stops and eventual settlement delivery.
+- [ORB-13893] — removed the fixed leaf concurrency cap so pull drains can be retuned.
+- [ORB-13941] — filtered pull admission by runnable executor crews and provider availability.
+- [ORB-13987] — resolved required-validation toolchain environments on the executing host.
+- [ORB-14005] — routed tasks by validated executor OS requirements.
+- [ORB-14149] — classified model-capacity failures without retrying the same unavailable model.
+- [ORB-14174] — implemented per-window crew restrictions and single-pass pull admission.
+- [ORB-14258] — distinguished red-base and transient validation failures from candidate failures.
+- [ORB-14260] — routed sandboxed claimed-owner calls through the parent broker.
+- [ORB-14262] — excluded provider crews after authentication failure and skipped futile recovery.
+- [ORB-14274] — made operator cancellation release a task to backlog unless blocking was requested.
+- [ORB-14310] — reserved contended surfaces against starvation by lower-ranked work.
+- [ORB-14849] — added before-landing review against the published PR head.
+- [ORB-15074] — allowed verified no-diff handoffs after the base branch advances.
+- [ORB-15192] — made before-landing review selectable by executor machine.
+- [ORB-15573] — settled provider refusals as provider holds rather than candidate failures.
+- [ORB-15639] — made the pull failure breaker half-open after cooldown and excluded evidence holds from failures.
+- [ORB-15677] — required explicit hosted success for owner-owed before-landing evidence.
+- [ORB-15764] — exempted no-diff-expected claimed deliveries from required validation, matching owner delivery.
+- [ORB-15774] — filtered pull admission by the executor host forecast’s admissible work profiles.
+- [ORB-15791] — bounded model-capacity crew exclusions with a retry backoff.
+- [ORB-16339] — waited for required checks a fresh PR head had not reported yet.
+- [ORB-16379] — scoped provider-login outage holds to the host whose credentials failed.
+- [ORB-16608] — admitted unprofiled auto-task templates through their fitting base classes.
+- [ORB-17303] — added the owner fallback for landing repairs whose original executor stopped pulling.
+- [ORB-19393] — implemented inherited-check waits and externally merged handoff reconciliation.
+- [ORB-15332] — removed the unused admission compaction helper without changing runtime behavior.
+- [ORB-17641] — removed the unused admission receipt accounting API.
+- [ORB-19424] — tracks the missing operational admission receipt compaction and accounting.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

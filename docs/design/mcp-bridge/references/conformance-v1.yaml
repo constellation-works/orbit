@@ -1,7 +1,7 @@
 schema_version: 2
 contract: orbit-mcp-v1
-last_updated: 2026-10-06
-last_validated: 2026-10-06
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 
 source_of_truth:
   exposed_tool_list:
@@ -53,9 +53,10 @@ authority:
     - authorization decisions
 
 authorization:
-  status: per-caller authorization is deferred; server-selected session capabilities are enforced
+  # ORB-12564 removed destination caller authorization; this is shipped behavior.
+  status: destination per-caller authorization is removed; server-selected session capabilities are enforced
   v1_rule: SSH reaches the remote process; it serves agent authority by default and operator authority when its server argv includes --operator
-  enforcement_owner_when_added: orbit-core for per-caller rules; server-selected session capabilities are already enforced there
+  enforcement_owner: orbit-core for server-selected session capabilities
   capability_filtering: false # tools/list is not filtered; Core enforces each call
 
 tool_definitions:
