@@ -190,13 +190,15 @@ impl OrbitRuntime {
         let (kind, detail) = match change {
             ExperimentChange::Start => {
                 require_status(current, &[DRAFT], "start")?;
-                let settings = self.experiment_settings();
-                if !settings.enabled {
+                // Read the live config, as admission does, so a runtime opened
+                // before `experiments.enabled` changed agrees with new assignments.
+                if !self.current_experiments_enabled() {
                     return Err(OrbitError::PolicyDenied(format!(
                         "experiment `{}` cannot start: experiments are disabled in this workspace (`experiments.enabled` is false)",
                         current.name
                     )));
                 }
+                let settings = self.experiment_settings();
                 let overlays = validate_startable(&record, &settings.config_keys)?;
                 self.validate_experiment_overlays(&current.name, &overlays)?;
                 self.validate_experiment_crews(&current.name, &overlays)?;
