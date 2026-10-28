@@ -196,7 +196,7 @@ export function taskDrainState(task, context) {
         source: task,
         pending: false,
         error: sharedError,
-        entry: null,
+        entry: sharedEntry,
         sharedSnapshot: true,
       });
     }
@@ -215,7 +215,9 @@ export function taskDrainState(task, context) {
   }
   const current = taskDrainLoads.get(task.id);
   return {
-    entry: current.error ? null : current.entry || drainReadinessEntry(task.id),
+    // A failed read keeps the snapshot entry standing in; without one the
+    // caller shows the error as unknown.
+    entry: current.entry || drainReadinessEntry(task.id),
     pending: current.pending,
     error: current.error,
   };

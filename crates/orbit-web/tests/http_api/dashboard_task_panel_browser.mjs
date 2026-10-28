@@ -95,7 +95,7 @@ globalThis.panelFixture = {
   ships: [], holdShipPost: false, releaseShipPost: null,
   deliveryClaim: false, readiness: [], lifecycle: [],
   holdTaskList: false, releaseTaskList: null,
-  drainActions: [], drainPhase: 'idle',
+  drainActions: [], drainPhase: 'idle', failAlsoTaskReadiness: false,
 };
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
@@ -117,6 +117,7 @@ globalThis.fetch = async (input, options = {}) => {
   if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
   if (api === '/api/crews') return json({ default_crew: 'opus', crews: [{ name: 'opus' }, { name: 'sol' }] });
   if (api === '/api/workflows/auto/readiness') {
+    if (globalThis.panelFixture.failAlsoTaskReadiness && url.searchParams.get('also_task')) return json({ error: 'readiness snapshot unavailable' }, 500);
     if (!drainActions) return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: globalThis.panelFixture.readiness });
     const readiness = tasks.map(task => ({ task_id: task.id, status: task.status, eligible: false,
       reason: task.status === 'proposed' ? 'not_backlog' : 'capacity_saturated',
@@ -1335,10 +1336,57 @@ async function checkTaskPanel() {
     results.regressionFromClassification = true;
   }
 
+
+}
+
+async function checkDrainReadinessFailureStandIn() {
+  // A failed Drain poll carrying also_task keeps the last snapshot entry:
+  // the detail's Readiness row and the backlog row dot stand in until a
+  // later poll succeeds, instead of dropping to unknown.
+  {
+    const { page, errors, context } = await openPage({ url: '/?workspace=one&drain-actions#tasks', clock: true });
+    const id = 'PANEL-51';
+    await row(page, id).scrollIntoViewIfNeeded();
+    await row(page, id).locator('.title').click();
+    await waitShown(page, id);
+    await page.clock.fastForward(30_000);
+    await page.waitForFunction(id => panelFixture.reads.some(read => new URL(read, location.href).searchParams.get('also_task') === id), id);
+    const detail = pane(page).locator(`#detail-${id} .readiness-list`);
+    await detail.waitFor({ state: 'visible' });
+    await page.waitForFunction(id => document.querySelector(`#detail-${id} .readiness-list`)?.textContent.includes('Readiness after initial load'), id);
+    assert.equal(await row(page, id).locator('.ready-dot:not(.none)').count(), 1, 'The overflow backlog row shows its snapshot readiness dot before the failure');
+    await capture(page, 'drain-readiness-snapshot-before-dark-1440.png');
+
+    const readsBeforeFailure = await page.evaluate(() => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length);
+    await page.evaluate(() => { globalThis.panelFixture.failAlsoTaskReadiness = true; });
+    await page.clock.fastForward(30_000);
+    await page.waitForFunction(before => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length > before, readsBeforeFailure);
+    await page.waitForTimeout(300);
+    assert.match(await detail.innerText(), /Readiness after initial load/, 'A failed also_task read keeps the snapshot entry in the detail Readiness row');
+    assert.doesNotMatch(await detail.innerText(), /Drain readiness unknown/, 'A failed also_task read does not drop the detail to unknown while a snapshot entry stands in');
+    assert.equal(await row(page, id).locator('.ready-dot:not(.none)').count(), 1, 'A failed also_task read keeps the backlog row readiness dot');
+    await capture(page, 'drain-readiness-failed-stand-in-dark-1440.png');
+    await page.setViewportSize({ width: 375, height: 812 });
+    await capture(page, 'drain-readiness-failed-stand-in-dark-375.png');
+    await page.setViewportSize({ width: 1440, height: 900 });
+
+    const readsBeforeRecovery = await page.evaluate(() => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length);
+    await page.evaluate(() => { globalThis.panelFixture.failAlsoTaskReadiness = false; });
+    await page.clock.fastForward(30_000);
+    await page.waitForFunction(before => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length > before, readsBeforeRecovery);
+    await page.waitForTimeout(300);
+    assert.match(await detail.innerText(), /Readiness after initial load/, 'A successful poll after the failure keeps the snapshot entry in the detail');
+    assert.equal(await row(page, id).locator('.ready-dot:not(.none)').count(), 1, 'A successful poll after the failure keeps the backlog row readiness dot');
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.drainReadinessFailureStandIn = true;
+    fs.writeFileSync(path.join(evidence, 'drain-readiness-failure-result.json'), JSON.stringify({ drainReadinessFailureStandIn: true }, null, 2));
+  }
 }
 
 try {
   if (!process.argv.includes('--save-refresh')) await checkDrainActionReadiness({ openPage, row, pane, waitShown, capture, results, evidence });
+  if (!process.argv.includes('--save-refresh')) await checkDrainReadinessFailureStandIn();
   if (!process.argv.includes('--drain-actions')) {
     await checkTaskSaveRefresh({ openPage, row, pane, waitShown, capture, results, evidence });
     if (!process.argv.includes('--save-refresh')) await checkTaskPanel();
