@@ -584,6 +584,32 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_reordered_tightened_mcp_alternative_reports_required_property(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["anyOf"] = [{"properties": {"a": {"type": "string"}}},
+                           {"properties": {"b": {"type": "string"},
+                                            "c": {"type": "string"}}}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add anyOf alternatives [ORB-64] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["anyOf"] = [
+            {"properties": {"b": {"type": "string"}, "c": {"type": "string"}},
+             "required": ["c"]},
+            {"properties": {"a": {"type": "string"}}},
+        ]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder and tighten anyOf alternative [ORB-65] (#2)")
+
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` property `inputSchema{anyOf1}.c` newly required"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
     def test_existing_boolean_schema_property_gaining_required_child_decides_minor(self):
         tools = self.repo.mcp()
         tools[0]["inputSchema"]["properties"]["options"] = True
