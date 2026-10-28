@@ -348,6 +348,13 @@ def match_schema_alternatives(before, after):
             matches[new_index] = old_index
             old_left.remove(old_index)
             new_left.remove(new_index)
+
+    # With just one branch left on each side, an edit can replace every
+    # property name. Pair that remainder after the stronger identity matches;
+    # extra inserted branches stay unmatched, and multiple leftovers remain
+    # ambiguous rather than being paired by position.
+    if len(old_left) == len(new_left) == 1:
+        matches[next(iter(new_left))] = next(iter(old_left))
     return matches
 
 

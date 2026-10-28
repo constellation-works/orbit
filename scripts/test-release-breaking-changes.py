@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
-"""Drive release-breaking-changes.py over fixture repositories.
+"""Exercise release-breaking-changes.py over MCP snapshots and fixture repositories.
 
-Each test builds a throwaway Git repository with miniature copies of the
-surfaces the detector reads, commits fixture diffs under `[ORB-N]` subjects and
-runs the script's CLI over the tagged range. Task tags and execution summaries
+CLI tests build a throwaway Git repository with miniature copies of the
+surfaces the detector reads, commit fixture diffs under `[ORB-N]` subjects and
+run the script's CLI over the tagged range. Task tags and execution summaries
 come from a stub `orbit` binary that serves a JSON fixture.
 """
 
 import json
 import os
 from pathlib import Path
+import runpy
 import subprocess
 import sys
 import tempfile
 import textwrap
 import unittest
+from unittest import mock
 
 import self_test_hang
 
@@ -559,6 +561,42 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                     })
                     self.assertEqual(report["bump"], "minor")
                     self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_zero_shared_edited_mcp_alternative_changes_are_reported(self):
+        detect_mcp_changes = runpy.run_path(str(SCRIPT))["detect_mcp_changes"]
+        cases = (
+            (
+                {"properties": {"b": {"type": "string"}, "c": {"type": "string"}}},
+                {"properties": {"x": {"type": "string"}}},
+                [("b", "removed or renamed"), ("c", "removed or renamed")],
+            ),
+            (
+                {"properties": {"b": {"type": "string"}}, "required": ["b"]},
+                {"properties": {"x": {"type": "string"}}, "required": ["x"]},
+                [("b", "removed or renamed"), ("x", "newly required")],
+            ),
+        )
+        unchanged = {"properties": {"a": {"type": "string"}}}
+        for keyword in ("anyOf", "oneOf"):
+            for old_branch, new_branch, changes in cases:
+                for reordered in (False, True):
+                    with self.subTest(keyword=keyword, changes=changes, reordered=reordered):
+                        before = [unchanged, old_branch]
+                        after = [new_branch, unchanged] if reordered else [unchanged, new_branch]
+                        git = mock.Mock()
+                        git.show.side_effect = [
+                            json.dumps([{"name": "orbit_task_show",
+                                         "inputSchema": {keyword: branches}}])
+                            for branches in (before, after)
+                        ]
+
+                        signals = detect_mcp_changes(git, "before", "after", [MCP])
+                        self.assertEqual(signals, [
+                            {"signal": "mcp-schema", "file": MCP,
+                             "detail": f"`orbit_task_show` property "
+                                       f"`inputSchema{{{keyword}1}}.{prop}` {change}"}
+                            for prop, change in changes
+                        ])
 
     def test_reordered_edited_mcp_alternative_removal_is_reported(self):
         tools = self.repo.mcp()
