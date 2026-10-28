@@ -172,6 +172,32 @@ impl OrbitRuntime {
         Ok(())
     }
 
+    /// Record that the live attempt of `handoff_id` waits for its base, as
+    /// a claim-scoped history event. The same reason replays its receipt.
+    pub(crate) fn record_handoff_landing_wait(
+        &self,
+        handoff_id: &str,
+        reason: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let (claim, _) = self.landing_claim(handoff_id)?;
+        let context = self.landing_invocation(&claim);
+        let attempt = self
+            .landing_attempt(handoff_id)?
+            .ok_or_else(|| missing_attempt(handoff_id))?
+            .attempt;
+        let digest = orbit_common::security::release::sha256_hex(reason.as_bytes());
+        self.stores().tasks().mutate_execution_claim(
+            Some(&context),
+            &format!("landing-wait:{handoff_id}:{attempt}:{digest}"),
+            &ClaimMutation::RecordLandingWait {
+                handoff_id: handoff_id.to_string(),
+                reason: reason.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
     fn landing_observation(
         &self,
         update: &HandoffLandingUpdate,

@@ -373,6 +373,16 @@ pub trait NullRuntimeHost: Send + Sync {
         Err(unsupported_runtime_capability("record_handoff_landing"))
     }
 
+    fn record_handoff_landing_wait(
+        &self,
+        _handoff_id: &str,
+        _reason: &str,
+    ) -> Result<(), OrbitError> {
+        Err(unsupported_runtime_capability(
+            "record_handoff_landing_wait",
+        ))
+    }
+
     // ── Claimed distributed leaf execution [ORB-12616] ─────────────────
 
     fn local_machine_id(&self) -> Option<String> {

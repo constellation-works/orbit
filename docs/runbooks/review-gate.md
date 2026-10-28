@@ -230,8 +230,11 @@ The owner enforces what it is owed in two places:
   is that success. A completed `SKIPPED` or `NEUTRAL` conclusion is not: the
   owner keeps waiting, the same as when a check is absent or still running,
   within `max_wait_seconds`. A failed check is classified first: one
-  inherited from the base gets one branch update, a transient one gets one
-  rerun, and one the candidate caused gets the claim's one automatic repair
+  inherited from the base gets a branch update; while the base stays red the
+  landing waits within its deadline for a newer passing base and updates
+  again, at most three updates per handoff, recording each wait and update
+  in task history. A transient one gets one rerun, and one the candidate
+  caused gets the claim's one automatic repair
   ([distributed drain runbook](distributed-drain.md)). A new failure whose
   log cites only files the candidate did not change is base-suspect: it
   waits for a base run newer than the failure before any repair. Past that budget the

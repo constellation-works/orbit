@@ -215,13 +215,22 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
             "name: CI\non:\n  pull_request:\n    branches: [main]\njobs:\n  protected:\n    name: Protected (${{ matrix.language }})\n    strategy:\n      matrix:\n        language: [rust]\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo check\n",
         );
     }
+    // [ORB-19393] An operator's second update-branch merge on top of the
+    // first is still the accepted candidate plus base merges.
     let provider_head = if base_update {
-        advance_main(&reviewed, "src/other.rs", "fn other() {}\n");
+        for (file, content) in [
+            ("src/other.rs", "fn other() {}\n"),
+            ("src/later.rs", "fn later() {}\n"),
+        ] {
+            advance_main(&reviewed, file, content);
+            git(&reviewed.repo, &["checkout", "-q", &reviewed.branch]);
+            git(
+                &reviewed.repo,
+                &["merge", "--no-ff", "-qm", "Provider base update", "main"],
+            );
+            git(&reviewed.repo, &["checkout", "-q", "main"]);
+        }
         git(&reviewed.repo, &["checkout", "-q", &reviewed.branch]);
-        git(
-            &reviewed.repo,
-            &["merge", "--no-ff", "-qm", "Provider base update", "main"],
-        );
         let head = revision(&reviewed.repo, "HEAD").commit;
         git(&reviewed.repo, &["checkout", "-q", "main"]);
         head
@@ -608,6 +617,21 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
             },
         )
         .unwrap();
+    // [ORB-19393] A landing that waits for its base records why in task
+    // history through the handed-off claim, which refuses unscoped writes.
+    let wait = r#"{"state":"waiting_for_base","reason":"the base is still red"}"#;
+    RuntimeHost::record_handoff_landing_wait(owner, &accepted.handoff_id, wait).unwrap();
+    assert!(
+        owner
+            .get_task_history(&accepted.handoff.task_id)
+            .unwrap()
+            .iter()
+            .any(
+                |row| row.event == orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT
+                    && row.note.as_deref() == Some(wait)
+            ),
+        "the wait is in task history"
+    );
     if stop {
         // Model a lost external reply via the normal trusted intent boundary.
         RuntimeHost::record_handoff_landing(

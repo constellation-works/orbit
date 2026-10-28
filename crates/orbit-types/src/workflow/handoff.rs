@@ -326,6 +326,10 @@ pub const LANDING_REPAIR_REQUEUED_EVENT: &str = "landing_repair_requeued";
 /// same commit.
 pub const EXTERNAL_MERGE_SETTLED_EVENT: &str = "external_merge_settled";
 
+/// History event of an owner landing that waits for its base branch to
+/// recover from a failure inherited from it, before the landing deadline.
+pub const LANDING_WAITING_FOR_BASE_EVENT: &str = "landing_waiting_for_base";
+
 /// History event of the landing stop that found the task's landing repair
 /// budget spent and blocked it. Requeues before it no longer count.
 pub const LANDING_REPAIR_EXHAUSTED_EVENT: &str = "landing_repair_exhausted";

@@ -230,6 +230,6 @@ pub use post_deploy::{
 };
 
 pub use pr_recovery::{
-    PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission, PrBaseUpdateReservation,
-    decide_pr_base_update, pr_base_update_reservations,
+    PR_BASE_UPDATE_BUDGET_SPENT, PR_BASE_UPDATE_RESERVED_EVENT, PrBaseUpdateAdmission,
+    PrBaseUpdateReservation, decide_pr_base_update, pr_base_update_reservations,
 };
