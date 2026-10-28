@@ -575,6 +575,38 @@ impl TaskCommitBoundary {
                     state.last_event =
                         orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT.into();
                 }
+                ClaimMutation::RecordLandingHistory {
+                    handoff_id,
+                    event,
+                    note,
+                } => {
+                    if !auth.operator
+                        || claim.phase != ExecutionClaimPhase::HandedOff
+                        || state.landing_invalidated
+                    {
+                        return Err(invalid("current operator landing context required"));
+                    }
+                    if !matches!(event.as_str(), "ci_check_rerun" | "ci_base_suspect") {
+                        return Err(invalid("unsupported handoff landing history event"));
+                    }
+                    if note.trim().is_empty() {
+                        return Err(invalid("handoff landing history requires a note"));
+                    }
+                    self.check_live_landing_attempt(auth, handoff_id)?;
+                    params
+                        .append_history
+                        .push(orbit_types::task::TaskHistoryEntry {
+                            at: Utc::now(),
+                            by: "system".into(),
+                            event: event.clone(),
+                            note: Some(note.clone()),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        });
+                    history_event = false;
+                }
                 ClaimMutation::CompleteLanding {
                     handoff_id,
                     evidence: proof,

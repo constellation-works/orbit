@@ -160,6 +160,16 @@ macro_rules! review_methods {
             reason: &str,
         ) -> Result<(), OrbitError>;
 
+        /// Append one of the two CI observations owned by a live landing
+        /// attempt. `event` is restricted by the owner store to
+        /// `ci_check_rerun` or `ci_base_suspect`.
+        fn record_handoff_landing_history(
+            &self,
+            handoff_id: &str,
+            event: &str,
+            note: &str,
+        ) -> Result<(), OrbitError>;
+
         // ── Claimed distributed leaf execution [ORB-12616] ─────────────────
 
         /// The machine this runtime executes on, as the

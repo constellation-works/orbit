@@ -821,11 +821,12 @@ impl FakeForge {
 impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
     fn apply_task_automation_update(
         &self,
-        _: &str,
-        update: orbit_engine::TaskAutomationUpdate,
+        _task_id: &str,
+        _update: orbit_engine::TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
-        self.history.lock().unwrap().extend(update.append_history);
-        Ok(())
+        Err(OrbitError::InvalidInput(
+            "active execution claim requires a claim-scoped mutation".into(),
+        ))
     }
     fn admit_handoff_base_update(
         &self,
@@ -886,6 +887,35 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 by: "owner".into(),
                 event: orbit_types::workflow::handoff::LANDING_WAITING_FOR_BASE_EVENT.into(),
                 note: Some(reason.into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            });
+        Ok(())
+    }
+
+    fn record_handoff_landing_history(
+        &self,
+        handoff_id: &str,
+        event: &str,
+        note: &str,
+    ) -> Result<(), OrbitError> {
+        if handoff_id != self.context.handoff_id
+            || !matches!(event, "ci_check_rerun" | "ci_base_suspect")
+        {
+            return Err(OrbitError::InvalidInput(
+                "current handoff claim does not authorize this history event".into(),
+            ));
+        }
+        self.history
+            .lock()
+            .unwrap()
+            .push(orbit_types::task::TaskHistoryEntry {
+                at: chrono::Utc::now(),
+                by: "system".into(),
+                event: event.into(),
+                note: Some(note.into()),
                 from_status: None,
                 to_status: None,
                 operation_id: None,
@@ -1739,6 +1769,29 @@ fn passed(run_id: u64, job_id: u64) -> FakeJob {
 }
 
 const UNTOUCHED_TEST_FAILURE: &str = "error: shutdown test timed out\n --> README.md:1:1\n";
+
+#[test]
+fn handoff_fake_refuses_unscoped_automation_updates() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "handoff_fake_refuses_unscoped_automation_updates",
+        || {
+            let (_sandbox, forge, _, _) = forge_fixture(true, false);
+            let error = RuntimeHost::apply_task_automation_update(
+                &forge,
+                TASK_ID,
+                orbit_engine::TaskAutomationUpdate::default(),
+            )
+            .expect_err("a live handoff claim fences the unscoped writer");
+            assert!(
+                error
+                    .to_string()
+                    .contains("active execution claim requires a claim-scoped mutation"),
+                "unscoped automation update refusal: {error}"
+            );
+        },
+    );
+}
 
 /// ORB-19342: a fresh base pass warrants a flake rerun before a repair,
 /// including when the repair is spent or a retry finishes after that pass.

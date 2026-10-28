@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use crate::context::{HandoffLandingContext, RuntimeHost, TaskAutomationUpdate};
+use crate::context::{HandoffLandingContext, RuntimeHost};
 
 use super::super::super::operations;
 use super::super::super::pr::{CheckState, PullRequestStatus};
@@ -253,6 +253,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 host,
                 std::slice::from_ref(&context.task_id),
                 &json!({"base":landing_tip.unwrap_or(base),"check":label,"signature":signature,"reason":why}),
+                Some(&context.handoff_id),
             )?;
         }
         jobs.push(FailedJob {
@@ -292,23 +293,10 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 let rerun_jobs = jobs.iter().filter(|job| job.run_id == Some(run_id)).map(|job| {
                     json!({"job_id":job.job_id,"check":job.label,"classification":job.class.as_str(),"signature":job.signature})
                 }).collect::<Vec<_>>();
-                host.apply_task_automation_update(
-                    &context.task_id,
-                    TaskAutomationUpdate {
-                        append_history: vec![orbit_types::task::TaskHistoryEntry {
-                            at: chrono::Utc::now(),
-                            by: "system".into(),
-                            event: "ci_check_rerun".into(),
-                            note: Some(
-                                json!({"head":head,"run_id":run_id,"jobs":rerun_jobs}).to_string(),
-                            ),
-                            from_status: None,
-                            to_status: None,
-                            operation_id: None,
-                            decision: None,
-                        }],
-                        ..TaskAutomationUpdate::default()
-                    },
+                host.record_handoff_landing_history(
+                    &context.handoff_id,
+                    "ci_check_rerun",
+                    &json!({"head":head,"run_id":run_id,"jobs":rerun_jobs}).to_string(),
                 )?;
             }
             recovery.rerun = true;

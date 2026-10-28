@@ -142,6 +142,167 @@ fn public_retry_adopts_a_clean_provider_base_update_and_lands_normally() {
     retry_native_handoff(true, false, true);
 }
 
+fn handoff_ci_history_uses_the_claim_scoped_mutation() {
+    use orbit_core::application::task::TaskUpdateParams;
+
+    let reviewed = ReviewedHandoff::accept(ReviewTiming::BeforeLanding);
+    let owner = &reviewed.owner;
+    let claim_id = owner.distributed_claim_console().unwrap()["claims"][0]["claim_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let accepted = owner.accepted_task_handoff(&claim_id).unwrap();
+    let expected = orbit_core::application::review::ExpectedCandidate {
+        candidate_commit: accepted.handoff.candidate.candidate.commit.clone(),
+        base_commit: accepted.handoff.candidate.base.commit.clone(),
+    };
+    owner
+        .approve_handoff_as_operator(
+            &accepted.handoff_id,
+            &expected,
+            "operator",
+            "approve-ci-history",
+        )
+        .unwrap();
+    let landing = ClaimInvocation::trusted_operator(
+        accepted.handoff.task_id.clone(),
+        accepted.handoff.claim_id.clone(),
+        "owner-landing".into(),
+    );
+    owner
+        .mutate_execution_claim(
+            Some(&landing),
+            "dispatch-ci-history",
+            &ClaimMutation::DispatchLanding {
+                handoff_id: accepted.handoff_id.clone(),
+                job_run_id: None,
+            },
+        )
+        .unwrap();
+
+    for (event, note) in [
+        ("ci_check_rerun", r#"{"run_id":7}"#),
+        ("ci_base_suspect", r#"{"check":"CI"}"#),
+    ] {
+        RuntimeHost::record_handoff_landing_history(owner, &accepted.handoff_id, event, note)
+            .unwrap();
+    }
+    let history = owner.get_task_history(&accepted.handoff.task_id).unwrap();
+    for (event, note) in [
+        ("ci_check_rerun", r#"{"run_id":7}"#),
+        ("ci_base_suspect", r#"{"check":"CI"}"#),
+    ] {
+        assert!(
+            history
+                .iter()
+                .any(|row| row.event == event && row.note.as_deref() == Some(note)),
+            "the handed-off claim records {event} through its scoped mutation"
+        );
+    }
+
+    let unscoped = RuntimeHost::apply_task_automation_update(
+        owner,
+        &accepted.handoff.task_id,
+        orbit_engine::TaskAutomationUpdate {
+            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".into(),
+                event: "unscoped-test-event".into(),
+                note: Some("must remain fenced".into()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap_err();
+    assert!(
+        unscoped
+            .to_string()
+            .contains("active execution claim requires a claim-scoped mutation"),
+        "unscoped automation history remains fenced: {unscoped}"
+    );
+    assert!(
+        owner
+            .update_task_as_human(
+                &accepted.handoff.task_id,
+                TaskUpdateParams {
+                    tags: Some(vec!["operator-change".into()]),
+                    ..Default::default()
+                },
+                "human:fixture".into(),
+            )
+            .unwrap_err()
+            .to_string()
+            .contains("active execution claim requires a claim-scoped mutation"),
+        "other unscoped task commits remain fenced"
+    );
+
+    let mutation = ClaimMutation::RecordLandingHistory {
+        handoff_id: accepted.handoff_id.clone(),
+        event: "ci_check_rerun".into(),
+        note: "wrong invocation".into(),
+    };
+    let other_claim = ClaimInvocation::trusted_operator(
+        accepted.handoff.task_id.clone(),
+        "different-claim".into(),
+        "owner-landing".into(),
+    );
+    assert!(
+        owner
+            .mutate_execution_claim(Some(&other_claim), "wrong-claim", &mutation)
+            .is_err(),
+        "a scoped mutation for another claim is refused"
+    );
+    let wrong_run = ClaimInvocation::trusted_worker(
+        accepted.handoff.task_id.clone(),
+        accepted.handoff.claim_id.clone(),
+        accepted.handoff.machine_id.clone(),
+        Some(orbit_store::contracts::ClaimRun {
+            machine_id: accepted.handoff.machine_id.clone(),
+            run_id: "different-run".into(),
+        }),
+    );
+    assert!(
+        owner
+            .mutate_execution_claim(Some(&wrong_run), "wrong-run", &mutation)
+            .is_err(),
+        "a scoped mutation for another run is refused"
+    );
+    assert!(
+        RuntimeHost::record_handoff_landing_history(
+            owner,
+            &accepted.handoff_id,
+            "other_history_event",
+            "must be refused",
+        )
+        .is_err(),
+        "the scoped history capability rejects every event outside its two-event allowlist"
+    );
+    let wrong_handoff = ClaimMutation::RecordLandingHistory {
+        handoff_id: "different-handoff".into(),
+        event: "ci_check_rerun".into(),
+        note: "must be refused".into(),
+    };
+    assert!(
+        owner
+            .mutate_execution_claim(Some(&landing), "wrong-handoff", &wrong_handoff)
+            .is_err(),
+        "the scoped mutation rejects a different handoff identity"
+    );
+    let final_history = owner.get_task_history(&accepted.handoff.task_id).unwrap();
+    assert_eq!(
+        final_history
+            .iter()
+            .filter(|row| row.event == "ci_check_rerun" || row.event == "ci_base_suspect")
+            .count(),
+        2,
+        "refused mutations append no history rows"
+    );
+}
+
 fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
     let reviewed = ReviewedHandoff::accept_with_commands(
         ReviewTiming::BeforeLanding,
@@ -749,7 +910,8 @@ crate::scenario_table!(
     a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_clean_scenarios,
     a_before_landing_handoff_squashed_onto_a_moved_base_is_excluded_as_rebased_clean,
     a_conflicting_base_or_a_head_pushed_after_review_stays_pending,
-    public_retry_reconciles_an_already_merged_native_handoff_without_merging_again
+    public_retry_reconciles_an_already_merged_native_handoff_without_merging_again,
+    handoff_ci_history_uses_the_claim_scoped_mutation
 );
 crate::scenario_table!(
     public_retry_provider_update_already_merged,

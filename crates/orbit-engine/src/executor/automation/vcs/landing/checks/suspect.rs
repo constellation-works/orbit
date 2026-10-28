@@ -211,6 +211,7 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
     host: &H,
     tasks: &[String],
     evidence: &Value,
+    handoff_id: Option<&str>,
 ) -> Result<(), OrbitError> {
     let note = serde_json::to_string(evidence)
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
@@ -222,22 +223,26 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
         {
             continue;
         }
-        host.apply_task_automation_update(
-            task,
-            TaskAutomationUpdate {
-                append_history: vec![orbit_types::task::TaskHistoryEntry {
-                    at: chrono::Utc::now(),
-                    by: "system".into(),
-                    event: "ci_base_suspect".into(),
-                    note: Some(note.clone()),
-                    from_status: None,
-                    to_status: None,
-                    operation_id: None,
-                    decision: None,
-                }],
-                ..TaskAutomationUpdate::default()
-            },
-        )?;
+        if let Some(handoff_id) = handoff_id {
+            host.record_handoff_landing_history(handoff_id, "ci_base_suspect", &note)?;
+        } else {
+            host.apply_task_automation_update(
+                task,
+                TaskAutomationUpdate {
+                    append_history: vec![orbit_types::task::TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".into(),
+                        event: "ci_base_suspect".into(),
+                        note: Some(note.clone()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    ..TaskAutomationUpdate::default()
+                },
+            )?;
+        }
         tracing::warn!(task, %evidence, "base-suspect: waiting for a fresh base check; no candidate repair");
     }
     Ok(())

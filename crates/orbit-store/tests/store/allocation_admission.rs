@@ -20,6 +20,8 @@ mod path_leases;
 mod reservation_grants;
 #[path = "allocation_admission/task_index.rs"]
 mod task_index;
+#[path = "allocation_admission/unscoped_claim_writes.rs"]
+mod unscoped_claim_writes;
 #[path = "allocation_admission/work_fit.rs"]
 mod work_fit;
 /// How long one isolated test may run before it is killed and fails.
