@@ -245,7 +245,8 @@ export function setDrainReadinessFailure(taskId, error) {
   const message = typeof error === "string" && error.trim() ? error : "readiness unavailable";
   if (readinessErrors.get(taskId) === message) return;
   readinessErrors.set(taskId, message);
-  waits.delete(taskId);
+  // The snapshot entry stands in until a later poll succeeds: keep `waits`
+  // so the detail Readiness row and the backlog row dot keep showing it.
   for (const listener of listeners) listener();
 }
 
@@ -269,7 +270,7 @@ export function drainReadinessFor(taskId) {
 }
 
 // The snapshot's raw entry for a task, or null; a Readiness card falls back to
-// it until its own read answers.
+// it until its own read answers, and it stands in when that read fails.
 export function drainReadinessEntry(taskId) {
   return waits.get(taskId)?.entry || null;
 }
