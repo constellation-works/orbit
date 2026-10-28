@@ -947,7 +947,7 @@ assert(fixtureCard.textContent.includes('orbit run job fixture --workspace one')
   const spacedCommand = checkWorkspaceArgv('My Project');
   assert(spacedCommand.includes("'My Project'"), `a space in the workspace name is quoted: ${spacedCommand}`);
   const quotedCommand = checkWorkspaceArgv('a"b$(c)`d');
-  assert(quotedCommand.includes("'a\"b$(c)`d'") || quotedCommand.includes("'a"), `quotes and metacharacters stay literal: ${quotedCommand}`);
+  assert(quotedCommand === "orbit run job sweep --workspace 'a\"b$(c)`d'", `quotes and metacharacters stay literal: ${quotedCommand}`);
   // The Copy command button copies the same quoted text.
   const copyButton = [...document.querySelectorAll('#jobs-body button')].find((node) => node.textContent === 'Copy command');
   assert(copyButton, 'spaced job details offer a Copy command button');
