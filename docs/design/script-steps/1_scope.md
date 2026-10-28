@@ -24,7 +24,8 @@ change. It reverses the removal recorded in
 routines still name only `job:<name>`, and a job may now contain a step that names a
 granted script. Neither decision is superseded until phase 2 ships; both link here.
 
-Bearing: Orbit already has these pieces, read from source at `a5b5408ea`.
+Bearing: Orbit already has these pieces, read from source at `a5b5408ea` (the `local_shell`
+bullet was rechecked at `ddfeaad6`).
 
 - **Job steps name catalog targets by prefix.** A job step's `target:` is a
   namespace-prefixed reference. Today only `activity:<name>` resolves
@@ -36,6 +37,19 @@ Bearing: Orbit already has these pieces, read from source at `a5b5408ea`.
 - **Activity types are `agent_loop` and `deterministic`.** `ActivityV2Spec`
   (`crates/orbit-types/src/workflow/activity_job/activity_v2.rs`) has no third variant.
   Activities declare `input_schema_json` and `output_schema_json`.
+- **A `local_shell` action already runs a direct child.** A `deterministic` activity with
+  `action: local_shell` ([ORB-11294]; `crates/orbit-engine/src/executor/automation/shell.rs`)
+  runs one child process with no shell, in one of two declared forms: `command` with
+  `args` (an `execve`), or `shell` with a non-empty inline `script`, run as
+  `<shell> -c <script>`. Setting both `command` and `shell` is refused, and so is `args`
+  with `shell`. The program comes from the activity config only, never from step input.
+  The executor defaults to `local-shell` when `config.executor` is absent, and its shipped
+  definition declares no `sandbox`, so a step runs bare under the process supervisor and
+  is confined only by a `cwd` check: the
+  directory must resolve inside the workspace root. Kernel confinement is opt-in, through
+  a `sandbox:` on the executor definition and an `fsProfile` on the activity
+  (`crates/orbit-core/assets/executors/local-shell.yaml`). A nonzero exit fails the step
+  (`LocalShellFailed`) unless `allow_nonzero_exit` is set.
 - **The non-success outcome survives.** `StepOutcome { success, output, message }`
   (`crates/orbit-engine/src/activity_job/job_executor/exec_ctx.rs`) still carries
   `success`, and the retry loop treats `Ok(success = false)` as retryable
@@ -88,7 +102,10 @@ and deterministic steps so that one job can be a whole pipeline (2026-10-27). Ex
 an agent step builds something, `package.sh` packages it, and a deterministic step
 uploads the result, with outputs flowing from step to step.
 
-Today the only route is four pieces for one script: a plugin that wraps the script as
+Two routes run a script from a job today. The first is `local_shell` (Bearing): a
+`deterministic` step runs a program or an inline script that the workspace YAML names,
+bare unless the operator opts into a sandbox, with no consent tied to the script's
+content. The second takes four pieces for one script: a plugin that wraps the script as
 a tool, a `deterministic` activity whose `action: plugin.tool_call` calls that tool, a
 job around the activity, and a routine that targets the job. The plugin also brings
 the wrong boundary. orbit-office already runs approved scripts this way
@@ -104,6 +121,12 @@ ORB-00374 removed `type: shell` for three reasons, and all three still bind:
    same workspace YAML ([ORB-00363]). Whoever could write the YAML could widen the list.
 3. **Arbitrary command text on a timer.** A routine `run: {type: shell, command: …}`
    would have reopened the surface unattended.
+
+The same three risks apply to `local_shell`, which restored the inline form under
+[ORB-11294]. Its shipped definition declares no sandbox, so its `cwd` check is the only
+confinement by default. Its program is named in the workspace YAML with no allowlist.
+A routine can run a job that holds a `local_shell` step. This design leaves
+`local_shell` as it is (see [Relation to `local_shell`](#relation-to-local_shell)).
 
 Three things exist now that did not when the shell surface was removed:
 
@@ -152,11 +175,44 @@ answer that does not depend on the workspace YAML:
 | No cwd confinement | The cwd is the run worktree, or the workspace root mounted read-only. Nothing outside the mount table exists for the child (§3) |
 | No policy consultation | Each run checks a host-local operator grant: script name, content digest and capability set (§2) |
 | The allowlist lived in the same YAML | The YAML only *requests* capabilities. The grant, written by the operator outside the workspace, is the authority, and a request beyond it refuses (§2) |
-| Arbitrary command text | No inline text anywhere. A step names a script, and the program and arguments are an argv list with no shell (§1) |
+| Arbitrary command text | No inline text in the script manifest or the `script:` target. A step names a script, and the program and arguments are an argv list with no shell (§1). `local_shell` keeps its inline form; see [Relation to `local_shell`](#relation-to-local_shell) |
 | The `Ok(success = false)` path lost its coverage | A script's nonzero exit is that outcome. Phase 2 restores the audit-message coverage ORB-00374 removed (§4) |
 
-What stays from ORB-00374: `type: shell` stays a load error, and so does any form of
-inline command text in an activity, job, routine or auto-task.
+What stays from ORB-00374: `type: shell` stays a load error. The script surface takes no
+inline command text: its manifest has no text field, and a routine target names only
+`job:<name>`. Inline command text in an activity config is accepted only by the
+`local_shell` action, which this design leaves as it is.
+
+### Relation to `local_shell`
+
+`local_shell` stays supported, and this design neither removes nor rejects it. The table
+compares the two routes for one script.
+
+| | `local_shell` (existing) | Script step (proposed) |
+|---|---|---|
+| Program | `command` + `args`, or `shell` + inline `script`, in the activity config | A manifest and an entry file, with no inline text (§1) |
+| Authority | The workspace YAML that names the program; no digest and no operator check | An operator grant, host-local, bound to the manifest and entry digest (§2) |
+| Content change | Not checked. Neither the YAML nor the file it runs is digested | Voids the grant; the next run refuses with `grant_stale` (§2) |
+| Sandbox | None by default. A `sandbox:` on the executor definition and an `fsProfile` on the activity opt in | The script profile, default-deny, with no unsandboxed fallback (§3) |
+| Network | The host's, by default | `none` by default; a grant can widen it (§3) |
+| Files and cwd | `cwd` must resolve inside the workspace root | Worktree or read-only root, with `.orbit/` masked; declared inputs and outputs (§3, §4) |
+| Environment | An allowlisted baseline, plus the executor's and the activity's `env` | Cleared; fixed values plus the grant's `env_pass` names (§3) |
+| Output | `success`, `exit_code`, `stdout`, `stderr`, `timed_out`, `argv` and `cwd` | Stdout JSON validated against a schema, plus declared files (§4) |
+| Nonzero exit | Fails the step (`LocalShellFailed`) unless `allow_nonzero_exit` is set | `Ok(success = false)` with `{exit_code, signal}` (§4) |
+| Audit | The step's output; on failure, a checkpointed diagnostic | A `script_execution` entry with digest, grant ID and provenance (§5) |
+
+**Relationship.** The script step is a second route, for an operator who must consent to
+exact bytes and wants the script profile. It does not replace `local_shell`. The inline
+`shell` + `script` form is the one inline command text that the no-inline rule in §1 does
+not cover. Changing `local_shell`'s shipped posture (its default sandbox, its nonzero-exit
+mapping, or whether a routine's job may use it) changes a shipped action, so it is a
+separate decision (open question 8). Removing or rejecting `local_shell` is a compatibility
+decision of its own, and this design does not assume it has been made.
+
+**Why.** The script route adds what the table's right column shows: consent bound to the
+bytes a reviewer approved, and a default-deny sandbox with no unsandboxed fallback. It is
+built beside `local_shell` because changing a shipped action in place is a separate
+decision.
 
 ### 1. Reference form
 
@@ -194,7 +250,9 @@ spec:
 
 The rules:
 
-- **No inline code.** The manifest has no `command`, `script` or `run` text field.
+- **No inline code in the manifest.** The manifest has no `command`, `script` or `run`
+  text field, and `target: script:<name>` names a manifest and nothing else. This rule
+  covers the script surface only; `local_shell`'s inline `script` is outside it.
   `entry` must resolve physically (after symlinks) to a regular file beneath the
   workspace root, outside `.git/` and `.orbit/state/`. A path that escapes is a load
   error naming the manifest.
@@ -242,8 +300,10 @@ both files, so the split costs no authority.
   and the two drift.
 - **Only a repository path, with no manifest.** There is nowhere to put the schemas
   and requests, and no catalog to list or grant.
-- **Inline `command:` text with a strict parser.** That is the surface ORB-00374
-  removed. Any text field is a place where the grant can't see the code.
+- **Inline `command:` text in the manifest, with a strict parser.** Any text field there
+  is a place where the grant can't see the code. `local_shell` already takes inline
+  `shell` + `script` in an activity; this design doesn't copy that form into the script
+  surface.
 
 ### 2. Authority outside the workspace YAML
 
@@ -502,8 +562,14 @@ directory.
 - **Let later steps read the script's scratch directory.** It exposes everything the
   script left behind and couples steps to a layout. Declared, capped outputs are an
   interface.
-- **Treat a nonzero exit as `Err`.** Retry and `recovery_activity` already read the
-  non-success outcome, and a failed chore is an ordinary outcome, not an executor fault.
+- **Treat a nonzero exit as `Err`, as `local_shell` does.** `local_shell` fails the step
+  with `LocalShellFailed` unless `allow_nonzero_exit` is set, and checkpoints the
+  diagnostic. The retry loop retries `Err` and `Ok(success = false)` alike, and both reach
+  `recovery_activity`, so the choice is the step's outcome shape, not whether retry
+  applies. A script's nonzero exit is an ordinary result of a chore, not an executor
+  fault, so the script step returns `Ok(success = false)` with `{exit_code, signal}` as
+  its output. `local_shell` with `allow_nonzero_exit: true` returns the exit status as
+  output, but the job executor sees that as a successful step.
 
 ### 5. Audit
 
@@ -619,7 +685,9 @@ to another machine would run code where nobody approved it.
 - **Grants.** `script_grant` is a new host table added by an additive migration inside
   the release-gated compatibility window ([ORB-15732]). Old binaries never read it. A
   witness with an unknown `orbit.script.grant.v<N>` version refuses.
-- **`type: shell` and inline text** stay load errors (§1).
+- **`type: shell`** stays a load error (§1). **Inline text** stays out of the script
+  manifest and target. `local_shell`'s `shell` + `script` form is unchanged; removing or
+  rejecting it would be a separate compatibility decision.
 
 **Why.** Fail closed on the old side, add on the new side. A script must never run on
 a binary that can't enforce its grant.
@@ -825,8 +893,9 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 
 ## Non-goals
 
-- **Inline shell text anywhere.** No `command:`, no `sh -c`, no expression evaluated as
-  a command (§1).
+- **Inline shell text in script steps.** No `command:`, no `sh -c`, no expression
+  evaluated as a command in the manifest or the `script:` target (§1). `local_shell` keeps
+  its inline form; see [Relation to `local_shell`](#relation-to-local_shell).
 - **Unsandboxed scripts.** There is no `unsandboxed` grant, and a host without the
   profile refuses (§3, §7).
 - **Scripts calling Orbit.** A script has no `orbit_tools`, no callbacks and no task
@@ -863,6 +932,10 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - **Re-grant fatigue.** A script edited often needs frequent re-grants. The diff view
   is the only mitigation; an operator who re-grants without reading has spent the
   protection.
+- **`local_shell` stays the weaker route.** A workspace that uses it runs its program bare
+  unless an operator adds a sandbox, and a routine can reach that program through a job.
+  This design makes the script route stronger and leaves `local_shell` as it is (open
+  question 8).
 - **The doc's size.** If phase 2 grows specs (the profile's mount table, the grant
   witness format), the feature graduates to the full track (CONVENTIONS.md §1).
 
@@ -925,6 +998,10 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 7. **Grant expiry.** Should grants expire by default, as condition-trigger operator
    grants do (30 days)? Leaning: no for script grants, since the digest already bounds
    them, but yes when the script has network.
+8. **`local_shell` posture.** Should the shipped `local-shell` definition declare a
+   sandbox, should its nonzero-exit mapping change, and should a routine's job be refused
+   a `local_shell` step? Each changes a shipped action or a routine's reach, so each needs
+   its own decision record. This doc decides none of them.
 
 ## Acceptance (feature level)
 
@@ -957,12 +1034,16 @@ A script that rewrites itself during a run changes nothing for that run (§2,
   `--follower`. A host without the profile refuses with `script_sandbox_unavailable`,
   and so does a nested-sandbox start.
 - An older binary meeting `target: script:` reports a load error and runs nothing.
+- `local_shell` is unchanged. An activity that uses it loads and dispatches as it does
+  today, and a nonzero exit still fails the step unless `allow_nonzero_exit` is set.
 
 ## Task References
 
 - [ORB-19294] — designs script steps (this doc).
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
+- [ORB-11294] — restored `local_shell` as a deterministic action; the Bearing and
+  [Relation to `local_shell`](#relation-to-local_shell) inventory it.
 - [ORB-10021] — made routine targets catalog references only.
 - [ORB-12903] — added worker containment scopes.
 - [ORB-19251] — macOS worker containment by tracked process tree.
