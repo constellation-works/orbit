@@ -58,7 +58,7 @@ const full = task => ({
   description: task.description || '## Why\\n\\nOperators compare tasks side by side. ' + task.title + ' needs a **clear** spec.\\n\\n- keep the list still\\n- show the detail beside it',
   acceptance_criteria: task.acceptance_criteria || ['The list keeps its scroll position', 'The panel opens beside the list'],
   plan: '1. Read the code\\n2. Change it', complexity: 'medium', type: 'feature', tags: ['dashboard', 'ui'],
-  created_by: 'operator', created_at: '2026-10-18T10:00:00Z', updated_at: '2026-10-18T12:00:00Z',
+  created_by: task.created_by === undefined ? 'operator' : task.created_by, created_at: '2026-10-18T10:00:00Z', updated_at: '2026-10-18T12:00:00Z',
   history: Array.from({ length: 6 }, (_, i) => ({ at: '2026-10-18T1' + i + ':00:00Z', by: 'operator', event: 'updated', note: 'edit ' + (i + 1) })),
   comments: task.comments || (task.id === 'PANEL-2' ? [] : sampleComments),
   artifacts: [{ path: 'notes/summary.txt', size: 42, media_type: 'text/plain' }],
@@ -204,7 +204,7 @@ const waitShown = async (page, id) => {
 };
 
 try {
-  // A schedule remains editable and distinct from the actual first start.
+  // Scheduling lives in the metadata card; editing still sets and clears it.
   for (const width of [1440, 375]) {
     const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
     const scheduledRow = row(page, 'PANEL-6');
@@ -215,7 +215,11 @@ try {
     await capture(page, `scheduled-list-dark-${width}.png`);
     await scheduledRow.locator('.title').click();
     await waitShown(page, 'PANEL-6');
-    const schedule = pane(page).locator('.task-schedule');
+    const schedule = pane(page).locator('.task-delivery-card .property-row.schedule');
+    await schedule.waitFor({ state: 'visible' });
+    assert.equal(await schedule.count(), 1, 'Scheduled belongs in the metadata card');
+    assert.equal(await schedule.locator('.label').textContent(), 'Scheduled');
+    assert.equal(await pane(page).locator('.task-schedule, .task-started-at').count(), 0);
     await schedule.getByRole('button', { name: 'Edit scheduled time for PANEL-6', exact: true }).click();
     const input = schedule.getByRole('textbox', { name: 'Edit scheduled time for PANEL-6', exact: true });
     await input.fill('2099-02-02T11:00:00+01:00');
@@ -223,20 +227,78 @@ try {
     await schedule.getByRole('button', { name: 'save', exact: true }).click();
     await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
     assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches[0].body), { not_before: '2099-02-02T11:00:00+01:00' });
-    await pane(page).locator('.task-schedule .field-edit').waitFor({state: 'visible'});
-    await capture(page, `scheduled-detail-dark-${width}.png`);
-    await pane(page).locator('.task-schedule .field-edit').click();
-    await pane(page).locator('.task-schedule input').fill('');
-    await pane(page).locator('.task-schedule').getByRole('button', { name: 'save', exact: true }).click();
+    await schedule.locator('.field-edit').waitFor({state: 'visible'});
+    await schedule.locator('[data-clock-at]').waitFor({state: 'visible'});
+    await capture(page, `task-detail-scheduled-dark-${width}.png`);
+    await schedule.locator('.field-edit').click();
+    await schedule.locator('input').fill('');
+    await schedule.getByRole('button', { name: 'save', exact: true }).click();
     await page.waitForFunction(() => globalThis.panelFixture.patches.length === 2);
     assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches[1].body), { not_before: '' });
-    await pane(page).locator('.task-schedule .field-edit').waitFor({state: 'visible'});
+    await schedule.locator('.field-edit').waitFor({state: 'visible'});
+    assert.match(await schedule.innerText(), /not scheduled/);
+    await capture(page, `task-detail-unscheduled-dark-${width}.png`);
     assert.equal(await row(page, 'PANEL-6').locator('.scheduled-chip').count(), 0, 'Clearing the schedule removes its hold chip');
     await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    const worktree = {
+      branch: 'orbit/dashboard-task-detail-layout-with-a-distinctive-branch-suffix',
+      worktree_path: '/home/operator/workspace/constellation/codebases/orbit/.orbit/state/worktrees/orbit-jrun-20261028-0113-c9',
+    };
+    await page.evaluate(worktree => {
+      panelFixture.tasks.find(task => task.id === 'PANEL-5').job_run_worktree = worktree;
+    }, worktree);
     await row(page, 'PANEL-5').locator('.title').click();
     await waitShown(page, 'PANEL-5');
-    await pane(page).locator('.task-started-at [data-clock-at]').waitFor({state: 'visible'});
-    await capture(page, `scheduled-started-dark-${width}.png`);
+    const riskBreakdown = pane(page).locator('.task-risk');
+    await riskBreakdown.locator('summary').click();
+    assert.match(await riskBreakdown.locator('.task-risk-lead').textContent(), /Regression risk 23%/);
+    assert.equal(await pane(page).locator('.task-started-at').count(), 0, 'Even a task with started_at has no Actual start line');
+    await riskBreakdown.locator('summary').click();
+    // Real clipboard permission checks the full value, beyond the clipped label.
+    await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+    for (const [kind, recorded] of [['run-branch', worktree.branch], ['run-worktree', worktree.worktree_path]]) {
+      const button = pane(page).locator(`.${kind} .run-worktree-copy`);
+      assert.equal(await button.getAttribute('title'), recorded);
+      const geometry = await button.evaluate((n, recorded) => {
+        const s = getComputedStyle(n);
+        const box = n.getBoundingClientRect();
+        const text = n.firstChild;
+        const start = text.textContent.indexOf(recorded);
+        const range = document.createRange();
+        range.setStart(text, start);
+        range.setEnd(text, start + 1);
+        const prefix = range.getBoundingClientRect();
+        range.setStart(text, start + recorded.length - 1);
+        range.setEnd(text, start + recorded.length);
+        const suffix = range.getBoundingClientRect();
+        return { height: box.height, lineHeight: parseFloat(s.lineHeight), width: n.clientWidth, fullWidth: n.scrollWidth,
+          whiteSpace: s.whiteSpace, overflow: s.overflowX, ellipsis: s.textOverflow, direction: s.direction,
+          prefixHidden: prefix.right <= box.left, suffixVisible: suffix.left >= box.left && suffix.right <= box.right + 1 };
+      }, recorded);
+      assert.equal(geometry.whiteSpace, 'nowrap');
+      assert.equal(geometry.overflow, 'hidden');
+      assert.equal(geometry.ellipsis, 'ellipsis');
+      assert.equal(geometry.direction, 'rtl', 'The beginning is elided so the distinctive end stays visible');
+      assert.ok(geometry.height <= geometry.lineHeight + 1, JSON.stringify(geometry));
+      assert.ok(geometry.fullWidth > geometry.width, 'The long fixture value needs truncation');
+      assert.equal(geometry.prefixHidden, true, 'The leading slash or branch prefix stays at the elided start');
+      assert.equal(geometry.suffixVisible, true, 'The final path or branch characters stay visible');
+      await button.click();
+      await page.waitForFunction(() => document.querySelector('.run-worktree-copy[data-copy-label]')?.textContent === 'copied!');
+      assert.equal(await page.evaluate(() => navigator.clipboard.readText()), recorded);
+      await page.waitForFunction(() => !document.querySelector('.run-worktree-copy[data-copy-label]'));
+    }
+    assert.equal(await pane(page).evaluate(n => n.scrollWidth <= n.clientWidth), true, 'The pane has no horizontal overflow');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'The page has no horizontal scroll');
+    await capture(page, `task-detail-worktree-dark-${width}.png`);
+    // No run, people, relations or readiness: Scheduled alone retains its card.
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await page.evaluate(() => Object.assign(panelFixture.tasks.find(task => task.id === 'PANEL-4'), { job_run_id: null, created_by: null }));
+    await row(page, 'PANEL-4').locator('.title').click();
+    await waitShown(page, 'PANEL-4');
+    await pane(page).locator('.task-delivery-card .schedule .field-edit').waitFor({ state: 'visible' });
+    assert.equal(await pane(page).locator('.task-delivery-card .property-row').count(), 1, 'Scheduled keeps an otherwise empty metadata card visible');
+    assert.equal(await pane(page).locator('.task-delivery-card .schedule .field-edit').count(), 1);
     assert.deepEqual(errors, []);
     await context.close();
   }
@@ -257,9 +319,8 @@ try {
     const riskChip = riskDetail.locator('.task-chip-risk');
     assert.equal(await riskChip.locator('.risk-value').textContent(), 'No estimate', 'Task detail retains its no-estimate risk chip');
     assert.match(await riskChip.getAttribute('title'), /No estimate: The task declares no context files/);
-    const riskBreakdown = riskDetail.locator('.task-risk');
-    await riskBreakdown.locator('summary').click();
-    assert.match(await riskBreakdown.locator('.task-risk-lead').textContent(), /No estimate: The task declares no context files/);
+    assert.equal(await riskDetail.locator('.task-risk').count(), 0, 'An unestimated task has no Regression risk breakdown');
+    await capture(page, `task-detail-unestimated-dark-${width}.png`);
     await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
     await pane(page).waitFor({ state: 'hidden' });
     await row(page, 'PANEL-1').locator('.title').click();
