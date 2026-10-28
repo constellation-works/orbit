@@ -207,7 +207,8 @@ export function renderHostResources(payload, host = document.getElementById('hos
   const compact = ageCompact(payload);
   const blockText = verdict.verdictUnknown ? (compact ? `stale · ${compact}` : 'unknown')
     : verdict.status === 'disabled' ? 'throttle off'
-    : tone === 'critical' ? `holding work · ${named || 'a resource'}`
+    : verdict.status === 'held' ? `holding work · ${named || 'a resource'}`
+    : tone === 'critical' ? `${named || 'a resource'} critical · admission open`
     : tone === 'elevated' ? `${named} near limit`
     : 'open';
   const summary = rows.map(row => `${row.label} ${row.shown}`).join(', ');
@@ -238,7 +239,8 @@ export function renderHostResources(payload, host = document.getElementById('hos
   );
   const pill = verdict.verdictUnknown ? (compact ? 'Stale' : 'Unknown')
     : verdict.status === 'disabled' ? 'Throttle off'
-    : tone === 'critical' ? `Holding work · ${named || 'a resource'}`
+    : verdict.status === 'held' ? `Holding work · ${named || 'a resource'}`
+    : tone === 'critical' ? `${(named || 'a resource').charAt(0).toUpperCase()}${(named || 'a resource').slice(1)} critical · admission open`
     : tone === 'elevated' ? `${named.charAt(0).toUpperCase()}${named.slice(1)} near limit`
     : 'Throttle open';
   renderHostWarning(alarm, tone);
@@ -271,8 +273,9 @@ function renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm) {
   const plain = verdict.verdictUnknown
     ? (compact ? `Last sample ${compact} ago. ` : '')
     : verdict.status === 'disabled' ? 'Throttle disabled — pressure is still reported but holds nothing. '
+    : verdict.status === 'held' ? (alarm && limits ? `New tasks wait until ${alarm.row.label} drops below ${markText(payload, resource, limits.resume)}. ` : 'New tasks wait while sustained pressure holds. ')
+    : tone === 'critical' ? `Admission is still open; ${alarm.row.label} reads critical but no sustained pressure is holding work yet. `
     : tone === 'ok' ? 'Nothing is held back on this host. '
-    : tone === 'critical' ? `New tasks wait until ${alarm.row.label} drops below ${markText(payload, resource, limits.resume)}. `
     : `Admission is still open; ${alarm.row.label} is between ${markText(payload, resource, limits.resume)} and its limit at ${markText(payload, resource, limits.high)}. `;
   const foot = `${plain}Throttle verdict: ${verdict.status}. ${verdict.reason}`;
   const link = el('a', { class: 'host-detail-drain', text: 'Open Drain' });

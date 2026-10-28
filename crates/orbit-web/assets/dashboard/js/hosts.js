@@ -300,6 +300,9 @@ function hostSwitch(row) {
   link.href = hostSwitchHref(name);
   link.setAttribute("aria-label", `Show ${row.name}`);
   link.addEventListener("click", (event) => {
+    // Modified and non-primary clicks follow the href (new tab, copy, open
+    // in background), so they must not be intercepted into an in-page switch.
+    if (event.defaultPrevented || (event.button ?? 0) !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     event.stopPropagation();
     requestHostSwitch(name);
@@ -309,8 +312,10 @@ function hostSwitch(row) {
 
 function hostSwitchHref(name) {
   const params = new URLSearchParams(window.location.search || "");
+  // The serving host is an explicit empty `host=`, not an absent parameter:
+  // a bare URL restores a remembered remote, an explicit empty one does not.
   if (name) params.set("host", name);
-  else params.delete("host");
+  else params.set("host", "");
   const query = params.toString();
   const path = window.location.pathname || "";
   const hash = window.location.hash || "";

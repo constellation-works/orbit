@@ -176,6 +176,18 @@ try {
             shadowed_by: [],
           },
           {
+            key: 'workflow.auto_ship',
+            label: 'Auto ship',
+            description: 'Ship automatically when checks pass.',
+            value_type: 'bool',
+            value: false,
+            state: 'set',
+            settable: true,
+            source: { layer: 'workspace' },
+            built_in: { value: false },
+            shadowed_by: [],
+          },
+          {
             key: 'workflow.mid_run_steering.max_rounds',
             label: 'Max steering rounds',
             description: 'Most rounds of operator steering admitted.',
@@ -493,6 +505,49 @@ try {
   await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
 
   // -------------------------------------------------------------------------
+  // Case (g): a boolean draft trims to its choice, invalid text is refused
+  // before any PUT, and the CLI preview names the value Save sends
+  // -------------------------------------------------------------------------
+  const boolRow = page.locator('.topic-row[data-key="workflow.auto_ship"]');
+  await boolRow.waitFor({ state: 'visible' });
+  await boolRow.locator('button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+  const boolField = drawer.locator('textarea.config-input, select.config-input');
+  await boolField.waitFor({ state: 'visible' });
+  if (await boolField.evaluate(node => node.tagName) === 'SELECT') await boolField.selectOption('true');
+  else await boolField.fill('true ');
+  assert.equal((await drawer.locator('.drawer-cli').textContent()).trim(), 'orbit config set workflow.auto_ship true', 'the CLI preview trims a boolean draft the way Save does');
+  await page.screenshot({ path: path.join(evidence, 'config-topics-bool-drawer-dark-1440.png') });
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.screenshot({ path: path.join(evidence, 'config-topics-bool-drawer-dark-375.png') });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  capturedPuts.length = 0;
+  await drawer.locator('button.config-action:has-text("Save")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  assert.deepEqual(capturedPuts, [{ key: 'workflow.auto_ship', body: { value: true, scope: 'workspace' } }], "'true ' saves true, never a coerced false");
+  // Invalid and false drafts through the same drawer.
+  await boolRow.locator('button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+  await boolField.waitFor({ state: 'visible' });
+  if (await boolField.evaluate(node => node.tagName) !== 'SELECT') {
+    capturedPuts.length = 0;
+    await boolField.fill('yes');
+    await drawer.locator('button.config-action:has-text("Save")').click();
+    assert.equal(capturedPuts.length, 0, 'an invalid boolean draft sends no PUT');
+    const boolWarning = drawer.locator('.config-warning');
+    await boolWarning.waitFor({ state: 'visible' });
+    assert.equal(await boolWarning.textContent(), 'workflow.auto_ship takes true or false');
+    await boolField.fill(' false ');
+  } else {
+    await boolField.selectOption('false');
+  }
+  assert.equal((await drawer.locator('.drawer-cli').textContent()).trim(), 'orbit config set workflow.auto_ship false');
+  capturedPuts.length = 0;
+  await drawer.locator('button.config-action:has-text("Save")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  assert.deepEqual(capturedPuts, [{ key: 'workflow.auto_ship', body: { value: false, scope: 'workspace' } }], 'false round-trips as false');
+
+  // -------------------------------------------------------------------------
   // Case (f): a first workspace write asks how to create the policy file
   // -------------------------------------------------------------------------
   const initButtons = () => drawer.locator('.drawer-actions button.config-action:not(.ghost)').evaluateAll(
@@ -719,6 +774,9 @@ try {
       'init-choice-close-or-refusal-creates-no-workspace-file',
       'global-and-existing-policy-writes-keep-plain-save',
       'git-init-scrubs-inherited-repository-authority',
+      'boolean-true-with-trailing-space-saves-true-and-cli-preview-matches',
+      'boolean-invalid-draft-refused-before-put',
+      'boolean-false-round-trips',
     ],
   }, null, 2));
 

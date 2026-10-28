@@ -79,6 +79,9 @@ const summaryRequests = [];
 // or fails them, so it decides the order responses settle in.
 let holdAudit = null;
 const heldAudit = [];
+// When set, /api/audit only returns events at or after this instant, the way
+// the real endpoint reparses a relative `since` against its clock per request.
+let auditCutoffMs = null;
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
   if (url.pathname === '/api/log/stream') { res.writeHead(204); res.end(); return; }
@@ -132,6 +135,7 @@ function answerAudit(url, res) {
     .filter(event => !url.searchParams.has('status') || event.status === url.searchParams.get('status')
       || (url.searchParams.get('status') === 'non_success' && event.status !== 'success'))
     .filter(event => url.searchParams.get('hide_unverified') !== 'true' || !(event.role === 'unverified' && event.status === 'success'))
+    .filter(event => auditCutoffMs === null || !event.timestamp || Date.parse(event.timestamp) >= auditCutoffMs)
     .slice(0, limit);
   const capped = before === null && cappedHead;
   const cursor = capped ? cappedHead.cursor : rows.length >= limit ? String(rows.at(-1).id) : null;
@@ -616,6 +620,33 @@ try {
   assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'the held older page continues the refreshed head');
   await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
   assert.equal(await page.locator('.audit-row').count(), 100, 'a later same-scope refresh keeps the loaded tail');
+  // A relative window expires retained tail rows on refresh: load 100 of 120
+  // events in a 1h window, advance the fixture clock ten minutes so only 61
+  // remain, and the refreshed list must drop the 39 expired tail rows while
+  // keeping the 11 still-valid ones behind the new head.
+  const expiryBase = Date.UTC(2026, 9, 28, 12, 0, 0);
+  const expiryStamp = (id) => new Date(expiryBase - (id >= 60 ? (120 - id) * 0.8 : 51 + (59 - id) * 0.2) * 60000).toISOString();
+  pagedEvents = Array.from({ length: 120 }, (_, index) => {
+    const id = 120 - index;
+    return { ...events[1], id, timestamp: expiryStamp(id), execution_id: `expiry-${id}`, status: 'success', role: 'codex' };
+  });
+  auditCutoffMs = expiryBase - 60 * 60000;
+  await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=all&since=1h'));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  assert.equal(await page.locator('.audit-row').count(), 50);
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'two pages load events 120 through 21');
+  auditCutoffMs = expiryBase - 50 * 60000;
+  auditRequests.length = 0;
+  await page.evaluate(() => auditFixture.fetchAndRenderAudit(auditContext));
+  assert.equal(await page.locator('.audit-row').count(), 61, 'refresh removes the 39 expired tail rows and keeps the 11 valid ones');
+  assert.deepEqual(await rowTitles(), Array.from({ length: 61 }, (_, index) => `event ${120 - index}`), 'only events still in the 1h window remain, in order');
+  assert.ok(auditRequests.some(params => params.has('before')), 'the retained tail was revalidated against the server, not kept by ID alone');
+  assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'no older events remain in the shrunken window');
+  auditCutoffMs = null;
   pagedEvents = null;
   await page.evaluate(async () => {
     const codebase = await import('/js/codebase.js');

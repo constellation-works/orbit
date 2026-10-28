@@ -365,6 +365,20 @@ showAlpha.click();
 assert.deepEqual(switched, ['alpha']);
 assert.equal(named(row('hm_local'), 'host-showing')[0].textContent, 'showing');
 assert.equal(named(row('hm_local'), 'host-switch').length, 0, 'the host already shown has no switch link');
+// The serving host's Show href carries an explicit empty host, so opening or
+// copying it in a new tab selects the serving host even with a remembered
+// remote; a modified click follows the href instead of switching in page.
+load('common.js').namespace.setHost('alpha');
+await fetchAndRenderConfig();
+const showServing = named(row('hm_local'), 'host-switch')[0];
+assert.ok(showServing, 'the serving host has a Show link while a remote is shown');
+assert.match(showServing.href, /(?:\?|&)host=(?:&|#|$)/, 'serving Show href is an explicit empty host');
+showServing.dispatch('click', { metaKey: true, button: 0 });
+assert.deepEqual(switched, ['alpha'], 'a modified click is not intercepted into an in-page switch');
+showServing.click();
+assert.deepEqual(switched, ['alpha', null], 'an ordinary click switches to the serving host');
+load('common.js').namespace.setHost(null);
+await fetchAndRenderConfig();
 
 resourceFailures.alpha = 'sampler down';
 await fetchAndRenderConfig();

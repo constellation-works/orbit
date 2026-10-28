@@ -181,6 +181,19 @@ assert.deepEqual(chips().map(node => node.className), ['host-resource critical',
 assert.deepEqual(readings(), [{ k: 'load', v: '1.9×' }, { k: 'mem', v: '82%' }, { k: 'disk', v: '88%' }]);
 assert.ok(chips().every(node => heldWords(node).length === 0));
 assert.match(chip('disk').title, /Throttle verdict: open/);
+// Critical but unsustained: severity stays alarming, admission wording follows
+// the actual verdict (open), never the visual tone.
+assert.equal(host.className, 'host-block critical', 'unsustained critical keeps the warning appearance');
+assert.match(host.getAttribute('aria-label'), /critical · admission open/);
+assert.doesNotMatch(host.getAttribute('aria-label'), /holding work/i);
+{
+  const pillNode = descendants(panel).find(node => String(node.className).startsWith('host-detail-pill'));
+  const footNode = descendants(panel).find(node => node.className === 'host-detail-foot-text');
+  assert.match(pillNode.textContent, /critical · admission open/i);
+  assert.doesNotMatch(pillNode.textContent, /holding work/i);
+  assert.match(footNode.textContent, /^Admission is still open; .* reads critical but no sustained pressure is holding work yet\. Throttle verdict: open\./);
+  assert.doesNotMatch(footNode.textContent, /New tasks wait/);
+}
 
 renderHostResources({ ...payload, pressures: [{ resource: 'memory' }] });
 assert.deepEqual(chips().map(node => node.className), ['host-resource critical', 'host-resource elevated throttled', 'host-resource critical'], 'the held resource is the one marked throttled');
