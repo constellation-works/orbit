@@ -198,6 +198,34 @@ impl OrbitRuntime {
         Ok(())
     }
 
+    /// Append a narrowly permitted CI observation through the current landing
+    /// claim. The store validates both the event and the live attempt.
+    pub(crate) fn record_handoff_landing_history(
+        &self,
+        handoff_id: &str,
+        event: &str,
+        note: &str,
+    ) -> Result<(), OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        let (claim, _) = self.landing_claim(handoff_id)?;
+        let context = self.landing_invocation(&claim);
+        let attempt = self
+            .landing_attempt(handoff_id)?
+            .ok_or_else(|| missing_attempt(handoff_id))?
+            .attempt;
+        let digest = orbit_common::security::release::sha256_hex(note.as_bytes());
+        self.stores().tasks().mutate_execution_claim(
+            Some(&context),
+            &format!("landing-history:{handoff_id}:{attempt}:{event}:{digest}"),
+            &ClaimMutation::RecordLandingHistory {
+                handoff_id: handoff_id.to_string(),
+                event: event.to_string(),
+                note: note.to_string(),
+            },
+        )?;
+        Ok(())
+    }
+
     fn landing_observation(
         &self,
         update: &HandoffLandingUpdate,

@@ -434,6 +434,13 @@ pub enum ClaimMutation {
         handoff_id: String,
         reason: String,
     },
+    /// Append one of the narrowly allowed CI observations to a live landing
+    /// attempt. The store validates the event name before writing history.
+    RecordLandingHistory {
+        handoff_id: String,
+        event: String,
+        note: String,
+    },
     /// Complete an authorized landing against verified external merge evidence.
     /// Refused while a merge intent is unresolved or the authority is stale.
     CompleteLanding {

@@ -313,7 +313,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
                 let evidence = serde_json::json!({
                     "base": tip, "check": label, "signature": signature, "reason": why,
                 });
-                super::suspect::record_base_suspect(host, tasks, &evidence)
+                super::suspect::record_base_suspect(host, tasks, &evidence, None)
                     .map_err(|error| error.to_string())?;
                 suspect = true;
                 reasons.push(why);

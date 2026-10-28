@@ -327,6 +327,14 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::record_handoff_landing_wait(self, handoff_id, reason)
     }
+    fn record_handoff_landing_history(
+        &self,
+        handoff_id: &str,
+        event: &str,
+        note: &str,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::record_handoff_landing_history(self, handoff_id, event, note)
+    }
     fn local_machine_id(&self) -> Option<String> {
         NullRuntimeHost::local_machine_id(self)
     }
