@@ -305,27 +305,33 @@ action_key = "condition:<fire_id>:<n>"   # n = 0 for the primary action, 1 for n
 
 `arm sequence` counts the subject's re-arms and is stored in the fenced
 checkpoint. For a task, the history position records exactly which state the edge
-was observed at, and explain cites it.
+was observed at, and explain cites it. This **observation revision** is immutable:
+later history writes never replace it in the fire ID, captured subject or action
+key. Per-fire approval uses a separate subject freshness binding (§7); it never
+compares the current raw history length with the observation revision.
 
 **Protocol.** Each pass follows the existing three checkpoints
 ([automation-triggers §4–5](../automation-triggers/2_design.md#5-crash-safety-concurrency-and-minimal-state)):
 
 1. Load the consumer state at generation `g` and evaluate the subjects.
 2. Commit `g+1`. Each new edge moves to `fired`, carrying its `fire_id` and action
-   keys as **intents**. A losing evaluator gets `ConcurrentEvaluation` and writes
-   nothing.
+   keys as **intents**, with the captured subject and observation revision. A
+   per-fire approval also freezes its freshness binding from that same snapshot
+   (§7), before any fire or decision bookkeeping. A losing evaluator gets
+   `ConcurrentEvaluation` and writes nothing.
 3. For each intent, look up the key: `automation_job_for_key` for a job, or the keyed
    task reservation for a mint. If an action exists, acknowledge it. Otherwise
-   admit the action under that key.
+   admit the action under that key once its grant and any per-fire decision pass
+   §7. An unanswered request keeps the intent pending without admitting a job.
 4. Commit the acknowledgement (task or run ID) on the fire record.
 
 | Failure window | Behavior |
 |---|---|
 | Crash before step 2 | Nothing recorded. The next pass re-evaluates; still true means the same edge. |
-| Intent saved, action not created | The next pass admits the same key. |
+| Intent saved, action not created | The next pass reuses the same key and any frozen approval binding; admission still requires §7. |
 | Action created, acknowledgement lost | The key resolves to the original task or run. No second mint. |
 | Two evaluators | Only one step-2 commit wins the compare-and-swap. Key admission fences any stale actor that already holds an intent. |
-| Subject changed between evaluation and action | The action still runs for the recorded edge. It receives the subject and revision captured at the edge, never a re-read. |
+| Subject changed between evaluation and action | An action without per-fire approval still runs for the recorded edge, receiving the captured subject and observation revision. With per-fire approval, a change that invalidates the freshness binding supersedes the request and prevents admission (§7); the captured input is never silently replaced. |
 
 Condition auto-tasks mint through the keyed task path, not the slot cursor
 (`fire_slot`). That closes the cursor's gap of a mint whose task ID was never
@@ -542,17 +548,51 @@ two things:
    raises a decision request on the subject task with a new gate,
    `trigger_action`:
    - **Answers:** `approve` or `dismiss`.
-   - **Binding:** `fire_id`, the grant digest and the subject revision at the edge.
-   - **Superseded when:** the definition, target or grant changes, or the subject
-     moves off that revision.
+   - **Binding:** `fire_id`, the grant identity and digest, and
+     `subject_freshness` frozen at the edge as defined below. The fire ID retains
+     the immutable observation revision (§3).
+   - **Superseded when:** the definition, target or grant changes, the grant is
+     revoked, expires or is replaced (even by one with the same digest), or
+     `subject_freshness` advances. Supersession is terminal; restoring earlier
+     content or status never revives the request.
+
+   **Subject freshness.** For a fire `F`, `subject_freshness(F, history)` is the
+   position of the latest task-history entry other than trusted bookkeeping for
+   `F` and its `trigger_action` request. Positions are append-only, so this value
+   can only advance. Freeze it with the observed task at step 2 of §3, and compare
+   that frozen value with the current value when raising the request and when
+   applying an answer. Do not capture a newer binding when raising or retrying:
+   a real change between the edge and the request must also supersede it.
+
+   The exemption is narrow: the owner's `condition_fired` entry for `F`, the
+   `decision_requested` entry for its request, and that request's channel-delivery
+   and answer bookkeeping. Exempt entries must be typed, owner-validated and
+   correlated to the stored fire/request IDs, and must change only those records
+   and bookkeeping-derived metadata such as `updated_at`. Event names or a
+   caller-supplied fire ID alone cannot claim the exemption. A write that also
+   changes task content is never exempt. All other subject writes advance
+   freshness, including status, tags, description, criteria, candidate or release
+   input changes, even if `when` stays true. An unknown entry, incomplete history,
+   or unverifiable bookkeeping provenance fails closed. Comparing `updated_at` or
+   raw history length would reintroduce self-invalidation; comparing only current content
+   would wrongly allow an edit followed by a revert to revive approval.
 
    Only a human answers, through `orbit.decision.submit`
    ([decision channel §3](../human-decision-channel/2_design.md#3-delegated-human-authority)).
-   On `approve`, the apply step admits the job under the fire's action key and
-   records the approving human as the run's authority. On `dismiss` the fire
-   closes, and the subject stays fired until it re-arms. A condition whose scope has
-   no subject task (workspace, host, file) can't use `approval: per_fire` in v1.
-   Its operator-authority targets need the grant alone.
+   On `approve`, the apply step checks that the request is open, the grant is
+   current, the definition and target still match, and subject freshness is
+   unchanged. That check and admission must be fenced against concurrent subject,
+   definition, target or grant writes: a change before admission refuses the
+   answer rather than running from a stale check. It admits the job under the
+   fire's action key with the captured input and records the approving human as
+   the run's authority. Its answer history write is exempt bookkeeping, so it
+   cannot invalidate its own admission. An already admitted key resolves to the
+   same run on retry. On `dismiss` the fire closes, and the subject stays fired
+   until it re-arms. A superseded request admits nothing and also leaves the
+   subject fired until re-arm; it never silently refreshes the old fire's input or
+   asks again against a newer subject. A condition whose scope has no subject task
+   (workspace, host, file) can't use `approval: per_fire` in v1. Its
+   operator-authority targets need the grant alone.
 
 **Protection from agent edits.** An agent with `orbit.auto_task.update`, or with
 write access to a definition file, can still edit a definition. Editing changes
@@ -630,10 +670,16 @@ honest; a static proof would not be.
 - **`orbit automation grant | revoke | clear-stall <definition>`** are operator-only.
 - **Where fires are recorded.**
   - Every fire record lives in the owner Store, with its intent, its
-    acknowledgement and its subject.
+    acknowledgement, its captured subject and immutable observation revision.
+    A per-fire approval also records the frozen freshness binding and the linked
+    decision-request ID (§7); retries reuse them.
   - Each minted task carries a `condition_fired` history event.
   - A task-scope subject gets a `condition_fired` event naming the fire, so task
-    history shows why automation acted.
+    history shows why automation acted. This event and the fire's own decision
+    channel bookkeeping still append to history (and may update `updated_at`),
+    while leaving its subject freshness binding unchanged under §7. They never
+    rewrite the observation revision or omit the audit history to keep approval
+    current.
   - `orbit routine list` and `orbit auto-task list` show the last fire and the last
     skip with its reason.
   - The dashboard Automation view lists condition definitions with matches, arm
@@ -856,15 +902,34 @@ target: job:release_pipeline     # workspace-defined; declares authority: operat
    zero would-fire.
 2. Daniel runs `orbit automation grant release-on-prep-done`, which records the
    digest of the definition, `release_pipeline` and its activities.
-3. A's task reaches `done`. The edge fires with `fire_id` bound to that task's
-   history position. Because the target declares `approval: per_fire`, the fire raises
-   a `trigger_action` decision request on the task: "Release from `<base>`?
-   approve / dismiss". Mail delivers it once the decision-mail transport ships.
-4. Daniel approves. The apply step admits `release_pipeline` under
-   `condition:<fire_id>:0`, attributed to him. A retry or a second evaluator resolves
-   the same key.
-5. An agent that edits the routine, or the job, makes the grant stale. The approval
-   request is superseded, and nothing runs until Daniel grants again.
+3. A's task reaches `done` at history position 40. The edge freezes observation
+   revision `40`, the captured task fields, and `subject_freshness = 40`.
+   Its fire ID is `F = sha256(consumer, epoch, task key, 40, arm sequence)`.
+   Because the target declares `approval: per_fire`, the fire raises request `R`
+   on the task: "Release from this preparation? approve / dismiss". Mail delivers
+   it once the decision-mail transport ships. `R` binds
+   `(F, grant identity, grant digest, 40)`.
+4. The owner's `condition_fired(F)` is entry 41 and `decision_requested(R)` is
+   entry 42. Raw history length is now 42 and `updated_at` may have advanced, but
+   both entries are exempt under §7: current subject freshness is still 40, so
+   `R` remains open. Reversing those two writes, or retrying their bookkeeping,
+   gives the same result; neither recaptures revision 42 or changes `F`.
+5. With no other change, Daniel approves `R`. The fenced apply sees freshness 40
+   and the same current grant, definition and target. The answer's own history
+   entry 43 is exempt too. It admits `release_pipeline` with the captured subject
+   under `condition:F:0`, attributed to Daniel. A retry or a second evaluator
+   resolves the same key.
+6. Alternatively, before answering, Daniel reopens the preparation task into
+   `review` at entry 43. Subject freshness advances to 43; `R` is superseded and
+   an approval attempt admits no job. Returning it to `done` at entry 44 advances
+   freshness again, so `R` stays superseded. Its observation revision is still 40
+   and `F` is unchanged; the subject must re-arm and reach a new edge before a new
+   fire can ask again. Any other subject edit, such as a description change while
+   the task remains `done` and `when` stays true, likewise advances freshness.
+7. An agent that edits the routine or the job makes the grant stale and supersedes
+   the pending request, even without a task-history write. Revoking, expiring or
+   replacing the grant also supersedes it. Daniel must grant again for a future
+   fire; no such change refreshes `R`.
 
 What is missing, and why B is phase 5:
 
@@ -1204,13 +1269,23 @@ target: job:media_ingest_pipeline    # workspace-defined
 - A `for_minutes` hold doesn't fire on a shorter true spell, or across an
   observation gap longer than the continuity limit.
 - A fire passes its subject to the action. The minted task or job input carries the
-  fire ID, the subject key, the revision at the edge and the bound variable's
-  fields.
+  fire ID, the subject key, the immutable observation revision at the edge and the
+  bound variable's fields. Fire and decision history writes never change that
+  identity or recapture its input.
 - A pull follower and a replica checkout never fire a workspace, task or file
   condition.
 - An operator-authority target doesn't run without a current grant whose digest
   matches the definition and target. With `approval: per_fire`, it doesn't run
   without a human answer, and an agent edit stops both.
+- A per-fire request's binding stays current across its own trusted `condition_fired`,
+  decision-request, delivery and answer bookkeeping, including their history and
+  `updated_at` changes. A real subject change between observation and request or
+  between request and admission supersedes it even if `when` stays true; a
+  definition, target or grant change does likewise. Reverting a change never
+  revives the request. The apply step fences freshness and authority checks with
+  keyed admission, and retries resolve the original run. Use case B's
+  history-40/41/42 trace admits on unchanged freshness 40 and refuses after a real
+  change at 43.
 - A file condition fires once per new stable file, even for a re-save of the same
   bytes or a rename within its roots. It finds files added while Orbit was down.
   With `group_by: stem`, a `.mp4` and `.vtt` pair fires once, in either arrival order.
