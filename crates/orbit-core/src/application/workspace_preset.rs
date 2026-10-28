@@ -188,14 +188,86 @@ impl WorkspacePreset {
         global_root: &Path,
         workspace_orbit_root: &Path,
     ) -> Result<(), OrbitError> {
-        // Loadability is decided before the config store is staged, so a
-        // missing or unloadable definition refuses the preset with no write.
         self.require_plugin_seeded(workspace_orbit_root)?;
-        self.require_seeded_definitions_load(global_root, workspace_orbit_root)?;
-        if self.sets_config() {
+        // Stage the preset's config in memory first, so plugin schema
+        // validation and routine catalog membership are judged against the
+        // effective post-preset config, not the config still on disk. The
+        // staged store is dropped without saving, so a refusal here writes
+        // nothing.
+        let staged_plugin_sections = if self.sets_config() {
             let path = workspace_orbit_root.join("config.toml");
             let store = self.staged_store(global_root, &path, WorkspaceInitMode::SeedFromGlobal)?;
+            let sections = store.plugin_sections_with_global(global_root)?;
             drop(store);
+            Some(sections)
+        } else {
+            None
+        };
+        if let Some(sections) = &staged_plugin_sections {
+            self.validate_staged_plugin_sections(global_root, workspace_orbit_root, sections)?;
+        }
+        // Loadability is decided from that staged view, so a missing or
+        // unloadable definition refuses the preset with no write.
+        self.require_seeded_definitions_load(
+            global_root,
+            workspace_orbit_root,
+            staged_plugin_sections.as_ref(),
+        )?;
+        Ok(())
+    }
+
+    /// Refuse a preset-set `plugins.<ns>.<key>` its installed plugin's
+    /// schema rejects under the staged effective section, naming the key.
+    /// A namespace with no installed plugin on this host cannot be checked
+    /// and is admitted, as `orbit config set` admits it.
+    fn validate_staged_plugin_sections(
+        &self,
+        global_root: &Path,
+        workspace_orbit_root: &Path,
+        sections: &std::collections::BTreeMap<String, serde_json::Value>,
+    ) -> Result<(), OrbitError> {
+        let mut touched: Vec<(&str, &str)> = Vec::new();
+        for (key, _) in &self.settings {
+            let mut parts = key.split('.');
+            if parts.next() == Some("plugins")
+                && let (Some(namespace), Some(_field)) = (parts.next(), parts.next())
+            {
+                touched.push((namespace, key.as_str()));
+            }
+        }
+        if touched.is_empty() {
+            return Ok(());
+        }
+        let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+            global_root,
+            workspace_orbit_root,
+        ))?;
+        if !config.persistence.audit_db.is_file() {
+            return Ok(());
+        }
+        let (_registry, load) = crate::runtime::plugin::discovery::host_plugin_registry(
+            global_root,
+            &config.persistence.audit_db,
+            sections,
+        )?;
+        for (namespace, key) in touched {
+            let Some(plugin) = load
+                .registered
+                .iter()
+                .filter(|entry| entry.name == namespace)
+                .filter_map(|entry| entry.loaded.as_ref())
+                .next()
+            else {
+                continue;
+            };
+            if let Err(message) =
+                crate::runtime::plugin::config::validate_plugin_config(plugin, sections)
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "preset '{}' sets `{key}`, which `orbit config set` refuses: {message}",
+                    self.name
+                )));
+            }
         }
         Ok(())
     }
@@ -297,8 +369,9 @@ impl WorkspacePreset {
         &self,
         global_root: &Path,
         workspace_orbit_root: &Path,
+        staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
     ) -> Result<(), OrbitError> {
-        self.require_routines_load(global_root, workspace_orbit_root)?;
+        self.require_routines_load(global_root, workspace_orbit_root, staged_plugin_sections)?;
         self.require_auto_tasks_load(workspace_orbit_root)
     }
 
@@ -306,6 +379,7 @@ impl WorkspacePreset {
         &self,
         global_root: &Path,
         workspace_orbit_root: &Path,
+        staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
     ) -> Result<(), OrbitError> {
         if self.enable_routines.is_empty() {
             return Ok(());
@@ -314,7 +388,11 @@ impl WorkspacePreset {
             workspace: "workspace".to_string(),
             orbit_dir: workspace_orbit_root.to_path_buf(),
         };
-        let catalog_lookup = effective_routine_catalog_lookup(global_root, workspace_orbit_root)?;
+        let catalog_lookup = effective_routine_catalog_lookup(
+            global_root,
+            workspace_orbit_root,
+            staged_plugin_sections,
+        )?;
         let collection =
             collect_routines_with_skips(&[source], &catalog_lookup, &|_path, _definition| None);
         let dir = workspace_orbit_root.join(ROUTINES_DIR);
@@ -458,6 +536,7 @@ fn seeded_file_matches(dir: &Path, name: &str, loaded_path: &Path, loaded_name: 
 fn effective_routine_catalog_lookup(
     global_root: &Path,
     workspace_orbit_root: &Path,
+    staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
 ) -> Result<impl Fn(&Path, &str) -> RoutineCatalogLookup, OrbitError> {
     use orbit_engine::activity_job::{V2JobCatalog, catalog_error_to_orbit};
 
@@ -494,7 +573,9 @@ fn effective_routine_catalog_lookup(
             Err(error) => errors.push(catalog_error_to_orbit(error).to_string()),
         }
     }
-    for (namespace, files) in active_plugin_job_files(global_root, workspace_orbit_root)? {
+    for (namespace, files) in
+        active_plugin_job_files(global_root, workspace_orbit_root, staged_plugin_sections)?
+    {
         if let Err(error) = catalog.load_files_prefer_existing(&files) {
             errors.push(format!(
                 "plugin '{namespace}' job catalog layer: {}",
@@ -529,6 +610,7 @@ fn effective_routine_catalog_lookup(
 fn active_plugin_job_files(
     global_root: &Path,
     workspace_orbit_root: &Path,
+    staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
 ) -> Result<Vec<(String, Vec<PathBuf>)>, OrbitError> {
     let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
         global_root,
@@ -537,10 +619,13 @@ fn active_plugin_job_files(
     if !config.persistence.audit_db.is_file() {
         return Ok(Vec::new());
     }
+    // When the preset stages config, plugin eligibility is judged against
+    // the staged effective sections; otherwise the on-disk sections apply.
+    let plugin_sections = staged_plugin_sections.unwrap_or(&config.plugins);
     let (_registry, load) = crate::runtime::plugin::discovery::host_plugin_registry(
         global_root,
         &config.persistence.audit_db,
-        &config.plugins,
+        plugin_sections,
     )?;
     Ok(load
         .registered
