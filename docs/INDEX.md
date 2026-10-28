@@ -125,13 +125,14 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Path Leases](./design/path-leases/1_overview.md) | Land native TLS and the listener's full rate limits (ORB-18413, ORB-18421) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 1: ORB-18488 browser-session credential (in review); then the terminal routes | claude |
 
-### Designing (3)
+### Designing (4)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
 | [Cloud Dispatch](./design/cloud-dispatch/1_scope.md) | Run the phase 0 manual cloud-session spike, then file phase 1 (no task yet) | claude |
 | [Condition Triggers](./design/condition-triggers/1_scope.md) | Review this scope; then file phase 1 (CEL schema, load-time checking, automation explain) | claude |
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
+| [Script Steps](./design/script-steps/1_scope.md) | Review this scope; then file phase 1 (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet) | claude |
 
 ### Shipped (35)
 
@@ -227,6 +228,7 @@ a conservative title/status fallback.
 | [Review Gate](./design/review-gate/1_overview.md) | Independent automatic code review — before-PR gating or a before-landing review of the open PR, each by a fresh reviewer that fixes its findings as a second commit, after-landing scheduling, one review per candidate, and exact-tree delivery coverage. | Accepted | codex |
 | [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Implemented | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Scope: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it | Draft | claude |
+| [Script Steps](./design/script-steps/1_scope.md) | Scope: a job step that runs a workspace script by name inside the executor sandbox, authorized by an operator grant bound to the script's content digest, with JSON stdin/stdout, declared files, audit and the job retry policy | Draft | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number. | Draft | claude |
 | [Task Artifacts](./design/task-artifacts/1_overview.md) | Tasks are Orbit's durable intent records: they explain what an agent or human is trying to change, how the work should be validated, what context is relevant, who acted on the work, and how the work connects to other Orbit artifacts. | Draft | codex |
 | [Task Migration](./design/task-migration/1_overview.md) | Move orbit tasks between hosts with export/import (tar.zst); task_prefix identifies each task's canonical owner, while an admitted follower may execute a fenced claim without taking authority. | Draft | claude |
