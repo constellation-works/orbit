@@ -420,6 +420,7 @@ impl OrbitRuntime {
             orchestrator: None,
             orchestrator_model: None,
             orchestrator_model_source: None,
+            created_by_model: None,
             origin: None,
             created_at: now,
             updated_at: now,

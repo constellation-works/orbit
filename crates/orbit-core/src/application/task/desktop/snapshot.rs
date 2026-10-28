@@ -77,6 +77,7 @@ fn truncate_task(task: &mut Task, truncated: &mut Vec<String>) {
         ("task.orchestrator_model", &mut task.orchestrator_model, 128),
         ("task.pr_status", &mut task.pr_status, 128),
         ("task.created_by", &mut task.created_by, 512),
+        ("task.created_by_model", &mut task.created_by_model, 128),
         ("task.planned_by", &mut task.planned_by, 512),
         ("task.implemented_by", &mut task.implemented_by, 512),
     ] {

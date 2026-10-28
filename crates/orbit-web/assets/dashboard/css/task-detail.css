@@ -757,6 +757,7 @@
 .task-hand[data-agent="codex"] { --hand: var(--ag-codex); background: var(--ag-codex-low); }
 .task-hand[data-agent="gemini"] { --hand: var(--ag-gemini); background: var(--ag-gemini-low); }
 .task-hand[data-agent="grok"] { --hand: var(--ag-grok); background: var(--ag-grok-low); }
+.task-hand[data-agent="muse"] { --hand: var(--ag-muse); background: var(--ag-muse-low); }
 .task-hand-name { color: var(--fg); font-weight: 500; }
 .task-hand-verb { color: var(--fg-dim); }
 .task-hand-sep {

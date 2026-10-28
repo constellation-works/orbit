@@ -110,6 +110,9 @@ chosen for delegation. On an authorized takeover, correct a stale assignment
 before continuing; do not leave another crew named for work it is not doing.
 `model` is tool-call provenance (agent family), while `orchestrator` identifies
 who prepared/supervised the work; neither substitutes for execution `crew`.
+On `orbit.task.add`, `model` may be your full model id (`claude-opus-5-5`):
+`created_by` keeps the family and the full id is recorded once as
+`created_by_model`.
 `model` never sets `orchestrator_model`: that comes from the `orchestrator`
 crew's configuration unless you override it.
 

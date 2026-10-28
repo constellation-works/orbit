@@ -297,6 +297,7 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
     }
     for (label, key) in [
         ("Created By:", "created_by"),
+        ("Created By Model:", "created_by_model"),
         ("Planned By:", "planned_by"),
         ("Implemented By:", "implemented_by"),
         ("Execution Crew:", "crew"),

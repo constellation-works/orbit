@@ -35,6 +35,7 @@ fn task(id: &str, title: &str) -> Task {
         orchestrator: None,
         orchestrator_model: None,
         orchestrator_model_source: None,
+        created_by_model: None,
         origin: None,
         created_at: at,
         updated_at: at,

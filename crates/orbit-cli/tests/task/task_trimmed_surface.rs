@@ -872,6 +872,52 @@ fn task_add_attributes_from_model_flag_and_managed_identity_env() {
     );
 }
 
+/// [ORB-19636] A create that names a full model keeps it as
+/// `created_by_model` beside the family `created_by`; a family-only create
+/// records none, and no update rewrites it.
+fn task_add_records_a_full_creator_model_once(workspace: &TestWorkspace) {
+    let add = json!({
+        "title": "Full creator model",
+        "description": "Filed with a full model string.",
+        "complexity": "low",
+        "workspace": "trimmed-surface-test",
+        "model": "claude-opus-5-5",
+    })
+    .to_string();
+    let added = workspace.task_json(&["tool", "run", "orbit.task.add", "--input", &add]);
+    let id = added["id"].as_str().expect("task id").to_string();
+    assert_eq!(added["created_by"], json!("claude"));
+    assert_eq!(added["created_by_model"], json!("claude-opus-5-5"));
+
+    let family = workspace.task_json(&[
+        "task",
+        "add",
+        "--title",
+        "Family creator",
+        "--description",
+        "Filed with a bare family",
+        "--complexity",
+        "low",
+        "--model",
+        "claude",
+        "--json",
+    ]);
+    assert_eq!(family["created_by"], json!("claude"));
+    assert_eq!(family["created_by_model"], Value::Null);
+
+    let rewrite = json!({"id": id, "model": "codex", "created_by_model": "gpt-6-sol"}).to_string();
+    let refused = workspace.run_raw(&["tool", "run", "orbit.task.update", "--input", &rewrite]);
+    assert!(
+        !refused.status.success(),
+        "task.update must not accept created_by_model"
+    );
+    let retitle = json!({"id": id, "model": "gpt-6-sol", "title": "Retitled"}).to_string();
+    workspace.task_json(&["tool", "run", "orbit.task.update", "--input", &retitle]);
+    let shown = workspace.task_json(&["task", "show", &id, "--json"]);
+    assert_eq!(shown["title"], json!("Retitled"));
+    assert_eq!(shown["created_by_model"], json!("claude-opus-5-5"));
+}
+
 fn locks_release_reaches_the_admin_tool_only_with_the_operator_capability(
     workspace: &TestWorkspace,
 ) {
@@ -1109,6 +1155,10 @@ fn scope_readiness_and_creation_grants() {
         (
             "allow_missing_context_records_durable_exact_creation_intent",
             allow_missing_context_records_durable_exact_creation_intent as fn(&TestWorkspace),
+        ),
+        (
+            "task_add_records_a_full_creator_model_once",
+            task_add_records_a_full_creator_model_once as fn(&TestWorkspace),
         ),
     ] {
         tracing::info!(case = name, "CLI contract row");

@@ -35,6 +35,10 @@ pub struct TaskCreateParams {
     /// construct the v2 create contract.
     pub repo_root: Option<String>,
     pub created_by: Option<String>,
+    /// The creator's full model id when the create named one; set once and
+    /// never updated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_model: Option<String>,
     pub planned_by: Option<String>,
     pub implemented_by: Option<String>,
     pub status: TaskStatus,

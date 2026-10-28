@@ -48,6 +48,12 @@ pub struct Task {
     pub context_files: Vec<String>,
     #[serde(default)]
     pub created_by: Option<String>,
+    /// The creator's full model id, recorded once when the create named one
+    /// (`claude-opus-5-5`, where `created_by` keeps only `claude`). Never
+    /// rewritten afterwards. Absent on family-only creates and on tasks filed
+    /// before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by_model: Option<String>,
     #[serde(default)]
     pub planned_by: Option<String>,
     #[serde(default)]
@@ -178,6 +184,7 @@ impl Task {
             execution_summary,
             context_files: envelope.context_files,
             created_by: envelope.created_by,
+            created_by_model: envelope.created_by_model,
             planned_by: envelope.planned_by,
             implemented_by: envelope.implemented_by,
             status,

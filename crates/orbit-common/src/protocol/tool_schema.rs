@@ -136,6 +136,9 @@ pub fn tool_parameter_enum_values(
         ("orbit.task.add" | "orbit.task.update", "type") => Some(TASK_TYPE_ENUM),
         ("orbit.task.add" | "orbit.task.update", "status") => Some(TASK_STATUS_ENUM),
         ("orbit.task.add" | "orbit.task.update", "complexity") => Some(TASK_COMPLEXITY_ENUM),
+        // A create records a full model string as `created_by_model`, so its
+        // `model` is not limited to the families.
+        ("orbit.task.add", "model") => None,
         (_, "model") => Some(AGENT_FAMILY_ENUM),
         _ => None,
     }

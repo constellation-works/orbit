@@ -1,7 +1,7 @@
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
-use orbit_types::identity::Crew;
+use orbit_types::identity::{Crew, all_agent_families};
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{
     OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin, TaskStatus, TaskType,
@@ -236,6 +236,8 @@ impl OrbitRuntime {
                 "initial status {initial_status} cannot carry an orchestrator; orchestrator can only be set while proposed or backlog"
             )));
         }
+        let created_by_model =
+            creation_creator_model(uses_system_identity, canonical_model.as_deref());
         let (orchestrator_model, orchestrator_model_source) = creation_orchestrator_model(
             orchestrator.as_ref(),
             params.orchestrator_model.as_deref(),
@@ -280,6 +282,7 @@ impl OrbitRuntime {
                     context_files,
                     repo_root: None,
                     created_by: Some(create_label.clone()),
+                    created_by_model: created_by_model.clone(),
                     planned_by,
                     implemented_by: None,
                     status: initial_status,
@@ -373,6 +376,22 @@ fn creation_crew_ticket<'a>(
         Some(ticket) => ticket(),
         None => runtime.random_crew_draw_ticket(),
     }
+}
+
+/// The creator's full model id a new task records as `created_by_model`:
+/// the caller's `model` input when it is more than a bare agent family, so
+/// `claude-opus-5-5` is kept while `created_by` stays `claude`. A system
+/// filer records none: its `created_by` is `system`, not the caller's model.
+/// An id longer than [`MAX_ORCHESTRATOR_MODEL_LEN`] or holding control
+/// characters is not recorded; `created_by` still takes its family.
+fn creation_creator_model(system_created: bool, model: Option<&str>) -> Option<String> {
+    let model = model.map(str::trim).filter(|model| !model.is_empty())?;
+    let bare_family = all_agent_families()
+        .iter()
+        .any(|family| family.eq_ignore_ascii_case(model));
+    let recordable =
+        model.len() <= MAX_ORCHESTRATOR_MODEL_LEN && !model.chars().any(char::is_control);
+    (!system_created && !bare_family && recordable).then(|| model.to_string())
 }
 
 /// Longest explicit `orchestrator_model` a create accepts.
