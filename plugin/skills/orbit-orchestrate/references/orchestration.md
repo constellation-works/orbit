@@ -107,10 +107,14 @@ the whole drain's time and cost; it does not decide or change live admissions.
 
 To verify the card, use a single-workspace dashboard, open its Tasks drain card,
 then follow the forecast link to **Analytics › Forecast**. The card uses the
-default read: a 30-day history, no new arrivals, and the live drain ceiling.
-The diagnostics read is available at `GET /api/diagnostics/backlog_forecast`;
-`lookback_days`, `concurrency`, and `arrivals=on` can change its assumptions,
-so omit them to compare with the card. The aggregate dashboard has no
+default read: a 30-day history, no new arrivals, and the drain's leaf-run
+ceiling. The default read may be served from the newest stored snapshot while
+it is under 120 minutes old, so that ceiling is the one the drain had when the
+snapshot was stored. `refresh=1`, other inputs, or no snapshot that recent
+compute the read live, with the live ceiling. The diagnostics read is available
+at `GET /api/diagnostics/backlog_forecast`; `lookback_days`, `concurrency`, and
+`arrivals=on` can change its assumptions, so omit them to compare with the
+card. The aggregate dashboard has no
 workspace-specific forecast.
 
 That ceiling is adjustable while the drain runs. `orbit run concurrency <run-id>
