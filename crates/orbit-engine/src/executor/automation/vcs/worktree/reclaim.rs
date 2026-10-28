@@ -131,17 +131,25 @@ fn confined_path(worktree: &Path, root: &Path, relative: &Path) -> Result<bool, 
     Ok(canonical != root && canonical.starts_with(root))
 }
 
+/// Bytes of every non-directory entry under `path` (or of `path` itself when
+/// it is not a directory), never following a symlink.
 fn path_bytes(path: &Path) -> Result<u64, OrbitError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() {
+        return Ok(metadata.len());
+    }
     let mut bytes = 0u64;
     let mut pending = vec![path.to_path_buf()];
-    while let Some(path) = pending.pop() {
-        let metadata = fs::symlink_metadata(&path)?;
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            for entry in fs::read_dir(path)? {
-                pending.push(entry?.path());
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            // Each entry is typed and measured relative to its open parent,
+            // not by resolving its whole path again; neither follows a symlink.
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                pending.push(entry.path());
+            } else {
+                bytes = bytes.saturating_add(entry.metadata()?.len());
             }
-        } else {
-            bytes = bytes.saturating_add(metadata.len());
         }
     }
     Ok(bytes)

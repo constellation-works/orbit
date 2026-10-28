@@ -4,6 +4,8 @@ use super::sweep::{WorktreeGcOptions, WorktreeGcReport};
 use orbit_common::OrbitError;
 use orbit_types::workflow::JobRun;
 use serde_json::Value;
+use std::collections::HashSet;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -43,6 +45,38 @@ pub(super) fn attributed_task_ids(run: &JobRun) -> Vec<String> {
     )
     .map(|identity| identity.task_ids)
     .unwrap_or_default()
+}
+
+/// The names directly under the managed worktree root, read once so a sweep
+/// over a long run history indexes only the derived paths that exist.
+pub(super) struct WorktreeRootListing {
+    root: PathBuf,
+    names: HashSet<OsString>,
+}
+
+impl WorktreeRootListing {
+    /// Every entry of any type; an absent root lists nothing. `None` when the
+    /// root cannot be named or read, so the caller indexes every path.
+    pub(super) fn read(repo_root: &Path) -> Option<Self> {
+        let sentinel = resolve_shared_worktree_path(repo_root, "gc-root-sentinel").ok()?;
+        let root = sentinel.parent()?.to_path_buf();
+        let names = match fs::read_dir(&root) {
+            Ok(entries) => entries
+                .map(|entry| entry.map(|entry| entry.file_name()))
+                .collect::<Result<_, _>>()
+                .ok()?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => HashSet::new(),
+            Err(_) => return None,
+        };
+        Some(Self { root, names })
+    }
+
+    /// Whether `path` is one of the listed entries.
+    pub(super) fn contains(&self, path: &Path) -> bool {
+        path.file_name()
+            .is_some_and(|name| self.names.contains(name))
+            && path.parent() == Some(self.root.as_path())
+    }
 }
 
 pub(super) fn on_disk_worktrees(repo_root: &Path) -> Result<Vec<PathBuf>, OrbitError> {

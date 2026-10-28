@@ -3,8 +3,8 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::RemoteToolCode;
 use orbit_engine::{
-    RuntimeHost, WorktreeGcOptions, WorktreeGcResult, WorktreeGcTaskLookup, collect_worktrees,
-    run_worktree_has_reclaim_output,
+    RuntimeHost, WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcResult,
+    WorktreeGcTaskLookup, collect_worktrees, run_worktree_has_reclaim_output,
 };
 use orbit_store::contracts::{ClaimMutation, JobRunQuery, LocalPullPhase};
 use orbit_types::task::{TaskHistoryEntry, TaskStatus, task_id_prefix};
@@ -16,9 +16,12 @@ use crate::{OrbitError, OrbitRuntime};
 impl OrbitRuntime {
     /// Inspect declared reclaimable paths without reconciling or writing state.
     /// Used by doctor; every terminal/worker/path gate also applies to estimates.
+    /// Only the input keys worktree identity reads are hydrated: every run is
+    /// still indexed, without materializing each one's whole input.
     pub fn reclaimable_worktrees(&self) -> Result<WorktreeGcResult, OrbitError> {
         let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
             include_steps: false,
+            input_keys: Some(WORKTREE_IDENTITY_INPUT_KEYS),
             ..JobRunQuery::default()
         })?;
         collect_worktrees(

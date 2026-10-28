@@ -85,8 +85,8 @@ pub(super) use worktree::setup_worktree;
 ))]
 pub use worktree::with_host_target_removal_hook;
 pub use worktree::{
-    WorktreeGcOptions, WorktreeGcRecovery, WorktreeGcResult, WorktreeReclaimReport,
-    collect_worktrees, run_worktree_has_reclaim_output, run_worktree_paths,
+    WORKTREE_IDENTITY_INPUT_KEYS, WorktreeGcOptions, WorktreeGcRecovery, WorktreeGcResult,
+    WorktreeReclaimReport, collect_worktrees, run_worktree_has_reclaim_output, run_worktree_paths,
 };
 
 /// Run one engine-private VCS/PR operation against the real `git` and `gh`,

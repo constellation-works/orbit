@@ -40,6 +40,12 @@ pub struct JobRunQuery {
     /// selects `job_run_steps` (including `agent_response_json`). Defaults
     /// to true so CLI/history callers keep hydrated pages.
     pub include_steps: bool,
+    /// When set, each run's `input` keeps only these top-level keys of a JSON
+    /// object; an input that is not an object is kept whole. The other values
+    /// are skipped while rows are read, so a caller that reads a few input
+    /// fields across a long history never materializes whole inputs. `None`
+    /// keeps every input whole.
+    pub input_keys: Option<&'static [&'static str]>,
 }
 
 impl Default for JobRunQuery {
@@ -57,6 +63,7 @@ impl Default for JobRunQuery {
             limit: None,
             order_by: JobRunOrder::default(),
             include_steps: true,
+            input_keys: None,
         }
     }
 }
