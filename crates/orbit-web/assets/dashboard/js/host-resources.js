@@ -179,12 +179,10 @@ function withStyle(node, style) {
   return node;
 }
 
-/// The rail-foot block: one button for load, mem and disk, plus io once this
-/// host has reported disk I/O stall. Each row keeps its severity and held
-/// state. The top bar shows one warning chip only while a reading is elevated
-/// or worse; that chip and the block open the same dialog.
-export function renderHostResources(payload, host = document.getElementById('host-block')) {
-  if (!host) return;
+/// The selected host's readings as the rail block and the Tasks dock strip
+/// state them: each resource's row, the throttle verdict, the worst alarm, the
+/// overall `tone` and the verdict's short `blockText`.
+function hostSummary(payload) {
   if (payload?.io) ioReported = true;
   const verdict = hostVerdict(payload);
   const resources = ioReported ? [...RESOURCES, 'io'] : RESOURCES;
@@ -211,10 +209,55 @@ export function renderHostResources(payload, host = document.getElementById('hos
     : tone === 'critical' ? `${named || 'a resource'} critical · admission open`
     : tone === 'elevated' ? `${named} near limit`
     : 'open';
-  const summary = rows.map(row => `${row.label} ${row.shown}`).join(', ');
+  return { verdict, rows, alarm, tone, named, compact, blockText };
+}
+
+function hostResourceNode(row) {
+  const node = el('span', {
+    class: `host-resource ${row.severity}${row.held ? ' throttled' : ''}`,
+    title: row.title, role: 'group', 'aria-label': row.title,
+  }, [
+    el('span', { class: 'k', text: row.label }),
+    el('span', { class: 'v', text: row.shown }),
+    el('span', { class: 'host-resource-bar', 'aria-hidden': 'true' }, [meterFill(row.fill)]),
+    ...(row.held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
+  ]);
+  node.dataset.resource = row.resource;
+  return node;
+}
+
+/// The Tasks dock's host strip: the same readings and verdict as the rail
+/// block, laid out as a compact horizontal row above the dock tabs.
+function renderHostStrip({ rows, tone, blockText }) {
+  const strip = document.getElementById('tasks-host-strip');
+  if (!strip) return;
+  strip.className = `host-strip ${tone}`;
+  strip.setAttribute('aria-label', `Host resources: ${blockText}. ${rows.map(row => `${row.label} ${row.shown}`).join(', ')}`);
+  strip.replaceChildren(
+    el('span', { class: 'host-strip-head' }, [
+      el('span', { class: 'host-strip-kicker', text: 'Host' }),
+      el('span', { class: 'host-strip-verdict' }, [
+        el('span', { class: 'host-strip-dot', 'aria-hidden': 'true' }),
+        el('span', { class: 'host-strip-verdict-text', text: blockText }),
+      ]),
+    ]),
+    el('span', { class: 'host-strip-rows' }, rows.map(hostResourceNode)),
+  );
+}
+
+/// The rail-foot block: one button for load, mem and disk, plus io once this
+/// host has reported disk I/O stall. Each row keeps its severity and held
+/// state. The top bar shows one warning chip only while a reading is elevated
+/// or worse; that chip and the block open the same dialog. The Tasks dock
+/// strip repaints from the same summary, so the two cannot disagree.
+export function renderHostResources(payload, host = document.getElementById('host-block')) {
+  if (!host) return;
+  const summary = hostSummary(payload);
+  const { verdict, rows, alarm, tone, named, compact, blockText } = summary;
+  const summaryText = rows.map(row => `${row.label} ${row.shown}`).join(', ');
   host.className = `host-block ${tone}${detailOpen ? ' open' : ''}`;
   host.setAttribute('aria-expanded', detailOpen ? 'true' : 'false');
-  host.setAttribute('aria-label', `Host resources: ${blockText}. ${summary}`);
+  host.setAttribute('aria-label', `Host resources: ${blockText}. ${summaryText}`);
   host.replaceChildren(
     el('span', { class: 'host-block-head' }, [
       el('span', { class: 'host-block-kicker', text: 'Host' }),
@@ -223,20 +266,9 @@ export function renderHostResources(payload, host = document.getElementById('hos
         el('span', { class: 'host-block-verdict-text', text: blockText }),
       ]),
     ]),
-    ...rows.map(row => {
-      const node = el('span', {
-        class: `host-resource ${row.severity}${row.held ? ' throttled' : ''}`,
-        title: row.title, role: 'group', 'aria-label': row.title,
-      }, [
-        el('span', { class: 'k', text: row.label }),
-        el('span', { class: 'v', text: row.shown }),
-        el('span', { class: 'host-resource-bar', 'aria-hidden': 'true' }, [meterFill(row.fill)]),
-        ...(row.held ? [el('span', { class: 'host-resource-held', text: 'throttled' })] : []),
-      ]);
-      node.dataset.resource = row.resource;
-      return node;
-    }),
+    ...rows.map(hostResourceNode),
   );
+  renderHostStrip(summary);
   const pill = verdict.verdictUnknown ? (compact ? 'Stale' : 'Unknown')
     : verdict.status === 'disabled' ? 'Throttle off'
     : verdict.status === 'held' ? `Holding work · ${named || 'a resource'}`
