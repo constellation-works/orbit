@@ -586,6 +586,9 @@ pub(in crate::api) struct AutoDrainReadinessQuery {
     /// listing, so a task detail gets its own answer wherever it ranks.
     #[serde(default)]
     task: Option<String>,
+    /// Add one task's full readiness entry beside the bounded workspace list.
+    #[serde(default)]
+    also_task: Option<String>,
     /// Maximum tasks to explain, including an explicit selection (1-500).
     #[serde(default)]
     limit: Option<usize>,
@@ -604,7 +607,7 @@ fn readiness_task_ids(raw: Option<&str>) -> Result<Vec<String>, String> {
         .collect()
 }
 
-/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N][&task=<id>,…][&limit=N][&allow_crew=<crew>,…]`
+/// `GET /workflows/auto/readiness?workspace=<id>[&concurrency=N][&task=<id>,…][&also_task=<id>][&limit=N][&allow_crew=<crew>,…]`
 /// — the read-only eligible/waiting snapshot for backlog-discovery
 /// auto-drain, projected straight from `OrbitRuntime::workspace_auto_readiness`
 /// (the same snapshot `orbit run readiness` prints) rather than a
@@ -617,6 +620,11 @@ pub(in crate::api) async fn auto_drain_readiness(
 ) -> Response {
     let task_ids = match readiness_task_ids(query.task.as_deref()) {
         Ok(ids) => ids,
+        Err(message) => return bad_request(message),
+    };
+    let also_task_ids = match readiness_task_ids(query.also_task.as_deref()) {
+        Ok(ids) if ids.len() <= 1 => ids,
+        Ok(_) => return bad_request("also_task accepts one task id".to_string()),
         Err(message) => return bad_request(message),
     };
     let allowed_crews = query
@@ -632,6 +640,15 @@ pub(in crate::api) async fn auto_drain_readiness(
             query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
             &allowed_crews,
         )?;
+        if !also_task_ids.is_empty() {
+            let detail = runtime.workspace_auto_readiness(
+                &also_task_ids,
+                query.concurrency,
+                query.limit.unwrap_or(AUTO_DRAIN_READINESS_LIMIT),
+                &allowed_crews,
+            )?;
+            payload["detail_tasks"] = detail["tasks"].clone();
+        }
         payload["start_options"] = drain_start_options(
             &runtime,
             hosts.as_deref().map(|snapshot| &snapshot.registry),

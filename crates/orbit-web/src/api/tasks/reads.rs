@@ -24,6 +24,8 @@ use std::sync::Arc;
 /// - `type` (alias `task_type`) — a single task type (`feature`/`bug`/
 ///   `refactor`/`chore`).
 /// - `q` (alias `search`) — case-insensitive task ID/title substring.
+/// - `detail` — optionally include the full projection for a task on this page.
+/// - `detail_runs=true` — with `detail`, include its bounded Runs tab page.
 /// - `limit` — positive integer, defaulting to [`orbit_core::DEFAULT_TASK_LIST_LIMIT`].
 /// - `cursor` — opaque continuation returned as `next_cursor`; it is rejected
 ///   when malformed or reused with a different workspace, endpoint, or filter.
@@ -37,7 +39,7 @@ use std::sync::Arc;
 /// ```json
 /// { "items": [ /* task summary rows, newest first */ ],
 ///   "total": 137, "limit": 50, "truncated": true,
-///   "offset": 0, "next_cursor": "..." }
+///   "offset": 0, "next_cursor": "...", "detail": { /* when requested */ } }
 /// ```
 ///
 /// Each item is a *summary* row (`"projection": "summary"`): the task's
@@ -74,6 +76,11 @@ pub(in crate::api) async fn list_tasks(
         Ok(query) => query,
         Err(message) => return bad_request(message),
     };
+    if let Some(id) = query.detail_id()
+        && let Err(message) = validate_id(id)
+    {
+        return bad_request(message);
+    }
     let riskiness = cached_riskiness_model(&state, &runtime).await;
     match blocking("task list", move || {
         let scope = format!("workspace:{}", runtime.workspace_id()?);
@@ -107,6 +114,7 @@ fn task_list_page_json(
     let total = page.total_without_cursor;
     let status_by_id = page.status_by_id;
     let attention = runtime.delivery_attention_map(page.items.iter())?;
+    let detail_riskiness = riskiness.clone();
     let projection = TaskListProjection::new(runtime)
         .with_delivery_attention(attention)
         .with_riskiness(riskiness);
@@ -130,14 +138,38 @@ fn task_list_page_json(
     } else {
         None
     };
-    Ok(json!({
+    let mut result = json!({
         "truncated": total > items.len(),
         "items": items,
         "total": total,
         "limit": query.limit(),
         "offset": offset,
         "next_cursor": next_cursor,
-    }))
+    });
+    if let Some(detail_id) = query.detail_id()
+        && let Some(row) = page.items.iter().find(|row| row.task.id == detail_id)
+    {
+        match dashboard_status_index(runtime, &row.task).and_then(|statuses| {
+            task_detail_json(runtime, row, &statuses, detail_riskiness.as_deref())
+        }) {
+            Ok(detail) => result["detail"] = detail,
+            Err(error) => tracing::debug!(
+                task_id = %detail_id,
+                %error,
+                "task list detail projection unavailable; dashboard will read it separately"
+            ),
+        }
+        if query.include_detail_runs() {
+            match super::super::jobs::task_runs_page(runtime, detail_id, 20) {
+                Ok(runs) => result["detail_runs"] = runs,
+                Err(error) => {
+                    tracing::debug!(task_id = %detail_id, %error, "task list Runs projection unavailable");
+                    result["detail_runs_error"] = json!("Task run history is unavailable");
+                }
+            }
+        }
+    }
+    Ok(result)
 }
 
 pub(in crate::api) async fn list_task_locks(Ws(runtime): Ws) -> Response {

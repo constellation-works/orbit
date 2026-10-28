@@ -22,6 +22,27 @@ let activeDetailTab = "overview";
 export let taskRunLoads = new Map();
 const TASK_RUNS_LIMIT = 20;
 const TASK_RUNS_FRESH_MS = 15000;
+
+export function taskRunsTabActive() {
+  return activeDetailTab === "runs";
+}
+
+export function primeTaskRuns(taskId, payload, task = null) {
+  if (typeof taskId !== "string" || !taskId || !payload || typeof payload !== "object") return;
+  const previous = taskRunLoads.get(taskId);
+  const items = Array.isArray(payload.items) ? payload.items : [];
+  taskRunLoads.set(taskId, {
+    pending: false,
+    error: typeof payload.error === "string" ? payload.error : null,
+    items: typeof payload.error === "string" && previous?.items ? previous.items : items,
+    total: Number.isFinite(payload.total) ? payload.total : items.length,
+    at: Date.now(),
+  });
+  if (task && taskRunsTabActive()) {
+    const node = document.getElementById(`detail-${taskId}-runs`);
+    if (node) renderTaskRuns(node, task, taskState.paneContext);
+  }
+}
 // The detail's own controls — status, complexity, crew and each field editor —
 // keep their feedback outside the task object, so the detail's diff hash has to
 // see it the way the row's hash sees the status/crew entries. Without this a

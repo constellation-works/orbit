@@ -1384,6 +1384,22 @@ fn auto_readiness_explains_the_tasks_it_names() {
                 "the bounded listing never reaches a proposed task: {listing:#}"
             );
 
+            let combined = json_ok(server.get(&format!(
+                "/api/workflows/auto/readiness?workspace={WS}&concurrency=1&also_task={}",
+                proposed.id
+            )));
+            assert_eq!(
+                combined["tasks"], listing["tasks"],
+                "the bounded list keeps its contents"
+            );
+            assert_eq!(
+                combined["detail_tasks"].as_array().unwrap().len(),
+                1,
+                "one selected task is added beside the bounded list"
+            );
+            assert_eq!(combined["detail_tasks"][0]["task_id"], proposed.id.as_str());
+            assert_eq!(combined["detail_tasks"][0]["reason"], "not_backlog");
+
             for bad in ["HF-404404", "not%20an%20id"] {
                 let response = server.get(&format!(
                     "/api/workflows/auto/readiness?workspace={WS}&task={bad}"

@@ -32,6 +32,8 @@ pub(super) struct TaskPageQuery {
     task_type: Option<TaskType>,
     origin: Option<TaskOrigin>,
     search: Option<String>,
+    detail_id: Option<String>,
+    detail_runs: bool,
     limit: usize,
     raw_cursor: Option<String>,
     cursor: Option<TaskCursor>,
@@ -47,6 +49,8 @@ impl Default for TaskPageQuery {
             task_type: None,
             origin: None,
             search: None,
+            detail_id: None,
+            detail_runs: false,
             limit: DEFAULT_TASK_LIST_LIMIT,
             raw_cursor: None,
             cursor: None,
@@ -82,6 +86,11 @@ impl TaskPageQuery {
                     query.search =
                         Some(value.trim().to_lowercase()).filter(|value| !value.is_empty());
                 }
+                "detail" => {
+                    query.detail_id =
+                        Some(value.trim().to_string()).filter(|value| !value.is_empty());
+                }
+                "detail_runs" => query.detail_runs = value == "true",
                 "limit" => {
                     if let Some(raw) = split_values(&value).next_back() {
                         query.limit = parse_limit(raw)?;
@@ -124,6 +133,14 @@ impl TaskPageQuery {
 
     pub(super) fn pilot_warnings(&self) -> bool {
         self.pilot_warnings
+    }
+
+    pub(super) fn detail_id(&self) -> Option<&str> {
+        self.detail_id.as_deref()
+    }
+
+    pub(super) fn include_detail_runs(&self) -> bool {
+        self.detail_runs
     }
 
     pub(super) fn limit(&self) -> usize {

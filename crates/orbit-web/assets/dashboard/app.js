@@ -26,6 +26,9 @@ import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
+import { taskState } from './js/task-shared.js';
+import { primeTaskDetail } from './js/task-data.js';
+import { primeTaskRuns, taskRunsTabActive } from './js/task-detail.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
@@ -137,6 +140,7 @@ let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
 // Health strip state
 let lastSummary = null;
 let jobsInFlightSequence = 0;
+let runningRunsSequence = 0;
 
 // ORB-00030: workspaces the dashboard is serving. Empty/one entry => single
 // mode (no selector). More than one => global mode (selector shown).
@@ -1083,7 +1087,7 @@ function resetTaskPagination() {
   taskScrollResetPending = true;
 }
 
-function tasksListPath(base = "/api/tasks") {
+function tasksListPath(base = "/api/tasks", detailId = null, includeRuns = false) {
   const sp = new URLSearchParams();
   if (activeStatuses.size > 0 && activeStatuses.size < STATUS_ORDER.length) {
     sp.set("status", STATUS_ORDER.filter((s) => activeStatuses.has(s)).join(","));
@@ -1093,6 +1097,8 @@ function tasksListPath(base = "/api/tasks") {
   if (searchQuery) sp.set("q", searchQuery);
   if (taskPilotWarningsFilter()) sp.set("pilot", "warnings");
   if (taskPageCursor) sp.set("cursor", taskPageCursor);
+  if (detailId) sp.set("detail", detailId);
+  if (includeRuns) sp.set("detail_runs", "true");
   const qs = sp.toString();
   return qs ? `${base}?${qs}` : base;
 }
@@ -1120,7 +1126,9 @@ function fetchAndRenderTasks() {
   // every workspace's tasks; otherwise the single/selected workspace's tasks
   // (the workspace query param is applied by fetchJson).
   const aggregate = isAggregateView();
-  const path = tasksListPath(aggregate ? "/api/tasks/all" : "/api/tasks");
+  const detailId = !aggregate && !taskState.pinnedExternalTask ? taskState.selectedTaskId : null;
+  const includeRuns = Boolean(detailId && taskRunsTabActive());
+  const path = tasksListPath(aggregate ? "/api/tasks/all" : "/api/tasks", detailId, includeRuns);
   const sequence = ++taskFetchSequence;
   taskPageLoading = true;
   taskPageError = null;
@@ -1139,6 +1147,15 @@ function fetchAndRenderTasks() {
     cacheCrewPayload(crews);
     // Both task-list endpoints answer `{ items, total, limit, truncated }`.
     const tasks = listItems(payload);
+    const refreshedDetail = payload && payload.detail;
+    const selectedTaskSummary = includeRuns ? tasks.find((task) => task.id === detailId) : null;
+    if (refreshedDetail && typeof refreshedDetail.id === "string") {
+      const summary = tasks.find((task) => task.id === refreshedDetail.id);
+      if (summary) primeTaskDetail(summary, refreshedDetail);
+    }
+    if (includeRuns && (payload?.detail_runs || payload?.detail_runs_error)) {
+      primeTaskRuns(detailId, payload.detail_runs || { error: payload.detail_runs_error }, selectedTaskSummary);
+    }
     lastTasks = tasks;
     lastTasksMeta = payload && !Array.isArray(payload)
       ? {
@@ -1334,9 +1351,16 @@ function activeRefreshJobs() {
   } else {
     add("Health summary", fetchAndRenderSummary());
   }
-  add("Jobs in flight", fetchJobsInFlight());
+  const includeRunningRuns = activeTab === "tasks" && !aggregate && activeStatuses.has("in-progress");
+  const activeRunsPath = `${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=active&limit=1${includeRunningRuns ? "&include_running=true" : ""}`;
+  const activeRunsRequest = fetchJson(activeRunsPath);
+  add("Jobs in flight", fetchJobsInFlight(activeRunsRequest));
   // Keep the chrome indicator current on every page.
-  add("Drain", fetchAndRenderAutoDrainPane());
+  const selectedTask = activeTab === "tasks" && !aggregate && !taskState.pinnedExternalTask
+    ? lastTasks.find((task) => task.id === taskState.selectedTaskId)
+    : null;
+  const detailTaskId = ["proposed", "backlog"].includes(selectedTask?.status) ? selectedTask.id : null;
+  add("Drain", fetchAndRenderAutoDrainPane({ detailTaskId }));
 
   if (activeTab === "tasks") {
     add("Tasks", fetchAndRenderTasks());
@@ -1345,7 +1369,7 @@ function activeRefreshJobs() {
     if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
     // When each running task's run started, for the In progress rows' elapsed
     // time. Only while that group can show.
-    if (!aggregate && activeStatuses.has("in-progress")) add("Running runs", fetchRunningRuns());
+    if (includeRunningRuns) add("Running runs", fetchRunningRuns(activeRunsRequest));
     return jobs;
   }
 
@@ -1513,21 +1537,23 @@ function fetchAndRenderRuns() {
   }, "runs-count");
 }
 
-function fetchJobsInFlight() {
+function fetchJobsInFlight(request) {
   const sequence = ++jobsInFlightSequence;
   const revision = getWorkspaceRevision();
-  const aggregate = isAggregateView();
-  return fetchJson(`${aggregate ? "/api/job-runs/all" : "/api/job-runs"}?state=active&limit=1`).then((payload) => {
+  return request.then((payload) => {
     if (revision !== getWorkspaceRevision() || sequence !== jobsInFlightSequence) return;
     const count = Number.isFinite(payload.total) ? payload.total : listItems(payload).length;
     setRailCount("rail-count-jobs", count, false, "Pending and running job runs, not tasks. One task is several pipeline runs. Independent of the History window and filters.", formatJobsRailCount);
   });
 }
 
-function fetchRunningRuns() {
+function fetchRunningRuns(request) {
   const revision = getWorkspaceRevision();
-  return fetchJson("/api/job-runs?state=running&limit=100").then((payload) => {
-    if (revision === getWorkspaceRevision()) setRunningRuns(payload);
+  const sequence = ++runningRunsSequence;
+  return request.then((payload) => {
+    if (revision === getWorkspaceRevision() && sequence === runningRunsSequence) {
+      setRunningRuns({ items: Array.isArray(payload?.running_items) ? payload.running_items : [] });
+    }
   });
 }
 
@@ -1849,6 +1875,7 @@ onWorkspaceChange(() => {
   markRefreshStale(false);
   resetTaskPagination();
   taskFetchSequence += 1;
+  runningRunsSequence += 1;
   lastTasks = [];
   lastTasksMeta = null;
   cacheCrewPayload({ crews: [] });

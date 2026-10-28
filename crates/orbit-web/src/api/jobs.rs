@@ -79,6 +79,10 @@ pub(super) struct JobRunListQuery {
     task_id: Option<String>,
     #[serde(default)]
     state: Option<String>,
+    /// Include the dashboard's bounded running-run projection with an active
+    /// count read, so both consumers share one HTTP request.
+    #[serde(default)]
+    include_running: bool,
     /// Duration (`24h`) or timestamp. Empty and `all` mean no time bound, so
     /// the dashboard window and `orbit run history --since` share one parser.
     #[serde(default)]
@@ -186,6 +190,9 @@ pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQue
         Ok(state) => state,
         Err(message) => return bad_request(message),
     };
+    if q.include_running && !matches!(state, JobRunListState::Active) {
+        return bad_request("include_running requires state=active".to_string());
+    }
     let scope = match resolve_job_run_scope(
         q.job_id.as_deref(),
         q.task_id.as_deref(),
@@ -195,7 +202,7 @@ pub(super) async fn list_job_runs(Ws(runtime): Ws, Query(q): Query<JobRunListQue
         Err(message) => return bad_request(message),
     };
     match blocking("list job runs", move || {
-        job_runs_page(&runtime, &scope, state, limit)
+        job_runs_page(&runtime, &scope, state, limit, q.include_running)
     })
     .await
     {
@@ -209,6 +216,7 @@ fn job_runs_page(
     scope: &JobRunScope,
     state: JobRunListState,
     limit: usize,
+    include_running: bool,
 ) -> Result<Value, orbit_core::OrbitError> {
     let params = job_run_list_params(scope, state, Some(limit));
     // Reconcile once before selecting the combined state page. Counting the
@@ -218,13 +226,46 @@ fn job_runs_page(
     let truncated = total > runs.len() as u64;
     let titles = super::runs::task_titles(runtime, &runs)?;
     let items = super::runs::run_list_rows(runtime, &runs, &titles);
-    Ok(json!({
+    let mut page = json!({
         "items": items,
         "total": total,
         "limit": limit,
         "truncated": truncated,
         "state": state.label(),
-    }))
+    });
+    if include_running {
+        // Keep the same bounded running projection as the separate dashboard
+        // poll, but return it with the active total so one refresh needs one
+        // HTTP read. Both queries run after the active page's reconciliation.
+        const RUNNING_RUN_LIMIT: usize = 100;
+        let running_params = job_run_list_params(
+            scope,
+            JobRunListState::Concrete(JobRunState::Running),
+            Some(RUNNING_RUN_LIMIT),
+        );
+        let running = runtime.list_job_runs(running_params)?;
+        let running_titles = super::runs::task_titles(runtime, &running)?;
+        page["running_items"] = Value::Array(super::runs::run_list_rows(
+            runtime,
+            &running,
+            &running_titles,
+        ));
+    }
+    Ok(page)
+}
+
+/// The task detail's bounded Runs tab projection, shared with the task list
+/// refresh when that tab is open.
+pub(super) fn task_runs_page(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    limit: usize,
+) -> Result<Value, orbit_core::OrbitError> {
+    let scope = JobRunScope {
+        task_id: Some(task_id.to_string()),
+        ..Default::default()
+    };
+    job_runs_page(runtime, &scope, JobRunListState::All, limit, false)
 }
 
 fn job_run_list_params(

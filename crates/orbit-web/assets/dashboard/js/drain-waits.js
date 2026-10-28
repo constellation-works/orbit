@@ -203,15 +203,18 @@ function drainPublishedDelivery(entry) {
 }
 
 let waits = new Map();
+let readinessErrors = new Map();
 let haveSnapshot = false;
 let signature = "";
 const listeners = new Set();
 
 function clearWaits() {
-  if (!haveSnapshot) return;
+  const changed = haveSnapshot || waits.size > 0 || readinessErrors.size > 0;
   waits = new Map();
+  readinessErrors = new Map();
   haveSnapshot = false;
   signature = "";
+  if (!changed) return;
   for (const listener of listeners) listener();
 }
 
@@ -219,18 +222,31 @@ function clearWaits() {
 // Listeners fire only when what a task row shows changed, so the 30 s poll
 // does not repaint the list for nothing.
 export function setDrainReadiness(payload) {
-  const tasks = Array.isArray(payload?.tasks) ? payload.tasks : [];
+  const tasks = [
+    ...(Array.isArray(payload?.tasks) ? payload.tasks : []),
+    ...(Array.isArray(payload?.detail_tasks) ? payload.detail_tasks : []),
+  ];
   const next = new Map();
   for (const entry of tasks) {
     if (typeof entry?.task_id !== "string" || !entry.task_id) continue;
     next.set(entry.task_id, { entry, view: drainReadinessView(entry) });
   }
   const nextSignature = [...next].map(([id, { view }]) => `${id}:${view.pool}:${view.label}|${view.title}`).join("\n");
-  const changed = nextSignature !== signature;
+  const changed = nextSignature !== signature || readinessErrors.size > 0;
   waits = next;
+  readinessErrors = new Map();
   signature = nextSignature;
   haveSnapshot = Array.isArray(payload?.tasks);
   if (changed) for (const listener of listeners) listener();
+}
+
+export function setDrainReadinessFailure(taskId, error) {
+  if (typeof taskId !== "string" || !taskId) return;
+  const message = typeof error === "string" && error.trim() ? error : "readiness unavailable";
+  if (readinessErrors.get(taskId) === message) return;
+  readinessErrors.set(taskId, message);
+  waits.delete(taskId);
+  for (const listener of listeners) listener();
 }
 
 export function onDrainReadinessChange(listener) {
@@ -256,6 +272,10 @@ export function drainReadinessFor(taskId) {
 // it until its own read answers.
 export function drainReadinessEntry(taskId) {
   return waits.get(taskId)?.entry || null;
+}
+
+export function drainReadinessFailure(taskId) {
+  return readinessErrors.get(taskId) || null;
 }
 
 // How the Backlog group's rows split across the pools. `known` is false until

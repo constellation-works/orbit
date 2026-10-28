@@ -1,5 +1,5 @@
 import { captureWorkspaceVisit, requestPanel, el, fetchJson, formatDateTime, getWorkspaceRevision, postJson } from './common.js';
-import { drainCrewNote, drainPilotNote, setDrainReadiness } from './drain-waits.js';
+import { drainCrewNote, drainPilotNote, setDrainReadiness, setDrainReadinessFailure } from './drain-waits.js';
 import { AUTO_DRAIN_APPROVE_RULE } from './drain-start.js';
 import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
 import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet, renderFleetIndicator } from './operations-fleet.js';
@@ -287,7 +287,7 @@ registerOperationsReset(() => {
 });
 
 configureOperationsFleetCallbacks({ updateDrainIndicators, clearStartCard });
-function fetchAndRenderAutoDrain() {
+function fetchAndRenderAutoDrain({ detailTaskId = null } = {}) {
   const workspace = selectedWorkspace();
   if (!workspace) {
     const token = ++operationsState.aggregateFleetToken;
@@ -298,13 +298,21 @@ function fetchAndRenderAutoDrain() {
     }, "auto-drain-phase-label");
   }
   const concurrency = autoDrainConcurrencyValid() ? autoDrainConcurrencyValue() : "";
-  const query = concurrency ? `?concurrency=${encodeURIComponent(concurrency)}` : "";
+  const params = new URLSearchParams();
+  if (concurrency) params.set("concurrency", concurrency);
+  if (detailTaskId) params.set("also_task", detailTaskId);
+  const query = params.size ? `?${params.toString()}` : "";
   const scope = "/api/workflows/auto/readiness";
   const path = `${scope}${query}`;
   const visit = captureWorkspaceVisit();
   const readiness = requestPanel("auto-drain-body", scope, () => fetchJson(path), payload => {
     renderAutoDrain(payload);
-  }, "auto-drain-phase-label");
+  }, "auto-drain-phase-label").catch(error => {
+    if (detailTaskId && visit.isCurrent()) {
+      setDrainReadinessFailure(detailTaskId, error.message || String(error));
+    }
+    throw error;
+  });
   const fleet = loadFleetSnapshot({ refreshWhenStale: false, onPartial: payload => { if (visit.isCurrent()) { renderFleetIndicator(payload); } } }).then(payload => {
     if (visit.isCurrent()) {
       renderFleetIndicator(payload);
@@ -325,6 +333,6 @@ configureOperationsDrainControls({
 });
 
 // Readiness refreshes on every page to feed the chip and task readiness.
-export async function fetchAndRenderAutoDrainPane() {
-  await fetchAndRenderAutoDrain();
+export async function fetchAndRenderAutoDrainPane({ detailTaskId = null } = {}) {
+  await fetchAndRenderAutoDrain({ detailTaskId });
 }
