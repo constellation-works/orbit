@@ -350,9 +350,12 @@ impl OrbitRuntime {
 
     /// One `crew_mismatch` warning per analysed task whose crew is outside
     /// its arm's crew pool, for an experiment whose arms overlay the crew
-    /// surface. An arm without a crew overlay, such as control, runs the
-    /// workspace's complexity pool for the task's tier; an unassessed task
-    /// there has no pool to check.
+    /// surface. An arm without a crew overlay, such as control, is checked
+    /// against the pool recorded at admission for the task's delivery
+    /// [ORB-19487], not today's workspace pool or the task's current tier:
+    /// later pool, override or complexity changes neither invent nor erase
+    /// a historical mismatch. When no admission pool was recorded, the
+    /// task is reported `crew_mismatch_unavailable` instead.
     fn crew_pool_mismatches(
         &self,
         record: &ExperimentRecord,
@@ -376,21 +379,26 @@ impl OrbitRuntime {
         if arm_pools.values().all(Option::is_none) {
             return Ok(Vec::new());
         }
-        let complexity_pools = self.dispatch_crew_pools();
         let mut warnings = Vec::new();
         for task in tasks {
             let (pool, which) = match arm_pools.get(task.arm.as_str()) {
                 Some(Some(pool)) => (pool.clone(), "crew pool".to_string()),
                 _ => {
-                    let Some(tier) = task.tier else {
-                        continue;
-                    };
-                    let Some(names) = complexity_pools.get(tier.as_str()) else {
+                    let Some(pool) = &task.admitted_pool else {
+                        warnings.push(ReadoutWarning {
+                            kind: "crew_mismatch_unavailable",
+                            message: format!(
+                                "task {} in arm `{}` ran crew `{}`, but the recorded admission pool for its delivery is unavailable, so a crew mismatch cannot be confirmed",
+                                task.task_id, task.arm, task.crew
+                            ),
+                        });
                         continue;
                     };
                     (
-                        names.iter().cloned().collect(),
-                        format!("workspace {tier} complexity pool"),
+                        pool.clone(),
+                        task.admitted_pool_label
+                            .clone()
+                            .unwrap_or_else(|| "recorded admission pool".to_string()),
                     )
                 }
             };

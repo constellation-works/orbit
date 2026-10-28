@@ -10,9 +10,7 @@ use orbit_common::OrbitError;
 use orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS;
 use orbit_store::V2AuditEventFilter;
 use orbit_store::contracts::{ExperimentAssignment, InvocationQuery, JobRunQuery};
-use orbit_types::task::{
-    Task, TaskComplexity, TaskHistoryEntry, TaskRelationType, TaskStatus, complexity_bucket,
-};
+use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus, complexity_bucket};
 use orbit_types::workflow::{
     PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker, ReviewVerdict, V2AuditEvent,
     V2AuditEventKind,
@@ -167,9 +165,12 @@ pub(super) struct TaskOutcome {
     pub(super) arm: String,
     pub(super) segment: u32,
     pub(super) complexity: String,
-    /// The task's assessed tier, whose complexity pool is the control
-    /// arm's crew pool.
-    pub(super) tier: Option<TaskComplexity>,
+    /// The crew pool recorded at admission for the task's latest
+    /// delivery, when that evidence exists [ORB-19487]. `None` means the
+    /// historical pool is unavailable, not that the crew mismatched.
+    pub(super) admitted_pool: Option<BTreeSet<String>>,
+    /// What `admitted_pool` is, for a mismatch message.
+    pub(super) admitted_pool_label: Option<String>,
     /// `task.crew`, the crew of the task's latest delivery [ORB-19416].
     pub(super) crew: String,
     pub(super) terminal: bool,
@@ -208,7 +209,121 @@ struct OutOfRunStart {
     blocker: PrAutoFixBlocker,
 }
 
+fn crew_names_from_entries(entries: Option<&Value>) -> BTreeSet<String> {
+    let mut names = BTreeSet::new();
+    if let Some(Value::Array(items)) = entries {
+        for item in items {
+            if let Some(name) = item.as_str() {
+                names.insert(name.to_string());
+            } else if let Some(name) = item.get("name").and_then(Value::as_str) {
+                names.insert(name.to_string());
+            }
+        }
+    }
+    names
+}
+
+fn captured_pool_for_tier(pools: Option<&Value>, tier: &str) -> BTreeSet<String> {
+    let Some(pool) = pools.and_then(|pools| pools.get(tier)) else {
+        return BTreeSet::new();
+    };
+    crew_names_from_entries(pool.get("crews").or_else(|| pool.as_array().map(|_| pool)))
+}
+
 impl OrbitRuntime {
+    /// The crew pool a task's latest delivery was admitted against
+    /// [ORB-19487]: its run's frozen `crew_selection.eligible_pool` for an
+    /// ordinary route (complexity, purpose, type, default, hold or a
+    /// run-level pool override captured in `auto_crew_pools`), or, for an
+    /// explicit run crew, the captured complexity pool at the admission
+    /// tier in that run's `auto_crew_pools`. The selection may be frozen
+    /// in the run input or in its pipeline state (a claimed leaf).
+    /// `None` when no run records that evidence for the task.
+    pub(super) fn admitted_crew_pool(
+        &self,
+        task_id: &str,
+        crew: &str,
+    ) -> Result<Option<(BTreeSet<String>, String)>, OrbitError> {
+        let mut runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            task_id: Some(task_id.to_string()),
+            include_steps: false,
+            ..Default::default()
+        })?;
+        runs.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.run_id.cmp(&left.run_id))
+        });
+        for run in runs {
+            let input = run.input.as_ref();
+            let mut selection = input
+                .and_then(|value| value.get("crew_selection"))
+                .filter(|selection| {
+                    selection.get("task_id").and_then(Value::as_str) == Some(task_id)
+                })
+                .cloned();
+            let mut pools = input
+                .and_then(|value| value.get("auto_crew_pools"))
+                .cloned();
+            if (selection.is_none() || pools.is_none())
+                && let Some(state) = self.read_run_state(&run.run_id.to_string())?
+            {
+                if selection.is_none() {
+                    selection = state.crew_selection.filter(|selection| {
+                        selection.get("task_id").and_then(Value::as_str) == Some(task_id)
+                    });
+                }
+                if pools.is_none() {
+                    pools = state
+                        .initial_input
+                        .get("auto_crew_pools")
+                        .cloned()
+                        .or_else(|| {
+                            input
+                                .and_then(|value| value.get("auto_crew_pools"))
+                                .cloned()
+                        });
+                }
+            }
+            let Some(selection) = selection else {
+                continue;
+            };
+            // Only the delivery that ran the crew the task now names is
+            // relevant: a crew redrawn by a later complexity rerate (or
+            // changed after admission) has no such delivery, so its
+            // historical membership is unavailable rather than a mismatch.
+            if selection.get("crew").and_then(Value::as_str) != Some(crew) {
+                continue;
+            }
+            let source = selection
+                .get("source")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let tier = selection
+                .get("complexity")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if source == "explicit" {
+                let pool = captured_pool_for_tier(pools.as_ref(), tier);
+                if pool.is_empty() {
+                    return Ok(None);
+                }
+                return Ok(Some((pool, format!("admission {tier} complexity pool"))));
+            }
+            let eligible = crew_names_from_entries(selection.get("eligible_pool"));
+            if !eligible.is_empty() {
+                return Ok(Some((eligible, "recorded admission pool".to_string())));
+            }
+            let pool = captured_pool_for_tier(pools.as_ref(), tier);
+            if !pool.is_empty() {
+                return Ok(Some((pool, format!("admission {tier} complexity pool"))));
+            }
+            return Ok(None);
+        }
+        Ok(None)
+    }
+
     /// Read every outcome of `enrolled` (unforced, assigned rows) of the
     /// experiment `experiment_id`, created at `created_at`.
     pub(super) fn experiment_outcomes(
@@ -348,14 +463,21 @@ impl OrbitRuntime {
                 "lines_changed",
                 settled(lines.get(id).filter(|_| done).map(|lines| *lines as f64)),
             );
+            let crew_name = task.crew.clone().unwrap_or_else(|| "unset".to_string());
+            let (admitted_pool, admitted_pool_label) =
+                match self.admitted_crew_pool(id, &crew_name)? {
+                    Some((pool, label)) => (Some(pool), Some(label)),
+                    None => (None, None),
+                };
             outcomes.push(TaskOutcome {
                 task_id: id.to_string(),
                 arm: arm.clone(),
                 segment: row.segment.unwrap_or(0),
                 complexity: complexity_bucket(task.complexity.as_ref().map(|c| c.as_str()))
                     .to_string(),
-                tier: task.complexity,
-                crew: task.crew.clone().unwrap_or_else(|| "unset".to_string()),
+                admitted_pool,
+                admitted_pool_label,
+                crew: crew_name,
                 terminal,
                 assigned_at: row.assigned_at,
                 assignment_digest: row.digest.clone(),

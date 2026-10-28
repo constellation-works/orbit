@@ -8,10 +8,12 @@
 //! explicitly crewed ORB-19386 ran luna in the control arm.
 
 use orbit_core::OrbitRuntime;
+use orbit_core::TaskComplexity;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
 use orbit_core::application::job::JobRunListParams;
+use orbit_core::application::task::TaskUpdateParams;
 use orbit_types::workflow::ProviderFailureClass;
 use serde_json::{Value, json};
 
@@ -122,6 +124,87 @@ fn submit(fx: &Fixture, job: &std::path::Path, input: Value) -> Value {
         .unwrap()
         .input
         .unwrap()
+}
+
+/// Workspace config after a pool change: the medium pool now runs luna.
+const CHANGED_POOL_CREWS: &str = r#"[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["luna"]
+
+[crews.sol]
+provider = "codex"
+model = "sol-model"
+
+[crews.luna]
+provider = "codex"
+model = "luna-model"
+
+[experiments]
+enabled = true
+"#;
+
+fn enroll_both_arms(fx: &Fixture, job: &std::path::Path) -> (String, String) {
+    enroll_both_arms_tagged(fx, job, &[])
+}
+
+fn enroll_both_arms_tagged(fx: &Fixture, job: &std::path::Path, tags: &[&str]) -> (String, String) {
+    let (mut treated, mut control) = (None, None);
+    for _ in 0..40 {
+        let task = fx.tagged_task(tags, None).id;
+        submit(fx, job, json!({ "task_id": task }));
+        let arm = fx.runtime.task_experiments(&task).unwrap()[0].arm.clone();
+        match arm.as_deref() {
+            Some("cheap-pool") if treated.is_none() => treated = Some(task),
+            Some("control") if control.is_none() => control = Some(task),
+            _ => {}
+        }
+        if treated.is_some() && control.is_some() {
+            break;
+        }
+    }
+    (treated.unwrap(), control.unwrap())
+}
+
+/// Medium runs sol and hard runs luna, so a medium-to-hard rerate would
+/// flag sol under today's tier pool.
+const RERATE_CREWS: &str = r#"[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol"]
+hard_complexity_crews = ["luna"]
+
+[crews.sol]
+provider = "codex"
+model = "sol-model"
+
+[crews.luna]
+provider = "codex"
+model = "luna-model"
+
+[experiments]
+enabled = true
+"#;
+
+fn readout_with_config(
+    fx: &Fixture,
+    config: &str,
+    experiment: &str,
+) -> orbit_core::application::experiment::ExperimentReadout {
+    std::fs::write(fx.repo.join(".orbit/config.toml"), config).unwrap();
+    let global = fx.repo.parent().unwrap().join("global");
+    let runtime = OrbitRuntime::from_roots(&global, &fx.repo.join(".orbit")).unwrap();
+    runtime.experiment_readout(experiment, None).unwrap()
+}
+
+fn mismatches_for(
+    readout: &orbit_core::application::experiment::ExperimentReadout,
+    task: &str,
+) -> Vec<String> {
+    readout
+        .warnings
+        .iter()
+        .filter(|warning| warning.kind == "crew_mismatch" && warning.message.contains(task))
+        .map(|warning| warning.message.clone())
+        .collect()
 }
 
 fn crew_of(fx: &Fixture, task: &str) -> (Option<String>, Option<String>) {
@@ -387,4 +470,208 @@ fn an_admitted_delivery_records_its_crew_exactly_once() {
 
     submit(&fx, &job, json!({ "task_id": task, "crew": "luna" }));
     assert_eq!(crew_assigned_entries(&fx, &task), assigned_before + 1);
+}
+
+/// [ORB-19487] Changing the workspace pool after admission cannot invent a
+/// control mismatch for the crew that was legitimate at admission.
+#[test]
+fn a_pool_change_after_admission_does_not_invent_a_control_mismatch() {
+    if !isolated(
+        "admitted_crew_write_back::a_pool_change_after_admission_does_not_invent_a_control_mismatch",
+    ) {
+        return;
+    }
+    let fx = fixture(EXPERIMENT_CREWS);
+    let job = delivery_job(&fx);
+    let experiment = started_crew_experiment(&fx.runtime);
+    let (_treated, control) = enroll_both_arms(&fx, &job);
+    assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("sol"));
+
+    let readout = readout_with_config(&fx, CHANGED_POOL_CREWS, &experiment);
+    assert!(
+        mismatches_for(&readout, &control).is_empty(),
+        "{:?}",
+        readout.warnings
+    );
+}
+
+/// [ORB-19487] Changing the workspace pool after admission cannot erase a
+/// genuine control mismatch either.
+#[test]
+fn a_pool_change_after_admission_does_not_erase_a_control_mismatch() {
+    if !isolated(
+        "admitted_crew_write_back::a_pool_change_after_admission_does_not_erase_a_control_mismatch",
+    ) {
+        return;
+    }
+    let fx = fixture(EXPERIMENT_CREWS);
+    let job = delivery_job(&fx);
+    let experiment = started_crew_experiment(&fx.runtime);
+    let (_treated, control) = enroll_both_arms(&fx, &job);
+    submit(&fx, &job, json!({ "task_id": control, "crew": "luna" }));
+    assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("luna"));
+
+    let readout = readout_with_config(&fx, CHANGED_POOL_CREWS, &experiment);
+    let mismatches = mismatches_for(&readout, &control);
+    assert_eq!(mismatches.len(), 1, "{:?}", readout.warnings);
+    assert!(
+        mismatches[0].contains(&format!("task {control} in arm `control` ran crew `luna`")),
+        "{mismatches:?}"
+    );
+}
+
+/// [ORB-19487] A complexity rerate after admission cannot invent a
+/// control mismatch: the admission tier's pool still applies.
+#[test]
+fn a_complexity_rerate_after_admission_does_not_invent_a_control_mismatch() {
+    if !isolated(
+        "admitted_crew_write_back::a_complexity_rerate_after_admission_does_not_invent_a_control_mismatch",
+    ) {
+        return;
+    }
+    let fx = fixture(RERATE_CREWS);
+    let job = delivery_job(&fx);
+    let experiment = started_crew_experiment(&fx.runtime);
+    let (_treated, control) = enroll_both_arms(&fx, &job);
+    assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("sol"));
+    fx.runtime
+        .update_task_with_identity(
+            &control,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Hard),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    // The rerate redraws onto the hard pool; that crew has no delivery
+    // under the old admission, so it must not be named a mismatch.
+    assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("luna"));
+
+    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    assert!(
+        mismatches_for(&readout, &control).is_empty(),
+        "{:?}",
+        readout.warnings
+    );
+}
+
+/// [ORB-19487] A run-level pool override is the admission pool for that
+/// delivery, not today's workspace pool.
+#[test]
+fn a_run_level_pool_override_is_checked_against_its_admission_pool() {
+    if !isolated(
+        "admitted_crew_write_back::a_run_level_pool_override_is_checked_against_its_admission_pool",
+    ) {
+        return;
+    }
+    let fx = fixture(EXPERIMENT_CREWS);
+    let job = delivery_job(&fx);
+    let experiment = started_crew_experiment(&fx.runtime);
+    let (_treated, control) = enroll_both_arms(&fx, &job);
+    let input = submit(
+        &fx,
+        &job,
+        json!({ "task_id": control, "medium_complexity_crews": ["luna"] }),
+    );
+    assert_eq!(input["crew_selection"]["crew"], "luna", "{input}");
+    assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("luna"));
+
+    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    assert!(
+        mismatches_for(&readout, &control).is_empty(),
+        "{:?}",
+        readout.warnings
+    );
+}
+
+/// [ORB-19487] A valid purpose route is checked against its recorded
+/// admission pool, not the complexity pool.
+#[test]
+fn a_purpose_route_is_checked_against_its_admission_pool() {
+    if !isolated("admitted_crew_write_back::a_purpose_route_is_checked_against_its_admission_pool")
+    {
+        return;
+    }
+    const PURPOSE_CREWS: &str = r#"[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol"]
+
+[workflow.purpose_crews]
+baseline_red_repair = ["luna"]
+
+[crews.sol]
+provider = "codex"
+model = "sol-model"
+
+[crews.luna]
+provider = "codex"
+model = "luna-model"
+
+[experiments]
+enabled = true
+"#;
+    let fx = fixture(PURPOSE_CREWS);
+    let job = delivery_job(&fx);
+    let experiment = started_crew_experiment(&fx.runtime);
+    let (_treated, control) =
+        enroll_both_arms_tagged(&fx, &job, &["crew-purpose:baseline_red_repair"]);
+    assert_eq!(crew_of(&fx, &control).0.as_deref(), Some("luna"));
+
+    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    assert!(
+        mismatches_for(&readout, &control).is_empty(),
+        "{:?}",
+        readout.warnings
+    );
+}
+
+/// [ORB-19487] Without recorded admission evidence a control crew is
+/// reported unavailable, not as a confirmed mismatch.
+#[test]
+fn a_control_crew_without_admission_evidence_is_unavailable_not_a_mismatch() {
+    if !isolated(
+        "admitted_crew_write_back::a_control_crew_without_admission_evidence_is_unavailable_not_a_mismatch",
+    ) {
+        return;
+    }
+    let fx = fixture(EXPERIMENT_CREWS);
+    let job = delivery_job(&fx);
+    let experiment = started_crew_experiment(&fx.runtime);
+    let (_treated, control) = enroll_both_arms(&fx, &job);
+    // Simulate a pre-capture delivery: remove every job run for the task.
+    {
+        use orbit_store::contracts::JobRunQuery;
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            fx.runtime.sqlite_store().unwrap(),
+            fx.runtime.workspace_id().unwrap(),
+        );
+        for run in jobs
+            .list_job_runs_filtered(&JobRunQuery {
+                task_id: Some(control.clone()),
+                include_steps: false,
+                ..Default::default()
+            })
+            .unwrap()
+        {
+            jobs.delete_job_run(&run.run_id.to_string()).unwrap();
+        }
+    }
+
+    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    assert!(
+        mismatches_for(&readout, &control).is_empty(),
+        "{:?}",
+        readout.warnings
+    );
+    assert!(
+        readout.warnings.iter().any(|warning| {
+            warning.message.contains(&control)
+                && (warning.kind.contains("unavailable")
+                    || warning.message.to_lowercase().contains("unavailable"))
+        }),
+        "{:?}",
+        readout.warnings
+    );
 }
