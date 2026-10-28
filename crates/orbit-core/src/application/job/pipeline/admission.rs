@@ -147,7 +147,8 @@ impl OrbitRuntime {
             admission.map(|admission| admission.parent_run_id.as_str()),
             resume.is_some(),
         )?;
-        self.install_auto_crew_admission(
+        // The draw's task writes wait for the durable insert below [ORB-19485].
+        let mut admission_task_writes = self.install_auto_crew_admission(
             job_name,
             &mut input,
             admission.map(|admission| admission.parent_run_id.as_str()),
@@ -272,6 +273,12 @@ impl OrbitRuntime {
                 seed_after_insert = true;
                 run
             };
+            // [ORB-19485] The run is durably admitted, so the draw's task writes
+            // may land. Refusals and key resolutions never reach this point, and
+            // a resolved automation key keeps the task its first admission left.
+            if !existing_automation_run && let Some(writes) = admission_task_writes.take() {
+                self.apply_admission_task_writes(writes);
+            }
 
             let trigger = if admission.is_some() {
                 JobRunTrigger::child()

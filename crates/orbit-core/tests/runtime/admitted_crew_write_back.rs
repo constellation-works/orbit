@@ -11,6 +11,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
+use orbit_core::application::job::JobRunListParams;
 use orbit_types::workflow::ProviderFailureClass;
 use serde_json::{Value, json};
 
@@ -87,10 +88,17 @@ fn started_crew_experiment(runtime: &OrbitRuntime) -> String {
 /// A catalog-shaped delivery job whose worker does nothing, so a submission
 /// runs admission and stops.
 fn delivery_job(fx: &Fixture) -> std::path::PathBuf {
+    delivery_job_in_state(fx, "enabled")
+}
+
+/// [`delivery_job`] whose spec declares `state`.
+fn delivery_job_in_state(fx: &Fixture, state: &str) -> std::path::PathBuf {
     let job_path = fx.repo.join("task_local_pipeline.yaml");
     std::fs::write(
         &job_path,
-        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_local_pipeline\nspec:\n  state: enabled\n  steps: []\n",
+        format!(
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_local_pipeline\nspec:\n  state: {state}\n  steps: []\n"
+        ),
     )
     .unwrap();
     orbit_core::test_support::install_substitute_pipeline_worker([
@@ -303,4 +311,80 @@ fn an_explicit_crew_is_excluded_from_crew_experiments_until_forced() {
             Some(format!("experiment:{experiment}/cheap-pool"))
         )
     );
+}
+
+fn crew_assigned_entries(fx: &Fixture, task: &str) -> usize {
+    fx.runtime
+        .get_task_history(task)
+        .unwrap()
+        .iter()
+        .filter(|entry| entry.event == "crew_assigned")
+        .count()
+}
+
+/// [ORB-19485] A refused submission leaves the task as it was. A disabled
+/// delivery job is refused before any run is admitted, so the explicit crew
+/// it names must not reach the task's crew, provenance or history.
+#[test]
+fn a_disabled_delivery_leaves_the_task_crew_and_history_unchanged() {
+    if !isolated(
+        "admitted_crew_write_back::a_disabled_delivery_leaves_the_task_crew_and_history_unchanged",
+    ) {
+        return;
+    }
+    let fx = fixture(HOLD_CREWS);
+    let job = delivery_job_in_state(&fx, "disabled");
+    let task = fx.tagged_task(&[], Some("sol")).id;
+    let crew_before = crew_of(&fx, &task);
+    let assigned_before = crew_assigned_entries(&fx, &task);
+
+    let error = fx
+        .runtime
+        .submit_job_run(
+            job.to_str().unwrap(),
+            json!({ "task_id": task, "crew": "luna" }),
+            Some("admitted-crew-test"),
+        )
+        .unwrap_err();
+    assert!(error.to_string().contains("is disabled"), "{error}");
+
+    assert_eq!(crew_of(&fx, &task), crew_before);
+    assert_eq!(crew_assigned_entries(&fx, &task), assigned_before);
+    // A disabled job has no catalog entry to filter runs by, so list them all:
+    // the fixture workspace admitted nothing.
+    let runs = fx
+        .runtime
+        .list_job_runs(JobRunListParams::default())
+        .unwrap();
+    assert!(runs.is_empty(), "{runs:?}");
+}
+
+/// [ORB-19485] An admitted delivery records its chosen crew and provenance
+/// once: a later admission that draws the crew already recorded adds no entry.
+#[test]
+fn an_admitted_delivery_records_its_crew_exactly_once() {
+    if !isolated("admitted_crew_write_back::an_admitted_delivery_records_its_crew_exactly_once") {
+        return;
+    }
+    let fx = fixture(HOLD_CREWS);
+    let job = delivery_job(&fx);
+    let task = fx.tagged_task(&[], Some("sol")).id;
+    let assigned_before = crew_assigned_entries(&fx, &task);
+
+    submit(&fx, &job, json!({ "task_id": task, "crew": "luna" }));
+    assert_eq!(
+        crew_of(&fx, &task),
+        (
+            Some("luna".to_string()),
+            Some("redraw:run_crew".to_string())
+        )
+    );
+    assert_eq!(
+        last_crew_note(&fx, &task),
+        "crew changed from `sol` to `luna` at admission (run_crew)"
+    );
+    assert_eq!(crew_assigned_entries(&fx, &task), assigned_before + 1);
+
+    submit(&fx, &job, json!({ "task_id": task, "crew": "luna" }));
+    assert_eq!(crew_assigned_entries(&fx, &task), assigned_before + 1);
 }

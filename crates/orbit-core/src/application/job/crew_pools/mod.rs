@@ -36,7 +36,7 @@ mod task_type;
 mod types;
 mod write_back;
 
-pub(crate) use admission::strip_auto_crew_admission;
+pub(crate) use admission::{AdmissionTaskWrites, strip_auto_crew_admission};
 pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
 };

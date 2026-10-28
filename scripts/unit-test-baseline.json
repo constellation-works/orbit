@@ -247,6 +247,7 @@
         "application/job/tests/crew_pools/admission.rs::a_limited_pool_member_is_never_drawn_until_its_reading_resets",
         "application/job/tests/exec.rs::a_claimed_leaf_provider_limit_holds_and_records_a_deferral",
         "application/job/tests/exec.rs::held_and_unsuccessful_runs_finalize_despite_summary_store_faults",
+        "application/job/tests/pipeline/admission.rs::a_redrawn_keyed_resubmission_is_refused_without_rewriting_the_task_crew",
         "application/job/tests/pipeline/admission.rs::audit_failure_preserves_admitted_runs_and_submission_errors",
         "application/job/tests/pipeline/admission.rs::definition_snapshot_refuses_external_internal_and_dangling_symlinks",
         "application/job/tests/pipeline/admission.rs::failure_after_run_insert_terminalizes_the_run_with_a_startup_diagnostic",
