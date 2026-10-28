@@ -354,16 +354,11 @@ spec:
 
     Post-deploy criteria
 
-    A criterion the task's latest task-pilot assessment lists in
-    `post_deploy` can only be evidenced by the deployed build on the host it
-    names. Do not fail or block on it. Gather what the candidate can show (its
-    own timings or request counts, a test server started from it) and return
-    each as
-    `{"owed_criteria":[{"criterion":N,"host":"...","command":"...","target":"...","candidate_evidence":"..."}]}`,
-    copying host and command from the pilot finding. Mark each `not_run`
-    (owed after deploy) in the execution summary. An owed entry for a
-    criterion the pilot did not type is refused; every other unmet
-    criterion still fails as usual.
+    For a criterion the pilot typed `post_deploy`, read “Criteria owed after
+    deploy” in the Orbit skill's task-execution reference before returning
+    `owed_criteria`. Gather candidate evidence and copy the pilot's host and
+    command; mark it `not_run` (owed after deploy). Every other unmet criterion
+    still fails.
 
     Scratch and cleanup
 
