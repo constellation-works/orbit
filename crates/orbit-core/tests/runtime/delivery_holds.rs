@@ -62,11 +62,34 @@ fn completion_refusals_hold_the_run_and_pass_its_parents() {
             Some(DeliveryRefusal::EvidenceStale),
             "did not report headRefOid",
         ),
+        // [ORB-19430] Completion reads that stay down hold; the original
+        // diagnostic is kept.
         (
             "forge_read",
             json!({}),
-            None,
+            Some(DeliveryRefusal::ForgeObservationUnavailable),
             "error connecting to api.github.com",
+        ),
+        // Repair provenance rules out the authenticated retry, so this
+        // transport failure carries no `completion_observation_unavailable:`.
+        (
+            "forge_read_untyped",
+            json!({}),
+            Some(DeliveryRefusal::ForgeObservationUnavailable),
+            "private automation VCS PR status failed: Post \"https://api.github.com/graphql\": net/http: TLS handshake timeout",
+        ),
+        (
+            "required_checks_unavailable",
+            json!({"mergeStateStatus": "BLOCKED", "reviewDecision": "APPROVED", "statusCheckRollup": [{"name": "test", "status": "IN_PROGRESS", "conclusion": null}]}),
+            Some(DeliveryRefusal::ForgeObservationUnavailable),
+            "required-check evidence is unavailable",
+        ),
+        ("forge_read_denied", json!({}), None, "Bad credentials"),
+        (
+            "forge_read_after_mutation",
+            json!({}),
+            None,
+            "TLS handshake timeout",
         ),
         (
             "candidate_red",
@@ -149,10 +172,32 @@ fn completion_outcome(
         ),
     )
     .unwrap();
-    if case == "forge_read" {
+    let working_gh = std::fs::read_to_string(&gh).unwrap();
+    let forge_failure = match case {
+        "forge_read" => Some("error connecting to api.github.com"),
+        "forge_read_untyped" | "forge_read_after_mutation" => {
+            Some("Post \"https://api.github.com/graphql\": net/http: TLS handshake timeout")
+        }
+        "forge_read_denied" => Some("HTTP 401: Bad credentials (https://api.github.com/graphql)"),
+        _ => None,
+    };
+    if let Some(failure) = forge_failure {
         std::fs::write(
             &gh,
-            "#!/bin/sh\necho 'error connecting to api.github.com' >&2\nexit 1\n",
+            format!(
+                "#!/bin/sh\nprintf '%s %s\\n' \"$1\" \"${{2:-}}\" >> '{}'\necho '{failure}' >&2\nexit 1\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+    }
+    if case == "required_checks_unavailable" {
+        std::fs::write(
+            &gh,
+            working_gh.replace(
+                &format!("'api graphql') printf '%s\\n' '{required_checks}' ;;"),
+                "'api graphql') echo 'HTTP 503: Service Unavailable (https://api.github.com/graphql)' >&2; exit 1 ;;",
+            ),
         )
         .unwrap();
     }
@@ -168,11 +213,14 @@ fn completion_outcome(
                 "workspace_path": "{{ input.workspace_path }}",
                 "completed_task_ids": "{{ input.task_ids }}", "pr_number": "42",
                 "published_head_sha": "published-head",
-                "max_wait_seconds": if matches!(case, "deadline_parked" | "deadline_infrastructure") { 600 } else { 0 },
+                "max_wait_seconds": if matches!(case, "deadline_parked" | "deadline_infrastructure" | "required_checks_unavailable") { 600 } else { 0 },
             },
         }]},
     }).to_string()).unwrap();
-    if case == "deadline_infrastructure" {
+    if matches!(
+        case,
+        "deadline_infrastructure" | "required_checks_unavailable"
+    ) {
         let job_config = std::fs::read_to_string(&job).unwrap();
         let mut job_json: Value = serde_json::from_str(&job_config).unwrap();
         job_json["spec"]["steps"][0]["default_input"]["auto_fix"] = json!(true);
@@ -184,6 +232,37 @@ fn completion_outcome(
         "head_inprogress" => TaskStatus::InProgress,
         _ => TaskStatus::Review,
     };
+    // Durable provenance an earlier round left: a repair reservation rules
+    // out the authenticated retry; a merge request is a completion mutation.
+    let provenance = match case {
+        "forge_read_untyped" | "required_checks_unavailable" => {
+            Some(orbit_types::workflow::PR_INFRASTRUCTURE_RESERVED_EVENT)
+        }
+        "forge_read_after_mutation" => {
+            Some(orbit_types::workflow::PR_COMPLETION_MUTATION_STARTED_EVENT)
+        }
+        _ => None,
+    };
+    if let Some(event) = provenance {
+        fx.runtime
+            .apply_task_automation_update(
+                &task,
+                TaskAutomationUpdate {
+                    append_history: vec![orbit_types::task::TaskHistoryEntry {
+                        at: Utc::now(),
+                        by: "system".into(),
+                        event: event.into(),
+                        note: Some(json!({"pr_number": "42"}).to_string()),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
     let input = json!({"workspace_path": fx.repo, "task_ids": [task]});
     let run = fx
         .runtime
@@ -273,6 +352,20 @@ fn completion_outcome(
         stored.steps.last().unwrap().error_code.as_deref(),
         refusal.map(DeliveryRefusal::error_code)
     );
+    if matches!(case, "forge_read_untyped" | "required_checks_unavailable") {
+        let message = stored
+            .steps
+            .last()
+            .unwrap()
+            .error_message
+            .as_deref()
+            .unwrap();
+        assert!(
+            !message.contains("completion_observation_unavailable:")
+                && (case == "forge_read_untyped" || message.contains("auto_fix_stopped")),
+            "{case}: the untyped carry holds: {message}"
+        );
+    }
     if case == "deadline_infrastructure" {
         let calls = std::fs::read_to_string(&calls).unwrap();
         assert_eq!(
@@ -365,4 +458,48 @@ fn completion_outcome(
         u64::from(refusal.is_none()),
         "{case}"
     );
+    if case == "forge_read" {
+        // The forge answers again, and the PR merged meanwhile: resuming the
+        // held run reads it and completes the delivery.
+        std::fs::write(&gh, &working_gh).unwrap();
+        std::fs::write(
+            &status,
+            json!({"state": "MERGED", "mergeStateStatus": "CLEAN", "headRefOid": "published-head",
+                "mergedAt": "2026-10-28T00:00:00Z", "mergeCommit": {"oid": "landed"}})
+            .to_string(),
+        )
+        .unwrap();
+        // The detached substitute waits for this marker, so it cannot
+        // interrupt the resumed run this test executes in process.
+        let released = fx.repo.join("resumed-worker-released");
+        crate::worker_fixture::install(&released, "created");
+        let resumed = fx
+            .runtime
+            .submit_resume_run(&run.run_id, Some("operator"), None)
+            .expect("a run held on unreadable completion observations is resumable");
+        // This one-step job binds its task to the executing run; a pipeline's
+        // batch id comes from its worktree checkpoint instead.
+        fx.runtime
+            .apply_task_automation_update(
+                &task,
+                TaskAutomationUpdate {
+                    job_run_id: Some(resumed.run_id.clone()),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let executed = fx.runtime.execute_pipeline_run_worker(&resumed.run_id);
+        std::fs::write(&released, "").unwrap();
+        executed.unwrap();
+        let after = fx.runtime.show_job_run(&resumed.run_id).unwrap();
+        assert_eq!(after.state, JobRunState::Success, "{:?}", after.steps);
+        assert_eq!(fx.runtime.get_task(&task).unwrap().status, TaskStatus::Done);
+        let calls = std::fs::read_to_string(&calls).unwrap();
+        assert!(
+            calls
+                .lines()
+                .all(|line| line == "pr view" || line == "api graphql"),
+            "the resumed completion only reads the forge: {calls}"
+        );
+    }
 }

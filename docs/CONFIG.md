@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit Configuration
-last_validated: 2026-10-27
+last_validated: 2026-10-28
 ---
 
 # Orbit Configuration
@@ -1056,6 +1056,7 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 | `delivery_base_checks_pending` | Failed checks are inherited from, or suspected to affect, the base; wait for the base's own result before candidate recovery. |
 | `delivery_completion_budget_expired` | The completion budget (deadline) expired before completion could be confirmed; the last observed pull request state was unmerged and the task stays in review. The pull request may have merged since, through auto-merge (a hold does not cancel it) or another actor, so check the forge. |
 | `delivery_check_evidence_inconclusive` | An auto-fix stop whose check log could not be read conclusively; no repair agent runs. |
+| `delivery_forge_observation_unavailable` | Completion's read-only forge reads (PR status, required checks, merge policy, prerequisite evidence) kept failing with a transport error before any completion mutation: after the one authenticated completion retry, when the run has no final recovery, past the completion budget, or after repair provenance that rules the retry out. Nothing changed on the forge and the task stays in review; `orbit job resume` reads the forge again and continues completion from its checkpoints. |
 
 These codes come from typed refusals, never from matching diagnostic wording.
 The refusing action keeps its existing task transition and landing evidence;
@@ -1066,12 +1067,15 @@ counts it under held, outside the failure rate. Routine fires retain their
 existing `succeeded` status for a held underlying run.
 
 Missing pinned identity fields, including the PR head, and contradictory merge
-evidence produce typed `delivery_evidence_stale` holds. Ordinary forge-read
-errors, failed candidate checks, and unlisted refusals remain failures. In particular,
+evidence produce typed `delivery_evidence_stale` holds. Forge reads refused for
+a credential, permission or other permanent reason, transport failures after a
+merge, auto-merge or rebase request (in that run or recorded in the task's
+history), failed candidate checks, and unlisted refusals remain failures. In particular,
 `delivery_evidence_stale` text alone does not establish a hold. Completion's
 ordinary conflict-recovery path also retains its existing failure and repair
 semantics. Resolve the named refusal before starting a new delivery attempt;
-these holds do not enable generic `orbit job resume`.
+apart from `delivery_forge_observation_unavailable`, these holds do not enable
+generic `orbit job resume`.
 
 #### A red base is held, not blocked
 

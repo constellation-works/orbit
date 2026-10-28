@@ -455,14 +455,23 @@ pub(super) fn empty_requirements_still_bind_completion_policy() {
     );
 }
 
-/// A second lost read after the retry spends no further budget: the run
-/// stops before any merge and the failure handoff diagnoses it.
-pub(super) fn repeated_observation_failure_escalates_after_one_retry() {
+/// [ORB-19430] A second lost read after the retry spends no further budget:
+/// the run holds before any merge, without the failure handoff, and the task
+/// stays in review.
+pub(super) fn repeated_observation_failure_holds_after_one_retry() {
     let (f, checkout) = fixture_with(true, true, true);
     let calls = tail_forge(&f, "repeated_lost_read");
     let (outcome, _started) = run_tail(&f);
     assert!(
-        !matches!(&outcome, Ok(outcome) if outcome.success),
+        matches!(
+            &outcome,
+            Err(orbit_engine::DispatchError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::ForgeObservationUnavailable,
+                message,
+                ..
+            }) if message.contains("completion_observation_unavailable:")
+                && message.contains("TLS handshake timeout")
+        ),
         "{outcome:?}"
     );
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
@@ -474,22 +483,17 @@ pub(super) fn repeated_observation_failure_escalates_after_one_retry() {
         "one authenticated retry: {:?}",
         state.final_recovery
     );
-    // As for any completion failure after publication, the failure handoff
-    // keeps the PR and the task in review and records the diagnosis.
     assert_eq!(
         f.runtime.get_task(&f.task).unwrap().status,
         TaskStatus::Review
     );
     assert!(
-        f.runtime
+        !f.runtime
             .get_task_comments(&f.task)
             .unwrap()
             .iter()
-            .any(
-                |c| c.message.contains("PR completion failed after publication")
-                    && c.message.contains("completion_observation_unavailable:")
-            ),
-        "the exhausted retry is diagnosed on the task"
+            .any(|c| c.message.contains("PR completion failed after publication")),
+        "a held completion does not run the failure handoff"
     );
     let requests = std::fs::read_to_string(calls).unwrap();
     assert!(

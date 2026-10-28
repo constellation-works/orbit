@@ -66,6 +66,7 @@ pub use light_delivery::{
 };
 pub(crate) use owed_criteria::accept_implementer_owed_criteria;
 pub use pr::PullRequestStatus;
+pub(crate) use pr::forge_observation_hold_message;
 pub(crate) use pr::{
     AUTHENTICATED_PUBLISHED_HEAD_SHA, apply_authenticated_published_head,
     provider_authenticated_published_head, recovery_published_head,

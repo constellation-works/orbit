@@ -90,8 +90,9 @@ pub(in crate::executor::automation::vcs) fn carry_class(
 /// diagnostic `succeeded` renders for it.
 ///
 /// Transient: HTTP 499, any three-digit HTTP 5xx, a TLS handshake timeout
-/// (`net/http: TLS handshake timeout` or `tls: handshake timeout`) or a
-/// connection the peer reset, even when the URL is not GraphQL, a request
+/// (`net/http: TLS handshake timeout` or `tls: handshake timeout`), a
+/// connection the peer reset or one `gh` could not open (`error connecting to
+/// api.github.com`) [ORB-19430], even when the URL is not GraphQL, a request
 /// timeout, or GitHub's generic "Something
 /// went wrong while executing your query" response. Permanent failures such
 /// as auth, an unknown head, or an invalid selector must fail on the first
@@ -109,7 +110,8 @@ fn classify(message: &str) -> PrivateVcsFailureClass {
         || (text.contains("graphql") && text.contains("timeout"))
         || text.contains("tls handshake timeout")
         || text.contains("tls: handshake timeout")
-        || text.contains("connection reset by peer");
+        || text.contains("connection reset by peer")
+        || text.contains("error connecting to ");
     if !transient {
         PrivateVcsFailureClass::Other
     } else if [

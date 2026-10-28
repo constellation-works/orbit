@@ -31,6 +31,11 @@ pub enum DeliveryRefusal {
     CompletionBudgetExpired,
     /// An auto-fix stop whose check evidence could not be read conclusively.
     CheckEvidenceInconclusive,
+    /// Completion's read-only forge observations kept failing with a transport
+    /// error before any completion mutation, past the bounded completion
+    /// retry. Nothing changed on the forge; the task stays in review and the
+    /// held run resumes its completion once the forge answers.
+    ForgeObservationUnavailable,
 }
 
 impl DeliveryRefusal {
@@ -49,6 +54,7 @@ impl DeliveryRefusal {
             Self::BaseChecksPending => "delivery_base_checks_pending",
             Self::CompletionBudgetExpired => "delivery_completion_budget_expired",
             Self::CheckEvidenceInconclusive => "delivery_check_evidence_inconclusive",
+            Self::ForgeObservationUnavailable => "delivery_forge_observation_unavailable",
         }
     }
 
@@ -67,6 +73,7 @@ impl DeliveryRefusal {
             "delivery_base_checks_pending" => Some(Self::BaseChecksPending),
             "delivery_completion_budget_expired" => Some(Self::CompletionBudgetExpired),
             "delivery_check_evidence_inconclusive" => Some(Self::CheckEvidenceInconclusive),
+            "delivery_forge_observation_unavailable" => Some(Self::ForgeObservationUnavailable),
             _ => None,
         }
     }
