@@ -290,9 +290,9 @@ impl WorkspacePreset {
     /// load. Routine targets resolve against the effective post-bootstrap
     /// catalog computed in memory (see
     /// [`effective_routine_catalog_lookup`]), so a target bootstrap would
-    /// seed still passes while an unresolvable one refuses before any
-    /// write. Catalog membership is resolved again when the preset is
-    /// enabled, after bootstrap has seeded jobs and loaded plugins.
+    /// seed or an active plugin supplies still passes while an unresolvable
+    /// one refuses before any write. Catalog membership is resolved again
+    /// when the preset is enabled, through the opened runtime.
     fn require_seeded_definitions_load(
         &self,
         global_root: &Path,
@@ -314,7 +314,7 @@ impl WorkspacePreset {
             workspace: "workspace".to_string(),
             orbit_dir: workspace_orbit_root.to_path_buf(),
         };
-        let catalog_lookup = effective_routine_catalog_lookup(global_root, workspace_orbit_root);
+        let catalog_lookup = effective_routine_catalog_lookup(global_root, workspace_orbit_root)?;
         let collection =
             collect_routines_with_skips(&[source], &catalog_lookup, &|_path, _definition| None);
         let dir = workspace_orbit_root.join(ROUTINES_DIR);
@@ -447,17 +447,18 @@ fn seeded_file_matches(dir: &Path, name: &str, loaded_path: &Path, loaded_name: 
 /// (`seed_default_jobs` over [`DEFAULT_JOB_FILES`]), so those names resolve
 /// even when that directory has not been seeded yet. The remaining layers
 /// mirror runtime execution membership: explicit `ORBIT_JOB_DIR` /
-/// `ORBIT_V2_JOB_DIR` directories, the global on-disk jobs, and the
-/// workspace on-disk jobs, parsed best-effort so a malformed file reports
-/// as a catalog error exactly as the runtime loader reports it. Plugin job
-/// files need a runtime plugin load and are resolved again at enable time;
-/// `enable_preset_definitions` re-checks every routine before enabling
-/// anything, so a target only a plugin layer supplies cannot partially
-/// apply there either.
+/// `ORBIT_V2_JOB_DIR` directories, the global on-disk jobs, the workspace
+/// on-disk jobs, and then the `plugin:<ns>` layer of every plugin active for
+/// this workspace (see [`active_plugin_job_files`]). Each is parsed
+/// best-effort, so a malformed file reports as a catalog error exactly as
+/// the runtime loader reports it. A target no layer supplies does not
+/// resolve, so its routine refuses before any write.
+/// `enable_preset_definitions` re-checks every routine through the opened
+/// runtime before enabling anything.
 fn effective_routine_catalog_lookup(
     global_root: &Path,
     workspace_orbit_root: &Path,
-) -> impl Fn(&Path, &str) -> RoutineCatalogLookup {
+) -> Result<impl Fn(&Path, &str) -> RoutineCatalogLookup, OrbitError> {
     use orbit_engine::activity_job::{V2JobCatalog, catalog_error_to_orbit};
 
     let global_jobs_dir = global_root.join("resources/jobs");
@@ -493,6 +494,14 @@ fn effective_routine_catalog_lookup(
             Err(error) => errors.push(catalog_error_to_orbit(error).to_string()),
         }
     }
+    for (namespace, files) in active_plugin_job_files(global_root, workspace_orbit_root)? {
+        if let Err(error) = catalog.load_files_prefer_existing(&files) {
+            errors.push(format!(
+                "plugin '{namespace}' job catalog layer: {}",
+                catalog_error_to_orbit(error)
+            ));
+        }
+    }
     let mut names: std::collections::BTreeSet<String> = catalog
         .iter()
         .map(|(name, _, _)| name.to_string())
@@ -503,10 +512,50 @@ fn effective_routine_catalog_lookup(
             .map(|(name, _)| (*name).to_string()),
     );
     let error = (!errors.is_empty()).then(|| errors.join("; "));
-    move |_root, job| RoutineCatalogLookup {
+    Ok(move |_root: &Path, job: &str| RoutineCatalogLookup {
         resolves: names.contains(job),
         error: error.clone(),
+    })
+}
+
+/// The job files of every plugin the runtime would load active for this
+/// workspace, by namespace, read without opening a runtime or writing
+/// anything.
+///
+/// The host plugin rows are read from a read-only store and pass the same
+/// grant, install-path, build-witness and definition checks a runtime load
+/// applies; the workspace `[plugin_enablement]` toggles then narrow them as
+/// the runtime does. A host with no plugin store has no active plugin.
+fn active_plugin_job_files(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+) -> Result<Vec<(String, Vec<PathBuf>)>, OrbitError> {
+    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
+        global_root,
+        workspace_orbit_root,
+    ))?;
+    if !config.persistence.audit_db.is_file() {
+        return Ok(Vec::new());
     }
+    let (_registry, load) = crate::runtime::plugin::discovery::host_plugin_registry(
+        global_root,
+        &config.persistence.audit_db,
+        &config.plugins,
+    )?;
+    Ok(load
+        .registered
+        .iter()
+        .filter(|entry| entry.status == orbit_types::plugin::PluginStatus::Active)
+        .filter(|entry| config.plugin_enablement.get(&entry.name) != Some(&false))
+        .filter_map(|entry| entry.loaded.as_ref())
+        .filter(|plugin| !plugin.definitions.jobs.is_empty())
+        .map(|plugin| {
+            (
+                plugin.namespace().to_string(),
+                plugin.definitions.jobs.clone(),
+            )
+        })
+        .collect())
 }
 
 /// Refusal for one `[enable]` name, naming that definition.
