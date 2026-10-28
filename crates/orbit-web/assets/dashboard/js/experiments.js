@@ -21,7 +21,7 @@ import {
 } from './common.js';
 import { setActiveTab } from './router.js';
 import { svg, linePath } from './sparkline.js';
-import { draftActions, lockedNote, syncExperimentAuthoring } from './experiment-form.js';
+import { draftActions, draftStartRenderState, lockedNote, syncExperimentAuthoring } from './experiment-form.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -143,7 +143,7 @@ export function renderExperiments() {
   if (!lastPayload || !panelCanRender(BODY)) return;
   const count = $(COUNT);
   const authoring = lastPayload.authoring || lastPayload.experiment?.authoring || null;
-  syncExperimentAuthoring(authoring, fetchAndRenderExperiments);
+  syncExperimentAuthoring(authoring, fetchAndRenderExperiments, renderDraftStartState);
   let nodes;
   if (lastPayload.kind === "list") {
     const total = lastPayload.experiments.length;
@@ -159,8 +159,15 @@ export function renderExperiments() {
   }
   const root = el("div", { class: "ex-view" }, nodes);
   root.dataset.key = `experiments-${lastPayload.kind}`;
-  root.dataset.hash = JSON.stringify([lastPayload, draft]);
+  root.dataset.hash = JSON.stringify([lastPayload, draft, draftStartRenderState()]);
   syncNodes(body, [root]);
+}
+
+function renderDraftStartState(experimentId) {
+  renderExperiments();
+  const host = Array.from($(BODY)?.querySelectorAll(".exf-draft-actions") || [])
+    .find((node) => node.dataset.key === `draft-actions-${experimentId}`);
+  host?.querySelector("button.exf-confirm-start")?.focus();
 }
 
 // ---- links ------------------------------------------------------------------

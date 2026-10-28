@@ -35,6 +35,7 @@ const POPULATION_LISTS = [
 let form = null;
 let authoring = null;
 let refresh = () => Promise.resolve();
+let renderDraftStartState = () => {};
 let nextKey = 1;
 let bound = false;
 // Draft Start confirmations by experiment id, so a poll that rebuilds a card
@@ -51,9 +52,10 @@ onWorkspaceChange(() => {
 /// Record what the latest list or detail payload says this session may do,
 /// and show the New experiment button only when create is authorized.
 /// `onSaved` refreshes the page after a write.
-export function syncExperimentAuthoring(next, onSaved) {
+export function syncExperimentAuthoring(next, onSaved, onDraftStartStateChange) {
   authoring = next || null;
   if (onSaved) refresh = onSaved;
+  if (onDraftStartStateChange) renderDraftStartState = onDraftStartStateChange;
   const button = $(OPEN);
   if (!button) return;
   if (!bound) {
@@ -63,6 +65,13 @@ export function syncExperimentAuthoring(next, onSaved) {
   const allowed = Boolean(authoring?.create?.authorized);
   button.hidden = !allowed;
   if (!authoring && form) closeExperimentForm();
+}
+
+/// The draft Start state included in the experiments panel's render hash.
+export function draftStartRenderState() {
+  return [...starts.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id, state]) => [id, state.reason, state.pending, state.status]);
 }
 
 export function closeExperimentForm() {
@@ -499,7 +508,7 @@ function startConfirmation(experiment, state, paint) {
       if (!visit.isCurrent() || starts.get(experiment.id) !== state) return;
       state.pending = false;
       state.status = error?.message || "Start failed.";
-      paint();
+      renderDraftStartState(experiment.id);
       return;
     }
     if (!visit.isCurrent()) return;
