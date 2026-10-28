@@ -129,9 +129,11 @@ See [multi-host.md](multi-host.md).
 
 Three things to know about what it seeded and how to finalize:
 
-- **Every routine and auto-task ships disabled.** The automation layer is
-  installed but dark until someone reviews and opts in. Do not assume a fresh
-  workspace schedules anything. → [automation.md](automation.md)
+- **Only `crew_performance_refresh` is seeded enabled.** Every other routine and
+  auto-task ships disabled: the automation layer is installed but dark until
+  someone reviews and opts in. `crew_performance_refresh` no-ops while
+  `workflow.crew_performance` is `off`, but it still records a job run each hour,
+  so a fresh workspace that seeds the default routines schedules it. → [automation.md](automation.md)
 - **`.orbit/` is per-user state.** `orbit workspace init` seeds a `.gitignore`
   that ignores the whole of `.orbit/` with no re-includes. Keep it. Seeded
   routines, auto-tasks, and resources come from the binary, not from git.
@@ -207,8 +209,9 @@ auto_tasks = []
   `[seeding]`, not here.
 - **`[enable]`** switches on routines and auto-tasks that an enabled plugin
   already seeded into this workspace. It applies after seeding. It never enables
-  a shipped default, so every shipped routine and auto-task stays disabled
-  unless someone opts in.
+  a shipped default, so `crew_performance_refresh` (seeded enabled) is the only
+  shipped default on without an opt-in; every other shipped routine and
+  auto-task stays disabled unless someone opts in.
 
 **Validation and limits.** Orbit validates the whole file against this
 workspace before it writes anything. Nothing is written or registered when any
