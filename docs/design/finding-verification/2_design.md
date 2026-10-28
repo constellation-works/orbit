@@ -1,13 +1,13 @@
 ---
 title: Finding Verification — Design
 owner: claude
-last_updated: 2026-10-24
+last_updated: 2026-10-28
 last_validated: 2026-10-26
 status: Accepted
 feature: finding-verification
 doc_role: design
 type: design
-summary: How finding_verification_pipeline selects review findings, draws verifier crews from the complexity pools, validates and records verdicts, escalates doubtful ones, and gates promotion and drain admission.
+summary: How review findings are rejected by the task pilot or the implementer by default, and how the opt-in finding_verification_pipeline selects them, draws verifier crews from the complexity pools, validates and records verdicts, escalates doubtful ones, and gates promotion and drain admission.
 tags: [finding-verification, review, automation, admission]
 paths: ["crates/orbit-core/src/application/task/finding_verification.rs", "crates/orbit-core/src/application/task/finding_verification_steps/**", "crates/orbit-core/assets/jobs/finding_verification_pipeline.yaml"]
 related_features: [automation-triggers, review-gate, distributed-drain, routines]
@@ -18,8 +18,10 @@ related_artifacts: [ORB-15662]
 
 This doc covers the current implementation: which tasks are findings, the
 job, the verdict schema and how it is recorded, crew selection and
-escalation, the gate, and the state trigger. Why verification is its own job
-rather than a task-pilot phase is in [4_decisions.md](4_decisions.md).
+escalation, the gate, the state trigger, and the default rejection routes
+(§8). With the job and its routine off, the task pilot and the implementer
+are how a wrong finding gets rejected; the job is the opt-in alternative.
+Why each exists is in [4_decisions.md](4_decisions.md).
 
 ## 1. Review findings
 
@@ -92,6 +94,8 @@ verdicts.
 
 The recorded **`FindingVerification`** (`schema_version: 1`) holds:
 
+- `source`: the route that decided it, `task_pilot` or `implementer` (§8),
+  absent for this job;
 - `verdict`, `confidence`, `severity`, `evidence`, `reasoning`,
   `reproduction` and `rejection` from the deciding report, with free text
   redacted;
@@ -238,7 +242,49 @@ uses the shared member host:
   releases a failed claim and puts a previously confirmed finding back into
   observation.
 
-## 8. Concerns & Honest Limitations
+## 8. Default rejection routes
+
+`review.verify_findings` is off and the routine disabled by default, so a
+wrong finding is usually rejected by work that already reads its code
+[ORB-19635]. Both routes record the same verdict through
+`record_finding_verification` (§5), entering through
+`OrbitRuntime::reject_invalid_finding`: REJECTED with reason
+`premise_wrong`, the evidence as `rejection.detail` and `reasoning`, the
+fingerprint of the task as it stands at the write, and the deciding route's
+`source`, crew (in `crews`, at the task's verification tier) and `run_id`.
+A task that is not a review finding (§1) is refused. A replay of a run's own
+recorded rejection succeeds without a second write.
+
+- **Task pilot.** For a review finding the pilot reads the cited code at
+  `source_revision` and may return `finding_invalid: {"evidence": "..."}`
+  with `path:line` citations, next to `duplicate_of`, `already_landed` and
+  `release_action_required`. It means the defect as described does not
+  exist there, not that it is already fixed or not worth fixing, and it is a
+  read-only judgement. Apply validates it like those findings: empty
+  evidence, any other task, or a non-Git workspace makes the assessment
+  invalid and nothing is written. A valid one keeps the task out of
+  readiness, holds drain approval as `finding_invalid`, and after the pilot
+  write rejects the task with the pilot's crew and run (`verified_sha` is
+  `source_revision`, confidence the pilot's). Apply reports the outcome on
+  the task's assessment as `finding_rejection` (`recorded`, and `status` or
+  the superseded `reason`); a rejection that does not record leaves the
+  pilot write standing. A `finding_invalid` of null changes nothing.
+- **Implementer.** A finding that turns out wrong only at pickup, after the
+  pilot's revision, is reported by the implementer as `finding-invalid.json`
+  (schema in the Orbit skill's task-execution reference): this task, its run
+  or retry lineage, the pinned HEAD as `tested_head`, `reasoning`, and at
+  least one `{location, note}` citing an existing `path:line` there. It
+  changes nothing and runs no workspace gates. On a clean tree at the pinned
+  HEAD the `git_commit` step verifies the report and has the host record the
+  verdict, then returns the `verified_finding_invalid` checkpoint with
+  `skipped_no_diff_expected: true`. The PR pipeline's `promote_no_diff` and
+  the local pipeline's `mark_review` and `complete_tasks` skip that decision,
+  so nothing is promoted or landed. A report from another run never shadows
+  this run's no-diff or already-landed evidence. A claimed leaf cannot write
+  the owner's task: its commit step refuses the report, and the implementer
+  returns a `finding_invalid` blocker with the evidence instead.
+
+## 9. Concerns & Honest Limitations
 
 - **Existing backlog findings are held.** The gate applies to review findings
   already in backlog. With the routine disabled, they wait until the job runs
@@ -267,3 +313,9 @@ uses the shared member host:
   checkout; an operator opts it in on the executor definition.
 - **Filer matching is by label.** A filer recorded only as a human or
   generic label matches no crew, so nothing is passed over.
+- **The default routes have no second opinion.** A pilot or implementer
+  rejection is one agent's judgement, with no escalation tier; the pilot's
+  free-text citations are not checked against the revision, while the
+  implementer's are. An operator who doubts one reopens the task.
+- **Claimed runs do not reject.** A claimed implementer's
+  `finding_invalid` blocker leaves the rejection to the owner's operator.

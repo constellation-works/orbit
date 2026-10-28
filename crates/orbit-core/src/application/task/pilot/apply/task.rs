@@ -9,7 +9,8 @@ use orbit_types::task::{ContextCreationState, Task, TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 
 use crate::application::task::{
-    CiSweepAdmission, MachineRequirement, NativeOsRequirement, TaskSweepFilingPort,
+    CiSweepAdmission, InvalidFinding, MachineRequirement, NativeOsRequirement, REVIEW_FINDING_TAGS,
+    TaskSweepFilingPort, VerdictConfidence, VerdictSource, VerdictWrite, is_review_finding,
 };
 
 use super::super::PostDeployRequirement;
@@ -26,8 +27,8 @@ use super::super::persist::{
 use super::super::validation_tools::{self, ImplementationLane};
 use super::super::{
     CONTEXT_CREATION_RETAINED, CONTEXT_EVIDENCE_RETAINED, CONTEXT_REAUTHORIZATION_REQUIRED,
-    PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps, post_deploy,
-    required_machine, required_os, required_string, required_string_array,
+    FINDING_INVALID, PILOT_NORMALIZATIONS, VALIDATION_TOOL_WARNINGS, normalize_evidence_gaps,
+    post_deploy, required_machine, required_os, required_string, required_string_array,
     retained_review_evidence, review_filed, reviewed_evidence_drops, unauthorized_missing_targets,
     user_facing_ui, validate_after_selectors, validate_recommendations,
 };
@@ -292,6 +293,7 @@ fn assess(
             ));
         }
     };
+    invalid_finding_target(context, task_id, &assessment, &current)?;
     let criteria = current.acceptance_criteria.len();
     let native_os = required_os(
         action,
@@ -345,6 +347,92 @@ fn assess(
         post_deploy,
         user_facing_ui,
     })
+}
+
+/// A `finding_invalid` result judges a review-filed bug at the pinned
+/// revision, so on any other task, or without a pinned revision, the whole
+/// assessment is invalid and nothing is written. Its evidence was already
+/// required to be non-empty by `validate_recommendations`.
+fn invalid_finding_target(
+    context: &ApplyContext<'_>,
+    task_id: &str,
+    assessment: &Value,
+    current: &Task,
+) -> Settled<()> {
+    if assessment.get(FINDING_INVALID).is_none_or(Value::is_null) {
+        return Ok(());
+    }
+    let refusal = if !is_review_finding(current) {
+        format!(
+            "task {task_id} {FINDING_INVALID} applies only to a review-filed bug (type bug \
+             tagged {}); return null for any other task",
+            REVIEW_FINDING_TAGS.join(", ")
+        )
+    } else if context.source.is_none() {
+        format!(
+            "task {task_id} {FINDING_INVALID} needs a pinned source revision to cite; a non-Git \
+             workspace returns null"
+        )
+    } else {
+        return Ok(());
+    };
+    Err(task_outcome(task_id, "invalid", Some(refusal)))
+}
+
+/// Record the pilot's `finding_invalid` as a REJECTED finding verdict once
+/// its assessment is written, which moves the task to `rejected`. The
+/// outcome is reported on the assessment as `finding_rejection`; the pilot
+/// write already stands, so a rejection that does not record is reported
+/// rather than failing the apply.
+fn reject_invalid_finding(context: &ApplyContext<'_>, validated: &mut ValidatedTask) {
+    let Some(evidence) = validated
+        .assessment
+        .get(FINDING_INVALID)
+        .and_then(|finding| finding.get("evidence"))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+    else {
+        return;
+    };
+    let Some(source) = context.source else {
+        return;
+    };
+    let confidence = match validated.assessment["confidence"].as_str() {
+        Some("high") => VerdictConfidence::High,
+        Some("low") => VerdictConfidence::Low,
+        _ => VerdictConfidence::Medium,
+    };
+    let finding = InvalidFinding {
+        source: VerdictSource::TaskPilot,
+        verified_sha: &source.source_revision,
+        base_branch: &source.base_branch,
+        confidence,
+        detail: &evidence,
+        evidence: Vec::new(),
+        crew: validated.pilot_crew.as_deref(),
+        run_id: validated.pilot_run_id.as_deref(),
+    };
+    let report = match context
+        .runtime
+        .reject_invalid_finding(&validated.task_id, &finding)
+    {
+        Ok(VerdictWrite::Recorded(status)) => json!({ "recorded": true, "status": status }),
+        Ok(VerdictWrite::Superseded { reason, detail }) => {
+            json!({ "recorded": false, "reason": reason, "detail": detail })
+        }
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.core.task_pilot",
+                task_id = %validated.task_id,
+                %error,
+                "could not reject a review finding task-pilot judged invalid"
+            );
+            json!({ "recorded": false, "reason": "apply_failed", "detail": error.to_string() })
+        }
+    };
+    if let Value::Object(fields) = &mut validated.assessment {
+        fields.insert("finding_rejection".to_string(), report);
+    }
 }
 
 /// The pilot never sees the deterministic findings — the lane's
@@ -518,6 +606,8 @@ fn write(
         outcome,
         Ok(ApplyTaskOutcome::Applied(_) | ApplyTaskOutcome::AlreadyApplied(_))
     ) {
+        // Rejected first: an invalid finding is never archived as fixed.
+        reject_invalid_finding(context, &mut validated);
         close_verified_no_diff(context.runtime, &mut validated);
     }
     let (label, fingerprint) = match outcome {

@@ -25,6 +25,7 @@ use super::checkpoint::{
     verify_clean_tree,
 };
 use super::diagnostics::{changed_head_error, empty_stage_error};
+use super::finding_invalid;
 use super::git_ops::{
     ensure_named_branch, ensure_no_unmerged_changes, git_commit_paths_with_identity,
     git_commit_with_identity, stage_paths, staged_changed_files,
@@ -419,6 +420,24 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         }
         let run_id = input_string_field(input, "run_id");
         let run_id = run_id.as_deref().unwrap_or(batch_id);
+        // A review finding this run judged absent at its base is rejected,
+        // not delivered: nothing lands and no workspace gate runs.
+        if let Some(base_sha) = base_sha.as_deref()
+            && finding_invalid::claims_run(host, &task, run_id)?
+        {
+            if claimed {
+                return Err(finding_invalid::claimed_refusal());
+            }
+            let base_branch = input_string_field(input, "base_ref").unwrap_or_default();
+            return finding_invalid::reject(
+                host,
+                &task,
+                &workspace_path,
+                run_id,
+                base_sha,
+                &base_branch,
+            );
+        }
         // ORB-14791: a claimed tagged task whose implementer supplied no
         // clean-tree report (a review files findings, not a report) skips as
         // on the owner, pinned to this run and base for the NoDiff handoff.

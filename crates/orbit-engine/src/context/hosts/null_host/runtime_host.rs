@@ -198,6 +198,13 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<(), OrbitError> {
         NullRuntimeHost::apply_task_automation_update(self, task_id, update)
     }
+    fn reject_invalid_finding(
+        &self,
+        report: &orbit_types::workflow::handoff::FindingInvalidReport,
+        base_branch: &str,
+    ) -> Result<(), OrbitError> {
+        NullRuntimeHost::reject_invalid_finding(self, report, base_branch)
+    }
     fn widen_task_context_files(
         &self,
         task_id: &str,

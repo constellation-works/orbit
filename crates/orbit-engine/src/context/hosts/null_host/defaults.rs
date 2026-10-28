@@ -228,6 +228,14 @@ pub trait NullRuntimeHost: Send + Sync {
             "apply_task_automation_update",
         ))
     }
+    fn reject_invalid_finding(
+        &self,
+        report: &orbit_types::workflow::handoff::FindingInvalidReport,
+        base_branch: &str,
+    ) -> Result<(), OrbitError> {
+        let _ = (report, base_branch);
+        Err(unsupported_runtime_capability("reject_invalid_finding"))
+    }
 
     fn widen_task_context_files(
         &self,

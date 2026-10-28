@@ -15,6 +15,8 @@
 //! A `verified_no_diff` assessment of a task not tagged `no-diff-expected`
 //! holds it as `pilot_verified_no_diff`, ahead of the readiness gaps its
 //! empty selectors leave; the apply step then closes it when it qualifies.
+//! A `finding_invalid` assessment holds it as `finding_invalid` ahead of
+//! every other finding; the apply step then rejects it.
 
 use std::collections::BTreeSet;
 
@@ -199,6 +201,9 @@ pub(super) fn assess_drain_admission(
     let release_action = assessment
         .get("release_action_required")
         .filter(|finding| !finding.is_null());
+    let finding_invalid = assessment
+        .get(super::FINDING_INVALID)
+        .filter(|finding| !finding.is_null());
     let no_diff = snapshot.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG);
     let verified_no_diff = (!no_diff)
         .then(|| VerifiedNoDiff::from_assessment(assessment))
@@ -209,6 +214,13 @@ pub(super) fn assess_drain_admission(
             PromotionDecision::Withhold,
             "not_proposed",
             json!(format!("task is {}", current.status)),
+        )
+    } else if let Some(finding) = finding_invalid {
+        // Apply rejects the task once the pilot write lands; never approve it.
+        (
+            PromotionDecision::Withhold,
+            super::FINDING_INVALID,
+            finding.clone(),
         )
     } else if auto_approval_opted_out(&current.tags) {
         (

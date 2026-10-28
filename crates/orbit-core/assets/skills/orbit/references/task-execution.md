@@ -300,6 +300,40 @@ non-empty and unique. The commit verifier also requires a clean worktree and
 the current HEAD to equal `tested_head`; otherwise reconcile the changes and
 rerun validation before attaching the evidence.
 
+### Invalid review finding
+
+A review-filed bug (type `bug` tagged `code-review`, `delivery-code-review`,
+`security-review` or `qa-sweep`) can be wrong. Confirm the defect at your
+base before editing. When it does not exist there (the code does not do what
+the finding claims, or the claimed consequence cannot happen), change
+nothing, run no workspace gates, and attach `finding-invalid.json` with
+`orbit.task.artifact.put`. It is not for a defect already fixed (use
+already-landed or no-diff) or one you judge not worth fixing (that is the
+operator's call):
+
+```json
+{
+  "schema_version": 1,
+  "task_id": "<current-task-id>",
+  "run_id": "<current-run-id>",
+  "tested_head": "<pinned-head-sha>",
+  "reasoning": "Why the defect as described does not exist at tested_head.",
+  "evidence": [
+    {"location": "src/path.rs:42", "note": "What this line shows."}
+  ]
+}
+```
+
+Each `location` is a repository-relative `path:line` naming an existing
+line at `tested_head`; at least one is required, and every `note` is
+non-empty. The commit step requires a clean worktree at `tested_head` and a
+report from this run or its retry lineage. It then records a REJECTED
+finding verdict (source `implementer`), moves the task to `rejected`, and
+lands nothing. Still write the execution summary with `Outcome: success`,
+saying the finding is invalid; a failed outcome refuses the handoff. A
+claimed run cannot reject the owner's task: return `result.blocker` with
+kind `finding_invalid` and the same evidence instead.
+
 ### Criteria owed after deploy
 
 A criterion the task's latest task-pilot assessment lists in `post_deploy` can

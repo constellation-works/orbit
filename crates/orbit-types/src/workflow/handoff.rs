@@ -406,6 +406,31 @@ pub struct NoDiffEvidence {
     pub validation: Vec<NoDiffCheck>,
 }
 
+/// A run's report that the review finding it picked up does not exist at its
+/// pinned HEAD: the code does not do what the finding claims, or the claimed
+/// consequence cannot happen. It changes nothing and runs no workspace gates;
+/// its `path:line` citations at `tested_head` are its evidence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindingInvalidReport {
+    pub schema_version: u32,
+    pub task_id: String,
+    pub run_id: String,
+    pub tested_head: String,
+    /// Why the defect as described does not exist at `tested_head`.
+    pub reasoning: String,
+    pub evidence: Vec<FindingInvalidCitation>,
+}
+
+/// One cited location of a [`FindingInvalidReport`]: a repository-relative
+/// `path:line` at its `tested_head`, and what that line shows.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FindingInvalidCitation {
+    pub location: String,
+    pub note: String,
+}
+
 /// One validation command the no-diff run executed, with its exit status and
 /// the task artifact holding the captured log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
