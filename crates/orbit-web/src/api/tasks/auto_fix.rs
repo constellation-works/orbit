@@ -9,8 +9,8 @@ use orbit_common::governance::authorization::{
 use orbit_core::application::job::TaskAutoFixError;
 use serde_json::json;
 
-use super::routines::{authorization_denied, authorized_caller};
-use super::{bad_request, blocking, map_runtime_error, server_error, validate_id};
+use crate::api::routines::{authorization_denied, authorized_caller};
+use crate::api::{bad_request, blocking, map_runtime_error, server_error, validate_id};
 use crate::state::{DashboardState, Ws};
 
 /// Whether Fix PR would start a repair of this task's pull request now
@@ -19,7 +19,7 @@ use crate::state::{DashboardState, Ws};
 ///
 /// `authorized` reports the operator session's repair authority; without it
 /// the forge is not read and `reason` is `not_authorized`.
-pub(super) async fn task_auto_fix_readiness(
+pub(in crate::api) async fn task_auto_fix_readiness(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,
@@ -65,7 +65,7 @@ pub(super) async fn task_auto_fix_readiness(
 /// setting; one started with `--complete` is resumed only when the session
 /// also holds completion authority. Every refusal is a `409` whose `code` is
 /// `task_auto_fix_<reason>`; nothing is started.
-pub(super) async fn start_task_auto_fix(
+pub(in crate::api) async fn start_task_auto_fix(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,

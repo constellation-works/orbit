@@ -8,9 +8,10 @@ use std::time::Duration;
 use orbit_core::OrbitError;
 use serde::{Deserialize, Serialize};
 
+use super::protocol::version_mismatch_message;
 use super::{
     LEASE_INTAKE_MAX_FRAME_BYTES, LEASE_INTAKE_PROTOCOL_VERSION, LeaseIntakeHello,
-    LeaseIntakeRequest, LeaseIntakeResponse, version_mismatch_message,
+    LeaseIntakeRequest, LeaseIntakeResponse,
 };
 
 /// The listener's end of the intake socket. Blocking, for the lease

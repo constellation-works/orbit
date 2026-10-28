@@ -26,12 +26,12 @@ use orbit_core::OrbitRuntime;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-use super::super::lease_listener::{LeaseListenerConfig, lease_listener_router};
 use crate::api::tests::test_support::enter_isolated_child;
 use crate::lease_intake::{
     IntakeLimits, LeaseIntakeAuthority, LeaseIntakeClient, LeaseIntakeOperation,
     LeaseIntakeRequest, LeaseIntakeResponse, LeaseIntakeSocket,
 };
+use crate::lease_listener::{LeaseListenerConfig, lease_listener_router};
 use crate::state::{DashboardState, SINGLE_WORKSPACE_ID};
 
 const PEER: &str = "192.0.2.10:50000";
@@ -429,7 +429,7 @@ fn a_granted_lease_carries_the_tokens_principal_and_scope_through_the_intake_soc
             .unwrap();
         let port = listener.local_addr().unwrap().port();
         let (shutdown, stop) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(super::super::lease_listener::serve_lease_listener_on(
+        let server = tokio::spawn(crate::lease_listener::serve_lease_listener_on(
             listener,
             tls_config,
             tls_store,

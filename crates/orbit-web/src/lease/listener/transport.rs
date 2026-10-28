@@ -15,8 +15,9 @@ use tokio::sync::{Semaphore, watch};
 use tokio::task::JoinSet;
 use tokio_rustls::TlsAcceptor;
 
+use super::LeaseListenerConfig;
+use super::admission::ListenerGate;
 use super::admission::REQUEST_WINDOW;
-use super::{LeaseListenerConfig, ListenerGate};
 
 const OVERLOADED: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: 27\r\n\r\n{\"error\":\"max_connections\"}";
 /// Most request-head bytes a refused connection reads before its 503.

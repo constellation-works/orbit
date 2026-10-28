@@ -12,13 +12,13 @@ use orbit_types::task::TaskStatus;
 use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
 use serde_json::{Value, json};
 
-use super::super::api::tests::test_support::enter_isolated_child;
-use super::super::lease_intake::{
+use crate::api::tests::test_support::enter_isolated_child;
+use crate::lease_intake::{
     IntakeLimits, LEASE_INTAKE_MAX_FRAME_BYTES, LEASE_INTAKE_PROTOCOL_VERSION,
     LeaseIntakeAuthority, LeaseIntakeClient, LeaseIntakeError, LeaseIntakeHello,
     LeaseIntakeOperation, LeaseIntakeRequest, LeaseIntakeResponse, LeaseIntakeSocket,
 };
-use super::super::state::{DashboardState, RegistrySource, SINGLE_WORKSPACE_ID};
+use crate::state::{DashboardState, RegistrySource, SINGLE_WORKSPACE_ID};
 
 fn call(
     client: &mut LeaseIntakeClient,

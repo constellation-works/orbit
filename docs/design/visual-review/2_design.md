@@ -132,7 +132,7 @@ globs = ["crates/orbit-web/assets/dashboard/js/tasks.js",
          "crates/orbit-web/assets/dashboard/js/task-lifecycle.js",
          "crates/orbit-web/assets/dashboard/js/task-runtime.js",
          "crates/orbit-web/assets/dashboard/css/task-detail.css",
-         "crates/orbit-web/src/api/tasks.rs"]
+         "crates/orbit-web/src/api/tasks/**"]
 ```
 
 Fields of a view:
@@ -190,8 +190,8 @@ First entries, chosen to cover the most edited views and the components they sha
 
 | id | Route | Fixture | States | Selected by (globs, abbreviated) |
 |---|---|---|---|---|
-| `tasks-list` | `#tasks` | `busy-workspace` | default, empty, loading, error | `js/tasks.js`, `css/tasks.css`, `api/tasks.rs` |
-| `task-detail` | `#tasks/<fixture task>` | `busy-workspace` | default, loading, error | `js/tasks.js`, `js/task-detail.js`, `js/task-pane.js`, `js/task-lifecycle.js`, `js/task-runtime.js`, `css/task-detail.css`, `api/tasks.rs` |
+| `tasks-list` | `#tasks` | `busy-workspace` | default, empty, loading, error | `js/tasks.js`, `css/tasks.css`, `api/tasks/**` |
+| `task-detail` | `#tasks/<fixture task>` | `busy-workspace` | default, loading, error | `js/tasks.js`, `js/task-detail.js`, `js/task-pane.js`, `js/task-lifecycle.js`, `js/task-runtime.js`, `css/task-detail.css`, `api/tasks/**` |
 | `run-detail` | run detail of a fixture run | `busy-workspace` | default, error | `js/run-detail.js`, `css/run-detail.css`, `api/runs/**` |
 | `jobs-live` | `#jobs/live` | `busy-workspace` | default, empty | `js/runs.js`, `css/runs.css`, `api/jobs.rs` |
 | `analytics-metrics` | `#analytics/metrics` | `busy-workspace` | default, loading | `js/metrics*.js`, `js/sparkline.js`, `api/diagnostics/**` |

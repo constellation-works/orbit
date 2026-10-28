@@ -18,12 +18,12 @@ use orbit_types::{
 };
 use serde_json::{Value, json};
 
-use super::{bad_request, blocking};
+use crate::api::{bad_request, blocking};
 use crate::state::{DashboardState, WsEntry};
 
 /// Content identity of the exact registered destination, stable across server
 /// restarts. Snapshot generation is checked separately within each request.
-pub(super) fn binding_token(entry: &WsEntry) -> Option<String> {
+pub(in crate::api) fn binding_token(entry: &WsEntry) -> Option<String> {
     let binding = entry.binding.as_ref()?;
     let bytes = serde_json::to_vec(&json!({
         "workspace": binding.logical_workspace_id,
@@ -54,13 +54,13 @@ fn authorize_creation(state: &DashboardState) -> Result<(), AuthorizationDenial>
     )
 }
 
-pub(super) async fn create_proposal(
+pub(in crate::api) async fn create_proposal(
     State(state): State<DashboardState>,
     RawQuery(query): RawQuery,
     body: Result<Json<ProposedTaskInput>, JsonRejection>,
 ) -> Response {
     if let Err(denial) = authorize_creation(&state) {
-        return super::routines::authorization_denied(denial);
+        return crate::api::routines::authorization_denied(denial);
     }
     let Json(body) = match body {
         Ok(body) => body,
@@ -142,7 +142,7 @@ pub(super) async fn create_proposal(
             Json(json!({"error": error.to_string()})),
         )
             .into_response(),
-        Ok(Err(error)) => super::map_runtime_error(error),
+        Ok(Err(error)) => crate::api::map_runtime_error(error),
         Err(response) => *response,
     }
 }

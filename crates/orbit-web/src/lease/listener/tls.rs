@@ -4,7 +4,7 @@ use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
-use super::refused;
+use super::config::refused;
 use orbit_config::LeaseListenerTlsSettings;
 use orbit_core::OrbitError;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
