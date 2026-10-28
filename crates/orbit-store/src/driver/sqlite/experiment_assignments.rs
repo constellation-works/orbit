@@ -15,6 +15,7 @@ pub(super) fn assign_experiments(
     workspace: &str,
     task: &str,
     mark_admitted: bool,
+    experiments_enabled: bool,
     decide: &ExperimentAssignmentDecision<'_>,
 ) -> Result<Vec<ExperimentAssignment>, OrbitError> {
     store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
@@ -24,7 +25,9 @@ pub(super) fn assign_experiments(
             params![workspace, task], |row| row.get(0),
         ).map_err(sqlite_store_error)?;
         let existing = load_assignments(conn, workspace, task)?;
-        if mark_admitted && admitted {
+        // A prior assignment or exclusion is sticky. Admission-only rows can
+        // be old writes from a disabled process and must be reconsidered.
+        if mark_admitted && admitted && !existing.is_empty() {
             return Ok(existing);
         }
         let mut statement = conn.prepare(&format!(
@@ -35,6 +38,14 @@ pub(super) fn assign_experiments(
         let records = definitions.into_iter().map(|experiment| {
             Ok(ExperimentRecord { arms: load_arms(conn, &experiment)?, experiment, events: Vec::new() })
         }).collect::<Result<Vec<_>, OrbitError>>()?;
+        let running_experiment_exists = records.iter().any(|record| {
+            record.experiment.status == "running"
+                && matches!(record.experiment.mode.as_str(), "shadow" | "live")
+        });
+        let admission_enabled = experiments_enabled || running_experiment_exists;
+        if mark_admitted && !admission_enabled {
+            return Ok(existing);
+        }
         for assignment in decide(&records, &existing, admitted)? {
             if assignment.task_id != task {
                 return Err(OrbitError::Store("experiment assignment task mismatch".into()));
@@ -44,7 +55,7 @@ pub(super) fn assign_experiments(
                 params![workspace, assignment.experiment, task, assignment.arm, assignment.segment, assignment.digest, stamp(assignment.assigned_at), assignment.forced, assignment.exclusion_reason],
             ).map_err(sqlite_store_error)?;
         }
-        if mark_admitted {
+        if mark_admitted && admission_enabled {
             conn.execute("INSERT OR IGNORE INTO experiment_admissions (workspace_id, task_id) VALUES (?1,?2)", params![workspace, task]).map_err(sqlite_store_error)?;
         }
         load_assignments(conn, workspace, task)

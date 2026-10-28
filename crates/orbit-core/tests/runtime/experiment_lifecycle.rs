@@ -4,7 +4,139 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
+use orbit_core::application::task::TaskAddParams;
+use orbit_core::{TaskComplexity, TaskStatus, TaskType};
 use serde_json::json;
+
+#[test]
+fn disabled_and_stale_admissions_enroll_once_experiments_run() {
+    if !super::dispatch_admission::isolated(
+        "experiment_lifecycle::disabled_and_stale_admissions_enroll_once_experiments_run",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let config_path = workspace.join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[experiments]\nenabled = false\n",
+    )
+    .unwrap();
+    let job_path = root.path().join("task_local_pipeline.yaml");
+    std::fs::write(
+        &job_path,
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_local_pipeline\nspec:\n  state: enabled\n  steps: []\n",
+    )
+    .unwrap();
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--list".to_string(),
+    ]);
+
+    // This runtime keeps the disabled settings snapshot after the config is
+    // enabled below, just like a long-lived drain process.
+    let stale_runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let disabled_task = stale_runtime
+        .add_task(TaskAddParams {
+            title: "Task admitted while experiments are disabled".into(),
+            complexity: TaskComplexity::Medium,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .unwrap();
+    let legacy_task = stale_runtime
+        .add_task(TaskAddParams {
+            title: "Task with a legacy admission-only row".into(),
+            complexity: TaskComplexity::Medium,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .unwrap();
+
+    let disabled_capture = submit_experiment_capture(&stale_runtime, &job_path, &disabled_task.id);
+    assert!(
+        disabled_capture["assignments"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    std::fs::write(
+        &config_path,
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let enabled_runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "experiment-lifecycle-test".into(),
+        reason: None,
+    };
+    let experiment = enabled_runtime
+        .create_experiment(
+            "admission-recovery",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("implement_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    // Reproduce a historical admission-only row while enabled but before any
+    // experiment was running. Its capture is empty, so no assignment is sticky.
+    let legacy_capture = submit_experiment_capture(&enabled_runtime, &job_path, &legacy_task.id);
+    assert!(legacy_capture["assignments"].as_array().unwrap().is_empty());
+    enabled_runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    // Both submissions use the runtime created before enabling. It still has
+    // the old disabled settings snapshot, yet the stored running experiment
+    // enrolls eligible tasks and recovers the legacy admission-only row.
+    let recovered_disabled =
+        submit_experiment_capture(&stale_runtime, &job_path, &disabled_task.id);
+    assert_eq!(
+        recovered_disabled["assignments"].as_array().unwrap().len(),
+        1
+    );
+    let recovered_legacy = submit_experiment_capture(&stale_runtime, &job_path, &legacy_task.id);
+    assert_eq!(recovered_legacy["assignments"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        stale_runtime.task_experiments(&legacy_task.id).unwrap()[0]
+            .arm
+            .as_deref(),
+        Some("treatment")
+    );
+}
+
+fn submit_experiment_capture(
+    runtime: &OrbitRuntime,
+    job_path: &std::path::Path,
+    task_id: &str,
+) -> serde_json::Value {
+    let submitted = runtime
+        .submit_job_run(
+            job_path.to_str().unwrap(),
+            json!({ "task_id": task_id, "crew": "sol" }),
+            Some("experiment-lifecycle-test"),
+        )
+        .unwrap();
+    let run = runtime.show_job_run_observed(&submitted.run_id).unwrap();
+    run.input.unwrap()["experiment_capture"].clone()
+}
 
 #[test]
 fn reweight_events_classify_weight_edits_separately_from_retirements() {
