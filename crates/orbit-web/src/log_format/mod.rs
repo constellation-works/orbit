@@ -10,7 +10,7 @@ mod scan;
 pub(crate) use filter::{Filters, LevelFilter};
 pub(crate) use render::{RenderedLogEvent, format_message_html, render_log_event_for_web};
 pub(crate) use scan::{
-    parse_matching_event, read_recent_matching_events_across_segments, read_recent_rendered_tail,
+    parse_matching_event, read_recent_matching_events_across_segments, read_recent_matching_tail,
     resolve_log_path,
 };
 

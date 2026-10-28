@@ -22,7 +22,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use super::{LogQuery, map_runtime_error, non_empty_string, server_error};
 use crate::log_format::{
     Filters as LogFilters, RenderedLogEvent, log_file_generation, parse_matching_event,
-    read_recent_rendered_tail, render_log_event_for_web, resolve_log_path,
+    read_recent_matching_tail, render_log_event_for_web, resolve_log_path,
 };
 
 const LOG_DEFAULT_LIMIT: usize = 50;
@@ -206,12 +206,12 @@ fn read_log_snapshot_from_path(
         None => LOG_DEFAULT_LIMIT,
     };
     let filters = log_filters(query)?;
-    let mut tail = read_recent_rendered_tail(path, &filters, limit)
+    let mut tail = read_recent_matching_tail(path, &filters, limit)
         .map_err(|e| orbit_core::OrbitError::Io(format!("read log {}: {e}", path.display())))?;
     let mut agent_offset = 0;
     let mut agent_cursor = None;
     if let Some(agent_path) = orbit_common::observability::logging::agent_jsonl_log_path(path) {
-        let agent_tail = read_recent_rendered_tail(&agent_path, &filters, limit).map_err(|e| {
+        let agent_tail = read_recent_matching_tail(&agent_path, &filters, limit).map_err(|e| {
             orbit_core::OrbitError::Io(format!("read log {}: {e}", agent_path.display()))
         })?;
         agent_offset = agent_tail.cursor;
@@ -220,7 +220,17 @@ fn read_log_snapshot_from_path(
             generation: Some(agent_tail.generation),
         });
         tail.events.extend(agent_tail.events);
-        tail.events.sort_by(|left, right| left.ts.cmp(&right.ts));
+        tail.events.sort_by(|left, right| {
+            left.get("timestamp")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .cmp(
+                    right
+                        .get("timestamp")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or(""),
+                )
+        });
         let discard = tail.events.len().saturating_sub(limit);
         tail.events.drain(..discard);
     }
@@ -234,9 +244,10 @@ fn read_log_snapshot_from_path(
         },
         agent_cursor.as_ref(),
     );
+    let events = tail.events.iter().map(render_log_event_for_web).collect();
     Ok(LogSnapshot {
         cursor,
-        events: tail.events,
+        events,
         offset: tail.cursor,
         agent_offset,
     })
