@@ -8,8 +8,14 @@
 //!
 //! Two rules shape the input contract:
 //!
-//! * **The program and its arguments come from `config` only.** A job step's
-//!   `with:` block is rendered from templates and may carry text an agent
+//! * **The program and its arguments come from static declarations only.**
+//!   The activity's `config` may declare `command` + `args` or `shell` +
+//!   `script`, or neither: when the activity names no program, the selected
+//!   executor definition's `command` is the fallback program and its `args`
+//!   are the argv (see `compose_argv`). For an explicit `command`, the
+//!   definition's static `args` prefix the activity's `args`; `shell` +
+//!   `script` runs exactly `<shell> -c <script>`. A job step's `with:`
+//!   block is rendered from templates and may carry text an agent
 //!   produced; letting it reach argv would make every shell step an injection
 //!   surface. Runtime input contributes the checkout to run in, nothing else.
 //! * **Argv execution and shell execution are different declarations.**

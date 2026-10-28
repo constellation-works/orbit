@@ -513,7 +513,13 @@ spec:
 
 The safety contract is the point of the action:
 
-- **The program comes from `config` only.** A step's templated input can
+- **The program comes from static declarations, never step input.** The
+  activity's `config` may declare `command` + `args` or `shell` + `script`,
+  or neither: when the activity names no program, the selected executor
+  definition's `command` is the fallback program and its `args` are the
+  argv. For an explicit `command`, the definition's static `args` prefix
+  the activity's `args`; `shell` + `script` runs exactly
+  `<shell> -c <script>`. A step's templated input can
   choose the checkout (`workspace_path` in the step input, defaulting to
   the registered repository root) but can never reach argv, so agent-
   produced text cannot become a command.
