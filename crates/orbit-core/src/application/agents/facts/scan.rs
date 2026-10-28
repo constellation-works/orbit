@@ -109,6 +109,13 @@ pub(in crate::application::agents) fn scan(
     }
     let scanned: BTreeSet<&str> = facts.iter().map(|task| task.id.as_str()).collect();
     pilots.retain(|graded| scanned.contains(graded.task_id.as_str()));
+    let ids = facts.iter().map(|task| task.id.clone()).collect();
+    let landed_lines = runtime
+        .landed_task_lines_changed(&ids, horizon)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "agent scorecards: landed diff sizes unavailable");
+            BTreeMap::new()
+        });
     let (charges, credits) = attribution::attribute(&facts, &regressions, &pilots);
     Ok(AgentFacts {
         computed_at,
@@ -118,6 +125,8 @@ pub(in crate::application::agents) fn scan(
         run_costs,
         credits,
         pilots,
+        landed_lines,
+        performance_types: runtime.crew_performance_types().to_vec(),
     })
 }
 

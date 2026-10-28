@@ -810,7 +810,13 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 .unwrap();
             assert_eq!(sol["units"], 2);
             assert_eq!(
-                sol["counts"]["escaped_regressions"], 4.0,
+                sol["stats"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|stat| stat["key"] == "escaped_regressions")
+                    .unwrap()["value"],
+                4.0,
                 "only no_test reaches the implementer, weighted by its high severity; review_missed is the reviewer's"
             );
             assert_eq!(sol["counts"]["review_rejects"], 1);

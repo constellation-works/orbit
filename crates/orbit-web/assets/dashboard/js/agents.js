@@ -62,6 +62,8 @@ let role = AGENT_ROLES[0];
 let requestScope = null;
 let scorecard = null;
 let attribution = null;
+let implementerMatrix = null;
+let implementerTier = "";
 // The selected row of each role, as `rowKey(row)`.
 const selected = new Map();
 let countsRequest = 0;
@@ -95,6 +97,7 @@ function rowKey(row) {
 function resetView() {
   scorecard = null;
   attribution = null;
+  implementerMatrix = null;
   const meta = $(META_ID);
   if (meta) meta.textContent = "";
   const title = $(TITLE_ID);
@@ -164,7 +167,9 @@ export function fetchAndRenderAgents() {
   }
   refreshRoleCounts(activeRole, selectedWindow, revision);
   const current = () => role === activeRole && getWorkspaceRevision() === revision && agentWindow() === selectedWindow;
-  return requestPanel(BODY_ID, path, () => Promise.all([fetchJson(path), fetchJson(attributionPath(selectedWindow))]), ([payload, strip]) => {
+  return requestPanel(BODY_ID, path, () => Promise.all([fetchJson(path), fetchJson(attributionPath(selectedWindow)),
+    activeRole === "implementers" ? fetchJson(`/api/agents/implementers/by-type?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}`).catch(() => null) : null,
+  ]), ([payload, strip, matrix]) => {
     if (!current()) return;
     if (!payload || payload.role !== activeRole || payload.requested_window !== selectedWindow) {
       console.error(`agent scorecard for ${payload && payload.role} ${payload && payload.requested_window} rejected under ${activeRole} ${selectedWindow}`);
@@ -172,6 +177,8 @@ export function fetchAndRenderAgents() {
     }
     scorecard = payload;
     attribution = strip;
+    implementerMatrix = matrix?.requested_window === selectedWindow && Array.isArray(matrix.cells) ? matrix : null;
+    if (!implementerMatrix) implementerTier = "";
     setRoleCount(activeRole, payload);
     syncSelection();
     render();
@@ -213,7 +220,25 @@ function setRoleCount(forRole, payload) {
 }
 
 function rows() {
-  return Array.isArray(scorecard && scorecard.rows) ? scorecard.rows : [];
+  const all = Array.isArray(scorecard && scorecard.rows) ? scorecard.rows : [];
+  if (role !== "implementers" || !implementerTier || !implementerMatrix) return all;
+  const tiers = new Map();
+  for (const cell of implementerMatrix.cells) {
+    if (cell.tier !== implementerTier) continue;
+    const key = rowKey(cell);
+    const tier = tiers.get(key) || { units: 0, score: cell.crew_mean };
+    tier.units += cell.n;
+    tiers.set(key, tier);
+  }
+  const ranking = all.flatMap((row) => {
+    const tier = tiers.get(rowKey(row));
+    return tier?.units > 0 ? [{ ...row, allTierRow: row, units: tier.units, score: tier.score,
+      below_support: tier.units < scorecard.min_support, rank: null }] : [];
+  });
+  ranking.sort((a, b) => Number(a.below_support) - Number(b.below_support) || b.score - a.score
+    || b.units - a.units || a.crew.localeCompare(b.crew) || a.model.localeCompare(b.model));
+  ranking.forEach((row, index) => { if (!row.below_support) row.rank = index + 1; });
+  return ranking;
 }
 
 function terms() {
@@ -319,8 +344,8 @@ function render() {
   if (meta) {
     const units = ranking.reduce((sum, row) => sum + (row.units || 0), 0);
     meta.textContent = scorecard.status === "ok"
-      ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(scorecard.fleet_average)}`
-        + ` · rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked`
+      ? `${units} ${scorecard.unit} in ${windowLabel()} · fleet average ${number(role === "implementers" && implementerTier ? 100 : scorecard.fleet_average)}`
+        + ` · ${role === "implementers" && implementerTier ? `${implementerTier} tier · ` : ""}rows under ${scorecard.min_support} ${scorecard.unit} are greyed and unranked`
       : `${ROLE_LABELS[role]} are not computed yet · window ${windowLabel()}`;
   }
   const panel = ROLE_PANELS[role];
@@ -334,7 +359,7 @@ function render() {
     nodes.push(stateNode("empty", scorecard.window_attempts
       ? `No ${scorecard.unit} in ${windowLabel()}`
       : `No ${scorecard.unit} in the ${windowLabel()} window`,
-      "Widen the window to rank this role."));
+      role === "implementers" && implementerTier ? "Choose another tier or widen the window to find work." : "Widen the window to rank this role."));
   } else {
     nodes.push(rankingNode(ranking));
     const row = selectedRow();
@@ -412,9 +437,34 @@ function stripNode() {
     legend,
   ];
   if (reasons.length) children.push(el("p", { class: "agents-strip-reasons", text: `Not scored: ${reasons.join(" · ")}.` }));
+  if (role === "implementers") {
+    const select = el("select", { id: "agents-tier", "aria-label": "Implementer tier" },
+      [["", "All tiers"], ["low", "Low"], ["medium", "Medium"], ["hard", "Hard"], ["xhard", "Xhard"]]
+        .map(([value, text]) => {
+          const option = el("option", { text });
+          option.value = value;
+          return option;
+        }));
+    select.value = implementerTier;
+    select.disabled = !implementerMatrix;
+    select.addEventListener("change", () => {
+      implementerTier = select.value;
+      syncSelection();
+      render();
+    });
+    const label = el("label", { text: "Rank within" });
+    label.htmlFor = "agents-tier";
+    children.push(el("div", { class: "agents-tier-control" }, [
+      label, select,
+      el("span", { class: "agents-muted", text: !implementerMatrix
+        ? "Tier scores unavailable. Refresh to retry."
+        : implementerTier ? "Tier crew score and support; detail evidence covers all tiers."
+          : "Fleet comparison on each row's tier mix." }),
+    ]));
+  }
   const node = el("section", { class: "agents-strip", "aria-label": "Who each problem counts against" }, children);
   node.dataset.key = "strip";
-  node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, agentWindow()]);
+  node.dataset.hash = JSON.stringify([attribution && attribution.owners, total, role, agentWindow(), implementerTier, Boolean(implementerMatrix)]);
   return node;
 }
 
@@ -448,7 +498,7 @@ function rankingNode(ranking) {
     el("th", { text: "Crew · model" }),
     el("th", { class: "agents-score-col", text: "Score" }),
     el("th", { class: "agents-num", text: "Support", title: `${scorecard.unit} in the window` }),
-    ...terms().map((term) => el("th", {
+    ...(role === "implementers" && implementerTier ? [] : terms()).map((term) => el("th", {
       class: "agents-num",
       text: term.label,
       title: `${term.label} per 100 ${termUnit(term)} (weight ${weight(term.weight)}): ${term.definition}`,
@@ -473,7 +523,7 @@ function rankingNode(ranking) {
     nameCell.setAttribute("scope", "row");
     const support = el("td", { class: "agents-num agents-support" }, [el("span", { text: String(row.units) })]);
     if (row.below_support) support.append(el("span", { class: "agents-below", text: `below ${scorecard.min_support}` }));
-    const cells = terms().map((term) => {
+    const cells = (role === "implementers" && implementerTier ? [] : terms()).map((term) => {
       const provisional = provisionalTerm(term, row);
       const td = el("td", {
         class: provisional ? "agents-num agents-term-provisional" : "agents-num",
@@ -510,7 +560,7 @@ function rankingNode(ranking) {
   wrap.tabIndex = 0;
   const node = el("section", { class: "agents-ranking", "aria-label": "Ranking" }, [wrap]);
   node.dataset.key = "ranking";
-  node.dataset.hash = JSON.stringify([role, scorecard.rows, scorecard.terms, selectedKey]);
+  node.dataset.hash = JSON.stringify([role, ranking, scorecard.terms, selectedKey, implementerTier]);
   return node;
 }
 
@@ -564,7 +614,7 @@ function radarNode(row) {
     if (axis.unit && units(axis, each) < (scorecard.warning_min_support ?? scorecard.min_support)) return "below term support";
     return Number.isFinite(rate(axis, each)) ? null : "no rate";
   };
-  const fleet = rows().filter((each) => each.rank != null && !below(each));
+  const fleet = (scorecard.rows || []).filter((each) => each.rank != null && !below(each));
   const values = axes.map((axis) => {
     const rates = fleet.filter((each) => !gap(axis, each)).map((each) => rate(axis, each)).sort((a, b) => a - b);
     const middle = Math.floor(rates.length / 2);
@@ -675,7 +725,9 @@ function radarNode(row) {
   ]);
 }
 
-function detailNode(row) {
+function detailNode(rankedRow) {
+  const row = rankedRow.allTierRow || rankedRow;
+  const tierView = Boolean(rankedRow.allTierRow);
   const panel = ROLE_PANELS[role];
   const scoreNote = panel && panel.scoreNote ? panel.scoreNote(row) : null;
   const termList = terms();
@@ -734,31 +786,32 @@ function detailNode(row) {
 
   const children = [
     el("header", { class: "agents-detail-head" }, [
-      el("span", { class: "agents-detail-rank", text: row.rank == null ? `below ${scorecard.min_support}` : `#${row.rank}` }),
+      el("span", { class: "agents-detail-rank", text: rankedRow.rank == null ? `below ${scorecard.min_support}` : `#${rankedRow.rank}` }),
       el("h3", { text: row.crew }),
       el("span", { class: "agents-model", text: row.model }),
     ]),
     el("div", { class: "agents-detail-score" }, [
-      el("strong", { text: number(row.score) }),
-      el("span", { text: "score" }),
+      el("strong", { text: number(rankedRow.score) }),
+      el("span", { text: tierView ? `${implementerTier} tier crew score` : "score" }),
     ]),
-    el("p", { class: "agents-detail-raw", text: rawText(row) }),
+    ...(tierView ? [el("p", { class: "agents-detail-note", text: `${rankedRow.units} tasks in this tier. Tier crew scores use two-sided shrinkage toward 100 with 30 tasks of reference evidence. All tiers score: ${number(row.score)}. The profile, breakdown and unscored context below cover all tiers.` })] : []),
+    el("p", { class: "agents-detail-raw", text: `${tierView ? "All tiers: " : ""}${rawText(row)}` }),
     ...(scoreNote ? [el("p", { class: "agents-detail-note", text: scoreNote.detail })] : []),
     radarNode(row),
-    el("h4", { text: "Score breakdown" }),
+    el("h4", { text: tierView ? "All tiers score breakdown" : "Score breakdown" }),
     breakdown,
-    el("h4", { text: "Shown, not scored" }),
+    el("h4", { text: tierView ? "Shown, not scored · all tiers" : "Shown, not scored" }),
     stats,
   ];
   const node = el("aside", { class: "agents-detail", "aria-label": `Detail for ${row.crew} · ${row.model}` }, children);
   node.id = "agents-detail";
   node.dataset.key = "detail";
-  node.dataset.hash = JSON.stringify([role, row, scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average]);
+  node.dataset.hash = JSON.stringify([role, rankedRow, implementerTier, scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average]);
   return node;
 }
 
 // The roles whose terms weigh regressions or findings by severity.
-const SEVERITY_ROLES = new Set(["implementers", "reviewers"]);
+const SEVERITY_ROLES = new Set(["reviewers"]);
 const SEVERITY_HOW = "Regressions and findings count by severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one escaped or missed regression costs twice its weight, from −16 for critical to −0.5 for nit. A review-job finding counts once finding verification CONFIRMS it, at the severity the verifier rated, and a review gate finding at the reviewer's own; a regression link counts at its recorded severity, which verification replaces when it confirms the finding that filed it, and a link stored without one counts as medium.";
 
 function howNode() {
@@ -778,6 +831,8 @@ function howNode() {
     el("p", { text: role === "implementers"
       ? `The raw score starts at 100, then adds weight × (actual − expected) per 100 ${unit} for every term. Expected counts use the fleet's rates on the row's tier mix. Tiers with fewer than 30 fleet tasks pool with the largest tier. Landings count one each at every complexity. Tasks tagged no-diff-expected when an attempt was admitted are not implementer work and count nowhere here.`
       : `Each term's count becomes a rate per 100 ${unit}. The raw score is the sum of weight × rate over the terms; positive weights are credit and negative weights are problems.` }),
+    ...(role === "implementers" ? [el("p", { text: "Escaped regressions are shown, not scored: diff size dominates regression risk, and linking is still sparse. Counts use severity weights: critical 8, high 4, medium 2, low 1, nit 0.25. Regression residual is severity-weighted actual minus expected, using fleet rates within the same tier and expected-size bucket. Expected size is the fleet median landed lines changed for the task's tier and type, never its own diff. Buckets double in size (under 2 lines, 2–4, 4–8, and so on); missing medians share an unknown-size bucket in their tier, without pooling tiers. The residual stays unscored until linking matures." }),
+      el("p", { text: "Diff economy is the median landed-task ratio of lines changed to the fleet median for that tier and type. Above 1 means larger diffs for comparable work. Missing data or a zero reference median is unavailable. It is shown, not scored; normalizing regressions by a crew's own diff would reward bloat. All tiers keeps the tier-mix score. A selected tier ranks its crew scores from the cell matrix, pulled toward 100 with 30 tasks of reference evidence, and hides rows without work in that tier. Detail evidence remains for all tiers." })] : []),
     ...ownUnitText(),
     el("p", { class: "agents-formula", text: `score = min(raw, (${unit} × raw + ${SMOOTHING} × fleet average) ÷ (${unit} + ${SMOOTHING}))` }),
     el("p", { text: `A row above the fleet average, the mean raw score weighted by ${unit}, is pulled down toward it, the more the less work backs it; a row below keeps its raw score. So a small row never rises on the fleet's evidence, and at an equal raw score the row with more ${unit} ranks higher. Rows with fewer than ${scorecard.min_support} ${unit} are greyed, unranked and listed last. Every problem counts against one role only, and cost and time are shown, never scored.` }),

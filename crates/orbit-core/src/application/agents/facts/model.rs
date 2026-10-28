@@ -344,6 +344,10 @@ pub struct AgentFacts {
     pub(in crate::application::agents) charges: Vec<Charge>,
     pub(in crate::application::agents) run_costs: BTreeMap<String, Option<f64>>,
     pub(in crate::application::agents) credits: Vec<Credit>,
+    /// Lines added plus deleted from the experiment outcome's landed diff rows.
+    pub(in crate::application::agents) landed_lines: BTreeMap<String, u64>,
+    /// The configured task types used for comparable diff sizes.
+    pub(in crate::application::agents) performance_types: Vec<orbit_config::CrewPerformanceType>,
     /// Each pilot assessment of a scanned done task, graded.
     pub(in crate::application::agents) pilots: Vec<Graded>,
 }

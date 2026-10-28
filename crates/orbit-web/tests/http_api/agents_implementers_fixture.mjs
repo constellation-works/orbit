@@ -5,7 +5,6 @@ export const implementerTerms = [
   ['review_rejects', 'Review rejects', -1, 'problem'],
   ['reviewer_repairs', 'Reviewer repairs', -0.5, 'problem'],
   ['crew_rework', 'Crew-caused rework', -1, 'problem'],
-  ['escaped_regressions', 'Escaped regressions', -2, 'problem'],
 ].map(([key, label, weight, group]) => ({ key, label, weight, group, definition: label }));
 const row = (crew, model, rank, landed, cost) => {
   const units = rank == null ? 2 : 24;
@@ -16,6 +15,9 @@ const row = (crew, model, rank, landed, cost) => {
     runs_without_model: 0, provisional: null, counts,
     per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, count * 100 / units])),
     stats: [
+      { key: 'escaped_regressions', label: 'Escaped regressions (severity-weighted)', value: counts.escaped_regressions },
+      { key: 'regression_residual', label: 'Regression residual (actual − expected)', value: 0 },
+      { key: 'diff_economy', label: 'Diff economy (× fleet median)', value: crew === 'unpriced' ? null : 2 },
       { key: 'cost_per_weighted_landed', label: 'Cost per landed task (USD)', value: cost },
       { key: 'median_run_seconds', label: 'Median completed run (seconds)', value: 540 },
       { key: 'tasks_by_tier', label: 'Tasks by tier', value: `medium: ${units}` },
@@ -52,6 +54,9 @@ const radarRow = (crew, model, rank, counts, reviewedUnits) => {
     runs_without_model: 0, provisional: null, counts, reviewed_units: reviewedUnits,
     per_100: Object.fromEntries(Object.entries(counts).map(([key, count]) => [key, count * 100 / units])),
     stats: [
+      { key: 'escaped_regressions', label: 'Escaped regressions (severity-weighted)', value: counts.escaped_regressions },
+      { key: 'regression_residual', label: 'Regression residual (actual − expected)', value: 0 },
+      { key: 'diff_economy', label: 'Diff economy (× fleet median)', value: crew === 'unpriced' ? null : 2 },
       { key: 'cost_per_weighted_landed', label: 'Cost per landed task (USD)', value: 5 },
       { key: 'median_run_seconds', label: 'Median completed run (seconds)', value: 540 },
       { key: 'tasks_by_tier', label: 'Tasks by tier', value: `medium: ${units}` },
@@ -89,4 +94,14 @@ export function implementerOutlierCard() {
   const card = implementerRadarCard();
   card.rows.push(radarRow('outlier', 'model-x', 6, { weighted_landed: 4, first_pass_accepts: 0, review_rejects: 40, reviewer_repairs: 40, crew_rework: 80, escaped_regressions: 28 }, 40));
   return finishCard(card.rows, '2026-10-19T09:05:00.000Z');
+}
+
+// Tier crew means deliberately reverse the all-tier leaders; one row has
+// only hard work so selecting low must hide it. Cell n sums to tier support.
+export function implementerMatrix(card = implementerCard()) {
+  return { role: 'implementers', requested_window: card.requested_window, by_type: true,
+    cells: card.rows.flatMap((row, index) => {
+      const mix = [ ['low', 'medium'], ['low', 'hard'], ['medium', 'xhard'], ['low', 'xhard'], ['hard'], ['low', 'hard'] ][index] || ['medium'];
+      return mix.map(tier => ({ crew: row.crew, model: row.model, tier, type: 'other', n: row.units / mix.length, crew_mean: 90 + index }));
+    }) };
 }

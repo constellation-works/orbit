@@ -369,7 +369,7 @@ impl OrbitRuntime {
             .collect();
         let tokens = self.task_token_totals(Some(since))?;
         let spend = self.task_spend(&ids, since)?;
-        let lines = self.landed_lines(&ids, since)?;
+        let lines = self.landed_task_lines_changed(&ids, since)?;
         let (run_events, run_digests) = self.run_audit(experiment_id, &ids, since)?;
 
         let mut landed_at = BTreeMap::new();
@@ -563,7 +563,7 @@ impl OrbitRuntime {
     }
 
     /// Lines added plus deleted over every landed delivery, per task.
-    fn landed_lines(
+    pub(crate) fn landed_task_lines_changed(
         &self,
         ids: &BTreeSet<String>,
         since: DateTime<Utc>,

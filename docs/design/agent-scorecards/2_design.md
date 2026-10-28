@@ -216,7 +216,7 @@ Today's per-8-active-hours rate toggle is dropped: active hours mean something o
 
 ### 4.6 Severity
 
-Review findings and `regression_from` links share one severity scale with constant weights: critical 8, high 4, medium 2, low 1, nit 0.25 ([ORB-19304]). A held finding adds its weight to **Findings that held**; an escaped or missed regression adds its weight to its term, whose weight is −2, so it costs twice its severity weight. Every other problem counts 1. The rubric with examples is in the orbit skill's task-fields reference.
+Review findings and `regression_from` links share one severity scale with constant weights: critical 8, high 4, medium 2, low 1, nit 0.25 ([ORB-19304]). A held finding adds its weight to **Findings that held**; a missed regression adds its severity weight to the reviewer term. Escaped regressions retain their severity-weighted count as unscored implementer context (§5.2). Every other problem counts 1. The rubric with examples is in the orbit skill's task-fields reference.
 
 A regression link records `severity_source`: `filer`, `verified`, `operator`, `backfill` or `default`. A new classified link must carry a severity. Finding verification runs as a different crew from the filer. When it confirms a review-filed finding, its rating replaces the filer's on that finding's links as `verified`, and an `operator` rating stands. So a reviewer cannot earn more by inflating its own findings. Without verification the filer's value scores, and a link stored before severity existed counts as `medium` (`default`). Review gate findings are not verified and count at the reviewer's own severity; a value off the scale counts 1.
 
@@ -271,7 +271,6 @@ Unit: **implemented tasks**, meaning tasks with at least one implementation run 
 | Review rejects | −1 | `reject` verdicts on the row's candidates. |
 | Reviewer repairs | −0.5 | `accept_with_fixes` verdicts on the row's candidates. |
 | Crew-caused rework | −1 | Repeat runs, `[BLOCKED]` or unmerged PRs, and operator requeues with cause `crew`, charged to the run that ended the attempt. Review verdicts are not counted again here. |
-| Escaped regressions | −2 | Regressions with escape `no_test` against tasks whose final implementation run is the row's, each counted at its severity weight (§4.6), so one costs −16 (critical) to −0.5 (nit). |
 
 Every scored term uses a fleet expectation for the row's **same task mix**:
 
@@ -326,8 +325,42 @@ actual-minus-expected rate, so `score_base + Σ contribution` equals raw before
 rounding. Other roles have neither additive field and retain their formulas.
 The former `tier_comparison` stat is removed: scored expectations supersede it.
 
-Shown, not scored: cost per landed task, median completed run duration, and
-tasks by tier. Cost sums the workspace's recorded invocations for the row's
+**Escaped regressions, residual and diff economy are shown, not scored.** The
+2026-10-27 riskiness backtest found lines changed the strongest regression
+predictor (AUC 0.737); crew proneness added nothing beyond size. Routing larger
+work to a crew should not penalize its score. Regression linking is still thin;
+the residual remains unscored pending roughly 100 linked regressions with sites
+and another backtest. Dividing regressions by the crew's actual diff size would
+reward bloat, so expected size and size discipline are separate.
+
+Each row's `stats` includes:
+
+- `escaped_regressions`: the severity-weighted count of `no_test` regressions
+  against the row's final implementation runs (§4.6), including a measured zero.
+- `regression_residual`: severity-weighted actual minus expected **counts**, not
+  a per-line or per-100 rate. Expected size is the fleet median lines changed
+  among unique landed tasks in the window with the same `(tier, type)`; type is
+  classified by the configured by-type rules and admitted tags below. Fleet
+  medians include all rows, including the row being compared. Tasks enter
+  buckets by that **cell median**, never by their own lines changed: `[0, 2)`,
+  `[2, 4)`, `[4, 8)`, and so on. Each `(tier, expected-size bucket)` has a fleet
+  severity-weighted regression rate per row-task observation. The row's expected
+  count sums that rate over its tasks. Missing cell medians use an explicit
+  unknown-size bucket in that same tier. Sparse buckets keep their own rate;
+  no tiers pool for this display-only metric. This conserves actual and
+  expected counts across the fleet; matching bucket rates yields residual zero.
+- `diff_economy`: the median, over the row's landed tasks with measured diffs
+  and a positive fleet cell median, of `lines_changed / fleet_cell_median`.
+  Above 1 means larger diffs for comparable work; twice each median gives 2.
+  Missing size data and zero reference medians are excluded, and no usable
+  ratios returns null (unavailable), never zero. A measured zero diff against a
+  positive reference contributes a real zero. Both measures reuse the experiment
+  `lines_changed` aggregate: added plus deleted code, test and other lines,
+  summed over landed deliveries per task within the scan horizon. No new store
+  format or backfill is introduced.
+
+Other unscored context: cost per landed task, median completed run duration,
+and tasks by tier. Cost sums the workspace's recorded invocations for the row's
 delivery runs (including delivery review and repair activities), counting each
 run once, using provider-reported cost when present and derived pricing
 otherwise, from the same telemetry as `/cost`. It divides by this row's landed
@@ -338,7 +371,13 @@ unpriced.
 
 Implementers have no role panel. The score-against-cost plot and per-tier
 review table remain removed; the ranking, detail column and disclosure are the
-whole tab. The existing **Score breakdown** shows the 100-point fleet reference
+whole tab. **Rank within** offers All tiers, low, medium, hard and xhard.
+All tiers preserves the existing tier-mix score without escaped regressions.
+A tier ranks each crew/model by the matrix's `crew_mean`, sums its cell `n` for
+support, hides rows with no work there and leaves below-support rows unranked.
+Ties use support, crew and model. The detail explicitly labels the profile,
+breakdown and unscored context **All tiers**, and shows the selected tier's score
+and support separately. The existing **Score breakdown** shows the 100-point fleet reference
 and each term's actual and expected counts beside its contribution. It adds no
 new section or per-tier table.
 
@@ -356,7 +395,9 @@ small, so the matrix applies a two-sided, two-level shrinkage with K = 30:
 no evidence scores its crew mean, and a crew with no tier evidence has crew
 mean 100. The matrix is separate from the ranking: the ranking keeps its
 one-sided `min(raw, …)` smoothing and is unchanged by `--by-type`, and the
-dashboard shows no by-type section.
+dashboard reads `GET /api/agents/implementers/by-type` from the same cached scan
+for its tier selector; it does not render a by-type table. Invalid windows
+return 400 as on the other scorecard routes.
 
 ### 5.3 Reviewers
 

@@ -1,5 +1,5 @@
 //! Implementers: the crew and model of the implementation runs that did the
-//! work. Every term is compared with the fleet on the same tier mix;
+//! work. Escaped regressions and diff context are unscored. Every scored term is compared with the fleet on the same tier mix;
 //! recorded cost and duration remain unscored context. Work admitted as
 //! `no-diff-expected` (reviews, audits, sweeps) is not implementation and
 //! counts nowhere here: no units, credit, charges or fleet expectation.
@@ -65,14 +65,9 @@ const TERMS: &[Term] = &[
         definition: "Repeat runs, [BLOCKED] or unmerged PRs, and operator requeues with cause crew, charged to the run that ended the attempt. Review verdicts are not counted again here.",
         group: "problem",
     },
-    Term {
-        key: "escaped_regressions",
-        label: "Escaped regressions",
-        weight: -2.0,
-        definition: "Regressions with escape no_test against tasks whose final implementation run is the row's, each weighted by the link's severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one costs -16 to -0.5.",
-        group: "problem",
-    },
 ];
+
+mod context;
 
 type Key = (String, String);
 
@@ -127,6 +122,7 @@ fn rows(facts: &AgentFacts, since: DateTime<Utc>) -> Vec<RowInput<'_>> {
         .iter()
         .map(|(row, tasks)| row_input(facts, since, row.clone(), tasks, &charges, &credits))
         .collect();
+    context::append_diff_context(facts, since, &work, &mut rows);
     let mut fleet: BTreeMap<&str, Fleet> = BTreeMap::new();
     for tasks in work.values() {
         for task in tasks {
