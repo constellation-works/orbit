@@ -30,6 +30,7 @@ import json
 import re
 import subprocess
 import sys
+from decimal import Decimal
 from pathlib import PurePosixPath
 
 BREAKING_TAG = "breaking-change"
@@ -428,18 +429,32 @@ def alternative_path_map(before, after):
 def _schema_type_names(schema):
     if isinstance(schema, dict) and "type" in schema:
         names = schema["type"]
-        names = set(names) if isinstance(names, list) else {names}
-        # `integer` is a subtype of `number`; seeing both is not a conflict.
-        if "integer" in names and "number" in names:
-            names.discard("integer")
-        return names
+        return set(names) if isinstance(names, list) else {names}
     return None
 
 
 def _schema_enum_values(schema):
     if isinstance(schema, dict) and isinstance(schema.get("enum"), list):
-        return {json.dumps(value, sort_keys=True) for value in schema["enum"]}
+        return schema["enum"]
     return None
+
+
+def _json_value_key(value):
+    """Compare JSON values using JSON Schema's numeric equality rules."""
+    if isinstance(value, bool):
+        return ("boolean", value)
+    if value is None:
+        return ("null",)
+    if isinstance(value, (int, float)):
+        return ("number", Decimal(str(value)))
+    if isinstance(value, str):
+        return ("string", value)
+    if isinstance(value, list):
+        return ("array", tuple(_json_value_key(item) for item in value))
+    if isinstance(value, dict):
+        return ("object", tuple(sorted((key, _json_value_key(item))
+                                        for key, item in value.items())))
+    return (type(value).__name__, value)
 
 
 def _json_type_name(value):
@@ -450,7 +465,7 @@ def _json_type_name(value):
     if isinstance(value, int):
         return "integer"
     if isinstance(value, float):
-        return "number"
+        return "integer" if value.is_integer() else "number"
     if isinstance(value, str):
         return "string"
     if isinstance(value, list):
@@ -458,9 +473,14 @@ def _json_type_name(value):
     return "object"
 
 
+def _json_value_matches_types(value, names):
+    name = _json_type_name(value)
+    return name in names or (name == "integer" and "number" in names)
+
+
 def _schema_const_value(schema):
     if isinstance(schema, dict) and "const" in schema:
-        return json.dumps(schema["const"], sort_keys=True)
+        return _json_value_key(schema["const"])
     return None
 
 
@@ -468,9 +488,9 @@ def schemas_disjoint(first, second):
     """Whether two schemas provably accept no common instance.
 
     Conservative: returns False (possibly overlapping) unless a direct
-    contradiction is found at the same location — conflicting types, enum or
-    const values, a recursively disjoint shared property, or a required
-    property the other side forbids via `additionalProperties: false`.
+    contradiction is found — conflicting types, enum or const values,
+    incompatible constraints on a required property of an object, or a
+    required property a closed object forbids.
     """
     if isinstance(first, bool) or isinstance(second, bool):
         # `false` accepts nothing; `true` overlaps everything.
@@ -479,33 +499,45 @@ def schemas_disjoint(first, second):
         return False
     first_types, second_types = _schema_type_names(first), _schema_type_names(second)
     if (first_types is not None and second_types is not None
-            and not (first_types & second_types)):
+            and not (first_types & second_types
+                     or ("integer" in first_types and "number" in second_types)
+                     or ("number" in first_types and "integer" in second_types))):
         return True
     first_enum, second_enum = _schema_enum_values(first), _schema_enum_values(second)
-    if first_enum is not None and second_enum is not None and not (first_enum & second_enum):
+    if (first_enum is not None and second_enum is not None
+            and not any(_json_value_key(left) == _json_value_key(right)
+                        for left in first_enum for right in second_enum)):
         return True
     for enum_values, other_types in ((first_enum, second_types), (second_enum, first_types)):
         if enum_values is not None and other_types is not None:
-            allowed = set(other_types) | ({"number"} if "integer" in other_types else set())
-            if not any(_json_type_name(json.loads(value)) in allowed
-                       or (_json_type_name(json.loads(value)) == "integer"
-                           and "number" in allowed)
+            if not any(_json_value_matches_types(value, other_types)
                        for value in enum_values):
                 return True
     first_const, second_const = _schema_const_value(first), _schema_const_value(second)
     if first_const is not None and second_const is not None and first_const != second_const:
         return True
     for const, enum_values in ((first_const, second_enum), (second_const, first_enum)):
-        if const is not None and enum_values is not None and const not in enum_values:
+        if (const is not None and enum_values is not None
+                and not any(const == _json_value_key(value) for value in enum_values)):
             return True
     first_props = first.get("properties") if isinstance(first.get("properties"), dict) else {}
     second_props = second.get("properties") if isinstance(second.get("properties"), dict) else {}
-    for name in first_props.keys() & second_props.keys():
-        if schemas_disjoint(first_props[name], second_props[name]):
-            return True
+    if first_types == {"object"} or second_types == {"object"}:
+        first_required = set(first.get("required", [])) if isinstance(
+            first.get("required"), list) else set()
+        second_required = set(second.get("required", [])) if isinstance(
+            second.get("required"), list) else set()
+        for name in first_props.keys() & second_props.keys():
+            if (name in first_required or name in second_required
+                    ) and schemas_disjoint(first_props[name], second_props[name]):
+                return True
     for owner, other in ((first, second), (second, first)):
-        if (owner.get("additionalProperties") is False
+        owner_patterns = owner.get("patternProperties")
+        if (_schema_type_names(owner) == {"object"}
+                and owner.get("additionalProperties") is False
                 and isinstance(owner.get("properties"), dict)):
+            if isinstance(owner_patterns, dict) and owner_patterns:
+                continue
             required = other.get("required")
             required = set(required) if isinstance(required, list) else set()
             if not required <= set(owner["properties"]):

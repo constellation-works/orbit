@@ -508,6 +508,71 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_oneof_overlap_check_respects_json_schema_instance_semantics(self):
+        cases = (
+            (
+                "integer is a number",
+                {"type": "object", "properties": {"value": {"type": "integer"}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"type": "number"}},
+                 "required": ["value"]},
+            ),
+            (
+                "JSON numeric enum values compare mathematically",
+                {"type": "object", "properties": {"value": {"enum": [1]}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"enum": [1.0]}},
+                 "required": ["value"]},
+            ),
+            (
+                "JSON numeric const values compare mathematically",
+                {"type": "object", "properties": {"value": {"const": 1}},
+                 "required": ["value"]},
+                {"type": "object", "properties": {"value": {"const": 1.0}},
+                 "required": ["value"]},
+            ),
+            (
+                "optional conflicting property can be omitted",
+                {"type": "object", "properties": {"value": {"type": "string"}}},
+                {"type": "object", "properties": {"value": {"type": "number"}}},
+            ),
+            (
+                "object keywords do not constrain scalar instances",
+                {"properties": {}, "additionalProperties": False},
+                {"required": ["value"]},
+            ),
+            (
+                "patternProperties can admit a required property",
+                {"type": "object", "properties": {},
+                 "patternProperties": {"^value$": {"type": "string"}},
+                 "additionalProperties": False},
+                {"type": "object", "required": ["value"]},
+            ),
+        )
+        for label, old_branch, inserted_branch in cases:
+            with self.subTest(label=label):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema["oneOf"] = [old_branch]
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Add oneOf branch [ORB-72] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                schema["oneOf"].append(inserted_branch)
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Add overlapping oneOf branch [ORB-73] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-73", "mcp-schema",
+                     "`orbit_task_show` `inputSchema{oneOf1}` oneOf alternative "
+                     "overlaps an existing alternative"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
     def test_disjoint_inserted_oneof_alternative_is_additive(self):
         # The new branch requires mode=compact while the old one requires
         # mode=full: no instance matches both, so every formerly valid input
@@ -517,6 +582,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         schema.pop("anyOf", None)
         schema.pop("oneOf", None)
         schema["oneOf"] = [{
+            "type": "object",
             "properties": {"mode": {"type": "string", "enum": ["full"]}},
             "required": ["mode"],
         }]
@@ -525,6 +591,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.repo.git("tag", "-f", "v0.35.0")
 
         schema["oneOf"].append({
+            "type": "object",
             "properties": {"mode": {"type": "string", "enum": ["compact"]}},
             "required": ["mode"],
         })
