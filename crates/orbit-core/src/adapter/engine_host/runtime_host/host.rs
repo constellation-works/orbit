@@ -1,9 +1,17 @@
+//! Forwarding-only `RuntimeHost` implementation for `OrbitRuntime`.
+//!
+//! Every substantive body lives in a sibling helper grouped by concern
+//! (`claims`, `validation`, `recovery`, `invocation` and the other modules
+//! declared in `mod.rs`); each method here is a one-line delegation with
+//! the trait signature unchanged. Rust allows one trait impl per type, so
+//! this file cannot be split into multiple impl blocks.
+
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::OrbitError;
 use orbit_engine::{
     CompletionObservationAdmission, CrewConfig, DispatchError, FinalRecoveryAdmission,
     FinalRecoveryAdmissionRequest, FinalRecoveryApplication, FinalRecoveryApplied,
@@ -12,9 +20,7 @@ use orbit_engine::{
     SteeringRoundAdmission, StepRecoveryDecisionRead, StepRecoveryDecisionRequest,
     StepRecoveryDecisionSlot, TaskActivityUpdate, TaskAutomationUpdate,
 };
-use orbit_store::contracts::{
-    InvocationQuery, InvocationRecord, JobRunStepParams, TaskReservationReleaseReason,
-};
+use orbit_store::contracts::{InvocationQuery, InvocationRecord, JobRunStepParams};
 use orbit_tools::{FsAuditLogger, ToolContext};
 use orbit_types::identity::AgentModelPair;
 use orbit_types::policy::Role;
@@ -68,8 +74,7 @@ impl RuntimeHost for OrbitRuntime {
         &self,
         request: &orbit_types::workflow::automation::DirectLandingRequest,
     ) -> Result<(), OrbitError> {
-        self.record_direct_landing_diff_stats(request);
-        Ok(())
+        claims::record_direct_landing(self, request)
     }
 
     fn accepted_automation_coverage(
@@ -87,7 +92,8 @@ impl RuntimeHost for OrbitRuntime {
         input: Option<serde_json::Value>,
         retry_source_run_id: Option<String>,
     ) -> Result<JobRun, OrbitError> {
-        self.stores().jobs().insert_job_run(
+        claims::insert_job_run(
+            self,
             job_id,
             attempt,
             scheduled_at,
@@ -102,9 +108,7 @@ impl RuntimeHost for OrbitRuntime {
         started_at: DateTime<Utc>,
         pid: u32,
     ) -> Result<JobRunStartOutcome, OrbitError> {
-        self.stores()
-            .jobs()
-            .mark_job_run_running(run_id, started_at, pid)
+        claims::mark_job_run_running(self, run_id, started_at, pid)
     }
 
     fn complete_job_run_step(
@@ -112,7 +116,7 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         params: &JobRunStepParams,
     ) -> Result<bool, OrbitError> {
-        self.stores().jobs().complete_job_run_step(run_id, params)
+        claims::complete_job_run_step(self, run_id, params)
     }
 
     fn finalize_job_run(
@@ -122,31 +126,18 @@ impl RuntimeHost for OrbitRuntime {
         finished_at: DateTime<Utc>,
         duration_ms: Option<u64>,
     ) -> Result<bool, OrbitError> {
-        self.finalize_job_run_with_reservation_cleanup(
-            run_id,
-            state,
-            finished_at,
-            duration_ms,
-            TaskReservationReleaseReason::RunTerminal,
-        )
+        claims::finalize_job_run(self, run_id, state, finished_at, duration_ms)
     }
 
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
-        match self.show_job_run(run_id) {
-            Ok(run) => Ok(Some(run)),
-            Err(OrbitError::NotFound {
-                kind: NotFoundKind::JobRun,
-                ..
-            }) => Ok(None),
-            Err(error) => Err(error),
-        }
+        claims::get_job_run(self, run_id)
     }
 
     fn read_run_state(
         &self,
         run_id: &str,
     ) -> Result<Option<orbit_types::workflow::PipelineState>, OrbitError> {
-        self.stores().jobs().read_run_state(run_id)
+        claims::read_run_state(self, run_id)
     }
 
     fn write_run_state(
@@ -154,7 +145,7 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         state: &orbit_types::workflow::PipelineState,
     ) -> Result<(), OrbitError> {
-        self.stores().jobs().write_run_state(run_id, state)
+        claims::write_run_state(self, run_id, state)
     }
 
     fn get_task(&self, task_id: &str) -> Result<Task, OrbitError> {
@@ -256,10 +247,10 @@ impl RuntimeHost for OrbitRuntime {
     /// `validate_step_recovery_mutation`.
     fn authorize_step_recovery(
         &self,
-        _run_id: &str,
-        _step_id: &str,
+        run_id: &str,
+        step_id: &str,
     ) -> Result<orbit_engine::StepRecoveryAdmission, OrbitError> {
-        Ok(orbit_engine::StepRecoveryAdmission::Allowed)
+        recovery::authorize_step_recovery(self, run_id, step_id)
     }
 
     fn validate_step_recovery_mutation(
@@ -269,13 +260,7 @@ impl RuntimeHost for OrbitRuntime {
         task_ids: &[String],
         workspace_path: &std::path::Path,
     ) -> Result<(), OrbitError> {
-        OrbitRuntime::validate_step_recovery_mutation(
-            self,
-            run_id,
-            step_id,
-            task_ids,
-            workspace_path,
-        )
+        recovery::validate_step_recovery_mutation(self, run_id, step_id, task_ids, workspace_path)
     }
 
     fn record_review_landing(
@@ -380,7 +365,7 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         owed: &[orbit_types::workflow::OwedCriterion],
     ) -> Result<(), OrbitError> {
-        OrbitRuntime::admit_owed_criteria(self, task_id, run_id, owed)
+        validation::admit_owed_criteria(self, task_id, run_id, owed)
     }
 
     fn outstanding_owed_criteria(
@@ -388,7 +373,7 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         run_id: Option<&str>,
     ) -> Result<Vec<usize>, OrbitError> {
-        OrbitRuntime::outstanding_owed_criteria(self, task_id, run_id)
+        validation::outstanding_owed_criteria(self, task_id, run_id)
     }
 
     fn record_claim_handoff(
@@ -418,13 +403,11 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn required_validation_commands(&self) -> Vec<String> {
-        self.host_validation_gates()
-            .gates
-            .required_validation_commands
+        validation::required_validation_commands(self)
     }
 
     fn review_baseline_commands(&self) -> Vec<String> {
-        self.host_validation_gates().gates.baseline_commands
+        validation::review_baseline_commands(self)
     }
 
     fn workspace_base_branch(&self) -> String {
@@ -432,7 +415,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn validation_gates(&self) -> orbit_types::workflow::HostValidationGates {
-        self.host_validation_gates()
+        validation::validation_gates(self)
     }
 
     fn unlocked_path_validation(&self) -> orbit_engine::UnlockedPathValidation {
@@ -572,28 +555,28 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
-        self.configured_agent_model_pair(agent_cli)
+        invocation::resolved_agent_model_pair(self, agent_cli)
     }
 
     fn invocation_records(
         &self,
         query: InvocationQuery,
     ) -> Result<Vec<InvocationRecord>, OrbitError> {
-        crate::runtime::RuntimeKernel::invocation_records(self, query)
+        invocation::invocation_records(self, query)
     }
 
     fn record_provider_limit(
         &self,
         observation: &ProviderLimitObservation,
     ) -> Result<(), OrbitError> {
-        crate::runtime::RuntimeKernel::record_provider_limit(self, observation).map(|_| ())
+        invocation::record_provider_limit(self, observation)
     }
 
     fn activity_implementer_identity(
         &self,
         input: &Value,
     ) -> Result<(Option<String>, Option<String>), OrbitError> {
-        self.implementer_identity_for_activity_input(input)
+        invocation::activity_implementer_identity(self, input)
     }
 
     fn resolved_crew_model(&self, run_id: &str) -> Result<Option<String>, OrbitError> {
@@ -654,8 +637,8 @@ impl RuntimeHost for OrbitRuntime {
         cli_executor::resolve_local_shell_executor(self, executor)
     }
 
-    fn provider_cli_config(&self, _provider: &str) -> HashMap<String, String> {
-        RuntimeHost::agent_provider_config(self)
+    fn provider_cli_config(&self, provider: &str) -> HashMap<String, String> {
+        invocation::provider_cli_config(self, provider)
     }
 
     fn resolve_executor_sandbox(
@@ -730,10 +713,7 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         activity_name: &str,
     ) -> Result<(), DispatchError> {
-        // A footprint still held when the wait ends is held for the same
-        // reason on an immediate retry, so the refusal is not retried.
-        OrbitRuntime::acquire_deferred_footprint(self, run_id, activity_name)
-            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))
+        recovery::acquire_deferred_footprint(self, run_id, activity_name)
     }
 
     fn mid_run_steering_enabled(&self) -> bool {
@@ -798,10 +778,7 @@ impl RuntimeHost for OrbitRuntime {
         output: &Value,
         compound_outputs: &BTreeMap<String, Value>,
     ) -> Result<(), DispatchError> {
-        checkpoints::checkpoint_step(self, run_id, step_index, step_id, output, compound_outputs)?;
-        // The step is durable, so this is a safe point to yield to an upgrade.
-        self.yield_run_at_step_boundary(run_id);
-        Ok(())
+        recovery::checkpoint_step(self, run_id, step_index, step_id, output, compound_outputs)
     }
 
     fn checkpoint_step_diagnostic(
@@ -838,7 +815,7 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         request: &FinalRecoveryAdmissionRequest,
     ) -> Result<FinalRecoveryAdmission, OrbitError> {
-        self.admit_run_final_recovery(run_id, request)
+        recovery::admit_final_recovery(self, run_id, request)
     }
 
     fn completion_deadline(
@@ -855,7 +832,7 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         task_ids: &[String],
     ) -> Result<Option<String>, OrbitError> {
-        self.published_completion_policy(run_id, task_ids)
+        recovery::completion_policy_digest(self, run_id, task_ids)
     }
 
     fn completion_observation_admission(
@@ -864,7 +841,7 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         step_id: &str,
     ) -> Result<CompletionObservationAdmission, OrbitError> {
-        self.classify_published_completion(run_id, task_id, step_id, true)
+        recovery::completion_observation_admission(self, run_id, task_id, step_id)
     }
 
     fn authenticate_completion_tail(
@@ -873,7 +850,7 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         step_id: &str,
     ) -> Result<bool, OrbitError> {
-        self.authenticate_published_completion(run_id, task_id, step_id)
+        recovery::authenticate_completion_tail(self, run_id, task_id, step_id)
     }
 
     fn apply_final_recovery(
@@ -881,21 +858,21 @@ impl RuntimeHost for OrbitRuntime {
         run_id: &str,
         application: &FinalRecoveryApplication,
     ) -> Result<FinalRecoveryApplied, OrbitError> {
-        self.apply_run_final_recovery(run_id, application)
+        recovery::apply_final_recovery(self, run_id, application)
     }
 
     fn allocate_step_recovery_decision(
         &self,
         request: &StepRecoveryDecisionRequest,
     ) -> Result<Option<StepRecoveryDecisionSlot>, OrbitError> {
-        crate::runtime::recovery_decision::allocate(request).map(Some)
+        recovery::allocate_step_recovery_decision(self, request)
     }
 
     fn read_step_recovery_decision(
         &self,
         slot: &StepRecoveryDecisionSlot,
     ) -> Result<StepRecoveryDecisionRead, OrbitError> {
-        crate::runtime::recovery_decision::read(slot)
+        recovery::read_step_recovery_decision(self, slot)
     }
 
     fn source_repair_admission(
@@ -910,16 +887,16 @@ impl RuntimeHost for OrbitRuntime {
         task_id: &str,
         source_run_id: Option<&str>,
     ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
-        OrbitRuntime::owner_published_candidate(self, task_id, source_run_id)
+        recovery::owner_published_candidate(self, task_id, source_run_id)
     }
     fn owner_publication_binding(
         &self,
         run_id: &str,
     ) -> Result<Option<orbit_types::workflow::SourceRepairBinding>, OrbitError> {
-        OrbitRuntime::owner_publication_binding(self, run_id)
+        recovery::owner_publication_binding(self, run_id)
     }
     fn validate_source_repair(&self, run_id: &str) -> Result<(), OrbitError> {
-        self.validate_operator_source_repair(run_id)
+        recovery::validate_source_repair(self, run_id)
     }
 
     fn admit_pr_auto_fix(
