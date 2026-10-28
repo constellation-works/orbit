@@ -373,8 +373,15 @@ def under_unmatched_alternative(path, unmatched):
 
 
 def alternative_path_map(before, after):
-    """Pair anyOf/oneOf branches by content and track newly inserted branches."""
+    """Pair anyOf/oneOf branches by content; track inserted and removed branches.
+
+    Returns (path_map, unmatched, removed): `path_map` translates a surviving
+    current branch prefix to its baseline prefix, `unmatched` holds inserted
+    current branch prefixes, and `removed` holds (baseline prefix, keyword)
+    pairs with no surviving counterpart (outermost only).
+    """
     path_map, unmatched = {}, set()
+    matched_baseline = set()
     alternatives = after.get("alternatives", {})
     for (parent, keyword), new_branches in sorted(
             alternatives.items(), key=lambda item: (item[0][0].count("{"), item[0][0])):
@@ -390,9 +397,120 @@ def alternative_path_map(before, after):
             if new_index in matches:
                 baseline = f"{baseline_parent}{{{keyword}{matches[new_index]}}}"
                 path_map[current] = baseline
+                matched_baseline.add(baseline)
             else:
                 unmatched.add(current)
-    return path_map, unmatched
+    branch_content = {}
+    for (parent, keyword), branches in before.get("alternatives", {}).items():
+        for old_index, branch in enumerate(branches):
+            branch_content[f"{parent}{{{keyword}{old_index}}}"] = (parent, keyword, branch)
+    surviving_content = set()
+    for baseline in matched_baseline:
+        if baseline in branch_content:
+            parent, keyword, branch = branch_content[baseline]
+            surviving_content.add((parent, keyword, json.dumps(branch, sort_keys=True)))
+    removed = []
+    for baseline in sorted(branch_content,
+                           key=lambda path: (path.count("{"), path)):
+        parent, keyword, branch = branch_content[baseline]
+        if baseline in matched_baseline:
+            continue
+        if under_unmatched_alternative(baseline, {path for path, _ in removed}):
+            continue
+        # Deduping identical branches changes nothing for anyOf and only
+        # admits input for oneOf, so an identical survivor keeps it additive.
+        if (parent, keyword, json.dumps(branch, sort_keys=True)) in surviving_content:
+            continue
+        removed.append((baseline, keyword))
+    return path_map, unmatched, removed
+
+
+def _schema_type_names(schema):
+    if isinstance(schema, dict) and "type" in schema:
+        names = schema["type"]
+        names = set(names) if isinstance(names, list) else {names}
+        # `integer` is a subtype of `number`; seeing both is not a conflict.
+        if "integer" in names and "number" in names:
+            names.discard("integer")
+        return names
+    return None
+
+
+def _schema_enum_values(schema):
+    if isinstance(schema, dict) and isinstance(schema.get("enum"), list):
+        return {json.dumps(value, sort_keys=True) for value in schema["enum"]}
+    return None
+
+
+def _json_type_name(value):
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "number"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    return "object"
+
+
+def _schema_const_value(schema):
+    if isinstance(schema, dict) and "const" in schema:
+        return json.dumps(schema["const"], sort_keys=True)
+    return None
+
+
+def schemas_disjoint(first, second):
+    """Whether two schemas provably accept no common instance.
+
+    Conservative: returns False (possibly overlapping) unless a direct
+    contradiction is found at the same location — conflicting types, enum or
+    const values, a recursively disjoint shared property, or a required
+    property the other side forbids via `additionalProperties: false`.
+    """
+    if isinstance(first, bool) or isinstance(second, bool):
+        # `false` accepts nothing; `true` overlaps everything.
+        return first is False or second is False
+    if not isinstance(first, dict) or not isinstance(second, dict):
+        return False
+    first_types, second_types = _schema_type_names(first), _schema_type_names(second)
+    if (first_types is not None and second_types is not None
+            and not (first_types & second_types)):
+        return True
+    first_enum, second_enum = _schema_enum_values(first), _schema_enum_values(second)
+    if first_enum is not None and second_enum is not None and not (first_enum & second_enum):
+        return True
+    for enum_values, other_types in ((first_enum, second_types), (second_enum, first_types)):
+        if enum_values is not None and other_types is not None:
+            allowed = set(other_types) | ({"number"} if "integer" in other_types else set())
+            if not any(_json_type_name(json.loads(value)) in allowed
+                       or (_json_type_name(json.loads(value)) == "integer"
+                           and "number" in allowed)
+                       for value in enum_values):
+                return True
+    first_const, second_const = _schema_const_value(first), _schema_const_value(second)
+    if first_const is not None and second_const is not None and first_const != second_const:
+        return True
+    for const, enum_values in ((first_const, second_enum), (second_const, first_enum)):
+        if const is not None and enum_values is not None and const not in enum_values:
+            return True
+    first_props = first.get("properties") if isinstance(first.get("properties"), dict) else {}
+    second_props = second.get("properties") if isinstance(second.get("properties"), dict) else {}
+    for name in first_props.keys() & second_props.keys():
+        if schemas_disjoint(first_props[name], second_props[name]):
+            return True
+    for owner, other in ((first, second), (second, first)):
+        if (owner.get("additionalProperties") is False
+                and isinstance(owner.get("properties"), dict)):
+            required = other.get("required")
+            required = set(required) if isinstance(required, list) else set()
+            if not required <= set(owner["properties"]):
+                return True
+    return False
 
 
 def translated_facts(values, path_map, unmatched):
@@ -417,7 +535,31 @@ def detect_mcp_changes(git, parent, commit, changed):
             report(f"tool `{name}` removed")
             continue
         before, after = old[name], new[name]
-        path_map, unmatched = alternative_path_map(before, after)
+        path_map, unmatched, removed = alternative_path_map(before, after)
+        for baseline, keyword in removed:
+            report(f"`{name}` `{baseline}` {keyword} alternative removed")
+        for current in sorted(unmatched, key=lambda path: (path.count("{"), path)):
+            if under_unmatched_alternative(
+                    current, {path for path in unmatched if path != current}):
+                continue
+            for (parent, keyword), new_branches in after.get("alternatives", {}).items():
+                prefix = f"{parent}{{{keyword}"
+                if not current.startswith(prefix) or keyword != "oneOf":
+                    continue
+                try:
+                    new_index = int(current[len(prefix):-1])
+                    branch = new_branches[new_index]
+                except (ValueError, IndexError):
+                    continue
+                baseline_parent = remap_alternative_path(parent, path_map)
+                old_branches = before.get("alternatives", {}).get(
+                    (baseline_parent, keyword), [])
+                if not old_branches:
+                    continue
+                if any(not schemas_disjoint(branch, old) for old in old_branches):
+                    report(f"`{name}` `{current}` oneOf alternative "
+                           f"overlaps an existing alternative")
+                break
         after_properties = translated_facts(after.get("properties", {}), path_map, unmatched)
         after_types = translated_facts(after.get("type", {}), path_map, unmatched)
         after_enums = translated_facts(after.get("enum", {}), path_map, unmatched)
@@ -440,6 +582,11 @@ def detect_mcp_changes(git, parent, commit, changed):
         # anyOf/oneOf alternatives retain their positional branch paths:
         # tightening an existing alternative can reject previously valid
         # input, while requirements at a new branch path stay additive.
+        # A removed alternative rejects the inputs only it accepted.
+        # Inserted anyOf branches only admit input, but oneOf demands
+        # exactly one match, so an inserted oneOf alternative overlapping
+        # an existing one steals the single match a formerly valid input
+        # had; provably disjoint insertions stay additive.
         def location(raw):
             return re.sub(r"\{allOf\d+\}", "", raw)
 

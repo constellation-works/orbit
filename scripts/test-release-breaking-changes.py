@@ -461,26 +461,142 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
-    def test_front_inserted_mcp_alternative_is_additive(self):
+    def test_front_inserted_anyof_alternative_is_additive(self):
+        # An inserted anyOf branch only admits input: {"view", "fields"} still
+        # matches, so the decision stays patch.
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema.pop("anyOf", None)
+        schema.pop("oneOf", None)
+        schema["anyOf"] = [{"required": ["view"]}, {"required": ["mode"]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add anyOf alternatives [ORB-58] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["anyOf"].insert(0, {"required": ["fields"]})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Insert anyOf alternative at front [ORB-59] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_front_inserted_overlapping_oneof_alternative_decides_minor(self):
+        # oneOf demands exactly one match: {"view", "fields"} matched only
+        # required(view) before, and matches required(fields) too after, so
+        # the front insertion rejects formerly valid input (ORB-19558).
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema.pop("anyOf", None)
+        schema.pop("oneOf", None)
+        schema["oneOf"] = [{"required": ["view"]}, {"required": ["mode"]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add oneOf alternatives [ORB-58] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["oneOf"].insert(0, {"required": ["fields"]})
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Insert oneOf alternative at front [ORB-59] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-59", "mcp-schema",
+             "`orbit_task_show` `inputSchema{oneOf0}` oneOf alternative "
+             "overlaps an existing alternative"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_disjoint_inserted_oneof_alternative_is_additive(self):
+        # The new branch requires mode=compact while the old one requires
+        # mode=full: no instance matches both, so every formerly valid input
+        # still matches exactly one branch.
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema.pop("anyOf", None)
+        schema.pop("oneOf", None)
+        schema["oneOf"] = [{
+            "properties": {"mode": {"type": "string", "enum": ["full"]}},
+            "required": ["mode"],
+        }]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add oneOf alternative [ORB-66] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["oneOf"].append({
+            "properties": {"mode": {"type": "string", "enum": ["compact"]}},
+            "required": ["mode"],
+        })
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Append disjoint oneOf alternative [ORB-67] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_removed_input_mcp_alternative_decides_minor(self):
+        # Removing the branch that accepted mode-only requests rejects those
+        # requests afterwards, for both keywords (ORB-19558).
         for keyword in ("anyOf", "oneOf"):
             with self.subTest(keyword=keyword):
                 tools = self.repo.mcp()
                 schema = tools[0]["inputSchema"]
                 schema.pop("anyOf", None)
                 schema.pop("oneOf", None)
-                schema[keyword] = [{"required": ["view"]}, {"required": ["mode"]}]
+                schema[keyword] = [
+                    {"properties": {"view": {"type": "string"}}, "required": ["view"]},
+                    {"properties": {"mode": {"type": "string"}}, "required": ["mode"]},
+                ]
                 self.repo.write_mcp(tools)
-                self.repo.commit(f"feat: Add {keyword} alternatives [ORB-58] (#1)")
+                self.repo.commit(f"feat: Add {keyword} alternatives [ORB-68] (#1)")
                 self.repo.git("tag", "-f", "v0.35.0")
 
-                schema[keyword].insert(0, {"required": ["fields"]})
+                del schema[keyword][1]
                 self.repo.write_mcp(tools)
-                self.repo.commit(f"feat: Insert {keyword} alternative at front [ORB-59] (#2)")
+                self.repo.commit(f"feat: Remove {keyword} mode alternative [ORB-69] (#2)")
 
                 report = self.report("--range", "v0.35.0..HEAD")
-                self.assertEqual(report["signals"], [])
-                self.assertEqual(report["bump"], "patch")
-                self.assertEqual(report["next_version"], "0.35.1")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-69", "mcp-schema",
+                     f"`orbit_task_show` `inputSchema{{{keyword}1}}` {keyword} "
+                     "alternative removed"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removed_output_mcp_alternative_decides_minor(self):
+        # Output contracts get the same removal signal as input contracts.
+        for keyword in ("anyOf", "oneOf"):
+            with self.subTest(keyword=keyword):
+                tools = self.repo.mcp()
+                tools[0]["outputSchema"] = {
+                    "type": "object",
+                    "properties": {"ok": {"type": "string"}},
+                    keyword: [
+                        {"properties": {"view": {"type": "string"}},
+                         "required": ["view"]},
+                        {"properties": {"mode": {"type": "string"}},
+                         "required": ["mode"]},
+                    ],
+                }
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Add output {keyword} alternatives [ORB-70] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del tools[0]["outputSchema"][keyword][0]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove output {keyword} view alternative [ORB-71] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-71", "mcp-schema",
+                     f"`orbit_task_show` `outputSchema{{{keyword}0}}` {keyword} "
+                     "alternative removed"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
 
     def test_existing_mcp_alternative_tightening_decides_minor(self):
         for keyword in ("anyOf", "oneOf"):
@@ -500,19 +616,37 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                 self.repo.commit(f"feat: Append {keyword} alternative [ORB-56] (#2)")
 
                 additive = self.report()
-                self.assertEqual(additive["signals"], [])
-                self.assertEqual(additive["bump"], "patch")
-                self.assertEqual(additive["next_version"], "0.35.1")
+                if keyword == "anyOf":
+                    self.assertEqual(additive["signals"], [])
+                    self.assertEqual(additive["bump"], "patch")
+                    self.assertEqual(additive["next_version"], "0.35.1")
+                else:
+                    # oneOf demands exactly one match, so the appended
+                    # required(fields) branch steals the single match from
+                    # {"view", "fields"} inputs (ORB-19558).
+                    self.assertEqual(self.signals(additive), {
+                        ("ORB-56", "mcp-schema",
+                         "`orbit_task_show` `inputSchema{oneOf2}` oneOf alternative "
+                         "overlaps an existing alternative"),
+                    })
+                    self.assertEqual(additive["bump"], "minor")
+                    self.assertEqual(additive["next_version"], "0.36.0")
 
                 schema[keyword][0]["required"].append("mode")
                 self.repo.write_mcp(tools)
                 self.repo.commit(f"feat: Tighten {keyword} alternative [ORB-57] (#3)")
 
                 report = self.report()
-                self.assertEqual(self.signals(report), {
+                expected = {
                     ("ORB-57", "mcp-schema",
                      f"`orbit_task_show` property `inputSchema{{{keyword}0}}.mode` newly required"),
-                })
+                }
+                if keyword == "oneOf":
+                    expected.add(
+                        ("ORB-56", "mcp-schema",
+                         "`orbit_task_show` `inputSchema{oneOf2}` oneOf alternative "
+                         "overlaps an existing alternative"))
+                self.assertEqual(self.signals(report), expected)
                 self.assertEqual(report["bump"], "minor")
                 self.assertEqual(report["next_version"], "0.36.0")
 
