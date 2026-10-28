@@ -1,8 +1,8 @@
 ---
 title: "Remote Access — Overview"
 owner: codex
-last_updated: 2026-10-08
-last_validated: 2026-10-25
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Accepted
 stage: shipped
 next: "—"
@@ -36,7 +36,7 @@ The registry is refreshed at request boundaries. A successful refresh atomically
 
 ## Remote Web connection
 
-Web's SSH transport is a local port forward. It first probes for an existing remote dashboard through a commandless forward. If /healthz answers, connect attaches without touching that server. Otherwise it starts orbit web serve --no-open through a second SSH process, waits for health, and owns that process's lifetime.
+Web's SSH transport is a local port forward. It first probes for an existing remote dashboard through a commandless forward. If /healthz answers, connect attaches to that process without stopping or replacing it; when browser sessions are enabled, it may also request a one-time browser ticket with `orbit web open --no-open`. Otherwise it starts `orbit web serve --no-open` through a second SSH process, waits for health, and owns that process's lifetime.
 
 This tunnel belongs to orbit-web. It is separate from MCP remote mode: MCP uses direct non-PTY SSH stdio and no local-forward listener.
 
@@ -46,8 +46,8 @@ A serving dashboard reaches the hosts in its host file through `/api/on/<host>/<
 
 ## Security boundary
 
-Orbit Web refuses non-loopback binds and has no application authentication. Its Origin check is browser-CSRF mitigation, not access control. SSH supplies remote authentication, encryption, and host verification.
+Orbit Web has no per-user login and refuses non-loopback binds. Its Origin check is browser-CSRF mitigation, not access control. The server may have a shared operator capability for governed writes; SSH supplies remote authentication, encryption, and host verification.
 
-The Web API includes mutations. Anyone who can reach the forwarded local port can act with the authority of the remote Orbit process. Through the host forward, an operator session is passed to a remote dashboard the serving dashboard starts; an already-running dashboard keeps its own operator capability. The serving host's SSH identity limits which registered hosts it can reach. Remote access is live access to one machine's state, not cross-machine synchronization, replication, or an offline shared store.
+The Web API includes mutations. A forwarded client can use whatever server-wide authority is enabled on the remote process; if it was started with operator capability, anyone on that tunnel can invoke governed writes. `orbit web connect` passes `--operator` by default unless `--no-operator` is set. Through the host forward, the serving dashboard passes its operator capability only when it starts a remote dashboard; an already-running dashboard keeps its own setting. The serving host's SSH identity limits which registered hosts it can reach. Remote access is live access to one machine's state, not cross-machine synchronization, replication, or an offline shared store.
 
 See [2_design.md](./2_design.md) for mechanics, [3_vision.md](./3_vision.md) for evolution gates, [4_decisions.md](./4_decisions.md) for current choices, [specs/ssh-tunnel.md](./specs/ssh-tunnel.md) for the tunnel contract, and [specs/host-forward.md](./specs/host-forward.md) for the host forward.
