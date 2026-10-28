@@ -236,7 +236,10 @@ def schema_facts(schema, path, facts):
         if isinstance(schema.get(key), (dict, bool)):
             schema_facts(schema[key], f"{path}[{key}]", facts)
     for key in ("anyOf", "oneOf", "allOf"):
-        for index, child in enumerate(schema.get(key) or []):
+        branches = schema.get(key) or []
+        if key in ("anyOf", "oneOf") and isinstance(branches, list):
+            facts.setdefault("alternatives", {})[(path, key)] = branches
+        for index, child in enumerate(branches):
             schema_facts(child, f"{path}{{{key}{index}}}", facts)
 
 
@@ -255,6 +258,113 @@ def mcp_tools(text):
     return result
 
 
+def schema_without_required(schema):
+    """Return a branch's structure without its required-property constraints."""
+    if isinstance(schema, list):
+        return [schema_without_required(value) for value in schema]
+    if isinstance(schema, dict):
+        return {key: schema_without_required(value) for key, value in schema.items()
+                if key != "required"}
+    return schema
+
+
+def schema_required_names(schema):
+    """Collect required property names anywhere in an alternative branch."""
+    if isinstance(schema, list):
+        return set().union(*(schema_required_names(value) for value in schema))
+    if not isinstance(schema, dict):
+        return set()
+    required = schema.get("required", [])
+    names = set(required) if isinstance(required, list) else set()
+    for value in schema.values():
+        names.update(schema_required_names(value))
+    return names
+
+
+def match_schema_alternatives(before, after):
+    """Map unchanged or tightened old alternatives to their new positions."""
+    matches, old_left, new_left = {}, set(range(len(before))), set(range(len(after)))
+    before_json = [json.dumps(branch, sort_keys=True) for branch in before]
+    after_json = [json.dumps(branch, sort_keys=True) for branch in after]
+
+    # Exact branch content is the strongest identity and handles insertions or
+    # reorderings without relying on array positions.
+    for old_index, encoded in enumerate(before_json):
+        candidates = [index for index in new_left if after_json[index] == encoded]
+        if candidates:
+            new_index = min(candidates, key=lambda index: (abs(index - old_index), index))
+            matches[new_index] = old_index
+            old_left.remove(old_index)
+            new_left.remove(new_index)
+
+    # A tightening changes `required` but keeps at least one required property
+    # from the original branch. Pair those remaining branches by shared
+    # constraints, preferring the same non-required schema shape.
+    before_required = [schema_required_names(branch) for branch in before]
+    after_required = [schema_required_names(branch) for branch in after]
+    before_shapes = [json.dumps(schema_without_required(branch), sort_keys=True)
+                     for branch in before]
+    after_shapes = [json.dumps(schema_without_required(branch), sort_keys=True)
+                    for branch in after]
+    candidates = []
+    for old_index in old_left:
+        for new_index in new_left:
+            overlap = len(before_required[old_index] & after_required[new_index])
+            same_shape = before_shapes[old_index] == after_shapes[new_index]
+            if overlap or (same_shape and
+                           (not before_required[old_index] or not after_required[new_index])):
+                candidates.append((same_shape, overlap,
+                                   -abs(old_index - new_index), old_index, new_index))
+    for _, _, _, old_index, new_index in sorted(candidates, reverse=True):
+        if old_index in old_left and new_index in new_left:
+            matches[new_index] = old_index
+            old_left.remove(old_index)
+            new_left.remove(new_index)
+    return matches
+
+
+def remap_alternative_path(path, path_map):
+    """Translate current branch prefixes to their matched baseline prefixes."""
+    for current, baseline in sorted(path_map.items(), key=lambda item: len(item[0]), reverse=True):
+        path = path.replace(current, baseline)
+    return path
+
+
+def under_unmatched_alternative(path, unmatched):
+    return any(path.startswith(prefix) for prefix in unmatched)
+
+
+def alternative_path_map(before, after):
+    """Pair anyOf/oneOf branches by content and track newly inserted branches."""
+    path_map, unmatched = {}, set()
+    alternatives = after.get("alternatives", {})
+    for (parent, keyword), new_branches in sorted(
+            alternatives.items(), key=lambda item: (item[0][0].count("{"), item[0][0])):
+        if under_unmatched_alternative(parent, unmatched):
+            old_branches = []
+            baseline_parent = remap_alternative_path(parent, path_map)
+        else:
+            baseline_parent = remap_alternative_path(parent, path_map)
+            old_branches = before.get("alternatives", {}).get((baseline_parent, keyword), [])
+        matches = match_schema_alternatives(old_branches, new_branches)
+        for new_index in range(len(new_branches)):
+            current = f"{parent}{{{keyword}{new_index}}}"
+            if new_index in matches:
+                baseline = f"{baseline_parent}{{{keyword}{matches[new_index]}}}"
+                path_map[current] = baseline
+            else:
+                unmatched.add(current)
+    return path_map, unmatched
+
+
+def translated_facts(values, path_map, unmatched):
+    result = {}
+    for path, value in values.items():
+        if not under_unmatched_alternative(path, unmatched):
+            result[remap_alternative_path(path, path_map)] = value
+    return result
+
+
 def detect_mcp_changes(git, parent, commit, changed):
     if MCP_SNAPSHOT not in changed:
         return []
@@ -269,17 +379,23 @@ def detect_mcp_changes(git, parent, commit, changed):
             report(f"tool `{name}` removed")
             continue
         before, after = old[name], new[name]
+        path_map, unmatched = alternative_path_map(before, after)
+        after_properties = translated_facts(after.get("properties", {}), path_map, unmatched)
+        after_types = translated_facts(after.get("type", {}), path_map, unmatched)
+        after_enums = translated_facts(after.get("enum", {}), path_map, unmatched)
+        after_nodes = translated_facts(
+            {path: True for path in after.get("schema_nodes", set())}, path_map, unmatched)
         for path, names in sorted(before.get("properties", {}).items()):
-            if path not in after.get("properties", {}):
+            if path not in after_properties:
                 continue
-            for prop in sorted(names - after["properties"][path]):
+            for prop in sorted(names - after_properties[path]):
                 report(f"`{name}` property `{path}.{prop}` removed or renamed")
         for path, kind in sorted(before.get("type", {}).items()):
-            if path in after.get("type", {}) and after["type"][path] != kind:
-                report(f"`{name}` `{path}` type {kind} → {after['type'][path]}")
+            if path in after_types and after_types[path] != kind:
+                report(f"`{name}` `{path}` type {kind} → {after_types[path]}")
         for path, values in sorted(before.get("enum", {}).items()):
-            if path in after.get("enum", {}):
-                for value in sorted(values - after["enum"][path]):
+            if path in after_enums:
+                for value in sorted(values - after_enums[path]):
                     report(f"`{name}` `{path}` enum value {value} removed")
         # allOf branches all apply, so their required sets union at their
         # instance location (branch renumbering is not a new constraint).
@@ -297,8 +413,11 @@ def detect_mcp_changes(git, parent, commit, changed):
 
         before_locations = {location(p) for p in before.get("schema_nodes", set())}
         before_required = required_by_location(before)
-        for loc, required in sorted(required_by_location(after).items()):
-            if loc not in before_locations:
+        translated_after = dict(after)
+        translated_after["required"] = translated_facts(after.get("required", {}), path_map, unmatched)
+        after_locations = {location(p) for p in after_nodes}
+        for loc, required in sorted(required_by_location(translated_after).items()):
+            if loc not in before_locations or loc not in after_locations:
                 continue
             for prop in sorted(required - before_required.get(loc, set())):
                 report(f"`{name}` property `{loc}.{prop}` newly required")

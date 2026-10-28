@@ -444,6 +444,27 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_front_inserted_mcp_alternative_is_additive(self):
+        for keyword in ("anyOf", "oneOf"):
+            with self.subTest(keyword=keyword):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema[keyword] = [{"required": ["view"]}, {"required": ["mode"]}]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Add {keyword} alternatives [ORB-58] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                schema[keyword].insert(0, {"required": ["fields"]})
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Insert {keyword} alternative at front [ORB-59] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(report["signals"], [])
+                self.assertEqual(report["bump"], "patch")
+                self.assertEqual(report["next_version"], "0.35.1")
+
     def test_existing_mcp_alternative_tightening_decides_minor(self):
         for keyword in ("anyOf", "oneOf"):
             with self.subTest(keyword=keyword):
