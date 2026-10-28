@@ -27,8 +27,8 @@ Start a fresh agent session afterwards so the tools load.
 
 The registration launches `orbit mcp serve --operator`. Operator sessions can
 dispatch workflows, resume runs, and run governed commands; agents launched by
-Orbit get agent-only authority. Authority is checked when a tool is called,
-so every session sees the same `tools/list` rather than a filtered tool list.
+Orbit get agent-only authority. Each session's capabilities filter the tools
+advertised by `tools/list`; authorization is also checked when a tool is called.
 
 `orbit mcp init` registers Orbit with the narrower **agent-only** authority:
 the agent can file and update tasks but cannot dispatch runs. Use it to pick
