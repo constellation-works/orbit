@@ -156,9 +156,15 @@ spec:
       same diff.
     - `unclassified`: apply the checks above that fit.
 
-    `orbit.codebase.show` with the path lists the tasks behind a mark. In your
-    summary, name each marked file you checked and what each category showed,
-    including any you could not observe.
+    `orbit.codebase.show` with a path lists regression tasks whose recorded
+    sites resolve under that path. For a path the task declared, a task whose
+    incoming regression links have no recorded sites appears only in that
+    path's `unsited` count; tasks whose sites resolve only to other paths are
+    omitted from that path's regression standing. Risk marks count regressions
+    against every file declared in the task footprint, regardless of sites, so
+    a mark can include contributors this lookup does not list. In your summary,
+    name each marked file you checked and what each category showed, including
+    any you could not observe.
   tool_disallow_list:
     - orbit.agent.invoke
     - orbit.auto_task.add
