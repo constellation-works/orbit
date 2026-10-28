@@ -158,8 +158,8 @@ impl OrbitRuntime {
     ///
     /// Every check runs before anything durable exists, and each refusal
     /// names why. The budget reads and the insert share one lock in the
-    /// calling run's own worktree scratch, so two concurrent calls from the
-    /// same run cannot both take its last slot.
+    /// parent's first existing worktree scratch, independent of which owned
+    /// worktree holds `cwd`, so concurrent calls cannot both take its last slot.
     pub(super) fn submit_explore_run(
         &self,
         caller: ManagedRunCaller,
@@ -306,13 +306,11 @@ impl OrbitRuntime {
             input[EXPLORE_IDEMPOTENCY_KEY] = json!(key);
         }
 
-        // The admission lock lives in the calling run's own worktree scratch
-        // (`.orbit/tmp`), not the primary state directory: a read-only primary
-        // mount still leaves the caller's writable worktree usable, and every
-        // `cwd` in that worktree resolves the same root, so the same parent
-        // keeps one lock. The budget reads and the insert share it, so two
-        // concurrent calls from the same run cannot both take its last slot.
-        let lock_target = explore_admission_lock_target(&root);
+        // Pick the lock from the parent's ordered worktree paths, never the
+        // requested cwd: a stale task-fallback worktree and the run-id worktree
+        // must share the budget reads and insert under one lock. Worktree
+        // scratch stays writable when the primary state directory is read-only.
+        let lock_target = explore_admission_lock_target(&self.paths().repo_root, &parent)?;
         let admitted = with_exclusive_file_lock(&lock_target, "explorer admission", || {
             let prior = self.explore_runs_of(&parent)?;
             if let Some(existing) = idempotency_key.and_then(|key| {
@@ -659,14 +657,21 @@ impl OrbitRuntime {
     }
 }
 
-/// The per-parent explorer admission lock, in the calling run's own worktree
-/// scratch. `worktree_root` is the verified linked worktree from
-/// [`OrbitRuntime::explore_checkout`], so every `cwd` in the same parent
-/// resolves the same target while different parents resolve different ones.
-/// The `.orbit/tmp` scratch stays inside the caller's existing write grants
-/// and survives a read-only primary state directory.
-fn explore_admission_lock_target(worktree_root: &Path) -> PathBuf {
-    orbit_scratch_dir(worktree_root).join("agent_explore_admission")
+/// The per-parent explorer admission lock, independent of the requested `cwd`.
+/// Use the first existing owned worktree in the engine's stable order: the
+/// run-id worktree when present, otherwise the task-derived fallback. Calls
+/// from either root therefore serialize on the same target. Keeping the lock
+/// in worktree scratch also supports a read-only primary state directory.
+fn explore_admission_lock_target(repo_root: &Path, parent: &JobRun) -> Result<PathBuf, OrbitError> {
+    let worktree_root = orbit_engine::run_worktree_paths(repo_root, parent)?
+        .into_iter()
+        .find_map(|path| path.canonicalize().ok())
+        .ok_or_else(|| {
+            OrbitError::PolicyDenied(
+                "the calling run has no existing worktree for explorer admission".to_string(),
+            )
+        })?;
+    Ok(orbit_scratch_dir(worktree_root).join("agent_explore_admission"))
 }
 
 /// The task the delegating run delivers, when it names exactly one.
