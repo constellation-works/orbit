@@ -15,11 +15,11 @@ use super::super::super::{
 };
 use super::{annotations, jobs};
 
-/// Whether an untouched-path failure still needs a fresh base result.
+/// Whether an untouched-path failure needs same-check base and PR-rerun evidence.
 pub(super) enum UntouchedBaseEvidence {
     Unrelated,
     Waiting(String),
-    FreshPass,
+    PassingBaseRun,
 }
 
 /// Independently guard the repair evidence path, including job-level recovery.
@@ -58,7 +58,7 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     .map_err(|error| format!("the failed check's base could not be read: {error}"))?;
     let base = git_output(workspace, &["merge-base", head, tip.trim()])
         .map_err(|error| error.to_string())?;
-    untouched_without_fresh_base(
+    untouched_base_evidence(
         host,
         workspace,
         head,
@@ -109,10 +109,9 @@ fn repository_citations(
         .collect())
 }
 
-/// Why this failure needs the base's next push run before a candidate
-/// repair. A fresh passing job clears the suspicion. Missing timestamps,
-/// pending/skipped jobs and failed reads never turn an old green run into
-/// fresh evidence. The caller's existing completion deadline bounds polling.
+/// Whether a matching base check passes. A pass alone only authorizes one
+/// unchanged-head pull-request rerun; only a repeated signature on that
+/// rerun can attribute the failure to the candidate.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -125,7 +124,7 @@ pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     log: &str,
 ) -> Result<UntouchedBaseEvidence, String> {
     let paths = repository_citations(workspace, head, log)?;
-    untouched_without_fresh_base(host, workspace, head, base, tip, base_branch, job, paths)
+    untouched_base_evidence(host, workspace, head, base, tip, base_branch, job, paths)
 }
 
 /// Whether `log` cites only repository files the candidate did not change
@@ -160,7 +159,7 @@ pub(super) fn started_after_completion(job: &Value, other: &Value) -> bool {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn untouched_without_fresh_base<H: RuntimeHost + ?Sized>(
+fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
     head: &str,
@@ -180,7 +179,7 @@ fn untouched_without_fresh_base<H: RuntimeHost + ?Sized>(
     let response = host
         .run_private_vcs_operation(
             operations::CI_COMMIT_JOBS,
-            json!({"commit":base,"workspace_path":workspace,"latest_push_branch":base_branch,"base_push_tip":tip,"base_push_after":job["completed_at"]}),
+            json!({"commit":base,"workspace_path":workspace,"latest_push_branch":base_branch,"base_push_tip":tip}),
         )
         .map_err(|error| format!("the base re-check on {tip} could not be read: {error}"))?;
     let base_jobs = response["jobs"]
@@ -191,18 +190,92 @@ fn untouched_without_fresh_base<H: RuntimeHost + ?Sized>(
             && base_job["run_status"] == "completed"
             && base_job["status"] == "completed"
             && base_job["conclusion"] == "success"
-            && started_after_completion(job, base_job)
-            && started_after_completion(job, &json!({"started_at":base_job["run_started_at"]}))
     }) {
-        return Ok(UntouchedBaseEvidence::FreshPass);
+        return Ok(UntouchedBaseEvidence::PassingBaseRun);
     }
     Ok(UntouchedBaseEvidence::Waiting(format!(
         "base-suspect: its cited repository files ({}) are outside the candidate's changed paths; \
-         waiting for a fresh push run of '{}' from base {base} through {tip} to re-check this base-wide failure \
-         after the candidate failure; an earlier passing base run does not authorize repair",
+         waiting for a successful same-check push run of '{}' from base {base} through {tip} and an \
+         unchanged-head pull_request rerun with the same failure signature; a base pass alone does not authorize repair",
         paths.into_iter().take(20).collect::<Vec<_>>().join(", "),
         jobs::job_label(job),
     )))
+}
+
+/// Whether task history records an earlier failed attempt with this same
+/// signature on the same head, followed by the current job starting later.
+/// The first failure is retained before the rerun is requested, so a resumed
+/// landing or auto-fix can recognize the same evidence as an in-process rerun.
+pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
+    host: &H,
+    tasks: &[String],
+    head: &str,
+    job: &Value,
+    check: &str,
+    signature: &str,
+) -> bool {
+    let current_start = job["started_at"]
+        .as_str()
+        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+    let Some(current_start) = current_start else {
+        return false;
+    };
+    let current_run = job["run_id"].as_u64();
+    let current_job = job["job_id"].as_u64();
+    let current_attempt = job["run_attempt"].as_u64();
+    for task in tasks {
+        let Ok(history) = host.get_task_history(task) else {
+            continue;
+        };
+        for entry in history
+            .iter()
+            .filter(|entry| matches!(entry.event.as_str(), "ci_base_suspect" | "ci_check_rerun"))
+        {
+            let Some(note) = entry
+                .note
+                .as_deref()
+                .and_then(|note| serde_json::from_str::<Value>(note).ok())
+            else {
+                continue;
+            };
+            let prior = if entry.event == "ci_check_rerun" {
+                note["jobs"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|prior| prior["check"] == check && prior["signature"] == signature)
+                    .map(|prior| (note["head"].as_str(), note["run_id"].as_u64(), prior))
+            } else {
+                (note["check"] == check && note["signature"] == signature).then_some((
+                    note["head"].as_str(),
+                    note["run_id"].as_u64(),
+                    &note,
+                ))
+            };
+            let Some((Some(prior_head), prior_run, prior)) = prior else {
+                continue;
+            };
+            if prior_head != head {
+                continue;
+            }
+            let completed = prior["completed_at"]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+            let Some(completed) = completed else {
+                continue;
+            };
+            if current_start < completed {
+                continue;
+            }
+            let same_identity = current_run == prior_run
+                && current_job == prior["job_id"].as_u64()
+                && current_attempt == prior["run_attempt"].as_u64();
+            if !same_identity {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Surface the base-wide suspicion once per owning task and exact failure,
@@ -243,7 +316,7 @@ pub(super) fn record_base_suspect<H: RuntimeHost + ?Sized>(
                 },
             )?;
         }
-        tracing::warn!(task, %evidence, "base-suspect: waiting for a fresh base check; no candidate repair");
+        tracing::warn!(task, %evidence, "base-suspect: waiting for conclusive same-check base and pull-request rerun evidence; no candidate repair");
     }
     Ok(())
 }

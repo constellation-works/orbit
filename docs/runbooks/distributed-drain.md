@@ -1671,36 +1671,31 @@ one. From then on:
     fetch stops adoption without spending rerun, update or repair budgets.
   - **transient**: the log shows the network or the runner giving out. The
     landing reruns the failed jobs once and judges the rerun.
-  - **base-suspect**: a failure the base's recorded run does not show,
-    whose log cites repository files (`path:line` locations that name files
-    at the head) that all lie outside the candidate's changed paths. An
-    earlier passing base run cannot attribute it to the candidate: something
-    outside the repository may have changed since, such as an advisory
-    database or a toolchain release. The landing records one
-    `ci_base_suspect` history event per task and failure, spends no rerun,
-    update or repair, and keeps polling for a fresh push run of the same job.
-    A completed successful push on the accepted base or any descendant through
-    the landing tip counts even after the tip moves again. Both the run and
-    its job must have started at or after the candidate's job completed.
-    The lookup examines up to 100 recent base-branch push runs, retaining the
-    latest run per workflow and commit; evidence outside that window keeps
-    the wait. A fresh same-signature failure on the tip makes it **inherited**.
-    A fresh pass makes it **flaky**: the landing reruns the failed jobs once
-    before attributing them to the candidate, with no branch update. A passing
-    rerun clears the failure without a repair. The same signature failing
-    again becomes **candidate** and takes the usual automatic repair; its
-    later completion does not require another fresh base pass. An
-    **inherited** outcome on a moved tip takes the inherited recovery
-    above: a branch update, then a wait for a newer passing base within the
-    landing deadline if the failure survives while the base is still red. A tip
-    pass or same-signature tip failure that started before the candidate's
-    job completed decides nothing: the failure stays **base-suspect**. A
-    base that gets no such run before `max_wait_seconds` stops the landing
-    in `review` without a repair, with the suspicion in the stop evidence.
-    `orbit run auto
-    --auto-fix` holds the same failure as a red base, and its repair
-    evidence read refuses a repair for it. A log that cites no repository
-    file, or cites a file the candidate changed, is classified as before.
+  - **base-suspect**: the failure's log cites repository files (`path:line`
+    locations that name files at the head) that all lie outside the
+    candidate's changed paths, and no same-signature failure on the base
+    explains it. An earlier passing base run alone cannot attribute the
+    failure to the candidate: an advisory database or toolchain can change
+    without a base commit change. A successful same-check push run on the
+    accepted base or a descendant through the landing tip, including an
+    earlier run, authorizes one rerun of the failed `pull_request` job on the
+    unchanged head; `pull_request` CI evaluates that head as a merge with the
+    current base. A pass on that rerun clears the failure. If it fails with
+    the same signature and the base has that successful same-check result,
+    the landing classifies it as **candidate** and uses the usual automatic
+    repair; it needs no further base run. A same-signature base failure stays
+    **inherited**. The lookup examines up to 100 recent base-branch push runs,
+    retaining the latest run per workflow and commit; evidence outside that
+    window does not authorize repair. `orbit run auto --auto-fix` applies the
+    same rule: it holds until task history records the unchanged-head rerun
+    and the same signature is observed again with a passing base check.
+    Without decisive evidence, `handoff_land` stops in review after
+    `max_base_ci_cycles` (default 3) observation cycles or the existing
+    `max_wait_seconds` deadline, whichever comes first. A cycle is one landing
+    poll that rechecks the same failed job against the accepted base ancestry.
+    Its stop evidence names the check, signature and missing rerun or base
+    result for operator review. A log that cites no repository file, or cites
+    a file the candidate changed, is classified as before.
   - **candidate**: anything else. The landing stops for the claim's one
     automatic repair, the same repair a conflicting base gets, and the stop
     evidence carries the failed step's signature and log excerpt for the

@@ -236,9 +236,16 @@ The owner enforces what it is owed in two places:
   in task history. A transient one gets one rerun, and one the candidate
   caused gets the claim's one automatic repair
   ([distributed drain runbook](distributed-drain.md)). A new failure whose
-  log cites only files the candidate did not change is base-suspect: it
-  waits for a base run newer than the failure before any repair. Past that budget the
-  landing stops, whatever branch protection requires. Branch protection may still treat a skipped or
+  log cites only files the candidate did not change is base-suspect: it waits
+  for a same-check base result and an unchanged-head `pull_request` rerun,
+  which evaluates the PR head as a merge with the current base. An earlier green
+  base run alone never attributes the failure to the candidate;
+  it only allows that PR rerun. A passing rerun clears the failure, while the
+  same signature failing again with a successful same-check run on the accepted
+  base ancestry enters candidate recovery. If the evidence remains incomplete,
+  `handoff_land` stops in review after `max_base_ci_cycles` observation cycles
+  (default 3) or `max_wait_seconds`, whichever comes first, and names the
+  missing evidence. Branch protection may still treat a skipped or
   neutral required check as satisfied; this gate does not. The candidate
   stays in review. A local candidate owed a hosted check stops too.
 

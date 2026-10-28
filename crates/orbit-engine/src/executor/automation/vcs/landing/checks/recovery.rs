@@ -1,6 +1,6 @@
 //! Classifying failed hosted checks and recovering from them once.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
@@ -49,10 +49,13 @@ impl CheckFailureClass {
 #[derive(Default)]
 pub(in crate::executor::automation::vcs) struct CheckRecovery {
     rerun: bool,
-    /// Untouched failures whose fresh base pass already authorized a rerun.
+    /// Untouched failures whose same-check base pass authorized a rerun.
     /// The rerun's later completion must not demand yet another base pass.
     rerun_candidates: BTreeSet<(u64, String, String)>,
+    /// Repeated base-evidence observations keyed by unchanged head, check and signature.
+    base_suspect_cycles: BTreeMap<(String, String, String), u64>,
     updated: bool,
+    pub(in crate::executor::automation::vcs) max_base_ci_cycles: u64,
     pub(in crate::executor::automation::vcs) waiting_for_base: Option<String>,
     pub(super) deadline_ms: u64,
     /// Failed jobs already acted on, so a rollup that still shows them
@@ -68,9 +71,13 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
 }
 
 impl CheckRecovery {
-    pub(in crate::executor::automation::vcs) fn before(deadline_ms: u64) -> Self {
+    pub(in crate::executor::automation::vcs) fn before(
+        deadline_ms: u64,
+        max_base_ci_cycles: u64,
+    ) -> Self {
         Self {
             deadline_ms,
+            max_base_ci_cycles,
             ..Default::default()
         }
     }
@@ -239,6 +246,19 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             &mut base_jobs,
             &mut tip_jobs,
         );
+        if class == CheckFailureClass::Flaky
+            && super::suspect::has_matching_candidate_rerun(
+                host,
+                std::slice::from_ref(&context.task_id),
+                head,
+                job,
+                &label,
+                &signature,
+            )
+        {
+            class = CheckFailureClass::Candidate;
+            why = "the unchanged pull-request head failed the same signature again after the base check passed".into();
+        }
         if recovery
             .rerun_candidates
             .contains(&(run_id, label.clone(), signature.clone()))
@@ -252,7 +272,11 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             super::suspect::record_base_suspect(
                 host,
                 std::slice::from_ref(&context.task_id),
-                &json!({"base":landing_tip.unwrap_or(base),"check":label,"signature":signature,"reason":why}),
+                &json!({
+                    "base":landing_tip.unwrap_or(base), "head":head, "check":label, "signature":signature,
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"],
+                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason":why,
+                }),
                 Some(&context.handoff_id),
             )?;
         }
@@ -277,9 +301,30 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
     let evidence = |outcome: &str| format!("{reason}; {classified}; {outcome}");
 
     match class {
-        CheckFailureClass::BaseSuspect => Ok(CheckRecoveryStep::WaitForBase(evidence(
-            "waiting for a fresh base check within the landing deadline; no candidate repair",
-        ))),
+        CheckFailureClass::BaseSuspect => {
+            let limit = recovery.max_base_ci_cycles;
+            let mut exhausted = None;
+            for job in jobs
+                .iter()
+                .filter(|job| job.class == CheckFailureClass::BaseSuspect)
+            {
+                let key = (head.to_owned(), job.label.clone(), job.signature.clone());
+                let cycles = recovery.base_suspect_cycles.entry(key).or_default();
+                *cycles = cycles.saturating_add(1);
+                if *cycles >= limit {
+                    exhausted.get_or_insert((*cycles, job.label.clone(), job.signature.clone()));
+                }
+            }
+            if let Some((cycles, check, signature)) = exhausted {
+                Ok(CheckRecoveryStep::Stop(evidence(&format!(
+                    "escalated after {cycles} base CI observation cycles (limit {limit}): check '{check}' still fails with signature `{signature}` on unchanged head {head}; a matching pull_request rerun failure and a successful same-check agent-main run on the accepted base ancestry have not both been observed, so review the missing base/check evidence",
+                ))))
+            } else {
+                Ok(CheckRecoveryStep::WaitForBase(evidence(
+                    "waiting for a same-signature pull_request rerun and a successful same-check agent-main run on the accepted base ancestry; no candidate repair",
+                )))
+            }
+        }
         CheckFailureClass::Transient | CheckFailureClass::Flaky if !recovery.rerun => {
             let runs: BTreeSet<u64> = jobs.iter().filter_map(|job| job.run_id).collect();
             for run_id in runs {
@@ -291,7 +336,16 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                     }),
                 )?;
                 let rerun_jobs = jobs.iter().filter(|job| job.run_id == Some(run_id)).map(|job| {
-                    json!({"job_id":job.job_id,"check":job.label,"classification":job.class.as_str(),"signature":job.signature})
+                    let original = head_jobs.iter().find(|original| {
+                        original["run_id"].as_u64() == Some(run_id)
+                            && original["job_id"].as_u64() == Some(job.job_id)
+                    });
+                    json!({
+                        "job_id":job.job_id,"check":job.label,"classification":job.class.as_str(),"signature":job.signature,
+                        "run_attempt":original.map(|original| original["run_attempt"].clone()).unwrap_or(Value::Null),
+                        "started_at":original.map(|original| original["started_at"].clone()).unwrap_or(Value::Null),
+                        "completed_at":original.map(|original| original["completed_at"].clone()).unwrap_or(Value::Null),
+                    })
                 }).collect::<Vec<_>>();
                 host.record_handoff_landing_history(
                     &context.handoff_id,

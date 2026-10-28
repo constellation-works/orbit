@@ -37,11 +37,12 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
 
     let LandingBudget {
         max_wait_seconds,
+        max_base_ci_cycles,
         poll_interval_seconds,
         started,
         deadline_ms,
     } = *budget;
-    let mut recovery = CheckRecovery::before(deadline_ms);
+    let mut recovery = CheckRecovery::before(deadline_ms, max_base_ci_cycles);
     let mut unreported = UnreportedChecks::new();
     let mut waited_seconds = 0_u64;
     let mut intent: Option<String> = None;
