@@ -242,7 +242,7 @@ def schema_facts(schema, path, facts):
             schema_facts(schema[key], f"{path}[{key}]", facts)
     for key in ("anyOf", "oneOf", "allOf"):
         branches = schema.get(key) or []
-        if key in ("anyOf", "oneOf") and isinstance(branches, list):
+        if key in schema and key in ("anyOf", "oneOf") and isinstance(branches, list):
             facts.setdefault("alternatives", {})[(path, key)] = branches
         for index, child in enumerate(branches):
             schema_facts(child, f"{path}{{{key}{index}}}", facts)
@@ -410,6 +410,12 @@ def alternative_path_map(before, after):
         if baseline in branch_content:
             parent, keyword, branch = branch_content[baseline]
             surviving_content.add((parent, keyword, json.dumps(branch, sort_keys=True)))
+    surviving_applicator_locations = {
+        remap_alternative_path(parent, path_map)
+        for parent, keyword in alternatives
+        if keyword in ("anyOf", "oneOf")
+        and not under_unmatched_alternative(parent, unmatched)
+    }
     removed = []
     for baseline in sorted(branch_content,
                            key=lambda path: (path.count("{"), path)):
@@ -417,6 +423,12 @@ def alternative_path_map(before, after):
         if baseline in matched_baseline:
             continue
         if under_unmatched_alternative(baseline, {path for path, _ in removed}):
+            continue
+        # Removing the whole anyOf/oneOf keyword relaxes the schema. It is not
+        # equivalent to removing a branch while an applicator still constrains
+        # the same location. Count either keyword here: replacing anyOf with
+        # oneOf (or vice versa) can still tighten the accepted schema.
+        if parent not in surviving_applicator_locations:
             continue
         # Deduping identical branches changes nothing for anyOf and only
         # admits input for oneOf, so an identical survivor keeps it additive.

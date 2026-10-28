@@ -687,6 +687,71 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                 self.assertEqual(report["bump"], "minor")
                 self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_removing_entire_input_mcp_applicator_is_additive(self):
+        # Both formerly accepted {id, view} inputs remain accepted; deleting
+        # the constraint also admits {id}-only inputs.
+        for keyword in ("anyOf", "oneOf"):
+            with self.subTest(keyword=keyword):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema[keyword] = [{"required": ["view"]}]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Require view through {keyword} [ORB-76] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema[keyword]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove whole {keyword} constraint [ORB-77] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(report["signals"], [])
+                self.assertEqual(report["bump"], "patch")
+                self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_removing_nested_input_mcp_applicator_is_additive(self):
+        tools = self.repo.mcp()
+        options = {
+            "type": "object",
+            "properties": {"view": {"type": "string"}},
+            "anyOf": [{"required": ["view"]}],
+        }
+        tools[0]["inputSchema"]["properties"]["options"] = options
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add nested anyOf constraint [ORB-78] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        del options["anyOf"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove nested anyOf constraint [ORB-79] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_replacing_input_mcp_applicator_still_reports_removed_branches(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["properties"]["mode"] = {"type": "string"}
+        schema["anyOf"] = [{"required": ["view"]}, {"required": ["mode"]}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add anyOf input constraints [ORB-80] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        schema["oneOf"] = schema.pop("anyOf")
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Replace anyOf with oneOf [ORB-81] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-81", "mcp-schema",
+             "`orbit_task_show` `inputSchema{anyOf0}` anyOf alternative removed"),
+            ("ORB-81", "mcp-schema",
+             "`orbit_task_show` `inputSchema{anyOf1}` anyOf alternative removed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
     def test_removed_output_mcp_alternative_decides_minor(self):
         # Output contracts get the same removal signal as input contracts.
         for keyword in ("anyOf", "oneOf"):
