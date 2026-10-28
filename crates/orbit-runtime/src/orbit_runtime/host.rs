@@ -289,7 +289,8 @@ impl RuntimeKernel {
 
     /// Every resource profile on this host, across its workspaces. Built from
     /// the stored delivery minutes and kept, across calls and clones, until a
-    /// sampled run finishes or the `[machine.auto_concurrency]` bounds change.
+    /// sampled run finishes, the `[machine.auto_concurrency]` bounds or the
+    /// crew-model map change, or a template's `no-diff-expected` tag is edited.
     pub fn resource_profiles(&self) -> Result<Arc<ProfileSet>, OrbitError> {
         let store = self.sqlite_store()?;
         let tasks = self.stores().tasks();
