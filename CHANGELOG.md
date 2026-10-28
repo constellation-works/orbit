@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.37.0 — 2026-10-28
+
+### Breaking Changes
+
+- **Ship sweep removed**: the `orbit run ship-sweep` command, the seeded ship-sweep routine and its job are gone, and `workflow.auto_ship` is deprecated and ignored.
+  Unattended dispatch → use `orbit run auto` drains or `orbit run ship`, and delete the key. ([ORB-19277])
+- **Regression severity**: `regression_from` links and review findings carry one five-level `severity` (nit to critical). Older binaries refuse the new field, so upgrade the owner and followers together. ([ORB-19304])
+- **Regression sites always recorded**: `workflow.regression_risk.record_sites` is deprecated and ignored, because `regression.sites` are now always kept.
+  Config that sets it → delete the key. ([ORB-19276])
+- **Store migrations**: opening a workspace applies SQLite v69 (`run_resource_minutes_freshness_index`) and v70 (`reopen_legacy_experiment_admissions`). Both are additive but change persisted storage, so upgrade hosts together. ([ORB-19463])
+
+### Highlights
+
+- **Size-based riskiness**: task regression risk is now fitted on footprint size (declared files before a diff exists, lines changed once one does), with the size-band evidence shown in place of driving files and a crew adjustment. ([ORB-19361])
+- **Experiments from the dashboard**: Analytics › Experiments can create, edit and start experiments, and `task.crew` now records the crew that actually ran, including experiment arms and provider-hold redraws. ([ORB-19368])
+- **Severity-weighted scorecards**: regressions and findings share one severity scale, and scorecards weight them by it. ([ORB-19304])
+- **Site-attributed hotspots**: Analytics › Codebase counts a regression against the files its recorded sites name instead of the whole footprint, and a file view lists its regressed symbols. ([ORB-19442])
+- **Steadier landing**: a failed check is rerun once before the candidate is blamed, and a handoff waits for the base fix after an inherited failure and reconciles PRs merged outside Orbit. ([ORB-19342])
+
 ## 0.36.0 — 2026-10-28
 
 ### Breaking Changes
