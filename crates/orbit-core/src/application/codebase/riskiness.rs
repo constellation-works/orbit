@@ -56,15 +56,14 @@ use crate::application::job::CodebaseDeliveryScan;
 
 /// Revision of the estimator below. Bump it whenever a change alters an
 /// estimate for the same facts. 2: size-based fit in place of the per-file
-/// maximum and the crew × complexity adjustment.
-pub const TASK_RISKINESS_ESTIMATOR_VERSION: u32 = 2;
+/// maximum and the crew × complexity adjustment. 3: nearby sizes keep their
+/// finite fit: scoring centers the log-size covariate and separation is a
+/// size threshold, not a parameter magnitude [ORB-19376].
+pub const TASK_RISKINESS_ESTIMATOR_VERSION: u32 = 3;
 /// Fisher-scoring iterations one fit may take before it is abandoned.
 const FIT_MAX_ITERATIONS: usize = 100;
 /// A fit has converged once a full step moves no parameter further.
 const FIT_TOLERANCE: f64 = 1e-9;
-/// A parameter past this magnitude means the sizes separate regressed from
-/// clean tasks: the likelihood has no finite optimum.
-const FIT_MAX_PARAMETER: f64 = 50.0;
 /// Review-candidate diffs one process remembers before starting over.
 const CANDIDATE_CACHE_LIMIT: usize = 4_096;
 
@@ -561,12 +560,45 @@ fn fit_step(points: &[(f64, bool)], a: f64, b: f64) -> FitStep {
     step
 }
 
+/// Whether a size threshold separates regressed from clean tasks. The
+/// complementary log-log likelihood then grows without bound along the
+/// separating direction, so no finite optimum exists. Splits run only
+/// between distinct sizes: one size carrying both outcomes never separates.
+fn sizes_separate_outcomes(points: &[(u64, bool)]) -> bool {
+    let mut sorted = points.to_vec();
+    sorted.sort_unstable_by_key(|(size, _)| *size);
+    let total_regressed = sorted.iter().filter(|(_, regressed)| *regressed).count();
+    let mut regressed_below = 0;
+    let mut clean_below = 0;
+    for (index, (size, regressed)) in sorted.iter().enumerate() {
+        regressed_below += usize::from(*regressed);
+        clean_below += usize::from(!*regressed);
+        if sorted.get(index + 1).is_some_and(|next| next.0 == *size) {
+            continue;
+        }
+        let regressed_above = total_regressed - regressed_below;
+        let clean_above = (sorted.len() - regressed_below - clean_below) - regressed_above;
+        let clean_below_split = regressed_below == 0 && clean_above == 0;
+        let regressed_below_split = clean_below == 0 && regressed_above == 0;
+        if clean_below_split || regressed_below_split {
+            return true;
+        }
+    }
+    false
+}
+
 /// Fit `p = 1 - exp(-exp(a + b·ln(1 + size)))` by maximum likelihood.
 /// `None` below `min_support` observations, without both outcomes, or when
-/// the optimum is not finite.
+/// the optimum is not finite: a size threshold separating regressed from
+/// clean tasks, a singular Fisher information, or no convergence within
+/// `FIT_MAX_ITERATIONS`.
+///
+/// Fisher scoring runs on the mean-centered covariate, so nearby sizes fit
+/// their steep but finite slope without diverging working parameters; the
+/// reported intercept and slope stay in `ln(1 + size)` units.
 fn fit_size_model(points: &[(u64, bool)], min_support: usize) -> Option<RiskinessFit> {
     let observations = points.len();
-    let regressed = points.iter().filter(|(_, flag)| *flag).count();
+    let regressed = points.iter().filter(|(_, regressed)| *regressed).count();
     if observations < min_support.max(1) || regressed == 0 || regressed == observations {
         return None;
     }
@@ -582,12 +614,23 @@ fn fit_size_model(points: &[(u64, bool)], min_support: usize) -> Option<Riskines
     if points.iter().all(|(size, _)| Some(*size) == first) {
         return Some(fit(intercept_only, 0.0));
     }
-    let points: Vec<(f64, bool)> = points
+    if sizes_separate_outcomes(points) {
+        return None;
+    }
+    let mut centered: Vec<(f64, bool)> = points
         .iter()
-        .map(|(size, flag)| (size_covariate(*size), *flag))
+        .map(|(size, regressed)| (size_covariate(*size), *regressed))
         .collect();
-    let (mut a, mut b) = (intercept_only, 0.0);
-    let mut current = fit_step(&points, a, b);
+    let mean = centered
+        .iter()
+        .map(|(covariate, _)| *covariate)
+        .sum::<f64>()
+        / centered.len() as f64;
+    for (covariate, _) in &mut centered {
+        *covariate -= mean;
+    }
+    let (mut center, mut slope) = (intercept_only, 0.0);
+    let mut current = fit_step(&centered, center, slope);
     for _ in 0..FIT_MAX_ITERATIONS {
         let [i_aa, i_ab, i_bb] = current.information;
         let determinant = i_aa * i_bb - i_ab * i_ab;
@@ -595,25 +638,34 @@ fn fit_size_model(points: &[(u64, bool)], min_support: usize) -> Option<Riskines
             return None;
         }
         let [s_a, s_b] = current.score;
-        let delta_a = (i_bb * s_a - i_ab * s_b) / determinant;
-        let delta_b = (i_aa * s_b - i_ab * s_a) / determinant;
-        let mut length = 1.0;
-        let mut next = fit_step(&points, a + delta_a, b + delta_b);
-        while next.log_likelihood < current.log_likelihood && length > 1e-9 {
-            length /= 2.0;
-            next = fit_step(&points, a + length * delta_a, b + length * delta_b);
-        }
-        a += length * delta_a;
-        b += length * delta_b;
-        current = next;
-        if !(a.is_finite() && b.is_finite())
-            || a.abs() > FIT_MAX_PARAMETER
-            || b.abs() > FIT_MAX_PARAMETER
-        {
+        let delta_center = (i_bb * s_a - i_ab * s_b) / determinant;
+        let delta_slope = (i_aa * s_b - i_ab * s_a) / determinant;
+        if !delta_center.is_finite() || !delta_slope.is_finite() {
             return None;
         }
-        if (length * delta_a).abs().max((length * delta_b).abs()) < FIT_TOLERANCE {
-            return Some(fit(a, b));
+        let mut length = 1.0;
+        let mut next = fit_step(&centered, center + delta_center, slope + delta_slope);
+        while next.log_likelihood < current.log_likelihood && length > 1e-9 {
+            length /= 2.0;
+            next = fit_step(
+                &centered,
+                center + length * delta_center,
+                slope + length * delta_slope,
+            );
+        }
+        center += length * delta_center;
+        slope += length * delta_slope;
+        current = next;
+        if !(center.is_finite() && slope.is_finite()) {
+            return None;
+        }
+        if (length * delta_center)
+            .abs()
+            .max((length * delta_slope).abs())
+            < FIT_TOLERANCE
+        {
+            let intercept = center - slope * mean;
+            return intercept.is_finite().then(|| fit(intercept, slope));
         }
     }
     None

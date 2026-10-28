@@ -2005,7 +2005,7 @@ analytics_test!(
         // (3 of 6). Two sizes fit each group's rate exactly.
         let server = fixture.server(false);
         let risky = riskiness(&server, &backlog_wide);
-        assert_eq!(risky["estimator_version"], 2);
+        assert_eq!(risky["estimator_version"], 3);
         assert_eq!(risky["state"], "estimated", "{risky}");
         assert_eq!(risky["basis"], "declared_files");
         assert_eq!(risky["basis_fallback"], Value::Null);
@@ -2069,6 +2069,187 @@ analytics_test!(
             riskiness(&server, &large[0])["basis_fallback"],
             "diff_history_insufficient"
         );
+    }
+);
+
+// [ORB-19376] Nearby sizes need a steep but finite slope: ten done tasks of
+// 10 declared files (1 regressed) and ten of 11 (5 regressed) estimate 0.1
+// and 0.5 instead of reporting insufficient_history. The diff-lines basis
+// fits the same rates through landed rows of 10 and 11 lines.
+analytics_test!(
+    task_riskiness_keeps_finite_fit_for_nearby_sizes,
+    |fixture| {
+        const TEN: [&str; 10] = [
+            "src/near00.rs",
+            "src/near01.rs",
+            "src/near02.rs",
+            "src/near03.rs",
+            "src/near04.rs",
+            "src/near05.rs",
+            "src/near06.rs",
+            "src/near07.rs",
+            "src/near08.rs",
+            "src/near09.rs",
+        ];
+        const ELEVEN: [&str; 11] = [
+            "src/near00.rs",
+            "src/near01.rs",
+            "src/near02.rs",
+            "src/near03.rs",
+            "src/near04.rs",
+            "src/near05.rs",
+            "src/near06.rs",
+            "src/near07.rs",
+            "src/near08.rs",
+            "src/near09.rs",
+            "src/near10.rs",
+        ];
+        let mut small = Vec::new();
+        let mut large = Vec::new();
+        for index in 0..10 {
+            small.push(done(&fixture, &format!("nearby small {index}"), &TEN));
+            large.push(done(&fixture, &format!("nearby large {index}"), &ELEVEN));
+        }
+        add(
+            &fixture,
+            "fix nearby small",
+            &["src/near_fix.rs"],
+            regression_from(&small[0]),
+        );
+        for (index, target) in large.iter().take(5).enumerate() {
+            add(
+                &fixture,
+                &format!("fix nearby large {index}"),
+                &["src/near_fix.rs"],
+                regression_from(target),
+            );
+        }
+        // The declared fit sees sizes 10 and 11; the diff fit sees landed
+        // rows of 10 and 11 lines on the same tasks.
+        for (index, id) in small.iter().enumerate() {
+            landed_row(&fixture, id, index, 10);
+        }
+        for (index, id) in large.iter().enumerate() {
+            landed_row(&fixture, id, 100 + index, 11);
+        }
+        let probe_ten = add(&fixture, "probe ten files", &TEN, vec![]);
+        let probe_eleven = add(&fixture, "probe eleven files", &ELEVEN, vec![]);
+
+        let riskiness = |server: &super::support::Server, id: &str| {
+            let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
+            rows["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["id"] == id)
+                .map(|row| row["riskiness"].clone())
+                .unwrap()
+        };
+        let close = |value: &Value, expected: f64| {
+            let actual = value["probability"].as_f64().unwrap();
+            assert!((actual - expected).abs() < 1e-6, "{expected}: {value}");
+        };
+
+        let server = fixture.server(false);
+        let ten = riskiness(&server, &probe_ten);
+        assert_eq!(ten["state"], "estimated", "{ten}");
+        assert_eq!(ten["estimator_version"], 3);
+        assert_eq!(ten["basis"], "declared_files");
+        assert_eq!(ten["size"], 10);
+        close(&ten, 0.1);
+        assert_eq!(ten["size_band"]["tasks"], 20);
+        assert_eq!(ten["size_band"]["regressed"], 6);
+        assert_eq!(ten["fit"]["observations"], 20);
+        assert_eq!(ten["fit"]["regressed"], 6);
+        // The reported fit stays in ln(1 + size) units: the saturated
+        // two-size model reproduces both group rates exactly.
+        let slope = ten["fit"]["slope"].as_f64().unwrap();
+        assert!((slope - 21.650667670220933).abs() < 1e-6, "{ten}");
+        let intercept = ten["fit"]["intercept"].as_f64().unwrap();
+        assert!((intercept + 54.16640098666374).abs() < 1e-6, "{ten}");
+
+        let eleven = riskiness(&server, &probe_eleven);
+        assert_eq!(eleven["state"], "estimated", "{eleven}");
+        assert_eq!(eleven["basis"], "declared_files");
+        assert_eq!(eleven["size"], 11);
+        close(&eleven, 0.5);
+        assert_eq!(eleven["size_band"]["tasks"], 10);
+        assert_eq!(eleven["size_band"]["regressed"], 5);
+
+        let landed = riskiness(&server, &small[1]);
+        assert_eq!(landed["basis"], "diff_lines", "{landed}");
+        assert_eq!(landed["size"], 10);
+        close(&landed, 0.1);
+        assert_eq!(landed["fit"]["observations"], 20);
+        assert_eq!(landed["fit"]["regressed"], 6);
+        assert_eq!(landed["size_band"]["tasks"], 20);
+        assert_eq!(landed["size_band"]["regressed"], 6);
+    }
+);
+
+// [ORB-19376] Genuinely separated sizes still report no estimate: ten clean
+// tasks of 10 files and ten regressed tasks of 11 files have no finite fit.
+analytics_test!(
+    task_riskiness_reports_no_estimate_when_sizes_separate_outcomes,
+    |fixture| {
+        const TEN: [&str; 10] = [
+            "src/near00.rs",
+            "src/near01.rs",
+            "src/near02.rs",
+            "src/near03.rs",
+            "src/near04.rs",
+            "src/near05.rs",
+            "src/near06.rs",
+            "src/near07.rs",
+            "src/near08.rs",
+            "src/near09.rs",
+        ];
+        const ELEVEN: [&str; 11] = [
+            "src/near00.rs",
+            "src/near01.rs",
+            "src/near02.rs",
+            "src/near03.rs",
+            "src/near04.rs",
+            "src/near05.rs",
+            "src/near06.rs",
+            "src/near07.rs",
+            "src/near08.rs",
+            "src/near09.rs",
+            "src/near10.rs",
+        ];
+        let mut unregressed = Vec::new();
+        let mut large = Vec::new();
+        for index in 0..10 {
+            unregressed.push(done(&fixture, &format!("split small {index}"), &TEN));
+            large.push(done(&fixture, &format!("split large {index}"), &ELEVEN));
+        }
+        assert_eq!(unregressed.len(), 10);
+        for (index, target) in large.iter().enumerate() {
+            add(
+                &fixture,
+                &format!("fix split large {index}"),
+                &["src/near_fix.rs"],
+                regression_from(target),
+            );
+        }
+        let probe = add(&fixture, "probe ten files", &TEN, vec![]);
+
+        let server = fixture.server(false);
+        let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
+        let risky = rows["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["id"] == probe)
+            .map(|row| row["riskiness"].clone())
+            .unwrap();
+        assert_eq!(risky["estimator_version"], 3);
+        assert_eq!(risky["state"], "insufficient_history", "{risky}");
+        assert_eq!(risky["probability"], Value::Null);
+        assert_eq!(risky["basis"], "declared_files");
+        assert_eq!(risky["size"], 10);
+        assert_eq!(risky["fit"], Value::Null);
+        assert_eq!(risky["size_band"], Value::Null);
     }
 );
 

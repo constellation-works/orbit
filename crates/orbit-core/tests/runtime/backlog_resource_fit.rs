@@ -203,8 +203,8 @@ fn heavy_profiles_drain_with_less_parallelism_at_the_same_ceiling() {
     // one fits only on an idle host.
     let heavy = Fixture::new(5.0).forecast("enforce");
     let light = Fixture::new(0.5).forecast("enforce");
-    // Resource fit landed at model 6. Model 12 keeps that factor.
-    assert_eq!(heavy["model_version"], 12);
+    // Resource fit landed at model 6. Model 13 keeps that factor.
+    assert_eq!(heavy["model_version"], 13);
     assert_eq!(heavy["inputs"]["admission_factors"]["resource_fit"], 1);
     for forecast in [&heavy, &light] {
         let fit = &forecast["inputs"]["resource_fit"];
