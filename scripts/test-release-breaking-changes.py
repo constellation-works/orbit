@@ -300,6 +300,59 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["next_version"], "0.35.1")
 
+    def test_quoted_serde_examples_do_not_hide_persisted_fields(self):
+        additions = (
+            '    #[doc = "Persisted field; unlike #[serde(skip)], it is on disk."]\n'
+            "    pub documented_skip: Option<String>,\n"
+            '    #[doc = "Persisted field; unlike #[serde(skip_serializing)], it is on disk."]\n'
+            "    pub documented_skip_serializing: Option<String>,\n"
+            '    #[serde(rename = "#[serde(skip)]")]\n'
+            "    pub renamed_example: Option<String>,\n"
+        )
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n" + additions)
+        self.repo.commit("feat: Add persisted task envelope fields [ORB-2]")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+        self.assertEqual(self.signals(report), {
+            ("ORB-2", "persisted-field",
+             "field `documented_skip` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+            ("ORB-2", "persisted-field",
+             "field `documented_skip_serializing` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+            ("ORB-2", "persisted-field",
+             "field `renamed_example` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+        })
+
+    def test_rustfmt_normalized_quoted_serde_examples_decide_minor(self):
+        additions = (
+            '    #[doc = "Persisted field; unlike #[serde(skip)], it is on disk."]\n'
+            "    pub documented_skip: Option<String>,\n"
+            '    #[doc = "Persisted field; unlike #[serde(skip_serializing)], it is on disk."]\n'
+            "    pub documented_skip_serializing: Option<String>,\n"
+        )
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n" + additions)
+        source = self.repo.root / TYPES
+        formatted = subprocess.run(
+            ["rustfmt", "--edition", "2021", str(source)], capture_output=True,
+            text=True, timeout=self_test_hang.HANG_CEILING_SECONDS)
+        self.assertEqual(formatted.returncode, 0, formatted.stderr)
+        self.repo.commit("feat: Add documented persisted fields [ORB-3]")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+        self.assertEqual(self.signals(report), {
+            ("ORB-3", "persisted-field",
+             "field `documented_skip` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+            ("ORB-3", "persisted-field",
+             "field `documented_skip_serializing` added to deny_unknown_fields type `TaskEnvelopeV2`"),
+        })
+
     def test_additive_changes_decide_patch(self):
         # New optional field on a type without deny_unknown_fields.
         self.repo.replace(TYPES, "pub struct TaskRow {\n    pub id: String,\n",

@@ -339,7 +339,44 @@ def deny_unknown_types(text):
         return {}
 
     def field_is_skipped(attributes):
-        for match in re.finditer(r"#\s*\[\s*serde\s*\(", attributes):
+        # Mask Rust string literals before looking for serde attributes so a
+        # doc or rename value containing an attribute example stays text.
+        outside_strings = list(attributes)
+        raw_string_prefix = re.compile(r'(?:br|r)(?P<hashes>#*)"')
+        index = 0
+        while index < len(attributes):
+            raw_string = raw_string_prefix.match(attributes, index)
+            if raw_string:
+                closing = '"' + raw_string.group("hashes")
+                end = attributes.find(closing, raw_string.end())
+                end = len(attributes) if end < 0 else end + len(closing)
+                for position in range(index, end):
+                    if attributes[position] != "\n":
+                        outside_strings[position] = " "
+                index = end
+                continue
+            if attributes[index] == '"':
+                end = index + 1
+                escaped = False
+                while end < len(attributes):
+                    char = attributes[end]
+                    end += 1
+                    if escaped:
+                        escaped = False
+                    elif char == "\\":
+                        escaped = True
+                    elif char == '"':
+                        break
+                for position in range(index, end):
+                    if attributes[position] != "\n":
+                        outside_strings[position] = " "
+                index = end
+                continue
+            index += 1
+
+        attribute_text = "".join(outside_strings)
+        serde_attribute = re.compile(r"(?m)^[ \t]*#\s*\[\s*serde\s*\(")
+        for match in serde_attribute.finditer(attribute_text):
             arguments, argument, depth = [], [], 1
             index = match.end()
             in_string = escaped = False
