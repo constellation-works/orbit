@@ -93,8 +93,10 @@ it: a tagged root with no `context_files` of its own is withheld while a descend
 **Landing.** An owner-side consumer verifies the pinned candidate and merges only with recorded
 completion authority, then verifies actual merge evidence before marking the task done. This
 consumer is live, triggered by accepted authorized handoffs or explicit owner approval.
-Ship-sweep routines, their wrapper, and the separate CLI remain available alongside explicit drains;
-every entry point uses the same claim admission. No schedule is enabled by this design.
+The ship sweep is retired: its routine, wrapper and separate CLI were removed, and a leftover
+routine loads as retired and never fires. Owner dispatch is an `orbit run auto` drain or an
+explicit `orbit run ship`; every entry point uses the same claim admission. No schedule is
+enabled by this design.
 
 ## 3. At a Glance
 

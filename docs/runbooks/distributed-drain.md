@@ -1363,8 +1363,8 @@ temporarily. Owner/local drains continue counting all in-flight children
 against their ceiling. `orbit run show <run-id>` counts the `Claimed leaves:` it
 carries by stage (`.claimed_leaves[].stage`), and so does the dashboard's run
 page. Review rebuilds still compete for repository build-budget slots. `--for`
-is at most 24 hours. Ship-sweep
-enablement is unchanged by any of this.
+is at most 24 hours. The ship sweep is
+retired (see Retired ship-sweep below), and nothing in this section brings it back.
 
 To close the feature entirely, set `DISTRIBUTED_MUTATION_ENTRY_POINTS_ENABLED`
 to `false` in `orbit-core` and rebuild: it is a source constant, not
