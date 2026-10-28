@@ -137,6 +137,12 @@ pub trait TaskStoreBackend: Send + Sync {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         Err(OrbitError::Store("claim inspection unavailable".into()))
     }
+    /// Read-only logical storage diagnostic for admission and mutation receipts.
+    fn inspect_admission_receipt_storage(
+        &self,
+    ) -> Result<crate::contracts::AdmissionReceiptStorage, OrbitError> {
+        Err(OrbitError::Store("receipt inspection unavailable".into()))
+    }
     /// Repairing claim read: settles an interrupted commit before reading.
     /// Unavailable backends fail closed.
     fn resolve_execution_claims(

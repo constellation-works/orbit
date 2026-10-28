@@ -68,13 +68,6 @@ impl OrbitRuntime {
         self.ensure_coordination_task_write_permitted()?;
         let (claim, accepted) = self.landing_claim(&update.handoff_id)?;
         let mut context = self.landing_invocation(&claim);
-        if matches!(
-            update.step,
-            HandoffLandingStep::PublishIntent { .. } | HandoffLandingStep::Complete
-        ) {
-            context =
-                context.with_handoff_observation(self.landing_observation(update, &accepted)?);
-        }
         let attempt = self
             .landing_attempt(&update.handoff_id)?
             .ok_or_else(|| missing_attempt(&update.handoff_id))?
@@ -162,6 +155,19 @@ impl OrbitRuntime {
                 },
             ),
         };
+        // Settled claims can only replay a recorded mutation: the store checks
+        // its receipt before refusing fresh mutations as stale. Let that check
+        // run without re-observing a NoDiff admission receipt, which may already
+        // be compacted. Unsettled claims still need the full authority recheck.
+        if claim.claim.phase.is_unsettled()
+            && matches!(
+                update.step,
+                HandoffLandingStep::PublishIntent { .. } | HandoffLandingStep::Complete
+            )
+        {
+            context =
+                context.with_handoff_observation(self.landing_observation(update, &accepted)?);
+        }
         self.stores()
             .tasks()
             .mutate_execution_claim(Some(&context), &mutation_id, &mutation)?;
