@@ -171,6 +171,11 @@ pub struct InvocationSpend {
     /// The provider-reported cost; `None` when the invocation recorded none
     /// or a negative or non-finite one.
     pub provider_cost_usd: Option<f64>,
+    /// Token cost from the shared versioned model-price table; `None` when
+    /// the model, timestamp or token split cannot be priced, or the result
+    /// is negative or non-finite. Independent of the provider-reported cost.
+    #[serde(default)]
+    pub derived_cost_usd: Option<f64>,
     /// As [`NormalizedTokenSummary::normalized_token_total`]; `None` when the
     /// model is missing or not covered by the normalization.
     pub normalized_tokens: Option<u64>,

@@ -320,7 +320,7 @@ fn enroll_primary_sample(
     arm_name: &str,
     complexity: TaskComplexity,
     tokens: Option<u64>,
-) {
+) -> String {
     let task = runtime
         .add_task(TaskAddParams {
             title: format!("primary sample for {arm_name}"),
@@ -372,4 +372,144 @@ fn enroll_primary_sample(
             .unwrap();
         runtime.archive_task(&task.id).unwrap();
     }
+    task.id.to_string()
+}
+
+#[test]
+fn cost_readout_excludes_partial_sums_and_identifies_estimated_tasks() {
+    if !super::dispatch_admission::isolated(
+        "experiment_readout::cost_readout_excludes_partial_sums_and_identifies_estimated_tasks",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "readout-test".into(),
+        reason: None,
+    };
+    let experiment = runtime
+        .create_experiment(
+            "cost-coverage",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("cost_usd".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+
+    let priced = (Some("gpt-6.1-sol"), None, 1_000_000, 0);
+    let reported = (Some("gpt-6.1-sol"), Some(5.0), 1_000_000, 0);
+    let zero = (None, Some(0.0), 0, 0);
+    let unpriced = (Some("unpriced-test-model"), None, 1_000_000, 0);
+    let invalid_basis = (Some("gpt-6.1-sol"), None, 100, 200);
+    let cases = [
+        (vec![reported], true),
+        (vec![zero], true),
+        (vec![priced], true),
+        (vec![reported, priced], true),
+        (vec![reported, unpriced], true),
+        (vec![unpriced], true),
+        (vec![reported, invalid_basis], true),
+        (vec![], true),
+        (vec![reported], false),
+    ];
+    for arm in ["control", "treatment"] {
+        for (invocations, terminal) in &cases {
+            let task_id =
+                enroll_primary_sample(&runtime, &experiment.id, arm, TaskComplexity::Low, None);
+            for (index, (model, cost, input, cache_read)) in invocations.iter().enumerate() {
+                runtime
+                    .insert_invocation_trace_record(&InvocationInsertParams {
+                        job_run_id: format!("fixture-{task_id}-{index}"),
+                        account: None,
+                        activity_id: if index == 0 {
+                            "agent_implement"
+                        } else {
+                            "review"
+                        }
+                        .into(),
+                        agent: "codex".into(),
+                        provider: None,
+                        model: model.map(str::to_string),
+                        task_ids: vec![task_id.clone()],
+                        trace: InvocationTrace {
+                            usage: TokenUsage {
+                                input: *input,
+                                cache_read: *cache_read,
+                                ..TokenUsage::default()
+                            },
+                            provider_cost_usd: *cost,
+                            ..InvocationTrace::default()
+                        },
+                    })
+                    .unwrap();
+            }
+            if *terminal {
+                runtime.archive_task(&task_id).unwrap();
+            }
+        }
+    }
+
+    let readout = runtime.experiment_readout(&experiment.id, None).unwrap();
+    let metric = readout
+        .metrics
+        .iter()
+        .find(|metric| metric.metric == "cost_usd")
+        .unwrap();
+    let derived = orbit_common::derive_cost_usd(
+        "gpt-6.1-sol",
+        Utc::now(),
+        &TokenUsage {
+            input: 1_000_000,
+            ..TokenUsage::default()
+        },
+    )
+    .unwrap();
+    assert!(derived > 0.0);
+    for arm in &metric.arms {
+        assert_eq!(
+            arm.estimate.n, 4,
+            "partial provider sums must never be measured"
+        );
+        assert_eq!(arm.unmeasured, 4);
+        assert_eq!(arm.open, 1);
+        assert_eq!(arm.estimate.mean, Some((10.0 + 2.0 * derived) / 4.0));
+        let payload = serde_json::to_value(arm).unwrap();
+        assert_eq!(
+            payload["cost_coverage"],
+            json!({"reported": 2, "estimated": 2, "unmeasured": 4})
+        );
+    }
+    assert_eq!(readout.primary_observations.len(), 8);
+    assert!(
+        readout
+            .metrics
+            .iter()
+            .filter(|metric| metric.metric != "cost_usd")
+            .all(|metric| serde_json::to_value(&metric.arms)
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|arm| arm.get("cost_coverage").is_none()))
+    );
 }

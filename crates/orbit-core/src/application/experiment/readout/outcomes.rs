@@ -176,7 +176,15 @@ pub(super) struct TaskOutcome {
     pub(super) terminal: bool,
     pub(super) assigned_at: DateTime<Utc>,
     pub(super) assignment_digest: Option<String>,
+    /// Present only for settled tasks with complete invocation cost coverage.
+    pub(super) cost_source: Option<CostSource>,
     pub(super) values: BTreeMap<&'static str, Outcome>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum CostSource {
+    Reported,
+    Estimated,
 }
 
 /// What the records say about the enrolled tasks.
@@ -198,7 +206,15 @@ struct RunEvents {
 #[derive(Default)]
 struct Spend {
     cost: Option<f64>,
+    estimated: bool,
+    unpriced: bool,
     implement_ms: Option<u64>,
+}
+
+impl Spend {
+    fn complete_cost(&self) -> Option<f64> {
+        self.cost.filter(|cost| !self.unpriced && cost.is_finite())
+    }
 }
 
 /// The head and blocker an out-of-run auto-fix start names.
@@ -417,7 +433,17 @@ impl OrbitRuntime {
                 "total_tokens",
                 settled(covered(task_tokens.map(|totals| &totals.all))),
             );
-            values.insert("cost_usd", settled(task_spend.and_then(|spend| spend.cost)));
+            let cost = task_spend.and_then(Spend::complete_cost);
+            values.insert("cost_usd", settled(cost));
+            let cost_source = task_spend
+                .filter(|_| terminal && cost.is_some())
+                .map(|spend| {
+                    if spend.estimated {
+                        CostSource::Estimated
+                    } else {
+                        CostSource::Reported
+                    }
+                });
             values.insert(
                 "lead_time",
                 settled(landed.map(|at| (*at - task.created_at).num_seconds() as f64 / 3_600.0)),
@@ -484,6 +510,7 @@ impl OrbitRuntime {
                 terminal,
                 assigned_at: row.assigned_at,
                 assignment_digest: row.digest.clone(),
+                cost_source,
                 values,
             });
         }
@@ -494,9 +521,10 @@ impl OrbitRuntime {
         })
     }
 
-    /// Provider cost over every linked invocation, and implement wall time,
-    /// per task. An invocation linked to several tasks counts in full toward
-    /// each, as the token series counts it.
+    /// Cost over every linked invocation (provider-reported first, then the
+    /// shared table-derived estimate), and implement wall time, per task.
+    /// Any unpriced invocation makes the task's cost unmeasured. An invocation
+    /// linked to several tasks counts in full toward each, as tokens do.
     fn task_spend(
         &self,
         ids: &BTreeSet<String>,
@@ -505,8 +533,12 @@ impl OrbitRuntime {
         let mut spend: BTreeMap<String, Spend> = BTreeMap::new();
         for invocation in self.invocation_spend(Some(since))? {
             for id in invocation.task_ids.iter().filter(|id| ids.contains(*id)) {
-                if let Some(cost) = invocation.provider_cost_usd {
-                    *spend.entry(id.clone()).or_default().cost.get_or_insert(0.0) += cost;
+                let task = spend.entry(id.clone()).or_default();
+                if let Some(cost) = invocation.provider_cost_usd.or(invocation.derived_cost_usd) {
+                    *task.cost.get_or_insert(0.0) += cost;
+                    task.estimated |= invocation.provider_cost_usd.is_none();
+                } else {
+                    task.unpriced = true;
                 }
             }
         }
