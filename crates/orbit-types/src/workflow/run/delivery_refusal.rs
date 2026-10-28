@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// A deliberate completion or landing refusal. Only the raising boundary
+/// A deliberate delivery refusal that parks a run. Only the raising boundary
 /// assigns these values; diagnostic text alone never establishes a hold.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -36,6 +36,10 @@ pub enum DeliveryRefusal {
     /// retry. Nothing changed on the forge; the task stays in review and the
     /// held run resumes its completion once the forge answers.
     ForgeObservationUnavailable,
+    /// The origin could not be reached while a task was still being admitted
+    /// through `worktree_setup`. The task remains in backlog for a later
+    /// admission after transport recovers.
+    OriginUnavailable,
 }
 
 impl DeliveryRefusal {
@@ -55,6 +59,7 @@ impl DeliveryRefusal {
             Self::CompletionBudgetExpired => "delivery_completion_budget_expired",
             Self::CheckEvidenceInconclusive => "delivery_check_evidence_inconclusive",
             Self::ForgeObservationUnavailable => "delivery_forge_observation_unavailable",
+            Self::OriginUnavailable => "delivery_origin_unavailable",
         }
     }
 
@@ -74,6 +79,7 @@ impl DeliveryRefusal {
             "delivery_completion_budget_expired" => Some(Self::CompletionBudgetExpired),
             "delivery_check_evidence_inconclusive" => Some(Self::CheckEvidenceInconclusive),
             "delivery_forge_observation_unavailable" => Some(Self::ForgeObservationUnavailable),
+            "delivery_origin_unavailable" => Some(Self::OriginUnavailable),
             _ => None,
         }
     }

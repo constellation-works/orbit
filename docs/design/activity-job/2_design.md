@@ -259,9 +259,14 @@ Seeded direct shipment workflows (`task_local_pipeline` and `task_pr_pipeline`) 
 
 Typed `DeliveryRefusal` decisions cross the engine/common/core error boundary
 without being flattened into message text. `HeldFailure` classifies their
-stable diagnostic codes, so completion and landing stop `held` and the gate
-and auto success guards pass them. The named outcomes and exclusions are in
-[completion and landing refusals](../../CONFIG.md#completion-and-landing-refusals-are-held).
+stable diagnostic codes, so delivery steps stop `held` and the gate and auto
+success guards pass them. `delivery_origin_unavailable` is raised only by the
+pre-admission `worktree_setup` boundary: a bounded transport fetch failure, or
+a fetch-lock timeout followed by a bounded origin probe that confirms
+transport unavailability. The task remains in backlog, and authentication,
+permission and missing-ref failures keep their ordinary failure behavior. The
+named outcomes and exclusions are in
+[delivery refusals](../../CONFIG.md#delivery-refusals-are-held).
 The existing action records remain authoritative for task and repair state;
 these decisions bypass retry, recovery and the terminal failure handoff.
 

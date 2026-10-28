@@ -14,7 +14,7 @@ use crate::executor::automation::input::input_string_field;
 use super::super::git::{
     GitOutcome, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
     git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
-    normalize_base_branch, resolve_worktree_start_point, timeout_recovery_error,
+    normalize_base_branch, resolve_worktree_start_point_for_admission, timeout_recovery_error,
 };
 use super::cleanup::remove_worktree;
 use super::dependency_delivery::{
@@ -63,7 +63,7 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     let repo_root_str = host.repo_root()?;
     let repo_root = Path::new(&repo_root_str);
 
-    let start_point = resolve_worktree_start_point(repo_root, &base, base_sync_mode)?;
+    let start_point = resolve_worktree_start_point_for_admission(repo_root, &base, base_sync_mode)?;
     // ORB-10380: `start_point` is a moving name (`origin/<base>`) shared by every
     // worktree off this `.git`; a sibling run's fetch or a merge can move it
     // mid-run. Resolve it exactly once here and hand the resulting commit id to

@@ -80,6 +80,8 @@ mod held_child_guard;
 mod local_provider_holds;
 #[cfg(target_os = "linux")]
 mod muse_state_grant;
+#[cfg(unix)]
+mod origin_fetch_hold;
 mod rebase_recovery_attempts;
 mod relation_auto_close;
 mod resume_ownership;
