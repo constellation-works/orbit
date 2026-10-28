@@ -120,10 +120,13 @@ impl OrbitRuntime {
         )
     }
 
-    /// Operator-only tool entrypoint: force an unassigned task into a running
-    /// arm. Existing assignments and exclusions are never overwritten. A
-    /// task with an explicit crew may be forced into a crew arm; the arm's
-    /// crew then runs and is written back to the task at admission.
+    /// Operator-only tool entrypoint: force a nonterminal task without an arm
+    /// assignment into a running arm. An `explicit_crew` exclusion for this
+    /// experiment yields to the force; an existing arm assignment or another
+    /// exclusion for it remains sticky, and overlapping surfaces owned by
+    /// another experiment are refused. A task with an explicit crew may be
+    /// forced into a crew arm; the arm's crew then runs and is written back to
+    /// the task at admission.
     pub fn force_experiment_assignment(
         &self,
         id: &str,
