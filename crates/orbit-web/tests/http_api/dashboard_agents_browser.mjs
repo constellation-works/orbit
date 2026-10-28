@@ -15,7 +15,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
-import { implementerCard } from './agents_implementers_fixture.mjs';
+import { implementerCard, implementerMatrix } from './agents_implementers_fixture.mjs';
 import { pilotCard } from './agents_pilots_fixture.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
@@ -35,7 +35,6 @@ const TERMS = {
     ['review_rejects', 'Review rejects', -1, 'problem', 'reject verdicts on the row\'s candidates.'],
     ['reviewer_repairs', 'Reviewer repairs', -0.5, 'problem', 'accept_with_fixes verdicts on the row\'s candidates.'],
     ['crew_rework', 'Crew-caused rework', -1, 'problem', 'Rework with cause crew.'],
-    ['escaped_regressions', 'Escaped regressions', -2, 'problem', 'Regressions with escape no_test.'],
   ],
   reviewers: [
     ['findings_held', 'Findings that held', 1, 'credit', 'Findings repaired by the reviewer and validated, open findings on a reject whose cited path the next run changed, and CONFIRMED review-job findings; each weighted by severity: critical 8, high 4, medium 2, low 1.'],
@@ -100,6 +99,7 @@ for (const row of REVIEWER_ROWS) row.score = Math.round(Math.min(row.raw, (row.u
 REVIEWER_ROWS.filter(row => !row.below_support).sort((a, b) => b.score - a.score).forEach((row, index) => { row.rank = index + 1; });
 let computedAt = '2026-10-19T08:00:00.000Z';
 const requests = [];
+let matrixUnavailable = false;
 const scorecardWindows = [];
 
 function header(role, url) {
@@ -133,6 +133,7 @@ function attribution(url) {
 }
 
 function payloadFor(url) {
+  if (url.pathname === '/api/agents/implementers/by-type') return { ...implementerMatrix(), requested_window: url.searchParams.get('window') };
   const agents = url.pathname.match(/^\/api\/agents\/(\w+)\/(scorecard|detail)$/);
   if (agents) {
     requests.push(`${agents[1]}/${agents[2]}${agents[2] === 'detail' ? `:${url.searchParams.get('crew')}` : ''}`);
@@ -153,6 +154,7 @@ function payloadFor(url) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://fixture');
   if (url.pathname === '/api/log/stream') { res.writeHead(204); res.end(); return; }
+  if (url.pathname === '/api/agents/implementers/by-type' && matrixUnavailable) { res.writeHead(503); res.end('{}'); return; }
   if (url.pathname.startsWith('/api/')) {
     res.setHeader('content-type', 'application/json');
     res.end(JSON.stringify(payloadFor(url)));
@@ -375,10 +377,28 @@ try {
   assert.ok(!implementersText.includes('Score against cost') && !implementersText.includes('First reviews by tier'), 'no chart, frontier or tier copy');
   assert.equal(await body.evaluate(node => node.lastElementChild.classList.contains('agents-how')), true, 'nothing reserves space past the disclosure');
   assert.match(await body.locator('.agents-stats').textContent(), /Cost per landed task/, 'cost stays in Shown, not scored');
+  for (const label of ['Escaped regressions', 'Regression residual', 'Diff economy']) assert.ok((await body.locator('.agents-stats').textContent()).includes(label));
   assert.equal(await body.locator('.agents-term-context').count(), implementerCard().terms.length);
   assert.equal(await body.locator('[data-term="weighted_landed"] .agents-term-context').textContent(), '22 actual · 19.1 expected');
   await body.locator('#agents-detail').screenshot({ path: path.join(evidence, 'agents-implementers-detail-dark-1440.png'), animations: 'disabled' });
+  for (const tier of ['low', 'medium', 'hard', 'xhard']) {
+    await page.locator('#agents-tier').selectOption(tier);
+    const ranked = await body.locator('.agents-row .agents-model').allTextContents();
+    assert.equal(ranked[0], ({ low: 'model-d', medium: 'model-c', hard: 'model-e', xhard: 'model-d' })[tier], 'tier ranking uses the tier crew mean rather than all-tier score');
+    assert.equal(ranked.includes('model-e'), tier === 'hard', 'a row without work in a tier is hidden');
+    assert.match(await body.locator('#agents-detail').textContent(), /All tiers score breakdown/);
+  }
+  await shot('agents-implementers-tier-dark-1440');
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.locator('#agents-tier').selectOption('low');
+  await page.locator('#agents-tier').scrollIntoViewIfNeeded();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  await shot('agents-implementers-tier-dark-375');
+  await page.locator('#agents-tier').selectOption('');
+  assert.equal(await body.locator('.agents-row .agents-model').first().textContent(), 'model-b', 'All tiers restores the original tier-mix ranking');
+  await page.setViewportSize({ width: 1440, height: 1100 });
   const implementersTails = [await disclosureTail()];
+  await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-implementers-dark-1440');
   await body.locator('.agents-how').evaluate(node => node.scrollIntoView({ block: 'end' }));
   await shot('agents-implementers-disclosure-dark-1440');
@@ -386,7 +406,7 @@ try {
   const desktopRanking = await rankingVisibility();
   assert.deepEqual(desktopRanking.headersInside.filter(([, visible]) => !visible), [], `rank, crew · model and score are visible without scrolling at 1440px: ${JSON.stringify(desktopRanking)}`);
   assert.equal(desktopRanking.scoreInsideEveryRow, true, 'every row shows its score at 1440px');
-  assert.equal(desktopRanking.scrolls, true, 'the evidence columns still scroll at 1440px');
+  assert.equal(desktopRanking.pageOverflow, false, 'the reduced set of evidence columns fits or scrolls within the ranking at 1440px');
   assert.equal(desktopRanking.cue, true, 'a scrolling ranking shows edge fades');
   await body.locator('.agents-ranking').screenshot({ path: path.join(evidence, 'agents-implementers-table-dark-1440.png'), animations: 'disabled' });
   await body.locator('.agents-row', { hasText: 'costly' }).locator('button').click();
@@ -425,6 +445,26 @@ try {
   fs.writeFileSync(path.join(evidence, 'implementers-track.json'), JSON.stringify(implementersTails, null, 2));
   for (const tail of implementersTails) assertNoEmptyPanelTrack(tail);
   pass('implementers ranking and detail without a role panel at desktop and phone widths', { tails: implementersTails });
+
+  // An unavailable optional matrix leaves the all-tier ranking usable.
+  matrixUnavailable = true;
+  await page.reload();
+  await body.locator('.agents-row').first().waitFor();
+  assert.equal(await page.locator('#agents-tier').isDisabled(), true);
+  assert.match(await body.locator('.agents-tier-control').textContent(), /Tier scores unavailable/);
+  assert.equal(await body.locator('.agents-row').count(), 6);
+  await shot('agents-implementers-unavailable-dark-1440');
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.locator('#agents-tier').scrollIntoViewIfNeeded();
+  await shot('agents-implementers-unavailable-dark-375');
+  matrixUnavailable = false;
+  await page.reload();
+  await body.locator('.agents-row').first().waitFor();
+  assert.equal(await page.locator('#agents-tier').isEnabled(), true);
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  await page.locator('#agents-window-selector [data-window="30d"]').click();
+  await page.waitForFunction(() => /in 30d/.test(document.getElementById('agents-meta').textContent));
+  pass('implementer tier matrix failure keeps all tiers usable and recovers');
 
   // Pilots: the shared ranking and detail, then one tier matrix per row with
   // its diagonal and its too-easy and too-hard counts, at both widths.

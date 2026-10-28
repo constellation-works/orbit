@@ -15,6 +15,16 @@ use super::agents::{
 };
 use super::support::{Fixture, isolated, json_ok};
 
+fn stat_value(row: &Value, key: &str) -> Value {
+    row["stats"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|stat| stat["key"] == key)
+        .unwrap()["value"]
+        .clone()
+}
+
 fn row<'a>(card: &'a Value, crew: &str) -> &'a Value {
     card["rows"]
         .as_array()
@@ -170,7 +180,7 @@ fn implementers_compare_actual_outcomes_with_the_same_tier_mix() {
                     "a fleet-average row starts at 100"
                 );
                 assert!(as_f64(&r["counts"]["crew_rework"]) > 0.0);
-                assert!(as_f64(&r["counts"]["escaped_regressions"]) > 0.0);
+                assert!(as_f64(&stat_value(r, "escaped_regressions")) > 0.0);
                 for term in card["terms"].as_array().unwrap() {
                     let key = term["key"].as_str().unwrap();
                     assert_eq!(
@@ -663,6 +673,128 @@ fn implementers_report_zero_reviewed_units_without_making_review_terms_provision
                 "an unreviewed row keeps its scored first-pass contribution: {first_pass}"
             );
             assert_eq!(detail["row"], *unreviewed, "{detail}");
+        },
+    );
+}
+
+#[test]
+fn implementer_regressions_do_not_rank_comparable_work() {
+    isolated(
+        "agents_implementers::implementer_regressions_do_not_rank_comparable_work",
+        || {
+            let fixture = Fixture::new();
+            let query = AgentQuery::parse(Some("30d"), Some(1)).unwrap();
+            let mut ids = Vec::new();
+            for crew in ["peer-a", "peer-b", "large", "missing"] {
+                ids.push(landed_with_tags(
+                    &fixture,
+                    &format!("jrun-{crew}"),
+                    crew,
+                    Vec::new(),
+                ));
+            }
+            use orbit_store::contracts::{
+                DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend,
+            };
+            for (index, id) in ids.iter().take(3).enumerate() {
+                fixture
+                    .runtime
+                    .sqlite_store()
+                    .unwrap()
+                    .record_landed_diff_stats(&LandedDiffStats {
+                        workspace_id: "ws_http_fixture".into(),
+                        task_id: id.clone(),
+                        base_commit: "base".into(),
+                        landed_commit: format!("head-{index}"),
+                        landed_at: Utc::now() - Duration::minutes(10),
+                        recorded_at: Utc::now(),
+                        job_run_id: None,
+                        source: LandedDiffSource::Landing,
+                        crew: None,
+                        model: None,
+                        complexity: None,
+                        task_type: None,
+                        code: DiffClassCounts {
+                            added: if index == 2 { 150 } else { 50 },
+                            ..Default::default()
+                        },
+                        tests: DiffClassCounts {
+                            deleted: 25,
+                            ..Default::default()
+                        },
+                        other: DiffClassCounts {
+                            added: 25,
+                            ..Default::default()
+                        },
+                    })
+                    .unwrap();
+            }
+            regression(
+                &fixture,
+                &ids[2],
+                RegressionNature::DefectInNew,
+                RegressionEscape::NoTest,
+            );
+            let card = fixture
+                .runtime
+                .agent_role_scorecard(AgentRole::Implementers, &query)
+                .unwrap();
+            assert_eq!(
+                row(&card, "large")["score"],
+                row(&card, "peer-a")["score"],
+                "regression linking must not rank otherwise identical implementer outcomes"
+            );
+            assert_eq!(stat_value(row(&card, "large"), "escaped_regressions"), 1);
+            assert_eq!(stat_value(row(&card, "peer-a"), "escaped_regressions"), 0);
+            assert_eq!(stat_value(row(&card, "large"), "diff_economy"), 2);
+            assert_eq!(
+                stat_value(row(&card, "missing"), "diff_economy"),
+                Value::Null
+            );
+            // Missing own size still uses the known fleet cell median, so the
+            // expected count is identical for all four comparable tasks.
+            assert_eq!(stat_value(row(&card, "large"), "regression_residual"), 0.75);
+            assert_eq!(
+                stat_value(row(&card, "missing"), "regression_residual"),
+                -0.25
+            );
+            for id in [&ids[0], &ids[1], &ids[3]] {
+                regression(
+                    &fixture,
+                    id,
+                    RegressionNature::DefectInNew,
+                    RegressionEscape::NoTest,
+                );
+            }
+            let facts = fixture.runtime.agent_scan().unwrap();
+            let card = agent_scorecard(
+                &facts,
+                AgentRole::Implementers,
+                &query,
+                std::time::Duration::ZERO,
+            );
+            for crew in ["peer-a", "peer-b", "large", "missing"] {
+                assert_eq!(
+                    stat_value(row(&card, crew), "regression_residual"),
+                    0,
+                    "fleet-matched expected-size buckets have no residual"
+                );
+            }
+            let matrix = agent_by_type_scorecard(&facts, &query, &[], std::time::Duration::ZERO);
+            let server = fixture.server(false);
+            let http = json_ok(server.get(&format!(
+                "/api/agents/implementers/by-type?{WS}&min_support=1"
+            )));
+            assert_eq!(
+                http["cells"], matrix["cells"],
+                "the HTTP tier selector uses the public cell matrix"
+            );
+            assert_eq!(
+                server
+                    .get(&format!("/api/agents/implementers/by-type?{WS}&window=bad"))
+                    .status(),
+                400
+            );
         },
     );
 }
