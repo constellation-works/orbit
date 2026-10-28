@@ -970,9 +970,8 @@ on.
   the fleet average (a row above the average is pulled down toward it, the
   more the less work backs it; a row below keeps its raw score), how each
   term adds to or takes from
-  the score, the tasks behind its biggest penalty (each opens the task), and
-  context such as active hours that is shown but never scored. Select another
-  row to change it.
+  the score, and context such as active hours that is shown but never scored.
+  Select another row to change it.
 - **How the score works** lists every term with its weight and definition and
   the smoothing formula. It stays open while the page refreshes.
 

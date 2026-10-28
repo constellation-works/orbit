@@ -2,7 +2,7 @@
 // Analytics › Agents through the shipped app, router, renderer and CSS, fed
 // contract-shaped `/api/agents` payloads: `#analytics/orchestrators` opening
 // `#analytics/agents/orchestrators`, the role tabs and their counts, row selection
-// driving the detail column, the disclosure surviving a refresh, no
+// driving scorecard detail, no detail API reads, the disclosure surviving a refresh, no
 // Implementers role panel or the empty grid row and gap that track would
 // reserve (16px at 1440, 12px at 375), the Reviewers provisional
 // banner, `accepts often` tag and verdict-outcome bars, the Pilots
@@ -15,8 +15,8 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
-import { implementerCard, implementerDetail } from './agents_implementers_fixture.mjs';
-import { pilotCard, pilotDetail } from './agents_pilots_fixture.mjs';
+import { implementerCard } from './agents_implementers_fixture.mjs';
+import { pilotCard } from './agents_pilots_fixture.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
 const evidence = path.resolve(process.argv[3]);
@@ -122,55 +122,6 @@ function scorecard(role, url) {
   const rows = url.searchParams.get('window') === '1h' ? [] : orchestratorRows;
   return { ...head, fleet_average: rows.length ? 79.02 : null, rows };
 }
-const task = (id, title, count, detail) => ({ task_id: id, title, status: 'done', count, occurrences: [{ at: '2026-10-12T14:03:00Z', detail, run_id: null }] });
-const REVIEWER_TASKS = {
-  'codex-review': { rejected_findings: [
-    task('ORB-16410', 'Lease renewal under clock skew', 1, 'disposed: accepted risk, tracked separately'),
-    task('ORB-16455', 'Finding: drain receipts double-count retries', 1, 'finding verification REJECTED'),
-  ] },
-  'claude-review': { missed_regressions: [
-    task('ORB-16288', 'Host forward retries on 502', 2, 'regression: escape review_missed'),
-    task('ORB-16301', 'Review settlement replay', 1, 'regression: escape review_missed'),
-  ] },
-};
-function detail(role, url) {
-  if (role === 'implementers') return implementerDetail(url.searchParams.get('crew'), url.searchParams.get('model'));
-  if (role === 'pilots') return { ...pilotDetail(url.searchParams.get('crew'), url.searchParams.get('model')), computed_at: computedAt };
-  const crew = url.searchParams.get('crew');
-  if (role === 'reviewers') {
-    const row = REVIEWER_ROWS.find(entry => entry.crew === crew);
-    return {
-      ...header(role, url), fleet_average: REVIEWER_FLEET, provisional: 77, row,
-      terms: terms(role).map(term => ({
-        key: term.key, label: term.label, weight: term.weight, group: term.group,
-        count: row.counts[term.key], per_100: row.per_100[term.key], contribution: term.weight * row.per_100[term.key],
-        tasks: (REVIEWER_TASKS[crew] || {})[term.key] || [],
-      })),
-    };
-  }
-  const row = orchestratorRows.find(entry => entry.crew === crew);
-  const tasks = {
-    'claude-orchestrator': [
-      task('ORB-16012', 'Ship mode for owner-local delivery', 3, 'spec_edit: task fields updated: acceptance_criteria'),
-      task('ORB-16120', 'Dock layout at phone width', 2, 'criteria_block: acceptance-criterion-unmet'),
-      task('ORB-16204', 'Drain receipt lookup by claim', 1, 'regression: escape spec_ambiguous'),
-    ],
-    'codex-orchestrator': [
-      task('ORB-15877', 'Host forward retries on 502', 4, 'spec_edit: task fields updated: description'),
-      task('ORB-15940', 'Review settlement replay', 1, 'final_recovery_escalated: criteria'),
-    ],
-    operator: [task('ORB-15001', 'Config keys reference page', 2, 'spec_edit: task fields updated: description')],
-    'gemini-orchestrator': [task('ORB-16330', 'Pilot receipt backfill', 2, 'criteria_block: scope-ambiguous')],
-  }[crew] || [];
-  return {
-    ...header(role, url), fleet_average: 192.13, row,
-    terms: terms(role).map(term => ({
-      key: term.key, label: term.label, weight: term.weight, group: term.group,
-      count: row.counts[term.key], per_100: row.per_100[term.key], contribution: term.weight * row.per_100[term.key],
-      tasks: term.key === 'spec_defects' ? tasks : [],
-    })),
-  };
-}
 function attribution(url) {
   const requested = url.searchParams.get('window') || '30d';
   return {
@@ -186,7 +137,7 @@ function payloadFor(url) {
   if (agents) {
     requests.push(`${agents[1]}/${agents[2]}${agents[2] === 'detail' ? `:${url.searchParams.get('crew')}` : ''}`);
     if (agents[2] === 'scorecard') scorecardWindows.push({ role: agents[1], window: url.searchParams.get('window') });
-    return agents[2] === 'scorecard' ? scorecard(agents[1], url) : detail(agents[1], url);
+    return agents[2] === 'scorecard' ? scorecard(agents[1], url) : {};
   }
   switch (url.pathname) {
     case '/api/agents/attribution': return attribution(url);
@@ -352,8 +303,7 @@ try {
   assert.match(await body.locator('.agents-strip').textContent(), /131 problems in 30d/);
   assert.equal(await body.locator('.agents-strip-seg.is-current.agents-owner-orchestrators').count(), 1);
   assert.equal(await body.locator('.agents-row-select[aria-pressed="true"] .agents-crew').textContent(), 'claude-orchestrator');
-  await body.locator('.agents-penalty .agents-task').first().waitFor();
-  assert.deepEqual(await body.locator('.agents-penalty .agents-task-id').allTextContents(), ['ORB-16012', 'ORB-16120', 'ORB-16204']);
+  assert.equal(await body.locator('.agents-penalty').count(), 0, 'the detail column has no penalty section');
   assert.match(await body.locator('tr.agents-row-below').textContent(), /below 10/);
   pass('ranking, strip and default detail', { counts });
   await shot('agents-orchestrators-dark-1440');
@@ -361,29 +311,21 @@ try {
   // Selecting a row moves the detail column to it.
   await body.locator('.agents-row', { hasText: 'codex-orchestrator' }).locator('.agents-row-select').click();
   await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'codex-orchestrator');
-  await body.locator('.agents-penalty .agents-task-id', { hasText: 'ORB-15877' }).waitFor();
   assert.equal(await body.locator('.agents-detail-rank').textContent(), '#2');
-  assert.equal(await body.locator('.agents-penalty').getAttribute('data-term'), 'spec_defects');
+  assert.equal(await body.locator('.agents-penalty').count(), 0);
   assert.match(await body.locator('.agents-stats').textContent(), /Active hours41\.3/);
   assert.equal(await body.locator('.agents-row.is-selected .agents-crew').textContent(), 'codex-orchestrator');
-  // A penalty task opens the task.
-  const taskHref = await body.locator('.agents-penalty .agents-task-id').first().getAttribute('href');
-  assert.match(taskHref, /#tasks\?open=ORB-15877/);
+  await body.locator('#agents-detail').screenshot({ path: path.join(evidence, 'agents-orchestrators-detail-dark-1440.png'), animations: 'disabled' });
   pass('selection updates the detail column');
 
-  // The disclosure stays open across a refresh, even when a newer scan
-  // rebuilds the ranking and re-reads the detail.
+  // The disclosure stays open across a refresh of the scorecard.
   await body.locator('.agents-how > summary').click();
   assert.equal(await body.locator('.agents-how').evaluate(node => node.open), true);
   assert.match(await body.locator('.agents-how').textContent(), /score = min\(raw, \(owned tasks × raw \+ 30 × fleet average\)/);
-  const detailReads = requests.filter(entry => entry === 'orchestrators/detail:codex-orchestrator').length;
   computedAt = '2026-10-19T08:05:00.000Z';
   await page.locator('#refresh-btn').click();
-  for (let tries = 0; tries < 50 && requests.filter(entry => entry === 'orchestrators/detail:codex-orchestrator').length <= detailReads; tries += 1) {
-    await page.waitForTimeout(100);
-  }
   await page.waitForTimeout(100);
-  assert.ok(requests.filter(entry => entry === 'orchestrators/detail:codex-orchestrator').length > detailReads, 'a newer scan re-reads the selected detail');
+  assert.equal(await body.locator('.agents-penalty').count(), 0);
   assert.equal(await body.locator('.agents-how').evaluate(node => node.open), true, 'the disclosure keeps its state across a poll');
   assert.equal(await body.locator('.agents-row-select[aria-pressed="true"] .agents-crew').textContent(), 'codex-orchestrator', 'the selection survives a poll');
   await shot('agents-orchestrators-how-dark-1440');
@@ -406,8 +348,7 @@ try {
   assert.ok(order.width > order.body * 0.9, 'the banner spans the body');
   await body.locator('.agents-row', { hasText: 'claude-review' }).locator('.agents-row-select').click();
   await page.waitForFunction(() => document.querySelector('#agents-detail h3')?.textContent === 'claude-review');
-  await body.locator('.agents-penalty .agents-task-id', { hasText: 'ORB-16288' }).waitFor();
-  assert.equal(await body.locator('.agents-penalty').getAttribute('data-term'), 'missed_regressions');
+  assert.equal(await body.locator('.agents-penalty').count(), 0);
   assert.match(await body.locator('.agents-stats').textContent(), /Accepts oftenyes/);
   assert.match(await body.locator('.agents-stats').textContent(), /Provisional30/);
   const outcomeRows = body.locator('.agents-role-panel-reviewers .agents-cause-row');
@@ -424,7 +365,7 @@ try {
   // Implementers uses the shared ranking/detail and shows no role panel.
   await page.locator('#agents-roles [data-view="implementers"]').click();
   await body.locator('.agents-row').first().waitFor();
-  await body.locator('.agents-penalty .agents-task').first().waitFor();
+  assert.equal(await body.locator('.agents-penalty').count(), 0);
   assert.equal(await page.locator('#agents-count-implementers').textContent(), '5 ranked', 'the tab labels the ranked subset without hover');
   assert.equal(await page.locator('#agents-count').textContent(), '6 rows · 5 ranked', 'the panel labels all rows and the ranked subset');
   assert.equal(await body.locator('.agents-row').count(), 6);
@@ -489,13 +430,12 @@ try {
   // its diagonal and its too-easy and too-hard counts, at both widths.
   await page.locator('#agents-roles [data-view="pilots"]').click();
   await body.locator('.agents-tier-card').first().waitFor();
-  await body.locator('.agents-penalty .agents-task').first().waitFor();
+  assert.equal(await body.locator('.agents-penalty').count(), 0);
   assert.equal(await page.locator('#agents-count-pilots').textContent(), '2 ranked');
   assert.equal(await page.locator('#agents-count').textContent(), '3 rows · 2 ranked');
   assert.equal(new URL(page.url()).hash, '#analytics/agents/pilots?window=30d');
   assert.equal(await body.locator('.agents-row').count(), 3);
   assert.equal(await body.locator('#agents-detail h3').textContent(), 'luna');
-  assert.equal(await body.locator('.agents-penalty').getAttribute('data-term'), 'lock_wait_hours');
   assert.doesNotMatch(await body.locator('.agents-stats').textContent(), /object Object/, 'the matrix is not a detail stat');
   assert.equal(await body.locator('.agents-tier-card').count(), 3);
   assert.equal(await body.locator('.agents-tier-matrix').count(), 2, 'a row with nothing placed has no matrix');
@@ -586,7 +526,7 @@ try {
   pass('phone layout', { phone, panel: await assertPanelOccupiesItsRow('orchestrators at 375px') });
   await page.evaluate(() => window.scrollTo(0, 0));
   await shot('agents-orchestrators-dark-375');
-  await page.locator('#agents-detail').scrollIntoViewIfNeeded();
+  await page.locator('#agents-detail .agents-detail-head').evaluate(node => window.scrollTo(0, node.getBoundingClientRect().top + window.scrollY - 140));
   await shot('agents-orchestrators-detail-dark-375');
   await page.locator('#agents-roles [data-view="reviewers"]').click();
   await body.locator('.agents-banner').waitFor();
@@ -607,6 +547,7 @@ try {
   await body.locator('.agents-role-panel-reviewers').scrollIntoViewIfNeeded();
   await shot('agents-reviewers-outcomes-dark-375');
   assert.deepEqual(errors, []);
+  assert.equal(requests.some(entry => entry.includes('/detail')), false, 'the dashboard never requests agent detail');
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ ok: true, results }, null, 2));
   console.log(JSON.stringify({ ok: true, checks: results.map(result => result.name) }));
 } finally {

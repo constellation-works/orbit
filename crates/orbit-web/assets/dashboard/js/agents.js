@@ -1,9 +1,8 @@
 // Analytics › Agents: one scorecard per agent role, ranked by crew and model.
-// Reads GET /api/agents/<role>/scorecard for the ranking and its terms,
+// Reads GET /api/agents/<role>/scorecard for the ranking and its terms, and
 // GET /api/agents/attribution for the strip of who each problem counts
-// against, and GET /api/agents/<role>/detail for the tasks behind the
-// selected row's biggest penalty. The server keeps one scan per workspace,
-// so a role, window or row change only slices it.
+// against. The server keeps one scan per workspace, so a role or window
+// change only slices it.
 //
 // One renderer serves every role: the strip, the ranking, the detail column
 // and the "How the score works" disclosure. A role's own panel comes from its
@@ -12,7 +11,7 @@
 // A role whose scorecard is not computed yet shows an empty state with its
 // terms. Pure vanilla JS, no build step; HTML uses `el()`, charts use inline SVG.
 
-import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, bindTaskLink, formatDateTime } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, wireWindowSelector, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime } from './common.js';
 import { orchestratorsPanel } from './agents-orchestrators.js';
 import { reviewersPanel } from './agents-reviewers.js';
 import { pilotsPanel } from './agents-pilots.js';
@@ -54,8 +53,6 @@ const NOT_SCORED_REASONS = {
 const MIN_SUPPORT = 10;
 // The smoothing constant K of the shared score (`agents/score.rs`).
 const SMOOTHING = 30;
-const PENALTY_TASKS_SHOWN = 6;
-
 const BODY_ID = "agents-body";
 const COUNT_ID = "agents-count";
 const META_ID = "agents-meta";
@@ -67,11 +64,6 @@ let scorecard = null;
 let attribution = null;
 // The selected row of each role, as `rowKey(row)`.
 const selected = new Map();
-// The selected row's detail: its cache key, the payload once it arrived, and
-// a failure to show in place.
-let detail = null;
-let detailRequest = 0;
-const detailCache = new Map();
 let countsRequest = 0;
 // "How the score works" stays as the reader left it across polls and roles.
 let howOpen = false;
@@ -96,11 +88,6 @@ function attributionPath(selectedWindow) {
   return `/api/agents/attribution?window=${encodeURIComponent(selectedWindow)}`;
 }
 
-function detailPath(forRole, selectedWindow, row) {
-  return `/api/agents/${forRole}/detail?window=${encodeURIComponent(selectedWindow)}&min_support=${MIN_SUPPORT}`
-    + `&crew=${encodeURIComponent(row.crew)}&model=${encodeURIComponent(row.model)}`;
-}
-
 function rowKey(row) {
   return `${row.crew}\0${row.model}`;
 }
@@ -108,9 +95,6 @@ function rowKey(row) {
 function resetView() {
   scorecard = null;
   attribution = null;
-  detail = null;
-  detailRequest += 1;
-  detailCache.clear();
   const meta = $(META_ID);
   if (meta) meta.textContent = "";
   const title = $(TITLE_ID);
@@ -249,45 +233,13 @@ function syncSelection() {
     if (first) selected.set(role, rowKey(first));
     else selected.delete(role);
   }
-  loadDetail();
 }
 
 function selectRow(row) {
   const key = rowKey(row);
   if (selected.get(role) === key) return;
   selected.set(role, key);
-  loadDetail();
   render();
-}
-
-// A row's detail is cached per scan: a poll with the same `computed_at`
-// reuses it, a newer scan reads it again. The previous tasks of the same row
-// stay on screen while the newer ones load.
-function loadDetail() {
-  const row = selectedRow();
-  if (!row || !scorecard || scorecard.status !== "ok") {
-    detail = null;
-    return;
-  }
-  const key = rowKey(row);
-  const cacheKey = `${requestScope}\0${scorecard.computed_at}\0${key}`;
-  if (detail && detail.cacheKey === cacheKey) return;
-  const previous = detail && detail.rowKey === key ? detail.payload : null;
-  const cached = detailCache.get(cacheKey);
-  detail = { cacheKey, rowKey: key, payload: cached || previous, loading: !cached, error: null };
-  if (cached) return;
-  const request = ++detailRequest;
-  const activeRole = role;
-  fetchJson(detailPath(activeRole, agentWindow(), row)).then((payload) => {
-    detailCache.set(cacheKey, payload);
-    if (request !== detailRequest || !detail || detail.cacheKey !== cacheKey) return;
-    detail = { ...detail, payload, loading: false };
-    render();
-  }, (error) => {
-    if (request !== detailRequest || !detail || detail.cacheKey !== cacheKey) return;
-    detail = { ...detail, loading: false, error: error.message || String(error) };
-    render();
-  });
 }
 
 function number(value) {
@@ -795,75 +747,14 @@ function detailNode(row) {
     radarNode(row),
     el("h4", { text: "Score breakdown" }),
     breakdown,
-    penaltyNode(row, contributions),
     el("h4", { text: "Shown, not scored" }),
     stats,
   ];
   const node = el("aside", { class: "agents-detail", "aria-label": `Detail for ${row.crew} · ${row.model}` }, children);
   node.id = "agents-detail";
   node.dataset.key = "detail";
-  node.dataset.hash = JSON.stringify([role, row, scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average, detail && [detail.payload, detail.loading, detail.error]]);
+  node.dataset.hash = JSON.stringify([role, row, scorecard.rows, scorecard.terms, scorecard.min_support, scorecard.warning_min_support, scorecard.sources, scorecard.fleet_average]);
   return node;
-}
-
-// The tasks behind the row's largest negative term, from its detail.
-function penaltyNode(row, contributions) {
-  let worst = null;
-  for (const entry of contributions) {
-    if ((entry.value || 0) < 0 && (!worst || entry.value < worst.value)) worst = entry;
-  }
-  const section = el("section", { class: "agents-penalty" });
-  if (!worst) {
-    section.append(el("h4", { text: "Biggest penalty" }));
-    section.append(el("p", { class: "agents-muted", text: "No penalty in this window." }));
-    return section;
-  }
-  section.append(el("h4", { text: `Biggest penalty: ${worst.term.label}` }));
-  section.dataset.term = worst.term.key;
-  const term = detail && detail.payload && Array.isArray(detail.payload.terms)
-    ? detail.payload.terms.find((entry) => entry.key === worst.term.key)
-    : null;
-  if (detail && detail.error) {
-    section.append(el("p", { class: "agents-error", role: "alert", text: `Unable to load the tasks: ${detail.error}` }));
-    return section;
-  }
-  if (!term) {
-    section.append(el("p", { class: "agents-muted", role: "status", text: "Loading the tasks…" }));
-    return section;
-  }
-  const tasks = Array.isArray(term.tasks) ? term.tasks : [];
-  section.append(el("p", { class: "agents-muted", text: `${number(term.count)} counted from ${plural(tasks.length, "task")}, ${signed(worst.value)} to the score` }));
-  const list = el("ul", { class: "agents-tasks" });
-  for (const task of tasks.slice(0, PENALTY_TASKS_SHOWN)) list.append(taskItem(task));
-  section.append(list);
-  if (tasks.length > PENALTY_TASKS_SHOWN) {
-    section.append(el("p", { class: "agents-muted", text: `and ${plural(tasks.length - PENALTY_TASKS_SHOWN, "more task")}` }));
-  }
-  return section;
-}
-
-function taskItem(task) {
-  const link = bindTaskLink(el("a", { class: "agents-task-id", text: task.task_id }), task.task_id);
-  const head = el("div", { class: "agents-task-head" }, [
-    link,
-    el("span", { class: "agents-task-title", text: task.title || "" }),
-    el("span", { class: "agents-task-meta", text: task.status || "" }),
-  ]);
-  if (typeof task.count === "number" && Math.abs(task.count) !== 1) head.append(el("span", { class: "agents-task-meta", text: `×${number(task.count)}` }));
-  const item = el("li", { class: "agents-task" }, [head]);
-  item.dataset.taskId = task.task_id;
-  const occurrences = Array.isArray(task.occurrences) ? task.occurrences : [];
-  if (occurrences.length) {
-    const list = el("ul", { class: "agents-occurrences" });
-    for (const occurrence of occurrences) {
-      list.append(el("li", {}, [
-        el("time", { text: formatDateTime(occurrence.at) }),
-        el("span", { text: occurrence.detail || "" }),
-      ]));
-    }
-    item.append(list);
-  }
-  return item;
 }
 
 function howNode() {

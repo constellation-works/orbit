@@ -1,8 +1,7 @@
 // Analytics › Agents through contract-shaped `/api/agents` payloads: the role
 // tabs and their ranked-row counts, the attribution strip, ranking selection
-// driving the detail column (breakdown, biggest-penalty tasks linking to the
-// task, shown-not-scored stats), "How the score works" keeping its state
-// across polls, a newer scan re-reading the open detail, the empty and
+// driving the detail column (rank, score, breakdown, shown-not-scored stats),
+// "How the score works" keeping its state across polls, the empty and
 // not_computed states, the Reviewers provisional banner, `accepts often` tag
 // and verdict-outcome bars, the aggregate placeholder, and the router sending
 // `#analytics/orchestrators` and old `#agents/<role>` to `#analytics/agents/<role>`.
@@ -239,19 +238,6 @@ const attribution = {
   owners: { orchestrators: 12, implementers: 5, reviewers: 0, pilots: 0, not_scored: { count: 3, reasons: { infrastructure: 2, unattributed: 1 } } },
   charged: { orchestrators: [{ crew: 'opus', model: 'model unknown', problems: 8 }], implementers: [], reviewers: [], pilots: [] },
 };
-const task = (id, count, detail) => ({ task_id: id, title: `Task ${id}`, status: 'done', count, occurrences: [{ at: '2026-10-11T09:00:00Z', detail, run_id: null }] });
-const detailFor = (scorecard, crew, tasks) => {
-  const selected = scorecard.rows.find(entry => entry.crew === crew);
-  return {
-    ...header('orchestrators', scorecard.computed_at), fleet_average: scorecard.fleet_average, row: selected,
-    terms: TERMS.map(term => ({
-      key: term.key, label: term.label, weight: term.weight, group: term.group,
-      count: selected.counts[term.key], per_100: selected.per_100[term.key], contribution: term.weight * selected.per_100[term.key],
-      tasks: tasks[term.key] || [],
-    })),
-  };
-};
-
 const routeV1 = url => {
   const requested = url.searchParams.get('window') || '30d';
   const served = requested === 'all' ? '90d' : requested;
@@ -352,29 +338,16 @@ assert.ok(rowNamed('haiku').querySelector('span.agents-bar-fill.negative') === n
 assert.equal(rowNamed('sonnet').querySelector('td.agents-score-col span.agents-score-note').textContent, '3 unclassified');
 assert.equal(rowNamed('opus').querySelector('span.agents-score-note'), null, 'no note without unclassified problems');
 
-// The top row is selected and its detail asked for.
+// The top row is selected by default, with detail rendered from its scorecard row.
 assert.equal(selectButton('opus').getAttribute('aria-pressed'), 'true', 'the top row is selected by default');
 requests = takeAll();
-assert.equal(requests.length, 1);
-assert.equal(requests[0].url.pathname, '/api/agents/orchestrators/detail');
-assert.equal(requests[0].url.searchParams.get('crew'), 'opus');
-assert.equal(requests[0].url.searchParams.get('model'), 'model unknown');
-assert.match(part('detail').textContent, /Loading the tasks/);
-// The breakdown and the stats come from the ranking row before the detail lands.
+assert.deepEqual(requests, [], 'the dashboard does not fetch agent detail');
+assert.equal(part('detail').querySelector('section.agents-penalty'), null, 'the detail column has no penalty section');
+// The breakdown and stats come from the ranking row.
 const breakdown = () => part('detail').querySelectorAll('ul.agents-breakdown li').map(item => [item.dataset.term, item.querySelector('span.agents-term-value').textContent]);
 assert.deepEqual(breakdown(), [['landed', '+95'], ['spec_defects', '−15'], ['spec_rework', '−5']]);
 assert.match(part('detail').textContent, /raw 75, pulled down toward the fleet average 71\.4 over 40 units/);
 assert.equal(part('detail').querySelector('p.agents-detail-note'), null);
-requests[0].resolve(response(detailFor(orchestrators(), 'opus', {
-  spec_defects: [task('ORB-1', 4, 'spec_edit: acceptance_criteria edited'), task('ORB-2', 2, 'criteria_block: acceptance-criterion-unmet')],
-  spec_rework: [task('ORB-3', 2, 'repeat_run: spec')],
-})));
-await settle();
-let penalty = part('detail').querySelector('section.agents-penalty');
-assert.equal(penalty.dataset.term, 'spec_defects', 'the biggest penalty is the largest negative term');
-assert.deepEqual(penalty.querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-1', 'ORB-2']);
-assert.ok(penalty.querySelector('a.agents-task-id').href.includes('open=ORB-1'), 'a penalty task links to the task');
-assert.match(penalty.textContent, /spec_edit: acceptance_criteria edited/);
 assert.match(part('detail').textContent, /Active hours30\.3/, 'shown-not-scored stats sit in the detail column');
 
 // The role panel shows each orchestrator's rework by cause.
@@ -392,17 +365,11 @@ assert.match(part('detail').querySelector('header').textContent, /#2sonnet/);
 assert.deepEqual(breakdown(), [['landed', '+75'], ['spec_defects', '−5'], ['spec_rework', '−5']]);
 assert.match(part('detail').textContent, /raw 65, not above the fleet average 71\.4, so not pulled/, 'a row below the average keeps its raw score');
 assert.match(part('detail').querySelector('p.agents-detail-note').textContent, /^3 .*20 owned tasks .*\(15 per 100\)/, 'the detail states the unclassified rate');
-requests = takeAll();
-assert.equal(requests.length, 1);
-assert.equal(requests[0].url.searchParams.get('crew'), 'sonnet');
-requests[0].resolve(response({ error: "no orchestrators row for crew 'sonnet' in the 30d window" }, 400));
-await settle();
-assert.match(part('detail').querySelector('p.agents-error').textContent, /Unable to load the tasks: no orchestrators row/);
+assert.deepEqual(takeAll(), [], 'selecting another row does not request agent detail');
 
-// Back to the first row: its cached detail answers without a request.
+// Back to the first row: the ranking row still drives the detail column.
 click(selectButton('opus'));
-assert.equal(pending.length, 0, 'the cached detail of this scan is reused');
-assert.deepEqual(part('detail').querySelector('section.agents-penalty').querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-1', 'ORB-2']);
+assert.deepEqual(takeAll(), [], 'returning to a row does not request agent detail');
 
 // "How the score works" lists every term and the smoothing formula, and its
 // open state survives a poll.
@@ -415,18 +382,17 @@ how().open = true;
 for (const listener of how().listeners.toggle) listener();
 const howBefore = how();
 
-// A poll with the same scan keeps the selection, the detail and the disclosure.
+// A poll with the same scan keeps the selection, detail and disclosure.
 loading = agents.fetchAndRenderAgents();
 answer(takeAll(), routeV1);
 await loading;
 await settle();
-assert.equal(pending.length, 0, 'an unchanged scan reads no detail');
+assert.deepEqual(takeAll(), [], 'an unchanged scan reads no agent detail');
 assert.equal(selectButton('opus').getAttribute('aria-pressed'), 'true', 'the selection survives a poll');
 assert.equal(how(), howBefore, 'the unchanged disclosure node is kept');
 assert.equal(how().open, true);
 
-// A newer scan re-reads the selected row's detail and keeps its tasks on
-// screen meanwhile; the rebuilt disclosure stays open.
+// A newer scan refreshes the scorecard-driven detail; the disclosure stays open.
 const routeV2 = url => {
   if (url.pathname === '/api/agents/attribution') return response(attribution);
   const role = url.pathname.split('/')[3];
@@ -440,14 +406,9 @@ answer(takeAll(), routeV2);
 await loading;
 await settle();
 requests = takeAll();
-assert.equal(requests.length, 1, 'a newer scan re-reads the open detail');
-assert.equal(requests[0].url.searchParams.get('crew'), 'opus');
-assert.deepEqual(part('detail').querySelector('section.agents-penalty').querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-1', 'ORB-2'], 'the previous tasks stay while the newer ones load');
+assert.deepEqual(requests, [], 'a newer scan does not read agent detail');
 assert.notEqual(how(), howBefore, 'changed terms rebuild the disclosure');
 assert.equal(how().open, true, 'the rebuilt disclosure keeps its open state');
-requests[0].resolve(response(detailFor(orchestrators('2026-10-19T08:05:00.000Z'), 'opus', { spec_defects: [task('ORB-9', 6, 'spec_edit: description edited')] })));
-await settle();
-assert.deepEqual(part('detail').querySelector('section.agents-penalty').querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-9']);
 
 // A role that is not computed yet shows an empty state that says so, with
 // its terms in the disclosure and no ranking, detail or panel.
@@ -515,7 +476,6 @@ const reviewers = (provisional, computedAt) => ({
 const routeReviewers = (provisional, computedAt) => url => {
   if (url.pathname === '/api/agents/attribution') return response(attribution);
   if (url.pathname === '/api/agents/reviewers/scorecard') return response(reviewers(provisional, computedAt));
-  if (url.pathname === '/api/agents/reviewers/detail') return response({ error: 'no detail in this fixture' }, 400);
   return response(notComputed(url.pathname.split('/')[3]));
 };
 agents.setAgentsRole('reviewers');
