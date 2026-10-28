@@ -112,6 +112,20 @@ pub(super) fn apply_resource_minute_regime(conn: &Connection) -> Result<(), Orbi
     super::introspect::add_column_if_missing(conn, "run_resource_minutes", "orbit_version", "TEXT")
 }
 
+/// v69: index each sampled run's first minute as its freshness marker. The
+/// sampler starts at minute zero, and retention leaves this marker until a
+/// prunable run's other minute rows have been removed.
+pub(super) fn apply_run_resource_minutes_freshness_index(
+    conn: &Connection,
+) -> Result<(), OrbitError> {
+    conn.execute_batch(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_run_resource_minutes_first_sample
+         ON run_resource_minutes(workspace_id, run_id)
+         WHERE minute_index = 0;",
+    )
+    .map_err(sqlite_store_error)
+}
+
 /// v53: the forecast's own baseline and delivery cohort. Historical rows and
 /// older writers retain null attribution metadata; no backfill is inferred.
 pub(super) fn apply_forecast_attribution(conn: &Connection) -> Result<(), OrbitError> {

@@ -640,12 +640,22 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: super::super::apply_resource_minute_regime,
     },
+    // The sampler starts each run at minute zero, and retention leaves its
+    // marker until the run's other minute rows have been removed. Older
+    // retention code does not preserve that order, so old binaries may read
+    // this schema but must not write it.
+    Migration {
+        version: 69,
+        name: "run_resource_minutes_freshness_index",
+        compat: MigrationCompatibility::ReadCompatible,
+        apply: super::super::apply_run_resource_minutes_freshness_index,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 68;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 69;
 
 /// A migration recorded as applied in the `schema_meta` ledger.
 #[derive(Debug, Clone, PartialEq, Eq)]

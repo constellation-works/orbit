@@ -205,6 +205,7 @@ include!("migration_freeze.rs");
 include!("provider_ledger.rs");
 include!("provider_limit_observations.rs");
 include!("publication.rs");
+include!("resource_usage.rs");
 include!("review_budget.rs");
 include!("session_log.rs");
 include!("store_readiness.rs");

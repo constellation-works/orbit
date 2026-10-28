@@ -473,6 +473,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "migration.v0068".to_string(),
                 "resource_minute_regime".to_string(),
             ),
+            (
+                "migration.v0069".to_string(),
+                "run_resource_minutes_freshness_index".to_string(),
+            ),
         ]
     );
 }
