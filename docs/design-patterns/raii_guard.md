@@ -146,7 +146,7 @@ From `crates/orbit-common/src/fs/file_lock/acquisition.rs`:
 ```rust
 #[must_use = "the advisory lock is released as soon as the guard is dropped"]
 pub struct FileLockGuard {
-    file: File,
+    file: Option<File>,
     clear_holder_on_drop: bool,
     shared_record: Option<PathBuf>,
     hold: Option<HoldReport>,
@@ -155,10 +155,13 @@ pub struct FileLockGuard {
 
 Patterns to copy:
 
-- **Hold the resource in a field.** `FileLockGuard` keeps the locked `File`
-  alive in `file`; `Drop` clears holder metadata and reports a long hold before
-  dropping the file releases the OS advisory lock. There is no separate
-  explicit release path to call or duplicate.
+- **Release before reporting.** `FileLockGuard` keeps the locked `File` alive
+  in `file`. `Drop` clears holder metadata while still locked, takes and drops
+  the file, then snapshots the long hold. Reports wait until enclosing lock
+  helper scopes have also closed their descriptors and removed their
+  re-entrancy records. A synchronous subscriber can block on I/O, so emitting
+  a nested report while an outer lock remains held extends that critical
+  section. The snapshot preserves the actual hold duration and step timings.
 
 ---
 

@@ -369,7 +369,9 @@ impl TaskCommitBoundary {
                 // after made a reader that met a live commit wait for the
                 // partition twice, the second time behind any writer that had
                 // queued meanwhile (ORB-15797).
-                if !BoundaryDepth::active(&self.partition_dir) && self.interrupted_commit()? {
+                if !BoundaryDepth::active(&self.partition_dir)
+                    && hold_step("interrupted commit check", || self.interrupted_commit())?
+                {
                     return Ok(None);
                 }
                 let _depth = BoundaryDepth::enter(&self.partition_dir);

@@ -60,6 +60,25 @@ that section, so the pass queues, takes the locks and writes its holder record o
 once per read. Inside it, a pass must not wait on another thread's task reads or request an
 admission: either would wait behind the shared lock the pass itself holds.
 
+Long-hold diagnostics snapshot each lock's duration after holder cleanup and
+descriptor close. They include named holder-record, holder-cleanup, lock-release
+and interrupted-commit-check steps alongside operation and recovery work.
+Release reports are emitted only after the enclosing lock helper scopes have
+released and removed their re-entrancy records. This keeps slow synchronous
+tracing I/O out of the host and partition critical sections; emitting a
+partition report before releasing the host could otherwise add seconds of
+unattributed host hold time. Holder cleanup stays under its lock so it cannot
+erase a subsequent exclusive holder's record.
+
+The deterministic public task-store API experiment is
+`cargo test -p orbit-store --lib task_read_report_latency_probe -- --ignored --nocapture`.
+It uses eight representative task bundles, a synchronized admission whose work
+is 80 ms, and a subscriber held for 2.2 seconds at its first release report.
+It prints ten sequential task-show API reads and ten searches with wall time,
+exit code and hold diagnostics. Run the same fixture against base and candidate
+production code. `slow_release_reports_do_not_hold_task_boundaries` provides the
+ordinary regression check without a timed performance assertion.
+
 **One durable commit decision.** A journal row in the host store database:
 
 | Step | What happens | What a crash here means |
