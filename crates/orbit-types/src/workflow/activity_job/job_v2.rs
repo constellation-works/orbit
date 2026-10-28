@@ -173,15 +173,6 @@ impl JobV2 {
         }
         stages
     }
-
-    /// The effective stage of the step with `step_id`, when the job has
-    /// that step and a stage covers it.
-    pub fn stage_for_step(&self, step_id: &str) -> Option<&JobStage> {
-        self.step_stages()
-            .into_iter()
-            .find(|(id, _)| *id == step_id)
-            .and_then(|(_, stage)| stage)
-    }
 }
 
 /// A display stage a job step belongs to, declared with `stage:` in job
