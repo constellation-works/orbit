@@ -47,6 +47,7 @@ const WARNING_LABELS = {
   lagging: "Open outcomes",
   primary_unmeasured: "Primary unmeasured",
   crew_mismatch: "Crew outside arm pool",
+  crew_mismatch_unavailable: "Crew admission pool unavailable",
   forced: "Forced assignments",
   explicit_crew: "Explicit-crew exclusions",
 };
