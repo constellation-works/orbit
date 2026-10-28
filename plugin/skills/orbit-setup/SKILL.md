@@ -43,6 +43,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |
 | Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, or source-remote rebinding | [Maintenance](references/maintenance.md#removing-or-re-targeting-a-workspace) |
+| Inspect or compact admission receipt storage on an owner checkout | [Maintenance — Admission receipt storage](references/maintenance.md#admission-receipt-storage) |
 | Scheduler/service logs and host incidents | [Operational logs](references/operational-logs.md) |
 
 Task tracking alone does not require a provider, PR credentials, a scheduler or
