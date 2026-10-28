@@ -1,10 +1,10 @@
 // Orbit dashboard task detail metadata: the meta block, the lifecycle and
 // delivery-stage strips, the hands chain, the delivery card and the OS readout.
 
-import { el, infoHint, makeCopyButton, runHref } from './common.js';
+import { el, infoHint, isAggregateView, makeCopyButton, runHref } from './common.js';
 import { elapsedLabel } from './task-runtime.js';
 import { buildExecutionProvenance, formatExecutionLocation } from './distributed.js';
-import { absTimeNode, canMutateTask, isAggregateView, pullRequestLink } from './task-shared.js';
+import { absTimeNode, canMutateTask, pullRequestLink } from './task-shared.js';
 import { explicitCrewValue, resolvedCrewName } from './task-crew.js';
 import { buildRiskChip, buildRiskDetail } from './task-riskiness.js';
 import { buildCrewUpdateControl, buildStatusUpdateControl } from './task-status-controls.js';

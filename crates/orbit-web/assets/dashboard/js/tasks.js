@@ -3,17 +3,19 @@
 
 import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
-import { runStartedAt, taskLockFiles } from './task-runtime.js';
+import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
-import { $, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag } from './task-shared.js';
+import { $, absTimeNode, rerender, taskState, setRenderer, taskList, tasksMeta, plural, isOsTag } from './task-shared.js';
 import { buildMutationFeedback, crewOptionsSignature, feedbackSignature } from './task-crew.js';
+import { invalidateDistributedConsole } from './distributed.js';
+import { recoveryRefusals } from './task-agent-actions.js';
 export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
 import * as taskReadiness from './task-readiness.js';
 import * as taskComments from './task-comments.js';
 export { buildArtifacts } from './task-evidence.js';
 export { scrollToComment } from './task-comments.js';
 import { clearTaskDataCaches } from './task-data.js';
-import { filterTasks, focusTaskRow, refreshChips, renderFilterSummary, renderTaskPagination, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction, syncSettleMergedButton } from './task-nav.js';
+import { closeTaskPane, filterTasks, focusTaskRow, refreshChips, renderFilterSummary, renderTaskPagination, resolvePendingOpenTask, revealTaskRow, selectTask, setOpenTask, stopRowInteraction, syncSettleMergedButton } from './task-nav.js';
 export { taskPilotWarningsFilter, copyTaskIdWithNotice, openVisibleTask, setPinnedExternalTask, clearPinnedExternalTask, cancelTaskSearchDebounce, clearTaskSearch, buildTasksHash, applyTasksHashQuery, syncTaskControls, renderTaskPagination, buildChips, wireSearch } from './task-nav.js';
 import { buildQuickAction, buildQuickActionError, hasQuickAction, pruneQuickActionErrors, quickActionSignature, quickActionState } from './task-quick-actions.js';
 import { applyTaskStatusChange, buildCrewUpdateControl } from './task-status-controls.js';

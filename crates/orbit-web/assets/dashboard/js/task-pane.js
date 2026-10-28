@@ -1,8 +1,8 @@
 // Orbit dashboard task pane: the pane render, its head, the resizer and the
 // keyboard navigation around it.
 
-import { $, el, makeCopyButton, syncNodes } from './common.js';
-import { taskState } from './task-shared.js';
+import { el, makeCopyButton, syncNodes } from './common.js';
+import { $, taskState } from './task-shared.js';
 import * as taskShared from './task-shared.js';
 import { closeTaskPane, focusTaskRow, openTaskPage, revealTaskRow, selectTask, stopRowInteraction } from './task-nav.js';
 import { taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
