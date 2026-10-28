@@ -4,11 +4,14 @@
 import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, formatDateTime, formatClock, formatDate, formatDayHeading, onClockZoneChange, statusPill, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
-import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
+import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
 import { buildRiskChip, buildRiskDetail, buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, buildExecutionProvenance, formatExecutionLocation, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims, registeredMachineHost } from './distributed.js';
 import { $, taskState, setRenderer, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, statusTransitions, statusTransition, fmtAbsTimeValue, absTimeNode, refreshTasks, defaultActiveStatuses, tasksMeta, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, GITHUB_PR_REF_SYSTEM, pullRequestLink, actionErrorNode, plural } from './task-shared.js';
+import { scheduleFeedbackExpiry, buildMutationFeedback, crewOptionsSignature, feedbackSignature, explicitCrewValue, isConfiguredCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
+export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
+import { applyUpdatedTask, clearTaskDataCaches, currentCrewTask, forgetTaskDetailLoad, loadTaskDetail, mergeTaskRecord, taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
 
 let settleMergedInFlight = false;
 // Advances whenever `taskState.openTaskId` changes, so a pin read for a task
@@ -27,24 +30,6 @@ const MUTATION_UNDO_WINDOW_MS = 8000;
 // A saved text field has no undo (restoring prose would need a second write of
 // its own), so its note only has to stay long enough to be read.
 const FIELD_SAVED_NOTICE_MS = 4000;
-// DANI-10391: a list row is a summary (`projection: "summary"`). It carries what
-// the collapsed row renders and filters on, plus counts, but the bodies, the
-// review gate, and the evidence a governed status transition needs live behind
-// GET /api/tasks/:id. `taskDetails` keeps the last full projection per task so
-// an open detail repaints from it across the 30 s refresh instead of flashing a
-// placeholder; `taskDetailLoads` records one read per list payload, keyed by
-// the summary object itself (every list fetch produces new objects), so a
-// render never issues a second read for the same row and a failed read is not
-// retried until the list refreshes or the row is reopened.
-let taskDetails = new Map();
-let taskDetailLoads = new Map();
-// Drain readiness for an open proposed or backlog task: why the drain is or is
-// not taking it, read per task (`GET /api/workflows/auto/readiness?task=<id>`)
-// so the Readiness card answers without the Drain card's snapshot and for a
-// task past its bound. One read per summary object, like `taskDetailLoads`; a
-// read in flight keeps the last answer on screen.
-const DRAIN_READINESS_STATUSES = new Set(["proposed", "backlog"]);
-let taskDrainLoads = new Map();
 const reviewApprovalsInFlight = new Set();
 // ORB-12645: which comments show their Markdown source instead of the rendered
 // body, keyed `<task id>#<index into task.comments>` like
@@ -76,9 +61,7 @@ onWorkspaceChange(() => {
   taskState.crewFeedback.clear();
   taskState.complexityFeedback.clear();
   taskState.fieldFeedback.clear();
-  taskDetails.clear();
-  taskDetailLoads.clear();
-  taskDrainLoads.clear();
+  clearTaskDataCaches();
   recoveryRefusals.clear();
   taskState.taskDecisionLoads.clear();
   taskState.expandedComments.clear();
@@ -208,76 +191,6 @@ export function formatTaskCount(filteredCount, fetchedCount, meta) {
     : `${filteredCount} shown of ${fetchedCount} fetched`;
 }
 
-function scheduleFeedbackExpiry(map, key, context, delay) {
-  const scheduledEntry = map.get(key);
-  setTimeout(() => {
-    if (map.get(key) === scheduledEntry && scheduledEntry && scheduledEntry.kind !== "pending") {
-      map.delete(key);
-      rerender(context);
-    }
-  }, delay);
-}
-
-// Renders the inline pending/success/error text next to a status or crew
-// select, plus a bounded "undo" button while `entry.undo` is still live. The
-// wrapper is a live region so screen-reader users get the same feedback a
-// sighted user reads from the text/color change.
-function buildMutationFeedback(entry, onUndo = () => {}) {
-  if (!entry) return null;
-  const wrap = el("span", { class: `mutation-feedback ${entry.kind}`, text: entry.text });
-  wrap.setAttribute("role", "status");
-  wrap.setAttribute("aria-live", entry.kind === "error" ? "assertive" : "polite");
-  if (entry.undo) {
-    const undoBtn = el("button", { class: "mutation-undo", text: "undo" });
-    undoBtn.type = "button";
-    undoBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      onUndo();
-    });
-    wrap.appendChild(undoBtn);
-  }
-  return wrap;
-}
-
-export function normalizeCrewPayload(payload) {
-  const crews = Array.isArray(payload && payload.crews)
-    ? payload.crews
-      .filter((crew) => crew && crew.name)
-      .map((crew) => ({
-        name: String(crew.name),
-        model: crew.model == null ? "" : String(crew.model),
-        is_default: Boolean(crew.is_default),
-      }))
-    : [];
-  crews.sort((a, b) => a.name.localeCompare(b.name));
-  return {
-    default_crew: payload && payload.default_crew ? String(payload.default_crew) : null,
-    crews,
-  };
-}
-
-export function cacheCrewPayload(payload) {
-  taskState.lastCrewPayload = normalizeCrewPayload(payload);
-  return taskState.lastCrewPayload;
-}
-
-export function hasCrewOptions() {
-  return Array.isArray(taskState.lastCrewPayload.crews) && taskState.lastCrewPayload.crews.length > 0;
-}
-
-function crewOptionsSignature() {
-  return JSON.stringify(taskState.lastCrewPayload);
-}
-
-// A stable string for a task's current mutation-feedback entry (or "" when
-// none), so a syncNodes row diff picks up pending/success/error/undo
-// transitions the same way it picks up any other task field change.
-function feedbackSignature(map, taskId) {
-  const entry = map.get(taskId);
-  if (!entry) return "";
-  return `${entry.kind}:${entry.text}:${entry.undo ? entry.undo.expiresAt : ""}`;
-}
-
 // The detail's own controls — status, complexity, crew and each field editor —
 // keep their feedback outside the task object, so the detail's diff hash has to
 // see it the way the row's hash sees the status/crew entries. Without this a
@@ -288,184 +201,6 @@ function detailFeedbackSignature(taskId) {
     parts.push(feedbackSignature(taskState.fieldFeedback, fieldFeedbackKey(taskId, field)));
   }
   return parts.join("|");
-}
-
-function explicitCrewValue(task) {
-  return task && task.crew ? String(task.crew) : "";
-}
-
-function isConfiguredCrewValue(value) {
-  const name = value ? String(value) : "";
-  return Boolean(name) && taskState.lastCrewPayload.crews.some((crew) => crew.name === name);
-}
-
-function hasStaleExplicitCrew(task) {
-  const currentValue = explicitCrewValue(task);
-  return Boolean(currentValue) && !isConfiguredCrewValue(currentValue);
-}
-
-function resolvedCrewName(task) {
-  if (taskState.lastCrewPayload.default_crew) return taskState.lastCrewPayload.default_crew;
-  if (!explicitCrewValue(task) && task && task.resolved_crew) {
-    return String(task.resolved_crew);
-  }
-  return "workspace";
-}
-
-function defaultCrewOptionText(task) {
-  return `default: ${resolvedCrewName(task)}`;
-}
-
-function crewOptionTitle(crew) {
-  return `model=${crew.model || "-"}`;
-}
-
-function isTaskSummary(task) {
-  return Boolean(task) && task.projection === "summary";
-}
-
-// The aggregate view's rows carry their owning workspace, which the detail and
-// mutation endpoints do not echo back. A full projection replacing a row keeps
-// those fields, or the row would lose its badge and, with it, its mutation
-// target (canMutateTask) after the first edit.
-const LIST_ONLY_TASK_FIELDS = ["workspace_id", "workspace_name", "workspace_root"];
-
-function mergeTaskRecord(previous, updated) {
-  if (!previous || !updated) return updated;
-  const merged = { ...updated };
-  for (const key of LIST_ONLY_TASK_FIELDS) {
-    if (merged[key] == null && previous[key] != null) merged[key] = previous[key];
-  }
-  return merged;
-}
-
-function applyUpdatedTask(updatedTask, context) {
-  if (!updatedTask || !updatedTask.id) return;
-  const previous = taskList(context).find((task) => task && task.id === updatedTask.id);
-  const merged = mergeTaskRecord(previous, updatedTask);
-  if (!isTaskSummary(merged)) taskDetails.set(merged.id, merged);
-  if (context && typeof context.replaceTask === "function") {
-    context.replaceTask(merged);
-  }
-  if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.task && taskState.pinnedExternalTask.task.id === merged.id) {
-    taskState.pinnedExternalTask.task = merged;
-  }
-  return merged;
-}
-
-function currentCrewTask(task, context) {
-  if (!task || !task.id) return task;
-  return taskList(context).find((current) => current && current.id === task.id) ||
-    (taskState.pinnedExternalTask && taskState.pinnedExternalTask.task && taskState.pinnedExternalTask.task.id === task.id
-      ? taskState.pinnedExternalTask.task
-      : null) ||
-    taskDetails.get(task.id) ||
-    task;
-}
-
-// Read the full projection behind a summary row. One read per summary object:
-// a repeat call for the same row returns the same promise, settled or not, so
-// renders and a status change racing on the same row share it.
-function loadTaskDetail(task, context) {
-  const existing = taskDetailLoads.get(task.id);
-  if (existing && existing.source === task) return existing.promise;
-  const load = { source: task, pending: true, error: null, promise: null };
-  if (isAggregateView() && !task.workspace_id) {
-    load.pending = false;
-    load.error = "Task workspace is unknown";
-    load.promise = Promise.reject(new Error(load.error));
-    taskDetailLoads.set(task.id, load);
-    return load.promise;
-  }
-  load.promise = fetchJson(taskMutationPath(task)).then(
-    (full) => {
-      load.pending = false;
-      if (taskDetailLoads.get(task.id) === load) {
-        applyUpdatedTask(full, context);
-        rerender(context);
-      }
-      return full;
-    },
-    (error) => {
-      load.pending = false;
-      load.error = error.message || String(error);
-      if (taskDetailLoads.get(task.id) === load) rerender(context);
-      throw error;
-    },
-  );
-  taskDetailLoads.set(task.id, load);
-  return load.promise;
-}
-
-// What an expanded row can render right now: the full projection when the row
-// is one or the last one fetched, plus whether a fresh read is pending or
-// failed. Starts the read for a summary row that has none yet.
-function taskDetailState(task, context) {
-  if (!isTaskSummary(task)) return { task, pending: false, error: null };
-  const load = taskDetailLoads.get(task.id);
-  if (!load || load.source !== task) {
-    loadTaskDetail(task, context).catch(() => {});
-  }
-  const current = taskDetailLoads.get(task.id);
-  return {
-    task: taskDetails.get(task.id) || null,
-    pending: Boolean(current && current.pending),
-    error: current ? current.error : null,
-  };
-}
-
-// Drop the recorded read so the next render issues a fresh one.
-function forgetTaskDetailLoad(taskId) {
-  taskDetailLoads.delete(taskId);
-  taskDrainLoads.delete(taskId);
-  taskState.taskDecisionLoads.delete(taskId);
-}
-
-function loadTaskDrainReadiness(task, context) {
-  const previous = taskDrainLoads.get(task.id);
-  const load = { source: task, pending: true, error: null, entry: previous ? previous.entry : null };
-  taskDrainLoads.set(task.id, load);
-  if (isAggregateView() && !task.workspace_id) {
-    load.pending = false;
-    load.entry = null;
-    load.error = "Task workspace is unknown";
-    return;
-  }
-  fetchJson(taskWorkspacePath(task, `/api/workflows/auto/readiness?task=${encodeURIComponent(task.id)}`)).then(
-    (payload) => {
-      const entry = Array.isArray(payload?.tasks) ? payload.tasks.find((item) => item?.task_id === task.id) : null;
-      load.entry = entry || null;
-      load.error = entry ? null : "The readiness snapshot does not mention this task";
-    },
-    (error) => {
-      load.entry = null;
-      load.error = error.message || String(error);
-    },
-  ).finally(() => {
-    load.pending = false;
-    if (taskDrainLoads.get(task.id) === load) rerender(context);
-  });
-}
-
-// What the Readiness card knows of the drain for an open task: its own read's
-// entry, else the Drain card's snapshot entry, and whether a read is pending
-// or failed. Null for a status the drain does not consider.
-function taskDrainState(task, context) {
-  if (!DRAIN_READINESS_STATUSES.has(task.status)) return null;
-  const load = taskDrainLoads.get(task.id);
-  if (!load || load.source !== task) loadTaskDrainReadiness(task, context);
-  const current = taskDrainLoads.get(task.id);
-  return {
-    entry: current.entry || drainReadinessEntry(task.id),
-    pending: current.pending,
-    error: current.error,
-  };
-}
-
-// An answer diffs on what it says; until one arrives, on the read's state.
-function taskDrainSignature(drain) {
-  if (!drain) return "";
-  return drain.entry ? JSON.stringify(drain.entry) : `${drain.pending}-${drain.error || ""}`;
 }
 
 function stopRowInteraction(node) {
