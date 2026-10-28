@@ -250,17 +250,24 @@ dock with its detail; below 1000px the task list fills the width.
 A task's detail leads with **Details**: status, complexity, crew, the
 operating systems it can run on, who created and carried it, its run and the
 machine it ran on, its pull request, its tags, and a **Risk** chip with the
-regression-risk score. When an estimate is available, the **Regression risk**
-breakdown gives the same estimate, its window and support, driving
-paths, and any limits. Partial support uses `~`; without an estimate, there is
-no breakdown. The Risk chip says **No estimate** and its tooltip gives the
-reason: `no files` (no context files), `no paths` (selectors identify no file or
-directory), `thin history` (too few done tasks touched its paths in the window),
-or `unavailable`
-(the estimate could not be computed). The score uses `window_days` and
-`min_support` even when
-`workflow.regression_risk.enabled` is off, since that switch controls prompt
-marks only. A circled *i* beside a value explains it on hover or focus. Its tabs are
+regression-risk score. The estimate is fitted on task size alone, without
+per-file or crew attribution. Tasks without a usable diff-based fit use the
+number of distinct file and directory paths in their context selectors. A
+review or done task with a resolvable diff and enough matching landed-diff
+history uses the diff's inserted and deleted lines. The **Regression risk**
+breakdown shows this basis and its size band: recent done tasks on the same
+basis at least this size, and how many regressed. A `~` before the percentage
+means some selectors have no path and are omitted from the declared-file count,
+so that count is a lower bound. When no estimate is available, the Tasks row
+has no risk part; the Risk chip says **No estimate** and its tooltip gives the
+reason: `no files` (no context selectors and no usable diff-based estimate),
+`no paths` (selectors identify no file or directory), `thin history` (not
+enough usable done-task observations on the selected basis to fit), or
+`unavailable` (the estimate could not be computed). The detail breakdown is
+shown only when there is an estimate. The score uses `window_days` and
+`min_support` even when `workflow.regression_risk.enabled` is off, since that
+switch controls prompt marks only. A circled *i* beside a value explains it on
+hover or focus. Its tabs are
 **Overview**, **Delivery** (only for a task with a delivery claim), **History**,
 **Runs**, [**Artifacts**](../../concepts/tasks/#task-artifacts), and
 **Comments**. The Artifacts tab lists files already stored on the task and
