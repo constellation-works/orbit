@@ -1,10 +1,20 @@
-//! Forwarding-only `RuntimeHost` implementation for `OrbitRuntime`.
+//! `RuntimeHost` implementation for `OrbitRuntime`.
 //!
-//! Every substantive body lives in a sibling helper grouped by concern
-//! (`claims`, `validation`, `recovery`, `invocation` and the other modules
-//! declared in `mod.rs`); each method here is a one-line delegation with
-//! the trait signature unchanged. Rust allows one trait impl per type, so
-//! this file cannot be split into multiple impl blocks.
+//! Most methods delegate to a sibling helper grouped by concern (`claims`,
+//! `validation`, `recovery`, `invocation` and the other modules declared in
+//! `mod.rs`), or adapt a type on the way through, with the trait signature
+//! unchanged. Rust allows one trait impl per type, so this file cannot be
+//! split into multiple impl blocks.
+//!
+//! Three bodies hold logic rather than delegating. They stay here as residual
+//! exceptions to that pattern:
+//!
+//! - `requires_claude_worker_credential` is a platform policy
+//!   (`cfg!(target_os = "macos")`).
+//! - `orbit_workspace_selector` trims the logical workspace id and maps an
+//!   empty selector to `None`.
+//! - `refresh_persistence_after_cli_provider` runs a store lookup with `?`
+//!   and then a refresh call.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
