@@ -15,6 +15,8 @@ const BROAD: &str = "cargo test -p orbit-exec --test probe fixture_children -- -
 const A: &str = "fixture_children::a_killed_parent_takes_its_group_with_it";
 const B: &str = "fixture_children::an_overrunning_child_is_killed";
 const C: &str = "fixture_children::a_third_child_is_reaped";
+const SEATBELT_CONFORMANCE_TABLE: &str =
+    "a_config_templated_write_root_outside_scratch_needs_fs_consent_scenarios";
 
 /// The host requirement that runs exactly `test`.
 fn exact(test: &str) -> String {
@@ -255,6 +257,146 @@ fn settles_on_their_replays(broad_command: &str) {
     assert_eq!(leaf.pair.owner_status(&leaf.task), "review");
 }
 
+/// The nested-Seatbelt conformance table emits the exact notice the reviewer
+/// turns into a host requirement; settlement runs that filtered table on the
+/// claimed host and passes the review without escalation [ORB-19501].
+fn a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay() {
+    let filter = format!("admission_audit::plugin_conformance::{SEATBELT_CONFORMANCE_TABLE}");
+    let output = std::process::Command::new(std::env::current_exe().expect("runtime test binary"))
+        .args([
+            "--exact",
+            filter.as_str(),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("ORBIT_TEST_FORCE_SEATBELT_REFUSAL", "1")
+        .env_remove("ORBIT_REQUIRE_SANDBOX_EXEC")
+        .output()
+        .expect("run the conformance table under a forced Seatbelt refusal");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "the nested-Seatbelt table defers instead of failing:\n{stdout}\n{stderr}"
+    );
+    let prefix = orbit_types::workflow::SEATBELT_DEFERRAL_PREFIX;
+    let deferred = stderr
+        .lines()
+        .filter(|line| line.starts_with(prefix))
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(deferred.len(), 2, "both conformance rows defer: {stderr}");
+    assert!(
+        deferred
+            .iter()
+            .all(|line| line.starts_with(&format!("{prefix} {SEATBELT_CONFORMANCE_TABLE}:"))),
+        "the deferrals name the filtered table the host replays: {deferred:?}"
+    );
+    assert!(
+        !stderr.contains(
+            "qa-scenario-pass: a_config_templated_write_root_outside_scratch_needs_fs_consent"
+        ) && !stderr.contains(
+            "qa-scenario-pass: goldens_supply_fixture_secrets_and_the_host_store_is_never_read"
+        ),
+        "a deferred row gets no pass credit: {stderr}"
+    );
+
+    let command = format!("cargo test -p orbit-core --test runtime {SEATBELT_CONFORMANCE_TABLE}");
+    let (leaf, attempt_id) = leaf_with_probe_target(&probe(&[]), "runtime");
+    leaf.put_report(&ReviewReport {
+        external_evidence: vec![ReviewEvidenceRequirement {
+            kind: ReviewEvidenceKind::HostSandboxTest,
+            name: "Nested-Seatbelt conformance table".into(),
+            command: command.clone(),
+            artifact: artifact(0),
+            os: Some(host_os()),
+            hosted_check: None,
+        }],
+        schema_version: REVIEW_CONTRACT_VERSION,
+        attempt_id: attempt_id.clone(),
+        verdict: ReviewVerdict::Incomplete,
+        summary: "The nested-Seatbelt conformance rows need the claimed host.".into(),
+        findings: Vec::new(),
+        validation: vec![
+            ReviewValidation {
+                id: Some("V1".into()),
+                command: "make ci-fast".into(),
+                outcome: ValidationOutcome::Passed,
+                role: ValidationRole::Required,
+                note: None,
+                check: None,
+                control: None,
+                sources: Vec::new(),
+                mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
+                deferred: Vec::new(),
+                baseline: None,
+            },
+            ReviewValidation {
+                id: Some("V2".into()),
+                command: command.clone(),
+                outcome: ValidationOutcome::Passed,
+                role: ValidationRole::Required,
+                note: Some("The nested-Seatbelt table emitted these deferrals.".into()),
+                check: None,
+                control: None,
+                sources: Vec::new(),
+                mutation_target: Vec::new(),
+                repaired_blob: Default::default(),
+                deferred,
+                baseline: None,
+            },
+        ],
+        retired_validation: Vec::new(),
+        escalation: Some("the nested-Seatbelt table needs the claimed host".into()),
+    });
+
+    let settled = leaf
+        .settle()
+        .expect("the claimed host replays the deferred table and settles the review");
+    assert_eq!(settled["gate"], "passed", "{settled}");
+    assert!(leaf.owner_artifact(REVIEW_EVIDENCE_HOLD_ARTIFACT).is_none());
+    let head = git(&leaf.pair.follower_repo, &["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    let tree = git(&leaf.pair.follower_repo, &["rev-parse", "HEAD^{tree}"])
+        .trim()
+        .to_string();
+    let certificate = certificate(&leaf);
+    assert_eq!(certificate.attempt_id, attempt_id);
+    assert!(certificate.verdict.passed(), "{:?}", certificate.verdict);
+    assert!(
+        certificate.escalation.is_none(),
+        "{:?}",
+        certificate.escalation
+    );
+    let [host] = certificate.host_evidence.as_slice() else {
+        panic!("one host replay: {:?}", certificate.host_evidence);
+    };
+    assert!(host.passed, "{host:?}");
+    assert_eq!(host.command, command);
+    assert_eq!(host.tree, tree);
+    let broad = broad_record(&certificate, &command);
+    assert_eq!(broad.executed_outcome(), ValidationOutcome::Passed);
+    assert!(broad.deferred.is_empty(), "{broad:?}");
+    let log: Value = serde_json::from_slice(
+        &leaf
+            .owner_artifact(&log_artifact(0))
+            .expect("host replay log"),
+    )
+    .unwrap();
+    assert!(
+        log["output"]
+            .as_str()
+            .unwrap_or_default()
+            .lines()
+            .any(|line| {
+                line == format!("ORBIT_HOST_PROBE_RAN {SEATBELT_CONFORMANCE_TABLE} {head}")
+            }),
+        "the host replay ran the exact table at the final candidate: {log:#}"
+    );
+}
+
 /// A deferral no host requirement runs exactly, an open finding, a failed
 /// broader run, a requirement outside the admitted grammar or without a
 /// record of its own (the owner binds each host result to one), or a moved
@@ -489,5 +631,6 @@ crate::scenario_table!(
     a_broader_run_with_non_selecting_options_settles_on_its_replays,
     a_broader_run_the_host_cannot_establish_runs_no_replay,
     a_replay_short_of_executing_its_test_leaves_the_broader_run_short,
-    a_deferral_owed_to_another_os_holds_the_review_for_it
+    a_deferral_owed_to_another_os_holds_the_review_for_it,
+    a_nested_seatbelt_conformance_deferral_settles_on_its_host_replay
 );

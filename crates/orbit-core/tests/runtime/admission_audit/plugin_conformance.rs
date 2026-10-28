@@ -7,10 +7,35 @@ use orbit_common::OrbitError;
 use orbit_types::plugin::PLUGIN_DIR_NAME;
 
 use super::plugin_fixture::PluginFixture;
+use crate::scenarios::Outcome;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::plugin::{
     PluginAddOptions, PluginTestOptions, PluginTestReport, install_plugin, test_plugin_dir,
 };
+
+/// The libtest test these scenario rows run inside. A nested Seatbelt lane
+/// refuses the plugin backend's own sandbox, so both rows defer under this
+/// one name: it is the filter a host replay runs to execute the rows
+/// natively, and the test the reviewer's `host_sandbox_test` requirement
+/// names [ORB-19501].
+const SCENARIO_TABLE: &str =
+    "a_config_templated_write_root_outside_scratch_needs_fs_consent_scenarios";
+
+/// Skip a row the lane's Seatbelt sandbox cannot run, printing only the
+/// sanctioned deferral notice and recording no pass. Without this the row
+/// reaches the backend spawn, fails with a typed
+/// `validation_route_unavailable` refusal the reviewer records as a plain
+/// failure, and no host replay runs.
+fn nested_seatbelt_skip() -> Option<Outcome> {
+    if orbit_exec::macos_sandbox_test_guard(SCENARIO_TABLE) {
+        None
+    } else {
+        Some(Outcome::Unavailable(
+            "nested Seatbelt refused the plugin backend's sandbox; deferred to a host replay"
+                .into(),
+        ))
+    }
+}
 
 /// A plugin whose one tool answers deterministically, with a golden file
 /// that either matches it or deliberately does not.
@@ -130,12 +155,15 @@ fn sentinel(dir: &Path) -> String {
 }
 
 #[cfg(unix)]
-fn a_config_templated_write_root_outside_scratch_needs_fs_consent() {
+fn a_config_templated_write_root_outside_scratch_needs_fs_consent() -> Outcome {
+    if let Some(skipped) = nested_seatbelt_skip() {
+        return skipped;
+    }
     if !super::plugin_fixture::enter_isolated_child(
         module_path!(),
         "a_config_templated_write_root_outside_scratch_needs_fs_consent",
     ) {
-        return;
+        return Outcome::Passed;
     }
     let fixture = PluginFixture::new();
     let root = write_tested_plugin(&fixture, "configured", "world");
@@ -179,6 +207,7 @@ fn a_config_templated_write_root_outside_scratch_needs_fs_consent() {
         "overwritten\n",
         "the consented root is opened"
     );
+    Outcome::Passed
 }
 
 /// A plugin declaring `api_token`, whose backend reports which of two known
@@ -222,12 +251,15 @@ fn write_secret_plugin(fixture: &PluginFixture, namespace: &str, golden: &str) -
 /// run delivers those — and never the host's stored value, even for the
 /// installed plugin of the same name.
 #[cfg(unix)]
-fn goldens_supply_fixture_secrets_and_the_host_store_is_never_read() {
+fn goldens_supply_fixture_secrets_and_the_host_store_is_never_read() -> Outcome {
+    if let Some(skipped) = nested_seatbelt_skip() {
+        return skipped;
+    }
     if !super::plugin_fixture::enter_isolated_child(
         module_path!(),
         "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
     ) {
-        return;
+        return Outcome::Passed;
     }
     let fixture = PluginFixture::new();
     let root = write_secret_plugin(
@@ -263,6 +295,7 @@ fn goldens_supply_fixture_secrets_and_the_host_store_is_never_read() {
          value reaches neither: {:?}",
         report.results
     );
+    Outcome::Passed
 }
 
 /// A fixture for a name the manifest does not declare could never be
@@ -306,3 +339,44 @@ crate::scenario_table!(
     a_config_templated_write_root_outside_scratch_needs_fs_consent,
     goldens_supply_fixture_secrets_and_the_host_store_is_never_read
 );
+
+/// A nested-Seatbelt lane [ORB-19501]: with the Seatbelt apply refused, the
+/// table passes while both rows defer under the table's own name and take no
+/// pass credit. The sanctioned notice is what the required-validation parser
+/// and the reviewer key a `host_sandbox_test` requirement on, so the claimed
+/// leaf's host replays the table outside the sandbox instead of escalating.
+#[cfg(unix)]
+#[test]
+fn nested_seatbelt_defers_conformance_rows_without_pass_credit() {
+    let module = module_path!().split_once("::").expect("test module").1;
+    let table = format!("{module}::{SCENARIO_TABLE}");
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args(["--exact", &table, "--nocapture", "--test-threads=1"])
+        .env("ORBIT_TEST_FORCE_SEATBELT_REFUSAL", "1")
+        .env_remove("ORBIT_REQUIRE_SANDBOX_EXEC")
+        .output()
+        .expect("run the conformance table under a forced Seatbelt refusal");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "a deferred table still exits zero:\n{stdout}\n{stderr}"
+    );
+    let sanctioned = format!(
+        "{} {SCENARIO_TABLE}:",
+        orbit_types::workflow::SEATBELT_DEFERRAL_PREFIX
+    );
+    assert!(
+        stderr.contains(&sanctioned),
+        "the rows defer under the table name the host replay filters on:\n{stdout}\n{stderr}"
+    );
+    for row in [
+        "a_config_templated_write_root_outside_scratch_needs_fs_consent",
+        "goldens_supply_fixture_secrets_and_the_host_store_is_never_read",
+    ] {
+        assert!(
+            !stderr.contains(&format!("qa-scenario-pass: {row}")),
+            "a deferred row takes no pass credit for {row}:\n{stdout}\n{stderr}"
+        );
+    }
+}
