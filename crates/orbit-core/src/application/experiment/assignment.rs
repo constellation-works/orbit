@@ -9,6 +9,14 @@ use orbit_types::task::Task;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+/// Why a task was excluded because another experiment owns one of its
+/// surfaces.
+pub(crate) const SURFACE_CONFLICT_EXCLUSION: &str = "surface_conflict";
+/// Why a task with an explicit crew was excluded from an experiment whose
+/// arms overlay the crew surface: every arm would run the explicit crew, so
+/// a control task could run a treatment crew unseen [ORB-19416].
+pub(crate) const EXPLICIT_CREW_EXCLUSION: &str = "explicit_crew";
+
 impl OrbitRuntime {
     /// Assign eligible running experiments once, before any delivery crew draw.
     pub(crate) fn admit_task_experiments(
@@ -16,6 +24,13 @@ impl OrbitRuntime {
         task: &Task,
     ) -> Result<Vec<ExperimentAssignment>, OrbitError> {
         let enabled = self.current_experiments_enabled();
+        // Read before the store transaction: recovering a legacy crew's
+        // provenance reads the task's history.
+        let explicit_crew = task
+            .crew
+            .as_deref()
+            .is_some_and(|crew| !crew.trim().is_empty())
+            && self.task_crew_source(task)?.as_deref() == Some("explicit");
         self.sqlite_store()?.assign_experiments(
             &self.workspace_id()?,
             &task.id,
@@ -45,7 +60,13 @@ impl OrbitRuntime {
                         continue;
                     }
                     let surfaces = experiment_surfaces(record)?;
-                    let conflict = !occupied.is_disjoint(&surfaces);
+                    let exclusion_reason = if !occupied.is_disjoint(&surfaces) {
+                        Some(SURFACE_CONFLICT_EXCLUSION.to_string())
+                    } else if explicit_crew && surfaces.contains("crew") {
+                        Some(EXPLICIT_CREW_EXCLUSION.to_string())
+                    } else {
+                        None
+                    };
                     let mut assignment = ExperimentAssignment {
                         experiment: experiment.id.clone(),
                         task_id: task.id.clone(),
@@ -54,9 +75,9 @@ impl OrbitRuntime {
                         digest: None,
                         assigned_at: Utc::now(),
                         forced: false,
-                        exclusion_reason: conflict.then(|| "surface_conflict".into()),
+                        exclusion_reason,
                     };
-                    if !conflict {
+                    if assignment.exclusion_reason.is_none() {
                         let arms = record
                             .arms
                             .iter()
@@ -100,7 +121,9 @@ impl OrbitRuntime {
     }
 
     /// Operator-only tool entrypoint: force an unassigned task into a running
-    /// arm. Existing assignments and exclusions are never overwritten.
+    /// arm. Existing assignments and exclusions are never overwritten. A
+    /// task with an explicit crew may be forced into a crew arm; the arm's
+    /// crew then runs and is written back to the task at admission.
     pub fn force_experiment_assignment(
         &self,
         id: &str,
@@ -136,10 +159,11 @@ impl OrbitRuntime {
                         "forced assignment requires a running experiment".into(),
                     ));
                 }
-                if existing
-                    .iter()
-                    .any(|row| row.experiment == record.experiment.id)
-                {
+                // An explicit-crew exclusion yields to the operator's choice.
+                if existing.iter().any(|row| {
+                    row.experiment == record.experiment.id
+                        && row.exclusion_reason.as_deref() != Some(EXPLICIT_CREW_EXCLUSION)
+                }) {
                     return Err(OrbitError::InvalidInput(
                         "task already has a sticky assignment or exclusion for this experiment"
                             .into(),

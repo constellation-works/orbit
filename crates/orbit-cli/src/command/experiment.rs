@@ -203,11 +203,12 @@ fn readout_blocks(value: &Value) -> Vec<Block> {
     let lagging = &value["lagging"];
     let _ = write!(
         header,
-        "\nPrimary metric: {}\nEnrollment: {} analysed, {} forced (excluded), {} surface-conflict exclusions\nSample ratio: chi-square {}, df {}, p = {}{}\nLagging: {} task(s) in flight, {} regression window(s) open",
+        "\nPrimary metric: {}\nEnrollment: {} analysed, {} forced (excluded), {} surface-conflict exclusions, {} explicit-crew exclusions\nSample ratio: chi-square {}, df {}, p = {}{}\nLagging: {} task(s) in flight, {} regression window(s) open",
         text(&experiment["primary_metric"]),
         text(&enrollment["analysed"]),
         text(&enrollment["forced_excluded"]),
         text(&enrollment["surface_conflict_excluded"]),
+        text(&enrollment["explicit_crew_excluded"]),
         number(&ratio["chi_square"]),
         text(&ratio["df"]),
         number(&ratio["p_value"]),

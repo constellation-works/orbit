@@ -848,6 +848,7 @@ orbit migrate              # same safe inspection default
 orbit migrate --confirm    # open the workspace, auto-apply, and report
 orbit migrate --json       # machine-readable inspection report
 orbit migrate --backfill-diff-stats [--limit N]  # apply, then record landed diff stats
+orbit migrate --backfill-task-crews  # apply, then set task.crew from each task's latest delivery run
 ```
 
 Example dry run on a pre-upgrade workspace:
@@ -877,6 +878,15 @@ whose landed commit is not available locally is counted as unresolvable and skip
 one with no recorded landing is counted separately. A rerun records only what is still
 missing, and the report says how many tasks remain past the limit. The rows feed
 Analytics › Metrics › Lines changed.
+
+`--backfill-task-crews` applies pending migrations like `--confirm`, then sets each task's
+crew to the crew its latest delivery run on this host selected (the run's `crew_selection`,
+or the one a claimed leaf froze in its pipeline state) wherever they differ, terminal
+tasks included. Each change records `crew_source: backfill:admission` and a `crew_assigned`
+history entry; the report names the workspace, how many tasks had a selection and which
+changed. Run it on the owner, once, after upgrading to a build that writes admission crews
+back. A task whose delivery ran only on a follower has no run on the owner, so it keeps its
+crew until its next settlement. A rerun changes nothing.
 
 Before applying layout v3, pause admissions and stop every older Orbit process
 that can write tasks. Install the new binary, apply or trigger the workspace

@@ -777,7 +777,8 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
         "no reassignment warning for a non-auto-task task"
     );
 
-    // A running auto-task task is not rewritten.
+    // A running auto-task task gets no reassignment warning, but records the
+    // crew its admission ran [ORB-19416].
     let running = fx.filed_task(
         Some("opus"),
         &["auto-task:ux-review-ui"],
@@ -794,9 +795,18 @@ fn an_auto_task_explicit_crew_is_reassigned_when_its_provider_is_limited() {
             None,
         )
         .unwrap();
-    fx.replay_admission(json!({ "task_ids": [running.id] }));
+    let admitted = fx.replay_admission(json!({ "task_ids": [running.id] }));
     let stored = runtime.get_task(&running.id).unwrap();
-    assert_eq!(stored.crew.as_deref(), Some("opus"), "{stored:?}");
+    assert_eq!(
+        stored.crew.as_deref(),
+        admitted["crew"].as_str(),
+        "{stored:?}"
+    );
+    assert_eq!(
+        stored.crew_source.as_deref(),
+        Some("redraw:provider_limit"),
+        "{stored:?}"
+    );
     assert!(
         runtime
             .get_task_comments(&running.id)

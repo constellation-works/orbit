@@ -47,10 +47,19 @@ pub(super) fn assign_experiments(
             if assignment.task_id != task {
                 return Err(OrbitError::Store("experiment assignment task mismatch".into()));
             }
-            conn.execute(
-                "INSERT INTO experiment_assignments (workspace_id, experiment_id, task_id, arm, segment, overlay_digest, assigned_at, forced, exclusion_reason) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+            // A forced assignment may replace an exclusion; any other row
+            // for the same experiment is sticky and refused as a duplicate.
+            let written = conn.execute(
+                "INSERT INTO experiment_assignments (workspace_id, experiment_id, task_id, arm, segment, overlay_digest, assigned_at, forced, exclusion_reason) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) \
+                 ON CONFLICT (workspace_id, experiment_id, task_id) DO UPDATE SET arm=excluded.arm, segment=excluded.segment, overlay_digest=excluded.overlay_digest, assigned_at=excluded.assigned_at, forced=excluded.forced, exclusion_reason=excluded.exclusion_reason \
+                 WHERE experiment_assignments.arm IS NULL AND excluded.forced=1 AND excluded.arm IS NOT NULL",
                 params![workspace, assignment.experiment, task, assignment.arm, assignment.segment, assignment.digest, stamp(assignment.assigned_at), assignment.forced, assignment.exclusion_reason],
             ).map_err(sqlite_store_error)?;
+            if written == 0 {
+                return Err(OrbitError::Store(
+                    "experiment assignment already exists for this task".into(),
+                ));
+            }
         }
         if mark_admitted {
             conn.execute("INSERT OR IGNORE INTO experiment_admissions (workspace_id, task_id) VALUES (?1,?2)", params![workspace, task]).map_err(sqlite_store_error)?;

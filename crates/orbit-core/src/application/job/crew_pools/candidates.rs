@@ -11,7 +11,8 @@ use serde_json::Value;
 use crate::OrbitRuntime;
 use crate::application::contracts::{
     CreationCrewAssignment, CrewCandidate, InspectionPool, PURPOSE_SOURCE_PREFIX,
-    TYPE_SOURCE_PREFIX, automatic_crew_source, parse_type_crew_source, type_crew_source,
+    TYPE_SOURCE_PREFIX, admission_crew_source, automatic_crew_source, parse_type_crew_source,
+    type_crew_source,
 };
 use crate::runtime::run_input::non_empty;
 
@@ -483,10 +484,13 @@ impl OrbitRuntime {
         let type_source = source
             .as_deref()
             .filter(|source| source.starts_with(TYPE_SOURCE_PREFIX));
+        // A crew admission wrote back for one delivery is not kept: the
+        // task draws its pool again, as an automatic assignment.
         let automatic = pool_tier.is_some()
             || purpose_source.is_some()
             || type_source.is_some()
-            || source.as_deref() == Some("default");
+            || source.as_deref() == Some("default")
+            || source.as_deref().is_some_and(admission_crew_source);
         let unassigned = self
             .crew_unless_retired(task.crew.as_deref())
             .and_then(non_empty)

@@ -4,6 +4,7 @@ use orbit_cmd::registry_runtime::{
 };
 use orbit_cmd::{MigrateCommands, MigrateStatus, migrate_dry_run_at};
 use orbit_core::application::codebase::{DIFF_STATS_BACKFILL_DEFAULT_LIMIT, DiffStatsBackfill};
+use orbit_core::application::job::TaskCrewBackfill;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::json;
 
@@ -23,7 +24,7 @@ pub struct MigrateCommand {
     #[arg(long, conflicts_with = "dry_run")]
     pub confirm: bool,
     /// Explicitly request the default non-destructive inspection mode
-    #[arg(long, conflicts_with_all = ["confirm", "backfill_diff_stats"])]
+    #[arg(long, conflicts_with_all = ["confirm", "backfill_diff_stats", "backfill_task_crews"])]
     pub dry_run: bool,
     /// Apply pending migrations, then record diff stats for done tasks that landed before they were recorded
     #[arg(long)]
@@ -36,6 +37,9 @@ pub struct MigrateCommand {
         value_name = "N"
     )]
     pub limit: usize,
+    /// Apply pending migrations, then set each task's crew to the crew its latest delivery run selected, where they differ
+    #[arg(long, conflicts_with = "backfill_diff_stats")]
+    pub backfill_task_crews: bool,
 }
 
 impl MigrateCommand {
@@ -108,7 +112,7 @@ impl MigrateCommand {
     /// Whether this invocation opens the runtime, which applies pending
     /// migrations: `--confirm`, or a backfill that needs the current schema.
     pub fn applies(&self) -> bool {
-        self.confirm || self.backfill_diff_stats
+        self.confirm || self.backfill_diff_stats || self.backfill_task_crews
     }
 }
 
@@ -116,6 +120,9 @@ impl Execute for MigrateCommand {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         if self.backfill_diff_stats {
             return backfill_payload(&runtime.backfill_landed_diff_stats(self.limit)?);
+        }
+        if self.backfill_task_crews {
+            return task_crew_backfill_payload(&runtime.backfill_admitted_task_crews()?);
         }
         // Apply path: opening the runtime (before this command ran) already
         // applied everything pending; report the outcome.
@@ -135,6 +142,23 @@ fn backfill_payload(report: &DiffStatsBackfill) -> CommandOut {
         text.push_str(&format!(
             "\n{} done tasks left past --limit {}; run it again to continue",
             report.remaining, report.limit
+        ));
+    }
+    Ok(Payload::blocks(doc, vec![Block::text(text)]).into())
+}
+
+fn task_crew_backfill_payload(report: &TaskCrewBackfill) -> CommandOut {
+    let doc = json!({ "task_crew_backfill": report });
+    let mut text = format!(
+        "task crew backfill in workspace {}: {} changed of {} tasks with a delivery crew selection",
+        report.workspace, report.changed, report.examined
+    );
+    for change in &report.tasks {
+        text.push_str(&format!(
+            "\n  {}: {} -> {}",
+            change.task_id,
+            change.from.as_deref().unwrap_or("(none)"),
+            change.to
         ));
     }
     Ok(Payload::blocks(doc, vec![Block::text(text)]).into())

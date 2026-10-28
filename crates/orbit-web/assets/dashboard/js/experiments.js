@@ -46,7 +46,9 @@ const WARNING_LABELS = {
   drift: "Drift",
   lagging: "Open outcomes",
   primary_unmeasured: "Primary unmeasured",
+  crew_mismatch: "Crew outside arm pool",
   forced: "Forced assignments",
+  explicit_crew: "Explicit-crew exclusions",
 };
 const GUARDRAIL_LABELS = { ok: "ok", breached: "breached", straddles: "straddles", unknown: "unknown" };
 const EVENT_LABELS = {
@@ -516,6 +518,13 @@ function warningsCard(readout) {
     warnings.push({
       kind: "forced",
       message: `${plural(forced, "forced assignment")} ${forced === 1 ? "is" : "are"} left out of every estimate`,
+    });
+  }
+  const explicitCrew = readout.enrollment?.explicit_crew_excluded || 0;
+  if (explicitCrew) {
+    warnings.push({
+      kind: "explicit_crew",
+      message: `${plural(explicitCrew, "task")} with an explicit crew ${explicitCrew === 1 ? "was" : "were"} excluded, since no crew arm would have changed ${explicitCrew === 1 ? "its" : "their"} crew`,
     });
   }
   const lagging = readout.lagging || {};

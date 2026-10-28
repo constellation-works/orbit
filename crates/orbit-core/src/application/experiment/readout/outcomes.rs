@@ -10,7 +10,9 @@ use orbit_common::OrbitError;
 use orbit_runtime::cost::IMPLEMENT_INVOCATION_IDS;
 use orbit_store::V2AuditEventFilter;
 use orbit_store::contracts::{ExperimentAssignment, InvocationQuery, JobRunQuery};
-use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus, complexity_bucket};
+use orbit_types::task::{
+    Task, TaskComplexity, TaskHistoryEntry, TaskRelationType, TaskStatus, complexity_bucket,
+};
 use orbit_types::workflow::{
     PR_AUTO_FIX_ADMITTED_EVENT, PrAutoFixAttempt, PrAutoFixBlocker, ReviewVerdict, V2AuditEvent,
     V2AuditEventKind,
@@ -161,9 +163,14 @@ pub(super) enum Outcome {
 
 /// One enrolled, unforced task with its outcomes.
 pub(super) struct TaskOutcome {
+    pub(super) task_id: String,
     pub(super) arm: String,
     pub(super) segment: u32,
     pub(super) complexity: String,
+    /// The task's assessed tier, whose complexity pool is the control
+    /// arm's crew pool.
+    pub(super) tier: Option<TaskComplexity>,
+    /// `task.crew`, the crew of the task's latest delivery [ORB-19416].
     pub(super) crew: String,
     pub(super) terminal: bool,
     pub(super) assigned_at: DateTime<Utc>,
@@ -342,10 +349,12 @@ impl OrbitRuntime {
                 settled(lines.get(id).filter(|_| done).map(|lines| *lines as f64)),
             );
             outcomes.push(TaskOutcome {
+                task_id: id.to_string(),
                 arm: arm.clone(),
                 segment: row.segment.unwrap_or(0),
                 complexity: complexity_bucket(task.complexity.as_ref().map(|c| c.as_str()))
                     .to_string(),
+                tier: task.complexity,
                 crew: task.crew.clone().unwrap_or_else(|| "unset".to_string()),
                 terminal,
                 assigned_at: row.assigned_at,

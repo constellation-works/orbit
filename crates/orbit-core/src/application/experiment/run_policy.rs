@@ -13,6 +13,10 @@ pub(crate) struct ExperimentCrewPool {
     pub(crate) entries: Vec<CrewPoolEntry>,
     pub(crate) source: String,
     pub(crate) digest: String,
+    /// The experiment and arm whose overlay this pool is, which a crew
+    /// written back to the task names.
+    pub(crate) experiment: String,
+    pub(crate) arm: String,
 }
 
 impl OrbitRuntime {
@@ -71,11 +75,13 @@ impl OrbitRuntime {
         };
         input["auto_crew_pools"] = serde_json::to_value(self.auto_crew_pools_for_input(input)?)
             .map_err(|error| OrbitError::Execution(format!("serialize crew pools: {error}")))?;
+        // The owner writes the leaf's crew back to its task when it settles.
         self.capture_task_crew_selection(
             input,
             &view,
             &mut crate::application::job::crew_pools::random_crew_ticket,
         )
+        .map(|_| ())
     }
 
     /// Existing assignments only: eligibility must never enroll a task.
@@ -110,6 +116,8 @@ impl OrbitRuntime {
                     entries,
                     source,
                     digest: entry.digest.clone(),
+                    experiment: entry.experiment.clone(),
+                    arm: entry.arm.clone(),
                 }));
             }
         }

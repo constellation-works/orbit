@@ -20,7 +20,8 @@ use self::outcomes::{
     metric_spec,
 };
 use self::stats::{Cell, Interval};
-use super::definition::validate_metric;
+use super::assignment::{EXPLICIT_CREW_EXCLUSION, SURFACE_CONFLICT_EXCLUSION};
+use super::definition::{ExperimentOverlay, validate_metric};
 use crate::OrbitRuntime;
 
 /// The readout shape's version; bump it on any breaking change.
@@ -81,6 +82,9 @@ pub struct ReadoutEnrollment {
     /// Tasks excluded at admission because another experiment owned a
     /// surface.
     pub surface_conflict_excluded: usize,
+    /// Tasks excluded at admission because an explicit crew would have
+    /// overridden this experiment's crew arms.
+    pub explicit_crew_excluded: usize,
     /// Assigned tasks whose record could not be read.
     pub unreadable: usize,
 }
@@ -251,7 +255,8 @@ pub struct Verdict {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReadoutWarning {
-    /// `sample_ratio`, `drift`, `lagging` or `primary_unmeasured`.
+    /// `sample_ratio`, `drift`, `lagging`, `primary_unmeasured` or
+    /// `crew_mismatch`.
     pub kind: &'static str,
     pub message: String,
 }
@@ -286,16 +291,86 @@ impl OrbitRuntime {
             &enrolled,
             now,
         )?;
+        let excluded = |reason: &str| {
+            rows.iter()
+                .filter(|row| row.arm.is_none() && row.exclusion_reason.as_deref() == Some(reason))
+                .count()
+        };
         let enrollment = ReadoutEnrollment {
             analysed: observed.tasks.len(),
             forced_excluded: rows.iter().filter(|row| row.forced).count(),
-            surface_conflict_excluded: rows
-                .iter()
-                .filter(|row| row.arm.is_none() && row.exclusion_reason.is_some())
-                .count(),
+            surface_conflict_excluded: excluded(SURFACE_CONFLICT_EXCLUSION),
+            explicit_crew_excluded: excluded(EXPLICIT_CREW_EXCLUSION),
             unreadable: enrolled.len() - observed.tasks.len(),
         };
-        build_readout(&record, enrollment, &observed, metric, now)
+        let mut readout = build_readout(&record, enrollment, &observed, metric, now)?;
+        readout
+            .warnings
+            .extend(self.crew_pool_mismatches(&record, &observed.tasks)?);
+        Ok(readout)
+    }
+
+    /// One `crew_mismatch` warning per analysed task whose crew is outside
+    /// its arm's crew pool, for an experiment whose arms overlay the crew
+    /// surface. An arm without a crew overlay, such as control, runs the
+    /// workspace's complexity pool for the task's tier; an unassessed task
+    /// there has no pool to check.
+    fn crew_pool_mismatches(
+        &self,
+        record: &ExperimentRecord,
+        tasks: &[TaskOutcome],
+    ) -> Result<Vec<ReadoutWarning>, OrbitError> {
+        let mut arm_pools: BTreeMap<&str, Option<BTreeSet<String>>> = BTreeMap::new();
+        for arm in &record.arms {
+            let overlay = ExperimentOverlay::parse(
+                &arm.name,
+                serde_json::from_str(&arm.overlay_json).map_err(|error| {
+                    OrbitError::Store(format!("invalid experiment overlay: {error}"))
+                })?,
+            )?;
+            arm_pools.insert(
+                arm.name.as_str(),
+                overlay
+                    .crew
+                    .map(|crew| crew.pool.into_iter().map(|member| member.crew).collect()),
+            );
+        }
+        if arm_pools.values().all(Option::is_none) {
+            return Ok(Vec::new());
+        }
+        let complexity_pools = self.dispatch_crew_pools();
+        let mut warnings = Vec::new();
+        for task in tasks {
+            let (pool, which) = match arm_pools.get(task.arm.as_str()) {
+                Some(Some(pool)) => (pool.clone(), "crew pool".to_string()),
+                _ => {
+                    let Some(tier) = task.tier else {
+                        continue;
+                    };
+                    let Some(names) = complexity_pools.get(tier.as_str()) else {
+                        continue;
+                    };
+                    (
+                        names.iter().cloned().collect(),
+                        format!("workspace {tier} complexity pool"),
+                    )
+                }
+            };
+            if pool.contains(&task.crew) {
+                continue;
+            }
+            warnings.push(ReadoutWarning {
+                kind: "crew_mismatch",
+                message: format!(
+                    "task {} in arm `{}` ran crew `{}`, outside the arm's {which} ({})",
+                    task.task_id,
+                    task.arm,
+                    task.crew,
+                    pool.into_iter().collect::<Vec<_>>().join(", ")
+                ),
+            });
+        }
+        Ok(warnings)
     }
 }
 

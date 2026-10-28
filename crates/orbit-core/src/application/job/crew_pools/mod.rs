@@ -3,8 +3,10 @@
 //! task's selection is frozen in its run input. Descendant pipelines inherit
 //! the same task choice; a task created without a crew before assignment moved
 //! to creation time, a stale pool assignment after rerating, or a default
-//! fallback for an empty pool, is routed through the current pools at admission,
-//! which reads the record and never writes it. The one exception is an
+//! fallback for an empty pool, is routed through the current pools at
+//! admission. Whatever crew admission chooses is written back to the task
+//! ([`write_back`], ORB-19416), so `task.crew` names the crew of its latest
+//! delivery. One older write is an
 //! auto-task task whose explicit crew is provider-limited [ORB-17638]:
 //! admission durably reassigns that task to its complexity pool and records
 //! a warning comment on it. The other is `workflow.crew_selection =
@@ -32,9 +34,11 @@ mod draw;
 mod purpose;
 mod task_type;
 mod types;
+mod write_back;
 
 pub(crate) use admission::strip_auto_crew_admission;
 pub(crate) use draw::{
     complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
 };
 pub(crate) use types::CapturedCrewPools;
+pub use write_back::{TaskCrewBackfill, TaskCrewChange};

@@ -238,7 +238,8 @@ fn read_example_week(fx: &Fixture) {
 
 /// Criterion 1: unset, `static`, and `usage_pressure` at strength 0 record
 /// the selection exactly as before, whatever the readings, and never
-/// re-draw or rewrite a task's assigned crew.
+/// re-draw or rewrite a task's assigned crew. A task with no pool assignment
+/// records the crew its admission drew [ORB-19416].
 fn static_selection_draws_and_records_as_before() {
     substitute_worker();
     let fx = Fixture::new(&config(r#"["sol"]"#, "[]", ""));
@@ -257,6 +258,7 @@ fn static_selection_draws_and_records_as_before() {
         "crew_selection = \"usage_pressure\"\nusage_pressure_strength = 0",
     ] {
         fx.configure(&config(POOL, "[]", extra));
+        let mut drawn = String::new();
         for _ in 0..5 {
             let admitted = fx.admit(json!({ "task_ids": [assigned.id] }));
             assert_eq!(
@@ -269,6 +271,7 @@ fn static_selection_draws_and_records_as_before() {
             );
             let admitted = fx.admit(json!({ "task_ids": [unpooled.id] }));
             let selection = &admitted["crew_selection"];
+            drawn = admitted["crew"].as_str().unwrap().to_string();
             assert_eq!(
                 selection["source"], "workflow.hard_complexity_crews",
                 "[{extra}] {admitted}"
@@ -283,13 +286,21 @@ fn static_selection_draws_and_records_as_before() {
                 "[{extra}] configured weights, no pressure fields: {admitted}"
             );
         }
+        let current = fx.runtime().get_task(&assigned.id).unwrap();
+        assert_eq!(
+            current.crew, assigned.crew,
+            "[{extra}] the record is not rewritten"
+        );
+        assert_eq!(current.crew_source, assigned.crew_source, "[{extra}]");
+        let current = fx.runtime().get_task(&unpooled.id).unwrap();
+        assert_eq!(current.crew.as_deref(), Some(drawn.as_str()), "[{extra}]");
+        assert!(
+            current.crew_source == unpooled.crew_source
+                || current.crew_source.as_deref() == Some("redraw:pool"),
+            "[{extra}] {:?}",
+            current.crew_source
+        );
         for task in [&assigned, &unpooled] {
-            let current = fx.runtime().get_task(&task.id).unwrap();
-            assert_eq!(
-                current.crew, task.crew,
-                "[{extra}] the record is not rewritten"
-            );
-            assert_eq!(current.crew_source, task.crew_source, "[{extra}]");
             assert!(fx.redraws(&task.id).is_empty(), "[{extra}]");
         }
     }
@@ -443,11 +454,11 @@ fn a_redraw_keeps_the_automatic_source_and_never_moves_an_explicit_crew() {
     assert_eq!(current.crew.as_deref(), Some("sol"));
     assert_eq!(current.crew_source.as_deref(), Some("explicit"));
     assert!(fx.redraws(&explicit.id).is_empty());
-    assert_eq!(
-        fx.runtime().get_task(&pooled.id).unwrap().crew.as_deref(),
-        Some("opus"),
-        "an explicit run crew does not rewrite the task"
-    );
+    // The task records the run crew it ran [ORB-19416] under an automatic
+    // source, so a later admission draws the pool again.
+    let current = fx.runtime().get_task(&pooled.id).unwrap();
+    assert_eq!(current.crew.as_deref(), Some("sol"));
+    assert_eq!(current.crew_source.as_deref(), Some("redraw:run_crew"));
 }
 
 /// Criterion 4: creation and a complexity re-rate of a pool task draw with

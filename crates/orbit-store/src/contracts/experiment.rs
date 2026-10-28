@@ -126,7 +126,7 @@ pub struct ExperimentAssignment {
 }
 
 /// Pure assignment decision inside the store transaction. Existing rows cannot
-/// be replaced. `admitted` includes prior admissions that matched no population;
+/// be replaced, except that a forced assignment may replace an exclusion. `admitted` includes prior admissions that matched no population;
 /// callers may reconsider those rows while there is still no assignment.
 pub type ExperimentAssignmentDecision<'a> = dyn Fn(
         &[ExperimentRecord],
