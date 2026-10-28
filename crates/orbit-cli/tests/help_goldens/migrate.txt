@@ -1,0 +1,33 @@
+Inspect or apply pending `.orbit/` workspace upgrades.
+
+By default, this command lists pending upgrades without applying them. `--dry-run` explicitly requests the same inspection, while `--confirm` applies the pending upgrades. Orbit also applies required workspace upgrades automatically when it opens a workspace.
+
+Usage: orbit migrate [OPTIONS]
+
+Options:
+      --confirm
+          Apply pending migrations
+
+      --dry-run
+          Explicitly request the default non-destructive inspection mode
+
+      --backfill-diff-stats
+          Apply pending migrations, then record diff stats for done tasks that landed before they were recorded
+
+      --limit <N>
+          Most done tasks one diff-stats backfill records (1-5000)
+          
+          [default: 500]
+
+      --backfill-task-crews
+          Apply pending migrations, then set each task's crew to the crew its latest delivery selected (latest local delivery run or claimed-leaf settlement), where they differ
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header
