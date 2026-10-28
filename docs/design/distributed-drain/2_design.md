@@ -81,12 +81,19 @@ stored result, never another task; the drain run ID is context, not an idempoten
   full receipts for unsettled claims, and exposes their counts and bytes. Bounded retention needs a
   protocol that rejects retired namespaces, not a time-based DELETE.
 
-**Implementation gap ([ORB-19424]).** The compaction and accounting requirements above
-remain committed scope. Current admission writes full receipts and can read legacy
-tombstones, but has no operational compactor or receipt-usage diagnostic. [ORB-15332]
-removed the unused `compact_admission` helper; [ORB-17641] removed the unused
-`admission_storage_usage` API. Those cleanups did not record a decision to withdraw
-the requirement. The settled claim-mutation receipt pruning in §3.1 is separate.
+**Operational retention ([ORB-19424]).** On the owner, `orbit doctor admission-receipts`
+reports full admission receipt and permanent tombstone counts and logical payload bytes.
+`orbit doctor admission-receipts --compact` runs maintenance under the admission boundary:
+it replaces idle receipts and receipts whose current claim is failed, revoked or landed
+with tombstones carrying the original machine ID, request ID and input digest. Claimed,
+running, handed-off and repair-pending claims keep full receipts; a missing claim also
+keeps its receipt. No age or reservation expiry substitutes for settlement. Exact replay
+of a tombstone returns `request_expired`; changed-input replay returns `request_mismatch`.
+The diagnostic without `--compact` is read-only and refuses pending journal recovery.
+Claim-mutation receipt counts and bytes are reported separately; their seven-day pruning
+on settlement (§3.1) is unchanged and is not run by admission maintenance. Logical bytes
+count UTF-8 JSON payloads, excluding row keys, SQLite indexes, free pages and WAL. Maintenance
+is explicit: operators run `--compact` periodically; pulls do not scan historical receipts.
 
 The response carries the task, resolved ship inputs, and a **claim handle** (`claim_id`,
 `reservation_id`, reservation expiry, runtime execution machine). A claim identifies one attempt,
@@ -1657,6 +1664,6 @@ this table retains its requirements without claiming the entire matrix was execu
 - [ORB-19393] — implemented inherited-check waits and externally merged handoff reconciliation.
 - [ORB-15332] — removed the unused admission compaction helper without changing runtime behavior.
 - [ORB-17641] — removed the unused admission receipt accounting API.
-- [ORB-19424] — tracks the missing operational admission receipt compaction and accounting.
+- [ORB-19424] — connected admission receipt compaction and separate logical storage accounting to `orbit doctor admission-receipts [--compact]`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

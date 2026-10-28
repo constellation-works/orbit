@@ -45,6 +45,30 @@ fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
         .expect("diagnostic row")
 }
 
+/// Admission receipts had neither an operational compactor nor an operator
+/// storage diagnostic. The command must expose both without running broad checks.
+#[test]
+fn doctor_admission_receipts_reports_storage_and_compacts() {
+    let fixture = WorkCheckout::new();
+    command(&fixture)
+        .args(["workspace", "init", "--name", "receipt-maintenance"])
+        .assert()
+        .success();
+    for extra in [vec![], vec!["--compact"]] {
+        let output = command(&fixture)
+            .args(["doctor", "admission-receipts", "--json"])
+            .args(extra)
+            .output()
+            .expect("receipt diagnostic");
+        assert!(output.status.success(), "{output:?}");
+        let report: Value = serde_json::from_slice(&output.stdout).expect("receipt JSON");
+        assert_eq!(report["compacted_receipts"], 0);
+        assert_eq!(report["storage"]["full_receipts"]["count"], 0);
+        assert_eq!(report["storage"]["tombstones"]["logical_payload_bytes"], 0);
+        assert_eq!(report["storage"]["claim_mutation_receipts"]["count"], 0);
+    }
+}
+
 /// ORB-16351: a unit file that names this binary is not `clock-unit: ok` while
 /// the systemd timer is disabled or inactive. A substitute `systemctl` reports
 /// each state; enabled and active stays ok.

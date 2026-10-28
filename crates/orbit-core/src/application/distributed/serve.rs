@@ -129,6 +129,16 @@ struct OwnerKnownRed {
 }
 
 impl crate::OrbitRuntime {
+    /// Explicit owner maintenance used by `doctor admission-receipts --compact`.
+    /// Retains full receipts for unsettled claims and permanent tombstones for
+    /// compacted requests; claim-mutation pruning remains independent.
+    pub fn compact_admission_receipts(
+        &self,
+    ) -> Result<orbit_store::contracts::AdmissionReceiptMaintenance, OrbitError> {
+        self.ensure_distributed_owner_workspace()?;
+        self.admission_boundary()?.compact_admission_receipts()
+    }
+
     /// Serve one pull admission for a caller this session speaks for.
     ///
     /// Refusal order follows the spec: the distributed gate and destination
