@@ -393,7 +393,9 @@ export function syncWindowSelectors() {
     const selector = document.getElementById(id);
     if (!selector) continue;
     // A panel holding its own count window (last N) shows that instead.
-    syncWindowTabState(selector, selector.dataset.panelWindow || target);
+    const panelTarget = selector.dataset.panelWindow || target;
+    const targetExists = windowTabs(selector).some((tab) => tab.dataset.window === panelTarget);
+    syncWindowTabState(selector, targetExists ? panelTarget : selector.dataset.fallbackWindow || panelTarget);
   }
   const toolsMeta = document.getElementById("tools-meta");
   if (toolsMeta) {

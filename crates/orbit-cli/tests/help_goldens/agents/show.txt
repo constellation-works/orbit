@@ -18,7 +18,7 @@ Options:
           Count work in this period, or over the newest delivery attempts
           
           [default: 30d]
-          [possible values: 1h, 24h, 7d, 30d, 90d, all, last50, last200, last500]
+          [possible values: 1h, 24h, 7d, 30d, 90d, all, last50, last200, last500, last1000]
 
       --min-support <MIN_SUPPORT>
           Units of work a row needs before it is ranked

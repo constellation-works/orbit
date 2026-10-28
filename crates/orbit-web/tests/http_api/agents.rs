@@ -1079,6 +1079,7 @@ fn count_windows_exclude_old_attempts_on_recently_commented_tasks() {
                     ("last50", 50),
                     ("last200", 200),
                     ("last500", 500),
+                    ("last1000", 1000),
                     ("90d", 0),
                 ] {
                     let response = json_ok(server.get(&format!(

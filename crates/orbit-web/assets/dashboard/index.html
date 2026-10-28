@@ -698,15 +698,11 @@
             <p class="agents-purpose">One row per crew and model, ranked by one shared score. Every problem counts against exactly one role, or is not scored; cost and time are shown beside the score, never in it.</p>
             <div class="scoreboard-control-group">
               <span class="scoreboard-control-label">window</span>
-              <div class="scoreboard-window-selector" id="agents-window-selector" role="tablist" aria-label="Agent scorecard window">
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="last50" aria-selected="false" tabindex="-1" title="The newest 50 delivery attempts, whatever their age">last 50</button>
-                <button type="button" role="tab" class="scoreboard-window-seg on" data-window="last200" aria-selected="true" tabindex="0" title="The newest 200 delivery attempts, whatever their age">last 200</button>
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="last500" aria-selected="false" tabindex="-1" title="The newest 500 delivery attempts, whatever their age">last 500</button>
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="1h" aria-selected="false" tabindex="-1">1h</button>
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="24h" aria-selected="false" tabindex="-1">24h</button>
+              <div class="scoreboard-window-selector" id="agents-window-selector" data-fallback-window="last500" role="tablist" aria-label="Agent scorecard window">
+                <button type="button" role="tab" class="scoreboard-window-seg on" data-window="last500" aria-selected="true" tabindex="0" title="The newest 500 delivery attempts, whatever their age">Last 500</button>
+                <button type="button" role="tab" class="scoreboard-window-seg" data-window="last1000" aria-selected="false" tabindex="-1" title="The newest 1000 delivery attempts, whatever their age">Last 1000</button>
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="7d" aria-selected="false" tabindex="-1">7d</button>
                 <button type="button" role="tab" class="scoreboard-window-seg" data-window="30d" aria-selected="false" tabindex="-1">30d</button>
-                <button type="button" role="tab" class="scoreboard-window-seg" data-window="all" aria-selected="false" tabindex="-1" title="all is served as 90 days, the scan's reach">all (90d)</button>
               </div>
             </div>
             <span class="scoreboard-controls-meta" id="agents-meta"></span>

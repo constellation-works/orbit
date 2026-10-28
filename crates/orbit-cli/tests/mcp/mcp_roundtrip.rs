@@ -919,6 +919,13 @@ fn task_update_refusal_names_a_reachable_status() {
 fn agents_show_missing_row_names_scorecard_and_window_recovery() {
     let (_workspace, mut client) = McpWorkspace::served();
 
+    let scorecard = client.call_tool_ok(
+        "orbit_agents_scorecard",
+        json!({ "role": "implementers", "window": "last1000" }),
+    );
+    assert_eq!(scorecard["requested_window"], "last1000", "{scorecard}");
+    assert_eq!(scorecard["window_attempts"], 1000, "{scorecard}");
+
     let refused = client.assert_tool_error(
         "orbit_agents_show",
         json!({ "role": "implementers", "crew": "missing-crew", "model": "codex" }),

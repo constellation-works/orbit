@@ -134,6 +134,20 @@ fn agents_cli_and_tools_serve_the_api_payload_and_orchestrator_aliases_name_them
         "the command prints the tool's payload"
     );
 
+    let last1000 = fixture.json(&[
+        "agents",
+        "scorecard",
+        "--role",
+        "orchestrators",
+        "--window",
+        "last1000",
+        "--min-support",
+        "2",
+        "--json",
+    ]);
+    assert_eq!(last1000["requested_window"], "last1000", "{last1000}");
+    assert_eq!(last1000["window_attempts"], 1000, "{last1000}");
+
     let detail_input = json!({
         "role": "orchestrators", "crew": "sonnet", "window": "30d", "min_support": 2,
     });

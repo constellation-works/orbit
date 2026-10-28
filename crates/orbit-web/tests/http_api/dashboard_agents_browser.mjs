@@ -100,6 +100,7 @@ for (const row of REVIEWER_ROWS) row.score = Math.round(Math.min(row.raw, (row.u
 REVIEWER_ROWS.filter(row => !row.below_support).sort((a, b) => b.score - a.score).forEach((row, index) => { row.rank = index + 1; });
 let computedAt = '2026-10-19T08:00:00.000Z';
 const requests = [];
+const scorecardWindows = [];
 
 function header(role, url) {
   const requested = url.searchParams.get('window') || '30d';
@@ -184,6 +185,7 @@ function payloadFor(url) {
   const agents = url.pathname.match(/^\/api\/agents\/(\w+)\/(scorecard|detail)$/);
   if (agents) {
     requests.push(`${agents[1]}/${agents[2]}${agents[2] === 'detail' ? `:${url.searchParams.get('crew')}` : ''}`);
+    if (agents[2] === 'scorecard') scorecardWindows.push({ role: agents[1], window: url.searchParams.get('window') });
     return agents[2] === 'scorecard' ? scorecard(agents[1], url) : detail(agents[1], url);
   }
   switch (url.pathname) {
@@ -320,8 +322,16 @@ try {
   // The retired Analytics › Orchestrators link opens Analytics › Agents › Orchestrators.
   await page.goto(`${origin}#analytics/orchestrators?window=30d`);
   await body.locator('.agents-row').first().waitFor();
-  // The panel opens on its own count window; the 30d tab hands it the shared window.
-  assert.equal(await page.locator('#agents-window-selector .scoreboard-window-seg.on').getAttribute('data-window'), 'last200', 'Agents defaults to the newest 200 delivery attempts');
+  // The panel opens on Last 500; the four choices are the only tabs.
+  const agentWindows = await page.locator('#agents-window-selector [data-window]').evaluateAll(nodes => nodes.map(node => node.dataset.window));
+  assert.deepEqual(agentWindows, ['last500', 'last1000', '7d', '30d']);
+  assert.deepEqual(await page.locator('#agents-window-selector [data-window]').allTextContents(), ['Last 500', 'Last 1000', '7d', '30d']);
+  assert.equal(await page.locator('#agents-window-selector .scoreboard-window-seg.on').getAttribute('data-window'), 'last500', 'Agents defaults to the newest 500 delivery attempts');
+  await shot('agents-window-last500-dark-1440');
+  await page.locator('#agents-window-selector [data-window="last1000"]').click();
+  await page.waitForFunction(() => /in last1000/.test(document.getElementById('agents-meta').textContent));
+  assert.equal(await page.locator('#agents-window-selector .scoreboard-window-seg.on').getAttribute('data-window'), 'last1000');
+  assert.equal(scorecardWindows.filter(entry => entry.role === 'orchestrators').at(-1).window, 'last1000', 'Last 1000 loads its scorecard data');
   await page.locator('#agents-window-selector [data-window="30d"]').click();
   await page.waitForFunction(() => /in 30d/.test(document.getElementById('agents-meta').textContent));
   await page.evaluate(async () => { await document.fonts.ready; });
@@ -515,21 +525,35 @@ try {
   await page.setViewportSize({ width: 1440, height: 1100 });
   pass('pilots ranking, detail and tier matrices at desktop and phone widths', { pilotsPhone, pilotsDesktop, pilotsPhonePanel });
 
-  // An empty window says so.
+  // Unsupported shared windows keep Last 500 selected and load its rows.
   await page.locator('#agents-roles [data-view="orchestrators"]').click();
-  await page.locator('#agents-window-selector [data-window="1h"]').click();
-  await body.locator('.agents-state-empty').waitFor();
-  assert.match(await body.locator('.agents-state').textContent(), /No owned tasks in the 1h window/);
-  assert.equal(new URL(page.url()).hash, '#analytics/agents/orchestrators?window=1h');
-  const emptyTail = await disclosureTail();
-  assertNoEmptyPanelTrack(emptyTail);
-  await shot('agents-orchestrators-empty-dark-1440');
-  await page.locator('#agents-window-selector [data-window="all"]').click();
   await body.locator('.agents-row').first().waitFor();
-  assert.match(await page.locator('#agents-meta').textContent(), /in 90d \(all\)/, 'all is served and labelled as 90d');
-  await page.locator('#agents-window-selector [data-window="30d"]').click();
-  await body.locator('.agents-row').first().waitFor();
-  pass('empty window and all as 90d');
+  for (const sharedWindow of ['1h', '24h', 'all']) {
+    await page.evaluate(async selected => {
+      const common = await import('/js/common.js');
+      const agents = await import('/js/agents.js');
+      common.setWindow(selected);
+      common.persistScopeToUrl();
+      common.syncWindowSelectors();
+      await agents.fetchAndRenderAgents();
+    }, sharedWindow);
+    assert.equal(await page.locator('#agents-window-selector .scoreboard-window-seg.on').getAttribute('data-window'), 'last500', `${sharedWindow} shows the Last 500 fallback`);
+    assert.equal(scorecardWindows.filter(entry => entry.role === 'orchestrators').at(-1).window, 'last500', `${sharedWindow} loads Last 500 scorecard data`);
+    assert.ok(await body.locator('.agents-row').count() > 0, `${sharedWindow} shows ranked data`);
+  }
+  await page.setViewportSize({ width: 375, height: 812 });
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await shot('agents-window-last500-dark-375');
+  await page.evaluate(async () => {
+    const common = await import('/js/common.js');
+    const agents = await import('/js/agents.js');
+    common.setWindow('30d');
+    common.persistScopeToUrl();
+    common.syncWindowSelectors();
+    await agents.fetchAndRenderAgents();
+  });
+  await page.setViewportSize({ width: 1440, height: 1100 });
+  pass('unsupported shared windows fall back to Last 500 and load data');
 
   // Phone width: the page never scrolls sideways, the ranking scrolls inside
   // its own box, the detail stacks below it, and touch targets are 44px.
