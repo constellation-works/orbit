@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.36.0 — 2026-10-28
+
+### Breaking Changes
+
+- **Resource-minute migration**: opening a workspace applies SQLite v68 (`resource_minute_regime`). The migration is additive (two nullable columns older binaries never read) but changes persisted storage; upgrade hosts together. ([ORB-19199])
+- **Scheduled task field**: v0.35.0 and older refuse unknown task fields, so they can't read a task whose `not_before` is set.
+  Mixed-version hosts → upgrade the owner and followers together. ([ORB-19214])
+
+### Highlights
+
+- **Scheduled tasks**: a task's optional `not_before` stops every dispatcher from starting it earlier, and the hold lifts by itself. `orbit task list --scheduled` and `not_before` range filters list upcoming work; the dashboard shows the schedule in task detail and the forecast. ([ORB-19214])
+- **Workspace presets**: `orbit workspace init --preset <file>` applies a distribution's TOML preset that picks which shipped routines and auto-tasks are seeded, enables plugin-seeded definitions and sets workspace config. The whole file is validated before anything is written. ([ORB-19186])
+- **Count-based windows**: forecasts and per-task analytics can count the newest deliveries instead of a time period (`last50`, `last200`, `last500`, or `orbit run profiles --accuracy --last N`), so a quiet month no longer blanks them. ([ORB-19199])
+- **Dashboard**: task detail shows the run's branch and worktree path. Locks held lists locked files with the tasks holding them, marks paths several tasks share and filters by a task's footprint. Fleet drains shows one tab per host. ([ORB-19190])
+- **Symbol-level footprints**: task-pilot and the review auto-tasks declare `symbol:` selectors where they can, and a `regression_from` relation can name the defect's `sites`, recorded once `workflow.regression_risk.record_sites` is on.
+
 ## 0.35.0 — 2026-10-27
 
 ### Breaking Changes
