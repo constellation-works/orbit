@@ -78,16 +78,19 @@ stored result, never another task; the drain run ID is context, not an idempoten
 - `idle` results are stored too; a later poll uses a new ID. Refusals create no claim. A refill
   pass stops at its first idle response.
 - No deletion may let an old ID become a new admission: v1 keeps compact tombstones forever and
-  full receipts for unsettled claims, and exposes their counts and bytes. Bounded retention needs a
+  full receipts for unsettled claims and failed or revoked claims with a preserved PR,
+  and exposes their counts and bytes. Bounded retention needs a
   protocol that rejects retired namespaces, not a time-based DELETE.
 
 **Operational retention ([ORB-19424]).** On the owner, `orbit doctor admission-receipts`
 reports full admission receipt and permanent tombstone counts and logical payload bytes.
 `orbit doctor admission-receipts --compact` runs maintenance under the admission boundary:
-it replaces idle receipts and receipts whose current claim is failed, revoked or landed
-with tombstones carrying the original machine ID, request ID and input digest. Claimed,
-running, handed-off and repair-pending claims keep full receipts; a missing claim also
-keeps its receipt. No age or reservation expiry substitutes for settlement. Exact replay
+it replaces idle receipts, landed claim receipts and receipts of failed or revoked claims
+without a preserved PR with tombstones carrying the original machine ID, request ID and
+input digest. Failed and revoked claims with a preserved PR keep full receipts to authorize
+later external-merge settlement, even if no handoff was accepted. Claimed, running,
+handed-off and repair-pending claims keep full receipts; a missing claim also keeps its
+receipt. No age or reservation expiry substitutes for settlement. Exact replay
 of a tombstone returns `request_expired`; changed-input replay returns `request_mismatch`.
 The diagnostic without `--compact` is read-only and refuses pending journal recovery.
 Claim-mutation receipt counts and bytes are reported separately; their seven-day pruning

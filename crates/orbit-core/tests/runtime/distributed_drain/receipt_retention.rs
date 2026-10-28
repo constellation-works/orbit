@@ -1,8 +1,119 @@
 //! Admission receipt maintenance through the owner's public runtime API.
 
+use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_store::contracts::{ClaimEvidence, ClaimInvocation, ClaimMutation};
 
 use super::*;
+
+#[derive(Default)]
+struct RetentionForge(Mutex<Option<MergedPullRequest>>);
+
+impl TaskPrForge for RetentionForge {
+    fn open_pull_requests(&self, _: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
+        Ok(Vec::new())
+    }
+
+    fn merged_pull_requests(&self, _: &Path) -> Result<Vec<MergedPullRequest>, OrbitError> {
+        Ok(self.0.lock().unwrap().iter().cloned().collect())
+    }
+
+    fn authenticated_login(&self, _: &Path) -> Result<String, OrbitError> {
+        Ok("owner-bot".into())
+    }
+
+    fn close_pull_request(&self, _: &Path, _: u64, _: &str) -> Result<(), OrbitError> {
+        panic!("receipt retention and external settlement must not close a PR")
+    }
+}
+
+/// A refused handoff's failed claim can be the only authority for its kept
+/// PR. Maintenance must preserve that authority for a later external merge.
+#[test]
+fn failed_claims_kept_unaccepted_pr_settles_after_receipt_compaction() {
+    if !isolated(
+        module_path!(),
+        "failed_claims_kept_unaccepted_pr_settles_after_receipt_compaction",
+    ) {
+        return;
+    }
+    let forge = Arc::new(RetentionForge::default());
+    let pair = Pair::with_owner(1, |owner| owner.with_task_pr_forge(forge.clone()));
+    let owner = &pair.wire.owner;
+    let probe = pair.wire.call("", "orbit.drain.probe", json!({})).unwrap();
+    let admitted = pair
+        .wire
+        .call(
+            "",
+            "orbit.task.pull",
+            json!({
+                "request_id": "kept-pr-retention", "caller_version": probe["binary_version"],
+                "caller_schema": orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA,
+                "caller_fingerprint": orbit_store::contracts::distributed_drain_protocol_fingerprint(),
+                "review_gate": true, "ship": probe["ship"],
+                "run_context": {"run_id": "retention-drain", "job_name": "workspace_pull_pipeline"}
+            }),
+        )
+        .unwrap();
+    let claim = &admitted["receipt"]["claim"];
+    let task = claim["task_id"].as_str().unwrap();
+    let claim_id = claim["claim_id"].as_str().unwrap();
+    let head = "0123456789abcdef0123456789abcdef01234567";
+    let branch = format!("orbit/{task}-01234567");
+    owner
+        .mutate_execution_claim(
+            Some(&ClaimInvocation::trusted_worker(
+                task.into(),
+                claim_id.into(),
+                FOLLOWER.into(),
+                None,
+            )),
+            "fail-with-kept-pr",
+            &ClaimMutation::Fail(ClaimEvidence {
+                summary: Some("The leaf failed after publishing its candidate PR.".into()),
+                failure: Some(
+                    serde_json::from_value(json!({
+                        "class": "candidate", "reason": "The owner refused the handoff",
+                        "candidate": {
+                            "branch": branch, "head_sha": head,
+                            "pull_request": "42", "published": true
+                        }
+                    }))
+                    .unwrap(),
+                ),
+                ..Default::default()
+            }),
+        )
+        .unwrap();
+    assert_eq!(pair.owner_status(task), "blocked");
+    assert!(owner.accepted_task_handoff(claim_id).is_err());
+    assert!(owner.get_task(task).unwrap().external_refs.is_empty());
+    assert_eq!(
+        pair.owner_claim(claim_id)["preserved_candidate"]["candidate"]["pull_request"],
+        "42"
+    );
+
+    let compacted = owner.compact_admission_receipts().unwrap();
+    *forge.0.lock().unwrap() = Some(MergedPullRequest {
+        pull: ForgePullRequest {
+            number: 42,
+            head_branch: branch,
+            body: format!("Delivers {task}"),
+            // The follower's PR is authoritative even though it has another author.
+            author: "follower-bot".into(),
+        },
+        base_branch: probe["ship"]["landing_branch"].as_str().unwrap().into(),
+        head_sha: head.into(),
+        merge_commit: head.into(),
+    });
+    let settlement = owner
+        .settle_externally_merged_task(task)
+        .expect("the failed claim's kept PR still authorizes settlement after compaction");
+    assert_eq!(settlement.pr_number, 42);
+    assert_eq!(pair.owner_status(task), "done");
+    assert_eq!(compacted.compacted_receipts, 0);
+    assert_eq!(compacted.storage.full_receipts.count, 1);
+    assert_eq!(compacted.storage.tombstones.count, 0);
+}
 
 #[test]
 fn operational_receipt_compaction_preserves_request_identity_and_live_claims() {

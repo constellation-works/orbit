@@ -89,7 +89,7 @@ pub struct ProvidersArgs {}
 
 #[derive(Args)]
 pub struct AdmissionReceiptsArgs {
-    /// Compact idle and settled admission receipts to permanent tombstones; keep unsettled claims' full receipts.
+    /// Compact idle and settled admission receipts to permanent tombstones; retain full receipts for unsettled claims and failed or revoked claims with a preserved PR.
     #[arg(long)]
     pub compact: bool,
 }

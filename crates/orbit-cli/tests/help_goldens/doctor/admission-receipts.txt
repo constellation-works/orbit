@@ -4,7 +4,7 @@ Usage: orbit doctor admission-receipts [OPTIONS]
 
 Options:
       --compact
-          Compact idle and settled admission receipts to permanent tombstones; keep unsettled claims' full receipts
+          Compact idle and settled admission receipts to permanent tombstones; retain full receipts for unsettled claims and failed or revoked claims with a preserved PR
 
   -h, --help
           Print help (see a summary with '-h')
