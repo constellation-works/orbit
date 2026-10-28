@@ -732,6 +732,105 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                 self.assertEqual(report["bump"], "patch")
                 self.assertEqual(report["next_version"], "0.35.1")
 
+    def test_relaxing_branch_inside_outer_oneof_decides_minor(self):
+        # Widening one outer oneOf branch can steal the unique match from
+        # the other branch: {id, view, fields} matched only the second
+        # branch before the inner oneOf is removed (and {id, mode, fields}
+        # likewise for the inner anyOf), and matches both afterwards.
+        for delete in ("oneOf", "anyOf"):
+            with self.subTest(delete=delete):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema["properties"]["mode"] = {"type": "string"}
+                schema["oneOf"] = [
+                    {"anyOf": [{"required": ["view"]}],
+                     "oneOf": [{"required": ["mode"]}]},
+                    {"required": ["fields"]},
+                ]
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Add outer oneOf applicators [ORB-84] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema["oneOf"][0][delete]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove inner {delete} under outer oneOf [ORB-85] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-85", "mcp-schema",
+                     f"`orbit_task_show` `inputSchema{{oneOf0}}{{{delete}0}}` "
+                     f"{delete} alternative removed"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removing_only_inner_applicator_inside_outer_oneof_decides_minor(self):
+        # The relaxed branch accepts everything afterwards, so an input
+        # matching only the sibling outer branch now matches both.
+        for delete in ("oneOf", "anyOf"):
+            with self.subTest(delete=delete):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema["properties"]["mode"] = {"type": "string"}
+                schema["oneOf"] = [
+                    {delete: [{"required": ["mode"]}]},
+                    {"required": ["fields"]},
+                ]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Add sole inner {delete} under outer oneOf [ORB-86] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema["oneOf"][0][delete]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove sole inner {delete} under outer oneOf [ORB-87] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(self.signals(report), {
+                    ("ORB-87", "mcp-schema",
+                     f"`orbit_task_show` `inputSchema{{oneOf0}}{{{delete}0}}` "
+                     f"{delete} alternative removed"),
+                })
+                self.assertEqual(report["bump"], "minor")
+                self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_relaxing_output_branch_inside_outer_oneof_decides_minor(self):
+        # Output contracts share the comparison, so the same relaxation
+        # under an outer oneOf is reported there too.
+        tools = self.repo.mcp()
+        tools[0]["outputSchema"] = {
+            "type": "object",
+            "properties": {
+                "view": {"type": "string"},
+                "mode": {"type": "string"},
+                "fields": {"type": "array", "items": {"type": "string"}},
+            },
+            "oneOf": [
+                {"anyOf": [{"required": ["view"]}],
+                 "oneOf": [{"required": ["mode"]}]},
+                {"required": ["fields"]},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add outer output oneOf applicators [ORB-88] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        del tools[0]["outputSchema"]["oneOf"][0]["oneOf"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove inner output oneOf under outer oneOf [ORB-89] (#2)")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-89", "mcp-schema",
+             "`orbit_task_show` `outputSchema{oneOf0}{oneOf0}` oneOf "
+             "alternative removed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
     def test_removing_nested_input_mcp_applicator_is_additive(self):
         tools = self.repo.mcp()
         options = {

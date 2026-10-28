@@ -435,14 +435,23 @@ def alternative_path_map(before, after):
                 for survivor_parent, survivor_keyword in surviving_applicators
                 if survivor_parent == parent
             }
+            # A relaxation inside an outer oneOf branch is not necessarily
+            # additive: widening that branch can make a formerly valid input
+            # match two outer branches, so the outer oneOf then rejects it.
+            # Test the parent path, not the baseline branch path: the removed
+            # keyword itself must not count as the enclosing oneOf, while a
+            # oneOf nested inside an outer anyOf branch stays additive.
+            inside_outer_oneof = re.search(r"\{oneOf\d+\}", parent) is not None
             if not survivors_here:
-                continue
+                if not inside_outer_oneof:
+                    continue
             # A sibling keyword that already constrained this location before
             # still constrains it, so deleting this whole keyword only relaxes
             # the schema. A survivor keyword that is new here is a replacement
             # (anyOf <-> oneOf), which can tighten the schema, so report it.
-            if any((parent, survivor_keyword) in before_applicators
-                   for survivor_keyword in survivors_here):
+            elif (not inside_outer_oneof
+                  and any((parent, survivor_keyword) in before_applicators
+                          for survivor_keyword in survivors_here)):
                 continue
         # Deduping identical branches changes nothing for anyOf and only
         # admits input for oneOf, so an identical survivor keeps it additive.
