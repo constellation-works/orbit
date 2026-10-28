@@ -649,15 +649,19 @@ def detect_mcp_changes(git, parent, commit, changed):
             if path in after_types and after_types[path] != kind:
                 report(f"`{name}` `{path}` type {kind} → {after_types[path]}")
         for path, values in sorted(before.get("enum", {}).items()):
-            if path in after_enums:
-                for value in sorted(values - after_enums[path]):
-                    report(f"`{name}` `{path}` enum value {value} removed")
-                # A widened enum usually only admits more input. Inside oneOf,
-                # that input can start matching another branch as well.
-                if inside_oneof(path):
-                    for value in sorted(after_enums[path] - values):
-                        report(f"`{name}` `{path}` enum value {value} added "
-                               "inside oneOf alternative")
+            if path not in after_enums:
+                if path in after_nodes and inside_oneof(path):
+                    report(f"`{name}` `{path}` enum constraint removed "
+                           "inside oneOf alternative")
+                continue
+            for value in sorted(values - after_enums[path]):
+                report(f"`{name}` `{path}` enum value {value} removed")
+            # A widened enum usually only admits more input. Inside oneOf,
+            # that input can start matching another branch as well.
+            if inside_oneof(path):
+                for value in sorted(after_enums[path] - values):
+                    report(f"`{name}` `{path}` enum value {value} added "
+                           "inside oneOf alternative")
         # allOf branches all apply, so their required sets union at their
         # instance location (branch renumbering is not a new constraint).
         # anyOf/oneOf alternatives retain their positional branch paths:
