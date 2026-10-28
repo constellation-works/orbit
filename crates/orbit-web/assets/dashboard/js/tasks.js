@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
+import { findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, raiseMessageSlot, el, syncNodes, makeRowDisclosure, enableRovingRows, makeCopyButton } from './common.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, runStartedAt, taskLockFiles } from './task-runtime.js';
 import { buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
@@ -41,6 +41,8 @@ onWorkspaceChange(() => {
   }
   taskState.statusFeedback.clear();
   taskState.foldedStatusTasks.clear();
+  // The list empties with the workspace, and so do its notices beside it.
+  syncTaskNotices([]);
   taskState.crewFeedback.clear();
   taskState.complexityFeedback.clear();
   taskState.fieldFeedback.clear();
@@ -201,8 +203,8 @@ function foldedStatusSignature(taskId) {
 }
 
 // Folded status feedback for a task with no row on screen, usually because its
-// new status is filtered out, so the undo stays reachable above the list. A
-// pinned detail shows its own.
+// new status is filtered out, so the undo stays reachable in the Tasks message
+// area. A pinned detail shows its own.
 function buildFoldedStatusNotices(rowIds, context) {
   const notices = [];
   for (const [taskId, task] of taskState.foldedStatusTasks) {
@@ -218,6 +220,17 @@ function buildFoldedStatusNotices(rowIds, context) {
     notices.push(notice);
   }
   return notices;
+}
+
+// Action and folded status notices sit in the Tasks message area beside the
+// list, not above its first card, so one coming or going moves no row. A new
+// one brings the notices to the top of the area.
+function syncTaskNotices(notices) {
+  const host = $("tasks-notices");
+  if (!host) return;
+  const before = Array.from(host.children, node => `${node.dataset.key}:${node.dataset.hash}`);
+  syncNodes(host, notices);
+  if (notices.some(node => !before.includes(`${node.dataset.key}:${node.dataset.hash}`))) raiseMessageSlot(host);
 }
 
 function takeTaskActionNotice() {
@@ -429,15 +442,13 @@ export function renderTasks(tasks, context) {
       el("div", { class: "text", text: replica ? `This checkout is a pull replica of ${replica.name}; its tasks live on the owner.` : defaultText }),
       replica?.switchable ? showOnOwnerButton(replica.name) : null,
     ]);
-    syncNodes(body, [notice, ...buildFoldedStatusNotices(new Set(), context), emptyState].filter(Boolean));
+    syncTaskNotices([notice, ...buildFoldedStatusNotices(new Set(), context)].filter(Boolean));
+    syncNodes(body, [emptyState]);
     renderTaskPane(filtered, context);
     finishTaskRender(body);
     return;
   }
   const groups = new Map();
-  if (notice) nodes.push(notice);
-  // Filled in once the rows are known: a notice is only for a task with no row.
-  const noticeIndex = nodes.length;
   const rowIds = new Set();
 
   for (const t of filtered) {
@@ -537,7 +548,8 @@ export function renderTasks(tasks, context) {
     });
     nodes.push(...groupNodes);
   }
-  nodes.splice(noticeIndex, 0, ...buildFoldedStatusNotices(rowIds, context));
+  // Built once the rows are known: a folded notice is only for a task with no row.
+  syncTaskNotices([notice, ...buildFoldedStatusNotices(rowIds, context)].filter(Boolean));
   syncNodes(body, nodes);
   syncRowSelection(body);
   renderTaskPane(filtered, context);

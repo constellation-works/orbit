@@ -513,18 +513,34 @@ export function renderPanelPlaceholder(bodyId) {
 // responses and overlapping refreshes, even when their URLs happen to match.
 const panelRequests = new Map();
 
+// A message area lists its notices newest first: the slot that last took new
+// text moves to the top through its flex order, so its live region stays put.
+let messageSlotOrder = 0;
+export function raiseMessageSlot(node) {
+  if (node && node.style) node.style.order = String(-(++messageSlotOrder));
+}
+
+// A panel whose body names a message area (`data-messages`, the Tasks list)
+// keeps its status note there, so a load error never moves its rows.
+function panelStatusHost(body) {
+  const id = body.dataset ? body.dataset.messages : null;
+  return (id && document.getElementById(id)) || body;
+}
+
 function panelMessage(bodyId, state) {
   const body = document.getElementById(bodyId);
   if (!body) return;
   body.setAttribute("aria-busy", state.pending ? "true" : "false");
-  let note = Array.from(body.children).find(node => node.dataset.panelStatus);
+  const host = panelStatusHost(body);
+  let note = Array.from(host.children).find(node => node.dataset.panelStatus);
   if (!note) {
     note = el("div", { class: "panel-placeholder" });
     note.dataset.panelStatus = "true";
     note.setAttribute("role", "status");
     note.setAttribute("aria-live", "polite");
-    body.insertBefore(note, body.children[0] || null);
+    host.insertBefore(note, host.children[0] || null);
   }
+  const previousText = note.textContent;
   // Only a cold load and an error need to take up room in the panel. "Updated"
   // and "Refreshing" stay in the live region for assistive tech but are not
   // painted, so a 30s poll never shifts the rows under the reader.
@@ -545,6 +561,7 @@ function panelMessage(bodyId, state) {
   } else {
     note.textContent = "Updated.";
   }
+  if (host !== body && !quiet && note.textContent !== previousText) raiseMessageSlot(note);
 }
 
 export function panelCanRender(bodyId) {
@@ -1235,7 +1252,7 @@ export function syncNodes(container, newNodesArr) {
   if (state) {
     panelMessage(container.id, state);
     const note = Array.from(container.children).find(node => node.dataset.panelStatus);
-    newNodesArr = [note, ...newNodesArr];
+    if (note) newNodesArr = [note, ...newNodesArr];
   }
   const oldNodes = Array.from(container.children);
   const oldMap = new Map();

@@ -127,7 +127,7 @@ function matchesChain(path, chain) {
   return true;
 }
 
-const ids = ['tasks-main', 'tasks-body', 'task-detail-pane', 'task-detail-body', 'task-pane-resizer', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status', 'host-select'];
+const ids = ['tasks-main', 'tasks-body', 'task-detail-pane', 'task-detail-body', 'task-pane-resizer', 'tasks-count', 'rail-count-tasks', 'tasks-previous', 'tasks-next', 'tasks-page-status', 'tasks-notices', 'host-select'];
 const byId = Object.fromEntries(ids.map(id => [id, Object.assign(new Node('div'), { id })]));
 // The selected task's detail renders in the pane beside the list.
 const paneBody = byId['task-detail-body'];
@@ -1083,7 +1083,7 @@ assert.equal(refreshes, 1, 'accepted approval refreshes the list');
 assert.equal(currentTasks[0].status, 'done');
 assert.ok(byId['tasks-body'].querySelectorAll('.group-label').some(label => label.textContent === 'Done'), 'the refreshed task appears under Done');
 assert.equal(approveButton('ORB-81'), null, 'Done offers no approval');
-assert.ok(byId['tasks-body'].querySelector('.task-action-notice').textContent.includes('done'), 'the notice reports the review destination');
+assert.ok(byId['tasks-notices'].querySelector('.task-action-notice').textContent.includes('done'), 'the notice reports the review destination');
 
 paintApprovals([task(81, { status: 'review' })]);
 nextApproval = deferred();
@@ -1149,7 +1149,7 @@ assert.ok(handoffRequest.body.request_id, 'handoff approval has a replay identit
 nextApproval.resolve(response({}));
 await settleActions();
 assert.equal(currentTasks[0].status, 'review', 'handoff approval waits for the owner landing job');
-assert.ok(byId['tasks-body'].querySelector('.task-action-notice').textContent.includes('owner landing job'), 'handoff notice does not claim it completed');
+assert.ok(byId['tasks-notices'].querySelector('.task-action-notice').textContent.includes('owner landing job'), 'handoff notice does not claim it completed');
 claims[0].handoff.authority = { state: 'authorized', summary: 'Landing is already authorized' };
 paintApprovals([task(86, { status: 'review' })]);
 const beforeClaimRefusal = requests.length;

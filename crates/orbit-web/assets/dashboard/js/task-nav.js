@@ -1,6 +1,6 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters, search and pagination.
 
-import { captureWorkspaceVisit, panelCanRender, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
+import { captureWorkspaceVisit, panelCanRender, raiseMessageSlot, el, fetchJson, postJson, isAggregateView, hostWriteRefusal, copyText } from './common.js';
 import { $, taskState, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, STATUS_LABELS } from './task-shared.js';
 import { forgetTaskDetailLoad } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
@@ -451,13 +451,15 @@ export function renderTaskPagination(context) {
     : {};
   previous.disabled = Boolean(state.loading) || !state.canPrevious;
   next.disabled = Boolean(state.loading) || !state.canNext;
-  // One page needs no pager; it comes back as soon as there is somewhere to go
-  // or something to report.
+  // One page needs no pager. Its loading and failure text is in the Tasks
+  // message area, so neither brings the pager back nor moves the list.
   const pager = previous.closest ? previous.closest(".task-pagination") : null;
-  if (pager) pager.hidden = !state.canPrevious && !state.canNext && !state.loading && !state.error;
-  status.textContent = state.error
+  if (pager) pager.hidden = !state.canPrevious && !state.canNext;
+  const text = state.error
     ? `Page failed: ${state.error}`
     : state.loading ? "Loading task page…" : "";
+  if (text && text !== status.textContent) raiseMessageSlot(status);
+  status.textContent = text;
   status.className = state.error ? "error" : "";
   if (previous.dataset.wired !== "true") {
     previous.dataset.wired = "true";

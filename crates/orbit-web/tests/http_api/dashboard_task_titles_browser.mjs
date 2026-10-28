@@ -226,7 +226,7 @@ async function assertStatusChangeFoldsDetail(page, evidence) {
   const row = id => page.locator(`#tasks-body .row[data-key="task-${id}"]`);
   const detail = id => page.locator(`#task-detail-body [data-key="detail-${id}"]`);
   const note = id => row(id).locator('.task-status-note');
-  const notice = id => page.locator(`#tasks-body [data-key="status-notice-${id}"]`);
+  const notice = id => page.locator(`#tasks-notices [data-key="status-notice-${id}"]`);
   const openParam = () => page.evaluate(() => new URLSearchParams(window.location.hash.split('?')[1] || '').get('open'));
   const expanded = async id => (await row(id).locator('.title').getAttribute('aria-expanded')) === 'true';
   const statusOf = id => page.evaluate(id => globalThis.taskTitleFixture.tasks.find(task => task.id === id).status, id);
