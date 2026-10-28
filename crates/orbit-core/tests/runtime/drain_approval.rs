@@ -11,9 +11,13 @@ use chrono::{DateTime, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::{OrbitRuntime, Task, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
+use orbit_store::contracts::JobRunStepParams;
 use orbit_tools::ToolContext;
+use orbit_types::resource::ExecutorResource;
 use orbit_types::task::{CONTEXT_CREATION_AUTHORIZED_EVENT, TaskRelation, TaskRelationType};
-use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
+use orbit_types::workflow::{
+    ChildDispatch, ExecutorDef, JobRunState, JobTargetType, PipelineState,
+};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -923,6 +927,71 @@ fn an_undecided_pilot_is_not_run_again_by_a_later_drain_until_the_task_really_ch
     assert_eq!(next["task_ids"], json!([ordinary.id]), "{next}");
 }
 
+fn a_pilot_that_could_not_draw_an_inspection_crew_is_retried_after_configuration() {
+    let workspace = Workspace::new();
+    let ordinary = workspace.task("ordinary", &[], &["file:README.md"], TaskComplexity::Low);
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["task_ids"], json!([ordinary.id]), "{selection}");
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    let now = Utc::now();
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        workspace.runtime.sqlite_store().unwrap(),
+        workspace.runtime.workspace_id().unwrap(),
+    );
+    jobs.complete_job_run_step(
+        &pilot,
+        &JobRunStepParams {
+            lock_wait_ms: None,
+            step_index: 0,
+            target_type: JobTargetType::Activity,
+            target_id: "prepare_task_pilot".into(),
+            started_at: now,
+            finished_at: now,
+            duration_ms: Some(0),
+            exit_code: None,
+            agent_response_json: None,
+            state: JobRunState::Failed,
+            error_code: None,
+            error_message: Some(
+                "job executor: invalid input: inspection_crew_unavailable: no inspection-capable crew is configured"
+                    .into(),
+            ),
+        },
+    )
+    .unwrap();
+    workspace.finish(&pilot, JobRunState::Failed);
+    workspace.record(&drain);
+
+    let history = workspace.runtime.get_task_history(&ordinary.id).unwrap();
+    assert!(
+        !history
+            .iter()
+            .any(|entry| entry.event == "task_pilot_unresolved")
+    );
+
+    // Existing holds from the buggy drain need to lift without an edit too.
+    append_unresolved_pilot_entry(&workspace, &ordinary, &pilot);
+
+    let mut executor: ExecutorResource =
+        serde_yaml::from_str(include_str!("../../assets/executors/codex.yaml")).unwrap();
+    executor.spec.inspection_args = Some(Vec::new());
+    workspace
+        .runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+
+    let later = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let next = workspace.select(&later);
+    assert_eq!(next["task_ids"], json!([ordinary.id]), "{next}");
+}
+
 fn selected(selection: &Value, task: &Task) -> bool {
     selection["task_ids"]
         .as_array()
@@ -1540,6 +1609,42 @@ fn append_pilot_entry(workspace: &Workspace, task: &Task, at: &str, note: &str) 
     .unwrap();
 }
 
+/// Recreate an unresolved-pilot marker written by the old drain implementation.
+fn append_unresolved_pilot_entry(workspace: &Workspace, task: &Task, pilot_run_id: &str) {
+    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+        &orbit_store::maintenance::task_registry::task_registry_path(
+            &workspace.runtime.global_root(),
+        ),
+    )
+    .unwrap();
+    orbit_store::compose::workspace_coordinated_backends(
+        registry,
+        workspace.runtime.workspace_id().unwrap(),
+        workspace.runtime.sqlite_store().unwrap(),
+    )
+    .unwrap()
+    .task
+    .history
+    .update_task_history(
+        &task.id,
+        orbit_store::contracts::TaskHistoryUpdateParams {
+            actor: "system".into(),
+            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                at: Utc::now(),
+                by: "system".into(),
+                event: "task_pilot_unresolved".into(),
+                note: Some(json!({"pilot_run_id": pilot_run_id}).to_string()),
+                from_status: None,
+                to_status: None,
+                operation_id: None,
+                decision: None,
+            }],
+            ..Default::default()
+        },
+    )
+    .unwrap();
+}
+
 fn a_drain_hold_note_counts_only_when_written_before_the_store_recorded_typed_decisions() {
     // The first open by this binary records the store's boundary.
     let first_open = Utc::now();
@@ -1668,6 +1773,7 @@ crate::scenario_table!(
     a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes,
     an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change,
     an_undecided_pilot_is_not_run_again_by_a_later_drain_until_the_task_really_changes,
+    a_pilot_that_could_not_draw_an_inspection_crew_is_retried_after_configuration,
     proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred,
     candidates_with_no_crew_are_never_bundled_with_crewed_candidates,
     verified_no_diff_merge_proof_uses_only_the_first_parent_change,
