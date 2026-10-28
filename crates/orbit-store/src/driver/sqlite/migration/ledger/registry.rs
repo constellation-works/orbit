@@ -650,10 +650,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::ReadCompatible,
         apply: super::super::apply_run_resource_minutes_freshness_index,
     },
-    // ORB-19423: delete admission-only rows so tasks older binaries admitted
-    // while experiments were disabled are admitted once more; rows written
-    // from here on are final. Data only: an older binary reads a missing row
-    // as a task not yet admitted.
+    // Delete every admission-only row so each task is admitted once more,
+    // including rows from enabled admissions that matched no population;
+    // stored rows cannot distinguish those from disabled-era admissions.
+    // Rows with an assignment or exclusion stay final. This migration changes
+    // data only: older binaries read a missing row as a task not yet admitted.
     Migration {
         version: 70,
         name: "reopen_legacy_experiment_admissions",
