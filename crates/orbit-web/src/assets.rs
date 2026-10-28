@@ -357,6 +357,21 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/operations.js"),
     ),
     (
+        "/static/js/operations-drain.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-drain.js"),
+    ),
+    (
+        "/static/js/operations-drain-controls.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-drain-controls.js"),
+    ),
+    (
+        "/static/js/operations-drain-capacity.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/operations-drain-capacity.js"),
+    ),
+    (
         "/static/js/operations-shared.js",
         JS,
         include_bytes!("../assets/dashboard/js/operations-shared.js"),
