@@ -110,6 +110,7 @@ mod step_recovery;
 mod system_work_crews;
 mod workspace_seed;
 
+mod codebase_regressions;
 mod codebase_related;
 mod host_labels;
 mod host_os_executor;

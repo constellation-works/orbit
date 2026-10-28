@@ -311,8 +311,8 @@ fn link_sites(link: &RegressionLink) -> impl Iterator<Item = (&str, Anchor)> {
 /// in the window.
 ///
 /// A `symbol:` or `file:` site counts under its file's key at the rollup; a
-/// non-root `dir:` site under its own key and every touched key below it.
-/// The root `dir:.` site covers all touched keys without creating a root-only
+/// non-root `dir:` site under its own key and every footprint or site key below
+/// it. The root `dir:.` site covers all those keys without creating a root-only
 /// key. A regressed task counts once per key however many sites name it, and
 /// joins the denominator of a key it did not declare, so the rate stays at
 /// most 1. Links without a site are attributed to no path: they are counted,
@@ -347,10 +347,17 @@ pub(super) fn regression_rows<'a>(facts: &'a CodebaseFacts, params: &Params) -> 
             }
         }
         if !sites.is_empty() {
+            // Seed every explicit site key before expanding directory sites,
+            // including keys outside all done tasks' declared footprints.
+            for anchor in sites.values() {
+                if !(anchor.dir && anchor.path == ".") {
+                    rows.entry(params.rollup.key(anchor)).or_default();
+                }
+            }
             sited.push((task, crew, declared, sites));
         }
     }
-    let touched: Vec<String> = rows.keys().cloned().collect();
+    let candidate_keys: Vec<String> = rows.keys().cloned().collect();
     for (task, crew, declared, sites) in sited {
         let mut keys: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
         for (site, anchor) in &sites {
@@ -362,12 +369,12 @@ pub(super) fn regression_rows<'a>(facts: &'a CodebaseFacts, params: &Params) -> 
             }
             if anchor.dir {
                 if is_root_dir {
-                    for key in &touched {
+                    for key in &candidate_keys {
                         keys.entry(key.clone()).or_default().insert(site);
                     }
                 } else {
                     let under = format!("{}/", anchor.path);
-                    for key in touched.iter().filter(|key| key.starts_with(&under)) {
+                    for key in candidate_keys.iter().filter(|key| key.starts_with(&under)) {
                         keys.entry(key.clone()).or_default().insert(site);
                     }
                 }
