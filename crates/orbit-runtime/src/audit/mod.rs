@@ -6,9 +6,8 @@
 
 pub(super) mod coordination;
 pub mod run;
-pub(crate) mod run_detail;
-pub mod run_events;
-pub mod run_logs;
-mod run_projection;
 pub mod system;
 pub mod tag_instructions;
+
+pub use run::events as run_events;
+pub use run::logs as run_logs;

@@ -9,7 +9,7 @@ use orbit_common::security::redaction::redact_all;
 use orbit_common::storage::blob_store::BlobStore;
 use serde_json::Value;
 
-use super::run::{
+use super::trail::{
     MAX_RECOVERY_ATTEMPTS, RunAuditEvent, RunAuditStep, RunCliInvocationRecord, RunProviderProcess,
     RunRecoveryAttempt, RunRecoveryAttempts, RunRecoveryDecision, RunStoppedDescendant,
 };

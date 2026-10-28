@@ -26,7 +26,7 @@ use serde_json::Value;
 use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
-use super::run::RunAuditEvent;
+use super::trail::RunAuditEvent;
 
 /// Hard cap on rows a kind-filtered forward page scans from one run.
 pub const RUN_EVENTS_MAX_SCAN_ROWS: usize = 50_000;

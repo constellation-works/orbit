@@ -11,7 +11,7 @@
 use orbit_common::security::redaction::redact_all;
 use serde_json::{Value, json};
 
-use super::run::RunCliInvocationRecord;
+use super::trail::RunCliInvocationRecord;
 
 /// Bytes of each stream the HTTP preview reads and keeps.
 pub const HTTP_PREVIEW_MAX_BYTES: usize = 8192;

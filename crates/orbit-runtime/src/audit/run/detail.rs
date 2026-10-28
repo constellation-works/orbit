@@ -24,13 +24,13 @@ use serde_json::Value;
 use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
-use super::run::{
-    MAX_PROVIDER_PROCESSES, RunAuditEvent, RunAuditStep, RunCliInvocationRecord,
-    RunExecutionProgress,
-};
-use super::run_projection::{
+use super::projection::{
     audit_steps_from_events, bound_provider_processes, cli_invocation_record,
     provider_processes_from_events, run_audit_event, step_index_by_id,
+};
+use super::trail::{
+    MAX_PROVIDER_PROCESSES, RunAuditEvent, RunAuditStep, RunCliInvocationRecord,
+    RunExecutionProgress,
 };
 
 const SOURCE: &str = "v2_envelope";
