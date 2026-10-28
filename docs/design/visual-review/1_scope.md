@@ -33,7 +33,7 @@ headless Chromium per host, and `ui` tasks are admitted only on hosts whose kit 
 ([browser checks](../../DEVELOPMENT.md#browser-checks-on-a-prepared-host)). Review findings
 are verified by a second crew ([finding verification](../finding-verification/2_design.md)),
 and the shared severity scale `critical | high | medium | low | nit` with weights 8, 4, 2, 1
-and 0.25 is being added by [ORB-19304]. Experiments assign tasks to arms and read outcomes out
+and 0.25 was added by [ORB-19304]. Experiments assign tasks to arms and read outcomes out
 per arm ([experiments](../experiments/1_scope.md)).
 
 ## Problem
