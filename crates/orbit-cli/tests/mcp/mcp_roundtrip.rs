@@ -5709,3 +5709,68 @@ fn observational_read_only_stores_report_unavailable_coverage() {
     // unexpected notices through the normal child-test contract.
     test_env::assert_child_test_passed(TEST, output.status, output.stdout, remaining.join("\n"));
 }
+
+#[test]
+fn mcp_scheduled_range_is_inclusive_and_validates_bounds() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let mut ids = Vec::new();
+    for (title, time) in [
+        ("No schedule", None),
+        ("Before", Some("2099-01-31T23:59:59Z")),
+        ("Lower", Some("2099-02-01T01:00:00+01:00")),
+        ("Upper", Some("2099-02-02T00:00:00Z")),
+        ("After", Some("2099-02-02T00:00:01Z")),
+    ] {
+        let task = client.add_task_full(title, "Scheduled range fixture.");
+        let id = id_of(&task);
+        if let Some(time) = time {
+            client.call_tool_ok(
+                "orbit_task_update",
+                json!({"id":id,"not_before":time,"model":"codex"}),
+            );
+        }
+        ids.push(id);
+    }
+    for (bounds, expected) in [
+        (
+            json!({"not_before_from":"2099-02-01T00:00:00Z", "not_before_until":"2099-02-02T00:00:00Z"}),
+            vec![ids[2].clone(), ids[3].clone()],
+        ),
+        (
+            json!({"not_before_from":"2099-02-02T00:00:00Z"}),
+            vec![ids[3].clone(), ids[4].clone()],
+        ),
+        (
+            json!({"not_before_until":"2099-02-01T00:00:00Z"}),
+            vec![ids[1].clone(), ids[2].clone()],
+        ),
+    ] {
+        let result = client.call_tool_ok("orbit_task_list", bounds);
+        let rows = result["tasks"].as_array().unwrap();
+        let found: BTreeSet<_> = rows
+            .iter()
+            .map(|row| row["id"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(found, expected.into_iter().collect());
+        assert!(
+            rows.iter().all(|row| row["not_before"].is_string()),
+            "{result}"
+        );
+    }
+    let all = client.call_tool_ok("orbit_task_list", json!({}));
+    assert!(
+        all["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("not_before").is_some()),
+        "{all}"
+    );
+    for field in ["not_before_from", "not_before_until"] {
+        for raw in ["tomorrow", ""] {
+            let error = client.call_tool_err("orbit_task_list", json!({field:raw}));
+            assert_message_parts(&error, &[field, raw]);
+        }
+    }
+}

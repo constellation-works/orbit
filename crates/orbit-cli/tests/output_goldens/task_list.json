@@ -44,6 +44,7 @@
         }
       ]
     },
+    "not_before": null,
     "pilot_warnings": []
   },
   {
@@ -91,6 +92,7 @@
         }
       ]
     },
+    "not_before": null,
     "pilot_warnings": []
   },
   {
@@ -138,6 +140,7 @@
         }
       ]
     },
+    "not_before": null,
     "pilot_warnings": []
   }
 ]

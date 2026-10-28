@@ -92,6 +92,7 @@ pub(super) struct TaskTableFilters {
     pub(super) priority: bool,
     pub(super) task_type: bool,
     pub(super) runs_on: bool,
+    pub(super) scheduled: bool,
 }
 
 /// Build the list view for `orbit task list` from the tool's task records.
@@ -152,6 +153,11 @@ pub(super) fn task_table(
                 }),
         ),
     ];
+    let show_schedule =
+        filtered.scheduled || tasks.iter().any(|task| task["not_before"].is_string());
+    if show_schedule {
+        columns.push(Column::new("SCHEDULED").fixed().filtered(true));
+    }
     if show_tools {
         columns.extend([
             Column::new("REQUIRED TOOLS").filtered(true),
@@ -177,6 +183,9 @@ pub(super) fn task_table(
             crate::output::color::cell(field("type"), Domain::TaskType),
             Cell::new(runs_on_cell(task, field("crew").is_empty())),
         ];
+        if show_schedule {
+            row.push(Cell::new(field("not_before")));
+        }
         if show_tools {
             row.extend([
                 Cell::new(json_str_list(&task["required_tools"])),

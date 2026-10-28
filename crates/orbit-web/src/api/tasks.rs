@@ -262,6 +262,9 @@ fn reject_unsupported_task_body_fields(
 pub(super) struct UpdateTaskBody {
     #[serde(default)]
     title: Option<String>,
+    /// RFC 3339 schedule; an empty string clears, null or absence preserves.
+    #[serde(default)]
+    not_before: Option<String>,
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
@@ -715,6 +718,20 @@ pub(super) async fn update_task_action(
     } else {
         TaskUpdateAuthority::Lifecycle
     };
+    let not_before = match body
+        .not_before
+        .map(|raw| {
+            if raw.trim().is_empty() {
+                Ok(None)
+            } else {
+                orbit_types::task::parse_not_before(&raw).map(Some)
+            }
+        })
+        .transpose()
+    {
+        Ok(value) => value,
+        Err(error) => return map_runtime_error(error.into()),
+    };
     let params = TaskUpdateParams {
         title: body.title,
         description: body.description,
@@ -746,7 +763,7 @@ pub(super) async fn update_task_action(
         trusted_artifact_origin: None,
         discard_candidate: false,
         allow_drop_system_tags: body.allow_drop_system_tags,
-        not_before: None,
+        not_before,
     };
     let id = id.to_string();
     task_mutation_response(runtime, "task update", move |runtime| {

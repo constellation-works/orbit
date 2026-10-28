@@ -60,6 +60,10 @@ const COMMANDS: &[Command] = &[
         args: &["task", "list"],
     },
     Command {
+        name: "task_list_scheduled",
+        args: &["task", "list", "--scheduled"],
+    },
+    Command {
         name: "skill_list",
         args: &["skill", "list"],
     },
@@ -788,6 +792,14 @@ fn plain_and_json_forms_match_their_goldens() {
     let fixture = Fixture::new();
 
     for command in COMMANDS {
+        if command.name == "task_list_scheduled" {
+            for (id, time) in [
+                ("ORB-00001", "2099-02-01T10:00:00Z"),
+                ("ORB-00000", "2099-02-02T10:00:00Z"),
+            ] {
+                fixture.run(&["task", "update", id, "--not-before", time], &[]);
+            }
+        }
         let plain = fixture.run(command.args, &[]);
         let mut plain_stdout = fixture.redact(&String::from_utf8_lossy(&plain.stdout));
 

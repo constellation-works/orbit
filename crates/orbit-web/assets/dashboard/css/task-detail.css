@@ -1855,3 +1855,13 @@ input.field-editor-input {
 .task-risk-body > p { margin: 2px 0; overflow-wrap: anywhere; }
 .task-risk-lead { color: var(--fg-soft); }
 .task-risk-file { padding-left: 12px; font-size: 12px; }
+
+.task-schedule, .task-started-at {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+.task-schedule > .field-editor-cell { flex: 1 1 180px; min-width: 0; }
+.task-schedule .field-editor { overflow-wrap: anywhere; }

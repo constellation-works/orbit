@@ -25,11 +25,12 @@ use super::review_modes::ReviewMode;
 /// horizon-mature calibration [ORB-18691]. 10: stored per-task work hours,
 /// tokens and USD cover every simulated attempt, not one delivery draw, and
 /// are scored against the same retry-inclusive measure [ORB-18859].
-pub(super) const MODEL_VERSION: u32 = 10;
+/// 11: scheduled tasks wait until their not_before instant.
+pub(super) const MODEL_VERSION: u32 = 11;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
-    ("admission", Some(1)),
+    ("admission", Some(2)),
     ("review_modes", Some(1)),
     ("outcomes", Some(1)),
     ("resource_fit", Some(1)),

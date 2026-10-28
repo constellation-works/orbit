@@ -291,7 +291,8 @@ impl TaskV2Store {
         }
         sort_listing(
             &mut items,
-            filter.terminal_last,
+            filter,
+            |row| row.task.not_before,
             |row| &row.task.created_at,
             |row| &row.task.id,
             |row| row.task.status,
@@ -439,7 +440,8 @@ fn select_candidates(
         .collect::<Vec<_>>();
     sort_listing(
         &mut items,
-        filter.terminal_last,
+        filter,
+        |task| task.not_before,
         |task| &task.created_at,
         |task| &task.id,
         |task| task.status,
@@ -462,13 +464,16 @@ fn select_candidates(
 /// status move behind the rest while each partition keeps that order.
 fn sort_listing<T>(
     items: &mut [T],
-    terminal_last: bool,
+    filter: &TaskListFilter,
+    not_before: impl Fn(&T) -> Option<chrono::DateTime<Utc>>,
     created_at: impl Fn(&T) -> &chrono::DateTime<Utc>,
     id: impl Fn(&T) -> &str,
     status: impl Fn(&T) -> TaskStatus,
 ) {
     sort_by_created_desc_id_asc(items, created_at, id);
-    if terminal_last {
+    if filter.scheduled_after.is_some() {
+        items.sort_by_key(not_before);
+    } else if filter.terminal_last {
         items.sort_by_key(|item| status(item).is_terminal());
     }
 }

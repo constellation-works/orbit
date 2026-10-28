@@ -1046,3 +1046,15 @@ main.tasks-layout.task-page-mode .task-pane-back { display: inline-flex; }
   font-size: 11px;
   white-space: nowrap;
 }
+
+.title-tags > .scheduled-chip {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 2px 6px;
+  border: 1px solid var(--warn-line);
+  border-radius: var(--radius);
+  color: var(--warn-fg);
+  background: var(--warn-wash);
+  font-size: 11px;
+}

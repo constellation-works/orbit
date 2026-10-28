@@ -1898,7 +1898,7 @@
   },
   {
     "name": "orbit_task_list",
-    "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on. os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
+    "description": "List Orbit tasks in a {tasks, total, truncated} envelope (default limit 50). With no status filter, non-terminal tasks come first and terminal tasks follow, each newest first; an explicit status filter is newest first. `total` counts all matching tasks and `truncated` reports whether the limit omitted tasks. Each task is a compact row (see `fields`); pass `fields` to add long-text fields such as description or plan. Optional filters: status, parent, type, origin, tag, dependency readiness, path, runs_on, not_before_from, not_before_until (inclusive RFC 3339 bounds; unscheduled tasks do not match). scheduled:true lists future schedules soonest first, including proposed tasks. Default rows carry not_before (null when unset). os_requirement is derived from OS tags intersected with the stored crew executor host_os, with source and unresolved/conflict states.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1923,6 +1923,18 @@
         "type": {
           "type": "string",
           "description": "Optional task type filter"
+        },
+        "scheduled": {
+          "type": "boolean",
+          "description": "Keep only future not_before schedules, soonest first, including proposed tasks. Other filters still apply."
+        },
+        "not_before_from": {
+          "type": "string",
+          "description": "Inclusive lower not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match."
+        },
+        "not_before_until": {
+          "type": "string",
+          "description": "Inclusive upper not_before bound (RFC 3339 with an offset). Unscheduled tasks do not match."
         },
         "origin": {
           "type": "string",
@@ -1974,7 +1986,7 @@
               "type": "string"
             }
           ],
-          "description": "Optional per-task field projection as a string or array, using the field names `orbit_task_show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit_task_show`."
+          "description": "Optional per-task field projection as a string or array, using the field names `orbit_task_show` accepts (for example `id`, `title`, `status`). When set, each listed task is an object holding only those fields. Omit it for compact rows (id, title, status, priority, type, dependencies, resolved_dependencies, implemented_by, not_before, created_at, updated_at, workspace), the same rows `orbit tool run orbit.task.list` returns. For long-text fields such as description, acceptance_criteria, plan or execution_summary, name them here, or fetch one task with `orbit_task_show`."
         },
         "view": {
           "type": "string",

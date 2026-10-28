@@ -43,6 +43,19 @@ pub fn task_record_json(
 ) -> Result<Map<String, Value>, OrbitError> {
     let task = &row.task;
     let mut object = task_base_json(task, status_by_id);
+    if let Some(at) = orbit_types::task::task_started_at(&row.history) {
+        object.insert("started_at".into(), serde_json::json!(at));
+    }
+    if let Some(at) = task.not_before {
+        object.insert(
+            "scheduled_hold".into(),
+            serde_json::json!(
+                task.status == TaskStatus::Backlog
+                    && at > chrono::Utc::now()
+                    && !orbit_types::task::schedule_overridden(&row.history, at)
+            ),
+        );
+    }
     TaskOsReadout::new(runtime)?.insert_into(task, &mut object);
     // Read projections must tolerate corrupt pilot receipts: the CLI contract
     // keeps malformed task-pilot comments as ordinary text (see orbit-cli
@@ -166,6 +179,19 @@ pub fn task_show_field_json(
     status_by_id: Option<&BTreeMap<String, TaskStatus>>,
 ) -> Result<Value, OrbitError> {
     match field {
+        "scheduled_hold" => {
+            let held = if task.status == TaskStatus::Backlog
+                && let Some(at) = task.scheduled_after(chrono::Utc::now())
+            {
+                !orbit_types::task::schedule_overridden(&runtime.get_task_history(&task.id)?, at)
+            } else {
+                false
+            };
+            Ok(serde_json::json!(held))
+        }
+        "started_at" => Ok(serde_json::json!(orbit_types::task::task_started_at(
+            &runtime.get_task_history(&task.id)?
+        ))),
         "experiments" => serde_json::to_value(runtime.task_experiments(&task.id)?)
             .map_err(serialize_error("experiments")),
         "pilot_warnings" => Ok(serde_json::json!(task_pilot_warnings(

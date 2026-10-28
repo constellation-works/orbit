@@ -17,6 +17,15 @@ Options:
           - rejected:    Declined. Ordinary edits may return it to backlog or in-progress; other transitions require a human operator to use `task update --force`
           - someday:     Future-scoped — wanted but not yet actionable. Agents skip someday tasks
 
+      --scheduled
+          List future-scheduled tasks soonest first, including proposed tasks labelled by status
+
+      --not-before-from <NOT_BEFORE_FROM>
+          Inclusive lower schedule bound (RFC 3339 with an offset)
+
+      --not-before-until <NOT_BEFORE_UNTIL>
+          Inclusive upper schedule bound (RFC 3339 with an offset)
+
       --all
           Deprecated no-op: task listing is status-neutral by default, so `--all` is no longer required to see every lifecycle status. Accepted for backward compatibility and ignored
 

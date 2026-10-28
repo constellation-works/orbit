@@ -24,6 +24,9 @@ const tasks = statuses.map((status, index) => ({
   title: 'Panel fixture task ' + (index + 1) + ': ' + ['Tighten the readiness card', 'Retire the legacy dock route', 'Measure drain admission latency'][index % 3],
   status, priority: 'medium', projection: 'summary', crew: index % 2 ? 'opus' : null,
   job_run_id: status === 'in-progress' ? 'jrun-fixture-' + (index + 1) : null,
+  ...(index === 6 ? { not_before: '2099-02-01T10:00:00Z', scheduled_hold: false } : {}),
+  ...(index === 5 ? { not_before: '2099-02-01T10:00:00Z', scheduled_hold: true } : {}),
+  ...(index === 4 ? { not_before: '2026-10-18T10:00:00Z', started_at: '2026-10-18T12:00:00Z' } : {}),
   ...(index === 3 ? { riskiness: { state: 'no_footprint' } } : {}),
   ...(index === 4 ? { riskiness: { state: 'estimated', probability: 0.23 } } : {}),
   status_transitions: [{ status: status === 'backlog' ? 'in-progress' : 'backlog' }],
@@ -137,6 +140,7 @@ globalThis.fetch = async (input, options = {}) => {
       const body = JSON.parse(options.body);
       globalThis.panelFixture.patches.push({ id: task.id, body });
       if (Object.hasOwn(body, 'crew')) task.crew = body.crew;
+      if (Object.hasOwn(body, 'not_before')) { task.not_before = body.not_before || null; task.scheduled_hold = Boolean(body.not_before); }
       if (body.status) task.status = body.status;
       if (body.acceptance_criteria) task.acceptance_criteria = body.acceptance_criteria;
       if (body.context_files) task.context_files = body.context_files;
@@ -200,6 +204,42 @@ const waitShown = async (page, id) => {
 };
 
 try {
+  // A schedule remains editable and distinct from the actual first start.
+  for (const width of [1440, 375]) {
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    const scheduledRow = row(page, 'PANEL-6');
+    assert.match(await scheduledRow.locator('.scheduled-chip').innerText(), /^Scheduled\s/);
+    assert.equal(await row(page, 'PANEL-5').locator('.scheduled-chip').count(), 0, 'Running work has no scheduled hold chip');
+    assert.equal(await row(page, 'PANEL-7').locator('.scheduled-chip').count(), 0, 'An overridden schedule has no hold chip');
+    await scheduledRow.scrollIntoViewIfNeeded();
+    await capture(page, `scheduled-list-dark-${width}.png`);
+    await scheduledRow.locator('.title').click();
+    await waitShown(page, 'PANEL-6');
+    const schedule = pane(page).locator('.task-schedule');
+    await schedule.getByRole('button', { name: 'Edit scheduled time for PANEL-6', exact: true }).click();
+    const input = schedule.getByRole('textbox', { name: 'Edit scheduled time for PANEL-6', exact: true });
+    await input.fill('2099-02-02T11:00:00+01:00');
+    await capture(page, `scheduled-editor-dark-${width}.png`);
+    await schedule.getByRole('button', { name: 'save', exact: true }).click();
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 1);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches[0].body), { not_before: '2099-02-02T11:00:00+01:00' });
+    await pane(page).locator('.task-schedule .field-edit').waitFor({state: 'visible'});
+    await capture(page, `scheduled-detail-dark-${width}.png`);
+    await pane(page).locator('.task-schedule .field-edit').click();
+    await pane(page).locator('.task-schedule input').fill('');
+    await pane(page).locator('.task-schedule').getByRole('button', { name: 'save', exact: true }).click();
+    await page.waitForFunction(() => globalThis.panelFixture.patches.length === 2);
+    assert.deepEqual(await page.evaluate(() => globalThis.panelFixture.patches[1].body), { not_before: '' });
+    await pane(page).locator('.task-schedule .field-edit').waitFor({state: 'visible'});
+    assert.equal(await row(page, 'PANEL-6').locator('.scheduled-chip').count(), 0, 'Clearing the schedule removes its hold chip');
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await row(page, 'PANEL-5').locator('.title').click();
+    await waitShown(page, 'PANEL-5');
+    await pane(page).locator('.task-started-at [data-clock-at]').waitFor({state: 'visible'});
+    await capture(page, `scheduled-started-dark-${width}.png`);
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
   await checkTaskPresentation({ openPage, row, waitShown, capture, results });
   // Task lifecycle controls follow the active Overview panel; Comment follows
   // the thread in Comments, and neither appears in the other task panels.

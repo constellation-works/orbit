@@ -90,3 +90,16 @@ impl Task {
         self.not_before.filter(|not_before| *not_before > now)
     }
 }
+
+/// The first recorded entry into active work, independent of the scheduled time.
+/// Requeues and later attempts do not replace the original start.
+#[must_use]
+pub fn task_started_at(history: &[TaskHistoryEntry]) -> Option<DateTime<Utc>> {
+    history
+        .iter()
+        .filter(|entry| {
+            entry.to_status == Some(crate::task::TaskStatus::InProgress) || entry.event == "started"
+        })
+        .map(|entry| entry.at)
+        .min()
+}

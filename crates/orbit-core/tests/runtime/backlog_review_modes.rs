@@ -378,8 +378,47 @@ fn historical_uncertainty_and_running_admission_remain_explicit() {
     assert_eq!(stored[0]["review_mode_source"], "captured:workspace");
 }
 
+fn scheduled_forecast_starts_at_or_after_not_before() {
+    let fixture = Fixture::new();
+    let runtime = fixture.runtime("none");
+    for _ in 0..8 {
+        delivery(&runtime, ReviewTiming::None, 1);
+    }
+    let id = pending(&runtime, TaskComplexity::Medium, "sample");
+    let not_before = Utc::now() + Duration::hours(24);
+    runtime
+        .update_task_with_identity(
+            &id,
+            TaskUpdateParams {
+                not_before: Some(Some(not_before)),
+                ..Default::default()
+            },
+            Some("codex".into()),
+            None,
+        )
+        .unwrap();
+    let before = Utc::now();
+    let result = forecast(&runtime);
+    let lower = (not_before - Utc::now()).num_seconds() as f64 / 3600.0;
+    let upper = (not_before - before).num_seconds() as f64 / 3600.0 + 0.01;
+    let predictions = result["forecast"]["task_predictions"].as_array().unwrap();
+    let task = predictions.iter().find(|task| task["id"] == id).unwrap();
+    for percentile in ["p50", "p90"] {
+        let start = task["predicted_start_hours"][percentile].as_f64().unwrap();
+        assert!(start >= lower && start <= upper, "{result}");
+        assert!(
+            result["forecast"]["time_to_drain_hours"][percentile]
+                .as_f64()
+                .unwrap()
+                >= start + 1.0,
+            "the scheduled wait must precede the one-hour delivery: {result}"
+        );
+    }
+}
+
 crate::scenario_table!(
     review_modes,
+    scheduled_forecast_starts_at_or_after_not_before,
     review_policy_selects_observed_delivery_distribution,
     thin_cells_preserve_mode_before_borrowing_pooled_history,
     historical_uncertainty_and_running_admission_remain_explicit,

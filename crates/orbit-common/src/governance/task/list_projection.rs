@@ -17,6 +17,7 @@ pub const MINIMAL_TASK_FIELDS: &[&str] = &[
     "dependencies",
     "resolved_dependencies",
     "implemented_by",
+    "not_before",
     "created_at",
     "updated_at",
     "workspace",

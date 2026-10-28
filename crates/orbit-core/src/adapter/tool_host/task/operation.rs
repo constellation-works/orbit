@@ -489,9 +489,36 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     // Validated before the query so an unknown field is refused even when no
     // task matches, instead of only surfacing on the first listed task.
     let fields = projection_fields(input)?.filter(|fields| !fields.is_empty());
+    let schedule_bound =
+        |field: &str| -> Result<Option<chrono::DateTime<chrono::Utc>>, OrbitError> {
+            input
+                .optional_raw_string(field)?
+                .map(|raw| {
+                    chrono::DateTime::parse_from_rfc3339(&raw)
+                .map(|at| at.with_timezone(&chrono::Utc))
+                .map_err(|error| OrbitError::InvalidInput(format!(
+                    "`{field}` must be an RFC 3339 instant with an offset; got `{raw}` ({error})"
+                )))
+                })
+                .transpose()
+        };
+    let not_before_from = schedule_bound("not_before_from")?;
+    let not_before_until = schedule_bound("not_before_until")?;
+    if not_before_from
+        .zip(not_before_until)
+        .is_some_and(|(from, until)| from > until)
+    {
+        return Err(OrbitError::InvalidInput(
+            "not_before_from must be at or before not_before_until".into(),
+        ));
+    }
     let page = runtime.query_task_rows_status_aware(&TaskListQuery {
         filter: TaskListFilter {
             statuses,
+            not_before_from,
+            not_before_until,
+            scheduled_after: (input.optional_bool("scheduled")? == Some(true))
+                .then(chrono::Utc::now),
             priority,
             task_type,
             origin,
@@ -526,6 +553,14 @@ fn list(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
         .map(|row| match &fields {
             None => {
                 let mut object = task_base_json(&row.task, &status_by_id);
+                object.insert(
+                    "not_before".into(),
+                    json!(
+                        row.task
+                            .not_before
+                            .map(orbit_types::task::format_not_before)
+                    ),
+                );
                 os_readout.insert_into(&row.task, &mut object);
                 object.insert(
                     "pilot_warnings".into(),

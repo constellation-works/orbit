@@ -586,3 +586,87 @@ fn task_index_and_bounded_listing() {
         check();
     }
 }
+
+#[test]
+fn scheduled_list_orders_future_tasks_and_labels_proposed() {
+    let workspace = workspace();
+    let unscheduled = workspace.add_task("Unscheduled");
+    let early = workspace.add_task("Earlier proposed");
+    let late = workspace.add_task("Later");
+    let past = workspace.add_task("Past");
+    for (id, time) in [
+        (&late, "2099-02-02T10:00:00Z"),
+        (&early, "2099-02-01T10:00:00Z"),
+        (&past, "2000-01-01T00:00:00Z"),
+    ] {
+        workspace.run(
+            &["task", "update", id, "--not-before", time],
+            "set schedule",
+        );
+    }
+    let output = workspace.run(
+        &["task", "list", "--scheduled", "--json", "--limit", "1"],
+        "list next scheduled task",
+    );
+    let tasks: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(tasks.as_array().unwrap().len(), 1);
+    assert_eq!(tasks[0]["id"], early);
+    assert_eq!(tasks[0]["status"], "proposed");
+    assert_eq!(tasks[0]["not_before"], "2099-02-01T10:00:00Z");
+    let output = workspace.run(
+        &["task", "list", "--scheduled", "--format", "table"],
+        "show scheduled tasks",
+    );
+    let text = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        text.find(&early).unwrap() < text.find(&late).unwrap(),
+        "{text}"
+    );
+    assert!(
+        text.contains("proposed") && text.contains("2099-02-01"),
+        "{text}"
+    );
+    assert!(
+        !text.contains(&past) && !text.contains(&unscheduled),
+        "{text}"
+    );
+
+    let shown = workspace.run(&["task", "show", &early], "show scheduled time");
+    let shown = String::from_utf8_lossy(&shown.stdout);
+    assert!(
+        shown.contains("Scheduled:") && shown.contains("2099-02-01"),
+        "{shown}"
+    );
+    workspace.run_as_operator(
+        &[
+            "task",
+            "update",
+            &early,
+            "--status",
+            "in-progress",
+            "--plan",
+            "Inspect the scheduled delivery surfaces.",
+        ],
+        "record manual start",
+    );
+    let shown = workspace.run(
+        &[
+            "task",
+            "show",
+            &early,
+            "--fields",
+            "not_before,started_at,scheduled_hold",
+            "--json",
+        ],
+        "project scheduled and actual times",
+    );
+    let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
+    assert_eq!(shown["not_before"], "2099-02-01T10:00:00Z");
+    assert!(shown["started_at"].as_str().is_some(), "{shown}");
+    assert_eq!(
+        shown["scheduled_hold"], false,
+        "an active task is no longer held by its schedule"
+    );
+    let text = workspace.run(&["task", "show", &early], "show actual start");
+    assert!(String::from_utf8_lossy(&text.stdout).contains("Actual start:"));
+}

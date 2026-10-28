@@ -21,6 +21,15 @@ Bearing: Orbit records managed invocations, task status history, leaf occupancy,
 
 ## Shipped so far
 
+Scheduled starts [ORB-19215] are model version **11**, admission factor revision
+**2**. Each pending task waits until its `not_before` instant before entering
+an admission pass. The event loop advances to that instant even with no running
+work; dependency and capacity waits can delay it further. `wait_hours.scheduled`
+counts the hold. An operator override for that exact schedule removes the hold;
+a task already running keeps its observed start. Synthetic arrivals and follow-ups
+do not inherit their historical donor's schedule. Calibration remains separate
+from earlier model versions.
+
 [ORB-18686] (`MODEL_VERSION` 3, `inputs.admission_factors` `admission: 1`, the other four factors `null`) replaced v1's list scheduling with an event-driven drain:
 
 - **Adapter.** `admission/forecast.rs` freezes the drain's inputs once per forecast: dispatch order from `owner_dispatch_order` over the live executor host limits with `sort_tasks_for_automatic_dispatch` and the expiring batches; pairwise conflict bitsets from `active_task_lock_holders`, `lock_holder_index`, `task_lock_overlaps` and `lock_context_files_for_task` (what each task holds once running, with `no-diff-expected` holding nothing, and its declared surface); root groups from `task_root_id`; and pilot deadlines from `footprint_waits`. Its pass runs the drain's gates in order: a held-lock conflict excludes the task's root group, at most `MAX_SURFACE_RESERVATIONS` lock-blocked `reserves_surface` tasks withhold lower-ranked overlapping work through `withhold_reserved_by` (the reservation body `withhold_reserved_surfaces` now delegates to, with its overlap lookup as a parameter), then unknown-footprint candidates still awaiting a pilot result are deferred, candidates without a free slot wait behind capacity, remaining candidates pass through `FootprintWave`, which decides unknown-footprint work through `defers` (the rule body `check` now delegates to), and same-wave conflicts are checked last. The drain passes again at the same instant while a pass admits something.

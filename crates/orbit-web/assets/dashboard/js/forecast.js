@@ -72,6 +72,7 @@ const UNFORECASTABLE_LABELS = {
   upstream: "behind unforecastable work", return_unsupported: "blocked, with no return history",
 };
 const WAITS = [
+  ["scheduled", "Scheduled time", "Waiting until the task’s earliest scheduled start; admission can start it later."],
   ["dependency", "Dependencies", "Waiting for an earlier task in this forecast to finish."],
   ["lock", "File locks", "Its files overlap a running task's locked files."],
   ["reservation", "Surface reservations", "Higher-priority lock-blocked work reserved an overlapping surface."],
