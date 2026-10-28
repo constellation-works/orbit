@@ -2,7 +2,7 @@
 title: Process Supervision — Overview
 owner: claude
 last_updated: 2026-10-12
-last_validated: 2026-10-25
+last_validated: 2026-10-28
 status: Draft
 stage: shipped
 next: "—"
