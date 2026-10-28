@@ -10,7 +10,7 @@ type: design
 summary: "Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not"
 tags: [usage-pressure, crews, crew-pools, provider-limits, admission]
 last_updated: 2026-10-24
-last_validated: 2026-10-24
+last_validated: 2026-10-27
 ---
 
 # Scope: usage-pressure crew selection
@@ -18,10 +18,10 @@ last_validated: 2026-10-24
 Status: phases 1–4 (pressure view, task draws, shared pool draws and pull drains) ([`workflow.crew_selection`](../../CONFIG.md#usage-pressure-draws)) implemented.
 Bearing: [provider usage limits](../../CONFIG.md#provider-usage-limits) already record every
 window a provider reports ([ORB-14695] failures, [ORB-14696] post-run readings, [ORB-17644] Muse)
-and gate crews that reach a threshold ([ORB-14697]). Weighted pools
+and gate crews that reach a threshold ([ORB-14697]). Weighted complexity and purpose pools
 (`workflow.<complexity>_complexity_crews`, `workflow.purpose_crews.*`) choose among the crews
-that are left. This scope uses the readings to tilt those draws too, without changing which
-crews a pool may draw.
+that are left. Task-type draws also use a `type:<type>/<tier>` source. This scope uses the
+readings to tilt those draws too, without changing which crews a source may draw.
 
 ## Problem
 
@@ -44,8 +44,9 @@ Tuesday's draw. Weighting the creation draw alone would weight it with days-old 
 ## Goal
 
 Spend the capacity that expires first, so that less of the accounts' combined capacity is lost
-at resets. Quality routing is unchanged: complexity and purpose pools still decide which crews a
-task may run as, and the configured weights still express the operator's preference among them.
+at resets. Quality routing is unchanged: the task's source pool (complexity, purpose, or task
+type) still decides which crews it may run as, and the configured weights still express the
+operator's preference among them.
 Pressure only scales those weights.
 
 ## Shape
@@ -116,7 +117,8 @@ Pressure is computed at the draw, from **the readings of the host whose login th
 spend**, from the same provider-limit observations that gating reads.
 
 1. **Admission re-draws automatic assignments.** With pressure on, a task whose crew came from
-   an automatic source (`pool:<complexity>`, `purpose:<purpose>`, `default`) is re-drawn from
+   an automatic source (`pool:<complexity>`, `purpose:<purpose>`, `type:<type>/<tier>`, or
+   `default`) is re-drawn from
    its pool when its run is admitted (`capture_auto_task_selection`). The member chosen at
    creation is no longer kept just because it can run. An explicit crew (`explicit`, a legacy
    pin, an explicit run-input crew) is never re-drawn. The re-draw respects the task's OS
@@ -130,7 +132,10 @@ spend**, from the same provider-limit observations that gating reads.
    partitions and agent explore all call `weighted_draw`. They take the same multiplier through
    one helper applied after limit narrowing, so no draw site computes pressure on its own.
 4. **Pull drains.** A follower spends its own login ([ORB-16324]). The owner must never weigh a
-   follower's run with the owner's readings. See Phasing and Open questions.
+   follower's run with the owner's readings. On a claimed leaf, the follower re-draws eligible
+   automatic sources (`pool:`, `purpose:`, or `default`) from its own readings; a `type:` source
+   keeps the owner's crew because the claim snapshot does not include tags or context files.
+   See Phasing and Open questions.
 
 ### Configuration
 
@@ -158,8 +163,8 @@ Readings stay per host.
 
 ## Non-goals
 
-- **Changing pool membership or complexity routing.** Pressure never sends a hard task to a
-  crew outside the hard pool.
+- **Changing pool membership or task routing.** Pressure never sends a task to a crew outside
+  its existing complexity, purpose, or task-type pool.
 - **Owner-local admission order.** Pressure does not change which ready task an owner admits
   next locally. Pull offer order is the one exception (phase 4): a follower's reported pressure
   is the lowest ordering key for its offers, below band, priority, expiry and census affinity.
@@ -194,8 +199,9 @@ Readings stay per host.
    provenance and history. Default `static`.
 3. **Shared seam for other draws.** Activity, review, finding-verification and explore pools take
    the multiplier through the same helper.
-4. **Pull drains.** The follower applies pressure from its own readings when it admits a pulled
-   leaf, and reports per-crew pressure in its crew window. The owner then offers first the tasks
+4. **Pull drains.** The follower applies pressure from its own readings when it re-draws an
+   eligible pulled leaf (`pool:`, `purpose:`, or `default`; a `type:` source keeps the owner's
+   crew), and reports per-crew pressure in its crew window. The owner then offers first the tasks
    whose pools contain the follower's highest-pressure crews.
 
 ## Open questions
@@ -208,10 +214,12 @@ Readings stay per host.
 3. **Default.** After a trial, should `usage_pressure` become the default in `ws_orbit` only, or
    everywhere?
 
-Settled: **follower offers (phase 4).** Both parts shipped [ORB-17773]: the follower re-draws a
-claimed leaf's automatic assignment on its own readings, and it reports per-crew pressure in its
-pull capability so the owner offers it first, among tasks tied on band, priority, expiry and
-census affinity, the ones whose pools hold its highest-pressure crews. Neither alone was
+Settled: **follower offers (phase 4).** Both parts shipped [ORB-17773]: the follower re-draws an
+eligible claimed leaf's automatic assignment (`pool:`, `purpose:`, or `default`) on its own
+readings; a `type:` source keeps the owner's crew because the claim snapshot has no tags or
+context files. The follower also reports per-crew pressure in its pull capability so the owner
+offers it first, among tasks tied on band, priority, expiry and census affinity, the ones whose
+pools hold its highest-pressure crews. Neither alone was
 enough: the re-draw can only choose within the pool of the task already offered, and offer
 order alone would still spend the owner's draw on the follower's login. Owner and followers
 run the same exact version, and the capability field is additive and optional — absent reads
