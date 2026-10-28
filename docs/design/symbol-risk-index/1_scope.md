@@ -149,16 +149,20 @@ stays unshipped: the index may be read as data, but nothing ranks, scores or pro
 ### Reconciling the view with the test rules
 
 The view must stay consistent with
-[Boundary-First Testing](../../design-patterns/test_strategy.md) and the workspace rule that
-tests are added only for an observed defect.
+[Boundary-First Testing](../../design-patterns/test_strategy.md) and the workspace guide
+(`CLAUDE.md`/`AGENTS.md`): a new test is added only for an observed, reproduced defect, as a
+focused regression check at a public CLI/API boundary that fails before the fix and passes
+after. No private-function tests (private fixtures driving public behavior are fine). Where
+that pattern reads more broadly, the workspace guide supersedes it; the pattern still governs
+coverage priorities, retirement evidence and timing.
 
 - **It mandates no test.** No auto-task, prompt or gate files "add a test for symbol X" from
-  the under-tested list. Features, refactors and chores still add no tests unless a criterion
-  asks for one.
-- **It informs bug-fix test placement.** When a fix task writes its one regression test, the
-  view shows how thinly the defect's site symbols are covered. That helps choose the boundary
-  test that reaches them. The test still goes at a stable boundary unless a unit-test admission
-  criterion holds.
+  the under-tested list. Features, refactors and chores add no new tests; the existing suite
+  gates them.
+- **It informs bug-fix test placement.** When a fix task writes its one regression test for an
+  observed, reproduced defect, the view shows how thinly the defect's site symbols are
+  covered. That helps choose the public-boundary test that reaches them. The test stays at a
+  public CLI/API boundary; there is no private-function unit-test exception.
 - **It is evidence, not a verdict, for the test-quality audit.** The recurring
   `test-quality-audit` already files proposed tasks for critical coverage gaps. It may cite
   the under-tested list, but a gap counts as critical only with a recorded defect there (a
