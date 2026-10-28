@@ -204,7 +204,8 @@ async function assertFleetPartial(browser, port) {
         }
         await page.evaluate(() => globalThis.releaseRemoteFleet());
         await page.waitForFunction(() => !document.querySelector('#auto-drain-body .fleet-row[data-phase="loading"]'), null, { timeout: 5000 });
-        await page.locator(`#auto-drain-body .fleet-row[data-phase="${scenario.settledPhase}"]`).first().waitFor({ state: 'visible', timeout: 5000 });
+        // The settled host sits behind its tab; the focused host stays shown.
+        await page.locator(`#auto-drain-body .fleet-row[data-phase="${scenario.settledPhase}"]`).first().waitFor({ state: 'attached', timeout: 5000 });
         const after = await page.evaluate(() => ({
           url: location.href,
           workspace: document.querySelector('#workspace-select')?.value,
@@ -491,7 +492,7 @@ try {
     await page.evaluate(() => document.fonts.ready);
     const layout = await page.evaluate(() => {
       const line = row => row.querySelector('.fleet-line').getBoundingClientRect().height;
-      const rows = [...document.querySelectorAll('.fleet-drains .fleet-row:not(.fleet-unavailable)')];
+      const rows = [...document.querySelectorAll('.fleet-drains .fleet-row:not(.fleet-unavailable)')].filter(row => row.offsetParent);
       return { viewport: innerWidth, pageWidth: document.documentElement.scrollWidth,
         cardWidth: document.querySelector('.fleet-drains').getBoundingClientRect().width,
         bodyWidth: document.querySelector('#auto-drain-body').getBoundingClientRect().width,
@@ -507,7 +508,9 @@ try {
     await page.locator('.fleet-drains .fleet-row').first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(evidence, 'fleet-' + width + '.png'), fullPage: true });
   }
-  // Select a row on another host through its native keyboard control.
+  // Select a row on another host through its native keyboard control, after
+  // choosing that host's tab.
+  await page.getByRole('tab', { name: /^remote/ }).click();
   const remote = page.getByRole('button', { name: /Show BusyWorkspace.* on remote/ });
   await remote.focus();
   await remote.press('Enter');
@@ -524,6 +527,8 @@ try {
   // slots: the whole row, not only the workspace button, is navigable.
   await page.locator('#global-drain-state').click();
   await page.locator('.fleet-drains').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('.fleet-host-tab[aria-selected="true"]').getAttribute('data-host'), 'remote', 'the chosen host tab is remembered');
+  await page.locator('.fleet-host-tab').first().click();
   await page.locator('.fleet-drains .fleet-row').first().locator('[data-field="slots"]').click();
   await page.waitForFunction(async () => {
     const common = await import('/js/common.js');
@@ -533,7 +538,7 @@ try {
   assert.deepEqual(errors, []);
   const polls = await assertPollBudget(browser, server.address().port);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup, workspaceDefaults, fleetPartial,
-    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'ready fleet hosts shown while another host is loading at 1440 and 375px', 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', 'ready workspace focus preserved and Enter selects it when another host settles (success and failure, 1440 and 375px)', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
+    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'ready fleet hosts shown while another host is loading at 1440 and 375px', 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', 'ready workspace focus preserved and Enter selects it when another host settles (success and failure, 1440 and 375px)', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'host tabs show one host at a time and remember the choice', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
   console.log('fleet browser startup, scope, mobile, and poll-budget checks passed');
 } finally {
   if (browser) await browser.close();

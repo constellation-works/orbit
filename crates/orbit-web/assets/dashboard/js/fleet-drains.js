@@ -214,7 +214,15 @@ export function replaceFleetDrains(container, payload, selectScope) {
   const active = doc?.activeElement || null;
   const focusedLabel = active && container.contains(active) && active.classList?.contains('fleet-workspace')
     ? active.getAttribute?.('aria-label') : null;
+  const focusedTab = active && container.contains(active) && active.classList?.contains('fleet-host-tab')
+    ? active.getAttribute?.('data-host') : null;
   const next = renderFleetDrains(payload, selectScope);
+  if (focusedTab) {
+    container.replaceChildren(next);
+    [...container.querySelectorAll('.fleet-host-tab')]
+      .find(tab => tab.getAttribute('data-host') === focusedTab)?.focus({ preventScroll: true });
+    return;
+  }
   if (!focusedLabel) {
     container.replaceChildren(next);
     return;
@@ -240,8 +248,78 @@ export function replaceFleetDrains(container, payload, selectScope) {
   if (restored && doc.activeElement !== restored) restored.focus({ preventScroll: true });
 }
 
-// One group per host, in registry order. Live drains lead their group; the
-// rest keep the host's order (the sort is stable). Idle rows show a muted dot and slots only.
+// The host tab shown, remembered across repaints and reloads. Storage can
+// refuse reads and writes; the in-memory choice then serves this page.
+const HOST_STORAGE_KEY = 'orbit.dashboard.fleetHost';
+let sessionHost = null;
+
+function rememberedHost() {
+  try { return localStorage.getItem(HOST_STORAGE_KEY) || sessionHost; } catch { return sessionHost; }
+}
+
+function rememberHost(host) {
+  sessionHost = host;
+  try { localStorage.setItem(HOST_STORAGE_KEY, host); } catch { /* the in-memory choice serves */ }
+}
+
+const isLive = row => Number(LIVE_PHASES.includes(row.phase));
+
+function hostSummary(rows) {
+  const known = rows.filter(row => row.workspace_id && !row.error && !row.pending);
+  const loading = rows.some(row => row.pending);
+  const live = known.filter(isLive);
+  const count = known.length ? `${known.length} workspace${known.length === 1 ? '' : 's'}${live.length ? ` · ${live.length} live` : ''}${loading ? ' · loading' : ''}` : loading ? 'loading' : 'unavailable';
+  const state = loading ? 'loading' : known.length ? 'ready' : 'unavailable';
+  return { known, loading, live, count, state };
+}
+
+// Show one host's section and mark its tab, in place: no repaint, so a
+// focused tab keeps focus.
+function showHost(root, host) {
+  for (const tab of root.querySelectorAll('.fleet-host-tab')) {
+    const on = tab.getAttribute('data-host') === host;
+    tab.classList.toggle('on', on);
+    tab.setAttribute('aria-selected', String(on));
+    tab.tabIndex = on ? 0 : -1;
+  }
+  for (const section of root.querySelectorAll('.fleet-host')) section.hidden = section.getAttribute('data-host') !== host;
+}
+
+// One tab per host: its name and a dot for its liveliest drain, hollow when
+// the host is unavailable. Arrow keys, Home and End move between tabs.
+function hostTabs(root, groups, selected) {
+  const hosts = [...groups.keys()];
+  const list = el('div', { class: 'scoreboard-window-selector fleet-host-tabs', role: 'tablist', 'aria-label': 'Host' });
+  for (const host of hosts) {
+    const summary = hostSummary(groups.get(host));
+    const dot = summary.live[0]?.phase || (summary.state === 'unavailable' ? 'fleet-dot-down' : summary.state === 'loading' ? 'fleet-dot-loading' : '');
+    const on = host === selected;
+    const tab = el('button', { class: `scoreboard-window-seg fleet-host-tab${on ? ' on' : ''}`, type: 'button', role: 'tab', 'aria-selected': String(on), title: `${host} · ${summary.count}` }, [
+      el('span', { class: `drain-dot ${dot}`.trim(), 'aria-hidden': 'true' }),
+      el('span', { class: 'fleet-host-tab-name', text: host }),
+    ]);
+    tab.setAttribute('data-host', host);
+    tab.tabIndex = on ? 0 : -1;
+    tab.addEventListener('click', () => { rememberHost(host); showHost(root, host); });
+    list.append(tab);
+  }
+  list.addEventListener('keydown', event => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const index = hosts.indexOf(rememberedHost());
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? hosts.length - 1
+      : (Math.max(index, 0) + (event.key === 'ArrowLeft' ? -1 : 1) + hosts.length) % hosts.length;
+    rememberHost(hosts[next]);
+    showHost(root, hosts[next]);
+    list.querySelector(`[data-host="${CSS.escape(hosts[next])}"]`)?.focus();
+  });
+  return list;
+}
+
+// One section per host, in registry order; with more than one host, tabs
+// choose which section shows (the remembered host, else the first). Live
+// drains lead their section; the rest keep the host's order (the sort is
+// stable). Idle rows show a muted dot and slots only.
 export function renderFleetDrains(payload, selectScope) {
   const root = el('div', { class: 'fleet-drains' });
   root.append(el('p', { class: 'fleet-hint', text: 'Select a workspace to inspect or control its drain' }));
@@ -250,15 +328,20 @@ export function renderFleetDrains(payload, selectScope) {
     if (!groups.has(row.host)) groups.set(row.host, []);
     groups.get(row.host).push(row);
   }
+  const tabbed = groups.size > 1;
+  const remembered = rememberedHost();
+  const selected = groups.has(remembered) ? remembered : groups.keys().next().value;
+  if (tabbed) {
+    root.className = 'fleet-drains fleet-tabbed';
+    root.append(hostTabs(root, groups, selected));
+  }
   for (const [host, rows] of groups) {
-    const isLive = row => Number(LIVE_PHASES.includes(row.phase));
     const ranked = [...rows].sort((a, b) => isLive(b) - isLive(a));
-    const known = rows.filter(row => row.workspace_id && !row.error && !row.pending);
-    const loading = rows.some(row => row.pending);
-    const live = known.filter(isLive).length;
-    const count = known.length ? `${known.length} workspace${known.length === 1 ? '' : 's'}${live ? ` · ${live} live` : ''}${loading ? ' · loading' : ''}` : loading ? 'loading' : 'unavailable';
+    const { known, loading, count, state } = hostSummary(rows);
     const section = el('section', { class: 'fleet-host' });
-    section.setAttribute('data-host-state', loading ? 'loading' : known.length ? 'ready' : 'unavailable');
+    section.setAttribute('data-host', host);
+    section.setAttribute('data-host-state', state);
+    if (tabbed && host !== selected) section.hidden = true;
     section.append(el('h3', { class: 'fleet-host-name' }, [el('span', { text: host }), el('span', { class: known.length ? 'fleet-host-count' : loading ? 'fleet-host-count fleet-host-loading' : 'fleet-host-count fleet-host-down', text: count })]));
     const list = el('ul', { class: 'fleet-rows' });
     for (const row of ranked) list.append(row.pending ? loadingRow(row) : row.workspace_id && !row.error ? workspaceRow(row, selectScope) : unavailableRow(row));
