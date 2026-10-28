@@ -95,13 +95,16 @@ try {
     await page.waitForFunction(() => !document.getElementById('refresh-btn').disabled);
   };
   const highlights = id => page.locator(`#detail-${id} .file-list .context-contended-backlog, #detail-${id} .file-list .context-contended-active`);
-  // Locks held is the same card in the Tasks dock and on Drain. Exercise
-  // reservation-only payloads too: they must never show the empty state.
+  // Locks held is the same card in the Tasks dock, under its own tab and by
+  // file, and on Drain, by task. Exercise reservation-only payloads too: they
+  // must never show the empty state.
   const panel = page.locator('#locks-panel');
-  await page.locator('#locks-body .lock-task-group').first().waitFor();
+  await page.locator('#dock-tab-locks').click();
+  await page.locator('#locks-body .lock-group').first().waitFor();
   await panel.screenshot({ path: path.join(evidence, 'locks-tasks-dark-1440.png') });
   await page.evaluate(() => { location.hash = '#drain'; });
   await panel.waitFor({ state: 'visible' });
+  await page.locator('#locks-body .lock-task-group').first().waitFor();
   await panel.screenshot({ path: path.join(evidence, 'locks-drain-dark-1440.png'), animations: 'disabled' });
   await page.locator('#drain-summary').screenshot({ path: path.join(evidence, 'drain-summary-dark-1440.png'), animations: 'disabled' });
   await page.setViewportSize({ width: 375, height: 1100 });

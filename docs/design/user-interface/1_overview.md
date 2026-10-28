@@ -45,10 +45,11 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
 WORK › Drain (`#drain`) shows the auto-drain state, forecast, how the live
 window was started, admission passes and waits, fleet drains and locked files.
 Its **Start a window** view (`#drain/start`) composes any `orbit run auto`
-start, local or pull, and its Log view is `#drain/log`. The same dock, with the
-Auto-drain status card, a simple Start a window card, Locks held and the Log
-view, sits beside the task list on Tasks and gives way to the task pane when a
-task opens; the composer stays on Drain. On a replica checkout, the simple
+start, local or pull, and its Log view is `#drain/log`. The same dock sits
+beside the task list on Tasks, as Drain (the Auto-drain status card and a
+simple Start a window card), Locks held and Log tabs, and gives way to the task
+pane when a task opens. Locks held lists holders by task or locked paths by
+file, marking a path more than one task holds, with a filter by task ID; the composer stays on Drain. On a replica checkout, the simple
 local Start stays disabled with the runtime checkout refusal and a link to
 `#drain/start` to pull from the owner.
 The Drain page shows the fleet drains, including in **All workspaces** mode,

@@ -162,7 +162,7 @@ prove that a particular task or run succeeded.
 
 | Rail | Shows |
 |---|---|
-| **Tasks** | Tasks, with the ones waiting on you first. The right dock holds the auto-drain card, a simple **Start a window** card, the locks held and a live log; an open task takes its place. |
+| **Tasks** | Tasks, with the ones waiting on you first. The right dock has three tabs: **Drain** (the auto-drain card and a simple **Start a window** card), **Locks held** and a live **Log**; an open task takes its place. |
 | **Runs** | Job runs, newest first, and run detail. |
 | **Health** | What is broken now: **Incidents** and **Doctor**. Incidents has three tabs: **Incidents** (grouped failures), **Events** (every audited call, opening on failures and denials), and **Errors** (step and event failures). |
 | **Analytics** | How delivery is trending: **Metrics**, **Reliability** (**Pipeline** and **Tools**), **Codebase**, **Resources**, **Forecast**, **Cost**, **Agents** (**Orchestrators**, **Implementers**, **Reviewers**, **Pilots**), and **Experiments**. See [Analytics](#analytics), the Reliability notes in [Runs and errors](#runs-and-errors), and [Agents](#agents). |
@@ -453,9 +453,14 @@ The card shows:
   such as `Waits on ABC-2` and the lock they contend for. On the Drain page,
   **Why N tasks are waiting** splits the same snapshot by pool and lists each
   wait with its count, a link to the task it waits on, and what that task
-  holds. **Locks held** lists each task holding locked files, its status,
-  file count, and how many waiting tasks it blocks; expand a row for the
-  paths.
+  holds. **Locks held** has two views. **By task** lists each task holding
+  locked files, its status, file count, and how many waiting tasks it blocks;
+  expand a row for the paths. **By file** lists each locked path instead;
+  expand a row for the tasks holding it, how (context lock, run reservation
+  or both) and their runs. A path held by more than one task is marked and
+  sorted first, and typing a task ID in the filter keeps only the locked
+  paths that task's `context_files` overlap. Drain opens on By task and the
+  Tasks dock on By file; a view you pick is remembered for that page.
 
 **Start a window** offers every option of `orbit run auto`, each with its
 flag beside it. A sticky footer sums the window up, lists anything that blocks

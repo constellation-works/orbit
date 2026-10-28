@@ -854,6 +854,19 @@ main.tasks-layout.task-pane-open > .tasks-dock { display: none; }
 .tasks-dock .dock-pane > .panel,
 .tasks-dock #dock-pane-drain .panel { flex: 0 0 auto; min-height: 0; }
 .tasks-dock #dock-pane-drain .panel[hidden] { display: none; }
+/* On Tasks, Locks held is a tab of the dock (log-tail.js) apart from the
+   Drain tab's cards; the tab names it, so its own title is read by screen
+   readers only. */
+.tasks-dock #side-dock[data-card="drain"] #locks-panel,
+.tasks-dock #side-dock[data-card="locks"] :is(#auto-drain-panel, #auto-drain-quick-start) { display: none !important; }
+.tasks-dock #side-dock[data-card="locks"] #locks-title {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .tasks-dock #dock-pane-log > #log-panel { flex: 1 1 auto; }
 
 /* The task pane: the list, a resizer, then the selected task's detail at the

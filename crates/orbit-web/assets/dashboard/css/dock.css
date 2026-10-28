@@ -233,3 +233,149 @@
   color: var(--fg-dim);
   font-size: 12px;
 }
+
+/* Docked on Tasks the card is file first: one row per locked path, its
+   holders in the disclosure, and a filter by task. */
+.locks-filter {
+  padding: 10px 18px 0;
+}
+#locks-filter {
+  width: 100%;
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-control);
+  color: var(--fg);
+  font-size: 12.5px;
+}
+#locks-filter::placeholder { color: var(--fg-mute); font-family: inherit; }
+#locks-filter:focus { border-color: var(--accent); }
+#locks-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.locks-filter-note {
+  margin: 6px 0 0;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+.lock-group {
+  --lock-pad: 18px;
+  position: relative;
+  border-bottom: 1px solid var(--hair);
+}
+.lock-group:last-child {
+  border-bottom: none;
+}
+/* A path more than one task holds: a warning rail and count. Admission keeps
+   locked paths exclusive, so this is the row to look at. */
+.lock-group.lock-shared {
+  box-shadow: inset 3px 0 0 var(--warn-line);
+  background: color-mix(in srgb, var(--warn-wash) 45%, transparent);
+}
+.lock-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 8px var(--lock-pad);
+  cursor: pointer;
+  list-style: none;
+}
+.lock-header::-webkit-details-marker { display: none; }
+.lock-header::before {
+  content: "";
+  width: 6px; height: 6px;
+  margin-right: 2px;
+  border-right: 1.5px solid var(--fg-mute);
+  border-bottom: 1.5px solid var(--fg-mute);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+  flex: 0 0 auto;
+}
+.lock-group > details[open] > .lock-header::before { transform: rotate(45deg); }
+.lock-header:hover { background: var(--bg-hover); }
+.lock-header:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+@media (prefers-reduced-motion: reduce) { .lock-header::before { transition: none; } }
+/* Long paths keep their file name: the start is clipped, not the end. */
+.lock-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.lock-owner-one {
+  flex: 0 0 auto;
+  color: var(--fg-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.lock-owner-count {
+  flex: 0 0 auto;
+  padding: 1px 8px;
+  border: 1px solid var(--warn-line);
+  border-radius: 10px;
+  background: var(--warn-wash);
+  color: var(--warn-fg);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.lock-holder-list {
+  margin: 0;
+  padding: 0 var(--lock-pad) 10px 36px;
+  list-style: none;
+}
+.lock-holder {
+  padding: 6px 0;
+  border-top: 1px solid var(--hair);
+}
+.lock-holder:first-child { border-top: none; }
+.lock-holder-line,
+.lock-holder-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+}
+.lock-holder-meta {
+  margin-top: 2px;
+  color: var(--fg-dim);
+  font-size: 12px;
+}
+.lock-holder-id {
+  color: var(--accent-hover);
+  font-size: 12.5px;
+  text-decoration: none;
+  white-space: nowrap;
+}
+a.lock-holder-id { cursor: pointer; }
+a.lock-holder-id:hover { color: var(--accent-hi); text-decoration: underline; }
+a.lock-holder-id:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 2px; }
+span.lock-holder-id { color: var(--fg-soft); }
+.lock-holder .pill {
+  padding: 1px 8px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--dot, var(--fg-dim)) 14%, transparent);
+  color: color-mix(in srgb, var(--dot, var(--fg-dim)) 60%, var(--fg));
+  font-size: 11.5px;
+}
+.lock-holder .pill::before { display: none; }
+.lock-holder-tag {
+  color: var(--fg-mute);
+  font-size: 11.5px;
+}
+.lock-holder-self .lock-holder-id { color: var(--fg-soft); }
+.lock-holder-title {
+  flex: 1 1 160px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--fg);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
