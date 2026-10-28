@@ -11,6 +11,7 @@ import * as taskFields from './task-fields.js';
 // the thread the way it was left. The thread order is a page-wide preference,
 // so it persists like the other dashboard presentation prefs.
 export let rawComments = new Set();
+const COMMENT_PREFS_KEY = "orbit.dashboard.comments";
 let commentPrefs = loadCommentPrefs();
 
 /* ORB-12645: the comment thread.
@@ -32,7 +33,6 @@ const COMMENT_LINE_HEIGHT_PX = 22;
 const COMMENT_WRAP_COLUMNS = 96;
 // Below this an outline would only repeat what the body already shows.
 const COMMENT_OUTLINE_MIN_SECTIONS = 3;
-const COMMENT_PREFS_KEY = "orbit.dashboard.comments";
 // `by` on an agent-written comment names the crew or the agent family that
 // wrote it. A human note carries the operator identity the API sanitizes to
 // (ORB-10444), which is never one of these.
