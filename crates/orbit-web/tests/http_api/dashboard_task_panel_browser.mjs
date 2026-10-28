@@ -36,6 +36,20 @@ const tasks = statuses.map((status, index) => ({
     external_refs: [{ system: 'github-pr', id: '42', url: 'https://github.com/o/r/pull/42' }],
     delivery_attention: { run_id: 'jrun-delivery-failed', run_state: 'failed', failed_step_id: 'complete_pr', blocker: 'failed_checks', head_sha: 'abc123', attempt: 1, budget: 3, repairing: false, pr_number: '42', as_of: '2026-10-18T12:00:00Z', observed_at: '2026-10-18T12:00:00Z' },
   } : {}),
+  ...(index === 9 ? {
+    relations: [
+      { type: 'regression_from', target: 'PANEL-1', regression: { nature: 'contract_drift', escape: 'no_test' } },
+      { type: 'regression_from', target: 'PANEL-2', regression: { nature: 'broke_existing', escape: 'unclassified', sites: ['file:crates/orbit-web/assets/dashboard/js/tasks.js', 'symbol:crates/orbit-web/assets/dashboard/js/tasks.js#relationTargets:function'] } },
+      { type: 'regression_from', target: 'PANEL-3' },
+      { type: 'related_to', target: 'PANEL-4' },
+    ],
+  } : {}),
+  ...(index === 10 ? {
+    relations: [
+      { type: 'regression_from', target: 'PANEL-1', regression: { nature: 'contract_drift', escape: 'no_test' } },
+      { type: 'regression_from', target: 'PANEL-3' },
+    ],
+  } : {}),
 }));
 const sampleComments = [
   { at: '2026-10-18T11:00:00Z', by: 'operator', message: 'Please keep the list still while I read.' },
@@ -1175,6 +1189,99 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
     results.draftPreservedBacklogDependency = true;
+  }
+
+  // Regression from keeps each link's own classification beside its id, with
+  // that link's sites under it; a bare link and other relation types stay plain.
+  for (const width of [1440, 375]) {
+    const { page, errors, context } = await openPage({ width, height: width === 375 ? 812 : 900 });
+    await row(page, 'PANEL-10').scrollIntoViewIfNeeded();
+    await row(page, 'PANEL-10').locator('.title').click();
+    await waitShown(page, 'PANEL-10');
+    const detail = pane(page).locator('#detail-PANEL-10');
+    const regressionRow = detail.locator('.property-row.relation[data-relation="regression_from"]');
+    await regressionRow.waitFor({ state: 'visible' });
+    assert.equal(await regressionRow.locator('.label').textContent(), 'regression from');
+    const entries = regressionRow.locator('.regression-entry');
+    assert.equal(await entries.count(), 3, 'Each regression_from target keeps its own entry');
+    const firstHead = entries.nth(0).locator('.regression-head');
+    assert.match(await firstHead.innerText(), /PANEL-1/, 'The classified link keeps its id');
+    assert.match(await firstHead.innerText(), /contract drift/, 'Nature renders as readable words, not the raw enum');
+    assert.match(await firstHead.innerText(), /escaped: no test/, 'Escape renders beside the id');
+    assert.equal(await entries.nth(0).locator('.regression-sites').count(), 0, 'A classified link without sites adds no site list');
+    const secondHead = entries.nth(1).locator('.regression-head');
+    assert.match(await secondHead.innerText(), /PANEL-2/);
+    assert.match(await secondHead.innerText(), /broke existing/);
+    assert.match(await secondHead.innerText(), /unclassified/, 'An unclassified escape still reads on the row');
+    const muted = entries.nth(1).locator('.regression-label.regression-unclassified');
+    assert.equal(await muted.count(), 1, 'Unclassified renders muted');
+    assert.equal(await muted.innerText(), 'unclassified');
+    const sites = entries.nth(1).locator('.regression-site');
+    assert.equal(await sites.count(), 2, 'Each site lists under its own target');
+    for (const expected of ['file:crates/orbit-web/assets/dashboard/js/tasks.js', 'symbol:crates/orbit-web/assets/dashboard/js/tasks.js#relationTargets:function']) {
+      const site = sites.filter({ hasText: expected });
+      assert.equal(await site.count(), 1, `Site ${expected} renders once`);
+      assert.equal(await site.getAttribute('title'), expected, 'The full selector stays in the title');
+      const geometry = await site.evaluate(node => {
+        const s = getComputedStyle(node);
+        const box = node.getBoundingClientRect();
+        return { height: box.height, lineHeight: parseFloat(s.lineHeight), whiteSpace: s.whiteSpace,
+          overflow: s.overflowX, ellipsis: s.textOverflow, direction: s.direction, fontFamily: s.fontFamily };
+      });
+      assert.equal(geometry.whiteSpace, 'nowrap', 'A site stays on one line');
+      assert.equal(geometry.overflow, 'hidden');
+      assert.equal(geometry.ellipsis, 'ellipsis');
+      assert.equal(geometry.direction, 'rtl', 'The start is elided so the distinctive end stays visible');
+      assert.ok(geometry.height <= geometry.lineHeight + 1, `A site is one line: ${JSON.stringify(geometry)}`);
+      assert.match(geometry.fontFamily, /mono/i, 'Sites render monospace');
+    }
+    const thirdHead = entries.nth(2).locator('.regression-head');
+    assert.equal(await thirdHead.locator('.task-delivery-relation').textContent(), 'PANEL-3', 'A bare link keeps only its id');
+    assert.equal((await thirdHead.innerText()).trim(), 'PANEL-3', 'A link without a regression object adds nothing extra');
+    assert.equal(await entries.nth(2).locator('.regression-label').count(), 0);
+    assert.equal(await entries.nth(2).locator('.regression-sites').count(), 0);
+    const relatedRow = detail.locator('.property-row.relation[data-relation="related_to"]');
+    await relatedRow.waitFor({ state: 'visible' });
+    assert.deepEqual(await relatedRow.locator('.task-delivery-relation').allTextContents(), ['PANEL-4'], 'Other relation types render as before');
+    assert.equal(await relatedRow.locator('.regression-label').count(), 0, 'Other relation types carry no classification');
+    assert.equal(await pane(page).evaluate(n => n.scrollWidth <= n.clientWidth), true, 'The pane has no horizontal overflow');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, 'The page has no horizontal scroll');
+    await capture(page, `task-detail-regression-sites-dark-${width}.png`);
+    await pane(page).getByRole('button', { name: width === 375 ? 'Back' : 'Close task detail', exact: true }).click();
+    await pane(page).waitFor({ state: 'hidden' });
+    await row(page, 'PANEL-11').scrollIntoViewIfNeeded();
+    await row(page, 'PANEL-11').locator('.title').click();
+    await waitShown(page, 'PANEL-11');
+    const plainDetail = pane(page).locator('#detail-PANEL-11');
+    const plainRow = plainDetail.locator('.property-row.relation[data-relation="regression_from"]');
+    await plainRow.waitFor({ state: 'visible' });
+    assert.equal(await plainRow.locator('.regression-entry').count(), 2, 'Classified and bare links share one row without sites');
+    assert.equal(await plainRow.locator('.regression-sites').count(), 0, 'The row renders cleanly with no sites');
+    assert.match(await plainRow.locator('.regression-entry').nth(0).innerText(), /contract drift/);
+    assert.equal((await plainRow.locator('.regression-entry').nth(1).innerText()).trim(), 'PANEL-3');
+    await capture(page, `task-detail-regression-dark-${width}.png`);
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
+  // Every Regression from id still opens its task.
+  {
+    const { page, errors, context } = await openPage();
+    await row(page, 'PANEL-10').scrollIntoViewIfNeeded();
+    await row(page, 'PANEL-10').locator('.title').click();
+    await waitShown(page, 'PANEL-10');
+    for (const target of ['PANEL-1', 'PANEL-2', 'PANEL-3']) {
+      const detail = pane(page).locator('#detail-PANEL-10');
+      const link = detail.locator(`.property-row.relation[data-relation="regression_from"] .regression-entry .task-delivery-relation`, { hasText: target });
+      await link.click();
+      await waitShown(page, target);
+      assert.equal(await openParam(page), target, `${target} opens from its Regression from id`);
+      await row(page, 'PANEL-10').scrollIntoViewIfNeeded();
+      await row(page, 'PANEL-10').locator('.title').click();
+      await waitShown(page, 'PANEL-10');
+    }
+    assert.deepEqual(errors, []);
+    await context.close();
+    results.regressionFromClassification = true;
   }
 
   fs.writeFileSync(path.join(evidence, 'task-panel-result.json'), JSON.stringify({ passed: true, ...results }, null, 2));

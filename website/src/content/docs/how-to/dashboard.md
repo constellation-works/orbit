@@ -281,6 +281,14 @@ not implied to be the same; a task that has not started has no such row. Run det
 the distinctive end stays visible, including on a phone. Hover for the full
 value, or click it to copy the complete branch or worktree path.
 
+The card lists relations one row per type, with each task id opening that
+task. A **Regression from** id that carries a classification adds its readable
+nature and escape beside the id — for example `ORB-1 · contract drift ·
+escaped: no test`, with `unclassified` muted — and lists each of its defect
+sites under that id, one per line in monospace with the start elided and the
+full selector in its title. A link without a classification stays a plain id,
+as do the other relation types.
+
 ### Edit task metadata
 
 Expand a row to edit these fields in place. Edits change the task record; they

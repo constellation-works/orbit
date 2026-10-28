@@ -705,6 +705,42 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+/* A classified Regression from row stacks one entry per target, so each id
+   keeps its own nature and escape labels and its own sites below it. */
+.task-delivery-relations.regression {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+.regression-entry { min-width: 0; }
+.regression-head {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 20px;
+}
+.regression-label { color: var(--fg-soft); font-size: 12.5px; }
+.regression-label.regression-unclassified { color: var(--fg-mute); font-style: italic; }
+/* Defect sites sit under their target, one per line in mono. The start is
+   elided so the distinctive end stays visible; the full selector is the title. */
+.regression-sites {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+}
+.regression-site {
+  display: block;
+  max-width: 100%;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
 .task-delivery-card .property-row.relation .label::first-letter { text-transform: uppercase; }
 .task-hands { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .task-hand {
