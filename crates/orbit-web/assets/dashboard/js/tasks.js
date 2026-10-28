@@ -418,7 +418,8 @@ export function renderTasks(tasks, context) {
   // Rows keep a fixed-width action column so actions line up between groups;
   // when no visible row has an action (a Done-only view) the whole column is
   // dead space, so the list gives it back as one.
-  body.dataset.quickActions = filtered.some(hasQuickAction) ? "some" : "none";
+  const quickActions = filtered.some(hasQuickAction) ? "some" : "none";
+  if (body.dataset.quickActions !== quickActions) body.dataset.quickActions = quickActions;
   $("tasks-count").textContent = formatTaskCount(filtered.length, tasks.length, tasksMeta(context));
   renderTaskPagination(context);
   syncSettleMergedButton(context);
@@ -541,8 +542,9 @@ export function renderTasks(tasks, context) {
     // A card whose rows carry no action (Blocked) gives the action column
     // back, so its crew sits at the card's right edge.
     const noQuick = !group.some(hasQuickAction);
+    // Every write is conditional, so a reused row is left untouched.
     groupNodes.forEach((node, index) => {
-      node.dataset.group = status;
+      if (node.dataset.group !== status) node.dataset.group = status;
       node.classList.toggle("no-quick", noQuick);
       node.classList.toggle("group-end", index === groupNodes.length - 1);
     });
@@ -574,7 +576,7 @@ function syncRowSelection(body) {
     const on = row.dataset.key === selected;
     row.classList.toggle("expanded", on);
     const button = row.querySelector("[data-row-focus]");
-    if (button) button.setAttribute("aria-expanded", String(on));
+    if (button && button.getAttribute("aria-expanded") !== String(on)) button.setAttribute("aria-expanded", String(on));
   }
 }
 

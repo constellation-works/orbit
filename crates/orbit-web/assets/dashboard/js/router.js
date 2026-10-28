@@ -814,7 +814,7 @@ function initTabsImpl(ctx) {
     updateHash: false,
   });
   initBackgroundNotifications();
-  startDashboardPolling(() => ctx.refreshDashboard());
+  startDashboardPolling(() => ctx.refreshDashboard({ poll: true }));
 }
 
 // Public named exports (the stable import surface for app.js and future modules).

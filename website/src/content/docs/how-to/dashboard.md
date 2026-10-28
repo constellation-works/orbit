@@ -247,6 +247,14 @@ currently lock, by file or by task. **Log** is a live `orbit.log` tail you can
 filter to **all**, **err**, **deny**, or **warn**. Opening a task replaces the
 dock with its detail; below 1000px the task list fills the width.
 
+While Tasks is open and the browser tab is visible, the task list, the run
+times of tasks in progress, the locks and the drain state refresh about every
+30 seconds. A refresh that brings nothing new leaves the list as it is, and a
+changed task redraws only its own row, so the scroll position, the open task
+and keyboard focus stay put. Crew choices, the Health counts on the rail and
+the drain forecast refresh when you open Tasks, when you click **Refresh**, and
+otherwise every five minutes.
+
 A task's detail leads with **Details**: status, complexity, crew, the
 operating systems it can run on, who created and carried it, its run and the
 machine it ran on, its pull request, its tags, and a **Risk** chip with the

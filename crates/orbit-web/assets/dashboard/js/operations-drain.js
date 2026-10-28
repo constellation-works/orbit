@@ -288,7 +288,7 @@ registerOperationsReset(() => {
 });
 
 configureOperationsFleetCallbacks({ updateDrainIndicators, clearStartCard });
-function fetchAndRenderAutoDrain({ detailTaskId = null } = {}) {
+function fetchAndRenderAutoDrain({ detailTaskId = null, forecast = true } = {}) {
   const workspace = selectedWorkspace();
   if (!workspace) {
     const token = ++operationsState.aggregateFleetToken;
@@ -322,7 +322,8 @@ function fetchAndRenderAutoDrain({ detailTaskId = null } = {}) {
   });
   // The optional summary paints itself and contains its failures. A slow
   // forecast must not delay dashboard refresh or release of action controls.
-  void refreshBacklogForecast();
+  // The Tasks page's 30 s tick leaves it to the page's slow reads.
+  if (forecast) void refreshBacklogForecast();
   return Promise.all([readiness, fleet]).then(() => {});
 }
 
@@ -341,7 +342,8 @@ configureOperationsDrainControls({
   holdAnnouncement: held => { holdDrainAnnouncement = held; },
 });
 
-// Readiness refreshes on every page to feed the chip and task readiness.
-export async function fetchAndRenderAutoDrainPane({ detailTaskId = null } = {}) {
-  await fetchAndRenderAutoDrain({ detailTaskId });
+// Readiness refreshes on every page to feed the chip and task readiness;
+// `forecast: false` skips the backlog forecast read.
+export async function fetchAndRenderAutoDrainPane({ detailTaskId = null, forecast = true } = {}) {
+  await fetchAndRenderAutoDrain({ detailTaskId, forecast });
 }
