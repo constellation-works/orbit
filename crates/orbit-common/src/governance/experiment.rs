@@ -33,7 +33,7 @@ operation_registry! {
         Resume => RESUME,
         /// Change arm weights or retire arms, opening a new segment.
         Reweight => REWEIGHT,
-        /// Force an unassigned task into an active arm.
+        /// Force a task with no arm assignment, or an explicit_crew exclusion for the experiment, into an active arm.
         Assign => ASSIGN,
         /// Conclude an experiment with the chosen arm, or none.
         Conclude => CONCLUDE,
@@ -427,7 +427,7 @@ const ASSIGN: OperationSpec<ExperimentVerb> = OperationSpec {
     verb: ExperimentVerb::Assign,
     cli_path: &["assign"],
     tool_name: "orbit.experiment.assign",
-    tool_description: "Force an unassigned nonterminal task into an active arm of a running experiment, shadow or live. Records forced=true. Existing assignments and exclusions are immutable; overlapping experiment surfaces are refused. Operator only: an agent session is refused.",
+    tool_description: "Force a nonterminal task with no arm assignment, or with an explicit_crew exclusion for this experiment, into an active arm of a running experiment, shadow or live. Records forced=true. Existing arm assignments and exclusions other than that explicit_crew exclusion are refused; overlapping experiment surfaces are refused. Operator only: an agent session is refused.",
     cli_about: "Force a task into an active arm of a running experiment (shadow or live)",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
