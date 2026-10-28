@@ -47,10 +47,14 @@ pub(in crate::executor::automation::vcs) enum HeadCheckEvidence {
 /// any other check no workflow job answers (an external status, a policy
 /// gate) is not. An unreadable job or log proves nothing; a log that shows
 /// the runner or the network failing is not the candidate's. Each stops without a repair.
+/// An untouched-file failure also needs task history proving that this head
+/// repeated the same check and signature after the earlier failed attempt;
+/// a passing base job alone only authorizes that PR rerun.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
+    tasks: &[String],
     pr: &str,
     head: &str,
     base_branch: Option<&str>,
@@ -119,7 +123,16 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 job_label(job)
             ));
         }
-        match super::suspect::watcher_suspicion(host, workspace, head, base_branch, job, &log) {
+        match super::suspect::watcher_suspicion(
+            host,
+            workspace,
+            tasks,
+            head,
+            base_branch,
+            job,
+            &log,
+            &signature.text,
+        ) {
             Ok(Some(reason)) => return HeadCheckEvidence::WaitForBase(reason),
             Err(reason) => return HeadCheckEvidence::Stop(reason),
             Ok(None) => {}

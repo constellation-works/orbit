@@ -61,6 +61,7 @@ pub(crate) fn completion_recovery_checks<H: RuntimeHost + ?Sized>(
         let detail = match head_check_evidence(
             host,
             workspace,
+            &[task_id.to_string()],
             pr,
             &required.head_sha,
             input
