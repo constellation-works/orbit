@@ -212,9 +212,9 @@ To place one task by hand, force it:
 orbit experiment assign brief-v2 --task <task-id> --arm brief-v2
 ```
 
-Forced assignment needs a running shadow experiment, an unassigned
-nonterminal task, and an active arm. It records `forced: true`. Existing
-assignments and exclusions are immutable — a task that already has one is
+Forced assignment needs a running experiment in either mode (shadow or live),
+an unassigned nonterminal task, and an active arm. It records `forced: true`.
+Existing assignments and exclusions are immutable — a task that already has one is
 refused — and a task whose surface another experiment owns is refused.
 Forced assignments are left out of every readout estimate and counted
 separately (see below), so use them to smoke-test an arm, not to gather

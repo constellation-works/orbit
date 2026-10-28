@@ -251,8 +251,8 @@ An operator creates an experiment as a draft, edits a draft with `update`, or
 copies a definition into a new draft with `clone`. `start` opens the first
 segment and freezes the definition. Operators may `pause` and `resume`,
 `reweight` a running or paused experiment to open a new segment, or `assign` an
-unassigned nonterminal task to an active arm of a running shadow experiment.
-They finish with `conclude` (recording a chosen arm or no choice) or
+unassigned nonterminal task to an active arm of a running experiment in either
+mode. They finish with `conclude` (recording a chosen arm or no choice) or
 `abandon` (without a conclusion). An agent session may only use these
 read-only commands:
 
