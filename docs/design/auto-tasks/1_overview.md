@@ -259,7 +259,13 @@ definition of the same name.
   deltas in `run-failure-report.json` (schema version 2). On an owner it also
   reads the failure and release settlements followers' claimed leaves sent,
   through `orbit run settlements --no-reconcile`, since those leaves never
-  enter the owner's run history; a leaf seen on two hosts counts once. Parents
+  enter the owner's run history. A follower settlement duplicates an owner
+  history row only when all three match: the row's `executed_on.machine_id`
+  equals the settlement's `machine_id`, the row's `run_id` equals the
+  settlement's `leaf_run_id`, and the row's `task_ids` lists the settlement's
+  `task_id`. Run ids come from each store's own sequence, so a same-id leaf
+  seen on another host is a different run and is counted; a row with null
+  `executed_on` never dedupes. Parents
   that fail `pipeline_success_guard` fold into their child by `orbit run
   show`'s `root_cause`, and a parent of a `held` child is no failure. Review
   refusals are clustered by escalation category (`base_red`,
