@@ -1,8 +1,10 @@
 # Automation: the host clock, routines, and auto-tasks
 
-How scheduled work happens, and what to turn on. A fresh workspace has the whole
-automation layer installed and **switched off** — this is the reference for
-opting in deliberately.
+How scheduled work happens, and what to turn on. A fresh workspace carries the
+defaults selected by its [seeding policy](configuration.md#seeding-policy).
+Scheduled work requires a host clock and enabled definitions; the seeded
+`crew-performance-refresh` exception below no-ops while crew performance is off.
+This is the reference for opting in deliberately.
 
 ## The chain
 
@@ -87,8 +89,10 @@ be deleted.
 <a id="the-eleven-seeded-routines"></a>
 ## The ten seeded routines
 
-`orbit workspace init` seeds all ten with a workspace-unique name
-(`<base>-<workspace>`) resolved at seed time. Nine are seeded disabled;
+`orbit workspace init` seeds the routines selected by `seeding.routines`
+(`"all"` by default) from this ten-routine catalog, with a workspace-unique name
+(`<base>-<workspace>`) resolved at seed time. See [Seeding policy](configuration.md#seeding-policy)
+to change that selection and reconcile an existing workspace. Nine defaults are disabled;
 `crew-performance-refresh` is the one exception, seeded enabled because it
 no-ops while `workflow.crew_performance` is `off`. The six cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.

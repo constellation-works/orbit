@@ -305,6 +305,8 @@ reset before it stays applied, recorded as its own audited reset.
   upgrades included, honours it; narrowing it retires the left-out defaults
   Orbit seeded and you never edited, and an edited one is preserved under
   `.orbit/.retired-managed/`. `restore` refuses a name the policy leaves out.
+  Follow [Seeding policy](configuration.md#seeding-policy) to change an existing
+  workspace's policy, preview sync and verify the result.
   `orbit workspace init --preset <file>` applies a policy, plugin-seeded
   enables and config keys from one reviewed file; the
   [configuration reference](https://orbit-cli.com/reference/config/#workspace-presets)
@@ -354,8 +356,10 @@ plugin being removed.
 
 ## The twenty-three seeded definitions
 
-`orbit workspace init` seeds all twenty-three, disabled, except any you deleted (see
-[Deleting a definition](#deleting-a-definition)):
+`orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
+(`"all"` by default) from this twenty-three-definition catalog, disabled,
+except any you deleted (see [Deleting a definition](#deleting-a-definition)).
+For ongoing selection and reconciliation, follow [Seeding policy](configuration.md#seeding-policy):
 
 - **`qa-sweep`** (`medium`) — hourly. Identifies recent changes, exercises them hands-on
   through their real user-facing paths rather than just re-running the test
