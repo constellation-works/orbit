@@ -410,12 +410,13 @@ def alternative_path_map(before, after):
         if baseline in branch_content:
             parent, keyword, branch = branch_content[baseline]
             surviving_content.add((parent, keyword, json.dumps(branch, sort_keys=True)))
-    surviving_applicator_locations = {
-        remap_alternative_path(parent, path_map)
+    surviving_applicators = {
+        (remap_alternative_path(parent, path_map), keyword)
         for parent, keyword in alternatives
         if keyword in ("anyOf", "oneOf")
         and not under_unmatched_alternative(parent, unmatched)
     }
+    before_applicators = set(before.get("alternatives", {}))
     removed = []
     for baseline in sorted(branch_content,
                            key=lambda path: (path.count("{"), path)):
@@ -428,8 +429,21 @@ def alternative_path_map(before, after):
         # equivalent to removing a branch while an applicator still constrains
         # the same location. Count either keyword here: replacing anyOf with
         # oneOf (or vice versa) can still tighten the accepted schema.
-        if parent not in surviving_applicator_locations:
-            continue
+        if (parent, keyword) not in surviving_applicators:
+            survivors_here = {
+                survivor_keyword
+                for survivor_parent, survivor_keyword in surviving_applicators
+                if survivor_parent == parent
+            }
+            if not survivors_here:
+                continue
+            # A sibling keyword that already constrained this location before
+            # still constrains it, so deleting this whole keyword only relaxes
+            # the schema. A survivor keyword that is new here is a replacement
+            # (anyOf <-> oneOf), which can tighten the schema, so report it.
+            if any((parent, survivor_keyword) in before_applicators
+                   for survivor_keyword in survivors_here):
+                continue
         # Deduping identical branches changes nothing for anyOf and only
         # admits input for oneOf, so an identical survivor keeps it additive.
         if (parent, keyword, json.dumps(branch, sort_keys=True)) in surviving_content:
