@@ -89,6 +89,8 @@ pub use linux_sandbox::{
     linux_bwrap_write_grant_diagnostic, linux_bwrap_write_grants, prepare_linux_bwrap_write_grants,
     probe_bwrap, probe_bwrap_fresh, report_bwrap_deferral, spawn_under_linux_bwrap,
 };
+#[cfg(feature = "test-support")]
+pub use macos_sandbox::force_seatbelt_refusal_for_test;
 pub use macos_sandbox::{
     MacosLoginKeychainAccess, MacosNetworkAccess, MacosSandboxSpawnRequest, SandboxExecApplyProbe,
     append_macos_file_mask, append_macos_network_access, append_macos_read_boundary,

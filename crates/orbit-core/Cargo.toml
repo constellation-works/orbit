@@ -56,6 +56,12 @@ libc.workspace = true
 [dev-dependencies]
 # Integration tests substitute the detached pipeline worker (`test_support`).
 orbit-core = { path = ".", features = ["test-support"] }
+# The nested-Seatbelt regression tests force an apply refusal in a spawned
+# test child through orbit-exec's test-only setter, installed explicitly by
+# the test harness. Dev-only: the shipped `orbit` binary has no caller for
+# the setter and no reader for the variable that prompts the harness, even
+# when a workspace test build unifies this feature into its orbit-exec.
+orbit-exec = { path = "../orbit-exec", features = ["test-support"] }
 orbit-policy = { path = "../orbit-policy" }
 # The decision-channel tests sign DKIM fixture messages with a test key.
 rsa.workspace = true
