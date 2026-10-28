@@ -938,6 +938,19 @@ timeout without proving the byte cap. These cases retain `TunnelSpec`, `ProbeLim
 and the fake SSH/peer harness, alongside all 24 previously admitted private fault,
 security and platform cases. No production visibility or behavior changes.
 
+`crates/orbit-web/src/tests/dashboard_assets.rs::dashboard_imported_modules_are_registered_routes`
+is admitted under criterion 3 for dashboard asset-route safety (ORB-19378,
+first guard of the `dashboard-split` chain). It scans every first-party
+dashboard module (`app.js` plus `js/*.js`) for relative `from` specifiers —
+covering `import … from` split across lines and `export … from` — resolves
+each against the importing file, and asserts a `DASHBOARD_FILES` route
+exists; it also asserts every `.js` file under `assets/dashboard/` is
+registered, catching an orphan no module imports yet. An unregistered module
+passes the browser tests, whose fixture server reads the assets directory
+directly, and then 404s in the real embedded-asset server, a failure no
+boundary test reaches. Each assertion names the 404 breakage. No runtime or
+asset behavior changes.
+
 ## Landing-review gate verdict parse admission
 
 `crates/orbit-core/src/application/job/delivery_attention/tests.rs::abandoned_landing_review_settle_reports_abandoned_verdict`
