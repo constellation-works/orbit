@@ -90,18 +90,3 @@ export function implementerOutlierCard() {
   card.rows.push(radarRow('outlier', 'model-x', 6, { weighted_landed: 4, first_pass_accepts: 0, review_rejects: 40, reviewer_repairs: 40, crew_rework: 80, escaped_regressions: 28 }, 40));
   return finishCard(card.rows, '2026-10-19T09:05:00.000Z');
 }
-export function implementerRadarDetail(card, crew, model) {
-  const row = card.rows.find(entry => entry.crew === crew && entry.model === model);
-  return { ...card, row, terms: card.terms.map(term => ({ ...term,
-    count: row.counts[term.key], per_100: row.per_100[term.key], contribution: (row.counts[term.key] - row.expected[term.key]) * 100 / row.units * term.weight,
-    tasks: [],
-  })) };
-}
-export function implementerDetail(crew, model) {
-  const card = implementerCard();
-  const row = card.rows.find(row => row.crew === crew && row.model === model);
-  return { ...card, row, terms: card.terms.map(term => ({ ...term,
-    count: row.counts[term.key], per_100: row.per_100[term.key], contribution: (row.counts[term.key] - row.expected[term.key]) * 100 / row.units * term.weight,
-    tasks: Array.from({ length: term.key === 'review_rejects' ? 1 : row.counts[term.key] }, (_, index) => ({ task_id: `ORB-${index + 1}`, title: 'Preserve the delivery result', status: 'done', count: term.key === 'review_rejects' ? row.counts[term.key] : 1, occurrences: [] })),
-  })) };
-}
