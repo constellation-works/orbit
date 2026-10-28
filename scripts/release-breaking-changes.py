@@ -488,7 +488,8 @@ def schemas_disjoint(first, second):
     """Whether two schemas provably accept no common instance.
 
     Conservative: returns False (possibly overlapping) unless a direct
-    contradiction is found — conflicting types, enum or const values,
+    contradiction is found — disjoint declared types, enum or const values
+    that cannot match the other branch's enum, const or declared type,
     incompatible constraints on a required property of an object, or a
     required property a closed object forbids.
     """
@@ -512,6 +513,10 @@ def schemas_disjoint(first, second):
         if enum_values is not None and other_types is not None:
             if not any(_json_value_matches_types(value, other_types)
                        for value in enum_values):
+                return True
+    for schema, other_types in ((first, second_types), (second, first_types)):
+        if "const" in schema and other_types is not None:
+            if not _json_value_matches_types(schema["const"], other_types):
                 return True
     first_const, second_const = _schema_const_value(first), _schema_const_value(second)
     if first_const is not None and second_const is not None and first_const != second_const:
