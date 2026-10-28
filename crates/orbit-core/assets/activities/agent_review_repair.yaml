@@ -472,10 +472,10 @@ spec:
   explore_instruction: |
     Read-only delegation
 
-    You may hand read-only questions (locate code, trace callers, summarize a module, find the tests covering a path) to a cheaper agent:
-    - `orbit.agent.invoke` with one focused `prompt`, a `cwd` inside your worktree, `wait_seconds` (≤600) and a unique `idempotency_key`. The answer carries `answer.summary`, `answer.findings` and `answer.paths_read`. Calls are budgeted; when one is refused, do the work yourself.
-    - Your provider's own read-only subagents (for example Claude's Agent tool on a small model).
-    Delegate only reading, never edits, validation, commits or dispatch. An explorer's answer is a lead: read what you rely on yourself before you change or cite it.
+    Before delegating a read-only question, read "Read-only delegation" in the
+    Orbit skill's task-execution reference. Delegate only reading; when a call
+    is refused, do the work yourself, and verify the explorer's cited files
+    before using its answer.
   tool_disallow_list:
     - orbit.auto_task.add
     - orbit.auto_task.mint
