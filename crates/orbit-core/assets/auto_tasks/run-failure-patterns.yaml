@@ -68,8 +68,13 @@ template:
     claimed pipeline job. `evidence_hold` releases, `operator_cancel`, and settlements with
     `review_decision_pending: true` are designed outcomes, not failures. Report pending-decision
     review refusals separately even though their `kind` stays `fail` and `failure_class` stays
-    `candidate`; a missing flag on an older record reads as false. A leaf that also appears in
-    this host's history counts once.
+    `candidate`; a missing flag on an older record reads as false. A follower settlement
+    duplicates an owner history run only when all three match: the settlement's `machine_id`
+    equals the history row's `executed_on.machine_id`, the settlement's `leaf_run_id` equals
+    the history row's `run_id`, and the history row's `task_ids` lists the settlement's
+    `task_id`. A bare `leaf_run_id` match without the machine and task match is an id
+    collision across hosts, not a duplicate: count it. A history row with null `executed_on`
+    cannot match on machine id, so it never dedupes a settlement.
 
     Fold cascades by recorded cause, never by matching text: read `root_cause` with
     `orbit run show <run-id> --no-reconcile --json` for every failed run. A run whose
@@ -219,7 +224,7 @@ template:
     deferred classes, and anything unreadable.
   acceptance_criteria:
   - The scan used the 7 days before scan start as its analysis window, computed per-job runs, raw and folded failed counts and failure rates for 7 days and 30 days, and reported new-since-cursor occurrences separately in `run-failure-report.json` with `schema_version` 2.
-  - Follower leaf settlements from `orbit run settlements --no-reconcile` were counted once with this host's runs, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
+  - Follower leaf settlements from `orbit run settlements --no-reconcile` were deduped against this host's runs only when machine id, leaf run id and task id all match (the settlement's `machine_id` equals the history row's `executed_on.machine_id`, its `leaf_run_id` equals the history row's `run_id`, and the history row's `task_ids` lists its `task_id`); a bare `leaf_run_id` match is a collision and counts, a null `executed_on` never dedupes, and failed parents were folded by their recorded `root_cause`, with a held child's parents not counted as failures.
   - Failures were clustered by normalized signature with review refusals split by escalation category, and the Pareto set covers at least 80% of each qualifying job's folded failures plus every class with at least 3 occurrences across 2 runs in 7 days.
   - Every Pareto class carries a category and a disposition in the report, and no class was dismissed by kind alone as designed refusal, provider, agent-declared, CI flake or operator resume.
   - Open tasks covering a Pareto class received one comment with 7-day counts and new-since-cursor counts, and at most 5 new tasks were filed, ranked by folded failures per week they would prevent.
