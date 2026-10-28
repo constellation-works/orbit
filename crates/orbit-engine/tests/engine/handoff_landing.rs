@@ -2788,6 +2788,33 @@ fn a_transient_check_failure_is_rerun_once_before_it_is_judged() {
     }
 }
 
+#[test]
+fn transient_non_pull_request_rerun_records_the_source_event() {
+    for event in ["push", "workflow_dispatch"] {
+        let (_sandbox, forge, candidate, _base) = forge_fixture(true, false);
+        let mut failure = failed(1, 11, NETWORK_FLAKE);
+        failure.event = event;
+        forge.job(&candidate, failure);
+        forge.state.lock().unwrap().after_rerun = Some(passed(1, 12));
+
+        let outcome = land_now(&forge);
+
+        assert_eq!(
+            outcome.expect("the transient rerun passes")["phase"],
+            "landed",
+            "{event}: successful rerun lands"
+        );
+        let history = forge.history.lock().unwrap();
+        let reruns = history
+            .iter()
+            .filter(|row| row.event == "ci_check_rerun")
+            .collect::<Vec<_>>();
+        assert_eq!(reruns.len(), 1, "{event}: record the rerun once");
+        let note: Value = serde_json::from_str(reruns[0].note.as_deref().unwrap()).unwrap();
+        assert_eq!(note["event"], event, "{event}: preserve the run event");
+    }
+}
+
 /// [ORB-15970] A classification needs every read it rests on. A failed job
 /// query on the base or its moved tip, a base log that cannot be read or
 /// recovered no text, and a log that names only its failed step decide
