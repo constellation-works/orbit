@@ -171,7 +171,7 @@ pub struct ForecastBuckets {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct GapFitAdmission {
     pub task_id: String,
-    /// The fallback step that found its profile: `exact`,
+    /// The fallback step that found its profile: `crew`, `exact`,
     /// `without_complexity`, `base_class`, `heaviest_of_class`,
     /// `heaviest_on_host`, or `none` on a host without profiles.
     pub profile_source: String,
