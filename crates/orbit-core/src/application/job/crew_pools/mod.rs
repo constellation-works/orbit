@@ -38,7 +38,8 @@ mod write_back;
 
 pub(crate) use admission::{AdmissionTaskWrites, strip_auto_crew_admission};
 pub(crate) use draw::{
-    complexity_crews_key, complexity_of_crews_key, random_crew_ticket, seeded_crew_ticket,
+    INSPECTION_CREW_UNAVAILABLE, complexity_crews_key, complexity_of_crews_key, random_crew_ticket,
+    seeded_crew_ticket,
 };
 pub(crate) use types::CapturedCrewPools;
 pub use write_back::{TaskCrewBackfill, TaskCrewChange};
