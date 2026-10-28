@@ -577,6 +577,9 @@ async function checkAuthoringFlow() {
   `;
   let store = [];
   const requests = [];
+  let heldStartExperimentId = null;
+  let heldStartResponse = null;
+  let heldStartSeenResolve = null;
   const view = experiment => ({
     ...experiment,
     enrollment: experiment.arms.map(arm => ({ arm: arm.name, enrolled: 0, segment_enrolled: 0 })),
@@ -620,6 +623,14 @@ async function checkAuthoringFlow() {
         return json(experiment);
       }
       if (!found) return refusal(res, 400, `no experiment \`${id}\` in this workspace`);
+      if (action === 'start' && req.method === 'POST' && found.id === heldStartExperimentId) {
+        heldStartResponse = () => {
+          heldStartResponse = null;
+          refusal(res, 409, 'deterministically refused start');
+        };
+        heldStartSeenResolve?.();
+        return;
+      }
       if (!action && req.method === 'PATCH') {
         if (found.status !== 'draft') {
           return refusal(res, 400, `experiment \`${found.name}\` is ${found.status}: its arms, overlays, population, metrics and sample rules are editable only in draft. Reweight or retire arms with reweight, or clone it into a new draft`);
@@ -670,6 +681,69 @@ async function checkAuthoringFlow() {
       const form = page.locator('#experiments-form form.exf');
       const labelled = (scope, label) => scope.locator('label.exf-field', { hasText: new RegExp(`^${label}`) });
       const shot = name => page.screenshot({ path: path.join(evidence, `${name}-dark-${width}.png`) });
+
+      // Hold Start while a changed list poll replaces its card, then refuse it.
+      // A final poll with the same payload must keep the refusal and unlock the
+      // current card; this orders the requests without timing delays.
+      const lostStart = {
+        id: 'exp-lost-start-refusal', name: 'race draft', status: 'draft', segment: 0,
+        mode: 'shadow', hypothesis: 'Original hypothesis', primary_metric: 'cost_usd',
+        min_sample: 20, max_days: 14, population: {}, guardrails: {}, events: [],
+        created_at: '2026-10-28T00:00:00Z',
+        arms: [
+          { name: 'control', control: true, weight: 1, retired_segment: null },
+          { name: 'treatment', control: false, weight: 1, retired_segment: null },
+        ],
+      };
+      store.push(lostStart);
+      await page.evaluate(async () => window.experiments.fetchAndRenderExperiments());
+      const lostStartCard = page.locator('.ex-item', { hasText: lostStart.name });
+      await lostStartCard.locator('.exf-start').click();
+      await lostStartCard.locator('.exf-confirm textarea').fill('Preserve this reason');
+      heldStartExperimentId = lostStart.id;
+      const heldStartSeen = new Promise(resolve => { heldStartSeenResolve = resolve; });
+      const routeBeforeStart = page.url();
+      await lostStartCard.locator('.exf-confirm-start').click();
+      await heldStartSeen;
+      heldStartSeenResolve = null;
+      assert.ok(heldStartResponse, 'the Start response is held');
+
+      lostStart.hypothesis = 'Changed while Start was pending';
+      await page.evaluate(async () => window.experiments.fetchAndRenderExperiments());
+      assert.equal(await lostStartCard.locator('.ex-hypothesis').textContent(), lostStart.hypothesis);
+      assert.equal(await lostStartCard.locator('.exf-confirm textarea').inputValue(), 'Preserve this reason');
+      assert.equal(await lostStartCard.locator('.exf-confirm-start').textContent(), 'Starting…');
+      assert.equal(await lostStartCard.locator('.exf-confirm-start').isDisabled(), true);
+      assert.equal(await lostStartCard.locator('.exf-confirm button.action.cancel').isDisabled(), true);
+      assert.equal(await lostStartCard.locator('.exf-edit').isDisabled(), true);
+
+      const refuseHeldStart = heldStartResponse;
+      refuseHeldStart();
+      heldStartExperimentId = null;
+      await lostStartCard.locator('.exf-error').waitFor();
+      assert.equal(await lostStartCard.locator('.exf-error').textContent(), 'deterministically refused start');
+      assert.equal(await lostStartCard.locator('.exf-confirm textarea').inputValue(), 'Preserve this reason');
+      assert.equal(await lostStartCard.locator('.exf-confirm-start').isDisabled(), false, 'retry is enabled after refusal');
+      assert.equal(await lostStartCard.locator('.exf-confirm button.action.cancel').isDisabled(), false, 'Cancel is enabled after refusal');
+      assert.equal(await lostStartCard.locator('.exf-edit').isDisabled(), false, 'Edit is enabled after refusal');
+
+      const unchangedListPayload = JSON.stringify(store.map(view));
+      await lostStartCard.scrollIntoViewIfNeeded();
+      await page.evaluate(async () => window.experiments.fetchAndRenderExperiments());
+      assert.equal(JSON.stringify(store.map(view)), unchangedListPayload, 'the final poll returns the same list payload');
+      assert.equal(page.url(), routeBeforeStart, 'the refusal is shown without navigation');
+      assert.equal(await lostStartCard.locator('.exf-error').textContent(), 'deterministically refused start');
+      assert.equal(await lostStartCard.locator('.exf-confirm-start').isDisabled(), false);
+      assert.equal(await lostStartCard.locator('.exf-confirm button.action.cancel').isDisabled(), false);
+      assert.equal(await lostStartCard.locator('.exf-edit').isDisabled(), false);
+      // The list's changed-row highlight lasts 600 ms; let it finish before
+      // capturing the stable repaired state.
+      await page.waitForTimeout(650);
+      await shot('lost-start-refusal');
+      await lostStartCard.locator('.exf-confirm button.action.cancel').click();
+      store = [];
+      await page.evaluate(async () => window.experiments.fetchAndRenderExperiments());
+      requests.length = 0;
 
       // Create: the form covers the definition; crew pickers offer only the
       // workspace's configured crews.
@@ -857,11 +931,13 @@ async function checkAuthoringFlow() {
       });
       await page.locator('.exf-locked').waitFor();
       assert.match(await page.locator('.exf-locked').textContent(), /running, so its definition can no longer be edited/);
-      steps.push({ width, requests: requests.map(({ method, path: route }) => `${method} ${route}`) });
+      steps.push({ width, requests: requests.map(({ method, path: route }) => `${method} ${route}`),
+        lostStartRefusal: { reasonPreserved: true, refusalVisibleAfterUnchangedPoll: true, retryCancelEditEnabled: true } });
     }
     assert.deepEqual(errors, [], 'no browser errors');
   } finally {
     fs.writeFileSync(path.join(evidence, 'authoring.json'), JSON.stringify({ steps, errors }, null, 2));
+    if (heldStartResponse) heldStartResponse();
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));
   }
