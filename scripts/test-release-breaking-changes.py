@@ -514,6 +514,76 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                 self.assertEqual(report["bump"], "minor")
                 self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_edited_mcp_alternative_removals_are_reported(self):
+        # Each edited branch keeps no required name and changes its shape, so
+        # exact, required-name and same-shape pairing all miss it. The property
+        # names it still shares with its old branch pair them.
+        cases = (
+            (
+                # Optional `c` removed from the edited branch.
+                {"properties": {"b": {"type": "string"}, "c": {"type": "string"}}},
+                {"properties": {"b": {"type": "string"}}},
+                ["property `inputSchema{anyOf1}.c` removed or renamed"],
+            ),
+            (
+                # Required `b` removed and `c` made required in the edited branch.
+                {"properties": {"b": {"type": "string"}, "c": {"type": "string"}},
+                 "required": ["b"]},
+                {"properties": {"c": {"type": "string"}}, "required": ["c"]},
+                ["property `inputSchema{anyOf1}.b` removed or renamed",
+                 "property `inputSchema{anyOf1}.c` newly required"],
+            ),
+        )
+        for keyword in ("anyOf", "oneOf"):
+            for old_branch, new_branch, details in cases:
+                with self.subTest(keyword=keyword, details=details):
+                    tools = self.repo.mcp()
+                    schema = tools[0]["inputSchema"]
+                    schema.pop("anyOf", None)
+                    schema.pop("oneOf", None)
+                    schema[keyword] = [{"properties": {"a": {"type": "string"}}}, old_branch]
+                    self.repo.write_mcp(tools)
+                    self.repo.commit(f"feat: Add {keyword} alternatives [ORB-60] (#1)")
+                    self.repo.git("tag", "-f", "v0.35.0")
+
+                    schema[keyword][1] = new_branch
+                    self.repo.write_mcp(tools)
+                    self.repo.commit(f"feat: Edit {keyword} alternative [ORB-61] (#2)")
+
+                    report = self.report()
+                    # Details are written for anyOf; oneOf paths differ only by keyword.
+                    self.assertEqual(self.signals(report), {
+                        ("ORB-61", "mcp-schema",
+                         f"`orbit_task_show` {detail.replace('anyOf', keyword)}")
+                        for detail in details
+                    })
+                    self.assertEqual(report["bump"], "minor")
+                    self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_reordered_edited_mcp_alternative_removal_is_reported(self):
+        tools = self.repo.mcp()
+        schema = tools[0]["inputSchema"]
+        schema["anyOf"] = [{"properties": {"a": {"type": "string"}}},
+                           {"properties": {"b": {"type": "string"}, "c": {"type": "string"}}}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add anyOf alternatives [ORB-62] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        # The edited branch moves ahead of the unchanged one. Its old and new
+        # positions differ, so each branch's path must be translated on its own.
+        schema["anyOf"] = [{"properties": {"b": {"type": "string"}}},
+                           {"properties": {"a": {"type": "string"}}}]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Reorder and edit anyOf alternatives [ORB-63] (#2)")
+
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-63", "mcp-schema",
+             "`orbit_task_show` property `inputSchema{anyOf1}.c` removed or renamed"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
     def test_existing_boolean_schema_property_gaining_required_child_decides_minor(self):
         tools = self.repo.mcp()
         tools[0]["inputSchema"]["properties"]["options"] = True

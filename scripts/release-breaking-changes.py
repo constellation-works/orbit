@@ -285,8 +285,14 @@ def schema_required_names(schema):
     return names
 
 
+def schema_property_names(schema):
+    """Top-level property names one alternative branch declares."""
+    properties = schema.get("properties") if isinstance(schema, dict) else None
+    return set(properties) if isinstance(properties, dict) else set()
+
+
 def match_schema_alternatives(before, after):
-    """Map unchanged or tightened old alternatives to their new positions."""
+    """Map unchanged, tightened or edited old alternatives to their new positions."""
     matches, old_left, new_left = {}, set(range(len(before))), set(range(len(after)))
     before_json = [json.dumps(branch, sort_keys=True) for branch in before]
     after_json = [json.dumps(branch, sort_keys=True) for branch in after]
@@ -324,14 +330,35 @@ def match_schema_alternatives(before, after):
             matches[new_index] = old_index
             old_left.remove(old_index)
             new_left.remove(new_index)
+
+    # An edit can change both the required names and the shape of a branch.
+    # Pair the leftovers that still share property names, most shared first;
+    # otherwise the edited branch reads as inserted and its removed or newly
+    # required properties go unreported.
+    before_properties = [schema_property_names(branch) for branch in before]
+    after_properties = [schema_property_names(branch) for branch in after]
+    candidates = []
+    for old_index in old_left:
+        for new_index in new_left:
+            shared = len(before_properties[old_index] & after_properties[new_index])
+            if shared:
+                candidates.append((shared, -abs(old_index - new_index), old_index, new_index))
+    for _, _, old_index, new_index in sorted(candidates, reverse=True):
+        if old_index in old_left and new_index in new_left:
+            matches[new_index] = old_index
+            old_left.remove(old_index)
+            new_left.remove(new_index)
     return matches
 
 
 def remap_alternative_path(path, path_map):
     """Translate current branch prefixes to their matched baseline prefixes."""
-    for current, baseline in sorted(path_map.items(), key=lambda item: len(item[0]), reverse=True):
-        path = path.replace(current, baseline)
-    return path
+    if not path_map:
+        return path
+    # One substitution pass: replacing each prefix in turn would chain a swapped
+    # pair (0 to 1, then 1 to 0) back onto itself. Longer prefixes match first.
+    pattern = "|".join(re.escape(current) for current in sorted(path_map, key=len, reverse=True))
+    return re.sub(pattern, lambda match: path_map[match.group(0)], path)
 
 
 def under_unmatched_alternative(path, unmatched):
