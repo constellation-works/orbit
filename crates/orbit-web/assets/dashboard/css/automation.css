@@ -53,6 +53,15 @@ body.operations-active { height: auto; min-height: 100vh; overflow-y: auto; }
   cursor: pointer; color: var(--fg-dim); font: 11px var(--font-sans);
 }
 .operation-details[open] summary { margin-bottom: 8px; }
+/* The opened body is an inset panel nested under its row: a sunk background,
+   a border, a left inset and a bottom gap so it cannot read as the next row. */
+.operation-details-body {
+  min-width: 0; margin: 0 0 6px 12px; padding: 10px 12px;
+  border: 1px solid var(--border); border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius); background: var(--bg);
+}
+.operation-details-body > :first-child { margin-top: 0; }
+.operation-details-body > :last-child { margin-bottom: 0; }
 .operation-action-unavailable { display: inline-flex; min-width: 0; }
 .operation-state {
   padding: 2px 6px; border: 1px solid var(--border); border-radius: 999px;
@@ -348,6 +357,8 @@ a.operation-chip:hover { border-color: var(--accent); color: var(--accent); }
 
 /* Delivery diagnostics remain readable on narrow operation cards. */
 .automation-diagnostic { margin-top: 1rem; max-width: 100%; }
+/* Inside the Details panel the disclosure is a divided section, not a second box. */
+.operation-details-body .automation-diagnostic { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--hair); }
 .automation-diagnostic summary { cursor: pointer; font-weight: 600; }
 .automation-diagnostic pre { max-height: 18rem; overflow: auto; padding: .75rem; }
 .automation-diagnostic p, .automation-diagnostic .operation-field-value { overflow-wrap: anywhere; }

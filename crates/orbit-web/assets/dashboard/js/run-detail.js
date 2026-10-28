@@ -1454,7 +1454,7 @@ function buildEventDetail(key, fields) {
     else expandedRunEvents.delete(key);
   });
   details.appendChild(el("summary", { text: fields.join(" ") }));
-  details.appendChild(el("pre", { text: fields.join("\n") }));
+  details.appendChild(el("pre", { class: "run-event-fields", text: fields.join("\n") }));
   td.appendChild(details);
   return td;
 }

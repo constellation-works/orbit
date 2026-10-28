@@ -693,8 +693,14 @@ td.run-event-detail summary::-webkit-details-marker { display: none; }
 td.run-event-detail summary::before { content: "▸ "; color: var(--fg-dim); }
 td.run-event-detail details[open] summary::before { content: "▾ "; }
 td.run-event-detail details[open] summary { color: var(--fg); }
+/* The opened fields are an inset panel, so they cannot read as the next event row. */
 td.run-event-detail pre {
-  margin: 6px 0 2px;
+  margin: 6px 0 6px 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   font: inherit;
