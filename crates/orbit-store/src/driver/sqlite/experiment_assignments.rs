@@ -25,10 +25,11 @@ pub(super) fn assign_experiments(
             params![workspace, task], |row| row.get(0),
         ).map_err(sqlite_store_error)?;
         let existing = load_assignments(conn, workspace, task)?;
-        // A first admission is final, including one that matched no
+        // An enabled admission is final, including one that matched no
         // population: a later edit or retry cannot move the task into a
-        // cohort. Only enabled admissions write this row, and v70 reopened
-        // the admission-only rows older binaries wrote while disabled.
+        // cohort. Migration v70 is the one-time exception: it reopens every
+        // admission-only row because stored rows cannot distinguish an
+        // enabled no-match admission from one written while disabled.
         if mark_admitted && admitted {
             return Ok(existing);
         }

@@ -42,9 +42,10 @@ fn invocation_workspace_backfill_attributes_only_unambiguous_runs() {
     assert_eq!(workspace_of("jrun-gone"), None);
 }
 
-/// v70 reopens admission-only rows, which older binaries also wrote while
-/// experiments were disabled, so those tasks are admitted once more. A row
-/// beside an assignment or exclusion stays, keeping that admission final.
+/// v70 reopens every admission-only row once, including rows from enabled
+/// admissions that matched no population; those are indistinguishable from
+/// rows written while experiments were disabled. A row beside an assignment
+/// or exclusion stays, keeping that admission final.
 /// Seeding needs the v69 ledger prefix, which no public boundary exposes.
 #[test]
 fn legacy_admission_only_rows_reopen_and_sticky_rows_stay() {
