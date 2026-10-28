@@ -321,6 +321,24 @@ try {
   await page.waitForTimeout(350);
   await page.screenshot({ path: path.join(evidence, 'tasks-owner-start-dark-375.png'), animations: 'disabled' });
   await page.setViewportSize({ width: 1440, height: 1000 });
+  // A Mark shipped tasks done choice made on an owner window carries over to a
+  // replica checkout and blocks its Start. The switch must name that reason
+  // while it stays checked: a replica with owner routing has no footer refusal,
+  // and the switch's help only describes the choice.
+  await page.evaluate(() => globalThis.dockReview.checkout(false));
+  if (await page.evaluate(() => document.getElementById('auto-drain-complete').checked)) throw new Error('Mark shipped tasks done must start off on the owner window');
+  await page.evaluate(() => document.getElementById('auto-drain-complete').click());
+  await page.evaluate(() => globalThis.dockReview.checkout(true));
+  await dockStart.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: path.join(evidence, 'tasks-replica-carried-complete-dark-1440.png') });
+  const carriedReason = page.locator('#tasks-dock #auto-drain-quick-start .drain-field-complete').filter({ hasText: 'its owner completes what it ships' });
+  if (!await carriedReason.isVisible()) {
+    throw new Error('A carried-over Mark shipped tasks done must name why replica Start is blocked');
+  }
+  if (!await dockStart.isDisabled()) throw new Error('A carried-over Mark shipped tasks done must keep replica Start disabled');
+  await page.evaluate(() => document.getElementById('auto-drain-complete').click());
+  if (await dockStart.isDisabled()) throw new Error('Replica Start must be enabled once the carried-over choice is unchecked');
+  await page.evaluate(() => globalThis.dockReview.checkout(false));
   await page.evaluate(() => globalThis.dockReview.next('success'));
   const postsBeforeSuccess = await page.evaluate(() => globalThis.dockReview.posts());
   await page.evaluate(() => globalThis.dockReview.hold());

@@ -2249,6 +2249,9 @@ function autoDrainCompletionControl(payload, reasons) {
     checked: autoDrainComplete,
     disabled: unavailable,
     title: unavailable ? reasons.complete : "",
+    // A checked choice can still block Start (a carried-over choice on a
+    // replica); its help describes the choice, so the refusal is named here.
+    refusal: autoDrainComplete ? reasons.complete : "",
     extraClass: "drain-field-complete",
     onChange: (on) => {
       autoDrainComplete = on;
