@@ -681,9 +681,13 @@ candidate, or restart hosted CI. Final recovery must be enabled for the run.
 An eligible lookup is one of completion's authenticated reads made before any
 mutation: the PR status, required-check and merge-policy reads, and the
 base-refresh and missing-prerequisite evidence reads, such as a commit's combined
-status. Only a transport failure qualifies: an HTTP 5xx answer, a GraphQL
-timeout, a TLS handshake timeout or a connection `gh` could not open, including
-a REST call that never reached GraphQL. Invalid or truncated evidence, a changed head, base, policy or
+status. Only a transient failure of the kind `classify` in
+`crates/orbit-engine/src/executor/automation/vcs/operations/process.rs`
+assigns qualifies: an HTTP 499 or HTTP 5xx answer, a GraphQL timeout, a TLS
+handshake timeout, a connection the peer reset or one `gh` could not open,
+including a REST call that never reached GraphQL, GitHub's `we couldn't
+respond to your request in time` response, or a GraphQL response containing
+`something went wrong while executing your query`. Invalid or truncated evidence, a changed head, base, policy or
 identity, a credential, permission, administrative-rule or other permanent
 refusal keep their ordinary failure. If the completion budget expires between
 reads or while waiting, completion instead returns the typed
