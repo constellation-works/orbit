@@ -550,8 +550,9 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
   cached in memory across passes and runtime clones, not just for the pass.
   Each read runs a freshness probe over the indexed minute-zero marker for
   each sampled run, returning the newest `finished_at` and count of finished
-  sampled runs, and rebuilds when it or the
-  `[machine.auto_concurrency]` bounds change. Pruning changes the count too.
+  sampled runs, and rebuilds when it, the
+  `[machine.auto_concurrency]` bounds, or the crew-model map changes.
+  Pruning changes the count too.
   Retention prunes a run's other minutes before its minute-zero marker.
   Only profiles are cached: the forecast's live inputs (running deliveries,
   reservations, baseline) are read fresh every pass.
