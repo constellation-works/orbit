@@ -230,6 +230,7 @@
             <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Drain views">
               <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0"><span class="dock-seg-label">Overview</span> <span id="dock-drain-state" class="dock-drain-state"></span></button>
               <button type="button" role="tab" class="dock-seg" id="dock-tab-start" data-mode="start" aria-selected="false" aria-controls="dock-pane-start" tabindex="-1">Start a window</button>
+              <button type="button" role="tab" class="dock-seg" id="dock-tab-locks" data-mode="locks" aria-selected="false" aria-controls="dock-pane-drain" tabindex="-1" hidden>Locks held</button>
               <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
             </div>
           </div>
@@ -283,7 +284,17 @@
                   <div class="body" id="auto-drain-quick-start-body"></div>
                 </section>
                 <section class="panel" id="locks-panel" aria-labelledby="locks-title">
-                  <header><h2 class="drain-title" id="locks-title">Locks held</h2><span class="count" id="locks-count">0 files · 0 tasks</span></header>
+                  <header>
+                    <h2 class="drain-title" id="locks-title">Locks held</h2><span class="count" id="locks-count">0 files · 0 tasks</span>
+                    <div class="scoreboard-window-selector locks-view" id="locks-view" role="tablist" aria-label="Locks held view">
+                      <button type="button" role="tab" class="scoreboard-window-seg" data-view="task" aria-selected="false" tabindex="-1" title="One row per holding task">By task</button>
+                      <button type="button" role="tab" class="scoreboard-window-seg" data-view="file" aria-selected="false" tabindex="-1" title="One row per locked file, with the tasks holding it">By file</button>
+                    </div>
+                  </header>
+                  <div class="locks-filter">
+                    <input type="search" id="locks-filter" class="mono" placeholder="Filter by task ID" autocomplete="off" spellcheck="false" aria-label="Filter locked files by a task's context files" aria-describedby="locks-filter-note" />
+                    <p id="locks-filter-note" class="locks-filter-note" role="status" hidden></p>
+                  </div>
                   <div class="body" id="locks-body"></div>
                 </section>
               </div>

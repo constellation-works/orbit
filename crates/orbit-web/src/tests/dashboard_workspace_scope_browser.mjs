@@ -260,12 +260,18 @@ export async function assertWorkspaceScope(browser, origin, evidence) {
         await page.screenshot({ path: path.join(evidence, `tasks-approval-dark-${width}.png`), animations: 'disabled' });
       }
       await page.setViewportSize({ width: 1280, height: 900 });
-      // Tasks carries the dock beside the list: the Auto-drain status card, the
-      // simple Start card and the locks, not the Drain page's waits and fleet
-      // cards or its Start a window view.
+      // Tasks carries the dock beside the list: its Drain tab holds the
+      // Auto-drain status card and the simple Start card, and Locks held is a
+      // tab of its own; not the Drain page's waits and fleet cards or its
+      // Start a window view.
+      await page.locator('#tasks-main #dock-tab-drain').click();
       await page.locator('#tasks-main #side-dock #auto-drain-panel').waitFor({ state: 'visible' });
       await page.locator('#tasks-main #side-dock #auto-drain-quick-start').waitFor({ state: 'visible' });
+      if (await page.locator('#tasks-main #side-dock #locks-panel').isVisible()) throw new Error('Locks held is its own tab on Tasks');
+      await page.locator('#tasks-main #dock-tab-locks').click();
       await page.locator('#tasks-main #side-dock #locks-panel').waitFor({ state: 'visible' });
+      if (await page.locator('#tasks-main #side-dock #auto-drain-panel').isVisible()) throw new Error('The Locks held tab shows only the locks');
+      await page.locator('#tasks-main #dock-tab-drain').click();
       if (await page.locator('#tasks-main #drain-waits-panel').isVisible() || await page.locator('#tasks-main #drain-fleet-panel').isVisible()) throw new Error('The Tasks dock must leave the waits and fleet cards on Drain');
       if (await page.locator('#tasks-main #dock-mode-toggle [data-mode="start"]').isVisible() || await page.locator('#tasks-main #auto-drain-start').isVisible()) throw new Error('The Tasks dock must leave Start a window on Drain');
       await page.locator('#tasks-body [data-key="task-SCOPE-1"] .title').click();

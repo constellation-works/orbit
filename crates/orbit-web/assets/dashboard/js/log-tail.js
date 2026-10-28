@@ -55,6 +55,9 @@ let logVisibilityWired = false;
 // wrapping preferences stay local to this browser.
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
 const DOCK_MODES = ["drain", "start", "log"];
+// Docked on Tasks, Locks held is a tab of its own: it shows that card of the
+// drain pane, and `drain` the rest.
+const DRAIN_CARD_MODES = ["locks"];
 
 function loadLogPanelPrefs() {
   try {
@@ -62,7 +65,8 @@ function loadLogPanelPrefs() {
     const parsed = raw ? JSON.parse(raw) : {};
     // `status` is the Drain mode's name before ORB-12898; a stored one opens as Drain.
     const dockMode = parsed.dockMode === "status" ? "drain" : parsed.dockMode;
-    return { dockMode: DOCK_MODES.includes(dockMode) ? dockMode : "drain", showAgent: parsed.showAgent !== false };
+    const known = DOCK_MODES.includes(dockMode) || DRAIN_CARD_MODES.includes(dockMode);
+    return { dockMode: known ? dockMode : "drain", showAgent: parsed.showAgent !== false };
   } catch (_) {
     return { dockMode: "drain", showAgent: true };
   }
@@ -140,7 +144,12 @@ function applyDockMode() {
   if (!dock) return;
   const modes = dockModes();
   const mode = shownDockMode();
-  dock.dataset.mode = mode;
+  const card = DRAIN_CARD_MODES.includes(mode) ? mode : null;
+  dock.dataset.mode = card ? "drain" : mode;
+  // On Tasks the drain pane splits into Drain and Locks; on Drain it shows
+  // every card.
+  if (dockHome() === "tasks") dock.dataset.card = card || "drain";
+  else delete dock.dataset.card;
   for (const btn of document.querySelectorAll("#dock-mode-toggle .dock-seg")) {
     const on = btn.dataset.mode === mode;
     btn.hidden = !modes.includes(btn.dataset.mode);
@@ -153,10 +162,11 @@ function applyDockMode() {
 // One dock, two homes: the Tasks page's right column and the Drain page. It
 // moves to whichever of the two is shown, so its cards keep one renderer and
 // one set of element ids. On Tasks its first view is named Drain, since the
-// page around it is not. Start a window is the Drain page's own view: Tasks
-// starts a window from the simple card in its first view.
+// page around it is not, and Locks held is a view of its own. Start a window
+// is the Drain page's own view: Tasks starts a window from the simple card in
+// its first view.
 const DOCK_HOMES = {
-  tasks: { slot: "tasks-dock", label: "Drain", modes: ["drain", "log"] },
+  tasks: { slot: "tasks-dock", label: "Drain", modes: ["drain", "locks", "log"] },
   drain: { slot: "drain-main", label: "Overview", modes: DOCK_MODES },
 };
 const dockHomeListeners = new Set();
@@ -205,7 +215,7 @@ export function chooseDockMode(mode) {
 
 // The router selects the Drain page view through this presentation handle.
 export function setDockMode(mode) {
-  if (!DOCK_MODES.includes(mode)) return;
+  if (!DOCK_MODES.includes(mode) && !DRAIN_CARD_MODES.includes(mode)) return;
   logPanelPrefs = { ...logPanelPrefs, dockMode: mode };
   saveLogPanelPrefs(logPanelPrefs);
   applyDockMode();

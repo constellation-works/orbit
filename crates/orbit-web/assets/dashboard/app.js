@@ -1,9 +1,10 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { bindTaskLink, captureWorkspaceVisit, requestPanel, resetPanel, detailsPanel, onWorkspaceChange, getWorkspaceRevision, el, statusPill, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
+import { initLocks, paintLocks } from './js/locks.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, renderDenialCount, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
@@ -22,7 +23,7 @@ import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { drainHolderCounts, fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, setDrainLocks, startFleetIndicatorRefresh } from './js/operations.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, setDrainLocks, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
@@ -406,135 +407,7 @@ function renderLocksPanel(payload) {
 }
 
 function paintLocksPanel(payload) {
-  const body = $("locks-body");
-  const count = $("locks-count");
-  if (!body || !count) return;
-  const byTask = Array.isArray(payload && payload.by_task) ? payload.by_task : [];
-  const byReservation = Array.isArray(payload && payload.by_reservation) ? payload.by_reservation : [];
-  const totalLocked = Number.isFinite(Number(payload && payload.total_locked))
-    ? Number(payload.total_locked)
-    : 0;
-  const totalTasks = Number.isFinite(Number(payload && payload.total_tasks))
-    ? Number(payload.total_tasks)
-    : byTask.length;
-  count.textContent = `${totalLocked} ${totalLocked === 1 ? "file" : "files"} · ${totalTasks} ${totalTasks === 1 ? "task" : "tasks"}`;
-
-  if (byTask.length === 0 && byReservation.length === 0) {
-    const empty = el("div", { class: "locks-empty", text: "No files currently locked." });
-    empty.dataset.key = "locks-empty";
-    empty.dataset.hash = "locks-empty";
-    syncNodes(body, [empty]);
-    return;
-  }
-
-  // One row per task: who holds the locks, its status, how many paths and how
-  // many waiting tasks it holds back, then its title and run. The paths fold
-  // away and stay open across refreshes once opened, so a dozen tasks never
-  // bury the card in file paths. The task link sits outside the disclosure
-  // (a link cannot live in a summary); an invisible copy of the id keeps its
-  // place in the row, and the link is laid over it.
-  const blocking = drainHolderCounts();
-  const nodes = byTask.map((task) => {
-    const taskId = String(task.id || "");
-    const files = Array.isArray(task.context_files) ? task.context_files : [];
-    const blocks = blocking.get(taskId) || 0;
-    const title = typeof task.title === "string" ? task.title.trim() : "";
-    const group = el("div", { class: "lock-task-group" });
-    group.dataset.key = `lock-task-${taskId}`;
-    group.dataset.hash = JSON.stringify([task, blocks]);
-    const details = detailsPanel(`lock-task-${taskId}`, { class: "lock-task-details" });
-
-    const idButton = el("a", {
-      class: "lock-task-id mono",
-      text: taskId,
-      title: title ? `Open ${taskId}: ${title}` : `Open ${taskId} in the task list`,
-    });
-    // Locks live on Drain, so opening a task must navigate to Tasks too.
-    bindTaskLink(idButton, taskId);
-
-    const header = el("summary", { class: "lock-task-header" }, [
-      el("span", { class: "lock-task-id-space mono", text: taskId, "aria-hidden": "true" }),
-      statusPill(task.status || "unknown"),
-      el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
-      blocks > 0 ? el("span", {
-        class: "lock-blocks",
-        text: `blocks ${blocks}`,
-        title: `${blocks} waiting ${blocks === 1 ? "task waits" : "tasks wait"} on ${taskId}`,
-      }) : null,
-    ]);
-    const job = task.job_run_id ? el("span", {
-      class: "lock-job mono",
-      text: shortRunId(task.job_run_id),
-      title: `job_run=${task.job_run_id}`,
-    }) : null;
-    if (title || job) {
-      header.appendChild(el("span", { class: "lock-task-meta" }, [
-        title ? el("span", { class: "lock-task-title", text: title, title }) : null,
-        job,
-      ]));
-    }
-    details.appendChild(header);
-
-    const list = el("div", { class: "lock-file-list" });
-    for (const path of files) {
-      list.appendChild(el("div", {
-        class: "lock-file-row mono",
-        text: String(path),
-        title: String(path),
-      }));
-    }
-    details.appendChild(list);
-    group.appendChild(details);
-    group.appendChild(idButton);
-    return group;
-  });
-  for (const reservation of byReservation) {
-    const key = `lock-reservation-${reservation.reservation_id}`;
-    const files = Array.isArray(reservation.files) ? reservation.files : [];
-    const taskIds = Array.isArray(reservation.task_ids) ? reservation.task_ids : [];
-    const group = el("div", { class: "lock-task-group lock-reservation-group" });
-    group.dataset.key = key;
-    group.dataset.hash = JSON.stringify(reservation);
-    const details = detailsPanel(key, { class: "lock-task-details" });
-    const holders = el("span", { class: "lock-reservation-holders" });
-    for (const taskId of taskIds) {
-      const link = el("a", { class: "mono", text: String(taskId) });
-      bindTaskLink(link, String(taskId));
-      holders.appendChild(link);
-    }
-    if (!taskIds.length) holders.appendChild(el("span", { text: "Manual reservation" }));
-    const header = el("summary", { class: "lock-task-header" }, [
-      el("span", {
-        class: "lock-reservation-label",
-        text: "Reservation",
-        title: reservation.expires_at ? `Expires ${reservation.expires_at}` : "Reserved lock surface",
-      }),
-      el("span", { class: "lock-count", text: `${files.length} ${files.length === 1 ? "file" : "files"}` }),
-      el("span", { class: "lock-task-meta" }, [
-        holders,
-        reservation.owner_run_id ? el("span", {
-          class: "lock-job mono",
-          text: shortRunId(reservation.owner_run_id),
-          title: `job_run=${reservation.owner_run_id}`,
-        }) : null,
-      ]),
-    ]);
-    details.appendChild(header);
-    const list = el("div", { class: "lock-file-list" });
-    for (const file of files) list.appendChild(el("div", { class: "lock-file-row mono", text: String(file), title: String(file) }));
-    details.appendChild(list);
-    group.appendChild(details);
-    nodes.push(group);
-  }
-  syncNodes(body, nodes);
-}
-
-// `jrun-20260925-0324-c9` reads as `…0324-c9`: the date is today's more often
-// than not, and the tail is what tells two runs apart.
-function shortRunId(runId) {
-  const text = String(runId || "");
-  const match = /^jrun-\d{8}-(.+)$/.exec(text);
-  return match ? `…${match[1]}` : text;
+  paintLocks(payload);
 }
 
 function knowledgeStatusPill(status) {
@@ -2084,6 +1957,7 @@ initHostResources();
 wireReliabilityWindowSelector();
 wireWindowSelector("tools-window-selector", { windows: TOOLS_WINDOWS });
 wireDoctorPanel();
+initLocks();
 setScopeChangeListener(() => {
   persistScopeToUrl();
   syncWindowSelectors();
