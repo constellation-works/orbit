@@ -466,9 +466,17 @@ function waitsCard() {
     el("th", { scope: "row" }, [label, " ", infoHint(hint)]),
     el("td", { class: "num", text: formatForecastQuantileRange(waits[key], formatForecastHours) }),
   ]));
+  const caption = "Summed over every waiting task, so hours add up across tasks and exceed the time to drain. A task counts under the first gate it fails.";
+  const head = [["Held back by"], ["Waiting", true]];
   return card("Why work waits", "task-hours, p50 – p90", [
-    table("Waiting by reason", [["Held back by"], ["Waiting", true]], rows, "Summed over every waiting task, so hours add up across tasks and exceed the time to drain. A task counts under the first gate it fails."),
-  ]);
+    el("div", { class: "fc-waits" }, [
+      el("p", { class: "mx-blurb fc-waits-caption", text: caption }),
+      el("div", { class: "fc-waits-grid" }, [
+        table("First four waiting reasons", head, rows.slice(0, 4)),
+        table("Last three waiting reasons", head, rows.slice(4)),
+      ]),
+    ]),
+  ], "fc-waits-card");
 }
 
 function taskCell(row) {
