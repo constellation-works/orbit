@@ -118,15 +118,12 @@ function chipClass(riskiness) {
   return elevated(riskiness) ? "risk-elevated" : "risk-estimated";
 }
 
-// The Tasks row part: "risk 23%", "risk ~23%" or "no estimate · thin history".
+// The Tasks row part: "risk 23%" or "risk ~23%" when support is partial.
 export function buildRiskRowPart(task) {
   const riskiness = riskinessOf(task);
-  if (!riskiness) return null;
+  if (!riskiness || !estimated(riskiness)) return null;
   const title = riskinessLines(riskiness).join("\n");
-  const text = estimated(riskiness)
-    ? `risk ${valueText(riskiness)}`
-    : `no estimate · ${(NO_ESTIMATE[riskiness.state] || NO_ESTIMATE.unavailable)[0]}`;
-  return el("span", { class: `risk-part ${chipClass(riskiness)}`, text, title, "aria-label": title });
+  return el("span", { class: `risk-part ${chipClass(riskiness)}`, text: `risk ${valueText(riskiness)}`, title, "aria-label": title });
 }
 
 // The task detail's lever chip: the value, with every line in its tooltip.
