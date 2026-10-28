@@ -950,10 +950,12 @@ dashboard window of `1h` or **all** uses `24h`, named on the cards.
 ## Agents
 
 **Agents** is an Analytics view. It ranks the crews and models behind each
-agent role in the selected workspace. The window starts at **last 200**: the
-newest 200 delivery attempts, whatever their age (**last 50** and **last 500**
-are beside it). A time window (`1h` to **all**, 90 days) follows the
-dashboard's window instead. Count windows reach back no further than 90 days.
+agent role in the selected workspace. The window starts at **Last 500**: the
+newest 500 delivery attempts, whatever their age. The selector offers
+**Last 500**, **Last 1000**, **7d**, and **30d**: a calendar tab (`7d` or
+`30d`) follows the dashboard's window, while the `1h`, `24h`, and **all**
+dashboard windows fall back to **Last 500**. Count windows reach back no
+further than 90 days.
 Pick a role from the
 tabs above the panel; each tab shows how many rows it ranks. A role whose
 scorecard is not computed yet says so and lists the terms it will be scored
