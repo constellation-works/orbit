@@ -50,6 +50,7 @@ const WINDOWS: &[EnumValue] = &[
     EnumValue::plain("last50"),
     EnumValue::plain("last200"),
     EnumValue::plain("last500"),
+    EnumValue::plain("last1000"),
 ];
 
 const ROLE: &[ParamSpec] = &[required(both(
@@ -66,7 +67,7 @@ const SELECTION: &[ParamSpec] = &[
         both(
             "window",
             ParamType::Enum(WINDOWS),
-            "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach), or over the newest delivery attempts the scan holds: last50, last200 or last500. Default: 30d.",
+            "Counts work in this period ending now: 1h, 24h, 7d, 30d, 90d or all (served as 90d, the scan's reach), or over the newest delivery attempts the scan holds: last50, last200, last500 or last1000. Default: 30d.",
             CliArgKind::flag("window"),
             "Count work in this period, or over the newest delivery attempts",
         ),

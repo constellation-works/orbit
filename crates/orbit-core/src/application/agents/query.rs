@@ -26,7 +26,7 @@ impl AgentQuery {
         };
         let Some((requested, served, span)) = timed.or_else(counted) else {
             return Err(OrbitError::InvalidInput(format!(
-                "window must be one of 1h, 24h, 7d, 30d, 90d, all, last50, last200 or last500; got '{window}'"
+                "window must be one of 1h, 24h, 7d, 30d, 90d, all, last50, last200, last500 or last1000; got '{window}'"
             )));
         };
         let min_support = min_support.unwrap_or(DEFAULT_MIN_SUPPORT);

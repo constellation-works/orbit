@@ -135,7 +135,8 @@ for (const role of ROLES) {
 const layout = make('main', 'agents-main', panes.analytics);
 for (const id of ['agents-title', 'agents-count', 'agents-meta', 'agents-body']) make('div', id, layout);
 const windows = make('div', 'agents-window-selector', layout);
-for (const value of ['last50', 'last200', 'last500', '1h', '24h', '7d', '30d', 'all']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
+windows.dataset.fallbackWindow = 'last500';
+for (const value of ['last500', 'last1000', '7d', '30d']) make('button', null, windows, 'scoreboard-window-seg').dataset.window = value;
 
 const document = {
   activeElement: null,
@@ -251,19 +252,49 @@ const detailFor = (scorecard, crew, tasks) => {
   };
 };
 
+const routeV1 = url => {
+  const requested = url.searchParams.get('window') || '30d';
+  const served = requested === 'all' ? '90d' : requested;
+  if (url.pathname === '/api/agents/attribution') return response({ ...attribution, window: served, requested_window: requested });
+  const role = url.pathname.split('/')[3];
+  const payload = role === 'orchestrators' ? orchestrators() : notComputed(role);
+  return response({ ...payload, window: served, requested_window: requested });
+};
+
 common.setMultiWorkspace(true);
 common.setWorkspace('ws-a');
 common.setWindow('30d');
 await settle();
 agents.wireAgentControls();
+common.syncWindowSelectors();
 assert.equal(agents.getAgentsRole(), 'orchestrators', 'Orchestrators is the default role');
 // The panel opens on its own count window; a calendar tab hands it back to
 // the shared window.
-assert.equal(windows.dataset.panelWindow, 'last200', 'the panel defaults to the newest 200 delivery attempts');
+assert.deepEqual(windows.children.map(tab => tab.dataset.window), ['last500', 'last1000', '7d', '30d'], 'the selector offers only the four supported windows');
+assert.equal(windows.dataset.panelWindow, 'last500', 'the panel defaults to the newest 500 delivery attempts');
+assert.equal(windows.children.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.window, 'last500', 'Last 500 is selected by default');
 const thirtyDays = windows.children.find(tab => tab.dataset.window === '30d');
 thirtyDays.closest = () => thirtyDays;
 for (const listener of windows.listeners.click) listener({ target: thirtyDays });
 assert.equal(windows.dataset.panelWindow, '', 'a calendar tab leaves the count window');
+
+// Shared windows that the selector no longer offers use Last 500 for both its
+// selected tab and the scorecard and attribution requests.
+for (const sharedWindow of ['1h', '24h', 'all']) {
+  common.setWindow(sharedWindow);
+  common.syncWindowSelectors();
+  assert.equal(windows.children.find(tab => tab.getAttribute('aria-selected') === 'true').dataset.window, 'last500', `${sharedWindow} selects the Last 500 fallback`);
+  const loading = agents.fetchAndRenderAgents();
+  const requests = takeAll();
+  assert.ok(requests.length > 0, `${sharedWindow} fetches panel data`);
+  assert.ok(requests.every(request => request.url.searchParams.get('window') === 'last500'), `${sharedWindow} requests Last 500 data`);
+  answer(requests, routeV1);
+  await loading;
+  await settle();
+  assert.ok(rowNamed('opus'), `${sharedWindow} renders scorecard data`);
+}
+common.setWindow('30d');
+common.syncWindowSelectors();
 
 // One refresh reads the role's scorecard and the attribution strip together,
 // and every other role's scorecard for its tab count.
@@ -282,11 +313,6 @@ for (const request of requests) {
 }
 const scorecardRequest = requests.find(request => request.url.pathname === '/api/agents/orchestrators/scorecard');
 assert.equal(scorecardRequest.url.searchParams.get('min_support'), '10');
-const routeV1 = url => {
-  if (url.pathname === '/api/agents/attribution') return response(attribution);
-  const role = url.pathname.split('/')[3];
-  return response(role === 'orchestrators' ? orchestrators() : notComputed(role));
-};
 answer(requests, routeV1);
 await loading;
 await settle();

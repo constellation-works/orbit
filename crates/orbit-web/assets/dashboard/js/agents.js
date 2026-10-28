@@ -134,11 +134,14 @@ onWorkspaceChange(() => {
 // Scorecards default to a count of recent delivery attempts, so a quiet month
 // still ranks the crews that did the work. A calendar tab hands the panel back
 // to the shared window; the count itself never becomes that window.
-const AGENT_COUNT_WINDOWS = ["last50", "last200", "last500"];
-let countWindow = "last200";
+const AGENT_COUNT_WINDOWS = ["last500", "last1000"];
+const AGENT_SHARED_WINDOWS = ["7d", "30d"];
+let countWindow = "last500";
 
 function agentWindow() {
-  return countWindow || getWindow();
+  if (countWindow) return countWindow;
+  const selected = getWindow();
+  return AGENT_SHARED_WINDOWS.includes(selected) ? selected : "last500";
 }
 
 function setCountWindow(next) {
