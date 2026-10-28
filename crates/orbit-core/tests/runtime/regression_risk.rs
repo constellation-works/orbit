@@ -472,7 +472,7 @@ fn regression_sites_invalid_writes_are_rejected() {
         )
         .unwrap();
     let cases = [
-        vec!["dir:src".to_string()],
+        vec!["module:orbit_core".to_string()],
         (0..9).map(|n| format!("file:src/site{n}.rs")).collect(),
         vec!["symbol:".to_string()],
         vec!["file:src/hot.rs".to_string(); 2],

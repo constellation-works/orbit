@@ -50,5 +50,6 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-"Touched" means a task's declared footprint, not the landed diff.
+"Touched" means a task's declared footprint, not the landed diff. Regressions count
+against the paths their links record as sites, not the whole footprint.
 Follow a ranked path to its tasks with `orbit codebase show <path>`.

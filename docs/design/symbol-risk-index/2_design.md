@@ -377,7 +377,9 @@ at most 16 hops and with a cycle guard, to a current selector. Agents often spel
 inconsistently, for example `fn` against `function`. A site with no exact match therefore
 resolves by `path#name` when exactly one current symbol in that file has the name; the
 resolution basis is `name_match`. Anything else counts as `unresolved_sites`. A `file:` site
-counts at file level and is never split among the file's symbols.
+counts at file level and is never split among the file's symbols. A `dir:` site, admitted
+only when no narrower site can be named, names no file or symbol and enters no symbol's site
+history.
 
 ## 6. Site history
 
@@ -492,7 +494,7 @@ pre-execution `context_files` snapshot [ORB-19361]'s declared-files backtest use
 |---|---|---|---|---|
 | **G1** | Test task; regressed | §7.1 `declared_lines`, falling back to `declared_files` per task, with (a, b) refitted per fold | `declared_files` on the same tasks (0.704 in the 2026-10-27 run) | ΔAUC ≥ 0.01, interval above 0, log loss no worse. Also report the resolved share. |
 | **G2** | Test task; regressed | The shipped size basis plus `max logit(p_s)` over the footprint's indexed symbols. Run once for the admission basis and once for the diff basis, using the diff's changed symbols. | The shipped size basis alone | Same as G1, judged for each basis separately. Only a passing basis gains the site term. |
-| **G3a** | (symbol, fold); named as a site by a link filed within 28 days of the fold start | Size percentile, then the fitted site model if `p_s` improves it | The symbol's file shrunk regression rate (today's Regressions ranking) | AUC higher, interval above 0 |
+| **G3a** | (symbol, fold); named as a site by a link filed within 28 days of the fold start | Size percentile, then the fitted site model if `p_s` improves it | The symbol's file shrunk regression rate (today's Regressions ranking, which counts a regressed task against a file only through its links' `regression.sites` under it, [ORB-19442]) | AUC higher, interval above 0 |
 | **G3b** | As G3a | G3a's model plus the coverage value | G3a's model | ΔAUC ≥ 0.01, interval above 0 |
 | **G3c** | As G3a | Next-window site rate of the bottom risk half | The all-symbol site rate | Upper 95% bound below the all-symbol rate |
 
@@ -529,6 +531,7 @@ same protocol and margin; the rerun has to clear it again from scratch.
 - [ORB-19358] — wrote this design and its scope
 - [ORB-19361] — replaces the per-file maximum with a size-based riskiness fit (declared files, diff lines)
 - [ORB-19276] — made Orbit always record `regression.sites`
+- [ORB-19442] — attributed the Regressions ranking (the G3a baseline) to `regression.sites` and admitted `dir:` sites
 - [ORB-18383] — recorded lines added and deleted per landed delivery, with a bounded backfill
 - [ORB-00374] — removed the shell activity surface fail-closed
 - [ORB-19294] — designed script steps, a granted execution path for workspace scripts

@@ -11,10 +11,10 @@ use orbit_core::{
 };
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
-    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep,
-    RegressionClassification, TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME,
-    TASK_EVENTS_FILE_NAME, TaskCommentRowV2, TaskDecision, TaskEventRowV2, TaskRelation,
-    TaskRelationType,
+    CONTEXT_FILES_WIDENED_EVENT, ContextFilesWidening, ContextWideningStep, DefectSeverity,
+    RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
+    TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
+    TaskDecision, TaskEventRowV2, TaskRelation, TaskRelationType,
 };
 use serde_json::{Value, json};
 
@@ -99,6 +99,21 @@ pub(super) fn request_lock(fixture: &Fixture, task: &str) -> Value {
 
 pub(super) fn regression_from(target: &str) -> Vec<TaskRelation> {
     classified_link(target, None)
+}
+
+/// A `regression_from` link to `target` recording `sites`, its nature and
+/// escape `unclassified`.
+pub(super) fn sited_link(target: &str, sites: &[&str]) -> Vec<TaskRelation> {
+    classified_link(
+        target,
+        Some(RegressionClassification {
+            nature: RegressionNature::Unclassified,
+            escape: RegressionEscape::Unclassified,
+            severity: DefectSeverity::Medium,
+            severity_source: SeveritySource::Filer,
+            sites: sites.iter().map(|site| site.to_string()).collect(),
+        }),
+    )
 }
 
 pub(in super::super) fn bundle_dir(root: &Path, task_id: &str) -> Option<PathBuf> {

@@ -329,6 +329,22 @@ td.codebase-empty { padding: 16px 14px; }
 .codebase-task-title { font-size: 13px; color: var(--fg); overflow-wrap: anywhere; }
 .codebase-task-by { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; padding-left: 12px; border-left: 2px solid #2e343c; font-size: 12px; color: var(--fg-dim); }
 .codebase-by-dim::before { content: "·"; margin-right: 6px; color: var(--fg-mute); }
+/* Regression sites: a chip per site on a regressed task, and the file view's
+   Symbols list, one expandable row per site. */
+.codebase-task-sites { display: flex; flex-wrap: wrap; gap: 6px; }
+.codebase-site { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; padding: 1px 8px; border: 1px solid #2e343c; border-radius: var(--radius-sm); background: var(--bg); font-size: 12px; }
+.codebase-site-name { font-family: var(--font-mono); color: var(--fg); overflow-wrap: anywhere; }
+.codebase-site-kind { font-size: 11.5px; color: var(--fg-mute); }
+.codebase-body > .codebase-file-symbols { flex: 1 1 100%; }
+.codebase-symbols { margin: 0; padding: 0; list-style: none; }
+.codebase-symbol { border-top: 1px solid #1b1f25; }
+.codebase-symbol:first-child { border-top: 0; }
+.codebase-symbol-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; padding: 8px 0; cursor: pointer; }
+.codebase-symbol-name { font-family: var(--font-mono); font-size: 13px; color: var(--fg); overflow-wrap: anywhere; }
+.codebase-symbol-path { font-family: var(--font-mono); font-size: 12px; color: var(--fg-dim); overflow-wrap: anywhere; }
+.codebase-symbol-count { margin-left: auto; font-size: 12px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+.codebase-symbol-tasks { display: flex; flex-direction: column; gap: 8px; margin: 0 0 10px 12px; padding: 8px 10px; list-style: none; border: 1px solid var(--border); border-left: 2px solid var(--border-strong); border-radius: var(--radius-sm); background: var(--bg); }
+.codebase-symbol-task { display: flex; flex-direction: column; gap: 6px; }
 .codebase-related-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid #1b1f25; --cb-color: var(--accent); }
 .codebase-related-row:first-child { border-top: 0; padding-top: 0; }
 .codebase-related-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }

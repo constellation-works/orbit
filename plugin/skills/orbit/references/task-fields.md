@@ -138,8 +138,11 @@ on the operator-only `orbit.workflow.run.show`.
     operator's override.
   - `sites` (optional, up to 8) — where the defect lives, not everything the
     culprit touched: `symbol:<path>#<name>:<kind>` of the function, method or
-    type that is wrong, or `file:<path>` for a file without symbols. Never
-    tests, goldens, docs or wiring the culprit only touched alongside. An
+    type that is wrong, `file:<path>` for a file without symbols, or
+    `dir:<path>` only when the defect spans a directory and no narrower site
+    can be named. Never tests, goldens, docs or wiring the culprit only
+    touched alongside. Codebase analytics attribute the culprit's regression
+    to these sites, and a link without sites to no path. An
     absolute path outside the workspace refuses the write. A relations
     replacement that omits `sites` clears them, so preserve an existing list.
   - `nature` — what kind of regression the link records:

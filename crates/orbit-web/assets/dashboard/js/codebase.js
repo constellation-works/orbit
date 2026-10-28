@@ -1,14 +1,16 @@
 // Analytics › Codebase: which paths are costly for agents to change, ranked
 // from records Orbit already keeps (/api/codebase/analytics). "Touched" is the
-// declared footprint, not the landed diff. The server caches one scan per
+// declared footprint, not the landed diff; Regressed counts a regression only
+// against the paths its links record as sites. The server caches one scan per
 // workspace; the window, minimum support and rollup only slice it, so the 30 s
 // poll never rescans bundles. How well task pilots predicted landed diffs is
 // graded under Agents › Pilots.
 //
 // Four views, each a hash route that keeps the selection's query:
 //   #analytics/codebase             Hotspots: one table, a column per path signal
-//   #analytics/codebase/file?path=  one path: its signals, regressed tasks and
-//                                   the files that land with it (/api/codebase/related)
+//   #analytics/codebase/file?path=  one path: its signals, regression sites
+//                                   (/api/codebase/show), regressed tasks and the
+//                                   files that land with it (/api/codebase/related)
 //   #analytics/codebase/coupling    reserved-together pairs and lock waits
 //   #analytics/codebase/marks       the regression-risk marks comparison
 // The other view choices (Show all, the path search, release grouping, the
@@ -48,8 +50,8 @@ const DEFAULT_QUERY = { window: "90d", min_support: 15, rollup: "file", ...DEFAU
 const SUPPORT_STEPS = [1, 2, 3, 5, 10, 15, 20, 30, 50, 100];
 // "Show paths with 5+ tasks" and "Lower to 5".
 const LOWERED_SUPPORT = 5;
-// A task that regressed this many ranked paths is marked: one fix there lifts
-// several rows.
+// A task whose regression sites fall under this many ranked paths is marked:
+// one fix there lifts several rows.
 const WIDE_TASK_PATHS = 5;
 // Regressed tasks listed on a file before "All N".
 const TASKS_SHOWN = 3;
@@ -70,7 +72,7 @@ const RELEASE_FILES = [
 // that carries data-signal and read by its dots and shaded cells.
 const SIGNALS = ["regressions", "footprint_misses", "blocked", "rejected"];
 const SIGNAL_INFO = {
-  regressions: { label: "Regressed", sub: "of done tasks", unit: "done tasks", rgb: "255, 122, 107", missing: "regressed" },
+  regressions: { label: "Regressed", sub: "at recorded sites", unit: "done tasks", rgb: "255, 122, 107", missing: "had a regression site recorded" },
   footprint_misses: { label: "Footprint miss", sub: "widened mid-run", unit: "declared", rgb: "242, 178, 76", missing: "was widened onto mid-run" },
   blocked: { label: "Blocked", sub: "by a run failure", unit: "declared", rgb: "195, 155, 255", missing: "was blocked by a run failure" },
   rejected: { label: "Rejected", sub: "after a run", unit: "with a run", rgb: "154, 164, 178", missing: "was rejected after a run" },
@@ -78,7 +80,7 @@ const SIGNAL_INFO = {
 const ROLLUP_NOUNS = { file: "File", dir: "Directory", crate: "Crate" };
 const WINDOW_PHRASES = { "7d": "in the last 7 days", "30d": "in the last 30 days", "90d": "in the last 90 days", all: "in all recorded history" };
 const PURPOSES = {
-  hotspots: "Paths that are costly for agents to change. Rates are over tasks that declared the path, which is not always the landed diff.",
+  hotspots: "Paths that are costly for agents to change. Rates are over tasks that declared the path, which is not always the landed diff; Regressed counts a regression only where its links record a site.",
   coupling: "Files that are reserved together, and files that make tasks wait for a lock.",
   file: "",
   marks: "Whether regression-risk marks in implement and review prompts lowered regressions on the marked paths.",
@@ -98,10 +100,14 @@ let paintedView = null;
 // The file view's related-files request: the key it answers, its response or
 // error, and a counter that retires superseded requests.
 let related = { key: null, data: null, error: null, loading: false, request: 0 };
+// The file view's path-detail request (/api/codebase/show), which carries the
+// path's regression sites: the same shape as `related`.
+let pathDetail = { key: null, data: null, error: null, loading: false, request: 0 };
 let requestHashChange = () => {};
 
 function resetRelated() {
   related = { key: null, data: null, error: null, loading: false, request: related.request + 1 };
+  pathDetail = { key: null, data: null, error: null, loading: false, request: pathDetail.request + 1 };
 }
 
 onWorkspaceChange(() => {
@@ -158,7 +164,7 @@ function applyCodebaseHashQuery(query, viewName = null) {
   // A view change alone answers from the payload on hand.
   if (sameQuery && lastData) {
     paint();
-    ensureRelated();
+    ensureFileReads();
   }
 }
 
@@ -256,7 +262,7 @@ function navigate(target) {
   setRoute(next);
   syncCodebaseControls();
   paint();
-  ensureRelated();
+  ensureFileReads();
   requestHashChange();
 }
 
@@ -722,6 +728,11 @@ function notesNode(model) {
       : `No path with ${count(data.min_support)}+ tasks ${SIGNAL_INFO[key].missing} in this window, so the ${SIGNAL_INFO[key].label} column is hidden.`;
     lines.push([text]);
   }
+  const regressions = section(data, "regressions");
+  if (regressions.attribution === "sites") {
+    const unsited = regressions.unsited || {};
+    lines.push([`Regressed counts a done task against a path only where one of its regression links records a site under it. ${plural(unsited.tasks, "regressed task")} (${plural(unsited.links, "link")}) have no recorded sites and are not attributed to paths.`]);
+  }
   const causes = causeTotals(data);
   let blocks = `Blocks from infrastructure (${count(causes.infrastructure)}) and manual holds (${count(causes.manual)}) never count against paths.`;
   if (causes.unclassified > 0) blocks += ` Neither do ${plural(causes.unclassified, "block")} with no recorded cause.`;
@@ -738,7 +749,7 @@ function notesNode(model) {
   const marks = section(data, "regressions").risk_marks || {};
   return keyed(node, "notes", {
     hidden: SIGNALS.filter((signal) => !signals.includes(signal)), rejected: section(data, "rejected").rejected_with_run,
-    causes, rollup: data.rollup, min: data.min_support,
+    causes, rollup: data.rollup, min: data.min_support, attribution: regressions.attribution || null, unsited: regressions.unsited || null,
     marks: [marks.enabled_at, marks.window_days, marks.with_marks, marks.before], links: [scopedHashHref(buildCodebaseHash({ view: "marks" })), scopedHashHref("#analytics/metrics")],
   });
 }
@@ -804,9 +815,13 @@ function regressedTaskNode(task, regressedPaths) {
     el("span", { class: "codebase-task-title", text: task.title || "" }),
   ]);
   if (wide >= WIDE_TASK_PATHS) {
-    top.appendChild(el("span", { class: "codebase-tag wide", text: `${count(wide)} ranked paths`, title: "This task regressed several ranked paths at once" }));
+    top.appendChild(el("span", { class: "codebase-tag wide", text: `${count(wide)} ranked paths`, title: "This task's regression sites fall under several ranked paths" }));
   }
   const item = el("li", { class: "codebase-task" }, [top]);
+  const sites = Array.isArray(task.sites) ? task.sites : [];
+  if (sites.length) {
+    item.appendChild(el("div", { class: "codebase-task-sites", "aria-label": "Regression sites" }, sites.map((site) => siteChip(site))));
+  }
   const links = Array.isArray(task.regressions) ? task.regressions : [];
   for (const id of task.regression_tasks || []) {
     const regression = el("a", { class: "codebase-task-link", text: id });
@@ -873,13 +888,118 @@ function fileTasks(model, path) {
         : `The ${count(tasks.length)} most recently done of ${count(hit.row.numerator)} regressed tasks are listed.`, "codebase-box-note"));
     }
     if (shown.some((task) => (model.regressedPaths.get(task.task_id) || 0) >= WIDE_TASK_PATHS)) {
-      box.appendChild(note("A task marked with a path count regressed that many ranked paths at once, so a single fix there can lift several rows.", "codebase-box-note"));
+      box.appendChild(note("A task marked with a path count has regression sites under that many ranked paths, so a single fix there can lift several rows.", "codebase-box-note"));
     }
   }
   return keyed(box, "file-tasks", {
     path, filter: model.data.regression_filter || null, limit: model.limit, allTasks: view.allTasks, row: hit ? hit.row : null,
     wide: tasks.map((task) => model.regressedPaths.get(task.task_id) || 0),
   });
+}
+
+/// A site selector as the reader names it: the symbol and its kind, or the
+/// whole file or directory it names.
+function siteName(selector) {
+  const text = String(selector || "");
+  if (text.startsWith("symbol:")) {
+    const rest = text.slice("symbol:".length);
+    const hash = rest.indexOf("#");
+    const kindAt = rest.lastIndexOf(":");
+    if (hash >= 0 && kindAt > hash) return { path: rest.slice(0, hash), name: rest.slice(hash + 1, kindAt), kind: rest.slice(kindAt + 1) };
+    return { path: rest, name: rest, kind: "" };
+  }
+  if (text.startsWith("dir:")) return { path: text.slice("dir:".length), name: "whole directory", kind: "" };
+  return { path: text.replace(/^file:/, ""), name: "whole file", kind: "" };
+}
+
+function siteChip(selector) {
+  const { name, kind } = siteName(selector);
+  const chip = el("span", { class: "codebase-site", title: selector }, [
+    el("span", { class: "codebase-site-name", text: name }),
+    kind ? el("span", { class: "codebase-site-kind", text: kind }) : null,
+  ]);
+  chip.dataset.site = selector;
+  return chip;
+}
+
+/// One site under the path: its symbol (or whole file), its regressed-task
+/// count, and, expanded, each regressed task with the links that name it.
+function symbolRow(site, tasksById, underDir) {
+  const { name, kind } = siteName(site.selector);
+  const summary = el("summary", { class: "codebase-symbol-head" }, [
+    el("span", { class: "codebase-symbol-name", text: name, title: site.selector }),
+    kind ? el("span", { class: "codebase-site-kind", text: kind }) : null,
+    underDir ? el("span", { class: "codebase-symbol-path", text: site.path || "" }) : null,
+    el("span", { class: "codebase-symbol-count", text: plural(site.tasks, "regressed task") }),
+  ]);
+  const body = el("ul", { class: "codebase-symbol-tasks" });
+  for (const id of site.regressed_tasks || []) {
+    const task = tasksById.get(id) || { task_id: id };
+    const link = el("a", { class: "codebase-task-link", text: id });
+    bindTaskLink(link, id);
+    const item = el("li", { class: "codebase-symbol-task" }, [
+      el("div", { class: "codebase-task-top" }, [link, el("span", { class: "codebase-task-title", text: task.title || "" })]),
+    ]);
+    const links = (Array.isArray(task.regressions) ? task.regressions : [])
+      .filter((entry) => Array.isArray(entry.sites) && entry.sites.includes(site.selector));
+    for (const entry of links) {
+      const by = el("a", { class: "codebase-task-link", text: entry.task_id });
+      bindTaskLink(by, entry.task_id);
+      const line = el("div", { class: "codebase-task-by" }, [el("span", { text: "regressed by" }), by]);
+      for (const key of ["nature", "escape", "severity"]) {
+        if (entry[key] && entry[key] !== "absent") line.appendChild(el("span", { class: "codebase-by-dim", text: valueLabel(entry[key]) }));
+      }
+      line.dataset.task = entry.task_id;
+      item.appendChild(line);
+    }
+    item.dataset.task = id;
+    body.appendChild(item);
+  }
+  const row = el("li", { class: "codebase-symbol" }, [el("details", {}, [summary, body])]);
+  row.dataset.site = site.selector;
+  return row;
+}
+
+/// Every recorded regression site under the path, from /api/codebase/show:
+/// one row per symbol, most regressed tasks first. A path with none says so,
+/// with how many regressed tasks that declared it record no site.
+function fileSymbols(model, path) {
+  const box = el("section", { class: "codebase-box codebase-file-symbols", "aria-label": "Symbols" }, [
+    el("div", { class: "codebase-box-head stacked" }, [el("h4", { text: "Symbols" }), el("span", { class: "codebase-extra", text: "regression sites recorded under this path" })]),
+  ]);
+  const body = el("div", { class: "codebase-box-body" });
+  box.appendChild(body);
+  const done = (hash) => keyed(box, "file-symbols", { path, ...hash });
+  if (pathDetail.error) {
+    body.appendChild(el("p", { class: "codebase-empty", text: `Could not load regression sites: ${pathDetail.error}` }));
+    return done({ error: pathDetail.error });
+  }
+  const data = pathDetail.data && pathDetail.data.path === path ? pathDetail.data : null;
+  if (!data) {
+    body.appendChild(el("p", { class: "codebase-empty", text: "Loading regression sites…" }));
+    return done({ loading: true });
+  }
+  const standing = data.rankings?.regressions || null;
+  if (data.untouched || !standing) {
+    body.appendChild(el("p", { class: "codebase-empty", text: "No done task in this window declared this path or recorded a regression site under it." }));
+    return done({ untouched: true });
+  }
+  const sites = Array.isArray(standing.sites) ? standing.sites : [];
+  const unsited = Number(standing.unsited?.tasks) || 0;
+  const filters = activeFilters(model.data.regression_filter || {});
+  if (filters.length) {
+    body.appendChild(note(`Filtered to ${filters.map(({ label, key }) => `${label.toLowerCase()} ${valueLabel(model.data.regression_filter[key])}`).join(", ")}: only sites of matching regressions are listed.`, "codebase-filter-note"));
+  }
+  if (!sites.length) {
+    body.appendChild(el("p", { class: "codebase-empty", text: `No regression site is recorded under this path. ${plural(unsited, "regressed task")} that declared it ${unsited === 1 ? "has" : "have"} no recorded sites, so ${unsited === 1 ? "it is" : "they are"} not attributed here.` }));
+    return done({ sites: [], unsited, filters: model.data.regression_filter || null });
+  }
+  const tasksById = new Map((Array.isArray(standing.tasks) ? standing.tasks : []).map((task) => [task.task_id, task]));
+  const list = el("ul", { class: "codebase-symbols" });
+  for (const site of sites) list.appendChild(symbolRow(site, tasksById, path.endsWith("/")));
+  body.appendChild(list);
+  if (unsited) body.appendChild(note(`${plural(unsited, "other regressed task")} that declared this path ${unsited === 1 ? "has" : "have"} no recorded sites and ${unsited === 1 ? "is" : "are"} not attributed here.`, "codebase-box-note"));
+  return done({ sites, tasks: standing.tasks || [], unsited, filters: model.data.regression_filter || null });
 }
 
 // Why no related file is listed, from the response's empty reason, with a
@@ -988,13 +1108,18 @@ function fileRelated(path) {
 
 function fileNodes(model) {
   const path = route.path;
-  return [fileHead(model, path), fileTiles(model, path), fileTasks(model, path), fileRelated(path)];
+  return [fileHead(model, path), fileTiles(model, path), fileSymbols(model, path), fileTasks(model, path), fileRelated(path)];
 }
 
 // The related query reads only the window and minimum support; a changed
 // payload refetches it too.
 function relatedFetchKey(path) {
   return JSON.stringify([path, codebaseQuery.window, codebaseQuery.min_support, lastPayloadKey]);
+}
+
+function ensureFileReads() {
+  ensurePathDetail();
+  ensureRelated();
 }
 
 function ensureRelated() {
@@ -1020,6 +1145,40 @@ async function fetchRelated(path, key) {
   } catch (error) {
     if (!current()) return;
     related = { ...related, data: null, error: error.message || String(error), loading: false };
+  }
+  if (route.view === "file" && route.path === path) paint();
+}
+
+// The path detail reads the whole selection; a changed payload refetches it.
+function pathDetailFetchKey(path) {
+  return JSON.stringify([path, analyticsPath(), lastPayloadKey]);
+}
+
+function ensurePathDetail() {
+  if (route.view !== "file" || !route.path || isAggregateView() || !lastData) return;
+  const key = pathDetailFetchKey(route.path);
+  if (key === pathDetail.key && !pathDetail.error) return;
+  fetchPathDetail(route.path, key);
+}
+
+async function fetchPathDetail(path, key) {
+  const request = pathDetail.request + 1;
+  const keep = pathDetail.data && pathDetail.data.path === path ? pathDetail.data : null;
+  pathDetail = { key, data: keep, error: null, loading: true, request };
+  const visit = captureWorkspaceVisit();
+  const sp = new URLSearchParams(analyticsPath().split("?")[1] || "");
+  sp.set("path", path);
+  const current = () => request === pathDetail.request && visit.isCurrent();
+  try {
+    const data = await fetchJson(`/api/codebase/show?${sp}`);
+    if (!current()) return;
+    pathDetail = { ...pathDetail, data: data && typeof data === "object" && !Array.isArray(data) ? { ...data, path } : { path }, loading: false };
+  } catch (error) {
+    if (!current()) return;
+    // A path nothing in the window touched is a 400: an answer, not a failure.
+    pathDetail = error && error.status === 400
+      ? { ...pathDetail, data: { path, untouched: true }, loading: false }
+      : { ...pathDetail, data: null, error: error.routeMissing ? "this host's Orbit does not serve path detail" : (error.message || String(error)), loading: false };
   }
   if (route.view === "file" && route.path === path) paint();
 }
@@ -1255,7 +1414,7 @@ function renderCodebase(data) {
   const computed = data.computed_at ? formatDateTime(data.computed_at) : "—";
   setMeta(`${plural(data.tasks_scanned, "task")} scanned · computed ${computed}`);
   paint();
-  ensureRelated();
+  ensureFileReads();
 }
 
 export {

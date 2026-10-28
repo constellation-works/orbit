@@ -9,6 +9,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime};
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
+    DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
     TASK_ARTIFACT_SCHEMA_VERSION, TASK_COMMENTS_FILE_NAME, TASK_EVENTS_FILE_NAME, TaskCommentRowV2,
     TaskEventRowV2, TaskRelation, TaskRelationType, TaskStatus,
 };
@@ -62,7 +63,13 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
             vec![TaskRelation {
                 relation_type: TaskRelationType::RegressionFrom,
                 target: regressed.parse().unwrap(),
-                regression: None,
+                regression: Some(RegressionClassification {
+                    nature: RegressionNature::Unclassified,
+                    escape: RegressionEscape::Unclassified,
+                    severity: DefectSeverity::Medium,
+                    severity_source: SeveritySource::Filer,
+                    sites: vec!["symbol:src/lib.rs#parse:function".into()],
+                }),
             }],
         );
         (regressed, regression)
@@ -110,6 +117,10 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
         json!([regression])
     );
     assert_eq!(regressions["tasks"].as_array().map(Vec::len), Some(1));
+    assert_eq!(
+        regressions["tasks"][0]["sites"],
+        json!(["symbol:src/lib.rs#parse:function"])
+    );
 
     // The human view lists the regressed task with the task that regressed it.
     let human = fixture
@@ -134,18 +145,38 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
         .lines()
         .find(|line| line.trim_start().starts_with(regression.as_str()))
         .unwrap_or_else(|| panic!("a line per regression link:\n{human}"));
-    for dimension in ["absent", "other", "operator"] {
+    for dimension in ["unclassified", "other", "operator"] {
         assert!(link.contains(dimension), "{dimension} in {link}");
     }
+    // It names the sites that attribute the task to the path, and lists each
+    // site under the path with its regressed-task count.
+    assert!(
+        human
+            .lines()
+            .any(|line| line.trim() == "sites: symbol:src/lib.rs#parse:function"),
+        "the regressed task's sites are listed:\n{human}"
+    );
+    assert!(
+        human.lines().any(|line| line
+            .trim_start()
+            .starts_with("parse (function)  1 regressed tasks")),
+        "the path's sites are listed with their counts:\n{human}"
+    );
     let filtered = fixture.json(
         &[
             &["codebase", "analytics"][..],
             &selection,
-            &["--nature", "absent", "--detected-by", "operator", "--json"],
+            &[
+                "--nature",
+                "unclassified",
+                "--detected-by",
+                "operator",
+                "--json",
+            ],
         ]
         .concat(),
     );
-    assert_eq!(filtered["regression_filter"]["nature"], "absent");
+    assert_eq!(filtered["regression_filter"]["nature"], "unclassified");
     assert_eq!(filtered["regressions"]["matching_links"], 1, "{filtered}");
     assert_eq!(filtered["regressions"]["rows"][0]["numerator"], 1);
     let excluded = fixture.json(
@@ -157,13 +188,16 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
         .concat(),
     );
     assert_eq!(excluded["regressions"]["matching_links"], 0, "{excluded}");
-    let absent = excluded["regressions"]["breakdowns"]["nature"]
+    let unclassified = excluded["regressions"]["breakdowns"]["nature"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|row| row["value"] == "absent")
+        .find(|row| row["value"] == "unclassified")
         .unwrap();
-    assert_eq!(absent["links"], 1, "a breakdown counts past its own filter");
+    assert_eq!(
+        unclassified["links"], 1,
+        "a breakdown counts past its own filter"
+    );
     let refused = fixture
         .command(&["codebase", "analytics", "--layer", "frontend"])
         .assert()

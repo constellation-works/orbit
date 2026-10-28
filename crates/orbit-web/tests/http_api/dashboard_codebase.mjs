@@ -228,7 +228,7 @@ const wide = regressed('ORB-9', 'opus', ['ORB-90']);
 const full = {
   window: '30d', rollup: 'dir', min_support: 5, touched: 'declared_footprint', tasks_scanned: 4933,
   computed_at: '2026-10-10T12:00:00.000Z', cache_ttl_seconds: 300, row_limit: 25,
-  regressions: { below_support: 1775, population: 900, rows: [
+  regressions: { below_support: 1775, population: 900, attribution: 'sites', unsited: { tasks: 412, links: 530 }, rows: [
     { path: 'src/a/', ...rate(13, 20), regressed_tasks: [wide, regressed('ORB-1', 'sol', ['ORB-2', 'ORB-3']), regressed('ORB-4', null, ['ORB-5']), regressed('ORB-6', 'opus', ['ORB-7'])],
       by_crew: [{ crew: 'opus', ...rate(12, 16) }, { crew: 'sol', ...rate(1, 4) }] },
     { path: 'src/b/', ...rate(9, 18), regressed_tasks: [wide], by_crew: [] },
@@ -305,9 +305,13 @@ const everything = () => view().querySelectorAll('div, section, table, ul, ol, b
 assert.equal(everything().filter(node => /codebase-(tile|crosstab|slice|crew-row|related-search)\b/.test(node.className) && !/codebase-file-tile/.test(node.className)).length, 0);
 assert.doesNotMatch(view().textContent, /by crew|by complexity|Nature × escape|Escape × layer|What changes alongside/i);
 
-// Footnotes: blocks that never count against a path, the marks and where
-// defect trends are. The defects link claims no crew or complexity rates.
-assert.deepEqual(notes().slice(0, 1), ['Blocks from infrastructure (7) and manual holds (40) never count against paths. Neither do 189 blocks with no recorded cause.']);
+// Footnotes: how regressions are attributed and how many are not, blocks
+// that never count against a path, the marks and where defect trends are.
+// The defects link claims no crew or complexity rates.
+assert.deepEqual(notes().slice(0, 2), [
+  'Regressed counts a done task against a path only where one of its regression links records a site under it. 412 regressed tasks (530 links) have no recorded sites and are not attributed to paths.',
+  'Blocks from infrastructure (7) and manual holds (40) never count against paths. Neither do 189 blocks with no recorded cause.',
+]);
 assert.match(notes().at(-1), /^Defect trends are on Metrics › Defects\.$/);
 assert.match(part('notes').querySelectorAll('a').at(-1).getAttribute('href'), /#analytics\/metrics$/);
 assert.doesNotMatch(part('notes').textContent, /crew|complexity/i);
@@ -364,6 +368,7 @@ Object.assign(sliced.regressions, {
 });
 sliced.regressions.rows[0].regressed_tasks[1] = {
   ...regressed('ORB-1', 'sol', ['ORB-2', 'ORB-3']),
+  sites: ['symbol:src/a/lib.rs#Retry::budget:method', 'file:src/a/mod.rs'],
   regressions: [{ ...link('ORB-2', 'broke_existing', 'no_test', 'dashboard', 'delivery_review'), severity: 'high', severity_source: 'verified' }, { ...link('ORB-3', 'absent', 'absent', 'store_migration', 'operator', 'footprint'), severity: 'absent', severity_source: 'absent' }],
 };
 await serve(sliced);
@@ -437,10 +442,11 @@ await serve(sliced);
 // The file view: the path with Copy path, a tile per signal with its rate,
 // counts and rank, and the regressed tasks with what regressed them. A
 // directory key has no file partners to rank.
-const requestsBeforeFile = pending.length;
+const relatedRequestCount = () => pending.filter(request => request.url.pathname === '/api/codebase/related').length;
+const requestsBeforeFile = relatedRequestCount();
 click(hotRows()[0].querySelector('a.codebase-path-link'));
 assert.deepEqual({ ...codebase.getCodebaseRoute() }, { view: 'file', path: 'src/a/' });
-assert.deepEqual(parts().map(node => node.dataset.key), ['file-head', 'file-tiles', 'file-tasks', 'file-related']);
+assert.deepEqual(parts().map(node => node.dataset.key), ['file-head', 'file-tiles', 'file-symbols', 'file-tasks', 'file-related']);
 assert.equal(part('file-head').querySelector('h3').textContent, 'a/');
 assert.deepEqual(tiles(), {
   regressions: ['65%', '13 of 20 done tasks · #1 of 7'],
@@ -451,6 +457,8 @@ assert.deepEqual(tiles(), {
 assert.deepEqual(tasks().map(item => item.dataset.task), ['ORB-9', 'ORB-1', 'ORB-4'], 'three regressed tasks before All');
 assert.deepEqual(tasks().map(item => item.dataset.wide ?? null), ['5', null, null], 'the task that regressed five ranked paths is marked');
 assert.deepEqual(tasks()[1].querySelectorAll('a.codebase-task-link').map(node => node.textContent), ['ORB-1', 'ORB-2', 'ORB-3']);
+assert.deepEqual(tasks()[1].querySelectorAll('span.codebase-site').map(chip => [chip.dataset.site, chip.textContent]),
+  [['symbol:src/a/lib.rs#Retry::budget:method', 'Retry::budgetmethod'], ['file:src/a/mod.rs', 'whole file']], 'a regressed task lists the sites that attribute it here');
 assert.match(tasks()[1].querySelector('a.codebase-task-link').getAttribute('href'), /#tasks\?open=ORB-1$/);
 assert.deepEqual(tasks()[1].querySelectorAll('div.codebase-task-by').map(line => [line.dataset.task, line.querySelectorAll('span.codebase-by-dim').map(tag => tag.dataset.value)]),
   [['ORB-2', ['broke_existing', 'dashboard', 'delivery_review', 'high']], ['ORB-3', ['absent', 'store_migration', 'operator']]], 'each regression names its nature, layer, detector and severity; an absent payload has no severity');
@@ -466,7 +474,40 @@ await settle();
 assert.deepEqual(copied, ['src/a/']);
 assert.ok(button(part('file-head'), 'Copied'), 'the copy action confirms');
 assert.match(relatedBox().textContent, /Group by file to see what lands alongside one/);
-assert.equal(pending.length, requestsBeforeFile, 'a directory key asks for no related files');
+assert.equal(relatedRequestCount(), requestsBeforeFile, 'a directory key asks for no related files');
+
+// Symbols: every recorded site under the path from /api/codebase/show at the
+// same selection, most regressed tasks first, each expanding to its tasks
+// and the links that name it.
+const symbols = () => part('file-symbols');
+const showRequest = pending.findLast(request => request.url.pathname === '/api/codebase/show');
+assert.deepEqual(['path', 'window', 'min_support', 'rollup', 'workspace'].map(name => showRequest.url.searchParams.get(name)), ['src/a/', '30d', '5', 'dir', 'ws-a']);
+assert.match(symbols().textContent, /Loading regression sites/);
+const sited = (selector, scope, path, symbol, kind, regressedTasks, regressionTasks, links) => ({ selector, scope, path, symbol, kind, tasks: regressedTasks.length, links, regressed_tasks: regressedTasks, regression_tasks: regressionTasks });
+showRequest.resolve(response({ path: 'src/a/', rankings: { regressions: {
+  ...rate(13, 20),
+  sites: [
+    sited('symbol:src/a/lib.rs#Retry::budget:method', 'symbol', 'src/a/lib.rs', 'Retry::budget', 'method', ['ORB-9', 'ORB-1'], ['ORB-2', 'ORB-90'], 2),
+    sited('file:src/a/mod.rs', 'file', 'src/a/mod.rs', null, null, ['ORB-1'], ['ORB-3'], 1),
+  ],
+  tasks: [
+    { task_id: 'ORB-9', title: 'Task ORB-9', regressions: [{ task_id: 'ORB-90', nature: 'broke_existing', escape: 'no_test', severity: 'high', sites: ['symbol:src/a/lib.rs#Retry::budget:method'] }] },
+    { task_id: 'ORB-1', title: 'Task ORB-1', regressions: [
+      { task_id: 'ORB-2', nature: 'defect_in_new', escape: 'review_missed', severity: 'medium', sites: ['symbol:src/a/lib.rs#Retry::budget:method'] },
+      { task_id: 'ORB-3', nature: 'absent', escape: 'absent', severity: 'absent', sites: ['file:src/a/mod.rs'] },
+    ] },
+  ],
+  unsited: { tasks: 2, links: 2 },
+} } }));
+await settle();
+const symbolRows = () => symbols().querySelectorAll('li.codebase-symbol');
+assert.deepEqual(symbolRows().map(row => [row.dataset.site, row.querySelector('span.codebase-symbol-name').textContent, row.querySelector('span.codebase-site-kind')?.textContent ?? null, row.querySelector('span.codebase-symbol-path').textContent, row.querySelector('span.codebase-symbol-count').textContent]),
+  [['symbol:src/a/lib.rs#Retry::budget:method', 'Retry::budget', 'method', 'src/a/lib.rs', '2 regressed tasks'], ['file:src/a/mod.rs', 'whole file', null, 'src/a/mod.rs', '1 regressed task']],
+  'one row per site with its regressed-task count; a file-level site reads whole file, and a directory key names each site\'s file');
+assert.deepEqual(symbolRows()[0].querySelectorAll('li.codebase-symbol-task').map(item => [item.dataset.task, item.querySelectorAll('div.codebase-task-by').map(line => line.dataset.task)]),
+  [['ORB-9', ['ORB-90']], ['ORB-1', ['ORB-2']]], 'a site expands to its regressed tasks and only the links that name it');
+assert.deepEqual(symbolRows()[1].querySelectorAll('div.codebase-task-by').map(line => [line.dataset.task, line.querySelectorAll('span.codebase-by-dim').length]), [['ORB-3', 0]], 'an unclassified link shows no dimensions');
+assert.match(symbols().querySelector('p.codebase-box-note').textContent, /^2 other regressed tasks that declared this path have no recorded sites and are not attributed here\.$/);
 assert.doesNotMatch(view().textContent, /Regressions by crew/);
 
 // A path no signal ranks under reads "not in the top 25"; a new path starts
@@ -474,6 +515,10 @@ assert.doesNotMatch(view().textContent, /Regressions by crew/);
 codebase.applyCodebaseHashQuery(new URLSearchParams('window=30d&min_support=5&rollup=dir&path=src/b/'), 'file');
 assert.deepEqual(tiles().footprint_misses, ['—', 'not in the top 25']);
 assert.equal(tasks().length, 1, 'a new path starts collapsed');
+// A path with no recorded site says so, with its unsited regressed tasks.
+pending.findLast(request => request.url.pathname === '/api/codebase/show').resolve(response({ path: 'src/b/', rankings: { regressions: { ...rate(0, 18), sites: [], tasks: [], unsited: { tasks: 3, links: 4 } } } }));
+await settle();
+assert.equal(symbols().querySelector('p.codebase-empty').textContent, 'No regression site is recorded under this path. 3 regressed tasks that declared it have no recorded sites, so they are not attributed here.');
 const fileNodes = parts();
 await serve(sliced);
 assert.ok(parts().every((node, index) => node === fileNodes[index]), 'a poll keeps the file view');
