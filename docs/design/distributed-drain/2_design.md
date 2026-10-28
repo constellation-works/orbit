@@ -340,10 +340,16 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
   Search and task listing read the owner's authoritative records only in the claimed
   workspace; search cannot request federated `workspaces` or `all_workspaces`
   (including their aliases). Task show and artifact get read any task in that
-  workspace, except another task's `review-*` artifact (refused on the remote
-  route as `claimed_owner_bridge_refused`; the review gate keeps its stricter
-  scope); a task the owner does not hold there is refused
-  (`claimed_owner_bridge_refused`). Artifact put stays on the claimed task, and
+  workspace, except another task's `review-*` artifact, which stays refused on
+  the remote route under the narrower reviewer, recovery or findings scope.
+  The diagnostic depends on dispatch order: an ordinary `agent_implement`
+  read of `review-report.json` or `review-manifest.json` fails the reviewer
+  activity check with `claimed_review_bridge_refused` before task identity is
+  checked. An admitted reviewer, a live final recovery or the findings-read
+  route can instead reach the claimed-task check and receive
+  `claimed_owner_bridge_refused` for another task. For task show and ordinary
+  artifact get, a task the owner does not hold in the claimed workspace is
+  refused (`claimed_owner_bridge_refused`). Artifact put stays on the claimed task, and
   follow-up creation retains its claim relation checks. No additional
   mutations are bridged. A task requiring `orbit.task.update` remains held before
   claim admission, with a reason naming that exact denied tool; audit templates
