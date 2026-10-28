@@ -1,8 +1,8 @@
 ---
 title: Symbol Risk Index — Design
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 feature: symbol-risk-index
 doc_role: design
@@ -35,6 +35,8 @@ header and one record per symbol.
 | Field | Meaning |
 |---|---|
 | `generation_id` | Store-assigned identifier |
+| `build_seq` | Store-assigned, monotonically increasing fencing sequence allocated at resolve (§4); unique per build attempt in the workspace |
+| `basis_generation_id` | The generation that was `current` when this build resolved, or null for the first build |
 | `workspace` | Owning workspace |
 | `base_ref`, `base_commit` | The integration branch (the workspace's base, `agent-main` in ws_orbit) and the commit indexed |
 | `indexer` | `{tool, plugin_version, extractor_version}` as reported by the indexer |
@@ -175,6 +177,7 @@ Four owner-store tables, added by one store migration:
 | `symbol_index_records` | `(generation_id, selector)` | The §1 record, plus `(generation_id, path)` file rows |
 | `symbol_lineage` | `(workspace, from_selector, to_selector)` | Rename links with the generation that recorded them and the basis (`indexer`, `digest`) |
 | `symbol_change_events` | `(workspace, landed_commit, selector)` | Which selectors a landed commit changed, joined to its task through the landed-delivery rows of `codebase/diff_stats.rs` |
+| `symbol_index_build_state` | `(workspace)` | One row per workspace: the next `build_seq` to allocate and the advisory single-flight lease (`lease_run_id`, `lease_expires_at`); see §4 |
 
 The records and generations are a **derived cache**. Dropping them costs one rebuild. Change
 events are derived from Git too: when the table is empty, the first run backfills the site
@@ -220,19 +223,104 @@ review-coverage evidence for each landed delivery, a contract this job has no bu
 claiming. The routine is evaluated on each owner checkout with an enabled clock, which in
 ws_orbit is dk-server-2. `orbit run job symbol_index_pipeline` rebuilds on demand.
 
-`job:symbol_index_pipeline` has three deterministic steps:
+**What the scheduler does and does not guarantee.** `policy.timeout_minutes: 60` is not a
+process deadline. In the current scheduler it is the staleness horizon after which a fire
+stops blocking `overlap: forbid` and is recorded as timed out (`RoutinePolicy` in
+`crates/orbit-types/src/workflow/routine.rs`); the sweep reclassifies the fire record past
+that horizon even when the run's owner is still alive or cannot be probed, and the dispatch
+seam (`submit`, `run_state`, `run_owner_liveness` in
+`crates/orbit-automation/src/routines/sweep.rs`) has no cancellation operation, so nothing
+kills or proves stopped a build that passes the horizon. Only a run that itself reaches the
+`Cancelled` state is known stopped, because cancellation signals the owner and verifies
+termination. A timed-out fire is also no longer a blocking fire (only `intent` and
+`dispatched` rows block, in `routine_blocking_fire`), so the next scheduled fire may start
+while the earlier build is still running; the existing sweep fixture for an unprobeable
+owner being reclaimed at the policy timeout specifies exactly this. A retry re-dispatch
+(`retries: {max: 1}`) is a further scheduled start under the same slot. A direct
+`orbit run job symbol_index_pipeline` acquires no routine fire slot at all. Correctness
+therefore never rests on builds running one at a time: any number of builds may be in
+flight, and publication is fenced instead (below). No scheduler change is needed.
 
-1. **`symbol_index_resolve`** (core). It reads the integration branch's head from the owner
-   checkout. It then finds the newest successful run of the configured coverage workflow on the
-   configured branch through the GitHub integration, the way `collect_dependabot_alerts` reads
-   alerts. It downloads that run's artifact into run scratch and records the run's head commit
-   as the coverage commit. If the head equals the current generation's base and the report's
-   digest is unchanged, the run ends as a no-op. A failed coverage fetch continues with
-   `coverage: null, reason: coverage_unavailable`, so the size data still refreshes.
-2. **`index`**: `plugin.tool_call` to the configured indexer tool with the §2 input.
-3. **`symbol_index_ingest`** (core). It validates the document (§2). In one transaction it
-   writes the generation as `current`, marks the previous one `superseded`, records lineage and
-   change events, and prunes past retention.
+**Build fencing.** Every entry point — a scheduled fire, a retry re-dispatch, a fire after
+timeout reclamation, and a direct `orbit run job` invocation — runs the same three steps,
+and the fence is allocated in the owner store, so it covers all of them:
+
+1. **`symbol_index_resolve`** (core). In one store transaction it allocates the build's
+   fencing token: it reads `symbol_index_build_state`, assigns `build_seq` (the stored
+   counter, then increments it; sequences are never reused, including by builds that later
+   fail, no-op or are rejected), and records the `generation_id` currently marked `current`
+   as `basis_generation_id` (null when none exists). It then reads the integration branch's
+   head from the owner checkout. It finds the newest successful run of the configured
+   coverage workflow on the configured branch through the GitHub integration, the way
+   `collect_dependabot_alerts` reads alerts. It downloads that run's artifact into run
+   scratch and records the run's head commit as the coverage commit. If the head equals the
+   current generation's base and the report's digest is unchanged, the run ends as a no-op
+   (its `build_seq` is simply never published; it does not block any other build). A failed
+   coverage fetch continues with `coverage: null, reason: coverage_unavailable`, so the size
+   data still refreshes. The allocated `build_seq`, `basis_generation_id` and resolved
+   `base_commit` are carried in the job run's step outputs to ingest; a build that cannot
+   show an allocated `build_seq` is refused at ingest.
+2. **`index`**: `plugin.tool_call` to the configured indexer tool with the §2 input, whose
+   `base_commit` is the commit resolve read and whose `previous_base_commit` is the basis
+   generation's base (null when there is no basis).
+3. **`symbol_index_ingest`** (core). It validates the document (§2), including that the
+   document's `base_commit` still equals the resolved `base_commit`. It then publishes by
+   compare-and-publish in a single transaction:
+   - Read the generation currently marked `current` (if any) inside the transaction.
+   - If a generation with this `build_seq` is already `current`, the ingest is an
+     already-published no-op and succeeds without writing (an ingest retried after its
+     transaction committed does not publish twice).
+   - Otherwise publish only if both hold: (a) `build_seq` is strictly greater than the
+     current generation's `build_seq` (vacuously true when there is no current generation),
+     and (b) the build's `base_commit` is not strictly behind the current generation's
+     base — that is, it equals it, descends from it, or is incomparable with it after a
+     history rewrite (checked with `merge-base --is-ancestor` in the owner checkout; a
+     diverged current generation is already unusable for admission under §5, and the newer
+     `build_seq` is what orders the replacement). A build whose base is a strict ancestor
+     of the current base is stale by construction and fails this check even if its
+     sequence were somehow newer.
+   - On publication, in the same transaction: write the generation as `current` with its
+     `build_seq` and `basis_generation_id`, mark the previous `current` generation
+     `superseded`, record lineage and change events, and prune past retention. Pruning
+     deletes only `superseded` generations beyond `retain_generations`; it can never
+     delete the generation just marked `current` in this transaction.
+   - On fence failure, write nothing and prune nothing: no generation rows, no lineage, no
+     change events, and the standing `current` generation is untouched. Ingest returns a
+     distinct superseded no-op outcome (`superseded_noop`, naming the standing
+     generation's `build_seq` and `base_commit`), and the job run ends as a successful
+     no-op rather than a failure, so a routine retry is not spent re-running a build that
+     can never publish. Operators can still see the rejection in the run's step output.
+
+   A SQL transaction alone would only make each unconditional publication atomic; the
+   sequence and ancestry preconditions checked inside that transaction are what order
+   concurrent publications. Because sequences are allocated at resolve, a build that
+   resolves later always fences out a build that resolved earlier, regardless of which
+   finishes first, which entry point started it, or whether its fire was reclaimed.
+
+**Advisory single-flight lease (cost only).** In the same resolve transaction, the build
+tries to claim the workspace lease in `symbol_index_build_state` (`lease_run_id`,
+`lease_expires_at`, with a TTL comfortably above the index target, refreshed by the index
+step while it runs). If an unexpired lease is held by another run, the build ends at
+resolve as a skipped no-op (`lease_held`) instead of paying for an index run that would
+likely be fenced out; it does not wait. The lease is released at ingest, at the resolve
+no-op exit, and on run failure where the runtime records one. The lease may expire while
+its holder is still running — that is expected and harmless: a successor then proceeds,
+and the fence, not the lease, decides publication. The lease therefore bounds wasted
+indexing work in the common case but is never load-bearing for correctness, and its
+expiry is never treated as evidence that the earlier build stopped.
+
+**Deterministic overlap trace.** Build A resolves base `C0` with `build_seq` 1 against
+basis generation G0, then stalls (its fire passes the 60-minute horizon and is reclaimed,
+or it was started directly). Build B — a later scheduled fire, a retry, or a direct run —
+resolves newer base `C1` (a descendant of `C0`) with `build_seq` 2, finishes first, and
+publishes: `current` becomes B's generation (`C1`, seq 2) and G0 is superseded. Build A
+then finishes and reaches ingest with seq 1 at `C0`: check (a) fails (1 is not greater
+than 2) and check (b) fails (`C0` is a strict ancestor of `C1`), so A writes nothing,
+prunes nothing, and returns `superseded_noop`. B's generation stays `current`, and the
+retention pruner never sees a transaction in which A's older generation could supersede
+or prune it. The same rejection holds if A and B were both direct runs, if B was a retry
+re-dispatch, or if A's owner was alive, stopped or unprobeable at reclamation — the fence
+does not consult liveness.
 
 **Cost**
 
@@ -240,12 +328,17 @@ ws_orbit is dk-server-2. `orbit run job symbol_index_pipeline` rebuilds on deman
 - *Index:* unmeasured. It is static parsing with no compilation. orbit-graph syncs
   incrementally by file content, so a rebuild after a day's deliveries re-parses only the
   changed files. Mapping LCOV is linear in the report. Phase 1 records wall time and peak
-  memory per build. The budget is the 60-minute routine timeout, with a target under 10
-  minutes for an incremental build.
+  memory per build. The target is under 10 minutes for an incremental build. The
+  60-minute `timeout_minutes` is not a budget the build is killed at: it is only the
+  staleness horizon after which the scheduler may dispatch another fire (above), so a
+  slow build may run past it and is then fenced at ingest if a newer build published.
 - *Ingest:* about 31,000 row writes in one transaction, expected to take seconds.
 
-At most four builds a day run, one at a time, with no runner cost: coverage reuses the report
-the Coverage job already pays for.
+The cron fires four slots a day; with `retries: {max: 1}` each slot can dispatch twice, so
+at most eight scheduled dispatches a day, plus an unbounded number of direct on-demand
+runs. Builds are not guaranteed to run one at a time (see above); the lease keeps
+concurrent indexing rare in practice and the fence keeps it safe when it happens. There
+is no runner cost: coverage reuses the report the Coverage job already pays for.
 
 ## 5. Staleness and renames
 
