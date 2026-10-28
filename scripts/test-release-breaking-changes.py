@@ -520,6 +520,50 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_false_boolean_schema_property_gaining_required_child_decides_patch(self):
+        # `false` accepts nothing, so relaxing it to an object that requires
+        # a child only admits input (ORB-19333 recorded both booleans).
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["extra"] = False
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add extra guard [ORB-60] (#1)")
+
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["extra"] = {
+            "type": "object",
+            "properties": {"m": {"type": "string"}},
+            "required": ["m"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax extra guard [ORB-61] (#2)")
+
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_false_additional_properties_gaining_required_child_decides_patch(self):
+        # As above: no request with extra properties was valid under
+        # `false`, so requiring a child of the relaxed object is additive.
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["additionalProperties"] = False
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Forbid extra properties [ORB-62] (#1)")
+
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["additionalProperties"] = {
+            "type": "object",
+            "properties": {"x": {"type": "string"}},
+            "required": ["x"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Relax extra properties [ORB-63] (#2)")
+
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
     def test_tag_forces_minor_and_breaking_notes_draft_bullets(self):
         self.repo.write("docs/ship.md", "ship\n")
         self.repo.commit("feat: Retire ship-sweep [ORB-30] (#1)")
