@@ -56,7 +56,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
             "/tasks/settle-merged",
             post(tasks::settle_merged_tasks_action),
         )
-        .route("/tasks/create", post(task_create::create_proposal))
+        .route("/tasks/create", post(tasks::create::create_proposal))
         .route("/tasks/all", get(workspaces::list_all_tasks))
         .route("/job-runs/all", get(workspaces::list_all_job_runs))
         .route("/workspaces", get(workspaces::list_workspaces))
@@ -98,8 +98,11 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         .route("/tasks/{id}/archive", post(tasks::archive_task_action))
         .route("/decisions", get(decisions::list_decisions))
         .route("/decisions/{id}/answer", post(decisions::answer_decision))
-        .route("/tasks/{id}/pilot", post(task_pilot::pilot_task_action))
-        .route("/tasks/{id}/triage", post(task_triage::triage_task_action))
+        .route("/tasks/{id}/pilot", post(tasks::pilot::pilot_task_action))
+        .route(
+            "/tasks/{id}/triage",
+            post(tasks::triage::triage_task_action),
+        )
         .route("/tasks/{id}/requeue", post(tasks::requeue_task_action))
         .route(
             "/tasks/{id}/settle-merged",
@@ -121,7 +124,8 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         // would start it; GET answers whether it would start now.
         .route(
             "/tasks/{id}/auto-fix",
-            get(task_auto_fix::task_auto_fix_readiness).post(task_auto_fix::start_task_auto_fix),
+            get(tasks::auto_fix::task_auto_fix_readiness)
+                .post(tasks::auto_fix::start_task_auto_fix),
         )
         .route(
             "/frictions",

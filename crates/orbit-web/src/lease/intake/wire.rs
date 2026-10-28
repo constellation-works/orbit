@@ -1,53 +1,13 @@
-//! The lease intake socket (`docs/design/path-leases/2_design.md` §7.2).
-//!
-//! The lease listener runs as its own OS user and cannot open the operator's
-//! Orbit store, so it hands authenticated lease operations to Orbit Web over
-//! a Unix socket. Orbit Web serves the socket only when the operator's global
-//! `lease.intake.peer_user` names that user, and accepts a connection only
-//! when the kernel reports that user as its peer. Every agent runs as the
-//! operator, so the operator's own user is refused like any other.
-//!
-//! The listener user is trusted for identity: it sends the principal, class,
-//! token id, token scope and client address it authenticated, and Orbit
-//! grants within the stricter of that scope and the workspace's class policy.
-//!
-//! Wire format: every frame is a 4-byte big-endian body length followed by
-//! that many bytes of JSON. A connection opens with a [`LeaseIntakeHello`]
-//! each way; either side refuses a protocol version other than its own,
-//! naming both. Then each [`LeaseIntakeRequest`] gets one
-//! [`LeaseIntakeResponse`], except `events`, which streams: it gets one
-//! response per notice page, about one a second while no notices arrive,
-//! until either side closes the connection or an error response ends it.
-//! The socket accepts the lease operations and nothing else.
-
-mod client;
-mod server;
-mod socket;
+//! Lease intake request and response wire types.
 
 use orbit_auth::scope::{LeaseTokenScope, LeaseTokenVerb};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-pub use client::LeaseIntakeClient;
-pub(crate) use server::IntakeLimits;
-pub(crate) use socket::LeaseIntakeSocket;
-
-/// The intake protocol version. A listener and an Orbit Web of different
-/// versions refuse each other, since the listener's root-owned binary is
-/// updated separately from the operator's. Any change to the frames or
-/// operations changes it. Version 2 added `notices` and `events`.
-pub const LEASE_INTAKE_PROTOCOL_VERSION: u32 = 2;
-
-/// The socket's path under the operator's Orbit home.
-pub const LEASE_INTAKE_SOCKET_PATH: &str = "run/lease-intake.sock";
-
-/// Largest frame body either side accepts.
-pub const LEASE_INTAKE_MAX_FRAME_BYTES: u32 = 64 * 1024;
-
 /// The first frame each side sends.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaseIntakeHello {
-    /// The sender's [`LEASE_INTAKE_PROTOCOL_VERSION`].
+    /// The sender's [`super::LEASE_INTAKE_PROTOCOL_VERSION`].
     pub protocol_version: u32,
     /// Set by the server when it refuses the connection.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -65,7 +25,7 @@ pub struct LeaseIntakeError {
 }
 
 impl LeaseIntakeError {
-    fn new(code: &str, message: impl Into<String>) -> Self {
+    pub(super) fn new(code: &str, message: impl Into<String>) -> Self {
         Self {
             code: code.to_string(),
             message: message.into(),
@@ -165,17 +125,4 @@ pub enum LeaseIntakeResponse {
     },
     /// The operation was refused or failed.
     Error(LeaseIntakeError),
-}
-
-/// The refusal both sides give for a protocol version other than their own.
-fn version_mismatch_message(
-    local: &str,
-    local_version: u32,
-    remote: &str,
-    remote_version: u32,
-) -> String {
-    format!(
-        "lease intake protocol mismatch: {local} speaks version {local_version} and {remote} \
-         speaks version {remote_version}; install the same Orbit release for both"
-    )
 }

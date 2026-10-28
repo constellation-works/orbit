@@ -26,9 +26,9 @@ mod health;
 mod heap;
 mod host_tunnels;
 #[cfg(unix)]
-pub mod lease_intake;
+mod lease;
 #[cfg(unix)]
-pub mod lease_listener;
+pub use lease::{intake as lease_intake, listener as lease_listener};
 mod log_format;
 mod parse;
 mod projections;

@@ -7,8 +7,8 @@ use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
 use orbit_core::application::job::TaskPilotSubmitError;
 use serde_json::json;
 
-use super::routines::{authorization_denied, authorized_caller};
-use super::{bad_request, map_runtime_error, server_error, validate_id};
+use crate::api::routines::{authorization_denied, authorized_caller};
+use crate::api::{bad_request, map_runtime_error, server_error, validate_id};
 use crate::state::{DashboardState, Ws};
 
 /// Submit `task_pilot_pipeline` in explicit mode for this one task, through the
@@ -19,7 +19,7 @@ use crate::state::{DashboardState, Ws};
 /// the pipeline's explicit mode would refuse (outside `proposed`/`backlog`,
 /// admitted, already held by a pilot run) or a replica checkout is a `409`
 /// whose `code` names the reason; nothing is submitted.
-pub(super) async fn pilot_task_action(
+pub(in crate::api) async fn pilot_task_action(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,

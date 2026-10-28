@@ -7,8 +7,8 @@ use orbit_common::governance::authorization::DASHBOARD_JOB_RUN;
 use orbit_core::application::job::EscalationTriageSubmitError;
 use serde_json::json;
 
-use super::routines::{authorization_denied, authorized_caller};
-use super::{bad_request, map_runtime_error, server_error, validate_id};
+use crate::api::routines::{authorization_denied, authorized_caller};
+use crate::api::{bad_request, map_runtime_error, server_error, validate_id};
 use crate::state::{DashboardState, Ws};
 
 /// Submit `escalation_triage_pipeline` in explicit mode for this one task,
@@ -24,7 +24,7 @@ use crate::state::{DashboardState, Ws};
 /// a live triage run, or a block with no escalated or overdue recovery
 /// decision) or a replica checkout is a `409` whose `code` names the
 /// reason; nothing is submitted.
-pub(super) async fn triage_task_action(
+pub(in crate::api) async fn triage_task_action(
     State(state): State<DashboardState>,
     Ws(runtime): Ws,
     Path(id): Path<String>,

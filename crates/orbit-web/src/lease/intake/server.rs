@@ -20,11 +20,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Semaphore, mpsc};
 
+use super::protocol::version_mismatch_message;
 use super::socket::LeaseIntakeSocket;
 use super::{
     LEASE_INTAKE_MAX_FRAME_BYTES, LEASE_INTAKE_PROTOCOL_VERSION, LeaseIntakeAuthority,
     LeaseIntakeError, LeaseIntakeHello, LeaseIntakeOperation, LeaseIntakeRequest,
-    LeaseIntakeResponse, version_mismatch_message,
+    LeaseIntakeResponse,
 };
 use crate::api::lease_notices::follow_notice_pages;
 use crate::state::DashboardState;
