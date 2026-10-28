@@ -494,7 +494,11 @@ def deny_unknown_types(text):
             index += 1
 
         attribute_text = "".join(outside_strings)
-        serde_attribute = re.compile(r"(?m)^[ \t]*#\s*\[\s*serde\s*\(")
+        # Match a serde attribute anywhere outside string literals: masking
+        # above already hides quoted examples, so no line-start anchor is
+        # needed, and anchoring would miss `#[serde(...)]` that shares its
+        # line with another attribute.
+        serde_attribute = re.compile(r"#\s*\[\s*serde\s*\(")
         for match in serde_attribute.finditer(attribute_text):
             arguments, argument, depth = [], [], 1
             index = match.end()
