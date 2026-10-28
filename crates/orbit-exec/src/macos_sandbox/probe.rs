@@ -73,7 +73,22 @@ pub fn seatbelt_deferral_notice(test: &str, detail: &str) -> String {
 /// output. This diagnostic does not change production sandbox behavior.
 pub fn probe_sandbox_exec_apply() -> &'static SandboxExecApplyProbe {
     static PROBE: OnceLock<SandboxExecApplyProbe> = OnceLock::new();
-    PROBE.get_or_init(probe_now)
+    PROBE.get_or_init(|| forced_seatbelt_refusal().unwrap_or_else(probe_platform))
+}
+
+/// Test seam reproducing a nested-Seatbelt lane on any host: with
+/// `ORBIT_TEST_FORCE_SEATBELT_REFUSAL=1` the probe reports the apply refused,
+/// so sandbox-gated tests print their sanctioned deferral notice and skip
+/// exactly as they do inside a macOS agent sandbox. Nothing sets this
+/// outside the regression tests that need a refusal without macOS.
+fn forced_seatbelt_refusal() -> Option<SandboxExecApplyProbe> {
+    if std::env::var("ORBIT_TEST_FORCE_SEATBELT_REFUSAL").as_deref() == Ok("1") {
+        Some(SandboxExecApplyProbe::ApplyRefused(
+            "sandbox_apply refused by ORBIT_TEST_FORCE_SEATBELT_REFUSAL".to_string(),
+        ))
+    } else {
+        None
+    }
 }
 
 /// Shared guard for tests that actually launch a Seatbelt-confined backend.
@@ -117,7 +132,7 @@ pub(super) fn classify_apply_result(
 }
 
 #[cfg(target_os = "macos")]
-fn probe_now() -> SandboxExecApplyProbe {
+fn probe_platform() -> SandboxExecApplyProbe {
     use orbit_common::process::run_bounded_capped;
     use std::process::Command;
     use std::time::Duration;
@@ -140,6 +155,6 @@ fn probe_now() -> SandboxExecApplyProbe {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn probe_now() -> SandboxExecApplyProbe {
+fn probe_platform() -> SandboxExecApplyProbe {
     SandboxExecApplyProbe::NotMacos
 }
