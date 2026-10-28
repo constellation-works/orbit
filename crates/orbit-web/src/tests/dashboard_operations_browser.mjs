@@ -454,6 +454,54 @@ try {
     }
   }
 
+  // An opened Details body is a bounded inset panel under its row: collapsed
+  // rows keep their height, the panel is bordered on a contrasting background,
+  // sits inside its row and leaves a gap before the row's end, so the next row starts clear of it.
+  for (const viewport of viewports.filter(({ name }) => name === '1440' || name === '375x812')) {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await page.click('.tab[data-tab="operations"]');
+    for (const tab of ['routines', 'auto-tasks']) {
+      await page.click(`#operations-subtabs .subtab[data-subtab="${tab}"]`);
+      await page.waitForTimeout(200);
+      const rows = page.locator(`#${tab}-body .operation-row:has(.operation-details)`);
+      if (await rows.count() < 2) throw new Error(`${tab} needs two rows with Details to check panel separation`);
+      const measure = () => rows.first().evaluate((row) => {
+        const details = row.querySelector('.operation-details');
+        const body = details.querySelector('.operation-details-body');
+        const style = body ? getComputedStyle(body) : null;
+        const box = body?.getBoundingClientRect();
+        const rowBox = row.getBoundingClientRect();
+        return {
+          rowHeight: rowBox.height,
+          open: details.open,
+          visible: Boolean(box && box.height > 0),
+          border: style && parseFloat(style.borderTopWidth),
+          background: style?.backgroundColor,
+          rowBackground: getComputedStyle(row.closest('.operation-group')).backgroundColor,
+          radius: style && parseFloat(style.borderTopLeftRadius),
+          padding: style && parseFloat(style.paddingLeft),
+          inset: box ? box.left - rowBox.left : null,
+          insideRow: box ? box.left >= rowBox.left && box.right <= rowBox.right + 0.5 && box.bottom <= rowBox.bottom : false,
+          gapToRowEnd: box ? rowBox.bottom - box.bottom : null,
+        };
+      });
+      await rows.first().evaluate((row) => { row.querySelector('.operation-details').open = false; });
+      const collapsed = await measure();
+      await rows.first().locator('.operation-details > summary').click();
+      const opened = await measure();
+      if (!opened.open || !opened.visible) throw new Error(`${tab} Details did not open at ${viewport.name}`);
+      if (opened.border < 1 || opened.radius < 4 || opened.padding < 8 || opened.inset < 8) throw new Error(`${tab} Details body is not a bordered inset panel at ${viewport.name}: ${JSON.stringify(opened)}`);
+      if (opened.background === opened.rowBackground) throw new Error(`${tab} Details body has no contrasting background at ${viewport.name}: ${JSON.stringify(opened)}`);
+      if (!opened.insideRow || (opened.gapToRowEnd ?? 0) < 8) throw new Error(`${tab} Details body is not separated from the next row at ${viewport.name}: ${JSON.stringify(opened)}`);
+      await assertNoOverflow(`${viewport.name} / ${tab} open Details`);
+      await rows.first().scrollIntoViewIfNeeded();
+      await page.screenshot({ path: path.join(evidence, `details-${tab}-open-dark-${viewport.width}.png`), fullPage: true });
+      await rows.first().locator('.operation-details > summary').click();
+      const closed = await measure();
+      if (Math.abs(closed.rowHeight - collapsed.rowHeight) > 0.5) throw new Error(`${tab} collapsed row height changed after closing Details at ${viewport.name}: ${collapsed.rowHeight} -> ${closed.rowHeight}`);
+    }
+  }
+
   const menus = await page.evaluate(() => ({
     work: [...document.querySelector('.rail-group').querySelectorAll('.tab')].map(button => button.dataset.tab),
     automation: [...document.querySelectorAll('#operations-subtabs .subtab')].map(button => button.dataset.subtab),

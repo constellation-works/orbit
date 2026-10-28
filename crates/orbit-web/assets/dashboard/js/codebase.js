@@ -926,11 +926,13 @@ function relatedRow(row) {
   const tasks = Array.isArray(row.tasks) ? row.tasks : [];
   if (tasks.length) {
     const evidence = el("details", { class: "codebase-related-evidence" }, [el("summary", { text: `Changed together in ${plural(tasks.length, "task")}` })]);
+    const list = el("div", { class: "codebase-related-evidence-body" });
     for (const task of tasks) {
       const link = el("a", { class: "codebase-task-link", text: task.title || task.task_id, title: task.commit || "" });
       bindTaskLink(link, task.task_id);
-      evidence.appendChild(link);
+      list.appendChild(link);
     }
+    evidence.appendChild(list);
     item.appendChild(evidence);
   }
   return item;

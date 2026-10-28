@@ -292,9 +292,12 @@ function operationFact(label, value, title) {
 function operationDetails(key, children) {
   const panel = detailsPanel(key, { class: "operation-details" });
   panel.appendChild(el("summary", { text: "Details" }));
+  // The summary stays in the row; only the opened body is the inset panel.
+  const body = el("div", { class: "operation-details-body" });
   for (const child of children) {
-    if (child) panel.appendChild(child);
+    if (child) body.appendChild(child);
   }
+  panel.appendChild(body);
   return panel;
 }
 
