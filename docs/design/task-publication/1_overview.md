@@ -1,7 +1,7 @@
 ---
 title: Task Publication — Overview
 owner: codex
-last_updated: 2026-10-06
+last_updated: 2026-10-28
 last_validated: 2026-10-28
 status: Accepted
 stage: shipped
@@ -19,11 +19,13 @@ related_artifacts: [ORB-11068, ORB-11072, ORB-11073, ORB-11074, ORB-11075, ORB-1
 # Task Publication — Overview
 
 Task publication is a shipped, explicit one-way durability surface: the machine
-that owns a workspace publishes validated task-bundle snapshots to a dedicated
-Git repository, while other machines may inspect those snapshots and the
-declared owner may deliberately restore them without creating a competing task
-authority. Orbit reports repository
-privacy as operator-managed; generic Git cannot verify provider visibility.
+that owns a workspace publishes validated task-bundle snapshots to that
+workspace's branch-scoped lineage in a Git repository, while other machines may
+inspect those snapshots and the declared owner may deliberately restore them
+without creating a competing task authority. A repository may carry several
+workspaces' lineages on distinct branches; dedicating it to publication is the
+recommended setup. Orbit reports repository privacy as operator-managed; generic
+Git cannot verify provider visibility.
 
 V1 deliberately stops short of the retired source-repository orphan-branch and
 multi-writer task-sync proposal. No task mutation, post-write hook, or default
@@ -57,10 +59,13 @@ separating task visibility and retention from the source-code repository.
 
 ### Publication repository
 
-An operator-provisioned, dedicated Git repository containing publication data
-for exactly one Orbit workspace in v1. Operators should make it private, but
-Orbit does not claim privacy unless a future provider integration proves it. It
-contains no source code and uses an ordinary configured branch.
+An operator-provisioned Git repository holding publication lineages, one per
+Orbit workspace. Each lineage is an ordinary configured branch with its own
+publication ID. Orbit reads, validates, and advances only the bound branch and
+never inspects other branches. Dedicating the repository to publication is the
+recommended setup, and operators should make it private, but Orbit does not
+claim privacy unless a future provider integration proves it. The publication
+commits Orbit writes contain no source code.
 
 ### Publication binding
 
@@ -81,8 +86,8 @@ authority.
 
 A validated tree containing one workspace manifest, task bundles, and the
 attached artifact bytes admitted by the configured publication policy. Each
-commit records the previous publication as its parent after the repository's
-first snapshot.
+commit records the previous publication as its parent after the lineage's first
+snapshot.
 
 ### Consumer
 
@@ -119,5 +124,6 @@ encrypted secret store.
 - [ORB-11075] — implemented labelled read-only publication inspection.
 - [ORB-11076] — implemented fail-closed same-authority publication restore.
 - [ORB-11077] — shipped the explicit CLI workflow, end-to-end contract, and operator runbook.
+- [ORB-18375] — allowed several workspace lineages to share one publication repository on distinct branches.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
