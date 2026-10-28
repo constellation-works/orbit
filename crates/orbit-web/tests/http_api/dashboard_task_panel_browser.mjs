@@ -1,4 +1,4 @@
-// Usage: node dashboard_task_panel_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/task-panel-browser [--save-refresh]
+// Usage: node dashboard_task_panel_browser.mjs /path/to/playwright/index.mjs .orbit/tmp/task-panel-browser [--save-refresh|--drain-actions]
 // Drives the shipped Tasks view with disposable API data: a row opens its
 // detail in the side pane beside a list that keeps its place, the pane's tabs,
 // width and keyboard, the full-page route and its way back, deep links, row
@@ -10,6 +10,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { checkTaskPresentation } from './dashboard_task_presentation_browser.mjs';
 import { checkTaskSaveRefresh } from './dashboard_task_save_refresh_browser.mjs';
+import { checkDrainActionReadiness } from './dashboard_drain_action_browser.mjs';
 import { dashboardFile } from '../../src/tests/dashboard_static.mjs';
 
 const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
@@ -19,7 +20,9 @@ fs.mkdirSync(evidence, { recursive: true });
 // Runs in the page before the app: a fixed task list and the reads it makes.
 const fixture = `
 globalThis.EventSource = class { close() {} };
-const statuses = ['proposed', 'proposed', 'review', 'in-progress', 'in-progress', ...Array(25).fill('backlog'), 'done'];
+const drainActions = new URLSearchParams(location.search).has('drain-actions');
+const statuses = drainActions ? [...Array(51).fill('backlog'), 'proposed']
+  : ['proposed', 'proposed', 'review', 'in-progress', 'in-progress', ...Array(25).fill('backlog'), 'done'];
 const tasks = statuses.map((status, index) => ({
   id: 'PANEL-' + (index + 1),
   title: 'Panel fixture task ' + (index + 1) + ': ' + ['Tighten the readiness card', 'Retire the legacy dock route', 'Measure drain admission latency'][index % 3],
@@ -92,6 +95,7 @@ globalThis.panelFixture = {
   ships: [], holdShipPost: false, releaseShipPost: null,
   deliveryClaim: false, readiness: [], lifecycle: [],
   holdTaskList: false, releaseTaskList: null,
+  drainActions: [], drainPhase: 'idle',
 };
 globalThis.fetch = async (input, options = {}) => {
   const url = new URL(input, location.href);
@@ -112,7 +116,26 @@ globalThis.fetch = async (input, options = {}) => {
   }
   if (api === '/api/tasks/locks') return json({ by_task: [], total_locked: 0, total_tasks: 0 });
   if (api === '/api/crews') return json({ default_crew: 'opus', crews: [{ name: 'opus' }, { name: 'sol' }] });
-  if (api === '/api/workflows/auto/readiness') return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: globalThis.panelFixture.readiness });
+  if (api === '/api/workflows/auto/readiness') {
+    if (!drainActions) return json({ controls_authorized: false, capacity: { drain_phase: 'idle' }, tasks: globalThis.panelFixture.readiness });
+    const readiness = tasks.map(task => ({ task_id: task.id, status: task.status, eligible: false,
+      reason: task.status === 'proposed' ? 'not_backlog' : 'capacity_saturated',
+      detail: 'Readiness after ' + (panelFixture.drainActions.at(-1) || 'initial load'),
+    }));
+    const requested = url.searchParams.get('task');
+    const bounded = readiness.filter(entry => entry.status === 'backlog').slice(0, 50);
+    const also = url.searchParams.get('also_task');
+    return json({ controls_authorized: true,
+      capacity: { drain_phase: panelFixture.drainPhase, drain_run_id: panelFixture.drainPhase === 'draining' ? 'jrun-fixture-drain' : null },
+      tasks: requested ? readiness.filter(entry => entry.task_id === requested) : bounded,
+      detail_tasks: also ? readiness.filter(entry => entry.task_id === also && !bounded.some(item => item.task_id === also)) : [],
+    });
+  }
+  if (drainActions && options.method === 'POST' && ['/api/workflows/auto', '/api/workflows/auto/stop'].includes(api)) {
+    panelFixture.drainActions.push(api.endsWith('/stop') ? 'Stop' : 'Start');
+    panelFixture.drainPhase = api.endsWith('/stop') ? 'idle' : 'draining';
+    return json({ run_id: 'jrun-fixture-drain', state: 'submitted', outcome: 'stopped' });
+  }
   if (api === '/api/distributed/claims') {
     const taskId = url.searchParams.get('task');
     const claims = globalThis.panelFixture.deliveryClaim && ['PANEL-1', 'PANEL-3'].includes(taskId) ? [{
@@ -1315,8 +1338,11 @@ async function checkTaskPanel() {
 }
 
 try {
-  await checkTaskSaveRefresh({ openPage, row, pane, waitShown, capture, results, evidence });
-  if (!process.argv.includes('--save-refresh')) await checkTaskPanel();
+  if (!process.argv.includes('--save-refresh')) await checkDrainActionReadiness({ openPage, row, pane, waitShown, capture, results, evidence });
+  if (!process.argv.includes('--drain-actions')) {
+    await checkTaskSaveRefresh({ openPage, row, pane, waitShown, capture, results, evidence });
+    if (!process.argv.includes('--save-refresh')) await checkTaskPanel();
+  }
   fs.writeFileSync(path.join(evidence, 'task-panel-result.json'), JSON.stringify({ passed: true, ...results }, null, 2));
   console.log('Dashboard task panel browser checks passed.');
 } finally {
