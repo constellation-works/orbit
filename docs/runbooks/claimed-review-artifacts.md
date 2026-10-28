@@ -284,8 +284,8 @@ cargo test --locked -p orbit-cli --test tool "$NATIVE" -- --exact --list
 cargo test --locked -p orbit-cli --test tool "$NATIVE" -- --exact --nocapture
 # Any Unix host: the broker's scope, refusals, lost answer and stopped broker,
 # for the review artifacts and for every other claimed-owner call.
-cargo test -p orbit-core --lib dispatch::tests::claimed_review
-cargo test -p orbit-core --lib dispatch::tests::claimed_owner
+cargo test -p orbit-core --lib dispatch::claimed::tests::review
+cargo test -p orbit-core --lib dispatch::claimed::tests::owner
 ```
 
 The outer exact fixture uses the bounded child-test runner, which verifies
