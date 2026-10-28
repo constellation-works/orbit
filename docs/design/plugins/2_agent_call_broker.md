@@ -166,7 +166,7 @@ The broker carries them only for the run bound to the claim, whose task is the c
 and takes the task, claim and owner from those records, never from the request. Each call is
 scoped to the claim. Search, task listing, task show and artifact get read the claimed
 workspace and may name any task in it ([ORB-19270]), except that a `review-*`
-artifact of another task is refused on the remote route under the narrower,
+artifact of another task is refused on both owner routes under the narrower,
 activity-dependent scopes below. The binding, not the request, supplies the
 owner's workspace, so the owner answers only from that workspace, and a task show or ordinary
 artifact get naming a task the owner does not hold there is refused as `claimed_owner_bridge_refused`
@@ -189,8 +189,10 @@ leaf's delivery route, and every delivery projection refuses pagination; artifac
 their own allowlists. A worker whose owner is on its own machine reaches the owner store in
 process, and its nested `orbit` applies the same request checks first, so it gets the same
 workspace reads and refusals, including the `review-*` and `delivery_run_refused` refusals
-below; only the bounded view is not selected for it. Its `review-*` writes still go to the
-run's broker, since only the run's records say which activity is the reviewer ([ORB-19289]).
+below; only the bounded view is not selected for it. Its `review-*` reads and writes go to the
+run's broker, since only the run's records identify the running reviewer and its admitted
+attempt. The broker applies the same reviewer, final-recovery and findings-read scopes for
+local and remote owners; the worker binding alone cannot authorize a review read.
 Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
 read scoped to the claimed workspace. The claimed task's own `regression_from` relation does not cross
 the broker either: the implementer returns the culprit in its output, and the owner records the
@@ -213,7 +215,7 @@ workspace, so a claimed worker can check for duplicate findings before filing. T
 supplies the destination; search refuses federated `workspaces` and `all_workspaces` scope,
 including their aliases, and both tools refuse internal (`_`-prefixed) fields. Task show and
 artifact get read any task in the claimed workspace ([ORB-19270]), except another
-task's `review-*` artifact (refused on the remote route under the activity-dependent
+task's `review-*` artifact (refused on both owner routes under the activity-dependent
 `review-*` scopes below); artifact put stays on the claimed task, and
 `orbit.task.update` remains denied.
 A finding the owner still refuses
@@ -264,15 +266,14 @@ findings (`findings_unverified`) on that candidate's held run and commit
 (`findings_candidate_mismatch`). A respelled name is `findings_read_refused`; a write of the
 artifact keeps the reviewer's scope.
 
-For a remote cross-task review-artifact read, the refusal marker follows the dispatch order.
-Final recovery goes through its recovery scope first, and any other activity's findings read
-goes through the findings scope; all remaining `review-*` calls go through the reviewer scope.
-An ordinary `agent_implement` read of `review-report.json` or `review-manifest.json` therefore
-fails the reviewer activity check with `claimed_review_bridge_refused`, before checking the
-requested task. An admitted reviewer or live final recovery reaches the claimed-task check
-after its attempt or recovery checks; the findings-read route checks the claimed task before
-leaf liveness and candidate binding. Those task checks refuse another task with
-`claimed_owner_bridge_refused`. None of these routes permits another task's review artifacts.
+On both owner routes, a review-artifact call naming another task is refused with
+`claimed_owner_bridge_refused` before the activity-dependent scopes. For the claimed task,
+final recovery goes through its recovery scope, and any other activity's findings read goes
+through the findings scope; all remaining `review-*` calls go through the reviewer scope.
+An ordinary `agent_implement` read of its own task's `review-report.json` or
+`review-manifest.json` therefore fails the reviewer activity check with
+`claimed_review_bridge_refused` on a local owner as on a remote owner. The running reviewer
+can read the four review contract artifacts listed above and the hold-named evidence.
 
 The claimed task's delivery view (`orbit.task.show` with `field: "delivery"`) is not forwarded:
 the owner holds no record of the follower's leaf run, so its answer could only be "job run not
@@ -293,7 +294,8 @@ changes nothing on the owner, and it applies even while the follower's ledger st
 reviewer running. No other coordination tool is forwarded. Inside a masked sandbox, one is
 refused as `claimed_owner_bridge_refused` before anything tries SSH. A worker whose owner is
 local, or that runs unsandboxed, keeps its existing route, except that a sandboxed worker's
-`review-*` put on a local owner goes to the broker, which serves a local owner for nothing else.
+`review-*` read or write on a local owner goes to the broker, which serves a local owner for
+nothing else.
 
 **Where the broker lives.** It runs in the `orbit job run-pipeline-worker` process that
 executes the agent step. `run_cli_backend`
