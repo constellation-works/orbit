@@ -2,7 +2,7 @@
 title: "Scope: conflict budget for footprint admission"
 owner: claude
 last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_validated: 2026-10-28
 status: Draft
 stage: designing
 next: "Settle the open questions (sum vs max, where weights live), then file phase 1"
@@ -18,8 +18,8 @@ tags: [conflict-budget, footprints, admission, locks, conflict-recovery]
 Status: proposed.
 Bearing: admission holds a context lock for every declared `context_files` selector and defers a
 candidate on any overlap with a held claim, reservation or wave member
-(`overlaps` in [`coordination/admission.rs`](../../../crates/orbit-store/src/repository/task/coordination/admission.rs),
-used by `selection.rs`, `owner_wave.rs` and the runtime lock index). Two settings already relax
+(`footprints_block` in [`coordination/admission.rs`](../../../crates/orbit-store/src/repository/task/coordination/admission.rs),
+via the `overlaps` closure in `selection.rs`, also consulted by `owner_wave.rs` and the runtime lock index). Two settings already relax
 that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
 (globs, default `["**/*.md"]`) takes no lock, and
 [`workflow.generated_paths`](../../CONFIG.md#generated-paths-are-regenerated-not-merged)

@@ -10,7 +10,7 @@ type: design
 summary: "Scope: weight crew pool draws by each crew's implementer score on the task's type within its complexity tier, either toward the crew that does that type best (absolute) or toward the type each crew does best relative to its own work (comparative)"
 tags: [crew-performance, crews, crew-pools, agent-scorecards, admission]
 last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_validated: 2026-10-28
 ---
 
 # Scope: performance-weighted crew selection
