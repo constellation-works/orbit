@@ -51,8 +51,8 @@ read serves the newest stored forecast instead of recomputing it.
   non-canonical query, it computes live as before, with `served_from:
   "live"`; a live canonical read still fills a free hourly slot.
 - **Calibration freshness.** A served snapshot's calibration is frozen at
-  store time, so it can be up to about an hour (at most two intervals)
-  behind tasks that finished since. A live read shows current calibration.
+  store time, so it can be up to two store intervals (120 minutes) behind
+  tasks that finished since. A live read shows current calibration.
 - **Refresh.** `refresh=1` computes live and returns that result. It stores
   a row only when the existing 60-minute check would accept one anyway,
   through the same transaction, so it never replaces or bypasses the newest
