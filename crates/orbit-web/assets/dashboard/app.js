@@ -420,23 +420,6 @@ function knowledgeTagWrap(nodes) {
     : [el("span", { class: "knowledge-tag dim", text: "-" })]);
 }
 
-function detailMetaRows(entries) {
-  const rows = entries
-    .filter(([, value]) => value != null && value !== "")
-    .map(([label, value]) => el("div", { class: "meta-row" }, [
-      el("span", { class: "k", text: label }),
-      el("span", { class: "v", text: String(value) }),
-    ]));
-  return el("div", { class: "meta-list" }, rows);
-}
-
-function detailGroup(title, content) {
-  return el("div", { class: "knowledge-side-group" }, [
-    el("h4", { class: "section-title", text: title }),
-    content || el("div", { class: "empty", text: "-" }),
-  ]);
-}
-
 function markdownPanel(body, fallbackClass) {
   const text = body || "";
   const rendered = renderMarkdown(text || "_No body._");
@@ -587,12 +570,6 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
   }
   if (count) count.textContent = friction.status || "open";
 
-  const controls = el("div", { class: "friction-controls" });
-  const controlGrid = el("div", { class: "friction-control-grid" });
-  controlGrid.appendChild(buildFrictionStatusControl(friction, detail));
-  controlGrid.appendChild(buildFrictionTagPicker(friction, detail));
-  controls.appendChild(controlGrid);
-
   const actions = el("div", { class: "actions" });
   const resolve = el("button", {
     class: "knowledge-btn primary",
@@ -604,44 +581,39 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
   resolve.addEventListener("click", () => resolveFriction(friction, resolve, detail));
   actions.appendChild(resolve);
 
+  // One card in the task detail's property-row style: each fact once, then
+  // the two triage controls. The head keeps only the title and status pill.
+  const factRow = (label, value) => el("div", { class: "property-row fact" }, [
+    el("span", { class: "label", text: label }),
+    value,
+  ]);
+  const textValue = (text, mono) => el("span", { class: mono ? "value mono" : "value", text });
+  const rows = [factRow("ID", textValue(friction.id, true))];
+  if (friction.model) rows.push(factRow("Model", textValue(friction.model)));
+  rows.push(factRow("Reported", textValue(fmtAbsTime(friction.created_at))));
+  if (friction.resolved_at) rows.push(factRow("Resolved", textValue(fmtAbsTime(friction.resolved_at))));
+  if (friction.during_task) {
+    const link = buildKnowledgeValueList([friction.during_task], { taskLinks: true });
+    link.classList.add("value");
+    rows.push(factRow("During task", link));
+  }
+  rows.push(buildFrictionStatusControl(friction, detail));
+  rows.push(buildFrictionTagPicker(friction, detail));
+
   const body = el("div", { class: "knowledge-detail-body" }, [
+    el("aside", { class: "knowledge-side" }, [
+      el("div", { class: "task-delivery-card friction-meta-card" }, rows),
+    ]),
     el("div", { class: "knowledge-body" }, [
       markdownPanel(friction.body || friction.title, "friction-detail-body"),
     ]),
-    el("aside", { class: "knowledge-side" }, [
-      detailGroup("Metadata", detailMetaRows([
-        ["id", friction.id],
-        ["status", friction.status || "open"],
-        ["model", friction.model],
-        ["reported", fmtAbsTime(friction.created_at)],
-        ["resolved", friction.resolved_at ? fmtAbsTime(friction.resolved_at) : "—"],
-      ])),
-      detailGroup("Triage", controls),
-      detailGroup("Tags", knowledgeTagWrap(frictionTagNodes(friction.tags))),
-      friction.during_task ? detailGroup("During task", buildKnowledgeValueList([friction.during_task], { taskLinks: true })) : null,
-    ].filter(Boolean)),
   ]);
 
   syncNodes(detail, [
     el("div", { class: "knowledge-detail-head" }, [
-      el("div", { class: "crumb" }, [
-        el("span", { class: "id", text: friction.id }),
-        el("span", { text: "·" }),
-        el("span", { text: "friction event" }),
-        el("span", { text: "·" }),
-        el("span", { text: friction.status || "open" }),
-      ]),
+      el("div", { class: "crumb" }, [el("span", { text: "friction event" })]),
       el("h2", { text: friction.title || friction.id }),
-      el("div", { class: "sub" }, [
-        knowledgeStatusPill(friction.status || "open"),
-        friction.model ? el("span", { text: `reported by ${friction.model}` }) : null,
-        el("span", { class: "dot", text: "·" }),
-        el("span", { text: fmtAbsTime(friction.created_at) }),
-        ...(friction.during_task ? [
-          el("span", { class: "dot", text: "·" }),
-          el("span", { text: `during ${friction.during_task}` }),
-        ] : []),
-      ]),
+      el("div", { class: "sub" }, [knowledgeStatusPill(friction.status || "open")]),
       actions,
     ]),
     body,
@@ -649,8 +621,6 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
 }
 
 function buildFrictionStatusControl(friction, detail) {
-  const wrap = el("label", { class: "friction-control" });
-  wrap.appendChild(el("span", { class: "friction-control-label", text: "status" }));
   const select = el("select", { class: "action status-update", title: `Status for ${friction.id}` });
   for (const status of FRICTION_STATUSES) {
     const option = el("option", { text: status });
@@ -661,14 +631,13 @@ function buildFrictionStatusControl(friction, detail) {
   select.addEventListener("change", () => {
     patchFriction(friction, { status: select.value }, select, detail);
   });
-  wrap.appendChild(select);
-  return wrap;
+  return el("label", { class: "property-row triage" }, [
+    el("span", { class: "label", text: "Status" }),
+    select,
+  ]);
 }
 
 function buildFrictionTagPicker(friction, detail) {
-  const wrap = el("div", { class: "friction-control friction-tag-picker" }, [
-    el("span", { class: "friction-control-label", text: "tags" }),
-  ]);
   const options = Array.isArray(lastFrictionPayload.tags) ? lastFrictionPayload.tags : [];
   const selected = new Set(Array.isArray(friction.tags) ? friction.tags : []);
   const grid = el("div", { class: "friction-tag-options" });
@@ -697,8 +666,10 @@ function buildFrictionTagPicker(friction, detail) {
     ]);
     grid.appendChild(label);
   }
-  wrap.appendChild(grid);
-  return wrap;
+  return el("div", { class: "property-row triage friction-tag-picker" }, [
+    el("span", { class: "label", text: "Tags" }),
+    grid,
+  ]);
 }
 
 async function patchFriction(friction, patch, control, detail) {
