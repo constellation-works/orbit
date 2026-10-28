@@ -122,6 +122,12 @@ By default, pull requests target the branch checked out when you run
 choose another, or `--ship-mode local` to merge in place instead of opening
 pull requests.
 
+If a distribution supplies a workspace preset, apply it with
+`orbit workspace init --preset <file>`. The TOML preset selects shipped
+routines and auto-tasks, enables definitions from an already enabled plugin,
+and sets workspace config. Orbit validates the whole file before writing
+anything. See [Workspace presets](../../reference/config/#workspace-presets).
+
 ### Prepare the sandbox
 
 Orbit runs each agent in an OS-level sandbox: `sandbox-exec` on macOS, which

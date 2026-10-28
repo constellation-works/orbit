@@ -29,7 +29,7 @@ leaves the existing export confirmation unchanged.
 | Command | Purpose |
 |---|---|
 | `orbit init` | Set up the global Orbit root, this machine's `[machine]` identity and task-ID prefix, and the default skills. `--machine-name <NAME>` and `--task-prefix <PREFIX>` choose a fresh identity. `--force` resets the global root to shipped defaults, including the machine identity, and creates a new machine ID. `--non-interactive` skips prompts and requires both identity flags on a fresh machine or forced reset; missing or invalid flags are refused before deleting the root. Ordinary re-init preserves the identity. `--skip-host-prerequisites` (or `ORBIT_SKIP_HOST_PREREQUISITES`) leaves the Linux Bubblewrap and AppArmor setup to the host's administrator. |
-| `orbit workspace init` | Register the current repository as a workspace. `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica` (`replica` requires `--owner <machine_id>`), `--task-id-start <N>`, `--mcp`, `--inject-agent-rules`, `--preset <file>` (see [workspace presets](config.md#workspace-presets)); `--force` reconciles an already registered workspace. |
+| `orbit workspace init` | Register the current repository as a workspace. `--name`, `--base-branch`, `--ship-mode pr\|local`, `--role owner\|replica` (`replica` requires `--owner <machine_id>`), `--task-id-start <N>`, `--mcp`, `--inject-agent-rules`, `--preset <file>` (see [workspace presets](../config/#workspace-presets)); `--force` reconciles an already registered workspace. |
 | `orbit workspace list` \| `show` \| `sync` \| `role` | List and show registered workspaces, converge managed artifacts (`sync`), and validate this checkout's role (`role`). |
 | `orbit workspace ship-mode [pr\|local]` | Print the workspace's ship mode, or rebind it in the workspace registry without re-running init. Config files and managed defaults are left untouched. |
 | `orbit workspace source-remote show` \| `rebind` | Show the workspace's source-repository identity, or replace the source remote after a repository transfer (`rebind --remote <URL>`; try `--dry-run` first). Use a credential-free Git origin and a credential helper: fresh registration refuses origins containing embedded credentials. |
@@ -82,6 +82,8 @@ mirror, pass `--workspace` explicitly. `--host <host>` names the host for
 | `orbit task review-reset <id>` | Reset one review lineage's budget with an audited reason. `--lineage` and `--reason` are required; `--adopt-configured-budget` takes the current configured budget instead of the captured one. |
 | `orbit task requeue <id> --reason <TEXT>` | Return a blocked task to the queue onto its published candidate, with an audited reason. `--discard-candidate` reruns it from scratch instead. |
 | `orbit task retry-handoff <handoff_id>` | Retry a stopped authorized handoff through normal owner landing. Every expectation is required, so a stale view is refused: `--owner-workspace`, `--candidate`, `--base`, `--attempt`, `--state stopped\|dispatched`, `--reason`, and a `--request` key that replays a retry after a lost reply. |
+| `orbit task recover-claim <claim_id>` | Operator only, on the owner: recover a live follower claim to `blocked` or `backlog`, fencing its attempt and releasing its reservation. `--phase`, `--status`, `--reason` and `--request` are required; reuse the request key after a lost reply. |
+| `orbit task revoke-handoff <handoff_id>` | Operator only, on the owner: revoke an accepted handoff's completion authority while its task stays in `review`. `--candidate`, `--base`, `--reason` and `--request` are required; an unresolved external merge intent refuses revocation. |
 | `orbit task settle-merged [id]` | Settle a `blocked`, `in-progress` or `review` task to `done` when its Orbit delivery pull request was merged outside Orbit and no run or claim of its own is live. It records a landing note naming the pull request and merge commit and starts no work. Without an ID, it matches every candidate task against recently merged pull requests; each `orbit run auto` pass does the same. |
 | `orbit task settle-merged <id> --recovered-claim <claim-id> --pull-request <number> --published-head <commit>` | Settle an owner-recovered follower claim's merged delivery when its handoff was refused and its PR was rescued by hand. Supply the full original published head. The owner verifies the admission's landing branch and delivery identity, records the operator-reported original head, merged head and merge commit as `operator-rescued`, and moves the task to `done` without force. The recovered claim stays revoked. |
 | `orbit task locks list` \| `contention` \| `reserve` \| `release` | Inspect and manage the file locks that gate parallel dispatch. |
@@ -97,6 +99,11 @@ in schedule order in text and JSON, including proposed tasks. Approval and
 dispatch remain separate; the schedule is an earliest start, not an exact-time
 promise. `orbit task show <id>` shows Scheduled and Actual start separately;
 `--fields not_before,started_at --json` selects those values.
+
+An operator can start named tasks early with
+`orbit run ship <id> --ignore-schedule`. It records a `schedule_overridden`
+history event for that scheduled time; changing `not_before` reinstates the
+hold for the new time. The override is available only on the CLI.
 
 The dashboard task detail has the same Scheduled value and actual first start.
 Its editor accepts RFC 3339 with an offset and clears on an empty save. A
