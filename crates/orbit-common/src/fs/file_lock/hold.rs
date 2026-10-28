@@ -281,7 +281,10 @@ pub fn hold_step<T>(name: &'static str, op: impl FnOnce() -> T) -> T {
 
 /// Record a wait for `lock_path` as a step of the reporting holds this
 /// thread is inside. Waits too short to matter stay in the enclosing step.
-/// The wait precedes the lock's own hold, so only enclosing holds count it.
+/// The caller opens the lock's own hold before recording the wait, so that
+/// hold's step list gets the wait too. Its breakdown ignores the wait:
+/// `breakdown_since` keeps only steps that started at or after the hold was
+/// acquired, and the wait started before that.
 pub(super) fn record_lock_wait(lock_path: &Path, started: Instant) {
     let waited = started.elapsed();
     if waited < MIN_RECORDED_LOCK_WAIT {
