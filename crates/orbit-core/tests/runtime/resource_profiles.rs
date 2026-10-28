@@ -1,10 +1,11 @@
 //! Resource profiles through the public runtime: seeded `run_resource_minutes`
 //! and `job_runs` rows become per-key profiles, a lookup walks the fallback
-//! chain, and profiles stay cached until a delivery finishes.
+//! chain, and profiles stay cached until a delivery finishes or a template's
+//! `no-diff-expected` tag changes.
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::runtime::host_resource::profile::{
     BaseClass, ProfileLookup, ProfileSource, ResourceProfile,
 };
@@ -747,6 +748,51 @@ fn profiles_stay_cached_until_a_delivery_finishes() {
     assert_eq!(fixture.profile("change", Some("hard")).delivery_count, 2);
 }
 
+/// A template's `no-diff-expected` tag edit reclassifies it on the next
+/// profile read, with no delivery finishing in between: a cache hit must not
+/// answer with the class the template had before the edit.
+fn no_diff_tag_edit_reclassifies_a_template_on_the_next_read() {
+    let fixture = Fixture::new("");
+    let workspace = fixture.workspace.clone();
+    let template = fixture.template_task("docs-audit", false);
+    fixture.delivery(
+        &workspace,
+        &template,
+        "auto-task:docs-audit",
+        None,
+        vec![RunSeed::flat(3, 1.0, GIB)],
+    );
+    let class = "auto-task:docs-audit";
+    let tags_with = |tags: &[&str]| TaskUpdateParams {
+        tags: Some(tags.iter().map(|tag| (*tag).to_string()).collect()),
+        ..Default::default()
+    };
+
+    let cached = fixture.runtime.resource_profiles().unwrap();
+    assert_eq!(fixture.profile(class, None).base_class, BaseClass::Change);
+    assert!(
+        Arc::ptr_eq(&cached, &fixture.runtime.resource_profiles().unwrap()),
+        "an untouched template keeps the cached profiles"
+    );
+
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &template,
+            tags_with(&["auto-task:docs-audit", "no-diff-expected"]),
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(fixture.profile(class, None).base_class, BaseClass::NoDiff);
+
+    fixture
+        .runtime
+        .update_task_with_identity(&template, tags_with(&["auto-task:docs-audit"]), None, None)
+        .unwrap();
+    assert_eq!(fixture.profile(class, None).base_class, BaseClass::Change);
+}
+
 /// No-diff profiles, and templates whose tasks are no-diff, flag deliveries
 /// over one core for two minutes in a row; a template that builds by design
 /// and change work are never flagged.
@@ -939,6 +985,7 @@ crate::scenario_table!(
     local_base_class_rollups_include_template_only_history,
     a_class_with_no_profile_borrows_the_heaviest_on_the_host,
     profiles_stay_cached_until_a_delivery_finishes,
+    no_diff_tag_edit_reclassifies_a_template_on_the_next_read,
     no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design,
     profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes,
     profiles_keep_their_newest_deliveries_after_a_month_without_any,
