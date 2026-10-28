@@ -28,10 +28,11 @@
 //! sandbox nor a read-only inner mode is enforced.
 //! A refusal is an ordinary tool error; the calling worker continues.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_common::fs::path::orbit_scratch_dir;
 use orbit_common::text::floor_char_boundary;
 use orbit_store::contracts::JobRunQuery;
 use orbit_types::telemetry::AuditEventStatus;
@@ -156,8 +157,9 @@ impl OrbitRuntime {
     /// Admit and submit one explorer for a managed run's caller.
     ///
     /// Every check runs before anything durable exists, and each refusal
-    /// names why. The budget reads and the insert share one lock, so two
-    /// concurrent calls from the same run cannot both take its last slot.
+    /// names why. The budget reads and the insert share one lock in the
+    /// calling run's own worktree scratch, so two concurrent calls from the
+    /// same run cannot both take its last slot.
     pub(super) fn submit_explore_run(
         &self,
         caller: ManagedRunCaller,
@@ -304,7 +306,13 @@ impl OrbitRuntime {
             input[EXPLORE_IDEMPOTENCY_KEY] = json!(key);
         }
 
-        let lock_target = self.paths().state_dir.join("agent_explore_admission");
+        // The admission lock lives in the calling run's own worktree scratch
+        // (`.orbit/tmp`), not the primary state directory: a read-only primary
+        // mount still leaves the caller's writable worktree usable, and every
+        // `cwd` in that worktree resolves the same root, so the same parent
+        // keeps one lock. The budget reads and the insert share it, so two
+        // concurrent calls from the same run cannot both take its last slot.
+        let lock_target = explore_admission_lock_target(&root);
         let admitted = with_exclusive_file_lock(&lock_target, "explorer admission", || {
             let prior = self.explore_runs_of(&parent)?;
             if let Some(existing) = idempotency_key.and_then(|key| {
@@ -649,6 +657,16 @@ impl OrbitRuntime {
             answer_truncated,
         }
     }
+}
+
+/// The per-parent explorer admission lock, in the calling run's own worktree
+/// scratch. `worktree_root` is the verified linked worktree from
+/// [`OrbitRuntime::explore_checkout`], so every `cwd` in the same parent
+/// resolves the same target while different parents resolve different ones.
+/// The `.orbit/tmp` scratch stays inside the caller's existing write grants
+/// and survives a read-only primary state directory.
+fn explore_admission_lock_target(worktree_root: &Path) -> PathBuf {
+    orbit_scratch_dir(worktree_root).join("agent_explore_admission")
 }
 
 /// The task the delegating run delivers, when it names exactly one.
