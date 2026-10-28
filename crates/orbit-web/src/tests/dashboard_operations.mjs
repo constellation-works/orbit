@@ -1963,6 +1963,8 @@ const forecastTextIncludesAdmission = () => (forecastCard()?.textContent || '').
 // Hold only the optional forecast: readiness, fleet and action readback all
 // succeed. Neither the dashboard refresh promise nor its control may wait for
 // the forecast, and repeated readbacks must reuse the same in-flight request.
+// The summary is read only where the card is shown: the Drain page (ORB-19062).
+harnessTab = 'drain';
 backlogForecastMode = 'ready';
 delayBacklogForecast = true;
 const searchesBeforeHeld = backlogForecastSearches.length;
@@ -2044,6 +2046,7 @@ for (const staleMode of ['ready', 'error']) {
 }
 backlogForecastMode = '';
 drainCapacityOverride = {};
+harnessTab = 'operations';
 await fetchAndRenderOperations();
 // A window started while another runs waits for it. The card lists it under
 // the live window with its run, ceiling, completion, crews and window, flags a
