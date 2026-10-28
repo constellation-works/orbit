@@ -5,7 +5,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::application::experiment::{
     ExperimentActor, ExperimentChange, ExperimentDefinitionInput,
 };
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{TaskComplexity, TaskStatus, TaskType};
 use serde_json::json;
 
@@ -36,15 +36,6 @@ fn disabled_and_stale_admissions_enroll_once_experiments_run() {
     let disabled_task = stale_runtime
         .add_task(TaskAddParams {
             title: "Task admitted while experiments are disabled".into(),
-            complexity: TaskComplexity::Medium,
-            task_type: Some(TaskType::Chore),
-            status: Some(TaskStatus::Backlog),
-            ..TaskAddParams::default()
-        })
-        .unwrap();
-    let legacy_task = stale_runtime
-        .add_task(TaskAddParams {
-            title: "Task with a legacy admission-only row".into(),
             complexity: TaskComplexity::Medium,
             task_type: Some(TaskType::Chore),
             status: Some(TaskStatus::Backlog),
@@ -84,34 +75,142 @@ fn disabled_and_stale_admissions_enroll_once_experiments_run() {
             actor.clone(),
         )
         .unwrap();
-    // Reproduce a historical admission-only row while enabled but before any
-    // experiment was running. Its capture is empty, so no assignment is sticky.
-    let legacy_capture = submit_experiment_capture(&enabled_runtime, &job_path, &legacy_task.id);
-    assert!(legacy_capture["assignments"].as_array().unwrap().is_empty());
     enabled_runtime
         .change_experiment(&experiment.id, ExperimentChange::Start, actor)
         .unwrap();
 
-    // Both submissions use the runtime created before enabling. It still has
-    // the old disabled settings snapshot, yet the stored running experiment
-    // enrolls eligible tasks and recovers the legacy admission-only row.
+    // The submission uses the runtime created before enabling. It still has
+    // the old disabled settings snapshot, yet the disabled admission wrote
+    // nothing, so this is the task's first admission and it enrolls.
     let recovered_disabled =
         submit_experiment_capture(&stale_runtime, &job_path, &disabled_task.id);
     assert_eq!(
         recovered_disabled["assignments"].as_array().unwrap().len(),
         1
     );
-    let recovered_legacy = submit_experiment_capture(&stale_runtime, &job_path, &legacy_task.id);
-    assert_eq!(recovered_legacy["assignments"].as_array().unwrap().len(), 1);
     // The assigned arm is drawn from the experiment's random salt, so pin the
     // persisted arm to the capture's arm rather than to a specific arm.
-    let captured_arm = recovered_legacy["assignments"][0]["arm"].as_str();
+    let captured_arm = recovered_disabled["assignments"][0]["arm"].as_str();
     assert!(matches!(captured_arm, Some("control" | "treatment")));
     assert_eq!(
-        stale_runtime.task_experiments(&legacy_task.id).unwrap()[0]
+        stale_runtime.task_experiments(&disabled_task.id).unwrap()[0]
             .arm
             .as_deref(),
         captured_arm
+    );
+}
+
+/// [ORB-19423] An enabled first admission that misses every running
+/// population is final: tagging the task into a population and retrying must
+/// not enroll it, while assignments and surface-conflict exclusions stay put.
+#[test]
+fn enabled_population_miss_stays_final_across_retries() {
+    if !super::dispatch_admission::isolated(
+        "experiment_lifecycle::enabled_population_miss_stays_final_across_retries",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let job_path = capture_job(root.path());
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "experiment-lifecycle-test".into(),
+        reason: None,
+    };
+    let start = |name: &str, tag: &str, overlay: serde_json::Value| {
+        let experiment = runtime
+            .create_experiment(
+                name,
+                ExperimentDefinitionInput {
+                    arms: Some(json!([
+                        { "name": "control", "control": true, "overlay": overlay },
+                        { "name": "treatment", "overlay": overlay }
+                    ])),
+                    population: Some(json!({ "tags_include": [tag] })),
+                    primary_metric: Some("implement_tokens".into()),
+                    ..ExperimentDefinitionInput::default()
+                },
+                actor.clone(),
+            )
+            .unwrap();
+        runtime
+            .change_experiment(&experiment.id, ExperimentChange::Start, actor.clone())
+            .unwrap();
+        experiment.id
+    };
+    let tagged = start("tagged", "eligible", json!({}));
+    let crew_overlay = json!({ "crew": { "pool": [{ "crew": "sol", "weight": 1 }] } });
+    let first_crew = start("crew-first", "contested", crew_overlay.clone());
+    let second_crew = start("crew-second", "contested", crew_overlay);
+    let add = |title: &str, tags: &[&str]| {
+        runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                complexity: TaskComplexity::Medium,
+                task_type: Some(TaskType::Chore),
+                status: Some(TaskStatus::Backlog),
+                tags: tags.iter().map(|tag| tag.to_string()).collect(),
+                ..TaskAddParams::default()
+            })
+            .unwrap()
+            .id
+    };
+
+    // A task carrying the tag enrolls, so the filter is the only difference.
+    let matched = add("Task in the tagged population", &["eligible"]);
+    let matched_capture = submit_experiment_capture(&runtime, &job_path, &matched);
+    assert_eq!(matched_capture["assignments"][0]["experiment"], tagged);
+
+    let missed = add("Task outside every population", &[]);
+    let missed_capture = submit_experiment_capture(&runtime, &job_path, &missed);
+    assert!(missed_capture["assignments"].as_array().unwrap().is_empty());
+    runtime
+        .update_task_with_identity(
+            &missed,
+            TaskUpdateParams {
+                tags: Some(vec!["eligible".into()]),
+                ..TaskUpdateParams::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let retried = submit_experiment_capture(&runtime, &job_path, &missed);
+    assert!(
+        retried["assignments"].as_array().unwrap().is_empty(),
+        "a retry after the edit enrolled the task: {retried}"
+    );
+    assert!(runtime.task_experiments(&missed).unwrap().is_empty());
+
+    let contested = add("Task in two crew experiments", &["contested"]);
+    submit_experiment_capture(&runtime, &job_path, &contested);
+    let rows = runtime.task_experiments(&contested).unwrap();
+    assert_eq!(rows.len(), 2, "{rows:?}");
+    assert_eq!(rows[0].experiment, first_crew);
+    assert!(rows[0].arm.is_some(), "{rows:?}");
+    assert_eq!(rows[1].experiment, second_crew);
+    assert_eq!(
+        rows[1].exclusion_reason.as_deref(),
+        Some("surface_conflict")
+    );
+    submit_experiment_capture(&runtime, &job_path, &contested);
+    let retried_rows = runtime.task_experiments(&contested).unwrap();
+    assert_eq!(
+        (
+            retried_rows[0].arm.as_deref(),
+            retried_rows[1].exclusion_reason.as_deref()
+        ),
+        (rows[0].arm.as_deref(), Some("surface_conflict"))
     );
 }
 

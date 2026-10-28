@@ -42,6 +42,51 @@ fn invocation_workspace_backfill_attributes_only_unambiguous_runs() {
     assert_eq!(workspace_of("jrun-gone"), None);
 }
 
+/// v70 reopens admission-only rows, which older binaries also wrote while
+/// experiments were disabled, so those tasks are admitted once more. A row
+/// beside an assignment or exclusion stays, keeping that admission final.
+/// Seeding needs the v69 ledger prefix, which no public boundary exposes.
+#[test]
+fn legacy_admission_only_rows_reopen_and_sticky_rows_stay() {
+    let conn = Connection::open_in_memory().expect("open legacy database");
+    let before = ledger::MIGRATIONS
+        .iter()
+        .position(|m| m.name == "reopen_legacy_experiment_admissions")
+        .expect("v70 registered");
+    ledger::run_migrations(&conn, &ledger::MIGRATIONS[..before]).expect("migrate to v69");
+    conn.execute_batch(
+        r#"
+            INSERT INTO experiment_admissions(workspace_id, task_id) VALUES
+                ('ws_a', 'ORB-1'),
+                ('ws_a', 'ORB-2'),
+                ('ws_a', 'ORB-3'),
+                ('ws_b', 'ORB-1');
+            INSERT INTO experiment_assignments(workspace_id, experiment_id, task_id, arm, assigned_at, exclusion_reason) VALUES
+                ('ws_a', 'exp-1', 'ORB-2', 'control', '2026-10-28T00:00:00Z', NULL),
+                ('ws_a', 'exp-2', 'ORB-3', NULL, '2026-10-28T00:00:00Z', 'surface_conflict');
+        "#,
+    )
+    .expect("seed legacy admissions");
+
+    ledger::run_migrations(&conn, ledger::MIGRATIONS).expect("apply v70");
+
+    let mut statement = conn
+        .prepare("SELECT workspace_id, task_id FROM experiment_admissions ORDER BY 1, 2")
+        .expect("prepare admission read");
+    let admitted = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("read admissions")
+        .collect::<Result<Vec<(String, String)>, _>>()
+        .expect("collect admissions");
+    assert_eq!(
+        admitted,
+        [
+            ("ws_a".to_string(), "ORB-2".to_string()),
+            ("ws_a".to_string(), "ORB-3".to_string()),
+        ]
+    );
+}
+
 // Safety invariant: every shipped ledger prefix has a stable schema. The
 // public open boundary always runs the latest registry, so it cannot expose
 // historical prefixes without widening production visibility (criterion 3).

@@ -37,9 +37,9 @@ impl OrbitRuntime {
             true,
             enabled,
             &|records, existing, admitted| {
-                // Old admission-only rows were created even when the feature
-                // was disabled. Reconsider them until they have a sticky row.
-                if (admitted && !existing.is_empty()) || task.status.is_terminal() {
+                // The first enabled admission decided the population, even
+                // when nothing matched; the store keeps the same rule.
+                if admitted || task.status.is_terminal() {
                     return Ok(Vec::new());
                 }
                 let mut occupied = occupied_surfaces(records, existing)?;

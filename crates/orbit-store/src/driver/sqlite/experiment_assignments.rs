@@ -25,9 +25,11 @@ pub(super) fn assign_experiments(
             params![workspace, task], |row| row.get(0),
         ).map_err(sqlite_store_error)?;
         let existing = load_assignments(conn, workspace, task)?;
-        // A prior assignment or exclusion is sticky. Admission-only rows can
-        // be old writes from a disabled process and must be reconsidered.
-        if mark_admitted && admitted && !existing.is_empty() {
+        // A first admission is final, including one that matched no
+        // population: a later edit or retry cannot move the task into a
+        // cohort. Only enabled admissions write this row, and v70 reopened
+        // the admission-only rows older binaries wrote while disabled.
+        if mark_admitted && admitted {
             return Ok(existing);
         }
         // Disabled admission writes nothing, so it cannot mark the task admitted
