@@ -2,7 +2,7 @@
 title: "Scope: human decision channel"
 owner: claude
 last_updated: 2026-10-25
-last_validated: 2026-10-25
+last_validated: 2026-10-28
 status: Draft
 stage: building
 next: "Mail transport in the orbit-decision-mail plugin (a stub today); polish ORB-18446"
@@ -106,7 +106,7 @@ fingerprint). The plugin never writes the task; it submits a *decision submissio
 to one governed core tool, and core either applies it as the human or refuses it.
 [2_design.md](./2_design.md) §3 shows the fit with `CallerProvenance`
 (`crates/orbit-common/src/governance/authorization/caller.rs:16`) and
-`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog.rs:324`).
+`GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog.rs:418`).
 
 ### Email transport (plugin)
 

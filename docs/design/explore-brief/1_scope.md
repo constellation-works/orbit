@@ -2,7 +2,7 @@
 title: "Scope: explore briefs from task-pilot"
 owner: claude
 last_updated: 2026-10-26
-last_validated: 2026-10-25
+last_validated: 2026-10-28
 status: Draft
 stage: building
 next: "Finish the remaining trial prerequisites before starting the three-arm trial"
