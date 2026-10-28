@@ -477,7 +477,7 @@ spec:
     # settle error keeps the PR open and unmerged and the task in review with
     # that step's typed reason.
     - id: landing_review_gate_admit
-      stage: { id: landing_review, label: Landing review }
+      stage: { id: landing_review, label: Review }
       retry:
         max_attempts: 3
         initial_backoff_ms: 1000
