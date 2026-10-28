@@ -57,7 +57,7 @@ authorization:
   status: destination per-caller authorization is removed; server-selected session capabilities are enforced
   v1_rule: SSH reaches the remote process; it serves agent authority by default and operator authority when its server argv includes --operator
   enforcement_owner: orbit-core for server-selected session capabilities
-  capability_filtering: false # tools/list is not filtered; Core enforces each call
+  capability_filtering: true # Direct MCP tools/list filters governed tools by caller authority; Core still authorizes each call
 
 tool_definitions:
   metadata:
