@@ -219,10 +219,15 @@ later registration stays hidden ([plugins](../plugins/1_scope.md) §4.3,
 [policy sandbox](../policy-sandbox/2_design.md)). Core refuses a hidden store as
 not visible rather than reading it as "no channel registered". Every channel
 read and write, the digest and submission included, runs where the store is
-visible: the operator CLI, or a callback from a backend the host runs outside the
-plugin sandbox. A confined backend's `orbit.decision.digest` and
-`orbit.decision.submit` callbacks are refused; submission never worked there,
-because a confined child cannot open the store lock.
+visible: the operator CLI, or the host process that spawned the calling backend.
+A backend reaches its `orbit.decision.digest` and `orbit.decision.submit`
+callbacks through a host route, sandboxed or not: when the call's ceiling
+admits either tool, the host passes the child one end of a socket pair beside its
+callback credential, and the child's nested `orbit` hands the call back over it
+instead of opening the store. The host answers only those two tools, for the
+session it minted, through the same dispatch, ceiling, governed row and audit as
+any identified callback, so the §3.3 caller and channel binding checks run
+unchanged; a confined child itself still cannot read the store.
 
 ### 3.3 The submission tool and the apply step
 

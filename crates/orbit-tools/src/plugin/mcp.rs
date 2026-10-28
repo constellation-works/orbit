@@ -380,6 +380,10 @@ impl McpBackend {
             &self.spec.allowed_tools(ctx),
         )?;
         callback.stamp_env(&mut environment);
+        // The decision-channel callbacks read a store no plugin child may
+        // read, so the child reaches them through the spawning host for as
+        // long as the session lives.
+        callback.open_host_route(ctx.orbit_host.as_ref())?;
         let request = ExecRequest {
             program: self.spec.command.to_string_lossy().into_owned(),
             args: self.spec.args.clone(),

@@ -60,11 +60,11 @@ other declared secrets. Use a dedicated namespace for this channel: registering
 or rotating another channel for that namespace replaces its `channel_key`.
 
 Orbit keeps every channel's key in its own channel store as well, and no plugin
-backend can read that store, even with `orbit_tools`. The two callbacks read
-it, so they run only from a backend the host runs outside the plugin sandbox
-(`backend.sandbox: none` with the `unsandboxed` grant). A sandboxed backend's
-`orbit.decision.digest` and `orbit.decision.submit` calls are refused as not
-visible. Agent sandboxes hide the store too.
+backend can read that store, even with `orbit_tools`. The backend does not need
+to: when it runs `orbit tool run orbit.decision.digest` or
+`orbit.decision.submit`, the Orbit process that started the backend answers the
+call. This works under the default plugin sandbox; the backend needs no
+`backend.sandbox: none`. Agent sandboxes hide the store too.
 
 Callbacks need the host-issued plugin callback session, an enabled plugin, the
 manifest's callback list, the recorded host grant and the spawning caller's

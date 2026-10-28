@@ -748,6 +748,16 @@ the same device and inode in the host-owned session directory; a forged file is 
 The descriptor survives `setsid`, `exec` and a cleared environment when the backend keeps it
 open. `ORBIT_PLUGIN_CALLBACK_FD` selects the descriptor number, defaulting to 3.
 
+**Host-routed callbacks.** `orbit.decision.digest` and `orbit.decision.submit` read core's
+decision-channel store, which no plugin child can read (§4.3). When a session's ceiling admits
+either, the host also hands the backend one end of a datagram socket pair on fd 4 and keeps a
+server on the other for the session's life. A nested `orbit` that holds a valid fd-3 credential
+and finds that socket passes one of those two calls back over it instead of running it, and
+the host answers it for the session it minted: same dispatch, ceiling, governed row and audit
+row as any identified callback, with only the spawning caller's workspace and worker
+invocation carried over. The host refuses any other tool on the route before dispatch, so the
+socket grants nothing the descriptor does not already authorize.
+
 The retired environment token and process ancestry never authorize a callback. A caller
 presenting only the old token, or matching a live backend session without a valid descriptor,
 is refused even when the session directory is readable. Start time is checked when a scan
