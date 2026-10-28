@@ -55,9 +55,7 @@ pub struct RegressionClassification {
     pub escape: RegressionEscape,
     /// Where the defect lives: canonical `symbol:` or `file:` selectors of
     /// the code that is wrong, as opposed to everything the culprit touched.
-    /// Absent on links filed without it. Builds that predate the field read
-    /// a task carrying it as damaged, so writers persist it only once
-    /// `workflow.regression_risk.record_sites` is on.
+    /// Absent on links filed without it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sites: Vec<String>,
 }

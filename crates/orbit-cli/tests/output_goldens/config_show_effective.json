@@ -1065,13 +1065,6 @@
       "path": null,
       "shadowed_by": []
     },
-    "workflow.regression_risk.record_sites": {
-      "scope": "built-in",
-      "state": "default",
-      "tier": "advanced",
-      "path": null,
-      "shadowed_by": []
-    },
     "workflow.regression_risk.threshold_percent": {
       "scope": "built-in",
       "state": "default",

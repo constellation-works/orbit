@@ -381,8 +381,7 @@ fn shipped_implement_and_review_activities_ask_for_marks() {
 /// An operator surface's `regression.sites` are canonicalized against the
 /// checkout the way its `context_files` are, so one path has one spelling.
 fn regression_sites_are_canonicalized_against_the_workspace() {
-    let mut fx = Fixture::new();
-    fx.reconfigure("[workflow.regression_risk]\nrecord_sites = true\n");
+    let fx = Fixture::new();
     let checkout = fx.workspace.parent().unwrap();
     let inside = format!("file:{}", checkout.join(HOT).display());
     let outside = format!(
@@ -440,28 +439,33 @@ fn regression_sites_are_canonicalized_against_the_workspace() {
     );
     assert_eq!(stored_sites(&site_task), [format!("file:{HOT}")]);
 
-    for record_sites in [true, false] {
-        fx.reconfigure(&format!(
-            "[workflow.regression_risk]\nrecord_sites = {record_sites}\n"
-        ));
-        match fx
-            .runtime
-            .add_task_screened(linked(&outside), &screen, None, None)
-            .unwrap_err()
-        {
-            OrbitError::InvalidInput(message) => assert!(
-                message.contains(&format!("`{outside}`")),
-                "the refusal names the entry as written: {message}"
-            ),
-            other => panic!("an outside-workspace site is invalid input, not {other:?}"),
-        }
+    match fx
+        .runtime
+        .add_task_screened(linked(&outside), &screen, None, None)
+        .unwrap_err()
+    {
+        OrbitError::InvalidInput(message) => assert!(
+            message.contains(&format!("`{outside}`")),
+            "the refusal names the entry as written: {message}"
+        ),
+        other => panic!("an outside-workspace site is invalid input, not {other:?}"),
     }
 }
 
-fn regression_sites_disabled_writes_drop_invalid_sites() {
-    let mut fx = Fixture::new();
+fn regression_sites_invalid_writes_are_rejected() {
+    let fx = Fixture::new();
     let target = fx.task.clone();
     let checkout = fx.workspace.parent().unwrap().to_path_buf();
+    let holder = fx
+        .runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Holder for invalid site updates", "complexity": "low", "model": "codex",
+                "description": "Regression sites fixture", "workspace": checkout,
+            }),
+        )
+        .unwrap();
     let cases = [
         vec!["dir:src".to_string()],
         (0..9).map(|n| format!("file:src/site{n}.rs")).collect(),
@@ -473,30 +477,6 @@ fn regression_sites_disabled_writes_drop_invalid_sites() {
             "type": "regression_from", "target": target,
             "regression": {"nature": "broke_existing", "escape": "no_test", "sites": sites}
         });
-        let added = fx
-            .runtime
-            .run_tool(
-                "orbit.task.add",
-                json!({
-                    "title": "Restore the retry budget", "complexity": "low", "model": "codex",
-                    "description": "Regression sites fixture", "workspace": checkout,
-                    "relations": [relation.clone()]
-                }),
-            )
-            .expect("disabled sites must not reject a finding");
-        assert_dropped_site_write(&fx.runtime, &added, sites.len());
-        let updated = fx
-            .runtime
-            .run_tool(
-                "orbit.task.update",
-                json!({
-                    "id": added["id"], "model": "codex", "relations": [relation.clone()]
-                }),
-            )
-            .expect("disabled sites must not reject an update");
-        assert_dropped_site_write(&fx.runtime, &updated, sites.len());
-
-        fx.reconfigure("[workflow.regression_risk]\nrecord_sites = true\n");
         for (tool, args) in [
             (
                 "orbit.task.add",
@@ -505,7 +485,7 @@ fn regression_sites_disabled_writes_drop_invalid_sites() {
             ),
             (
                 "orbit.task.update",
-                json!({"id": added["id"], "model": "codex", "relations": [relation]}),
+                json!({"id": holder["id"], "model": "codex", "relations": [relation]}),
             ),
         ] {
             assert!(
@@ -513,41 +493,67 @@ fn regression_sites_disabled_writes_drop_invalid_sites() {
                     fx.runtime.run_tool(tool, args),
                     Err(OrbitError::InvalidInput(message)) if message.contains("`regression.sites`")
                 ),
-                "recording enabled must still validate sites: {sites:?}"
+                "sites are always validated and rejected when malformed: {sites:?}"
             );
         }
-        fx.reconfigure("[workflow.regression_risk]\nrecord_sites = false\n");
     }
 }
 
-fn assert_dropped_site_write(runtime: &OrbitRuntime, result: &Value, count: usize) {
-    let stored = runtime.get_task(result["id"].as_str().unwrap()).unwrap();
-    let regression = stored
-        .relations
-        .iter()
-        .find_map(|r| r.regression.as_ref())
+fn regression_sites_are_kept_without_configuration() {
+    let fx = Fixture::new();
+    let target = fx.task.clone();
+    let checkout = fx.workspace.parent().unwrap().to_path_buf();
+    let added = fx
+        .runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Keep regression sites", "complexity": "low", "model": "codex",
+                "description": "Regression sites fixture", "workspace": checkout,
+                "relations": [{"type": "regression_from", "target": target,
+                 "regression": {"nature": "broke_existing", "escape": "no_test", "sites": ["file:src/hot.rs"]}}]
+            }),
+        )
         .unwrap();
-    assert!(
-        regression.sites.is_empty(),
-        "disabled sites must not persist"
-    );
-    assert_eq!(regression.nature, RegressionNature::BrokeExisting);
-    assert_eq!(regression.escape, RegressionEscape::NoTest);
-    let warnings = result["warnings"]
-        .as_array()
-        .expect("tool response carries drop warnings");
-    assert!(
-        warnings
+    let stored = fx.runtime.get_task(added["id"].as_str().unwrap()).unwrap();
+    assert_eq!(
+        stored
+            .relations
             .iter()
-            .filter_map(Value::as_str)
-            .any(|w| w.starts_with(&format!("{count} `regression.sites`")) && w.contains("is off")),
-        "drop warning must report the discarded sites: {result}"
+            .find_map(|r| r.regression.as_ref())
+            .unwrap()
+            .sites,
+        ["file:src/hot.rs"],
+        "sites persist with no configuration"
+    );
+    let updated = fx
+        .runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({
+                "id": added["id"], "model": "codex",
+                "relations": [{"type": "regression_from", "target": target,
+                 "regression": {"nature": "broke_existing", "escape": "no_test", "sites": ["file:src/cold.rs"]}}]
+            }),
+        )
+        .unwrap();
+    let stored = fx
+        .runtime
+        .get_task(updated["id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        stored
+            .relations
+            .iter()
+            .find_map(|r| r.regression.as_ref())
+            .unwrap()
+            .sites,
+        ["file:src/cold.rs"]
     );
 }
 
-fn regression_sites_disabled_relink_drops_inherited_sites() {
-    let mut fx = Fixture::new();
-    fx.reconfigure("[workflow.regression_risk]\nrecord_sites = true\n");
+fn regression_sites_relink_keeps_inherited_sites() {
+    let fx = Fixture::new();
     let target = fx.task.clone();
     let checkout = fx.workspace.parent().unwrap().to_path_buf();
     let added = fx.runtime.run_tool("orbit.task.add", json!({
@@ -573,12 +579,6 @@ fn regression_sites_disabled_relink_drops_inherited_sites() {
             .sites,
         ["file:src/hot.rs"]
     );
-    fx.reconfigure("[workflow.regression_risk]\nrecord_sites = false\n");
-    let updated = fx
-        .runtime
-        .run_tool("orbit.task.update", relink.clone())
-        .unwrap();
-    assert_dropped_site_write(&fx.runtime, &updated, 1);
     let stored = fx.runtime.get_task(added["id"].as_str().unwrap()).unwrap();
     assert_eq!(stored.source_task_id(), Some(target.as_str()));
     assert!(
@@ -588,20 +588,16 @@ fn regression_sites_disabled_relink_drops_inherited_sites() {
             .any(|r| r.relation_type == TaskRelationType::RelatedTo
                 && r.target.as_str() == fx.ids[0])
     );
-    let unchanged = fx.runtime.run_tool("orbit.task.update", relink).unwrap();
-    assert!(
-        unchanged.get("warnings").is_none(),
-        "no sites means no drop warning: {unchanged}"
-    );
 }
 
 crate::scenario_table!(
     regression_sites_write_invalid_scenarios,
-    regression_sites_disabled_writes_drop_invalid_sites,
+    regression_sites_invalid_writes_are_rejected,
+    regression_sites_are_kept_without_configuration,
 );
 crate::scenario_table!(
     regression_sites_write_relink_scenarios,
-    regression_sites_disabled_relink_drops_inherited_sites,
+    regression_sites_relink_keeps_inherited_sites,
 );
 
 crate::scenario_table!(

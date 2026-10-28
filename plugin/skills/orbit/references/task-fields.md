@@ -129,11 +129,9 @@ on the operator-only `orbit.workflow.run.show`.
   - `sites` (optional, up to 8) — where the defect lives, not everything the
     culprit touched: `symbol:<path>#<name>:<kind>` of the function, method or
     type that is wrong, or `file:<path>` for a file without symbols. Never
-    tests, goldens, docs or wiring the culprit only touched alongside. Kept
-    only while `workflow.regression_risk.record_sites` is on; otherwise the
-    write drops them with a warning. An absolute path outside the workspace
-    refuses the write either way. A relations replacement that omits
-    `sites` clears them, so preserve an existing list.
+    tests, goldens, docs or wiring the culprit only touched alongside. An
+    absolute path outside the workspace refuses the write. A relations
+    replacement that omits `sites` clears them, so preserve an existing list.
   - `nature` — what kind of regression the link records:
     - `broke_existing`: the culprit broke behavior that worked before it landed.
     - `defect_in_new`: the defect is in code the culprit itself introduced.

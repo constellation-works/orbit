@@ -109,10 +109,6 @@ pub struct TaskDocumentUpdateParams {
     pub external_refs: Option<Vec<ExternalRef>>,
     pub pr_status: Option<Option<String>>,
     pub source_task_id: Option<Option<String>>,
-    /// Drop sites from the classification a `source_task_id` re-link inherits.
-    /// The caller supplies its recording policy; unrelated relations and
-    /// explicit replacement relations are unaffected.
-    pub drop_inherited_regression_sites: bool,
     pub job_run_id: Option<Option<String>>,
     /// Trusted link location supplied with the run binding, never tool input.
     pub job_run_machine: Option<Option<orbit_types::task::ExecutionLocation>>,
