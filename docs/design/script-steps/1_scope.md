@@ -699,7 +699,7 @@ a binary that can't enforce its grant.
 | `machine.script_timeout_max_seconds` | `3600` | Ceiling on any grant's `timeout_max_seconds` on this host |
 | `machine.script_scratch_max_bytes` | `1GiB` | Ceiling on any grant's scratch size |
 | `machine.script_output_files_max` | `64` × `64MiB` | Ceiling on any grant's output-file caps |
-| `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks with a warning when a scope is unavailable; `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
+| `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks, with a Linux warning when a scope is unavailable (macOS launches uncontained without a warning); `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
 
 Host keys, not workspace keys. Each grant's limits must sit at or below them.
 
