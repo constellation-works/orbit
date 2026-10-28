@@ -152,6 +152,22 @@ fn requested_fields(object: &Map<String, Value>) -> Vec<String> {
         .collect()
 }
 
+/// Refuse a delivery view of the claimed task that names a run other than
+/// the claim's leaf, on either route: a claim delivers through its leaf only.
+pub(super) fn require_leaf_delivery_run(
+    object: &Map<String, Value>,
+    binding: &WorkerInvocation,
+) -> Result<(), OrbitError> {
+    match object.get("run_id") {
+        None => Ok(()),
+        Some(Value::String(run_id)) if run_id.trim() == binding.bound_run_id => Ok(()),
+        Some(_) => Err(super::claimed_owner::denied(
+            "delivery_run_refused: a claimed worker reads the delivery of its own leaf run \
+             only; omit `run_id` or name that run",
+        )),
+    }
+}
+
 /// Answer a claimed worker's delivery view of its claimed task from this
 /// executor's record of the leaf run. The owner has no record of the leaf,
 /// so the view is never forwarded. Only the leaf run is readable, named or
@@ -168,16 +184,7 @@ pub(super) fn delivery(
             "`{TASK_SHOW_DELIVERY_FIELD}` cannot be combined with other fields"
         )));
     }
-    match object.get("run_id") {
-        None => {}
-        Some(Value::String(run_id)) if run_id.trim() == binding.bound_run_id => {}
-        Some(_) => {
-            return Err(super::claimed_owner::denied(
-                "delivery_run_refused: a claimed worker reads the delivery of its own leaf run \
-                 only; omit `run_id` or name that run",
-            ));
-        }
-    }
+    require_leaf_delivery_run(object, binding)?;
     let leaf = if is_final_recovery(run) {
         recovering_leaf(runtime, run)
     } else {

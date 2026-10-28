@@ -3,13 +3,15 @@
 //! design-sync run on a follower could list related tasks but not open them.
 //! Exercise the bridge, the broker's real socket and the owner's public task
 //! tools on a real store, for a remote owner and for an owner on the
-//! worker's own machine.
+//! worker's own machine. The local route once skipped the claim's
+//! `review-*` and delivery-run refusals the broker applies (ORB-19289).
 
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
+use orbit_types::workflow::{REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT};
 use serde_json::{Value, json};
 
 use super::super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
@@ -112,6 +114,9 @@ impl Workspace {
                 json!({"id": id, "path": "ledger.json", "_worker_read": "artifact"}),
             ),
             (GET, json!({"id": id, "path": "../ledger.json"})),
+            // Another task's review artifacts stay outside the claim.
+            (GET, json!({"id": id, "path": REVIEW_MANIFEST_ARTIFACT})),
+            (GET, json!({"id": id, "path": REVIEW_REPORT_ARTIFACT})),
             (
                 PUT,
                 json!({"id": id, "path": "evidence.json", "source_path": source}),
@@ -323,7 +328,22 @@ fn a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refu
             "{name} {input}: {error}"
         );
     }
+    // The claimed task's delivery is its leaf run's only.
+    let error = refused(bridge(
+        SHOW,
+        &json!({"id": local.task_id, "field": "delivery", "run_id": "jrun-other"}),
+    ));
+    assert!(
+        error.to_string().contains("delivery_run_refused"),
+        "another run's delivery: {error}"
+    );
     assert_eq!(workspace.owner.calls(), before);
+    for input in [
+        json!({"id": local.task_id, "field": "delivery"}),
+        json!({"id": local.task_id, "field": "delivery", "run_id": local.bound_run_id}),
+    ] {
+        assert!(bridge(SHOW, &input).is_none(), "{input}");
+    }
 
     // The claimed task stays readable, and its own artifact writable.
     assert!(bridge(SHOW, &json!({"id": local.task_id})).is_none());
@@ -335,4 +355,46 @@ fn a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refu
         )
         .is_none()
     );
+}
+
+#[test]
+fn a_claimed_worker_on_its_owners_machine_writes_review_artifacts_only_as_the_running_reviewer() {
+    let mut fixture = Fixture::new();
+    let local = WorkerInvocation {
+        owner_machine_id: FOLLOWER.into(),
+        ..fixture.binding.clone()
+    };
+    fixture.runtime = fixture
+        .runtime
+        .without_worker_routing()
+        .with_worker_invocation(local.clone(), fixture.owner.clone())
+        .unwrap();
+    fixture.binding = local;
+    let (report, bytes) = fixture.report("report.json", &fixture.attempt_id);
+    let put = json!({"id": fixture.binding.task_id, "path": REVIEW_REPORT_ARTIFACT,
+                     "source_path": report});
+
+    // The implementer shares the reviewer's leaf binding, so only the run's
+    // broker can tell them apart; a report naming the open attempt is still
+    // refused for it.
+    let implementer = fixture.serve("agent_implement");
+    let error = fixture
+        .forwarded(&implementer, PUT, put.clone())
+        .unwrap_err();
+    assert!(
+        error.contains("claimed_review_bridge_refused") && error.contains("before-PR reviewer"),
+        "{error}"
+    );
+    assert!(
+        fixture.owner.puts().is_empty(),
+        "the forged report never lands"
+    );
+
+    let reviewer = fixture.serve("agent_review_repair");
+    fixture.forwarded(&reviewer, PUT, put).unwrap();
+    let puts = fixture.owner.puts();
+    assert_eq!(puts.len(), 1);
+    let content: Vec<u8> =
+        serde_json::from_value(puts[0]["artifacts"][0]["content"].clone()).unwrap();
+    assert_eq!(content, bytes, "the running reviewer's report lands");
 }

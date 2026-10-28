@@ -188,7 +188,9 @@ task projections remain available. The claimed task's delivery projection still 
 leaf's delivery route, and every delivery projection refuses pagination; artifact get/put keep
 their own allowlists. A worker whose owner is on its own machine reaches the owner store in
 process, and its nested `orbit` applies the same request checks first, so it gets the same
-workspace reads and refusals; only the bounded view is not selected for it.
+workspace reads and refusals, including the `review-*` and `delivery_run_refused` refusals
+below; only the bounded view is not selected for it. Its `review-*` writes still go to the
+run's broker, since only the run's records say which activity is the reviewer ([ORB-19289]).
 Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
 read scoped to the claimed workspace. The claimed task's own `regression_from` relation does not cross
 the broker either: the implementer returns the culprit in its output, and the owner records the
@@ -225,7 +227,8 @@ the owner receives that form. A path such as ` review-gate.json` or `./review-ga
 therefore the gate's `review-gate.json`, never an ordinary artifact.
 
 A `review-*` artifact (the prefix matched without ASCII case) is the review gate's and keeps its
-stricter scope. The broker carries it only for the reviewer activity (`agent_review_repair`),
+stricter scope. A `review-*` read or write naming a task other than the claimed task is refused
+as `claimed_owner_bridge_refused` before any of the scopes below. The broker carries it only for the reviewer activity (`agent_review_repair`),
 and only while the review ledger shows one open attempt, admitted by that leaf, whose reviewer
 is running in this run before its deadline. A read may name the review contract's
 `review-manifest.json`, `review-report.json`, `review-report-history.json` or
@@ -289,7 +292,8 @@ reservation alone ends nothing: the claim stays active until the owner recovers 
 changes nothing on the owner, and it applies even while the follower's ledger still shows the
 reviewer running. No other coordination tool is forwarded. Inside a masked sandbox, one is
 refused as `claimed_owner_bridge_refused` before anything tries SSH. A worker whose owner is
-local, or that runs unsandboxed, keeps its existing route.
+local, or that runs unsandboxed, keeps its existing route, except that a sandboxed worker's
+`review-*` put on a local owner goes to the broker, which serves a local owner for nothing else.
 
 **Where the broker lives.** It runs in the `orbit job run-pipeline-worker` process that
 executes the agent step. `run_cli_backend`
