@@ -97,6 +97,7 @@ mod pilot;
 mod post_deploy;
 mod provider_limit;
 mod rebased_landing;
+mod receipt_retention;
 mod recovery;
 mod regression_attribution;
 mod requeue;

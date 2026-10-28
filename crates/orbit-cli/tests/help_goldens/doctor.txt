@@ -1,13 +1,14 @@
 Diagnose workspace health, provider CLIs, and filesystem access
 
-With no subcommand, checks the workspace: config, database, disk, indexes, locks, and runs. Default database checks read the header and schema; --deep also scans every database page with SQLite quick_check. The subcommands run focused diagnostics for provider CLIs and filesystem access.
+With no subcommand, checks the workspace: config, database, disk, indexes, locks, and runs. Default database checks read the header and schema; --deep also scans every database page with SQLite quick_check. The subcommands run focused diagnostics for provider CLIs, filesystem access, and admission receipt storage.
 
 Usage: orbit doctor [OPTIONS]
        orbit doctor <COMMAND>
 
 Commands:
-  providers  Show each executor's provider CLI, configured sandbox, Linux sandbox readiness, and usage limits
-  fs-access  Dry-run a workspace-relative path against a filesystem profile's read and modify rules
+  admission-receipts  Show admission receipt counts and logical payload bytes, with separate claim-mutation receipt usage
+  providers           Show each executor's provider CLI, configured sandbox, Linux sandbox readiness, and usage limits
+  fs-access           Dry-run a workspace-relative path against a filesystem profile's read and modify rules
 
 Options:
       --deep

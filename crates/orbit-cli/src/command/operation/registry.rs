@@ -484,11 +484,21 @@ impl Commands {
             ),
             Commands::Doctor(command) => {
                 use super::super::doctor::DoctorSubcommand;
-                // The focused diagnostics only read definitions, so they stay
-                // available while another executable generation holds the
-                // store; the health checks and repairs need the full runtime.
+                // Focused inspection avoids reconciliation on open. Receipt
+                // compaction, like the health checks and repairs, needs the
+                // full runtime and its writable generation gate.
                 let (subcommand, target_type, target_id, runtime_need) = match &command.command {
                     None => (None, "workspace", None, RuntimeNeed::Required),
+                    Some(DoctorSubcommand::AdmissionReceipts(args)) => (
+                        Some("admission-receipts"),
+                        "workspace",
+                        None,
+                        if args.compact {
+                            RuntimeNeed::Required
+                        } else {
+                            RuntimeNeed::ReadOnly
+                        },
+                    ),
                     Some(DoctorSubcommand::Providers(_)) => {
                         (Some("providers"), "executor", None, RuntimeNeed::ReadOnly)
                     }

@@ -18,9 +18,9 @@ related_artifacts: [ORB-12488, ORB-12616, ORB-12500, ORB-13625, ORB-13941, ORB-1
 ready, valid, conflict-free task in its canonical order and atomically records the reservation,
 attempt identity, `in-progress` transition, history, and request receipt. Retries replay the same
 receipt. The internal store foundation implements admission receipts, claims and replay.
-Operational admission-receipt compaction and storage accounting remain missing, tracked
-by [ORB-19424]: [ORB-15332] removed the unused compactor, and [ORB-17641] removed
-the unused accounting API. The retention requirements below remain the contract.
+Operational admission-receipt compaction and storage accounting are available on the owner
+through `orbit doctor admission-receipts [--compact]` ([ORB-19424]). The retention
+requirements below remain the contract.
 For follower execution, the five protocol
 operations — the
 [preflight probe](../2_design.md#41-read-only-admission-probe),
@@ -619,6 +619,29 @@ An idle receipt is eligible to compact immediately; a claim in claimed, running,
 retains its full receipt. At the default 60-second idle sleep, one idle drain leaves 1,440 request
 identities per day even after compaction. No age-based tombstone deletion is supported.
 
+Run `orbit doctor admission-receipts` on the owner for a read-only snapshot. It reports
+`full_receipts`, `tombstones` and, separately, `claim_mutation_receipts`, each with a
+`count` and `logical_payload_bytes`. Bytes are the UTF-8 JSON payload lengths; they do
+not include row keys, indexes, free pages or WAL and are not filesystem usage.
+A pending journal recovery refuses this inspection rather than mutating state.
+
+Add `--compact` for explicit runtime maintenance. Under the exclusive admission boundary,
+it recovers pending commits, then replaces idle receipts and receipts whose current claim
+is failed, revoked or landed with permanent tombstones. Claimed, running, handed-off and
+repair-pending claims retain full receipts, as does a receipt whose current claim is missing.
+Reservation expiry and age never establish settlement. The tombstone preserves the original
+machine ID, request ID and digest of the original input using the same persisted encoding
+as replay. Exact replay returns `request_expired`, changed-input replay returns
+`request_mismatch`, and neither can admit again. Repeated maintenance is idempotent.
+The command reports `compacted_receipts` and the resulting storage snapshot, including
+unchanged claim-mutation receipts; it does not invoke their separate seven-day pruning
+on settlement. Operators schedule or run this command periodically: admission itself does
+not scan receipt history, so idle full payloads accumulate until maintenance runs.
+An already-recorded landing completion on a settled claim replays its retained claim-mutation
+receipt before candidate observation; compaction of a NoDiff claim's admission receipt does
+not prevent that replay. Changed completion input is still refused, and a settled claim
+cannot perform a fresh landing mutation.
+
 Execution provenance is optional on persisted records for backward reading. Run origin is
 captured from the trusted runtime backend at insertion and is not updated by run upserts.
 The shared run JSON projection exposes `executed_on`, and task show exposes
@@ -896,6 +919,6 @@ see the caller-side implementation status in design §3.
 - [ORB-17304] — ordered pull and owner-local admission against the live executor census (§2, §9).
 - [ORB-17641] — removed the unused admission receipt accounting API.
 - [ORB-19393] — verified base-merge chains, bounded inherited recovery and reconciliation of externally merged handoffs.
-- [ORB-19424] — tracks the missing operational admission receipt compaction and accounting.
+- [ORB-19424] — connected admission receipt compaction and separate logical storage accounting to `orbit doctor admission-receipts [--compact]`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

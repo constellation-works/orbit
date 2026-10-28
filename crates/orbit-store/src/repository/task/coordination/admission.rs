@@ -17,6 +17,8 @@ use super::selection::{AdmissionSnapshot, DependencyReach, Screen};
 use crate::contracts::*;
 use crate::repository::task::v2::{TaskV2Store, task_comment_from_row, task_history_from_events};
 
+mod retention;
+
 /// The in-section re-check of assessment-scoped holds a caller gives
 /// [`TaskCommitBoundary::admit_task`]: the candidate with the comments and
 /// history read with it, to the hold's diagnostic, or `None` when it is free.

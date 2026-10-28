@@ -128,6 +128,15 @@ pub struct AdmissionReceiptLookup {
 }
 
 impl crate::OrbitRuntime {
+    /// Inspect owner admission receipt storage without compacting or recovering
+    /// interrupted task commits. Claim-mutation receipt usage is separate.
+    pub fn inspect_admission_receipt_storage(
+        &self,
+    ) -> Result<orbit_store::contracts::AdmissionReceiptStorage, OrbitError> {
+        self.ensure_distributed_owner_workspace()?;
+        self.stores().tasks().inspect_admission_receipt_storage()
+    }
+
     /// Serve the read-only admission probe for this workspace.
     ///
     /// Refusal order matches the spec ladder: caller capability first, at the

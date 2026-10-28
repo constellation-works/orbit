@@ -138,6 +138,11 @@ impl TaskStoreBackend for TaskV2Store {
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {
         self.claim_boundary()?.inspect_execution_claims()
     }
+    fn inspect_admission_receipt_storage(
+        &self,
+    ) -> Result<crate::contracts::AdmissionReceiptStorage, OrbitError> {
+        self.claim_boundary()?.inspect_admission_receipt_storage()
+    }
     fn resolve_execution_claims(
         &self,
     ) -> Result<Vec<crate::contracts::ClaimInspection>, OrbitError> {

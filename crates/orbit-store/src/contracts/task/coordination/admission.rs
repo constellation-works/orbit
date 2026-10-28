@@ -674,6 +674,31 @@ pub enum AdmissionLookup {
     NotFound,
 }
 
+/// Logical storage of one coordination receipt category. Payload bytes exclude
+/// keys, SQLite indexes, free pages and WAL; this is not filesystem usage.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReceiptPayloadUsage {
+    pub count: u64,
+    pub logical_payload_bytes: u64,
+}
+
+/// Admission storage, with claim-mutation receipts accounted separately.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionReceiptStorage {
+    pub full_receipts: ReceiptPayloadUsage,
+    pub tombstones: ReceiptPayloadUsage,
+    /// Pruned independently on claim settlement after seven days, never by
+    /// admission receipt maintenance.
+    pub claim_mutation_receipts: ReceiptPayloadUsage,
+}
+
+/// Result of explicit owner admission receipt maintenance.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AdmissionReceiptMaintenance {
+    pub compacted_receipts: u64,
+    pub storage: AdmissionReceiptStorage,
+}
+
 /// One task an owner-local drain wave selected, with the canonical lock
 /// footprint its gate will reserve [ORB-15514].
 #[derive(Debug, Clone, PartialEq, Eq)]
