@@ -1372,7 +1372,7 @@ async function checkDrainReadinessFailureStandIn() {
 
     const readsBeforeRecovery = await page.evaluate(() => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length);
     await page.evaluate(() => { globalThis.panelFixture.failAlsoTaskReadiness = false; });
-    await page.clock.fastForward(30_000);
+    await page.clock.fastForward(60_000);
     await page.waitForFunction(before => panelFixture.reads.filter(read => new URL(read, location.href).searchParams.get('also_task') === 'PANEL-51').length > before, readsBeforeRecovery);
     await page.waitForTimeout(300);
     assert.match(await detail.innerText(), /Readiness after initial load/, 'A successful poll after the failure keeps the snapshot entry in the detail');
