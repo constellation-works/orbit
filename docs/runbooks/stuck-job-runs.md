@@ -182,9 +182,10 @@ recovery can proceed. Their `delivery_*` diagnostic codes are listed in
 The task keeps the state the refusing action left it in, and gate/auto parents
 pass the held child. Missing or contradictory evidence, permanent forge read
 refusals (credentials, permissions) and red candidate checks still fail. A
-provider read that errors or times out, including its subprocess timeout,
-remains a failure; eligible transient transport failures may use the read-only
-recovery below. Transport failures that outlast it, or that it cannot take,
+provider read that errors or times out for a permanent or other non-transient
+reason, including a non-transport subprocess timeout, remains a failure;
+eligible transient transport failures may use the read-only recovery below.
+Transport failures that outlast it, or that it cannot take,
 hold as `delivery_forge_observation_unavailable` unless a completion mutation
 started. Resolve the decision before a new delivery attempt; apart from
 `delivery_forge_observation_unavailable`, which `orbit job resume` continues
