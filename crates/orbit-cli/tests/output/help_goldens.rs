@@ -147,6 +147,35 @@ fn read_help(args: &[&str], home: &Path, work: &Path) -> String {
     String::from_utf8(output.stdout).expect("help is UTF-8")
 }
 
+fn check_help_goldens(root: &Path, update: bool, home: &Path, work: &Path) {
+    for case in discover_help_golden_cases(root) {
+        let args: Vec<_> = case.argv.iter().map(String::as_str).collect();
+        let relative = &case.golden;
+        let actual = read_help(&args, home, work).replace(env!("CARGO_PKG_VERSION"), "<VERSION>");
+        let path = root.join(relative);
+        if update {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap_or_else(|err| {
+                    panic!("create help golden directory {}: {err}", parent.display())
+                });
+            }
+            fs::write(&path, &actual)
+                .unwrap_or_else(|err| panic!("write help golden {}: {err}", path.display()));
+            continue;
+        }
+        let expected = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("read help golden {}: {err}", path.display()));
+        assert_eq!(
+            actual,
+            expected,
+            "`orbit {} --help` drifted from {relative}. If the new help is intentional, \
+             regenerate with `{UPDATE_HELP_GOLDENS_ENV}=1 cargo test -p orbit-cli --test \
+             output help_goldens::` or `make goldens UPDATE=1`, then review the diff.",
+            args.join(" ")
+        );
+    }
+}
+
 #[test]
 fn subcommand_globals_are_single_line_references() {
     let temp = tempdir().expect("tempdir");
@@ -211,25 +240,60 @@ fn help_matches_the_shipped_surface() {
     let update = std::env::var(UPDATE_HELP_GOLDENS_ENV).as_deref() == Ok("1");
 
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/help_goldens");
-    for case in discover_help_golden_cases(&root) {
-        let args: Vec<_> = case.argv.iter().map(String::as_str).collect();
-        let relative = &case.golden;
-        let actual = read_help(&args, &home, &work).replace(env!("CARGO_PKG_VERSION"), "<VERSION>");
-        let path = root.join(relative);
-        if update {
-            fs::write(&path, &actual)
-                .unwrap_or_else(|err| panic!("write help golden {}: {err}", path.display()));
-            continue;
-        }
-        let expected = fs::read_to_string(&path)
-            .unwrap_or_else(|err| panic!("read help golden {}: {err}", path.display()));
-        assert_eq!(
-            actual,
-            expected,
-            "`orbit {} --help` drifted from {relative}. If the new help is intentional, \
-             regenerate with `{UPDATE_HELP_GOLDENS_ENV}=1 cargo test -p orbit-cli --test \
-             output help_goldens::` or `make goldens UPDATE=1`, then review the diff.",
-            args.join(" ")
-        );
-    }
+    check_help_goldens(&root, update, &home, &work);
+}
+
+#[test]
+fn update_creates_missing_family_directories_but_validation_stays_strict() {
+    let temp = tempdir().expect("tempdir");
+    let root = temp.path().join("help_goldens");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    fs::create_dir_all(&root).expect("fixture root");
+    fs::create_dir_all(&home).expect("fixture home");
+    fs::create_dir_all(&work).expect("fixture work");
+    let bindings = root.join("new_family.cases.json");
+    fs::write(
+        &bindings,
+        r#"[{"argv":["task","show"],"golden":"new_family/show.txt"}]"#,
+    )
+    .expect("fixture binding");
+
+    let golden = root.join("new_family/show.txt");
+    assert!(!golden.exists(), "fixture golden must start missing");
+    check_help_goldens(&root, true, &home, &work);
+    assert!(
+        golden.is_file(),
+        "update mode must create the family directory"
+    );
+    assert!(
+        !fs::read_to_string(&golden)
+            .expect("generated help golden")
+            .is_empty()
+    );
+
+    fs::remove_file(&golden).expect("remove generated golden");
+    let missing = std::panic::catch_unwind(|| check_help_goldens(&root, false, &home, &work))
+        .expect_err("normal mode must reject a missing golden");
+    assert!(
+        missing
+            .downcast_ref::<String>()
+            .is_some_and(|message| message.contains("read help golden")),
+        "normal mode must fail while reading the missing golden"
+    );
+
+    fs::write(
+        &bindings,
+        r#"[{"argv":["task","show"],"golden":"../outside.txt"}]"#,
+    )
+    .expect("invalid fixture binding");
+    let invalid = std::panic::catch_unwind(|| check_help_goldens(&root, true, &home, &work))
+        .expect_err("update mode must reject an invalid golden path");
+    assert!(
+        invalid
+            .downcast_ref::<String>()
+            .is_some_and(|message| message.contains("invalid help golden path")),
+        "invalid paths must be rejected before update writes"
+    );
+    assert!(!temp.path().join("outside.txt").exists());
 }
