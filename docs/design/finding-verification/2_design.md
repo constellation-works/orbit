@@ -73,13 +73,17 @@ A verifier returns one **report** per task:
 | `evidence` | `[{location, note}]` | Each `location` is `path:line`: a relative path without `..` or empty segments, and a 1-based line. The file must exist at the pinned revision, and the line must not be past its end. |
 | `reasoning` | string | Non-empty. |
 | `reproduction` | string? | Optional. |
-| `severity` | `critical` \| `high` \| `medium` \| `low` | Required for CONFIRMED. |
+| `severity` | `critical` \| `high` \| `medium` \| `low` \| `nit` | Required for CONFIRMED. |
 | `rejection` | `{reason, fixed_at?, duplicate_of?, detail}` | Required for REJECTED, forbidden for CONFIRMED. `reason` is `premise_wrong`, `already_fixed` (needs `fixed_at`), `unreachable` or `duplicate` (needs `duplicate_of`). `detail` is non-empty. |
 
 CONFIRMED also needs at least one evidence location. A report that does not
 parse, fails a rule, or cites a missing file or line leaves its task
 `unverified` with reason `invalid_verdict` or `invalid_evidence`. A verifier
 that completes successfully but omits a verdict leaves `missing_verdict`.
+`severity` is the five-level scale review findings and `regression_from`
+classifications share: a classified link carries `severity` and reads back
+with `severity_source`, and the verifier confirms or adjusts the filer's
+rating (source `verified`).
 The shipped job forwards the position-aligned `fan_in.errors` array to apply
 as `partition_errors`: a failed verifier leaves `verifier_failed`, with its
 partition, crew and dispatch diagnostic. Failed workers retain null output
