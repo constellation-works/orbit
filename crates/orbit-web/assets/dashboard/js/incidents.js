@@ -138,9 +138,9 @@ function incidentMessageText(row) {
 
 // The feed bounds every message and flags a cut one `truncated` [ORB-15527];
 // `message_event_id` names the audit row the detail panel loads it from. A
-// message that ends in an ellipsis was cut before it was stored; when one of
-// the incident's own audit events carries a longer copy of the same text,
-// that copy is the message.
+// message that ends in an ellipsis was cut before it was stored. The server
+// recovers complete copies before bounding the evidence preview; consider
+// those messages across runs, plus preview rows from older servers.
 function fullMessage(incidents) {
   const sample = incidents[0];
   const recorded = recordedMessage(sample);
@@ -152,9 +152,14 @@ function fullMessage(incidents) {
   if (!TRAILING_ELLIPSIS.test(recorded)) return { text: recorded, recorded: true, truncated: false };
   const stem = recorded.replace(TRAILING_ELLIPSIS, "");
   for (const incident of incidents) {
-    for (const event of incidentEvents(incident)) {
+    for (const event of [incident, ...incidentEvents(incident)]) {
       const message = recordedMessage(event);
       if (message.length > stem.length && message.startsWith(stem) && !TRAILING_ELLIPSIS.test(message)) {
+        if (event.truncated === true) {
+          const sourceId = event === incident ? event.message_event_id : event.id;
+          const eventId = Number.isSafeInteger(sourceId) && sourceId > 0 ? sourceId : null;
+          return { text: message, recorded: true, truncated: true, eventId };
+        }
         return { text: message, recorded: true, truncated: false };
       }
     }
