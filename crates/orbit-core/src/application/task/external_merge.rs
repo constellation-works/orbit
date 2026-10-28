@@ -86,6 +86,7 @@ use crate::OrbitRuntime;
 use crate::application::task::{TaskRecords, TaskWorkspaceAutoPort};
 use crate::runtime::task_pr_forge::MergedPullRequest;
 
+mod handoff;
 mod rescued;
 
 /// The statuses a task settles from.
@@ -146,6 +147,8 @@ struct RevokedHandoff {
     handoff_id: String,
     pull_request: u64,
     landing_branch: String,
+    /// A stopped authorized handoff needs independent candidate/head verification.
+    candidate: Option<orbit_types::workflow::handoff::HandoffCandidate>,
 }
 
 impl Candidate {
@@ -445,6 +448,15 @@ impl OrbitRuntime {
                     accepted.handoff_id, claim.claim.claim_id
                 ));
             }
+            Some(LandingStartState::Pending)
+                if tasks
+                    .landing_attempts()
+                    .map_err(unreadable)?
+                    .iter()
+                    .any(|attempt| {
+                        attempt.handoff_id == accepted.handoff_id
+                            && attempt.state == LandingAttemptState::Stopped
+                    }) => {}
             Some(LandingStartState::Pending) => {
                 return Err(format!(
                     "{unsettled}: its handoff holds completion authority, and the owner's \
@@ -487,7 +499,8 @@ impl OrbitRuntime {
             claim_id: claim.claim.claim_id,
             handoff_id: accepted.handoff_id,
             pull_request: number,
-            landing_branch: candidate.landing_branch,
+            landing_branch: candidate.landing_branch.clone(),
+            candidate: (authority == Some(LandingStartState::Pending)).then_some(candidate),
         }))
     }
 
@@ -653,7 +666,13 @@ impl OrbitRuntime {
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         let id = observed.id.as_str();
         let number = landing.pull.number;
-        let (_, note) = landing_note(landing);
+        let (_, mut note) = landing_note(landing);
+        if revoked.candidate.is_some() {
+            note.push_str(&format!(
+                "; verified accepted candidate plus base merges at head {}",
+                landing.head_sha
+            ));
+        }
         if let Some(live) = self.live_task_run(observed) {
             return Err(refused(id, &live));
         }
@@ -664,11 +683,15 @@ impl OrbitRuntime {
             .map_err(|error| refused(id, &error.to_string()))?;
         self.ensure_resolves_are_workspace_local(observed)?;
         let history_actor = actor.unwrap_or(SYSTEM_ACTOR_LABEL).to_string();
-        let context = ClaimInvocation::trusted_operator(
-            id.to_string(),
-            revoked.claim_id.clone(),
-            history_actor,
-        );
+        let context = self.external_handoff_settlement_context(
+            revoked,
+            landing,
+            ClaimInvocation::trusted_operator(
+                id.to_string(),
+                revoked.claim_id.clone(),
+                history_actor,
+            ),
+        )?;
         self.with_mutation(|| {
             self.mutate_execution_claim(
                 Some(&context),
@@ -682,6 +705,10 @@ impl OrbitRuntime {
                     base_branch: landing.base_branch.clone(),
                     merge_commit: landing.merge_commit.clone(),
                     note: note.clone(),
+                    verified_candidate_head: revoked
+                        .candidate
+                        .as_ref()
+                        .map(|_| landing.head_sha.clone()),
                 },
             )
             .map_err(|error| refused(id, &error.to_string()))?;

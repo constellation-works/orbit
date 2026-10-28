@@ -226,7 +226,6 @@ impl OrbitRuntime {
             || accepted.handoff.candidate.repository != request.repository
             || accepted.handoff.candidate.source_branch != request.head_branch
             || accepted.handoff.candidate.base_branch != request.base_branch
-            || accepted.handoff.candidate.candidate.commit != request.head_sha
             || accepted.handoff.candidate.delivery
                 != (orbit_types::workflow::handoff::HandoffDelivery::PullRequest {
                     number: request
@@ -238,6 +237,26 @@ impl OrbitRuntime {
             return Err(OrbitError::InvalidInput(
                 "base update differs from accepted handoff".into(),
             ));
+        }
+        if request.head_sha != accepted.handoff.candidate.candidate.commit {
+            let response = orbit_engine::RuntimeHost::run_private_vcs_operation(
+                self,
+                "pr.status",
+                serde_json::json!({
+                    "workspace_path":self.paths().repo_root,"pr":request.pr_number,
+                }),
+            )?;
+            let status = orbit_engine::PullRequestStatus::from_status_response(&response);
+            if status.head_sha.as_deref() != Some(&request.head_sha) {
+                return Err(OrbitError::InvalidInput(
+                    "base update head changed before admission".into(),
+                ));
+            }
+            orbit_engine::verify_handoff_pull_request_head(
+                &self.paths().repo_root,
+                &accepted.handoff.candidate,
+                &status,
+            )?;
         }
         let observation = orbit_store::contracts::HandoffObservation {
             candidate: accepted.handoff.candidate.clone(),

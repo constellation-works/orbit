@@ -97,6 +97,25 @@ pub fn observe_accepted_published_handoff<H: RuntimeHost + ?Sized>(
     observe_published(host, workspace_path, &accepted.handoff.candidate, true)
 }
 
+/// Verify the forge's current head and, when merged, delivery tree for an
+/// immutable accepted candidate. Clean first-parent base updates are allowed;
+/// source edits, a stale landing ref and unreadable objects refuse settlement.
+pub fn verify_handoff_pull_request_head(
+    workspace: &Path,
+    candidate: &HandoffCandidate,
+    status: &PullRequestStatus,
+) -> Result<(), OrbitError> {
+    super::super::landing::checks::verify_published_base_update(workspace, candidate, status)?;
+    observe_accepted_revision(
+        workspace,
+        &candidate.candidate,
+        "candidate",
+        "handoff verification",
+    )?;
+    observe_accepted_revision(workspace, &candidate.base, "base", "handoff verification")?;
+    Ok(())
+}
+
 fn observe_published<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &Path,

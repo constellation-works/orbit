@@ -49,7 +49,8 @@ pub fn pr_base_update_reservations(
         .collect()
 }
 
-/// One update per repository/PR across heads, causes, siblings and restarts.
+/// One update per repository/PR, or at most three for inherited handoff
+/// recovery within the original execution and deadline. Auto-fix stays single-use.
 pub fn decide_pr_base_update(
     history: &[TaskHistoryEntry],
     request: &PrBaseUpdateReservation,
@@ -61,20 +62,40 @@ pub fn decide_pr_base_update(
         Ok(reservations) => reservations,
         Err(reason) => return PrBaseUpdateAdmission::Refused(reason),
     };
-    if let Some(previous) = reservations
+    let prior: Vec<_> = reservations
         .into_iter()
-        .find(|row| row.repository == request.repository && row.pr_number == request.pr_number)
-    {
-        if previous.head_sha == request.head_sha
-            && previous.head_branch == request.head_branch
+        .filter(|row| row.repository == request.repository && row.pr_number == request.pr_number)
+        .collect();
+    if let Some(previous) = prior.iter().find(|row| row.head_sha == request.head_sha) {
+        if previous.head_branch == request.head_branch
             && previous.base_branch == request.base_branch
             && previous.base_sha == request.base_sha
             && previous.evidence == request.evidence
         {
-            return PrBaseUpdateAdmission::Observe(Box::new(previous));
+            return PrBaseUpdateAdmission::Observe(Box::new((*previous).clone()));
         }
-        return PrBaseUpdateAdmission::Refused("the cumulative base update budget is spent".into());
+        return PrBaseUpdateAdmission::Refused(
+            "the cumulative base update budget is spent for this head".into(),
+        );
     }
+    if let Some(first) = prior.first() {
+        let handoff_retry = request.evidence["cause"] == "inherited"
+            && request.evidence["handoff_id"].as_str() == Some(request.execution.as_str())
+            && prior.len() < 3
+            && request.deadline_ms <= first.deadline_ms
+            && prior.iter().all(|row| {
+                row.execution == request.execution
+                    && row.head_branch == request.head_branch
+                    && row.base_branch == request.base_branch
+                    && row.base_sha != request.base_sha
+            });
+        if !handoff_retry {
+            return PrBaseUpdateAdmission::Refused(
+                "the cumulative base update budget is spent".into(),
+            );
+        }
+    }
+
     PrBaseUpdateAdmission::Reserved
 }
 

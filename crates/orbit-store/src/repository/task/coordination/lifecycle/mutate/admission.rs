@@ -22,8 +22,10 @@ impl TaskCommitBoundary {
             let decision = decide_pr_base_update(&history, request);
             if matches!(decision, PrBaseUpdateAdmission::Reserved) {
                 let mutation = ClaimMutation::ReserveBaseUpdate(request.clone());
-                let mutation_id =
-                    format!("base-update:{}:{}", request.repository, request.pr_number);
+                let mutation_id = format!(
+                    "base-update:{}:{}:{}",
+                    request.repository, request.pr_number, request.head_sha
+                );
                 let receipt_id = sha256_hex(encode(&(&auth.claim_id, &mutation_id))?.as_bytes());
                 let input = encode(&(
                     &auth.task_id,
@@ -53,7 +55,12 @@ impl TaskCommitBoundary {
         let candidate = &accepted.handoff.candidate;
         if request.execution != accepted.handoff_id
             || request.repository != candidate.repository
-            || request.head_sha != candidate.candidate.commit
+            || (request.head_sha != candidate.candidate.commit
+                && !(request.evidence["cause"] == "inherited"
+                    && request.evidence["handoff_id"].as_str()
+                        == Some(accepted.handoff_id.as_str())
+                    && request.evidence["candidate"].as_str()
+                        == Some(candidate.candidate.commit.as_str())))
             || request.head_branch != candidate.source_branch
             || request.base_branch != candidate.base_branch
             || candidate.delivery

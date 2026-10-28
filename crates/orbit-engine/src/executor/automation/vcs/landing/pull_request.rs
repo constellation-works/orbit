@@ -39,8 +39,17 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
         max_wait_seconds,
         poll_interval_seconds,
         started,
-        deadline_ms,
+        mut deadline_ms,
     } = *budget;
+    let history = host.get_task_history(&context.task_id)?;
+    let reservations = orbit_types::workflow::pr_base_update_reservations(&history)
+        .map_err(OrbitError::Execution)?;
+    for prior in reservations
+        .iter()
+        .filter(|row| row.repository == candidate.repository && row.pr_number == pr_number)
+    {
+        deadline_ms = deadline_ms.min(prior.deadline_ms);
+    }
     let mut recovery = CheckRecovery::before(deadline_ms);
     let mut unreported = UnreportedChecks::new();
     let mut waited_seconds = 0_u64;
@@ -137,6 +146,26 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
             let observed = observe_candidate(context, Some(&status), view).map_err(|error| {
                 stop_pr(host, context, &diagnostic, false, &error.to_string()).unwrap_or(error)
             })?;
+            evidence["external_merge"] = json!(intent.is_none());
+            if intent.is_none() {
+                host.apply_task_automation_update(
+                    &context.task_id,
+                    crate::context::TaskAutomationUpdate {
+                        append_history: vec![orbit_types::task::TaskHistoryEntry {
+                            at: chrono::Utc::now(),
+                            by: "system".into(),
+                            event: orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT
+                                .into(),
+                            note: Some(evidence.to_string()),
+                            from_status: None,
+                            to_status: None,
+                            operation_id: None,
+                            decision: None,
+                        }],
+                        ..Default::default()
+                    },
+                )?;
+            }
             if let Some(intent_id) = intent {
                 record(
                     host,
@@ -338,21 +367,26 @@ pub(super) fn land_pull_request<H: RuntimeHost + ?Sized>(
                 diagnostic["required_checks"] = observation;
             }
             match recovered {
-                CheckRecoveryStep::Acted => continue,
+                CheckRecoveryStep::Acted => {
+                    recovery.waiting_for_base = None;
+                    continue;
+                }
                 CheckRecoveryStep::Wait => waiting_on_recovery = true,
                 CheckRecoveryStep::WaitForBase(reason) => {
                     diagnostic["base_suspicion"] = json!(reason);
+                    if recovery.waiting_for_base.as_deref() != Some(&reason) {
+                        host.apply_task_automation_update(&context.task_id, crate::context::TaskAutomationUpdate {
+                            append_history: vec![orbit_types::task::TaskHistoryEntry {
+                                at: chrono::Utc::now(), by: "system".into(),
+                                event: "landing_waiting_for_base".into(),
+                                note: Some(json!({"state":"waiting_for_base","reason":reason,"head":status.head_sha,"deadline_ms":deadline_ms}).to_string()),
+                                from_status: None, to_status: None, operation_id: None, decision: None,
+                            }],
+                            ..Default::default()
+                        })?;
+                        recovery.waiting_for_base = Some(reason);
+                    }
                     waiting_on_recovery = true;
-                }
-                CheckRecoveryStep::HoldForBase(reason) => {
-                    return Err(hold_pr(
-                        host,
-                        context,
-                        &diagnostic,
-                        false,
-                        DeliveryRefusal::BaseChecksPending,
-                        &reason,
-                    )?);
                 }
                 CheckRecoveryStep::Repair(evidence) => {
                     return Err(stop_pr(host, context, &diagnostic, true, &evidence)?);
@@ -595,7 +629,7 @@ fn landing_timeout<H: RuntimeHost + ?Sized>(
             DeliveryRefusal::BaseChecksPending,
             &format!(
                 "pull request #{number} is waiting for the base's own check result after \
-                 {max_wait_seconds}s: {suspicion}; the candidate stays in review"
+                 {max_wait_seconds}s: the base never recovered before the landing deadline; {suspicion}; the candidate stays in review"
             ),
         );
     }

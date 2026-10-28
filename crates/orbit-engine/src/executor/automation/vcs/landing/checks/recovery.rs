@@ -53,6 +53,7 @@ pub(in crate::executor::automation::vcs) struct CheckRecovery {
     /// The rerun's later completion must not demand yet another base pass.
     rerun_candidates: BTreeSet<(u64, String, String)>,
     updated: bool,
+    pub(in crate::executor::automation::vcs) waiting_for_base: Option<String>,
     pub(super) deadline_ms: u64,
     /// Failed jobs already acted on, so a rollup that still shows them
     /// before the provider registers the rerun or update waits instead.
@@ -88,8 +89,6 @@ pub(in crate::executor::automation::vcs) enum CheckRecoveryStep {
     Wait,
     /// A base-suspect failure waits without authorizing candidate recovery.
     WaitForBase(String),
-    /// A confirmed red base holds this landing without any recovery.
-    HoldForBase(String),
     /// Stop for the one automatic repair, with this evidence.
     Repair(String),
     /// [ORB-16890] That repair is spent: stop so the owner returns the task
@@ -332,7 +331,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         ))),
         CheckFailureClass::Inherited
             if (recovery.updated || head != context.candidate.candidate.commit)
-                && onto_passing_tip(&jobs) =>
+                && onto_passing_tip(&jobs)
+                && landing_tip.is_some_and(|tip| contains(workspace, tip, head)) =>
         {
             // The one update already landed the candidate on a base tip where
             // the same job passes, so the failure that remains is the
@@ -347,20 +347,21 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 )))
             }
         }
-        CheckFailureClass::Inherited
-            if recovery.updated || head != context.candidate.candidate.commit =>
-        {
-            Ok(CheckRecoveryStep::HoldForBase(evidence(
-                "it failed again after one branch update, so the candidate stays in review",
-            )))
-        }
         CheckFailureClass::Inherited => {
             let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) else {
-                return Ok(CheckRecoveryStep::HoldForBase(evidence(
-                    "the base branch has not moved past it, so the base is still red and the \
-                     candidate stays in review",
+                return Ok(CheckRecoveryStep::WaitForBase(evidence(
+                    "waiting for a newer passing base commit within the landing deadline; the base is still red",
                 )));
             };
+            // After the first update, only a same-job passing base authorizes
+            // another. A newer red or unproven tip keeps the original deadline.
+            if (recovery.updated || head != context.candidate.candidate.commit)
+                && !onto_passing_tip(&jobs)
+            {
+                return Ok(CheckRecoveryStep::WaitForBase(evidence(
+                    "waiting for the same job to pass on a newer base commit within the landing deadline",
+                )));
+            }
             let request = orbit_types::workflow::PrBaseUpdateReservation {
                 execution: context.handoff_id.clone(),
                 repository: context.candidate.repository.clone(),
@@ -370,7 +371,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 base_branch: context.candidate.base_branch.clone(),
                 base_sha: tip.into(),
                 deadline_ms: recovery.deadline_ms,
-                evidence: json!({"cause":"inherited","classification":classified}),
+                evidence: json!({"cause":"inherited","handoff_id":context.handoff_id,"candidate":context.candidate.candidate.commit,"classification":classified}),
             };
             match host.admit_handoff_base_update(&context.handoff_id, &request)? {
                 orbit_types::workflow::PrBaseUpdateAdmission::Reserved => {}
@@ -380,7 +381,9 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                     return Ok(CheckRecoveryStep::Wait);
                 }
                 orbit_types::workflow::PrBaseUpdateAdmission::Refused(reason) => {
-                    return Ok(CheckRecoveryStep::Stop(reason));
+                    return Ok(CheckRecoveryStep::WaitForBase(evidence(&format!(
+                        "waiting within the landing deadline: {reason}"
+                    ))));
                 }
             }
             // The reservation survives an unknown provider reply. Re-observe

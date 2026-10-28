@@ -463,6 +463,7 @@ impl TaskCommitBoundary {
         pull_request: u64,
         base_branch: &str,
         merge_commit: &str,
+        verified_candidate_head: Option<&str>,
         history: &[TaskHistoryEntry],
     ) -> Result<(), OrbitError> {
         if !auth.operator || state.claim.phase != ExecutionClaimPhase::HandedOff {
@@ -485,10 +486,22 @@ impl TaskCommitBoundary {
             ));
         }
         if !self.handoff_authority_revoked(handoff_id)? {
-            return Err(invalid(
-                "handoff completion authority is not revoked; approval or the owner landing \
-                 job completes this handoff",
-            ));
+            let stopped = self
+                .attempt_row(handoff_id)?
+                .map(|raw| decode::<LandingAttempt>(&raw.payload_json))
+                .transpose()?
+                .is_some_and(|attempt| attempt.state == LandingAttemptState::Stopped);
+            if !stopped
+                || !verified_candidate_head.is_some_and(|head| {
+                    matches!(head.len(), 40 | 64)
+                        && head.bytes().all(|byte| byte.is_ascii_hexdigit())
+                })
+            {
+                return Err(invalid(
+                    "handoff completion authority is not revoked; a stopped attempt and owner-verified candidate head are required",
+                ));
+            }
+            self.check_handoff_landing(auth, state)?;
         }
         if let Some(raw) = self.attempt_row(handoff_id)?
             && decode::<LandingAttempt>(&raw.payload_json)?.state == LandingAttemptState::Dispatched
@@ -510,6 +523,26 @@ impl TaskCommitBoundary {
             return Err(invalid("the task owes acceptance criteria after deploy"));
         }
         Ok(())
+    }
+
+    /// Finish an externally merged stopped attempt under its existing authority.
+    pub(super) fn complete_external_merge_attempt(
+        &self,
+        handoff_id: &str,
+        evidence: &str,
+        effects: &mut ClaimCommitEffects,
+    ) -> Result<(), OrbitError> {
+        let old = self
+            .attempt_row(handoff_id)?
+            .ok_or_else(|| invalid("stopped landing attempt required"))?;
+        let mut attempt: LandingAttempt = decode(&old.payload_json)?;
+        attempt.state = LandingAttemptState::Merged;
+        attempt.evidence = Some(evidence.into());
+        attempt.updated_at = Utc::now();
+        effects
+            .replacements
+            .push((old, row(ATTEMPT, handoff_id, &attempt)?));
+        self.settle_landing_request(handoff_id, LandingStartState::Completed, effects)
     }
 
     /// Stop the live attempt with durable evidence. The task stays in `review`

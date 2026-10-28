@@ -1644,13 +1644,20 @@ one. From then on:
   - **inherited**: the same signature fails on the candidate's base commit,
     or the landing branch has moved past that base and the same job passes
     on its tip. The landing updates the pull request's branch from the
-    landing branch once and waits for the checks on the new head. No agent
-    runs. If the same check still fails on that new head and the same job
-    passes on the base tip, the failure is the candidate's: the landing
+    landing branch and waits for the checks on the new head. No agent
+    runs. A failure that survives the update while the base stays red records
+    `landing_waiting_for_base` in task history, including the reason, head and
+    original deadline. The landing keeps polling. When the same jobs pass on
+    a newer base commit, it updates again and rechecks, up to three cumulative
+    updates for that handoff. Each update records `pr_base_update_reserved`
+    before the provider call; polls and restarts cannot reset the count or
+    extend the deadline. If the same check still fails on that new head and the same job
+    passes on the base tip already contained in that head, the failure is the candidate's: the landing
     stops for the one automatic repair, and the stop evidence carries the
     failed job, its signature and a log excerpt. A repair that is already
     spent returns the task to the backlog instead (below). A base that has not moved, and is still
-    red, stops in `review` without a repair. `orbit run auto --auto-fix` uses
+    red, waits until the landing deadline, then stops in `review` without a
+    repair, recording that the base never recovered. `orbit run auto --auto-fix` uses
     this same classification for that unmoved red base: it spends no repair
     attempt, waits out its completion deadline, and stops with a base-red
     reason. It does the same when the base has moved and the tip's same job
@@ -1684,8 +1691,8 @@ one. From then on:
     again becomes **candidate** and takes the usual automatic repair; its
     later completion does not require another fresh base pass. An
     **inherited** outcome on a moved tip takes the inherited recovery
-    above: one branch update, and a failure that still fails after it
-    while the tip does not pass stops in `review` without a repair. A tip
+    above: a branch update, then a wait for a newer passing base within the
+    original deadline if the failure survives while the base is still red. A tip
     pass or same-signature tip failure that started before the candidate's
     job completed decides nothing: the failure stays **base-suspect**. A
     base that gets no such run before `max_wait_seconds` stops the landing
@@ -1768,7 +1775,8 @@ one. From then on:
   Transient and flaky failures share one rerun budget per head. Each rerun
   records `ci_check_rerun` in task history with the head, workflow run ID,
   job IDs, check names, classifications and signatures.
-  Each of the rerun, the branch update and the repair is spent once. A
+  Reruns and repairs are spent once. Inherited handoff updates are bounded
+  to three within the original landing deadline. A
   failure past that budget, or one the landing cannot classify (its jobs or
   log are unreadable), stops the landing with the task in `review` and the
   classification in the stop evidence (`orbit task show <task-id>`).
@@ -1818,8 +1826,10 @@ one. From then on:
   Every currently required and owner-owed check must actually succeed on the
   new head before the normal conditional merge.
 
-  This uses the same cumulative base-update reservation as inherited failures:
-  one update per repository/PR on the owning task, recorded before mutation.
+  This uses the same cumulative base-update reservation as inherited failures.
+  Absent-emission and auto-fix recovery get one update per repository/PR; only
+  inherited handoff recovery may reserve further distinct heads and base tips,
+  up to three updates within the original deadline, recorded before mutation.
   The owner rechecks current handoff authorization and pinned native/review
   evidence in the owner claim/task transaction and again before the provider update; revoked
   or unreadable authority cannot reserve an update.
@@ -2529,3 +2539,24 @@ Preserve schedule files; do not bulk-disable routines as cleanup.
 - [Distributed drain design](../design/distributed-drain/2_design.md) and
   [task-pull spec](../design/distributed-drain/specs/task-pull.md)
 - Embedded skill: [distributed-drain setup](../../crates/orbit-core/assets/skills/orbit/references/setup/distributed-drain.md)
+
+### Operator updates and external merges of handed-off PRs
+
+Retry landing and active landing accept a first-parent chain of clean base
+merges on top of the immutable accepted candidate. Every extra commit must
+have exactly two parents, the previous head first and a commit contained in
+the freshly fetched landing branch second, with exactly their clean merge
+tree. Other source changes require `reconcile_review`.
+
+A waiting landing observes an operator merge through its ordinary PR poll.
+The existing external-merge settlement pass also considers a stopped handoff
+that still holds completion authority. It verifies the accepted candidate and
+base, the entire update chain and the reported merge tree against the fetched
+landing branch. When GitHub deleted the source branch, it fetches
+`refs/pull/<number>/head`. Only after that verification does the claim journal
+atomically mark the attempt merged, complete its landing request, end the
+claim as landed and finish the task. Task history records
+`external_merge_settled` with the PR, merged commit and verified head. Live
+owner jobs, unresolved merge intents, unapproved handoffs and changed heads
+keep their existing fences. Operator-revoked handoffs keep their existing
+settlement route.

@@ -10,13 +10,14 @@
 //! - **inherited**: the same signature fails on the candidate's base commit,
 //!   or the base branch has moved past that base and the same job passes on
 //!   its tip. The landing merges the current base into the pull request's
-//!   branch once, through the provider's branch update, and waits for the
-//!   checks again on the new head. No agent runs. A failure that is still
-//!   there after that one update, on a base tip where the same job passes,
-//!   is the candidate's: the landing stops for the one automatic repair,
-//!   with the failed job, its signature and a log excerpt, unless that
-//!   repair is already spent, in which case it stops for a requeue (below).
-//!   An unmoved base that is still red stops in review without a repair.
+//!   branch and waits for the checks again. If the base remains red, the
+//!   landing records a visible wait and polls within its original deadline.
+//!   A newer base where every inherited job passes permits another update,
+//!   with at most three cumulative updates for the handoff. No agent runs.
+//!   Only a failure on a head that already contains that passing tip earns
+//!   the candidate's one automatic repair, or its backlog requeue when spent.
+//!   At the deadline, a red base stops in review with a base-never-recovered
+//!   reason.
 //! - **transient**: the log shows the network or the runner failing, by the
 //!   rule the validation gates already rerun on. The landing reruns the
 //!   failed jobs once and waits again.
@@ -56,17 +57,16 @@
 //! A stale rollup entry for a job already rerun or updated can wait for its
 //! replacement to register, but never hides a separately failed aggregate.
 //!
-//! The rerun, the branch update and the repair are each spent once. A
-//! failure past that budget, other than the candidate's own, or one this
-//! module cannot classify, stops the landing in review, with the
-//! classification in the stop evidence. The
-//! repair an inherited failure earns after its one update is that same
-//! single repair, not a second update or a second repair.
+//! Reruns and repairs remain single-use. Inherited handoff updates share a
+//! persisted count and original deadline across polls and restarts; auto-fix
+//! and absent-emission recovery retain their one-update budget. Unreadable
+//! evidence stops in review without spending recovery.
 //!
 //! A branch update moves the pull request's head off the accepted candidate.
 //! [`verified_base_update`] accepts the new head only when it is a merge of
-//! that candidate with a commit already on the landing branch whose tree is
-//! exactly the clean merge of the two, so nothing but the base's own advance
+//! that candidate through a first-parent chain of merges with commits on the
+//! landing branch, each tree exactly the clean merge of its parents, so nothing
+//! but the base's own advance
 //! reaches the merge. The provider merges the base as it is when the update
 //! runs, so the caller refreshes the landing ref before asking. The owner's
 //! accepted candidate, its validation evidence and the observation the store
