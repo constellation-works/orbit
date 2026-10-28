@@ -5,13 +5,18 @@
 //! tools on a real store, for a remote owner and for an owner on the
 //! worker's own machine. The local route once skipped the claim's
 //! `review-*` and delivery-run refusals the broker applies (ORB-19289).
+//! Same-task review reads must also reach the broker's running-reviewer
+//! check: the implementer shares the reviewer's worker binding (ORB-19359).
 
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
 use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
-use orbit_types::workflow::{REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT};
+use orbit_types::workflow::{
+    REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT,
+    REVIEW_REPORT_HISTORY_ARTIFACT,
+};
 use serde_json::{Value, json};
 
 use super::super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
@@ -358,7 +363,8 @@ fn a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refu
 }
 
 #[test]
-fn a_claimed_worker_on_its_owners_machine_writes_review_artifacts_only_as_the_running_reviewer() {
+fn a_claimed_worker_on_its_owners_machine_reads_and_writes_review_artifacts_only_as_the_running_reviewer()
+ {
     let mut fixture = Fixture::new();
     let local = WorkerInvocation {
         owner_machine_id: FOLLOWER.into(),
@@ -371,6 +377,19 @@ fn a_claimed_worker_on_its_owners_machine_writes_review_artifacts_only_as_the_ru
         .unwrap();
     fixture.binding = local;
     let (report, bytes) = fixture.report("report.json", &fixture.attempt_id);
+    fixture.owner.hold(REVIEW_REPORT_ARTIFACT, &bytes);
+    fixture
+        .owner
+        .hold(REVIEW_REPORT_HISTORY_ARTIFACT, br#"{"revisions":[]}"#);
+    fixture
+        .owner
+        .hold(REVIEW_EVIDENCE_HOLD_ARTIFACT, br#"{"requirements":[]}"#);
+    let contracts = [
+        REVIEW_MANIFEST_ARTIFACT,
+        REVIEW_REPORT_ARTIFACT,
+        REVIEW_REPORT_HISTORY_ARTIFACT,
+        REVIEW_EVIDENCE_HOLD_ARTIFACT,
+    ];
     let put = json!({"id": fixture.binding.task_id, "path": REVIEW_REPORT_ARTIFACT,
                      "source_path": report});
 
@@ -378,6 +397,31 @@ fn a_claimed_worker_on_its_owners_machine_writes_review_artifacts_only_as_the_ru
     // broker can tell them apart; a report naming the open attempt is still
     // refused for it.
     let implementer = fixture.serve("agent_implement");
+    // Same-task reads once bypassed the broker on a local owner. Even the
+    // contract and respelled review names must reach its reviewer check.
+    for path in contracts.into_iter().chain([
+        "review-gate.json",
+        "review-baseline.json",
+        "review-evidence-private.log",
+        " ./review-report.json ",
+        "REVIEW-REPORT.JSON",
+    ]) {
+        let error = fixture
+            .forwarded(
+                &implementer,
+                GET,
+                json!({"id": fixture.binding.task_id, "path": path}),
+            )
+            .unwrap_err();
+        assert!(
+            error.contains("claimed_review_bridge_refused") && error.contains("before-PR reviewer"),
+            "{path}: {error}"
+        );
+    }
+    assert!(
+        fixture.owner.reads().is_empty(),
+        "a non-reviewer's same-task review reads never reach the owner"
+    );
     let error = fixture
         .forwarded(&implementer, PUT, put.clone())
         .unwrap_err();
@@ -391,6 +435,23 @@ fn a_claimed_worker_on_its_owners_machine_writes_review_artifacts_only_as_the_ru
     );
 
     let reviewer = fixture.serve("agent_review_repair");
+    for path in contracts {
+        let read = fixture
+            .forwarded(
+                &reviewer,
+                GET,
+                json!({"id": fixture.binding.task_id, "path": path}),
+            )
+            .unwrap();
+        assert_eq!(read["path"], path);
+        assert_eq!(read["id"], fixture.binding.task_id);
+        assert!(
+            read["content"]
+                .as_str()
+                .is_some_and(|text| !text.is_empty())
+        );
+    }
+    assert_eq!(fixture.owner.reads(), contracts);
     fixture.forwarded(&reviewer, PUT, put).unwrap();
     let puts = fixture.owner.puts();
     assert_eq!(puts.len(), 1);

@@ -38,10 +38,12 @@
 //! nested `orbit` applies the same request checks to its reads and puts
 //! there, so both routes widen and refuse alike: another task's `review-*`
 //! artifacts and another run's delivery of the claimed task are refused
-//! there too. Its `review-*` puts still go to the run's broker, the only
-//! holder of the run's activity, which applies the reviewer's attempt scope
-//! as it does for a remote owner [ORB-19289]. This follows STD-05 R1 (the
-//! read scope derives from the claim's binding, which the host holds, never
+//! there too. Its `review-*` reads and puts go to the run's broker, the only
+//! holder of the run's activity and admitted review attempt. It applies the
+//! same reviewer, final-recovery and findings-read scopes as for a remote
+//! owner; the shared worker binding cannot authorize review reads. This
+//! follows STD-05 R1 (the read scope derives from the claim's binding,
+//! which the host holds, never
 //! from a workspace, view or task the request names) and R3 (every entry
 //! route calls the same checks).
 //!
@@ -100,9 +102,9 @@ pub enum ClaimedOwnerRoute {
 /// or MCP) to its run's broker.
 ///
 /// `None` leaves the call on the caller's existing route: not a coordination
-/// tool, a local owner's call other than a `review-*` put, no remote owner,
-/// or an unsandboxed worker without a broker, which can reach the owner
-/// itself.
+/// tool, a local owner's call other than a `review-*` read or put, no remote
+/// owner, or an unsandboxed worker without a broker, which can reach the
+/// owner itself.
 #[allow(clippy::too_many_arguments)]
 pub fn bridge_claimed_owner_call(
     global_root: &Path,
@@ -150,7 +152,7 @@ pub(super) fn bridge_through(
     }
     let local = process_machine_id?;
     let binding = if local_owner(binding, local) {
-        // Only a review write needs the broker's reviewer scope; every other
+        // Review reads and writes need the broker's activity scope; every other
         // call keeps the in-process owner route once its checks pass.
         match local_owner_scope(binding, name, input, cwd, workspace_root) {
             Ok(true) => binding,
@@ -264,7 +266,7 @@ fn local_owner(binding: &WorkerInvocation, process_machine_id: &str) -> bool {
 /// artifacts, and the claimed task's delivery of its leaf run only. The owner
 /// route then pins the binding's workspace, as the broker's does.
 ///
-/// Answers whether the call is a `review-*` write, which only the run's
+/// Answers whether the call is a `review-*` read or write, which only the run's
 /// broker can scope: the reviewer's attempt is in the run's records, not in
 /// the worker binding the reviewer shares with every activity of its leaf.
 fn local_owner_scope(
@@ -296,6 +298,7 @@ fn local_owner_scope(
             let path = canonical_artifact_path(object)?;
             if super::claimed_review::is_review_artifact(&path) {
                 require_claimed_task(object, binding)?;
+                return Ok(true);
             }
             Ok(false)
         }
@@ -390,20 +393,20 @@ pub(super) fn denied(reason: &str) -> OrbitError {
 }
 
 /// The claim a broker serves, from host records alone: the step runner's
-/// worker binding, whose owner must be another machine, and the run's task.
-/// A claim whose owner is this machine is served only for a `review-*` put,
-/// which needs the reviewer's attempt scope the worker cannot derive itself.
+/// worker binding and the run's task. A remote owner's calls use this route.
+/// A claim whose owner is this machine is served only for a `review-*` read
+/// or put, which needs the activity scope the worker cannot derive itself.
 fn claim_binding<'a>(
     runtime: &'a OrbitRuntime,
     run: &orbit_engine::PluginBrokerRun,
-    review_write: bool,
+    review_artifact: bool,
 ) -> Result<&'a WorkerInvocation, OrbitError> {
     let binding = runtime
         .worker_invocation()
         .ok_or_else(|| denied("this run is not bound to a claim"))?;
     let machine = runtime.automation_machine_identity();
     let served = remote_owner(Some(binding), machine).is_some()
-        || (review_write && machine.is_some_and(|machine| local_owner(binding, machine)));
+        || (review_artifact && machine.is_some_and(|machine| local_owner(binding, machine)));
     if !served {
         return Err(denied(
             "the claim's owner is this machine, which the worker reaches directly",
@@ -573,7 +576,7 @@ pub(super) fn execute_brokered(
         _ => String::new(),
     };
     let review = matches!(tool, GET | PUT) && super::claimed_review::is_review_artifact(&path);
-    let binding = claim_binding(runtime, run, review && tool == PUT)?;
+    let binding = claim_binding(runtime, run, review)?;
     if review {
         // Another task's review artifacts are outside the claim for every
         // activity, before any review scope decides [ORB-19289].
