@@ -36,6 +36,8 @@ pub(crate) struct TaskRecordUpdateParams {
     pub(crate) external_refs: Option<Vec<ExternalRef>>,
     pub(crate) pr_status: Option<Option<String>>,
     pub(crate) source_task_id: Option<Option<String>>,
+    /// Recording policy applied to a classification inherited by a re-link.
+    pub(crate) drop_inherited_regression_sites: bool,
     pub(crate) job_run_id: Option<Option<String>>,
     pub(crate) crew: Option<Option<String>>,
     pub(crate) crew_source: Option<Option<String>>,
