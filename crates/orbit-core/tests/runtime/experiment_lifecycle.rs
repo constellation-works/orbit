@@ -114,11 +114,15 @@ fn disabled_and_stale_admissions_enroll_once_experiments_run() {
     );
     let recovered_legacy = submit_experiment_capture(&stale_runtime, &job_path, &legacy_task.id);
     assert_eq!(recovered_legacy["assignments"].as_array().unwrap().len(), 1);
+    // The assigned arm is drawn from the experiment's random salt, so pin the
+    // persisted arm to the capture's arm rather than to a specific arm.
+    let captured_arm = recovered_legacy["assignments"][0]["arm"].as_str();
+    assert!(matches!(captured_arm, Some("control" | "treatment")));
     assert_eq!(
         stale_runtime.task_experiments(&legacy_task.id).unwrap()[0]
             .arm
             .as_deref(),
-        Some("treatment")
+        captured_arm
     );
 }
 
