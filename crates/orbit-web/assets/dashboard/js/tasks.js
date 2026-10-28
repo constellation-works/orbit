@@ -6487,22 +6487,6 @@ function buildFilteredEmpty(status) {
   return note;
 }
 
-// "Nothing in review or proposed." for open statuses that are on but hold no
-// task. Only when the page holds every matching task and nothing else narrows
-// it, so an empty card is never inferred from a partial list.
-function buildEmptyGroupsNote(groups, context) {
-  if (searchQueryValue(context) || notReadyOnly || !statusCounts(context)) return null;
-  const active = activeStatusSet(context);
-  const empty = GROUP_ORDER.filter((status) => EMPTY_GROUP_PHRASES[status] && active.has(status) && !groups.has(status));
-  if (empty.length === 0 || groups.size === 0) return null;
-  const phrases = empty.map((status) => EMPTY_GROUP_PHRASES[status]);
-  const text = `Nothing ${phrases.length > 1 ? `${phrases.slice(0, -1).join(", ")} or ${phrases.at(-1)}` : phrases[0]}.`;
-  const note = el("p", { class: "groups-empty-note", text });
-  note.dataset.key = "groups-empty-note";
-  note.dataset.hash = text;
-  return note;
-}
-
 export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
@@ -6596,8 +6580,6 @@ export function renderTasks(tasks, context) {
   const ordered = GROUP_ORDER.filter((s) => groups.has(s)).concat(
     [...groups.keys()].filter((s) => !GROUP_ORDER.includes(s)),
   );
-  const emptyNote = buildEmptyGroupsNote(groups, context);
-  if (emptyNote) nodes.push(emptyNote);
   for (const status of ordered) {
     const group = groups.get(status);
     // Each status is one card: its head, the backlog's readiness strip, then
