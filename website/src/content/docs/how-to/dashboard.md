@@ -636,8 +636,10 @@ point is one or two runs. This chart has no matching `orbit` command.
 Open **Codebase** when a path keeps showing up in regressions, mid-run
 footprint widenings, blocked runs, or rejections, or when tasks keep
 reserving the same files. A rate's denominator is tasks that declared the
-path: the footprint, which is not always the diff that landed. Each rate
-shows its numerator and its denominator. How well task pilots predicted
+path: the footprint, which is not always the diff that landed. The one
+exception is **Regressed**, whose denominator also takes done tasks that a
+regression sited under the path without declaring it. Each rate shows its
+numerator and its denominator. How well task pilots predicted
 landed diffs is graded under [Agents](#agents), on **Pilots**.
 
 The view's own window is `7d`, `30d`, `90d`, or **All** (default `90d`).
@@ -650,10 +652,20 @@ directory to find a hotspot.
 
 | Signal | Rate |
 |---|---|
-| **Regressed** | Done tasks that later regressed, over done tasks that declared the path. |
+| **Regressed** | Done tasks that later regressed at a recorded site under the path, over done tasks that declared the path or were sited under it. |
 | **Footprint miss** | Tasks widened onto the path mid-run, over tasks that declared it. |
 | **Blocked** | Tasks blocked by a run failure, over tasks that declared it. |
 | **Rejected** | Tasks rejected after a run, over tasks that had a run. |
+
+**Regressed** counts a done task only against the paths that a `regression_from`
+link to it records as defect sites: the file, symbol or directory the defect
+was in, not every path the task declared. A directory site counts under that
+directory and under each path below it that a done task declared in the window.
+A regressed task none of whose links record a site counts as regressed under no
+path; it is reported as unsited, and it stays in the denominator of each path it
+declared. A done task whose regression names a site under a path it never
+declared joins that path's denominator, so a path can rank on a task that never
+touched it.
 
 **Regressions only** filters the Regressed column by nature, escape, layer,
 and detected-by. **Show all** lists every ranked path; otherwise you see the
@@ -662,8 +674,13 @@ ranked.
 
 **File** opens when you select a path. The address is
 `#analytics/codebase/file` with that path in the query. It shows the path's
-signals and rank, **Regressed tasks** (the task that regressed each one,
-with nature, layer, detected-by and severity), and **Changes with**: files that
+signals and rank, then **Symbols**: the defect sites recorded under the path,
+one row per site named by its symbol or file, most regressed tasks first. A
+row opens to the regressed tasks it attributes and the regression tasks that
+name it, with nature, escape and severity. The box also says how many regressed
+tasks that declared the path record no site, since none of them is attributed
+to it. Below it are **Regressed tasks** (the task that regressed each one, with
+nature, layer, detected-by and severity), and **Changes with**: files that
 landed in the same tasks. **Changes with** lists single files, so group by
 file to see it.
 
@@ -679,8 +696,10 @@ is measured to now. Paths under the minimum are hidden.
 **Marks** (`#analytics/codebase/marks`) compares regression rates on paths
 that implement and review prompts marked as regression-prone. **With marks**
 is done tasks in the window whose prompt marked the path: regressed divided
-by marked. **Before** is done tasks that touched the path in the days before
-the first mark. Open it from **Per-path comparison** on Hotspots. Until a
+by marked. Regressed here means any `regression_from` link to the task
+matches, whether or not the link records a site, so these rates can differ
+from the Regressed signal. **Before** is done tasks that touched the path in
+the days before the first mark. Open it from **Per-path comparison** on Hotspots. Until a
 prompt has marked a path, the view says there is nothing to compare. Recent
 tasks have had less time to be named by a regression. Marks are written
 while `workflow.regression_risk.enabled` is true (the default). With it off,
