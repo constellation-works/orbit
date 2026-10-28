@@ -11,6 +11,7 @@ use orbit_types::workflow::{
     run_id_minute_stem,
 };
 
+use super::input_keys::parse_input_keys;
 use super::state::write_state_json_conn;
 use crate::contracts::{JobRunOrder, JobRunQuery};
 use crate::{Store, parse_timestamp};
@@ -190,7 +191,9 @@ impl Store {
         let conn = self.read()?;
         let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
-            .query_map(param_refs.as_slice(), row_to_job_run)
+            .query_map(param_refs.as_slice(), |row| {
+                row_to_job_run_with_input_keys(row, query.input_keys)
+            })
             .map_err(sqlite_store_error)?;
         let mut runs = rows
             .collect::<Result<Vec<_>, _>>()
@@ -409,6 +412,15 @@ pub(super) fn get_job_run_for_workspace_conn(
 }
 
 pub(super) fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
+    row_to_job_run_with_input_keys(row, None)
+}
+
+/// [`row_to_job_run`], hydrating only `input_keys` of the run's input when
+/// set ([`JobRunQuery::input_keys`]).
+fn row_to_job_run_with_input_keys(
+    row: &rusqlite::Row<'_>,
+    input_keys: Option<&[&str]>,
+) -> rusqlite::Result<JobRun> {
     let attempt: i64 = row.get(2)?;
     let state_raw: String = row.get(3)?;
     let scheduled_raw: String = row.get(4)?;
@@ -432,7 +444,12 @@ pub(super) fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun
         created_at: parse_timestamp(&created_raw)?,
         pid: pid.map(|value| value as u32),
         pid_start_time: row.get(10)?,
-        input: parse_optional_json(input_json, "input_json")?,
+        input: match input_keys {
+            Some(keys) => parse_optional_json_with(input_json, "input_json", |raw| {
+                parse_input_keys(raw, keys)
+            })?,
+            None => parse_optional_json(input_json, "input_json")?,
+        },
         retry_source_run_id: row.get(12)?,
         knowledge_metrics: parse_optional_json(knowledge_metrics_json, "knowledge_metrics_json")?,
         resolved_crew: row.get(14)?,
@@ -755,8 +772,16 @@ fn parse_optional_json<T: serde::de::DeserializeOwned>(
     raw: Option<String>,
     label: &str,
 ) -> rusqlite::Result<Option<T>> {
+    parse_optional_json_with(raw, label, |raw| serde_json::from_str(raw))
+}
+
+fn parse_optional_json_with<T>(
+    raw: Option<String>,
+    label: &str,
+    parse: impl FnOnce(&str) -> serde_json::Result<T>,
+) -> rusqlite::Result<Option<T>> {
     raw.map(|raw| {
-        serde_json::from_str(&raw).map_err(|e| {
+        parse(&raw).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(
                 raw.len(),
                 rusqlite::types::Type::Text,

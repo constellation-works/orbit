@@ -163,5 +163,6 @@ fn job_run_query(params: JobRunListParams) -> JobRunQuery {
         limit: params.limit,
         order_by: params.order_by,
         include_steps: true,
+        input_keys: None,
     }
 }

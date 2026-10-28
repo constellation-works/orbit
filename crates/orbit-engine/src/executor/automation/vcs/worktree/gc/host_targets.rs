@@ -25,10 +25,11 @@ use super::leftovers::worker_may_be_alive;
 use super::paths::{attributed_task_ids, run_worktree_paths};
 use super::reclaim::reclaim_patterns;
 use super::sweep::{WorktreeGcOptions, WorktreeGcReport};
+use super::workers::{map_with_sweep_workers, sweep_scan_workers};
 use orbit_common::OrbitError;
 use orbit_common::fs::file_lock::{read_file_lock_holder, try_acquire_exclusive_file_lock};
 use orbit_types::workflow::JobRun;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ffi::{CStr, CString, OsStr};
 use std::fs;
 use std::os::unix::ffi::OsStrExt;
@@ -144,22 +145,49 @@ fn canonical_source(worktree: &Path) -> Option<PathBuf> {
     Some(parent.join(worktree.file_name()?))
 }
 
-fn attributions<'a>(repo_root: &Path, runs: &'a [JobRun]) -> BTreeMap<String, Attribution<'a>> {
+/// The runs each present target was built for, from every run's derived
+/// checkouts. Runs share the managed worktree root, so each parent directory
+/// is canonicalized once; a key no listed target has is never indexed.
+fn attributions<'a>(
+    run_paths: &[(&'a JobRun, Vec<PathBuf>)],
+    names: &[CString],
+) -> BTreeMap<String, Attribution<'a>> {
     let mut index = BTreeMap::<String, Attribution<'a>>::new();
-    for run in runs {
-        for worktree in run_worktree_paths(repo_root, run).unwrap_or_default() {
-            let Some(source) = canonical_source(&worktree) else {
+    let present = names
+        .iter()
+        .filter_map(|name| name.to_str().ok())
+        .collect::<HashSet<_>>();
+    if present.is_empty() {
+        return index;
+    }
+    let mut parents = HashMap::<&Path, Option<PathBuf>>::new();
+    for (run, worktrees) in run_paths {
+        for worktree in worktrees {
+            let Some(parent) = worktree.parent() else {
                 continue;
             };
+            let Some(source) = parents
+                .entry(parent)
+                .or_insert_with(|| fs::canonicalize(parent).ok())
+                .as_ref()
+                .zip(worktree.file_name())
+                .map(|(parent, name)| parent.join(name))
+            else {
+                continue;
+            };
+            let key = host_validation_target_key(&source);
+            if !present.contains(key.as_str()) {
+                continue;
+            }
             index
-                .entry(host_validation_target_key(&source))
+                .entry(key)
                 .or_insert_with(|| Attribution {
-                    worktree,
+                    worktree: worktree.clone(),
                     source,
                     runs: Vec::new(),
                 })
                 .runs
-                .push(run);
+                .push(*run);
         }
     }
     index
@@ -218,13 +246,23 @@ pub(super) fn run_has_host_target(repo_root: &Path, run: &JobRun) -> bool {
         })
 }
 
+/// One listed target and what owns it, resolved before any is classified.
+enum TargetOwner<'i, 'r> {
+    Run {
+        attribution: &'i Attribution<'r>,
+        selected: &'r JobRun,
+    },
+    Scratch(Option<ScratchOwner>),
+}
+
 /// Classify, and with `options.delete` remove, the host validation targets
-/// of recorded runs. `removed_worktrees` are the checkouts this sweep removed
-/// or would remove. A failure is reported, never returned, so the rest of the
-/// sweep's figures survive it.
+/// of recorded runs, attributed through `run_paths` (each resolvable run and
+/// its derived checkouts). `removed_worktrees` are the checkouts this sweep
+/// removed or would remove. A failure is reported, never returned, so the
+/// rest of the sweep's figures survive it.
 pub(super) fn collect_host_targets(
     repo_root: &Path,
-    runs: &[JobRun],
+    run_paths: &[(&JobRun, Vec<PathBuf>)],
     options: &WorktreeGcOptions,
     removed_worktrees: &BTreeSet<PathBuf>,
 ) -> Vec<WorktreeGcReport> {
@@ -249,9 +287,9 @@ pub(super) fn collect_host_targets(
             return vec![report];
         }
     };
-    let index = attributions(repo_root, runs);
+    let index = attributions(run_paths, &names);
     let mut base_runs = base_run_owners(repo_root);
-    let mut reports = Vec::new();
+    let mut targets = Vec::new();
     for name in names {
         let target = Target {
             path: root.path.join(OsStr::from_bytes(name.to_bytes())),
@@ -265,9 +303,7 @@ pub(super) fn collect_host_targets(
                     .to_str()
                     .ok()
                     .and_then(|key| scratch_owner(&root, &mut base_runs, key));
-                reports.push(collect_scratch_target(
-                    repo_root, &root, &target, owner, options,
-                ));
+                targets.push((target, TargetOwner::Scratch(owner)));
             }
             continue;
         };
@@ -278,30 +314,73 @@ pub(super) fn collect_host_targets(
             },
             None => attribution.runs[0],
         };
-        let mut report = WorktreeGcReport::for_run(&target.path, selected);
-        let task_ids = attributed_task_ids(selected);
-        report.task_id = (!task_ids.is_empty()).then(|| task_ids.join(","));
-        report.detail = Some(format!(
-            "host validation output of checkout '{}'",
-            attribution.source.display()
+        targets.push((
+            target,
+            TargetOwner::Run {
+                attribution,
+                selected,
+            },
         ));
-        if let Err(error) = classify(
-            repo_root,
-            &root,
-            &target,
-            attribution,
-            options,
-            removed_worktrees,
-            &mut report,
-        ) {
-            tracing::warn!(path = %target.path.display(), %error,
-                "worktree GC failed to reclaim a host validation target; continuing the sweep");
-            report.bytes_reclaimed = 0;
-            report.action = format!("failed:{error}");
-        }
-        reports.push(report);
     }
-    reports
+    // Measuring is read-only, so a dry run measures targets side by side;
+    // a deleting sweep removes them one at a time.
+    map_with_sweep_workers(
+        &targets,
+        sweep_scan_workers(!options.delete),
+        || (),
+        |(), (target, owner)| match owner {
+            TargetOwner::Scratch(owner) => {
+                collect_scratch_target(repo_root, &root, target, owner.as_ref(), options)
+            }
+            TargetOwner::Run {
+                attribution,
+                selected,
+            } => collect_run_target(
+                repo_root,
+                &root,
+                target,
+                attribution,
+                selected,
+                options,
+                removed_worktrees,
+            ),
+        },
+    )
+}
+
+/// Report, and with `options.delete` remove, a target a recorded run's
+/// checkout derives.
+fn collect_run_target(
+    repo_root: &Path,
+    root: &TargetsRoot,
+    target: &Target,
+    attribution: &Attribution<'_>,
+    selected: &JobRun,
+    options: &WorktreeGcOptions,
+    removed_worktrees: &BTreeSet<PathBuf>,
+) -> WorktreeGcReport {
+    let mut report = WorktreeGcReport::for_run(&target.path, selected);
+    let task_ids = attributed_task_ids(selected);
+    report.task_id = (!task_ids.is_empty()).then(|| task_ids.join(","));
+    report.detail = Some(format!(
+        "host validation output of checkout '{}'",
+        attribution.source.display()
+    ));
+    if let Err(error) = classify(
+        repo_root,
+        root,
+        target,
+        attribution,
+        options,
+        removed_worktrees,
+        &mut report,
+    ) {
+        tracing::warn!(path = %target.path.display(), %error,
+            "worktree GC failed to reclaim a host validation target; continuing the sweep");
+        report.bytes_reclaimed = 0;
+        report.action = format!("failed:{error}");
+    }
+    report
 }
 
 /// Decide `report`'s action, removing the target when the sweep deletes.
@@ -374,7 +453,7 @@ fn collect_scratch_target(
     repo_root: &Path,
     root: &TargetsRoot,
     target: &Target,
-    owner: Option<ScratchOwner>,
+    owner: Option<&ScratchOwner>,
     options: &WorktreeGcOptions,
 ) -> WorktreeGcReport {
     let mut report = WorktreeGcReport::blank(&target.path);
@@ -389,7 +468,7 @@ fn collect_scratch_target(
         owner.kind,
         owner.source.display()
     ));
-    if let Err(error) = classify_scratch(repo_root, root, target, &owner, options, &mut report) {
+    if let Err(error) = classify_scratch(repo_root, root, target, owner, options, &mut report) {
         tracing::warn!(path = %target.path.display(), %error,
             "worktree GC failed to reclaim a scratch host validation target; continuing the sweep");
         report.bytes_reclaimed = 0;

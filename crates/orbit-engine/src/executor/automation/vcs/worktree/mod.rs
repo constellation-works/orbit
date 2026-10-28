@@ -109,6 +109,18 @@ pub(in crate::executor::automation) struct WorktreeIdentity {
     pub(in crate::executor::automation) run_id: String,
 }
 
+/// Every top-level input key worktree identity derivation
+/// (`WorktreeIdentity::from_input`) reads, so a run inventory for worktree GC
+/// can hydrate only these (`JobRunQuery::input_keys`). Keep it in step with
+/// that derivation.
+pub const WORKTREE_IDENTITY_INPUT_KEYS: &[&str] = &[
+    "task_ids",
+    "task_id",
+    "epic_task_id",
+    "run_id",
+    "branch_prefix",
+];
+
 impl WorktreeIdentity {
     /// Derive the identity from a `setup_worktree`-shaped input.
     ///
