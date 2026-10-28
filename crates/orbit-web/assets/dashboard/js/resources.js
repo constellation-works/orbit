@@ -647,7 +647,7 @@ function tipText(minute, visible, u) {
 // ---- table and meta -------------------------------------------------------
 
 function profileTable(all, u) {
-  const head = el("tr", {}, ["Series", "Deliveries", "Horizon", "Peak CPU", "Peak memory p90", "Spread cpu · mem", "Build-like"].map((label, i) =>
+  const head = el("tr", {}, ["Series", "Deliveries", "Crew models", "Horizon", "Peak CPU", "Peak memory p90", "Spread cpu · mem", "Build-like"].map((label, i) =>
     el("th", { class: i === 0 ? "" : "num", scope: "col", text: label })));
   const rows = all.map((series) => {
     const p = series.profile;
@@ -657,7 +657,8 @@ function profileTable(all, u) {
       el("th", { scope: "row" }, [
         el("span", { class: `rp-row-name rp-s-${series.key}` }, [el("span", { class: "mx-swatch", "aria-hidden": "true" }), series.label]),
       ]),
-      el("td", { class: "num", text: `${series.deliveries}${series.sparse ? " (sparse)" : ""}`, title: regimeTitle(p) }),
+      el("td", { class: "num", text: `${series.deliveries}${series.sparse ? " (sparse)" : ""}` }),
+      el("td", { class: "num", text: crewCount(p), title: crewTitle(p) }),
       el("td", { class: "num", text: `${series.horizon}m` }),
       el("td", { class: "num", text: `${u.cpuText(peakCpu.value)} @ +${peakCpu.minute ?? 0}m` }),
       el("td", { class: "num", text: `${u.memText(peakMem.value)} @ +${peakMem.minute ?? 0}m` }),
@@ -674,14 +675,27 @@ function profileTable(all, u) {
   ]);
 }
 
-/// Which regime a profile's window follows, and what an earlier one added
-/// or lost.
-function regimeTitle(profile) {
-  const regime = profile.regime || {};
-  const parts = [`crew model ${regime.crew_model || "unrecorded"}`, `Orbit ${regime.orbit_version || "unrecorded"}`];
-  if (profile.prior_regime_deliveries) parts.push(`${profile.prior_regime_deliveries} from an earlier regime top it up to the minimum`);
-  if (profile.excluded_prior_regime) parts.push(`${profile.excluded_prior_regime} earlier-regime deliveries left out`);
-  return parts.join(" · ");
+/// How many crew models a profile's union spans, and how many of them price
+/// their own work from their own profile.
+function crewCount(profile) {
+  const crews = profile.crews || [];
+  if (!crews.length) return "—";
+  const min = lastPayload.min_profile_deliveries;
+  const own = crews.filter((crew) => crew.profile_deliveries != null && crew.profile_deliveries >= min).length;
+  return own ? `${crews.length} · ${own} own` : `${crews.length}`;
+}
+
+/// Each crew model's share of the union, and whether its own profile prices
+/// its work or is too sparse and falls back to the union.
+function crewTitle(profile) {
+  const min = lastPayload.min_profile_deliveries;
+  return (profile.crews || []).map((crew) => {
+    const name = crew.crew_model || "unrecorded crew model";
+    const own = crew.profile_deliveries == null
+      ? "priced by the union"
+      : `own profile ${crew.profile_deliveries}${crew.profile_deliveries < min ? ", sparse: priced by the union" : ""}`;
+    return `${name}: ${crew.deliveries} in this window · ${own}`;
+  }).join("\n") || "no crew model recorded";
 }
 
 function metaLine() {
@@ -689,7 +703,7 @@ function metaLine() {
   const window = p.delivery_limit ?? (p.last == null ? p.profile_window : (p.last === "all" ? (p.max_last ?? 1000) : Number(p.last)));
   const parts = [
     `built ${formatDateTime(p.built_at)}`,
-    `each profile: up to ${Number(window).toLocaleString("en-US")} retained completed deliveries of its kind under its newest crew model and Orbit version`,
+    `each profile: up to ${Number(window).toLocaleString("en-US")} retained completed deliveries of its kind over every crew model; admission prices a task by its crew model's own profile when that has ${p.min_profile_deliveries} or more`,
     `sparse below ${p.min_profile_deliveries}`,
     p.host ? hostText(p.host) : "host size unavailable",
     `admit at ${p.admit_cpu_percent}% cpu · ${p.admit_memory_percent}% memory`,

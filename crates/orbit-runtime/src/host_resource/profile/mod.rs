@@ -11,16 +11,19 @@
 //!   or one claimed leaf. Its series is the per-minute sum over those runs,
 //!   counted from admission. A delivery with a resumed or retried run, or a
 //!   run still live, is left out.
+//! - **Crew model.** Each delivery carries the crew model its runs named.
+//!   A key has one profile per crew model, over that model's deliveries,
+//!   and a union over every crew model's. A lookup that knows the crew model
+//!   reads its crew profile first and falls back to the union while that is
+//!   sparse, so a mixed crew pool keeps each model's history and a newly
+//!   finished delivery of one model never hides the others'.
 //! - **Window.** The last `profile_window` completed deliveries of the key,
-//!   whatever their age, so a month without deliveries leaves every profile
-//!   as it was. Staleness comes from a regime change instead: each delivery
-//!   carries the crew model and Orbit version its runs were sampled under,
-//!   and the window keeps only deliveries of the newest delivery's regime.
-//!   While that regime has fewer than `min_profile_deliveries`, the newest
-//!   earlier deliveries top the window up to that minimum, so a change never
-//!   empties a key. Retention keeps the newest
-//!   [`RESOURCE_HISTORY_DELIVERIES_PER_KEY`] deliveries of each key past its
-//!   age cutoff.
+//!   or of the key and crew model, whatever their age, so a month without
+//!   deliveries leaves every profile as it was. The Orbit version a delivery
+//!   ran under is recorded but never narrows a window: a release does not
+//!   change what a delivery costs. Retention keeps the newest
+//!   [`RESOURCE_HISTORY_DELIVERIES_PER_KEY`] deliveries of each key, and of
+//!   each key and crew model, past its age cutoff.
 //! - **Per minute.** `alive` is the fraction still running, `cpu` the mean
 //!   cores and `mem` the 90th-percentile memory over the deliveries alive
 //!   then, each with its spread; memory also keeps its mean, from which the
@@ -35,6 +38,7 @@
 //! keeps them across admission passes and rebuilds when a freshness probe
 //! changes. Live load is never cached here.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -115,14 +119,18 @@ pub struct ProfileMinute {
     pub memory_stddev_bytes: f64,
 }
 
-/// What a delivery ran under: a change of either makes earlier samples stale.
-#[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub struct ProfileRegime {
-    /// The crew model of its runs; `None` when none named one, or the
-    /// minutes predate regime recording.
+/// One crew model's share of a profile.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProfileCrew {
+    /// `None` for deliveries whose runs named no crew model, or whose minutes
+    /// predate crew recording.
     pub crew_model: Option<String>,
-    /// The Orbit version that sampled it; `None` before regime recording.
-    pub orbit_version: Option<String>,
+    /// The deliveries of this crew model in the profile's window.
+    pub deliveries: usize,
+    /// The deliveries in this crew model's own profile of the key, which
+    /// prices its work while it has at least `min_profile_deliveries`;
+    /// `None` without one: no crew model, or a class-wide profile.
+    pub profile_deliveries: Option<usize>,
 }
 
 /// One delivery in a profile's window.
@@ -134,7 +142,11 @@ pub struct ProfileDelivery {
     /// Minutes from admission to the last run's end.
     pub minutes: u32,
     pub run_ids: Vec<String>,
-    pub regime: ProfileRegime,
+    /// The crew model its runs named; `None` when none did.
+    pub crew_model: Option<String>,
+    /// The Orbit version that sampled it, for reference only; `None` before
+    /// it was recorded.
+    pub orbit_version: Option<String>,
 }
 
 /// A delivery behind a no-diff profile's build flag.
@@ -174,15 +186,13 @@ pub struct ResourceProfile {
     pub base_class: BaseClass,
     /// The samples the profile used: deliveries in its window.
     pub delivery_count: usize,
-    /// The regime of the key's newest delivery, which the window follows.
-    /// A class-wide profile spans complexities and crews, so its regime is
-    /// left empty; its window is the union of its keys' windows.
-    pub regime: ProfileRegime,
-    /// Deliveries in the window from an earlier regime, topping a regime
-    /// with fewer than `min_profile_deliveries` up to that minimum.
-    pub prior_regime_deliveries: usize,
-    /// Deliveries of the key left out because an earlier regime ran them.
-    pub excluded_prior_regime: usize,
+    /// The crew model whose deliveries this profile holds; `None` for a
+    /// union over every crew model: a key's own profile or a class-wide one.
+    pub crew_model: Option<String>,
+    /// The crew models behind the profile, by model: how many of the
+    /// window's deliveries each ran, and how many its own profile of the key
+    /// holds. A union's crew count is this list's length.
+    pub crews: Vec<ProfileCrew>,
     /// Fewer deliveries than `min_profile_deliveries`: a lookup falls back
     /// past this key.
     pub sparse: bool,
@@ -219,10 +229,16 @@ pub struct ResourceProfile {
 #[derive(Debug, Clone)]
 pub struct ProfileSet {
     pub built_at: DateTime<Utc>,
-    /// One profile per key, in key order.
+    /// One profile per key, in key order: the union over every crew model.
     pub profiles: Vec<Arc<ResourceProfile>>,
+    /// One profile per key and recorded crew model, in key then model order:
+    /// what a lookup that knows its crew model reads before the union.
+    pub crew_profiles: Vec<Arc<ResourceProfile>>,
     /// One profile per workspace and `no-diff` or `change` class, over every
     /// complexity, including template deliveries of that base class: the
     /// first fallback step, or the base-class step for templates.
     pub class_profiles: Vec<Arc<ResourceProfile>>,
+    /// The configured crews' models by crew name, so admission can look a
+    /// task's assigned crew up by the model its profiles are keyed on.
+    pub crew_models: BTreeMap<String, String>,
 }

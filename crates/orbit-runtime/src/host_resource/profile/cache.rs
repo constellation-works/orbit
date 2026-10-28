@@ -1,6 +1,6 @@
 //! Profiles kept across admission passes until a delivery finishes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
@@ -16,11 +16,13 @@ pub(crate) type NoDiffTasks<'a> =
 struct Cached {
     freshness: DeliveryRunsFreshness,
     bounds: ProfileBounds,
+    crew_models: BTreeMap<String, String>,
     profiles: Arc<ProfileSet>,
 }
 
 /// The host's profiles, rebuilt only when the store's freshness probe (the
-/// newest finish and count of finished sampled runs) or the bounds change.
+/// newest finish and count of finished sampled runs), the bounds or the
+/// configured crews' models change.
 ///
 /// Only profiles live here. What a forecast reads about running deliveries,
 /// reservations and the baseline is read fresh every pass, or two drains on
@@ -36,6 +38,7 @@ impl ResourceProfileCache {
         &self,
         store: &dyn ResourceUsageStoreBackend,
         no_diff_tasks: NoDiffTasks<'_>,
+        crew_models: BTreeMap<String, String>,
         bounds: ProfileBounds,
         now: DateTime<Utc>,
     ) -> Result<Arc<ProfileSet>, OrbitError> {
@@ -48,13 +51,21 @@ impl ResourceProfileCache {
         if let Some(cached) = slot.as_ref()
             && cached.freshness == freshness
             && cached.bounds == bounds
+            && cached.crew_models == crew_models
         {
             return Ok(Arc::clone(&cached.profiles));
         }
-        let profiles = Arc::new(build_uncached(store, no_diff_tasks, bounds, now)?);
+        let profiles = Arc::new(build_uncached(
+            store,
+            no_diff_tasks,
+            crew_models.clone(),
+            bounds,
+            now,
+        )?);
         *slot = Some(Cached {
             freshness,
             bounds,
+            crew_models,
             profiles: Arc::clone(&profiles),
         });
         Ok(profiles)
@@ -66,6 +77,7 @@ impl ResourceProfileCache {
 pub(crate) fn build_uncached(
     store: &dyn ResourceUsageStoreBackend,
     no_diff_tasks: NoDiffTasks<'_>,
+    crew_models: BTreeMap<String, String>,
     bounds: ProfileBounds,
     now: DateTime<Utc>,
 ) -> Result<ProfileSet, OrbitError> {
@@ -78,5 +90,5 @@ pub(crate) fn build_uncached(
     } else {
         no_diff_tasks(&templates)?
     };
-    Ok(build_profiles(runs, &tagged, bounds, now))
+    Ok(build_profiles(runs, &tagged, crew_models, bounds, now))
 }

@@ -90,6 +90,9 @@ pub(crate) fn build_forecast(
             } else {
                 BaseClass::Change
             },
+            // A reservation does not record the crew it drew, so the key's
+            // union prices it.
+            crew_model: None,
         };
         let found = profiles.lookup(&lookup);
         // Priced at its age since it was written, as a running delivery of
@@ -290,6 +293,7 @@ fn running_deliveries(load: &AdmissionLoad, now: DateTime<Utc>) -> Vec<RunningDe
                 age_minutes: 0,
                 profile_source: crate::host_resource::profile::ProfileSource::None,
                 profile_key: None,
+                crew_model: None,
                 current_cpu_cores: 0.0,
                 current_memory_bytes: 0,
                 held_flat: false,
@@ -307,6 +311,9 @@ fn running_deliveries(load: &AdmissionLoad, now: DateTime<Utc>) -> Vec<RunningDe
         };
         delivery.admitted_at = delivery.admitted_at.min(admitted_at);
         if let Some(minute) = &run.newest_minute {
+            if delivery.crew_model.is_none() {
+                delivery.crew_model = minute.crew_model.clone();
+            }
             delivery.current_cpu_cores += minute.cpu_cores;
             delivery.current_memory_bytes = delivery
                 .current_memory_bytes
@@ -328,7 +335,7 @@ fn running_deliveries(load: &AdmissionLoad, now: DateTime<Utc>) -> Vec<RunningDe
 
 /// A running delivery's lookup. Its run records no base class, so a template
 /// takes the one its own profile learned, and is assumed to change code
-/// without one.
+/// without one. The crew model its minutes recorded picks its crew profile.
 fn running_lookup(profiles: &ProfileSet, delivery: &RunningDelivery) -> ProfileLookup {
     let no_diff = delivery.work_class.starts_with(AUTO_TASK_TAG_PREFIX)
         && profiles.profiles.iter().any(|profile| {
@@ -342,6 +349,7 @@ fn running_lookup(profiles: &ProfileSet, delivery: &RunningDelivery) -> ProfileL
         delivery.complexity.clone(),
         no_diff,
     )
+    .with_crew_model(delivery.crew_model.clone())
 }
 
 fn with_profile(delivery: RunningDelivery, found: &ProfileMatch) -> RunningDelivery {

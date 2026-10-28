@@ -69,9 +69,11 @@ impl ResourceFit {
         let priced = tasks
             .iter()
             .map(|task| {
-                evidence
-                    .profiles
-                    .lookup(&task_lookup(&evidence.workspace_id, task))
+                evidence.profiles.lookup(&task_lookup(
+                    &evidence.workspace_id,
+                    task,
+                    &evidence.profiles,
+                ))
             })
             .collect();
         Self { evidence, priced }

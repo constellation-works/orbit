@@ -296,9 +296,21 @@ impl RuntimeKernel {
         self.resource_profiles.profiles(
             &store,
             &|task_ids| tasks.task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
+            self.crew_models(),
             ProfileBounds::from(&self.auto_concurrency_settings()),
             Utc::now(),
         )
+    }
+
+    /// Each configured crew's model by crew name: what a task's assigned
+    /// crew looks its crew profile up by.
+    fn crew_models(&self) -> std::collections::BTreeMap<String, String> {
+        self.context
+            .settings()
+            .crews()
+            .iter()
+            .map(|(name, crew)| (name.clone(), crew.assignment.model.clone()))
+            .collect()
     }
 
     /// [`Self::resource_profiles`] over the last `window` deliveries of each
@@ -312,6 +324,7 @@ impl RuntimeKernel {
         Ok(Arc::new(build_uncached(
             &store,
             &|task_ids| tasks.task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
+            self.crew_models(),
             bounds,
             Utc::now(),
         )?))

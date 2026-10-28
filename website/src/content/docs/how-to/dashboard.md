@@ -731,17 +731,18 @@ A profile is learned from the CPU and memory that delivery's workers recorded
 on this host. It appears once a delivery the drain admitted here finishes.
 Each profile keeps the most recent completed deliveries of its kind, however
 old. How many it keeps is `machine.auto_concurrency.profile_window` (default
-50). When the crew model or Orbit version changes, the profile follows the
-newest one and keeps older deliveries only until it has
-`machine.auto_concurrency.min_profile_deliveries` of the new kind; hover a
-delivery count to see which. The page prints the number in effect, the
+50), across every crew model and Orbit version. Admission prices a task by
+its crew model's own deliveries of that kind when it has at least
+`machine.auto_concurrency.min_profile_deliveries`, and by all of them
+otherwise; the **Crew models** column counts the models behind each
+profile and how many have enough of their own, and hovering it lists
+each. The page prints the number in effect, the
 host's cores and memory, and the admit thresholds.
 
 The history selector beside the work class changes the displayed history
 without changing admission: **Last 50** (admission's own window, or its
 configured count), **Last 200**, or **Last 1,000**. Each count is an upper
-bound of retained completed deliveries per kind; regime filtering can leave
-fewer. **Last 1,000** is capped at 1,000 even when the host retains more. An
+bound of retained completed deliveries per kind. **Last 1,000** is capped at 1,000 even when the host retains more. An
 admission window configured above 1,000 still applies to the default
 selection. The API's `last=all` is a compatibility alias for this capped
 choice; `delivery_limit` reports the effective bound and `max_last` reports

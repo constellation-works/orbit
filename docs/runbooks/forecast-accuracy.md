@@ -137,8 +137,8 @@ budgets, thresholds, profiles or persistent settings.
 History is normally pruned after 30 days by run GC, which keeps the newest
 10,000 forecasts and the host minutes they pair with whatever their age, and
 each key's newest 200 deliveries by admission, plus its newest 200 eligible
-completed deliveries by finish time and the newest 200 of their current
-regime (or more when the configured profile window is larger). An explicit earlier timestamp can select
+completed deliveries by finish time, and the newest 200 of each crew model
+per key (or more when the configured profile window is larger). An explicit earlier timestamp can select
 surviving rows, but cannot recover pruned measurements
 or infer historical source/settings. This reporting change does not establish
 calibration or enforcement readiness. See
@@ -148,7 +148,7 @@ calibration or enforcement readiness. See
 
 This is the column reference `orbit run profiles --help` used to carry.
 
-Lists one resource profile per workspace, work class and complexity, learned from the CPU and memory each delivery's workers recorded. A delivery is the chain of runs for one task, counted from its admission; resumed or retried deliveries are left out. Each profile covers the key's last `machine.auto_concurrency.profile_window` completed deliveries, whatever their age, under the newest delivery's crew model and Orbit version; earlier-regime deliveries only top a profile up to `min_profile_deliveries`. `auto-task:<template>` profiles have no complexity.
+Lists one resource profile per workspace, work class and complexity, learned from the CPU and memory each delivery's workers recorded. A delivery is the chain of runs for one task, counted from its admission; resumed or retried deliveries are left out. Each profile covers the key's last `machine.auto_concurrency.profile_window` completed deliveries, whatever their age, across every crew model and Orbit version. Admission prices a task by its crew model's own profile of the key while that has at least `min_profile_deliveries`, and by this union otherwise; `--json` lists each crew model's share under `crews`. `auto-task:<template>` profiles have no complexity.
 
 HORIZON is the minute at which fewer than one in ten deliveries is still running, capped at `horizon_cap_minutes`. PEAK_CPU is the highest mean cores before it and PEAK_MEM the highest 90th-percentile memory, each with the minute it occurs. CPU_P50, CPU_P90, MEM_P50 and MEM_P90 are the nearest-rank 50th and 90th percentiles of each delivery's own highest minute. They stay high when deliveries peak in different minutes, so they can be several times PEAK_CPU; a sparse profile still shows them from however many deliveries it has. SPREAD says how far deliveries disagree with that average (per-minute standard deviation over mean, for CPU and memory): near 0 is a profile stable enough to forecast with, near or above 1 one that is not. DELIVERIES marks a key with fewer than `min_profile_deliveries` as sparse; a lookup for it falls back to a wider profile.
 

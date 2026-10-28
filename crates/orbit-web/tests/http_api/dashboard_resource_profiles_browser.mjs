@@ -53,7 +53,17 @@ const profiles = [
   profile('auto-task:qa-sweep', null, 6, false, 20, 24, 3, 2),
   profile('change', 'hard', 2, true, 60, 60, 6, 6),
   profile('change', 'low', 12, false, 30, 40, 2, 2),
-  profile('change', 'medium', 8, false, 45, 50, 4, 4),
+  {
+    // A union over a mixed crew pool: two models have enough deliveries of
+    // their own to price their tasks, the third falls back to the union.
+    ...profile('change', 'medium', 8, false, 45, 50, 4, 4),
+    crew_model: null,
+    crews: [
+      { crew_model: 'model-luna', deliveries: 2, profile_deliveries: 2 },
+      { crew_model: 'model-sol', deliveries: 1, profile_deliveries: 4 },
+      { crew_model: 'model-terra', deliveries: 5, profile_deliveries: 5 },
+    ],
+  },
   profile('no-diff', 'medium', 5, false, 15, 18, 0.8, 1),
 ];
 const report = (workspace, list, last) => ({
@@ -231,8 +241,15 @@ try {
   const rows = await body.locator('.mx-table tbody tr').evaluateAll(nodes => nodes.map(node => ({ text: node.textContent, dim: node.classList.contains('mx-dim') })));
   assert.equal(rows.length, 3);
   assert.deepEqual(rows.map(row => row.dim), [false, false, true], 'the sparse row is dimmed');
-  assert.match(rows[2].text, /Hard2 \(sparse\)60m6\.0 cores @ \+4m6\.0 GiB @ \+5m/);
-  pass('work classes and table', { rows });
+  assert.match(rows[2].text, /Hard2 \(sparse\)—60m6\.0 cores @ \+4m6\.0 GiB @ \+5m/);
+  assert.match(rows[1].text, /Medium83 · 2 own45m/, 'the union counts its crew models and those priced by their own profile');
+  const crewTitle = await body.locator('.mx-table tbody tr').nth(1).locator('td').nth(1).getAttribute('title');
+  assert.equal(crewTitle, [
+    'model-luna: 2 in this window · own profile 2, sparse: priced by the union',
+    'model-sol: 1 in this window · own profile 4',
+    'model-terra: 5 in this window · own profile 5',
+  ].join('\n'));
+  pass('work classes and table', { rows, crewTitle });
 
   // The legacy all request is bounded, including its label and tooltip.
   const history = body.getByRole('group', { name: 'Deliveries per profile' });

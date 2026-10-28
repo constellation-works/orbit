@@ -971,7 +971,7 @@ fn calculate_backlog_forecast(
             }
             match admission.profile_source(index) {
                 Some(ProfileSource::None) => bump("resource_profile_missing"),
-                Some(ProfileSource::Exact) | None => {}
+                Some(ProfileSource::Crew | ProfileSource::Exact) | None => {}
                 Some(_) => bump("resource_profile_fallbacks"),
             }
             for _ in 0..plan.unverifiable[index] {

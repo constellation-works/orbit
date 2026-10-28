@@ -136,6 +136,9 @@ pub struct RunningDelivery {
     pub age_minutes: u32,
     pub profile_source: ProfileSource,
     pub profile_key: Option<ProfileKey>,
+    /// The crew model its live runs' minutes recorded; `None` before one
+    /// did, when the key's union prices it.
+    pub crew_model: Option<String>,
     /// The sum of its live runs' newest measured minutes.
     pub current_cpu_cores: f64,
     pub current_memory_bytes: u64,
