@@ -12,7 +12,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 /// Metric names an experiment may read its verdict or guardrails on.
-pub(crate) const EXPERIMENT_METRICS: &[&str] = &[
+pub const EXPERIMENT_METRICS: &[&str] = &[
     "implement_tokens",
     "total_tokens",
     "cost_usd",
@@ -31,7 +31,8 @@ pub(crate) const EXPERIMENT_METRICS: &[&str] = &[
     "lines_changed",
 ];
 
-const COMPLEXITIES: &[&str] = &["low", "medium", "hard", "xhard"];
+/// Complexities a population filter may name.
+pub const EXPERIMENT_COMPLEXITIES: &[&str] = &["low", "medium", "hard", "xhard"];
 
 /// The activity role an overlay entry applies to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -387,11 +388,11 @@ pub(crate) fn parse_population(value: Value) -> Result<String, OrbitError> {
     if let Some(unknown) = population
         .complexity
         .iter()
-        .find(|complexity| !COMPLEXITIES.contains(&complexity.as_str()))
+        .find(|complexity| !EXPERIMENT_COMPLEXITIES.contains(&complexity.as_str()))
     {
         return Err(OrbitError::InvalidInput(format!(
             "`population.complexity` value `{unknown}` is not one of {}",
-            COMPLEXITIES.join(", ")
+            EXPERIMENT_COMPLEXITIES.join(", ")
         )));
     }
     if let Some(both) = population

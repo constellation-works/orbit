@@ -244,6 +244,30 @@ pub const DASHBOARD_CONFIG_SET: GovernedOperation = GovernedOperation {
     rationale: "config.toml governs sandboxing, crews, and unattended delivery for every surface on this machine",
 };
 
+/// Define a draft experiment from the dashboard's Analytics › Experiments page.
+pub const DASHBOARD_EXPERIMENT_CREATE: GovernedOperation = GovernedOperation {
+    id: "experiment.create",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "defining an experiment decides which treatments tasks may be randomized into, so only an operator may do it",
+};
+
+/// Edit a draft experiment's definition from the dashboard.
+pub const DASHBOARD_EXPERIMENT_UPDATE: GovernedOperation = GovernedOperation {
+    id: "experiment.update",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "editing an experiment's definition changes the treatments tasks may be randomized into, so only an operator may do it",
+};
+
+/// Start a draft experiment from the dashboard.
+pub const DASHBOARD_EXPERIMENT_START: GovernedOperation = GovernedOperation {
+    id: "experiment.start",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "starting an experiment begins randomizing tasks into its treatments, and a live one changes how their runs dispatch, so only an operator may do it",
+};
+
 /// Conclude an experiment from the dashboard, recording the decision and
 /// filing a promotion task when an arm is chosen.
 pub const DASHBOARD_EXPERIMENT_CONCLUDE: GovernedOperation = GovernedOperation {
@@ -838,6 +862,9 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
     DASHBOARD_TASK_POST_DEPLOY,
     DASHBOARD_CLAIM_RECOVER,
     DASHBOARD_CONFIG_SET,
+    DASHBOARD_EXPERIMENT_CREATE,
+    DASHBOARD_EXPERIMENT_UPDATE,
+    DASHBOARD_EXPERIMENT_START,
     DASHBOARD_EXPERIMENT_CONCLUDE,
     DASHBOARD_HOST_EDIT,
     DASHBOARD_HOST_FORWARD,

@@ -267,13 +267,22 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         // experiment with its events, and its per-arm readout (the JSON of
         // `orbit.experiment.readout` plus the primary metric's cumulative
         // series).
+        // Operator authoring: create a draft, edit a draft and start one.
+        // Each handler authorizes its `experiment.*` dashboard operation and
+        // then calls the same core lifecycle function as the CLI.
         .route(
             "/diagnostics/experiments",
-            get(diagnostics::diagnostics_experiments),
+            get(diagnostics::diagnostics_experiments)
+                .post(diagnostics::diagnostics_experiment_create),
         )
         .route(
             "/diagnostics/experiments/{id}",
-            get(diagnostics::diagnostics_experiment),
+            get(diagnostics::diagnostics_experiment)
+                .patch(diagnostics::diagnostics_experiment_update),
+        )
+        .route(
+            "/diagnostics/experiments/{id}/start",
+            post(diagnostics::diagnostics_experiment_start),
         )
         .route(
             "/diagnostics/experiments/{id}/readout",

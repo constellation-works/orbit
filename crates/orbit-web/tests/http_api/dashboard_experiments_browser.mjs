@@ -1,6 +1,8 @@
 // Cumulative primary-metric chart through the shipped experiments renderer.
 // The Rust harness runs this with TZ=America/Los_Angeles, so a Local label
-// that still shows the UTC clock cannot pass.
+// that still shows the UTC clock cannot pass. With a Playwright module and an
+// evidence directory it checks tooltip bounds in Chromium, or with
+// `--authoring` the operator's create, edit and start flow.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
@@ -218,7 +220,8 @@ const readout = {
 // same buckets as the clock regression below. No browser is needed for that
 // default VM mode, which remains part of the ordinary HTTP test target.
 if (process.argv[2]) {
-  await checkCumulativeTooltipBounds();
+  if (process.argv.includes('--authoring')) await checkAuthoringFlow();
+  else await checkCumulativeTooltipBounds();
   process.exit(0);
 }
 
@@ -267,6 +270,7 @@ const load = name => new vm.SourceTextModule(
 );
 const common = load('common.js');
 const sparkline = load('sparkline.js');
+const experimentForm = load('experiment-form.js');
 const experiments = load('experiments.js');
 const router = new vm.SyntheticModule(['setActiveTab'], function exportRouter() {
   this.setExport('setActiveTab', () => {});
@@ -275,15 +279,21 @@ const router = new vm.SyntheticModule(['setActiveTab'], function exportRouter() 
 await common.link(() => { throw new Error('unexpected common dependency'); });
 await sparkline.link(() => { throw new Error('unexpected sparkline dependency'); });
 await router.link(() => { throw new Error('unexpected router dependency'); });
+await experimentForm.link(specifier => {
+  if (specifier === './common.js') return common;
+  throw new Error(`unexpected experiment-form dependency ${specifier}`);
+});
 await experiments.link(specifier => {
   if (specifier === './common.js') return common;
   if (specifier === './sparkline.js') return sparkline;
   if (specifier === './router.js') return router;
+  if (specifier === './experiment-form.js') return experimentForm;
   throw new Error(`unexpected experiments dependency ${specifier}`);
 });
 await common.evaluate();
 await sparkline.evaluate();
 await router.evaluate();
+await experimentForm.evaluate();
 await experiments.evaluate();
 
 const { setExperimentId, fetchAndRenderExperiments } = experiments.namespace;
@@ -526,6 +536,250 @@ async function checkCumulativeTooltipBounds() {
     assert.deepEqual(failures, [], 'cumulative tooltips and metric values remain readable');
   } finally {
     fs.writeFileSync(path.join(evidence, 'bounds.json'), JSON.stringify({ results, failures, errors }, null, 2));
+    if (browser) await browser.close();
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+// Usage: node dashboard_experiments_browser.mjs "$PLAYWRIGHT_MODULE" .orbit/tmp/experiments-browser --authoring
+// The fixture server stands in for the experiment routes and answers with
+// core's own refusal text for the two refusals the flow provokes; the routes
+// themselves are covered against the real server in experiments.rs.
+async function checkAuthoringFlow() {
+  const { default: http } = await import('node:http');
+  const { default: path } = await import('node:path');
+  const { pathToFileURL } = await import('node:url');
+  const { dashboardFile, dashboardCsp } = await import('../../src/tests/dashboard_static.mjs');
+  const { chromium } = await import(pathToFileURL(path.resolve(process.argv[2])).href);
+  const evidence = path.resolve(process.argv[3]);
+  fs.mkdirSync(evidence, { recursive: true });
+  const authoring = {
+    create: { authorized: true, reason: null },
+    update: { authorized: true, reason: null },
+    start: { authorized: true, reason: null },
+    enabled: true,
+    max_running: 3,
+    config_keys: ['workflow.explore.max_calls_per_run'],
+    metrics: ['cost_usd', 'first_pass_acceptance', 'lead_time'],
+    complexities: ['low', 'medium', 'hard', 'xhard'],
+    crews: [{ name: 'opus', enabled: true }, { name: 'sonnet', enabled: true }],
+  };
+  const initializer = `
+    import * as experiments from '/static/js/experiments.js';
+    document.querySelector('.tab-pane[data-tab=analytics]').classList.add('active');
+    document.querySelectorAll('.tab-pane[data-tab=analytics] > main').forEach(node => {
+      node.style.display = node.id === 'analytics-experiments-main' ? 'grid' : 'none';
+    });
+    window.experiments = experiments;
+    experiments.setExperimentId(null);
+    await experiments.fetchAndRenderExperiments();
+    window.fixtureReady = true;
+  `;
+  let store = [];
+  const requests = [];
+  const view = experiment => ({
+    ...experiment,
+    enrollment: experiment.arms.map(arm => ({ arm: arm.name, enrolled: 0, segment_enrolled: 0 })),
+    forced: 0,
+    excluded: 0,
+  });
+  const apply = (experiment, body) => {
+    for (const name of ['name', 'hypothesis', 'population', 'primary_metric', 'guardrails', 'min_sample', 'max_days', 'mode']) {
+      if (body[name] !== undefined) experiment[name] = body[name];
+    }
+    if (body.arms) experiment.arms = body.arms.map(arm => ({ ...arm, overlay_digest: 'sha256:fixture', retired_segment: null }));
+  };
+  const refusal = (res, status, error) => {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error }));
+  };
+  const readBody = req => new Promise(resolve => {
+    let text = '';
+    req.on('data', chunk => { text += chunk; });
+    req.on('end', () => resolve(text ? JSON.parse(text) : {}));
+  });
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://fixture');
+    if (url.pathname.startsWith('/api/diagnostics/experiments')) {
+      const body = req.method === 'GET' ? null : await readBody(req);
+      requests.push({ method: req.method, path: url.pathname, body });
+      const [, id, action] = url.pathname.replace('/api/diagnostics/experiments', '').split('/');
+      const found = store.find(item => item.id === id);
+      const json = value => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(value)); };
+      if (!id && req.method === 'GET') return json({ experiments: store.map(view), authoring });
+      for (const [metric, threshold] of Object.entries(body?.guardrails || {})) {
+        if (!/^[+-]\d+(\.\d+)?(pt|%)?$/.test(threshold)) {
+          return refusal(res, 400, `guardrail threshold \`${threshold}\` for \`${metric}\` must be a signed number with an optional \`pt\` or \`%\` unit, such as \`-5pt\` or \`+0\``);
+        }
+      }
+      if (!id && req.method === 'POST') {
+        const experiment = { id: `exp-${store.length + 1}`, status: 'draft', segment: 0, mode: 'shadow', hypothesis: '', population: {}, guardrails: {},
+          primary_metric: null, min_sample: null, max_days: null, arms: [], events: [], created_at: new Date().toISOString() };
+        apply(experiment, body);
+        store.push(experiment);
+        return json(experiment);
+      }
+      if (!found) return refusal(res, 400, `no experiment \`${id}\` in this workspace`);
+      if (!action && req.method === 'PATCH') {
+        if (found.status !== 'draft') {
+          return refusal(res, 400, `experiment \`${found.name}\` is ${found.status}: its arms, overlays, population, metrics and sample rules are editable only in draft. Reweight or retire arms with reweight, or clone it into a new draft`);
+        }
+        apply(found, body);
+        return json(found);
+      }
+      if (action === 'start' && req.method === 'POST') {
+        if (!found.primary_metric) return refusal(res, 400, `experiment \`${found.name}\` cannot start: it has no primary metric`);
+        found.status = 'running';
+        found.segment = 1;
+        return json(found);
+      }
+      if (action === 'readout') {
+        const fixture = structuredClone(readout);
+        fixture.arms = found.arms.map(arm => ({ name: arm.name, control: arm.control, weight: arm.weight, n: 0 }));
+        fixture.cumulative = { metric: 'pass_rate', window: fixture.cumulative.window, arms: [] };
+        fixture.metrics = [];
+        return json(fixture);
+      }
+      if (!action) return json({ ...found, conclude_authorized: true, authoring });
+      return refusal(res, 404, 'unexpected route');
+    }
+    const served = url.pathname === '/fixture.mjs'
+      ? { data: initializer, type: 'text/javascript' } : dashboardFile(url.pathname);
+    if (!served) { res.writeHead(404); res.end(); return; }
+    const data = url.pathname === '/' ? served.data.toString().replace(
+      /<script[^>]*src="[^"]*app.js"[^>]*><\/script>/,
+      '<script type="module" src="/fixture.mjs"></script>',
+    ) : served.data;
+    res.writeHead(200, { 'content-type': served.type, 'content-security-policy': dashboardCsp() });
+    res.end(data);
+  });
+  const errors = [];
+  const steps = [];
+  let browser;
+  try {
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    browser = await chromium.launch({ headless: true, executablePath: process.env.ORBIT_CHROMIUM_PATH || undefined });
+    const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+    page.on('pageerror', error => errors.push(String(error)));
+    for (const width of [1440, 375]) {
+      store = [];
+      requests.length = 0;
+      await page.setViewportSize({ width, height: 1000 });
+      await page.goto(`http://127.0.0.1:${server.address().port}/?workspace=ws_fixture&case=authoring-${width}#analytics/experiments`);
+      await page.waitForFunction(() => window.fixtureReady);
+      const form = page.locator('#experiments-form form.exf');
+      const labelled = (scope, label) => scope.locator('label.exf-field', { hasText: new RegExp(`^${label}`) });
+      const shot = name => page.screenshot({ path: path.join(evidence, `${name}-dark-${width}.png`) });
+
+      // Create: the form covers the definition; crew pickers offer only the
+      // workspace's configured crews.
+      await page.locator('#experiments-new').click();
+      assert.equal(await form.isVisible(), true, 'New experiment opens the form');
+      assert.equal(await page.locator('#experiments-new').getAttribute('aria-expanded'), 'true');
+      await labelled(form, 'Name').locator('input').fill('trial');
+      await labelled(form, 'Hypothesis').locator('textarea').fill('A smaller crew pool keeps first-pass acceptance.');
+      await form.locator('.exf-population label.exf-check', { hasText: 'medium' }).locator('input').check();
+      await labelled(form, 'Tags to include').locator('input').fill('ui, docs');
+      const treatment = form.locator('.exf-arm').nth(1);
+      await treatment.locator('.exf-surface-crew > summary').click();
+      await treatment.locator('.exf-add-crew').click();
+      const crewOptions = await treatment.locator('.exf-surface-crew select').evaluate(node => [...node.options].map(option => option.value));
+      assert.deepEqual(crewOptions, ['', 'opus', 'sonnet'], 'the crew picker lists the configured crews');
+      await treatment.locator('.exf-surface-crew select').selectOption('sonnet');
+      await treatment.locator('.exf-surface-skills > summary').click();
+      assert.match(await treatment.locator('.exf-surface-skills > summary').textContent(), /Claude on Unix only/);
+      await form.locator('.exf-add-guardrail').click();
+      await form.locator('.exf-guardrails select').selectOption('cost_usd');
+      await form.locator('.exf-guardrails input').fill('5pt');
+      await page.evaluate(() => document.getElementById('experiments-form').scrollIntoView({ block: 'start' }));
+      await shot('experiment-form');
+      await treatment.evaluate(node => node.scrollIntoView({ block: 'start' }));
+      await shot('experiment-form-arms');
+
+      // Core's refusal lands under the field it names.
+      await form.locator('.exf-save').click();
+      const guardrailError = form.locator('.exf-guardrails .exf-error');
+      await guardrailError.waitFor();
+      assert.match(await guardrailError.textContent(), /guardrail threshold `5pt` for `cost_usd`/);
+      await guardrailError.scrollIntoViewIfNeeded();
+      await shot('field-error');
+      await form.locator('.exf-guardrails input').fill('-5pt');
+      await form.locator('.exf-save').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      const created = requests.find(request => request.method === 'POST' && request.path === '/api/diagnostics/experiments' && request.body.guardrails.cost_usd === '-5pt');
+      assert.ok(created, 'the draft is created');
+      assert.deepEqual(created.body.population, { complexity: ['medium'], tags_include: ['ui', 'docs'] });
+      assert.deepEqual(created.body.arms.map(arm => [arm.name, arm.control, arm.weight]), [['control', true, 1], ['treatment', false, 1]]);
+      assert.deepEqual(created.body.arms[1].overlay, { crew: { pool: [{ crew: 'sonnet', weight: 1 }] } });
+      assert.equal(created.body.mode, 'shadow', 'mode defaults to shadow');
+
+      // A draft card offers Edit and Start; a refused start says why.
+      const card = page.locator('.ex-item', { hasText: 'trial' });
+      await card.locator('.exf-start').click();
+      await card.locator('.exf-confirm-start').click();
+      await card.locator('.exf-error').waitFor();
+      assert.match(await card.locator('.exf-error').textContent(), /it has no primary metric/);
+      await card.locator('.exf-confirm .action.cancel').click();
+
+      // Edit: the form opens on the stored definition and patches it.
+      await card.locator('.exf-edit').click();
+      assert.equal(await labelled(form, 'Name').locator('input').inputValue(), 'trial');
+      assert.equal(await form.locator('.exf-arm').nth(1).locator('.exf-surface-crew select').inputValue(), 'sonnet');
+      await labelled(form, 'Primary metric').locator('select').selectOption('first_pass_acceptance');
+      await labelled(form, 'Minimum sample per arm').locator('input').fill('20');
+      await labelled(form, 'Reason').locator('textarea').fill('Measure acceptance');
+      await form.locator('.exf-save').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      const patch = requests.find(request => request.method === 'PATCH');
+      assert.equal(patch.body.primary_metric, 'first_pass_acceptance');
+      assert.equal(patch.body.min_sample, 20);
+      assert.equal(patch.body.reason, 'Measure acceptance');
+      assert.equal(patch.body.name, undefined, 'an unchanged name is not sent as a rename');
+
+      // Start: the confirmation names arms, weights and population.
+      await card.locator('.exf-start').click();
+      const confirmation = await card.locator('.exf-confirm').textContent();
+      for (const fragment of ['control (control) weight 1', 'treatment weight 1', 'complexity medium', 'tags include ui, docs', 'Shadow']) {
+        assert.ok(confirmation.includes(fragment), `confirmation names ${fragment}: ${confirmation}`);
+      }
+      await card.locator('.exf-confirm textarea').fill('Ready to measure');
+      await card.locator('.exf-confirm').scrollIntoViewIfNeeded();
+      await shot('start-confirm');
+      await card.locator('.exf-confirm-start').click();
+      await card.locator('.ex-status-running').waitFor();
+      assert.deepEqual(await card.locator('.ex-arm-progress .ex-arm-name').allTextContents(), ['controlcontrol', 'treatment']);
+      assert.equal(await card.locator('.exf-edit').count(), 0, 'a running experiment offers no Edit');
+      assert.deepEqual(requests.filter(request => request.path.endsWith('/start')).at(-1).body, { reason: 'Ready to measure' });
+
+      // Save and start: one confirmation, two writes.
+      await page.locator('#experiments-new').click();
+      await labelled(form, 'Name').locator('input').fill('trial-b');
+      await labelled(form, 'Primary metric').locator('select').selectOption('cost_usd');
+      await labelled(form, 'Mode').locator('select').selectOption('live');
+      await form.locator('.exf-save-start').click();
+      const summary = await form.locator('.exf-confirm').textContent();
+      assert.match(summary, /Start trial-b\?/);
+      assert.match(summary, /every task/);
+      assert.match(summary, /Live: .*changes how those dispatches run/);
+      await form.locator('.exf-confirm-start').click();
+      await page.locator('#experiments-form').waitFor({ state: 'hidden' });
+      const second = page.locator('.ex-item', { hasText: 'trial-b' });
+      await second.locator('.ex-status-running').waitFor();
+      await page.locator('.ex-list').scrollIntoViewIfNeeded();
+      await shot('running');
+
+      // A started experiment's detail says why there is no Edit.
+      await page.evaluate(async () => {
+        window.experiments.setExperimentId('exp-1');
+        await window.experiments.fetchAndRenderExperiments();
+      });
+      await page.locator('.exf-locked').waitFor();
+      assert.match(await page.locator('.exf-locked').textContent(), /running, so its definition can no longer be edited/);
+      steps.push({ width, requests: requests.map(({ method, path: route }) => `${method} ${route}`) });
+    }
+    assert.deepEqual(errors, [], 'no browser errors');
+  } finally {
+    fs.writeFileSync(path.join(evidence, 'authoring.json'), JSON.stringify({ steps, errors }, null, 2));
     if (browser) await browser.close();
     await new Promise(resolve => server.close(resolve));
   }

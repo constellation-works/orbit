@@ -50,6 +50,8 @@ mod distributed_contracts;
 mod doctor;
 #[path = "http_api/embedded.rs"]
 mod embedded;
+#[path = "http_api/experiments.rs"]
+mod experiments;
 #[path = "http_api/friction_writes.rs"]
 mod friction_writes;
 #[path = "http_api/guards.rs"]

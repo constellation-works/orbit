@@ -586,8 +586,12 @@
         <section class="panel" id="experiments-panel">
           <header>
             <span>Experiments</span>
-            <span class="count" id="experiments-count">-</span>
+            <span class="ex-head-end">
+              <span class="count" id="experiments-count">-</span>
+              <button type="button" id="experiments-new" class="action ship" aria-controls="experiments-form" aria-expanded="false" hidden>New experiment</button>
+            </span>
           </header>
+          <div class="ex-form-host" id="experiments-form" hidden></div>
           <div class="body experiments-body" id="experiments-body" tabindex="0" role="region" aria-label="Experiments"></div>
         </section>
       </main>
