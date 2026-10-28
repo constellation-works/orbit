@@ -11,6 +11,11 @@ stability = "internal"
 [lints]
 workspace = true
 
+[features]
+# Test-only hooks (the forced Seatbelt-refusal setter in the sandbox-exec
+# probe). Enable it only from `[dev-dependencies]`, never in a shipped build.
+test-support = []
+
 [dependencies]
 orbit-common = { path = "../orbit-common" }
 orbit-types = { path = "../orbit-types" }

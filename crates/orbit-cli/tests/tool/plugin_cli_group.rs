@@ -2603,3 +2603,112 @@ fn plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay() {
         "the backend ran under its declared sandbox, which refused the write"
     );
 }
+
+/// [ORB-19525] The `ORBIT_TEST_FORCE_SEATBELT_REFUSAL` test seam must not
+/// reroute a production `orbit plugin test` run. The shipped binary carries
+/// no reader for the variable, so with it set the run executes exactly as
+/// without it; before the fix the same run refused with
+/// `validation_route_unavailable` on a host that is not inside Seatbelt.
+#[cfg(unix)]
+#[test]
+fn plugin_test_ignores_forced_seatbelt_refusal_in_the_shipped_binary() {
+    if !orbit_exec::macos_sandbox_test_guard(
+        "plugin_test_ignores_forced_seatbelt_refusal_in_the_shipped_binary",
+    ) {
+        return;
+    }
+    let fixture = Fixture::new();
+    let source = fixture.source("forcedrefusal");
+    write_greet_conformance_plugin(&source, "forcedrefusal");
+    let dir = source.to_str().expect("plugin directory");
+
+    for forced in [false, true] {
+        let mut command = fixture.orbit();
+        command.args(["plugin", "test", dir]);
+        if forced {
+            command.env("ORBIT_TEST_FORCE_SEATBELT_REFUSAL", "1");
+        } else {
+            command.env_remove("ORBIT_TEST_FORCE_SEATBELT_REFUSAL");
+        }
+        for name in [
+            "ORBIT_VALIDATION_SUMMARY",
+            "ORBIT_VALIDATION_GATE",
+            "ORBIT_VALIDATION_BASE",
+            "ORBIT_REQUIRE_SANDBOX_EXEC",
+        ] {
+            command.env_remove(name);
+        }
+        let run = command.assert().success();
+        let stdout = String::from_utf8_lossy(&run.get_output().stdout);
+        assert!(
+            stdout.contains("1 of 1 conformance test(s) passed"),
+            "forced={forced}: the case executes and passes:\n{stdout}"
+        );
+        assert!(
+            !stdout.contains("SKIP: sandbox-exec cannot apply a profile:")
+                && !stdout.contains("deferred to a host replay"),
+            "forced={forced}: the run must not defer:\n{stdout}"
+        );
+    }
+
+    // With a validation-gate route named, the forced run still executes
+    // instead of deferring every case to a host replay.
+    let summary_path = fixture.home.join("forced-gate-summary.json");
+    let gate = format!("orbit plugin test {dir}");
+    let gated = fixture
+        .orbit()
+        .args(["plugin", "test", dir])
+        .env("ORBIT_TEST_FORCE_SEATBELT_REFUSAL", "1")
+        .env("ORBIT_VALIDATION_SUMMARY", &summary_path)
+        .env("ORBIT_VALIDATION_GATE", &gate)
+        .env("ORBIT_VALIDATION_BASE", "base-sha")
+        .env_remove("ORBIT_REQUIRE_SANDBOX_EXEC")
+        .assert()
+        .success();
+    let stdout = String::from_utf8_lossy(&gated.get_output().stdout);
+    assert!(
+        stdout.contains("1 of 1 conformance test(s) passed"),
+        "the gated run executes under the forced variable:\n{stdout}"
+    );
+    let summary: Value =
+        serde_json::from_slice(&std::fs::read(&summary_path).expect("gated summary"))
+            .expect("summary JSON");
+    assert_eq!(summary["tests_run"], 1);
+    assert_eq!(summary["notices"], json!([]));
+}
+
+/// A one-case conformance plugin whose backend answers `world`.
+#[cfg(unix)]
+fn write_greet_conformance_plugin(source: &Path, namespace: &str) {
+    let root = source.join(".orbit-plugin");
+    std::fs::create_dir_all(root.join("bin")).expect("create plugin bin dir");
+    std::fs::create_dir_all(root.join("tests/conformance")).expect("create conformance dir");
+    let backend = root.join("bin/backend.sh");
+    std::fs::write(
+        &backend,
+        "#!/bin/sh\ncat > /dev/null\nprintf '{\"ok\":true,\"output\":{\"subject\":\"world\"}}\\n'\n",
+    )
+    .expect("write backend");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&backend, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod backend");
+    }
+    std::fs::write(
+        root.join("plugin.yaml"),
+        format!(
+            "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 1.0.0\n  \
+             description: Conformance fixture.\nspec:\n  backend:\n    type: exec\n    command: \
+             bin/backend.sh\n  tools:\n    - name: greet\n      description: Greet.\n      \
+             execution_kind: read_only\n      mcp_scope: workspace\n  tests: \
+             [tests/conformance/*.yaml]\n"
+        ),
+    )
+    .expect("write manifest");
+    std::fs::write(
+        root.join("tests/conformance/greet.yaml"),
+        "schemaVersion: 1\nkind: PluginTest\ntests:\n  - name: greet_answers\n    tool: greet\n    \
+         input: {}\n    expect:\n      output:\n        subject: world\n",
+    )
+    .expect("write golden");
+}

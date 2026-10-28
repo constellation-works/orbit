@@ -27,6 +27,14 @@ const SCENARIO_TABLE: &str =
 /// `validation_route_unavailable` refusal the reviewer records as a plain
 /// failure, and no host replay runs.
 fn nested_seatbelt_skip() -> Option<Outcome> {
+    // The outer regression tests spawn this table's child with the variable
+    // set to reproduce a nested-Seatbelt lane. Only this test harness reads
+    // it, installing orbit-exec's test-only refusal explicitly; the shipped
+    // binary has no reader, so the variable cannot reroute a production
+    // `orbit plugin test` run [ORB-19525].
+    if std::env::var("ORBIT_TEST_FORCE_SEATBELT_REFUSAL").as_deref() == Ok("1") {
+        orbit_exec::force_seatbelt_refusal_for_test();
+    }
     if orbit_exec::macos_sandbox_test_guard(SCENARIO_TABLE) {
         None
     } else {
