@@ -281,27 +281,23 @@ def detect_mcp_changes(git, parent, commit, changed):
             if path in after.get("enum", {}):
                 for value in sorted(values - after["enum"][path]):
                     report(f"`{name}` `{path}` enum value {value} removed")
-        # A required entry constrains its instance location: the schema path
-        # with combinator branches stripped. allOf branches all apply, so
-        # their required sets union at that location (branch renumbering on
-        # insertion is not a new constraint). anyOf/oneOf branches are
-        # alternatives, so a requirement inside one does not unconditionally
-        # constrain the location and stays additive; oneOf exclusivity
-        # changes are not modelled as newly-required properties.
+        # allOf branches all apply, so their required sets union at their
+        # instance location (branch renumbering is not a new constraint).
+        # anyOf/oneOf alternatives retain their positional branch paths:
+        # tightening an existing alternative can reject previously valid
+        # input, while requirements at a new branch path stay additive.
         def location(raw):
-            return re.sub(r"\{(?:anyOf|oneOf|allOf)\d+\}", "", raw)
+            return re.sub(r"\{allOf\d+\}", "", raw)
 
-        def unconditional_required(facts):
+        def required_by_location(facts):
             grouped = {}
             for raw, req in facts.get("required", {}).items():
-                if re.search(r"\{(?:anyOf|oneOf)\d+\}", raw):
-                    continue
                 grouped.setdefault(location(raw), set()).update(req)
             return grouped
 
         before_locations = {location(p) for p in before.get("schema_nodes", set())}
-        before_required = unconditional_required(before)
-        for loc, required in sorted(unconditional_required(after).items()):
+        before_required = required_by_location(before)
+        for loc, required in sorted(required_by_location(after).items()):
             if loc not in before_locations:
                 continue
             for prop in sorted(required - before_required.get(loc, set())):
