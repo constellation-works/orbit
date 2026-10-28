@@ -22,11 +22,13 @@ mod candidate_resume;
 mod ci_collect;
 mod claimed_candidate_paths;
 #[cfg(unix)]
+#[path = "claimed_pr_reuse/scenarios.rs"]
 mod claimed_pr_reuse;
 mod commit_verifier;
 mod completion_review;
 #[cfg(unix)]
 mod dependabot_collect;
+#[path = "final_recovery/scenarios.rs"]
 mod final_recovery;
 #[cfg(unix)]
 mod forge_hold;

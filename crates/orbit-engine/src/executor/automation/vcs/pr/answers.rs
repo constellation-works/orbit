@@ -1,7 +1,7 @@
 //! The provider's pull-request answers, parsed once where each private PR
 //! operation's response is read.
 //!
-//! `operations/pr.rs` produces these responses from `gh` and the private
+//! `operations/pr/` produces these responses from `gh` and the private
 //! transport carries them as JSON. This module is the one reader of that
 //! JSON: every decision takes the typed value, so the provider's field names
 //! appear here and in the producer only. Unknown fields are ignored.

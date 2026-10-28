@@ -6,11 +6,13 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde_json::{Value, json};
 
-use super::DEFAULT_TIMEOUT_MS;
-use super::input::{reject_option_like, required_string};
-use super::process::execute_with_transient_retry;
+use super::super::DEFAULT_TIMEOUT_MS;
+use super::super::input::{reject_option_like, required_string};
+use super::super::process::execute_with_transient_retry;
 
-pub(super) fn add_labels(input: &Value) -> Result<Value, OrbitError> {
+pub(in crate::executor::automation::vcs::operations) fn add_labels(
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let workspace_path = Path::new(required_string(input, "workspace_path")?);
     let pr = required_string(input, "pr")?;
     if !pr.bytes().all(|byte| byte.is_ascii_digit()) {

@@ -8,4 +8,4 @@ mod tools;
 
 pub(super) use checkout::SourceInspection;
 pub use checkout::is_source_inspection_checkout;
-pub(super) use tools::{admit_inspection, prepare_inspection_tools};
+pub(super) use tools::{InspectionTools, admit_inspection, prepare_inspection_tools};

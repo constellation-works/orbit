@@ -2,6 +2,7 @@
 #[cfg(unix)]
 mod cli_support;
 mod commit;
+#[path = "dispatcher/classification.rs"]
 mod dispatcher;
 mod gc;
 #[cfg(unix)]

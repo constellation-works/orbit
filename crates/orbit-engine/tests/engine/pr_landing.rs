@@ -56,6 +56,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 mod absent_context;
 pub(super) use absent_context::adopted_policy_cases;
+#[path = "pr_landing/auto_fix/scenarios.rs"]
 mod auto_fix;
 mod check_annotations;
 mod completion_observation;
