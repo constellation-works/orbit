@@ -133,8 +133,16 @@ function runningTaskCard(group, workspaceId) {
   return card;
 }
 
+function shellQuoteJob(text) {
+  return `'${text.replace(/'/g, "'\\''")}'`;
+}
+function shellWordJob(text) {
+  return /^[A-Za-z0-9_.\/:@%+=,-]+$/.test(text) ? text : shellQuoteJob(text);
+}
 function jobCommand(jobId, workspace) {
-  return `orbit run job ${jobId} --workspace ${workspace?.name || workspace?.id || "<workspace>"}`;
+  const target = workspace?.name || workspace?.id || '<workspace>';
+  const targetWord = target === '<workspace>' ? target : shellWordJob(String(target));
+  return `orbit run job ${shellWordJob(String(jobId))} --workspace ${targetWord}`;
 }
 
 function jobRow(job, workspace) {

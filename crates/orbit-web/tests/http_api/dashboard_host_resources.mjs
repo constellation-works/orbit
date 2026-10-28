@@ -453,6 +453,21 @@ clickChip(providerItems()[1]);
 assert.equal(pill().textContent, 'near limit');
 outsideClick();
 
+// A stale-by-date reading that is still gated until a future reset keeps its
+// active gate and held crews alongside the age label, agreeing with admission
+// and the drain note.
+renderProviderUsage({ provider_limits: [
+  usage({ provider: 'codex', window: 'seven_day', used_percent: 95, gated: true, stale: true, age_seconds: 86400, observed_at: '2026-10-14T12:00:00Z', crews: ['codex-main'], until: '2099-10-18T03:00:00Z', resets_at: '2099-10-18T03:00:00Z' }),
+] });
+assert.deepEqual(providerItems().map(classes), [`${base} critical stale`], 'a stale but still-gated provider keeps the critical tone with the stale mark');
+assert.deepEqual(providerItems().map(line), ['codex 95% old'], 'the chip retains the age flag while gated');
+clickChip(providerItems()[0]);
+assert.match(pill().textContent, /^gated until 2099-10-18 03:00 UTC · 24h old$/, 'the pill names the active gate and the age');
+assert.match(dialogRows()[0], /old/, 'the window row retains the age flag');
+assert.match(dialogRows()[0], /gated/, 'the window row lists the active gate');
+assert.match(dialogText(), /Held back: codex-main/, 'the dialog names the held crew');
+outsideClick();
+
 // A scoped window is named by its scope, with the window as its sublabel; a
 // provider with many windows lists them all, most used first.
 const scoped = (scope, window, used) => usage({ provider: 'antigravity', scope, window, used_percent: used });

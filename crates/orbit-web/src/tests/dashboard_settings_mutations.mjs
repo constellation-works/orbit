@@ -17,9 +17,10 @@ export async function checkSettingsMutationOwnership(browser, origin, evidence =
       const topics = await import('/static/js/config-topics.js');
       const config = await import('/static/js/config.js');
       const body = document.getElementById('config-body');
-      const row = (key, value, value_type = 'string') => ({
+      const row = (key, value, value_type = 'string', extra = {}) => ({
         key, label: key, value, value_type, state: 'set', settable: true,
         source: { layer: 'workspace' }, equals: { built_in: true },
+        fallback: { layer: 'global', value, state: 'set' }, ...extra,
       });
       const payload = {
         config_set: { authorized: true },
@@ -113,6 +114,67 @@ export async function checkSettingsMutationOwnership(browser, origin, evidence =
       check(body.textContent.includes('Removed 2 workspace value(s). Failed: pr.draft: fixture refusal'), 'same-visit successes and per-key refusal are reported');
       refuseKey = null;
       results.push('bulk-same-visit-sequential-successes-and-per-key-refusal');
+
+      // Bulk cleanup is fallback-safe: only a workspace value whose admitted
+      // removal fallback preserves the effective value is offered. An
+      // intentional built-in-valued override of a different global value stays,
+      // an unknown (null) fallback is never claimed safe, and safe ordinary and
+      // replace-only security restatements remain removable.
+      {
+        const safeOrdinary = row('workflow.base_branch', 'agent-main');
+        const safeSecurity = row('execution.policy', 'strict', 'string', {
+          equals: { global: true, built_in: true },
+          fallback: { layer: 'built-in', value: 'strict', state: 'set' },
+        });
+        const intentionalOverride = row('workflow.required_validation_commands', [], 'array<string>', {
+          equals: { global: false, built_in: true },
+          fallback: { layer: 'global', value: ['make ci-guards'], state: 'set' },
+        });
+        const unknownFallback = row('workflow.unknown_key', 'kept', 'string', {
+          equals: { global: true, built_in: false },
+          fallback: null,
+        });
+        const fallbackPayload = {
+          config_set: { authorized: true },
+          sections: [{ token: 'workflow', keys: [safeOrdinary, safeSecurity, intentionalOverride, unknownFallback] }],
+          crews: [], crew_fields: [],
+        };
+        body.replaceChildren(); topics.renderAllKeys(body, fallbackPayload, context);
+        const bulk = [...body.querySelectorAll('button')].find((button) => button.textContent.startsWith('Remove all'));
+        check(bulk && bulk.textContent === 'Remove all 2 workspace values', `fallback-safe bulk offers only preserving removals: ${bulk?.textContent}`);
+        // The intentional built-in-valued override and the unknown fallback
+        // stay out of the bulk section.
+        const bulkSection = bulk.closest('section');
+        check(!bulkSection.textContent.includes('workflow.required_validation_commands'), 'intentional built-in-valued override of a different global value remains intact');
+        check(!bulkSection.textContent.includes('workflow.unknown_key'), 'unknown fallback is not claimed safe');
+        check(bulkSection.textContent.includes('workflow.base_branch'), 'safe ordinary restatement remains removable');
+        check(bulkSection.textContent.includes('execution.policy'), 'safe replace-only security restatement remains removable');
+        results.push('bulk-fallback-safe-only-preserving-removals');
+        // Restore the ownership payload for the drawer checks below.
+        reset();
+      }
+
+      // An enum selection refreshes the displayed orbit config set equivalent
+      // to the value Save sends.
+      {
+        const enumRow = row('review.timing', 'off', 'string', { options: ['off', 'before_pr'] });
+        const enumPayload = {
+          config_set: { authorized: true },
+          sections: [{ token: 'review', keys: [enumRow] }],
+          crews: [], crew_fields: [],
+        };
+        body.replaceChildren(); topics.renderAllKeys(body, enumPayload, context);
+        body.querySelector('[data-key="review.timing"] button').click();
+        const select = body.querySelector('.config-drawer select');
+        check(select, 'enum drawer shows a select');
+        const preview = () => body.querySelector('.drawer-cli').textContent;
+        check(preview().includes('review.timing off'), `enum preview starts at the current value: ${preview()}`);
+        select.value = 'before_pr';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        check(preview().includes('review.timing before_pr'), `enum change updates the CLI preview: ${preview()}`);
+        results.push('drawer-enum-selection-refreshes-cli-preview');
+        reset();
+      }
 
       for (const action of ['Save', 'Remove workspace value']) {
         for (const transition of ['replacement', 'host', 'workspace-round-trip']) {

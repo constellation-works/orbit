@@ -368,6 +368,37 @@ try {
   assert.equal(await open(), false, 'a provider dialog with no chip on screen closes at the breakpoint');
   await assertFocusOnVisible('after a provider dialog closes at the breakpoint');
 
+  // ---- A stale-by-date reading that is still gated lists its gate and held crews.
+  override = (() => {
+    const now = new Date();
+    const inFuture = new Date(now.getTime() + 24 * 3600e3).toISOString();
+    const observed = new Date(now.getTime() - 24 * 3600e3).toISOString();
+    return {
+      provider_limits: [{
+        provider: 'codex', scope: null, window: 'seven_day', used_percent: 95, exhausted: false,
+        resets_at: inFuture, source: 'native', observed_at: observed, age_seconds: 86400,
+        stale: true, gating: true, partial: false, threshold: 90, gated: true, until: inFuture, crews: ['codex-main'],
+      }],
+      provider_pressures: [],
+    };
+  })();
+  await load(1920, () => document.querySelectorAll('#provider-usage-chips .provider-usage-item').length === 1);
+  const staleGated = await chips();
+  assert.equal(staleGated.length, 1);
+  assert.equal(staleGated[0].key, 'codex');
+  assert.equal(staleGated[0].flag, 'old', 'the chip retains the age flag while gated');
+  assert.match(staleGated[0].className, /critical/, 'a stale but still-gated provider keeps the critical tone');
+  assert.match(staleGated[0].className, /stale/, 'and the stale mark');
+  await chip('codex').click();
+  await dialog.waitFor({ state: 'visible' });
+  const stalePill = await page.evaluate(() => document.querySelector('#provider-usage-dialog .usage-pill').textContent);
+  assert.match(stalePill, /^gated until .* · 24h old$/, 'the pill names the active gate and the age');
+  const staleRows = await dialogRows();
+  assert.match(staleRows[0], /old/, 'the window row retains the age flag');
+  assert.match(staleRows[0], /gated/, 'the window row lists the active gate');
+  assert.match(await dialog.innerText(), /Held back: codex-main/, 'the dialog names the held crew');
+  await page.keyboard.press('Escape');
+
   // Touch: a tap toggles.
   const touch = await browser.newContext({ viewport: { width: 375, height: 800 }, hasTouch: true, isMobile: true });
   const phone = await touch.newPage();
