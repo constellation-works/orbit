@@ -107,6 +107,16 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/task-shared.js"),
     ),
     (
+        "/static/js/task-crew.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-crew.js"),
+    ),
+    (
+        "/static/js/task-data.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/task-data.js"),
+    ),
+    (
         "/static/js/field-editor.js",
         JS,
         include_bytes!("../assets/dashboard/js/field-editor.js"),
