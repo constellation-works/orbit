@@ -63,8 +63,7 @@ the plugin stays a pure transport.
 
 ### 2.1 Fields
 
-`DecisionRequest` (new, `crates/orbit-types/src/task/decision.rs`, beside
-`PilotAdmissionVerdict` at line 191):
+`DecisionRequest` (new, `crates/orbit-types/src/task/decision/request.rs`):
 
 | Field | Meaning |
 |---|---|
