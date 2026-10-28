@@ -1,90 +1,116 @@
 //! Per-task riskiness: the observed chance that a task, once done, is named
-//! by at least one `regression_from` link, estimated from its declared
-//! footprint, crew and complexity.
+//! by at least one `regression_from` link, estimated from its size alone.
 //!
 //! The estimate reads the same windowed regression facts as the
-//! regression-risk marks ([`super::risk`]) and the Regressions ranking
-//! ([`regression_rows`]): every task done in the trailing
-//! `workflow.regression_risk.window_days` is one observation, regressed when
-//! any link names it. `min_support` is the shared minimum; the marks'
-//! threshold and file cap do not apply.
+//! regression-risk marks ([`super::risk`]) and the Regressions ranking: every
+//! task done in the trailing `workflow.regression_risk.window_days` is one
+//! observation, regressed when any link names it. The marks' threshold and
+//! file cap do not apply.
 //!
-//! 1. Each `file:`/`symbol:` selector is its path; a `dir:` selector rolls up
-//!    every footprint key under it, counting each historical task once.
-//!    Module and command selectors carry no path and are counted as
-//!    unsupported.
-//! 2. With N done tasks and R regressed, the base rate is
-//!    `p0 = (R + 1) / (N + 2)`. An anchor touched by `n_f >= min_support`
-//!    tasks, `r_f` of them regressed, has the shrunk rate
-//!    `p_f = (r_f + min_support * p0) / (n_f + min_support)`.
-//! 3. Supported anchors combine by their maximum rate; the top three are the
-//!    driving files.
-//! 4. One joint crew × complexity adjustment shifts the odds:
-//!    `logistic(logit(max p_f) + logit(p_g) - logit(p0))`, where `p_g` is
-//!    that group's rate shrunk the same way, applied only when both the group
-//!    and the workspace have at least `max(20, min_support)` observations. A
-//!    task without a crew averages over its complexity pool's positive
-//!    weights, unadjusted for members without support.
-//! 5. A numeric estimate needs N and one anchor at `min_support`. Otherwise
-//!    the state names why: `no_footprint`, `unsupported_footprint` or
-//!    `insufficient_history`, never a low probability.
+//! 1. A task's size has one of two bases. Before a diff exists it is the
+//!    declared path count: the distinct `file:`/`symbol:` paths and `dir:`
+//!    directories of its `context_files`, each counted once; module and
+//!    command selectors carry no path and are counted as unsupported. Once
+//!    the task is in review or done and its diff resolves, the size is the
+//!    lines changed (insertions plus deletions) of that diff: a done task's
+//!    landed-delivery row ([`super::diff_stats`], written once per landing),
+//!    or a review task's candidate commit against the base its delivery run
+//!    started from, diffed once per commit pair per process. A review or
+//!    done task without a resolvable diff falls back to declared files and
+//!    says so.
+//! 2. Each basis has its own fit of
+//!    `p = 1 - exp(-exp(a + b·ln(1 + size)))`, with `a` and `b` refitted by
+//!    maximum likelihood (Fisher scoring) at every model build over the
+//!    window's done tasks that have that size. When every observation has
+//!    the same size the slope is not identified and the fit is the
+//!    intercept alone (`b = 0`).
+//! 3. A fit needs at least `min_support` observations, some regressed and
+//!    some not, and a finite optimum. Otherwise the state names why
+//!    (`no_footprint`, `unsupported_footprint` or `insufficient_history`),
+//!    never a low probability.
+//! 4. Every estimate carries its calibration evidence: of the window's done
+//!    tasks on the same basis at least this size, how many regressed.
 //!
-//! The estimate is derived, not stored on the task; [`TaskRiskinessModel`]
-//! is built once per scan and estimates any number of tasks without another
-//! history read. The backlog forecast consumes [`TaskRiskiness::probability`]
-//! unchanged.
+//! Size carries the signal: in backtests of Orbit's own history, neither a
+//! crew × complexity term nor per-file attribution added anything over it,
+//! so the estimate names neither. The estimate is derived, not stored on the
+//! task; [`TaskRiskinessModel`] is built once per scan and estimates any
+//! number of tasks without another history read. The backlog forecast
+//! consumes [`TaskRiskiness::probability`] unchanged.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Mutex, OnceLock};
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskComplexity};
+use orbit_store::contracts::LandedDiffStats;
+use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
+use serde_json::Value;
 
 use super::facts::{Anchor, CodebaseFacts};
 use super::regression::RegressionFilter;
-use super::sections::{Params, Rollup, regression_rows};
+use super::sections::{Params, Rollup};
 use crate::OrbitRuntime;
+use crate::application::job::CodebaseDeliveryScan;
 
 /// Revision of the estimator below. Bump it whenever a change alters an
-/// estimate for the same facts.
-pub const TASK_RISKINESS_ESTIMATOR_VERSION: u32 = 1;
-/// Fewest observations a crew × complexity group and the workspace need
-/// before the group adjusts an estimate, when `min_support` is lower.
-const GROUP_MIN_SUPPORT: usize = 20;
-/// Driving files one estimate lists.
-const DRIVING_FILES: usize = 3;
-/// The complexity tiers whose crew pools an unassigned task averages over.
-const POOL_TIERS: [TaskComplexity; 4] = [
-    TaskComplexity::Low,
-    TaskComplexity::Medium,
-    TaskComplexity::Hard,
-    TaskComplexity::XHard,
-];
+/// estimate for the same facts. 2: size-based fit in place of the per-file
+/// maximum and the crew × complexity adjustment.
+pub const TASK_RISKINESS_ESTIMATOR_VERSION: u32 = 2;
+/// Fisher-scoring iterations one fit may take before it is abandoned.
+const FIT_MAX_ITERATIONS: usize = 100;
+/// A fit has converged once a full step moves no parameter further.
+const FIT_TOLERANCE: f64 = 1e-9;
+/// A parameter past this magnitude means the sizes separate regressed from
+/// clean tasks: the likelihood has no finite optimum.
+const FIT_MAX_PARAMETER: f64 = 50.0;
+/// Review-candidate diffs one process remembers before starting over.
+const CANDIDATE_CACHE_LIMIT: usize = 4_096;
 
 /// Whether a task has an estimate, and why not.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskinessState {
-    /// A probability from at least one supported anchor.
+    /// A probability from a fitted size model.
     Estimated,
-    /// The task declares no `context_files`.
+    /// The task declares no `context_files` and has no resolvable diff.
     NoFootprint,
     /// The task's selectors name no path (module or command selectors only).
     UnsupportedFootprint,
-    /// Paths are declared, but the workspace or every anchor is below
-    /// `min_support`.
+    /// The window holds too few done tasks on the task's basis to fit.
     InsufficientHistory,
 }
 
-/// How much of an estimated footprint had support.
+/// How much of an estimated task's size was measured.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SupportState {
-    /// Every selector is a supported anchor.
+    /// The whole size was measured.
     Full,
-    /// Some anchors are below `min_support`, or some selectors name no path.
+    /// Some selectors name no path, so the declared count is a lower bound.
     Partial,
+}
+
+/// What a task's size counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RiskinessBasis {
+    /// Distinct paths the task's `context_files` declare.
+    DeclaredFiles,
+    /// Lines inserted plus deleted by the task's candidate or landed diff.
+    DiffLines,
+}
+
+/// Why a task in review or done is sized by declared files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BasisFallback {
+    /// No candidate or landed diff of the task could be read.
+    NoResolvableDiff,
+    /// The diff resolved, but too few done tasks in the window have one to
+    /// fit lines changed.
+    DiffHistoryInsufficient,
 }
 
 /// The workspace observations behind every estimate.
@@ -98,57 +124,25 @@ pub struct RiskinessBase {
     pub base_rate: f64,
 }
 
-/// One supported anchor of the task's footprint.
-#[derive(Debug, Clone, Serialize)]
-pub struct RiskinessAnchor {
-    /// The path; a directory ends in `/`.
-    pub path: String,
-    /// The shrunk rate `p_f`.
-    pub probability: f64,
-    /// Distinct done tasks in the window that touched it: `n_f`.
-    pub support: usize,
-    /// Of them, regressed: `r_f`.
+/// One basis's fitted `p = 1 - exp(-exp(intercept + slope·ln(1 + size)))`.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RiskinessFit {
+    /// Done tasks in the window with a size on this basis.
+    pub observations: usize,
+    /// Of them, regressed.
     pub regressed: usize,
+    pub intercept: f64,
+    pub slope: f64,
 }
 
-/// How the crew × complexity adjustment was applied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AdjustmentState {
-    /// The task's own crew group adjusted the estimate.
-    Applied,
-    /// The estimate averages the task's complexity pool over its weights.
-    PoolWeighted,
-    /// No adjustment: `reason` says why.
-    Omitted,
-}
-
-/// One crew × complexity group the adjustment read.
-#[derive(Debug, Clone, Serialize)]
-pub struct RiskinessGroup {
-    pub crew: String,
-    /// The crew's pool weight, for a pool-weighted estimate.
-    pub weight: Option<u32>,
-    /// Done tasks in the window by this crew at this complexity.
+/// The calibration evidence of one estimate: done tasks in the window, on
+/// the same basis, at least as large as the task.
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct RiskinessSizeBand {
     pub tasks: usize,
     pub regressed: usize,
-    /// The group's shrunk rate `p_g`, when it has support.
+    /// `regressed / tasks`; `None` when no task was that large.
     pub rate: Option<f64>,
-    /// Whether this group adjusted the estimate.
-    pub applied: bool,
-}
-
-/// The crew × complexity adjustment and its basis.
-#[derive(Debug, Clone, Serialize)]
-pub struct RiskinessAdjustment {
-    pub state: AdjustmentState,
-    /// `no_complexity`, `no_crew`, `workspace_below_support`,
-    /// `group_below_support`, `pool_below_support` or, for a pool-weighted
-    /// estimate with some unsupported members, `pool_partial_support`.
-    pub reason: Option<&'static str>,
-    /// Observations each group and the workspace need: `max(20, min_support)`.
-    pub min_support: usize,
-    pub groups: Vec<RiskinessGroup>,
 }
 
 /// One task's riskiness, as the task API serves it.
@@ -156,12 +150,21 @@ pub struct RiskinessAdjustment {
 pub struct TaskRiskiness {
     pub estimator_version: u32,
     pub state: RiskinessState,
-    /// The adjusted estimate; `None` unless `state` is `estimated`.
+    /// The fitted estimate; `None` unless `state` is `estimated`.
     pub probability: Option<f64>,
-    /// The maximum anchor rate before the crew × complexity adjustment.
-    pub unadjusted_probability: Option<f64>,
+    /// What `size` counts; `None` when the task has no size.
+    pub basis: Option<RiskinessBasis>,
+    /// Why a task in review or done is sized by declared files.
+    pub basis_fallback: Option<BasisFallback>,
+    /// Declared paths or lines changed, per `basis`.
+    pub size: Option<u64>,
+    /// The fit behind `probability`, when one exists for the basis.
+    pub fit: Option<RiskinessFit>,
+    /// Done tasks in the window at least this size, and how many regressed.
+    pub size_band: Option<RiskinessSizeBand>,
     pub support_state: Option<SupportState>,
     pub window_days: u32,
+    /// The fewest observations a fit needs.
     pub min_support: usize,
     /// Start of the window.
     pub since: String,
@@ -169,23 +172,26 @@ pub struct TaskRiskiness {
     /// tasks done shortly before it have had little time to reveal any.
     pub observed_through: String,
     pub workspace: RiskinessBase,
-    /// Distinct done tasks behind the supported anchors; never a sum of
-    /// per-anchor counts.
+    /// Done tasks behind the fit; equal to `fit.observations`.
     pub supporting_tasks: usize,
     /// Of them, regressed.
     pub supporting_regressed: usize,
     /// Distinct path anchors the footprint names.
     pub anchors: usize,
-    /// Path anchors below `min_support`.
-    pub uncovered_anchors: usize,
     /// Selectors that name no path.
     pub unsupported_selectors: usize,
-    /// The highest-rate supported anchors, at most three.
-    pub driving_files: Vec<RiskinessAnchor>,
-    /// The crew the estimate resolved, when the task names one.
+    /// Deprecated in estimator version 2: always null.
+    pub unadjusted_probability: Option<f64>,
+    /// Deprecated in estimator version 2: always 0.
+    pub uncovered_anchors: usize,
+    /// Deprecated in estimator version 2: always empty.
+    pub driving_files: Vec<Value>,
+    /// Deprecated in estimator version 2: always null.
     pub crew: Option<String>,
+    /// Deprecated in estimator version 2: always null.
     pub complexity: Option<String>,
-    pub adjustment: Option<RiskinessAdjustment>,
+    /// Deprecated in estimator version 2: always null.
+    pub adjustment: Option<Value>,
 }
 
 /// Done tasks in one crew × complexity group.
@@ -193,6 +199,44 @@ pub struct TaskRiskiness {
 struct GroupTally {
     tasks: usize,
     regressed: usize,
+}
+
+/// The window's observations on one basis, sorted by size for the size band,
+/// and their fit.
+#[derive(Debug, Default)]
+struct SizeHistory {
+    /// Sizes, ascending.
+    sizes: Vec<u64>,
+    /// `at_least[i]`: regressed observations among `sizes[i..]`.
+    regressed_at_least: Vec<usize>,
+    fit: Option<RiskinessFit>,
+}
+
+impl SizeHistory {
+    fn new(mut points: Vec<(u64, bool)>, min_support: usize) -> Self {
+        let fit = fit_size_model(&points, min_support);
+        points.sort_unstable();
+        let mut regressed_at_least = vec![0; points.len() + 1];
+        for (index, (_, regressed)) in points.iter().enumerate().rev() {
+            regressed_at_least[index] = regressed_at_least[index + 1] + usize::from(*regressed);
+        }
+        Self {
+            sizes: points.into_iter().map(|(size, _)| size).collect(),
+            regressed_at_least,
+            fit,
+        }
+    }
+
+    fn band(&self, size: u64) -> RiskinessSizeBand {
+        let start = self.sizes.partition_point(|observed| *observed < size);
+        let tasks = self.sizes.len() - start;
+        let regressed = self.regressed_at_least[start];
+        RiskinessSizeBand {
+            tasks,
+            regressed,
+            rate: (tasks > 0).then(|| regressed as f64 / tasks as f64),
+        }
+    }
 }
 
 /// The windowed regression facts every task estimate reads, built from one
@@ -205,48 +249,100 @@ pub struct TaskRiskinessModel {
     min_support: usize,
     /// Whether each done task in the window was regressed, by observation.
     regressed: Vec<bool>,
-    /// Every file-rollup footprint key and the observations that touched it.
-    keys: BTreeMap<String, Vec<usize>>,
-    /// Observations by (crew, complexity).
+    /// Observations by (crew, complexity), for the forecast prior only.
     groups: BTreeMap<(String, String), GroupTally>,
-    /// Each complexity tier's crew pool: names with positive weights.
-    pools: BTreeMap<&'static str, Vec<(String, u32)>>,
+    declared: SizeHistory,
+    diff: SizeHistory,
+    /// Lines changed by each task's landed delivery or review candidate.
+    diff_lines: HashMap<String, u64>,
 }
 
 impl OrbitRuntime {
-    /// Read the windowed regression facts once and build the model that
-    /// estimates every task's riskiness from them, under the configured
-    /// `workflow.regression_risk` window and minimum support and this
-    /// host's complexity crew pools.
+    /// Read the windowed regression facts and the recorded diff sizes once
+    /// and build the model that estimates every task's riskiness from them,
+    /// under the configured `workflow.regression_risk` window and minimum
+    /// support.
     pub fn task_riskiness_model(&self) -> Result<TaskRiskinessModel, OrbitError> {
         let settings = self.regression_risk_settings();
         let since = Utc::now() - Duration::days(i64::from(settings.window_days));
         let facts = super::facts::scan_regressions(self, since)?;
-        let pools = POOL_TIERS
-            .into_iter()
-            .map(|tier| {
-                let members = self
-                    .configured_complexity_pool(tier)
-                    .unwrap_or_else(|error| {
-                        tracing::warn!(%tier, %error, "riskiness: crew pool unreadable");
-                        None
-                    })
-                    .unwrap_or_default()
-                    .into_iter()
-                    .filter(|candidate| candidate.weight > 0)
-                    .map(|candidate| (candidate.crew.name, candidate.weight))
-                    .collect();
-                (tier.as_str(), members)
+        let mut diff_lines: HashMap<String, u64> = self
+            .landed_diff_stats(None)
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "riskiness: landed diff stats unreadable");
+                Vec::new()
             })
+            .iter()
+            // Oldest first: a task's latest landing wins.
+            .map(|row| (row.task_id.clone(), landed_lines(row)))
             .collect();
+        self.add_review_candidate_lines(&facts, &mut diff_lines);
         Ok(TaskRiskinessModel::build(
             &facts,
             since,
             settings.window_days,
             settings.min_support as usize,
-            pools,
+            diff_lines,
         ))
     }
+
+    /// The lines changed by each review task's candidate, from the commit
+    /// its delivery run made against the base it started from.
+    fn add_review_candidate_lines(
+        &self,
+        facts: &CodebaseFacts,
+        diff_lines: &mut HashMap<String, u64>,
+    ) {
+        let scan = CodebaseDeliveryScan::default();
+        let mut repo: Option<Option<git2::Repository>> = None;
+        for task in &facts.tasks {
+            if task.status != TaskStatus::Review || diff_lines.contains_key(&task.id) {
+                continue;
+            }
+            let Ok(delivery) = self.observe_codebase_task_delivery(&task.id, &scan) else {
+                continue;
+            };
+            let (Some(base), Some(head)) = (delivery.commit.base_sha, delivery.commit.head_sha)
+            else {
+                continue;
+            };
+            let key = (base, head);
+            let cache = candidate_lines_cache();
+            if let Some(lines) = cache.lock().ok().and_then(|seen| seen.get(&key).copied()) {
+                diff_lines.insert(task.id.clone(), lines);
+                continue;
+            }
+            let repo = repo
+                .get_or_insert_with(|| git2::Repository::open(&self.paths().repo_root).ok())
+                .as_ref();
+            // A missing commit is not remembered: a later fetch can supply it.
+            let Some(lines) = repo.and_then(|repo| self.candidate_diff_lines(repo, &key.0, &key.1))
+            else {
+                continue;
+            };
+            if let Ok(mut seen) = cache.lock() {
+                if seen.len() >= CANDIDATE_CACHE_LIMIT {
+                    seen.clear();
+                }
+                seen.insert(key, lines);
+            }
+            diff_lines.insert(task.id.clone(), lines);
+        }
+    }
+}
+
+/// Lines changed per candidate `(base, head)`. A commit pair's diff never
+/// changes, so the process diffs each one once.
+fn candidate_lines_cache() -> &'static Mutex<HashMap<(String, String), u64>> {
+    static CANDIDATE_LINES: OnceLock<Mutex<HashMap<(String, String), u64>>> = OnceLock::new();
+    CANDIDATE_LINES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn landed_lines(row: &LandedDiffStats) -> u64 {
+    [row.code, row.tests, row.other]
+        .iter()
+        .map(|class| class.added + class.deleted)
+        .sum()
 }
 
 impl TaskRiskinessModel {
@@ -279,7 +375,7 @@ impl TaskRiskinessModel {
         since: DateTime<Utc>,
         window_days: u32,
         min_support: usize,
-        pools: BTreeMap<&'static str, Vec<(String, u32)>>,
+        diff_lines: HashMap<String, u64>,
     ) -> Self {
         let params = Params {
             since: Some(since),
@@ -287,17 +383,20 @@ impl TaskRiskinessModel {
             rollup: Rollup::File,
             filter: RegressionFilter::default(),
         };
-        let (rows, _) = regression_rows(facts, &params);
-        let mut observation: HashMap<&str, usize> = HashMap::new();
         let mut regressed = Vec::new();
         let mut groups: BTreeMap<(String, String), GroupTally> = BTreeMap::new();
+        let mut declared = Vec::new();
+        let mut diff = Vec::new();
         for task in &facts.tasks {
             if !task.done_at.is_some_and(|at| params.within(at)) {
                 continue;
             }
             let was_regressed = params.filter.regressed(task);
-            observation.insert(task.id.as_str(), regressed.len());
             regressed.push(was_regressed);
+            declared.push((task.footprint.len() as u64, was_regressed));
+            if let Some(lines) = diff_lines.get(&task.id) {
+                diff.push((*lines, was_regressed));
+            }
             if let (Some(crew), Some(complexity)) = (&task.crew, &task.complexity) {
                 let tally = groups
                     .entry((crew.clone(), complexity.clone()))
@@ -306,36 +405,24 @@ impl TaskRiskinessModel {
                 tally.regressed += usize::from(was_regressed);
             }
         }
-        let keys = rows
-            .into_iter()
-            .map(|(key, row)| {
-                let touching = row
-                    .touching
-                    .iter()
-                    .filter_map(|task| observation.get(task.id.as_str()).copied())
-                    .collect();
-                (key, touching)
-            })
-            .collect();
         Self {
             computed_at: facts.computed_at,
             since,
             window_days,
             min_support: params.min_support,
             regressed,
-            keys,
             groups,
-            pools,
+            declared: SizeHistory::new(declared, params.min_support),
+            diff: SizeHistory::new(diff, params.min_support),
+            diff_lines,
         }
     }
 
     /// The riskiness of `task` from this model's facts.
     pub fn estimate(&self, task: &Task) -> TaskRiskiness {
-        let m = self.min_support;
         let population = self.regressed.len();
         let regressed = self.regressed.iter().filter(|flag| **flag).count();
         let p0 = (regressed as f64 + 1.0) / (population as f64 + 2.0);
-        let shrink = |r: usize, n: usize| (r as f64 + m as f64 * p0) / (n as f64 + m as f64);
 
         let selectors: Vec<&str> = task
             .context_files
@@ -354,66 +441,63 @@ impl TaskRiskinessModel {
             }
         }
 
-        let mut supported = Vec::new();
-        let mut supporting = BTreeSet::new();
-        let mut uncovered_anchors = 0;
-        for anchor in &anchors {
-            let touching = self.anchor_observations(anchor);
-            let n = touching.len();
-            if population < m || n < m {
-                uncovered_anchors += 1;
-                continue;
+        let diff = matches!(task.status, TaskStatus::Review | TaskStatus::Done)
+            .then(|| self.diff_lines.get(task.id.as_str()).copied());
+        let (basis, size, basis_fallback) = match diff {
+            Some(Some(lines)) if self.diff.fit.is_some() => {
+                (RiskinessBasis::DiffLines, lines, None)
             }
-            let r = touching.iter().filter(|at| self.regressed[**at]).count();
-            supported.push(RiskinessAnchor {
-                path: if anchor.dir {
-                    format!("{}/", anchor.path)
-                } else {
-                    anchor.path.clone()
-                },
-                probability: shrink(r, n),
-                support: n,
-                regressed: r,
-            });
-            supporting.extend(touching);
-        }
-        supported.sort_by(|left, right| {
-            right
-                .probability
-                .total_cmp(&left.probability)
-                .then_with(|| right.support.cmp(&left.support))
-                .then_with(|| left.path.cmp(&right.path))
-        });
-
-        let state = if selectors.is_empty() {
+            Some(Some(_)) => (
+                RiskinessBasis::DeclaredFiles,
+                anchors.len() as u64,
+                Some(BasisFallback::DiffHistoryInsufficient),
+            ),
+            Some(None) => (
+                RiskinessBasis::DeclaredFiles,
+                anchors.len() as u64,
+                Some(BasisFallback::NoResolvableDiff),
+            ),
+            None => (RiskinessBasis::DeclaredFiles, anchors.len() as u64, None),
+        };
+        let history = match basis {
+            RiskinessBasis::DeclaredFiles => &self.declared,
+            RiskinessBasis::DiffLines => &self.diff,
+        };
+        let state = if basis == RiskinessBasis::DiffLines {
+            RiskinessState::Estimated
+        } else if selectors.is_empty() {
             RiskinessState::NoFootprint
         } else if anchors.is_empty() {
             RiskinessState::UnsupportedFootprint
-        } else if supported.is_empty() {
+        } else if history.fit.is_none() {
             RiskinessState::InsufficientHistory
         } else {
             RiskinessState::Estimated
         };
-        let crew = task
-            .crew
-            .as_deref()
-            .map(str::trim)
-            .filter(|crew| !crew.is_empty())
-            .or(task.implemented_by.as_deref())
-            .map(str::to_string);
-        let complexity = task
-            .complexity
-            .filter(|complexity| complexity.is_assessed())
-            .map(|complexity| complexity.as_str().to_string());
-
-        let mut riskiness = TaskRiskiness {
+        let sized = matches!(
+            state,
+            RiskinessState::Estimated | RiskinessState::InsufficientHistory
+        );
+        let fit = history.fit.filter(|_| sized);
+        let estimated = state == RiskinessState::Estimated;
+        TaskRiskiness {
             estimator_version: TASK_RISKINESS_ESTIMATOR_VERSION,
             state,
-            probability: None,
-            unadjusted_probability: None,
-            support_state: None,
+            probability: fit.filter(|_| estimated).map(|fit| fit.probability(size)),
+            basis: sized.then_some(basis),
+            basis_fallback: basis_fallback.filter(|_| sized),
+            size: sized.then_some(size),
+            fit,
+            size_band: estimated.then(|| history.band(size)),
+            support_state: estimated.then(|| {
+                if basis == RiskinessBasis::DeclaredFiles && unsupported_selectors > 0 {
+                    SupportState::Partial
+                } else {
+                    SupportState::Full
+                }
+            }),
             window_days: self.window_days,
-            min_support: m,
+            min_support: self.min_support,
             since: self.since.to_rfc3339_opts(SecondsFormat::Secs, true),
             observed_through: self.computed_at.to_rfc3339_opts(SecondsFormat::Secs, true),
             workspace: RiskinessBase {
@@ -421,155 +505,116 @@ impl TaskRiskinessModel {
                 regressed,
                 base_rate: p0,
             },
-            supporting_tasks: supporting.len(),
-            supporting_regressed: supporting.iter().filter(|at| self.regressed[**at]).count(),
+            supporting_tasks: fit.map_or(0, |fit| fit.observations),
+            supporting_regressed: fit.map_or(0, |fit| fit.regressed),
             anchors: anchors.len(),
-            uncovered_anchors,
             unsupported_selectors,
+            unadjusted_probability: None,
+            uncovered_anchors: 0,
             driving_files: Vec::new(),
-            crew: crew.clone(),
-            complexity: complexity.clone(),
+            crew: None,
+            complexity: None,
             adjustment: None,
-        };
-        let Some(top) = supported.first().map(|anchor| anchor.probability) else {
-            return riskiness;
-        };
-        let (probability, adjustment) =
-            self.adjust(top, p0, crew.as_deref(), complexity.as_deref(), shrink);
-        riskiness.probability = Some(probability);
-        riskiness.unadjusted_probability = Some(top);
-        riskiness.support_state = Some(if uncovered_anchors > 0 || unsupported_selectors > 0 {
-            SupportState::Partial
-        } else {
-            SupportState::Full
-        });
-        riskiness.driving_files = supported.into_iter().take(DRIVING_FILES).collect();
-        riskiness.adjustment = Some(adjustment);
-        riskiness
-    }
-
-    /// The done-task observations under `anchor`: a file's own key, or every
-    /// key under a directory, each task once.
-    fn anchor_observations(&self, anchor: &Anchor) -> BTreeSet<usize> {
-        if !anchor.dir {
-            return self
-                .keys
-                .get(&anchor.path)
-                .into_iter()
-                .flatten()
-                .copied()
-                .collect();
         }
-        let prefix = format!("{}/", anchor.path);
-        self.keys
-            .range(prefix.clone()..)
-            .take_while(|(key, _)| key.starts_with(&prefix))
-            .flat_map(|(_, touching)| touching.iter().copied())
-            .collect()
-    }
-
-    /// Apply the crew × complexity odds adjustment to `top`.
-    fn adjust(
-        &self,
-        top: f64,
-        p0: f64,
-        crew: Option<&str>,
-        complexity: Option<&str>,
-        shrink: impl Fn(usize, usize) -> f64,
-    ) -> (f64, RiskinessAdjustment) {
-        let required = GROUP_MIN_SUPPORT.max(self.min_support);
-        let omitted = |reason, groups| {
-            (
-                top,
-                RiskinessAdjustment {
-                    state: AdjustmentState::Omitted,
-                    reason: Some(reason),
-                    min_support: required,
-                    groups,
-                },
-            )
-        };
-        let Some(complexity) = complexity else {
-            return omitted("no_complexity", Vec::new());
-        };
-        let group = |crew: &str, weight: Option<u32>| {
-            let tally = self
-                .groups
-                .get(&(crew.to_string(), complexity.to_string()))
-                .copied()
-                .unwrap_or_default();
-            let rate = (tally.tasks >= required).then(|| shrink(tally.regressed, tally.tasks));
-            RiskinessGroup {
-                crew: crew.to_string(),
-                weight,
-                tasks: tally.tasks,
-                regressed: tally.regressed,
-                rate,
-                applied: false,
-            }
-        };
-        let adjusted = |rate: f64| logistic(logit(top) + logit(rate) - logit(p0));
-        if self.regressed.len() < required {
-            let groups = crew.map(|crew| group(crew, None)).into_iter().collect();
-            return omitted("workspace_below_support", groups);
-        }
-        if let Some(crew) = crew {
-            let mut basis = group(crew, None);
-            let Some(rate) = basis.rate else {
-                return omitted("group_below_support", vec![basis]);
-            };
-            basis.applied = true;
-            return (
-                adjusted(rate),
-                RiskinessAdjustment {
-                    state: AdjustmentState::Applied,
-                    reason: None,
-                    min_support: required,
-                    groups: vec![basis],
-                },
-            );
-        }
-        let pool = self.pools.get(complexity).map(Vec::as_slice).unwrap_or(&[]);
-        if pool.is_empty() {
-            return omitted("no_crew", Vec::new());
-        }
-        let mut groups: Vec<RiskinessGroup> = pool
-            .iter()
-            .map(|(crew, weight)| group(crew, Some(*weight)))
-            .collect();
-        if groups.iter().all(|basis| basis.rate.is_none()) {
-            return omitted("pool_below_support", groups);
-        }
-        let total: f64 = pool.iter().map(|(_, weight)| f64::from(*weight)).sum();
-        let mut probability = 0.0;
-        for basis in &mut groups {
-            let weight = f64::from(basis.weight.unwrap_or_default());
-            let member = match basis.rate {
-                Some(rate) => {
-                    basis.applied = true;
-                    adjusted(rate)
-                }
-                None => top,
-            };
-            probability += weight / total * member;
-        }
-        let partial = groups.iter().any(|basis| !basis.applied);
-        (
-            probability,
-            RiskinessAdjustment {
-                state: AdjustmentState::PoolWeighted,
-                reason: partial.then_some("pool_partial_support"),
-                min_support: required,
-                groups,
-            },
-        )
     }
 }
 
-fn logit(p: f64) -> f64 {
-    (p / (1.0 - p)).ln()
+impl RiskinessFit {
+    fn probability(&self, size: u64) -> f64 {
+        let hazard = (self.intercept + self.slope * size_covariate(size)).exp();
+        -(-hazard).exp_m1()
+    }
 }
 
-fn logistic(x: f64) -> f64 {
-    1.0 / (1.0 + (-x).exp())
+fn size_covariate(size: u64) -> f64 {
+    (size as f64).ln_1p()
+}
+
+/// The log-likelihood, score and Fisher information of one observation set
+/// at `(a, b)` under the complementary log-log link.
+struct FitStep {
+    log_likelihood: f64,
+    score: [f64; 2],
+    information: [f64; 3],
+}
+
+fn fit_step(points: &[(f64, bool)], a: f64, b: f64) -> FitStep {
+    let mut step = FitStep {
+        log_likelihood: 0.0,
+        score: [0.0; 2],
+        information: [0.0; 3],
+    };
+    for &(x, regressed) in points {
+        let hazard = (a + b * x).clamp(-40.0, 40.0).exp();
+        let survival = (-hazard).exp();
+        let p = (-(-hazard).exp_m1()).max(f64::MIN_POSITIVE);
+        let y = if regressed { 1.0 } else { 0.0 };
+        step.log_likelihood += if regressed { p.ln() } else { -hazard };
+        let score = (y - p) * hazard / p;
+        let weight = hazard * hazard * survival / p;
+        step.score[0] += score;
+        step.score[1] += score * x;
+        step.information[0] += weight;
+        step.information[1] += weight * x;
+        step.information[2] += weight * x * x;
+    }
+    step
+}
+
+/// Fit `p = 1 - exp(-exp(a + b·ln(1 + size)))` by maximum likelihood.
+/// `None` below `min_support` observations, without both outcomes, or when
+/// the optimum is not finite.
+fn fit_size_model(points: &[(u64, bool)], min_support: usize) -> Option<RiskinessFit> {
+    let observations = points.len();
+    let regressed = points.iter().filter(|(_, flag)| *flag).count();
+    if observations < min_support.max(1) || regressed == 0 || regressed == observations {
+        return None;
+    }
+    let rate = regressed as f64 / observations as f64;
+    let intercept_only = (-(-rate).ln_1p()).ln();
+    let fit = |intercept: f64, slope: f64| RiskinessFit {
+        observations,
+        regressed,
+        intercept,
+        slope,
+    };
+    let first = points.first().map(|(size, _)| *size);
+    if points.iter().all(|(size, _)| Some(*size) == first) {
+        return Some(fit(intercept_only, 0.0));
+    }
+    let points: Vec<(f64, bool)> = points
+        .iter()
+        .map(|(size, flag)| (size_covariate(*size), *flag))
+        .collect();
+    let (mut a, mut b) = (intercept_only, 0.0);
+    let mut current = fit_step(&points, a, b);
+    for _ in 0..FIT_MAX_ITERATIONS {
+        let [i_aa, i_ab, i_bb] = current.information;
+        let determinant = i_aa * i_bb - i_ab * i_ab;
+        if !determinant.is_finite() || determinant <= f64::EPSILON * i_aa * i_bb {
+            return None;
+        }
+        let [s_a, s_b] = current.score;
+        let delta_a = (i_bb * s_a - i_ab * s_b) / determinant;
+        let delta_b = (i_aa * s_b - i_ab * s_a) / determinant;
+        let mut length = 1.0;
+        let mut next = fit_step(&points, a + delta_a, b + delta_b);
+        while next.log_likelihood < current.log_likelihood && length > 1e-9 {
+            length /= 2.0;
+            next = fit_step(&points, a + length * delta_a, b + length * delta_b);
+        }
+        a += length * delta_a;
+        b += length * delta_b;
+        current = next;
+        if !(a.is_finite() && b.is_finite())
+            || a.abs() > FIT_MAX_PARAMETER
+            || b.abs() > FIT_MAX_PARAMETER
+        {
+            return None;
+        }
+        if (length * delta_a).abs().max((length * delta_b).abs()) < FIT_TOLERANCE {
+            return Some(fit(a, b));
+        }
+    }
+    None
 }

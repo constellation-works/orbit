@@ -348,6 +348,23 @@ impl OrbitRuntime {
         Ok(())
     }
 
+    /// Lines inserted plus deleted by `base..head`, counted as a landed row
+    /// counts them. `None` when either commit is not in the checkout.
+    pub(super) fn candidate_diff_lines(
+        &self,
+        repo: &git2::Repository,
+        base: &str,
+        head: &str,
+    ) -> Option<u64> {
+        let (_, counts) = diff_counts(repo, Some(base), head, &self.diff_classes())?;
+        Some(
+            [counts.code, counts.tests, counts.other]
+                .iter()
+                .map(|class| class.added + class.deleted)
+                .sum(),
+        )
+    }
+
     fn diff_classes(&self) -> DiffClasses<'_> {
         DiffClasses {
             tests: self.diff_test_paths(),

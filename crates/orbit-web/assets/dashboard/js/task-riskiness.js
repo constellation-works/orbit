@@ -1,8 +1,9 @@
-// Task riskiness: the observed chance that a task like this one, once done,
+// Task riskiness: the observed chance that a task of this size, once done,
 // is named by a later regression, as the task API's `riskiness` object
-// estimates it from the context files' regression history. A task without an
-// estimate says why and never reads as low risk; a partially supported
-// estimate carries a `~` marker.
+// estimates it from a size-only fit over recent done tasks. The size is the
+// declared path count before a diff exists, else the diff's lines changed.
+// A task without an estimate says why and never reads as low risk; an
+// estimate whose declared count misses pathless selectors carries a `~`.
 
 import { el, formatDate } from './common.js';
 
@@ -10,7 +11,7 @@ import { el, formatDate } from './common.js';
 const NO_ESTIMATE = {
   no_footprint: ["no files", "The task declares no context files, so there is nothing to estimate from."],
   unsupported_footprint: ["no paths", "Its context selectors name no file or directory, so there is nothing to estimate from."],
-  insufficient_history: ["thin history", "Too few done tasks touched its files in the window to estimate."],
+  insufficient_history: ["thin history", "Too few done tasks in the window to fit a size-based estimate."],
   unavailable: ["unavailable", "The estimate could not be computed."],
 };
 
@@ -46,70 +47,72 @@ function elevated(riskiness) {
   return typeof base === "number" && base > 0 && riskiness.probability >= base * ELEVATED_RATIO;
 }
 
-function plural(count, word) {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
 }
 
-// The one-line value: "23%", "~23%" for partial support, or "No estimate".
+// The one-line value: "23%", "~23%" for a partial count, or "No estimate".
 function valueText(riskiness) {
   if (!estimated(riskiness)) return "No estimate";
   return `${partial(riskiness) ? "~" : ""}${percent(riskiness.probability)}`;
 }
 
-function adjustmentLine(riskiness) {
-  const adjustment = riskiness.adjustment;
-  if (!adjustment) return null;
-  const tier = riskiness.complexity || "unassessed";
-  const groups = Array.isArray(adjustment.groups) ? adjustment.groups : [];
-  const groupText = (group) => `${group.crew} · ${tier}: ${group.regressed} of ${group.tasks} regressed${typeof group.rate === "number" ? ` (${percent(group.rate)})` : ""}`;
-  if (adjustment.state === "applied") return `Adjusted for ${groupText(groups[0] || { crew: riskiness.crew, regressed: 0, tasks: 0 })}`;
-  if (adjustment.state === "pool_weighted") {
-    const unsupported = groups.filter((group) => !group.applied).map((group) => group.crew);
-    return `Averaged over the ${tier} crew pool by weight${unsupported.length ? `; unadjusted for ${unsupported.join(", ")} (below ${adjustment.min_support} tasks)` : ""}`;
-  }
-  const min = adjustment.min_support;
-  const reasons = {
-    no_complexity: "the task has no assessed complexity",
-    no_crew: "the task has no crew and its complexity has no crew pool",
-    workspace_below_support: `the workspace has fewer than ${min} done tasks`,
-    group_below_support: groups[0] ? `${groupText(groups[0])}, below ${min} tasks` : `its crew group is below ${min} tasks`,
-    pool_below_support: `no ${tier} pool crew has ${min} done tasks`,
-  };
-  return `Not adjusted for crew/complexity: ${reasons[adjustment.reason] || adjustment.reason || "no basis"}`;
+function count(value) {
+  return typeof value === "number" ? value.toLocaleString("en-US") : "–";
 }
+
+// The size as its basis counts it: "23 declared files" or "412 lines changed".
+function sizeText(riskiness) {
+  if (typeof riskiness.size !== "number") return null;
+  if (riskiness.basis === "diff_lines") return `${count(riskiness.size)} ${riskiness.size === 1 ? "line" : "lines"} changed`;
+  return `${count(riskiness.size)} declared ${riskiness.size === 1 ? "file" : "files"}`;
+}
+
+// The calibration evidence: recent done tasks at least this size.
+function bandLine(riskiness) {
+  const band = riskiness.size_band;
+  if (!band || typeof band.tasks !== "number") return null;
+  if (!band.tasks) return "No recent done task was this size or larger";
+  return `Of the ${count(band.tasks)} recent done ${band.tasks === 1 ? "task" : "tasks"} this size or larger, ${count(band.regressed)} regressed (${percent(band.rate)})`;
+}
+
+const FALLBACK = {
+  no_resolvable_diff: "no candidate or landed diff could be read",
+  diff_history_insufficient: "too few recent done tasks have a landed diff to fit lines changed",
+};
 
 // Every line the tooltip and the detail block show, in reading order.
 export function riskinessLines(riskiness) {
   if (!riskiness) return [];
   const lines = [];
   if (estimated(riskiness)) {
-    lines.push(`Regression risk ${percent(riskiness.probability)}${partial(riskiness) ? " (partial support)" : ""}: the observed share of similar done tasks later named by a regression`);
+    const size = sizeText(riskiness);
+    lines.push(`Regression risk ${percent(riskiness.probability)}${size ? ` · ${size}` : ""}${partial(riskiness) ? " (partial count)" : ""}`);
+    const band = bandLine(riskiness);
+    if (band) lines.push(band);
   } else {
     const [, sentence] = NO_ESTIMATE[riskiness.state] || NO_ESTIMATE.unavailable;
     lines.push(`No estimate: ${sentence}`);
   }
   if (riskiness.state === "unavailable") return lines;
+  if (riskiness.basis_fallback) {
+    lines.push(`Sized by declared files: ${FALLBACK[riskiness.basis_fallback] || riskiness.basis_fallback}`);
+  }
+  const fit = riskiness.fit;
+  if (fit && typeof fit.observations === "number") {
+    const population = riskiness.basis === "diff_lines" ? "with a landed diff" : "";
+    lines.push(`Fitted on size alone over ${count(fit.observations)} done tasks${population ? ` ${population}` : ""}, ${count(fit.regressed)} regressed`);
+  }
   const workspace = riskiness.workspace || {};
   if (riskiness.window_days != null) {
     lines.push(`Window: tasks done in the last ${riskiness.window_days} days, observed through ${formatDate(riskiness.observed_through)}; recent work has had less time to reveal regressions`);
   }
   if (workspace.tasks != null) {
-    lines.push(`Workspace: ${workspace.regressed} of ${workspace.tasks} done tasks regressed (base ${percent(workspace.base_rate)})`);
+    lines.push(`Workspace: ${count(workspace.regressed)} of ${count(workspace.tasks)} done tasks regressed (base ${percent(workspace.base_rate)})`);
   }
-  const files = Array.isArray(riskiness.driving_files) ? riskiness.driving_files : [];
-  if (files.length) {
-    lines.push("Driving files:");
-    for (const file of files) lines.push(`  ${file.path} — ${percent(file.probability)} (${file.regressed} of ${file.support} regressed)`);
+  if (riskiness.basis !== "diff_lines" && riskiness.unsupported_selectors) {
+    lines.push(`Not counted: ${plural(riskiness.unsupported_selectors, "selector")} without a path`);
   }
-  if (riskiness.supporting_tasks) {
-    lines.push(`Support: ${plural(riskiness.supporting_tasks, "distinct done task")}, ${riskiness.supporting_regressed} regressed`);
-  }
-  const gaps = [];
-  if (riskiness.uncovered_anchors) gaps.push(`${riskiness.uncovered_anchors} of ${riskiness.anchors} paths below ${riskiness.min_support} done tasks`);
-  if (riskiness.unsupported_selectors) gaps.push(`${plural(riskiness.unsupported_selectors, "selector")} without a path`);
-  if (gaps.length) lines.push(`Uncovered: ${gaps.join("; ")}`);
-  const adjustment = adjustmentLine(riskiness);
-  if (adjustment) lines.push(adjustment);
   return lines;
 }
 
@@ -118,7 +121,7 @@ function chipClass(riskiness) {
   return elevated(riskiness) ? "risk-elevated" : "risk-estimated";
 }
 
-// The Tasks row part: "risk 23%" or "risk ~23%" when support is partial.
+// The Tasks row part: "risk 23%" or "risk ~23%" for a partial count.
 export function buildRiskRowPart(task) {
   const riskiness = riskinessOf(task);
   if (!riskiness || !estimated(riskiness)) return null;
@@ -149,10 +152,7 @@ export function buildRiskDetail(task) {
   ]);
   const body = el("div", { class: "task-risk-body" }, [
     el("p", { class: "task-risk-lead", text: lead }),
-    ...rest.map((line) => el("p", {
-      class: line.startsWith("  ") ? "task-risk-file mono" : "task-risk-line",
-      text: line.trim(),
-    })),
+    ...rest.map((line) => el("p", { class: "task-risk-line", text: line })),
   ]);
   return el("details", { class: "task-risk" }, [summary, body]);
 }

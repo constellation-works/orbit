@@ -1950,33 +1950,39 @@ analytics_test!(
 // [ORB-18690] Task list rows and the detail serve the same riskiness object
 // from the regression facts; a task with no footprint or thin history gets
 // an explicit no-estimate state rather than a low probability.
+// [ORB-19361] Estimator 2 fits risk on size alone: declared paths before a
+// diff exists, lines changed once a landed diff resolves, each with its own
+// maximum-likelihood fit, and names no file or crew.
 analytics_test!(
-    task_riskiness_estimates_from_footprint_regressions_and_names_no_estimate_states,
+    task_riskiness_fits_size_by_basis_and_names_no_estimate_states,
     |fixture| {
+        let wide = ["src/b.rs", "src/c.rs", "src/d.rs", "src/e.rs"];
+        let mut small = Vec::new();
+        let mut large = Vec::new();
         for index in 0..6 {
-            let risky = done(&fixture, &format!("risky {index}"), &["src/risky.rs"]);
-            if index < 3 {
-                add(
-                    &fixture,
-                    &format!("fix {index}"),
-                    &["src/fix.rs"],
-                    regression_from(&risky),
-                );
-            }
-            done(&fixture, &format!("calm {index}"), &["src/calm.rs"]);
+            small.push(done(&fixture, &format!("small {index}"), &["src/a.rs"]));
+            large.push(done(&fixture, &format!("large {index}"), &wide));
         }
-        let estimated = add(
-            &fixture,
-            "touches risky",
-            &["src/risky.rs", "src/new.rs"],
-            vec![],
-        );
+        for target in [&small[0], &large[0], &large[1], &large[2]] {
+            add(
+                &fixture,
+                &format!("fix {target}"),
+                &["src/fix.rs"],
+                regression_from(target),
+            );
+        }
+        // Every done task but small[5] has a landed row.
+        for (index, id) in small.iter().enumerate().take(5) {
+            landed_row(&fixture, id, index, 10);
+        }
+        for (index, id) in large.iter().enumerate() {
+            landed_row(&fixture, id, 10 + index, 100);
+        }
+        let backlog_wide = add(&fixture, "touches four files", &wide, vec![]);
         let unfootprinted = add(&fixture, "no footprint", &[], vec![]);
-        let thin = add(&fixture, "new file only", &["src/new.rs"], vec![]);
 
-        let server = fixture.server(false);
-        let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
-        let riskiness = |id: &str| {
+        let riskiness = |server: &super::support::Server, id: &str| {
+            let rows = json_ok(server.get(&format!("/api/tasks?{WS}&limit=100")));
             rows["items"]
                 .as_array()
                 .unwrap()
@@ -1985,48 +1991,112 @@ analytics_test!(
                 .map(|row| row["riskiness"].clone())
                 .unwrap()
         };
+        let close = |value: &Value, expected: f64| {
+            let actual = value["probability"].as_f64().unwrap();
+            assert!((actual - expected).abs() < 1e-6, "{expected}: {value}");
+        };
 
-        // N = 12 done tasks, R = 3: p0 = 4/14. src/risky.rs has 3 of 6
-        // regressed, shrunk with min_support 5 toward p0.
-        let base = 4.0 / 14.0;
-        let risky = riskiness(&estimated);
+        // Declared basis: 12 done tasks, sizes 1 (1 of 6 regressed) and 4
+        // (3 of 6). Two sizes fit each group's rate exactly.
+        let server = fixture.server(false);
+        let risky = riskiness(&server, &backlog_wide);
+        assert_eq!(risky["estimator_version"], 2);
         assert_eq!(risky["state"], "estimated", "{risky}");
-        assert_eq!(
-            risky["support_state"], "partial",
-            "src/new.rs has no history"
-        );
-        let expected = (3.0 + 5.0 * base) / (6.0 + 5.0);
-        let probability = risky["probability"].as_f64().unwrap();
-        assert!((probability - expected).abs() < 1e-9, "{risky}");
+        assert_eq!(risky["basis"], "declared_files");
+        assert_eq!(risky["basis_fallback"], Value::Null);
+        assert_eq!(risky["size"], 4);
+        close(&risky, 0.5);
+        assert_eq!(risky["size_band"]["tasks"], 6);
+        assert_eq!(risky["size_band"]["regressed"], 3);
+        assert_eq!(risky["fit"]["observations"], 12);
+        assert_eq!(risky["fit"]["regressed"], 4);
+        assert_eq!(risky["support_state"], "full");
         assert_eq!(risky["workspace"]["tasks"], 12);
-        assert_eq!(risky["workspace"]["regressed"], 3);
-        assert_eq!(risky["supporting_tasks"], 6);
-        assert_eq!(risky["uncovered_anchors"], 1);
-        assert_eq!(
-            risky["driving_files"],
-            json!([{
-                "path": "src/risky.rs",
-                "probability": expected,
-                "support": 6,
-                "regressed": 3,
-            }])
-        );
-        assert_eq!(
-            risky["adjustment"]["state"], "omitted",
-            "12 observations cannot support a crew/complexity group: {risky}"
-        );
+        assert_eq!(risky["workspace"]["regressed"], 4);
+        // Retired attribution stays readable, and empty, for old readers.
+        assert_eq!(risky["driving_files"], json!([]));
+        assert_eq!(risky["adjustment"], Value::Null);
+        assert_eq!(risky["crew"], Value::Null);
 
-        let none = riskiness(&unfootprinted);
+        // Diff basis: the 11 landed rows, 10 lines (1 of 5 regressed) and
+        // 100 lines (3 of 6).
+        let landed = riskiness(&server, &large[0]);
+        assert_eq!(landed["basis"], "diff_lines", "{landed}");
+        assert_eq!(landed["size"], 100);
+        close(&landed, 0.5);
+        assert_eq!(landed["fit"]["observations"], 11);
+        assert_eq!(landed["size_band"]["tasks"], 6);
+        let unresolved = riskiness(&server, &small[5]);
+        assert_eq!(unresolved["basis"], "declared_files", "{unresolved}");
+        assert_eq!(unresolved["basis_fallback"], "no_resolvable_diff");
+        assert_eq!(unresolved["size"], 1);
+        close(&unresolved, 1.0 / 6.0);
+        assert_eq!(unresolved["size_band"]["tasks"], 12);
+        assert_eq!(unresolved["size_band"]["regressed"], 4);
+
+        let none = riskiness(&server, &unfootprinted);
         assert_eq!(none["state"], "no_footprint");
         assert_eq!(none["probability"], Value::Null);
-        let thin = riskiness(&thin);
-        assert_eq!(thin["state"], "insufficient_history");
-        assert_eq!(thin["probability"], Value::Null);
+        assert_eq!(none["basis"], Value::Null);
 
-        let detail = json_ok(server.get(&format!("/api/tasks/{estimated}?{WS}")));
+        let detail = json_ok(server.get(&format!("/api/tasks/{backlog_wide}?{WS}")));
         assert_eq!(
             detail["riskiness"], risky,
             "list and detail share one estimate"
         );
+        drop(server);
+
+        // min_support is the history a fit needs: above both populations,
+        // neither basis fits and no number is shown.
+        let config = fixture.work.join("config.toml");
+        let mut text = fs::read_to_string(&config).unwrap_or_default();
+        text.push_str("\n[workflow.regression_risk]\nmin_support = 13\n");
+        fs::write(&config, text).unwrap();
+        let server = fixture.server(false);
+        for id in [&backlog_wide, &large[0]] {
+            let thin = riskiness(&server, id);
+            assert_eq!(thin["state"], "insufficient_history", "{thin}");
+            assert_eq!(thin["probability"], Value::Null);
+            assert_eq!(thin["basis"], "declared_files");
+            assert_eq!(thin["size_band"], Value::Null);
+        }
+        assert_eq!(
+            riskiness(&server, &large[0])["basis_fallback"],
+            "diff_history_insufficient"
+        );
     }
 );
+
+/// A landed-delivery row of `lines` changed lines for `task_id`; `seq`
+/// keeps each row's commit distinct.
+fn landed_row(fixture: &Fixture, task_id: &str, seq: usize, lines: u64) {
+    use orbit_store::contracts::{
+        DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend as _,
+    };
+    fixture
+        .runtime
+        .sqlite_store()
+        .unwrap()
+        .record_landed_diff_stats(&LandedDiffStats {
+            workspace_id: "ws_http_fixture".into(),
+            task_id: task_id.into(),
+            base_commit: format!("{:040x}", 2 * seq),
+            landed_commit: format!("{:040x}", 2 * seq + 1),
+            landed_at: Utc::now() - Duration::minutes(1),
+            recorded_at: Utc::now(),
+            job_run_id: None,
+            source: LandedDiffSource::Landing,
+            crew: None,
+            model: None,
+            complexity: None,
+            task_type: None,
+            code: DiffClassCounts {
+                added: lines - lines / 4,
+                deleted: lines / 4,
+                files: 1,
+            },
+            tests: DiffClassCounts::default(),
+            other: DiffClassCounts::default(),
+        })
+        .unwrap();
+}
