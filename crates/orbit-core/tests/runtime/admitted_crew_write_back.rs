@@ -675,3 +675,94 @@ fn a_control_crew_without_admission_evidence_is_unavailable_not_a_mismatch() {
         readout.warnings
     );
 }
+
+/// [ORB-19520] A rerate onto a superseded delivery's crew is unavailable,
+/// not a mismatch: the latest relevant delivery ran a different crew.
+#[test]
+fn a_rerate_onto_a_superseded_delivery_crew_is_unavailable_not_a_mismatch() {
+    if !isolated(
+        "admitted_crew_write_back::a_rerate_onto_a_superseded_delivery_crew_is_unavailable_not_a_mismatch",
+    ) {
+        return;
+    }
+    let fx = fixture(RERATE_CREWS);
+    let job = delivery_job(&fx);
+    let experiment = started_crew_experiment(&fx.runtime);
+    let (_treated, target) = enroll_both_arms(&fx, &job);
+    assert_eq!(crew_of(&fx, &target).0.as_deref(), Some("sol"));
+    // Drop the enrolling delivery so the history below holds exactly the
+    // older explicit luna delivery and the newer normal sol delivery.
+    {
+        use orbit_store::contracts::JobRunQuery;
+        let jobs = orbit_store::compose::workspace_job_run_store(
+            fx.runtime.sqlite_store().unwrap(),
+            fx.runtime.workspace_id().unwrap(),
+        );
+        for run in jobs
+            .list_job_runs_filtered(&JobRunQuery {
+                task_id: Some(target.clone()),
+                include_steps: false,
+                ..Default::default()
+            })
+            .unwrap()
+        {
+            jobs.delete_job_run(&run.run_id.to_string()).unwrap();
+        }
+    }
+
+    // Older delivery: an explicit luna run against the medium pool.
+    let explicit = submit(&fx, &job, json!({ "task_id": target, "crew": "luna" }));
+    assert_eq!(explicit["crew_selection"]["crew"], "luna", "{explicit}");
+    assert_eq!(crew_of(&fx, &target).0.as_deref(), Some("luna"));
+
+    // Re-queue onto the medium pool without another delivery, so the next
+    // admission runs the pool's sol without changing the pool assignment.
+    fx.runtime
+        .update_task_with_identity(
+            &target,
+            TaskUpdateParams {
+                crew: Some(None),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(crew_of(&fx, &target).0.as_deref(), Some("sol"));
+
+    // Newer delivery: a normal admission that runs the medium pool's sol.
+    let admitted = submit(&fx, &job, json!({ "task_id": target }));
+    assert_eq!(admitted["crew_selection"]["crew"], "sol", "{admitted}");
+    assert_eq!(crew_of(&fx, &target).0.as_deref(), Some("sol"));
+
+    // A legitimate medium-to-hard rerate redraws onto the hard pool's luna
+    // without another delivery.
+    fx.runtime
+        .update_task_with_identity(
+            &target,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Hard),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(crew_of(&fx, &target).0.as_deref(), Some("luna"));
+
+    let readout = fx.runtime.experiment_readout(&experiment, None).unwrap();
+    assert!(
+        mismatches_for(&readout, &target).is_empty(),
+        "{:?}",
+        readout.warnings
+    );
+    assert!(
+        readout.warnings.iter().any(|warning| {
+            warning.message.contains(&target)
+                && (warning.kind.contains("unavailable")
+                    || warning.message.to_lowercase().contains("unavailable"))
+        }),
+        "{:?}",
+        readout.warnings
+    );
+}
