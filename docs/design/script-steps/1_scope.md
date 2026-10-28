@@ -55,12 +55,16 @@ Bearing: Orbit already has these pieces, read from source at `a5b5408ea`.
   `fetch` phase exists on Linux only (Landlock, outbound TCP 443). macOS refuses it
   because a descendant that calls `setsid` escapes the process-group kill
   (`BUILD_FETCH_PHASE_SUPPORTED`).
-- **Worker containment.** On Linux each pipeline worker runs in its own transient
-  systemd scope with the `machine.worker_*` memory, task and CPU limits, and
-  `machine.worker_containment = "strict"` refuses a launch without one
+- **Worker containment.** Linux worker containment defaults to `warn`. A worker runs
+  in a transient systemd scope with configured `machine.worker_*` limits when the
+  user manager is reachable. If it is unavailable, `warn` launches the worker in the
+  caller's cgroup with a warning; `off` also launches without a worker scope (with a
+  warning on Linux), while `strict` refuses an unavailable scope
   (`crates/orbit-core/src/application/job/pipeline/worker/scope.rs`, [ORB-12903]).
-  macOS has no cgroup, so workers there run uncontained; a tracked-tree watchdog is
-  filed as [ORB-19251].
+  `machine.worker_cpu_quota` is optional, and systemd may accept `CPUQuota=` without
+  enforcing it when the CPU controller is not delegated. Under `warn` or `off`, a
+  script may therefore run without worker-scope resource limits. macOS has no cgroup,
+  so workers there run uncontained; a tracked-tree watchdog is filed as [ORB-19251].
 - **Operator grants with a tamper-evident witness.** Plugin grants are host-local
   (SQLite `plugin_store`) and checked against a witness file under
   `~/.orbit/plugins/.grants/<ns>.json` that no agent or plugin profile can write
@@ -106,8 +110,13 @@ Three things exist now that did not when the shell surface was removed:
 - **A no-default-grant sandbox in-tree.** The build sandbox above shipped for plugin
   builds. It is the profile a script needs: nothing readable but what is named, one
   writable directory, no network, a capped log and a kill bound.
-- **Per-run resource containment.** A runaway script in a worker can't take the host
-  down on Linux; it hits its scope's memory or task limit.
+- **Per-run resource containment.** A worker scope can apply memory and task limits
+  to a Linux script only when that scope was created. With the default `warn` mode,
+  an unavailable worker scope falls back to the caller's cgroup; `off` skips the
+  worker scope and logs a warning on Linux. If neither the script nor its worker has
+  a scope, a runaway script can exhaust resources in the caller's cgroup and affect
+  the host. A CPU quota is optional and may be accepted without enforcement when
+  systemd lacks CPU-controller delegation.
 - **A consent model whose authority lives outside the workspace.** Plugin grants
   showed how: host-local, digest-witnessed, operator-only to write, re-consent on a
   changed request.
@@ -388,14 +397,21 @@ it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
   manifest request or 600 s, and capped by the grant's `timeout_max_seconds` (default
   3600). On expiry Orbit sends `SIGTERM`, waits 10 s, then sends `SIGKILL`. The step
   fails with `script_timeout`.
-- **Linux.** The script is a descendant of the job's worker, so the worker scope's
-  `machine.worker_*` limits always bound it. When the systemd user manager is
-  reachable, the script also gets its own transient scope,
-  `orbit-script-<run>-<step>.scope`. Its `MemoryMax`, `TasksMax` and `CPUQuota` come
-  from the grant, each capped at the machine value. Under `strict` containment an
-  unavailable scope refuses the step, as it refuses a worker. Bubblewrap's
-  `--unshare-pid` and `--die-with-parent` mean that killing the namespace's init kills
-  every descendant, so on Linux nothing outlives the step.
+- **Linux.** The script is a descendant of the job's worker and inherits its cgroup;
+  worker limits apply only when the worker actually has a scope. The default
+  `machine.worker_containment = "warn"` runs a worker in the caller's cgroup with a
+  warning when its scope is unavailable, and `off` runs it without a worker scope
+  (with a warning on Linux).
+  When systemd can create it, the script also gets its own transient scope,
+  `orbit-script-<run>-<step>.scope`, with `MemoryMax`, `TasksMax` and `CPUQuota` from
+  the grant, each capped at the machine value. If that per-script scope is unavailable,
+  `warn` or `off` permits the step to continue in the worker's cgroup; `strict` refuses
+  the step. A worker with an unavailable scope is likewise refused under `strict`.
+  Thus a script may run with neither scope under the default mode and can exhaust
+  host resources. `CPUQuota` is optional and systemd enforces it only where the user
+  manager delegates the CPU controller; elsewhere it may be accepted but not enforced.
+  Bubblewrap's `--unshare-pid` and `--die-with-parent` mean that killing the
+  namespace's init kills every descendant, so on Linux nothing outlives the step.
 - **Scratch size.** The scratch directory is size-bounded (`scratch_max_bytes`,
   default 1 GiB), polled as the build directory is. A breach kills the step.
 
@@ -615,7 +631,7 @@ a binary that can't enforce its grant.
 | `machine.script_timeout_max_seconds` | `3600` | Ceiling on any grant's `timeout_max_seconds` on this host |
 | `machine.script_scratch_max_bytes` | `1GiB` | Ceiling on any grant's scratch size |
 | `machine.script_output_files_max` | `64` × `64MiB` | Ceiling on any grant's output-file caps |
-| `machine.worker_containment` | (existing) | `strict` also refuses a script step whose scope can't be created, and every script step on macOS (§3) |
+| `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks with a warning when a scope is unavailable; `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
 
 Host keys, not workspace keys. Each grant's limits must sit at or below them.
 
@@ -725,9 +741,11 @@ target: job:nightly_backup
 1. The operator runs `orbit script grant backup --write-root /srv/backups/notes`. Orbit
    resolves `bash` to `/usr/bin/bash`, shows the request against the grant, writes
    `sg-…` and its witness, and probes `/srv/backups/notes`.
-2. At 03:00 the clock submits `nightly_backup`, and the worker starts in its scope. The
-   step snapshots `backup.yaml` and `backup.sh`, computes the digest, matches the
-   grant, and checks that the requested `write_roots` lie within the granted ones.
+2. At 03:00 the clock submits `nightly_backup`, and the worker starts under the
+   configured containment policy (in a scope when available, or uncontained under
+   `warn`/`off`). The step snapshots `backup.yaml` and `backup.sh`, computes the
+   digest, matches the grant, and checks that the requested `write_roots` lie within
+   the granted ones.
 3. Bubblewrap starts with no network and the workspace root mounted read-only as the
    cwd (the job has no worktree). `/srv/backups/notes` is writable, the scratch
    directory is `$HOME` and `$TMPDIR`, `.orbit/` is masked and `~/.ssh` is denied. The
