@@ -184,6 +184,25 @@ model = "luna-model"
 enabled = true
 "#;
 
+/// [`RERATE_CREWS`] plus an opus crew an operator can assign explicitly.
+const RERATE_CREWS_WITH_OPERATOR_CREW: &str = r#"[workflow]
+default_crew = "sol"
+medium_complexity_crews = ["sol"]
+hard_complexity_crews = ["luna"]
+
+[crews.sol]
+provider = "codex"
+model = "sol-model"
+
+[crews.luna]
+provider = "codex"
+model = "luna-model"
+
+[crews.opus]
+provider = "claude"
+model = "opus-model"
+"#;
+
 fn readout_with_config(
     fx: &Fixture,
     config: &str,
@@ -764,6 +783,73 @@ fn backfill_skips_a_latest_run_cancelled_before_implementation() {
         "{report:?}"
     );
     assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
+}
+
+/// [ORB-19623] An explicit crew assignment that lands after the backfill has
+/// read a delivery but before it writes the task's crew is newer than that
+/// delivery, so the operator's choice stands. The checkpoint lands it in that
+/// window, which a thread race would only hit sometimes.
+#[test]
+fn backfill_does_not_overwrite_an_explicit_crew_assigned_during_the_backfill() {
+    if !isolated(
+        "admitted_crew_write_back::backfill_does_not_overwrite_an_explicit_crew_assigned_during_the_backfill",
+    ) {
+        return;
+    }
+    let fx = fixture(RERATE_CREWS_WITH_OPERATOR_CREW);
+    let job = delivery_job(&fx);
+    let task = fx.tagged_task(&[], None).id;
+    let input = submit(&fx, &job, json!({ "task_id": task }));
+    assert_eq!(input["crew_selection"]["crew"], "sol", "{input}");
+    // A medium-to-hard rerate is a system redraw, not an explicit assignment:
+    // the task no longer names the sol its delivery ran, so the backfill has
+    // a crew to copy.
+    fx.runtime
+        .update_task_with_identity(
+            &task,
+            TaskUpdateParams {
+                complexity: Some(TaskComplexity::Hard),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    assert_eq!(crew_of(&fx, &task).0.as_deref(), Some("luna"));
+
+    let ran = std::rc::Rc::new(std::cell::Cell::new(false));
+    let hook = {
+        let owner = fx.runtime.clone();
+        let task = task.clone();
+        let ran = ran.clone();
+        move || {
+            owner
+                .update_task_with_identity(
+                    &task,
+                    TaskUpdateParams {
+                        crew: Some(Some("opus".to_string())),
+                        ..Default::default()
+                    },
+                    None,
+                    None,
+                )
+                .unwrap();
+            ran.set(true);
+        }
+    };
+    let report = orbit_core::test_support::with_crew_backfill_checkpoint(hook, || {
+        fx.runtime.backfill_admitted_task_crews()
+    })
+    .unwrap();
+    assert!(ran.get(), "the checkpoint never landed the explicit crew");
+    assert!(
+        report.tasks.iter().all(|change| change.task_id != task),
+        "{report:?}"
+    );
+    assert_eq!(
+        crew_of(&fx, &task),
+        (Some("opus".to_string()), Some("explicit".to_string()))
+    );
 }
 
 /// [ORB-19520] A rerate onto a superseded delivery's crew is unavailable,

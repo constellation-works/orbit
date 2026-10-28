@@ -42,4 +42,6 @@ pub(crate) use draw::{
     seeded_crew_ticket,
 };
 pub(crate) use types::CapturedCrewPools;
+#[cfg(feature = "test-support")]
+pub use write_back::with_crew_backfill_checkpoint;
 pub use write_back::{TaskCrewBackfill, TaskCrewChange};

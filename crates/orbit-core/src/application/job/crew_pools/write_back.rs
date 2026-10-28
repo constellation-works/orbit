@@ -10,6 +10,7 @@
 //! `crew_assigned` history entry, so history keeps every earlier crew. A
 //! one-time backfill repairs tasks admitted before the write-back.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use orbit_common::OrbitError;
@@ -27,6 +28,38 @@ use crate::application::task::{SYSTEM_ACTOR_LABEL, TaskRecordUpdateParams, TaskR
 use crate::runtime::run_input::{non_empty, singular_task_id_from_input};
 
 use super::types::{POLICY_PIPELINES, SELECTION_KEY};
+
+thread_local! {
+    /// The test hook the backfill runs between reading a candidate and writing its crew.
+    static BACKFILL_HOOK: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+}
+
+/// Take and run the backfill hook, if a test installed one [ORB-19623].
+fn notify_backfill_checkpoint() {
+    let hook = BACKFILL_HOOK.with(|slot| slot.borrow_mut().take());
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+/// Run `hook` after the backfill reads a candidate delivery and before it
+/// writes that task's crew, so an explicit crew assignment can land between
+/// the read and the locked write, which must then judge it [ORB-19623].
+#[cfg(feature = "test-support")]
+pub fn with_crew_backfill_checkpoint<T>(
+    hook: impl FnOnce() + 'static,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Clear;
+    impl Drop for Clear {
+        fn drop(&mut self) {
+            BACKFILL_HOOK.with(|slot| *slot.borrow_mut() = None);
+        }
+    }
+    BACKFILL_HOOK.with(|slot| *slot.borrow_mut() = Some(Box::new(hook)));
+    let _guard = Clear;
+    operation()
+}
 
 /// The provenance a crew written back to its task records, and the clause
 /// its history entry explains the change with.
@@ -80,8 +113,10 @@ pub(crate) struct PendingCrewWriteBack {
 /// What a locked crew write requires of the task before it changes the task.
 #[derive(Clone, Copy)]
 enum CrewWriteGuard<'a> {
-    /// The backfill, which also repairs terminal tasks because analytics read them.
-    Any,
+    /// The backfill copying a delivery stamped `copied_at`. It also repairs
+    /// terminal tasks because analytics read them, and leaves a task alone
+    /// whose explicit crew assignment is newer than `copied_at` [ORB-19623].
+    Backfill(chrono::DateTime<chrono::Utc>),
     /// An admission's write-back, which leaves terminal tasks alone and any task
     /// whose crew is no longer `recorded`: a newer change to the task owns it.
     Recorded(Option<&'a str>),
@@ -288,10 +323,8 @@ impl OrbitRuntime {
                 (None, None) => continue,
             };
             report.examined += 1;
-            if self.backfill_explicit_is_newer(&task_id, at)? {
-                continue;
-            }
-            match self.write_task_crew(&task_id, &crew, &written, CrewWriteGuard::Any) {
+            notify_backfill_checkpoint();
+            match self.write_task_crew(&task_id, &crew, &written, CrewWriteGuard::Backfill(at)) {
                 Ok(Some(from)) => {
                     report.changed += 1;
                     report.tasks.push(TaskCrewChange {
@@ -306,30 +339,6 @@ impl OrbitRuntime {
             }
         }
         Ok(report)
-    }
-
-    /// Whether the task's explicit crew assignment is newer than the delivery
-    /// `at` the backfill would copy from, so the operator's choice stands
-    /// [ORB-19602].
-    fn backfill_explicit_is_newer(
-        &self,
-        task_id: &str,
-        at: chrono::DateTime<chrono::Utc>,
-    ) -> Result<bool, OrbitError> {
-        let task = match self.get_task(task_id) {
-            Ok(task) => task,
-            Err(OrbitError::NotFound { .. }) => return Ok(false),
-            Err(error) => return Err(error),
-        };
-        if task.crew_source.as_deref() != Some("explicit") {
-            return Ok(false);
-        }
-        let history = self.get_task_history(task_id)?;
-        let latest = history
-            .iter()
-            .filter(|entry| entry.event == "crew_assigned")
-            .max_by_key(|entry| entry.at);
-        Ok(latest.is_some_and(|entry| entry.at > at))
     }
 
     /// The crew `run` selected for `task_id`: its admission selection, else
@@ -375,7 +384,13 @@ impl OrbitRuntime {
             .with_task_write_lock(task_id, &mut || {
                 let current = self.get_task(task_id)?;
                 let refused = match guard {
-                    CrewWriteGuard::Any => false,
+                    // The operator's explicit crew stands over a delivery older
+                    // than it [ORB-19602]. The history is read under the lock,
+                    // so this check and the write see one task state [ORB-19623].
+                    CrewWriteGuard::Backfill(copied_at) => {
+                        current.crew_source.as_deref() == Some("explicit")
+                            && self.crew_assigned_after(task_id, copied_at)?
+                    }
                     CrewWriteGuard::Recorded(recorded) => {
                         current.status.is_terminal() || current.crew.as_deref() != recorded
                     }
@@ -414,6 +429,18 @@ impl OrbitRuntime {
                 Ok(())
             })?;
         Ok(changed)
+    }
+
+    /// Whether the task has a `crew_assigned` history entry newer than `at`.
+    fn crew_assigned_after(
+        &self,
+        task_id: &str,
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<bool, OrbitError> {
+        Ok(self
+            .get_task_history(task_id)?
+            .iter()
+            .any(|entry| entry.event == "crew_assigned" && entry.at > at))
     }
 
     /// Whether the task's latest local `run` was cancelled before it
