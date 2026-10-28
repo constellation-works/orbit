@@ -5,7 +5,7 @@
 use std::fs;
 
 use chrono::{DateTime, Duration, Utc};
-use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
 use orbit_core::{OrbitError, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
@@ -1232,6 +1232,93 @@ analytics_test!(
             matches!(unknown, Err(OrbitError::InvalidInput(_))),
             "{unknown:?}"
         );
+    }
+);
+
+analytics_test!(
+    codebase_regressions_attribute_root_directory_sites_to_known_rollups,
+    |fixture| {
+        let culprit = done(
+            &fixture,
+            "root directory culprit",
+            &[
+                "crates/orbit-core/src/area/a.rs",
+                "crates/orbit-core/src/area/b.rs",
+            ],
+        );
+        let screened = fixture
+            .runtime
+            .add_task_screened(
+                TaskAddParams {
+                    title: "Fix the root directory culprit".into(),
+                    description: "codebase analytics fixture".into(),
+                    relations: sited_link(&culprit, &["dir:."]),
+                    ..Default::default()
+                },
+                &TaskWriteScreen::unbound(true),
+                None,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            screened.task.relations[0]
+                .regression
+                .as_ref()
+                .unwrap()
+                .sites,
+            ["dir:."]
+        );
+
+        let server = fixture.server(false);
+        let by = |rollup: &str| {
+            analytics(
+                &server,
+                &format!("window=all&min_support=1&rollup={rollup}"),
+            )
+        };
+
+        let files = &by("file")["regressions"];
+        assert_eq!(
+            files["unsited"],
+            json!({ "tasks": 0, "links": 0 }),
+            "the admitted root site remains sited: {files}"
+        );
+        for path in [
+            "crates/orbit-core/src/area/a.rs",
+            "crates/orbit-core/src/area/b.rs",
+        ] {
+            assert_eq!(rate_of(files, path), (1, 1), "{files}");
+            assert_eq!(
+                row(files, path).unwrap()["regressed_tasks"]
+                    .as_array()
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert_eq!(files["rows"].as_array().unwrap().len(), 2, "{files}");
+
+        let dirs = &by("dir")["regressions"];
+        assert_eq!(
+            dirs["unsited"],
+            json!({ "tasks": 0, "links": 0 }),
+            "the root site remains sited at directory rollup: {dirs}"
+        );
+        assert_eq!(
+            rate_of(dirs, "crates/orbit-core/src/area/"),
+            (1, 1),
+            "the directory row counts the culprit once despite two declared files: {dirs}"
+        );
+        assert_eq!(dirs["rows"].as_array().unwrap().len(), 1, "{dirs}");
+
+        let crates = &by("crate")["regressions"];
+        assert_eq!(
+            crates["unsited"],
+            json!({ "tasks": 0, "links": 0 }),
+            "the root site remains sited at crate rollup: {crates}"
+        );
+        assert_eq!(rate_of(crates, "crates/orbit-core/"), (1, 1), "{crates}");
+        assert_eq!(crates["rows"].as_array().unwrap().len(), 1, "{crates}");
     }
 );
 
