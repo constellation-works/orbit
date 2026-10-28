@@ -471,6 +471,7 @@ impl OrbitRuntime {
                     artifact_owner_run_id: artifact_owner.clone(),
                     artifact_writer,
                     actor: effective_label.clone(),
+                    drop_inherited_regression_sites: !self.regression_risk_settings().record_sites,
                     crew_source: crew_source.clone(),
                     planned_by: attribution.planned_by.clone(),
                     implemented_by: attribution.implemented_by.clone(),

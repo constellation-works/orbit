@@ -296,12 +296,13 @@ impl TaskV2Store {
                 envelope_changed = true;
             }
             if let Some(value) = &fields.source_task_id {
-                // Re-setting the same culprit keeps the link's classification.
+                // Re-setting the same culprit keeps the link's classification,
+                // subject to the caller's site-recording policy.
                 let replacements = value
                     .iter()
                     .cloned()
                     .map(|target| {
-                        let regression = bundle
+                        let mut regression = bundle
                             .envelope
                             .relations
                             .iter()
@@ -310,6 +311,11 @@ impl TaskV2Store {
                                     && relation.target == target
                             })
                             .and_then(|relation| relation.regression.clone());
+                        if fields.drop_inherited_regression_sites
+                            && let Some(regression) = &mut regression
+                        {
+                            regression.sites.clear();
+                        }
                         TaskRelation {
                             relation_type: TaskRelationType::RegressionFrom,
                             target,

@@ -9,8 +9,8 @@
 //! about to create, and they have no one to warn.
 
 use orbit_common::OrbitError;
-use orbit_common::fs::selector::canonical_selector_in_workspace;
-use orbit_types::task::{Task, TaskRelation, backlog_footprint_warning};
+use orbit_common::fs::selector::{canonical_selector, canonical_selector_in_workspace};
+use orbit_types::task::{Task, TaskRelation, TaskRelationType, backlog_footprint_warning};
 
 use crate::OrbitRuntime;
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
@@ -268,7 +268,26 @@ impl OrbitRuntime {
         write: impl FnOnce(TaskUpdateParams) -> Result<Task, OrbitError>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        let site_warnings = self.admit_regression_sites(params.relations.as_mut())?;
+        let mut site_warnings = self.admit_regression_sites(params.relations.as_mut())?;
+        if !self.regression_risk_settings().record_sites
+            && params.relations.is_none()
+            && let Some(Some(target)) = &params.source_task_id
+        {
+            // The store inherits only the matching culprit's classification.
+            // Inspect it for the advisory count, but leave the actual re-link
+            // and site removal to the store's locked write.
+            let task = self.get_task(id)?;
+            let dropped = task
+                .relations
+                .iter()
+                .find(|relation| {
+                    relation.relation_type == TaskRelationType::RegressionFrom
+                        && relation.target == *target
+                })
+                .and_then(|relation| relation.regression.as_ref())
+                .map_or(0, |regression| regression.sites.len());
+            site_warnings.extend(Self::regression_site_drop_warnings(dropped));
+        }
         let mut context_files_unverified = Vec::new();
         if let Some(candidates) = params.context_files.as_deref() {
             params.context_creation = if screen.allow_missing_context {
@@ -309,9 +328,10 @@ impl OrbitRuntime {
         })
     }
 
-    /// Canonicalize and shape-check the `regression.sites` of `relations`,
-    /// then drop them, with a warning, unless
-    /// `workflow.regression_risk.record_sites` is on. Builds that predate the
+    /// Drop the `regression.sites` of `relations` with a warning unless
+    /// `workflow.regression_risk.record_sites` is on; recorded sites are
+    /// canonicalized and shape-checked. Parsable anchors must stay inside
+    /// the workspace even when recording is off. Builds that predate the
     /// field read a task carrying it as damaged, so the operator turns
     /// recording on only once every host reading the workspace knows it.
     fn admit_regression_sites(
@@ -329,6 +349,11 @@ impl OrbitRuntime {
             .filter_map(|relation| relation.regression.as_mut())
         {
             for site in &mut regression.sites {
+                // Disabled sites need no valid shape, but a parsable selector
+                // must still pass workspace containment before being dropped.
+                if !record && canonical_selector(site).is_err() {
+                    continue;
+                }
                 let canonical = canonical_selector_in_workspace(site, root).map_err(|error| {
                     OrbitError::InvalidInput(format!(
                         "invalid `regression.sites` entry `{site}`: {error}"
@@ -336,22 +361,27 @@ impl OrbitRuntime {
                 })?;
                 *site = canonical;
             }
-            regression
-                .validate_sites()
-                .map_err(OrbitError::InvalidInput)?;
-            if !record {
+            if record {
+                regression
+                    .validate_sites()
+                    .map_err(OrbitError::InvalidInput)?;
+            } else {
                 dropped += regression.sites.len();
                 regression.sites.clear();
             }
         }
-        Ok(if dropped == 0 {
+        Ok(Self::regression_site_drop_warnings(dropped))
+    }
+
+    fn regression_site_drop_warnings(dropped: usize) -> Vec<String> {
+        if dropped == 0 {
             Vec::new()
         } else {
             vec![format!(
                 "{dropped} `regression.sites` entries were not recorded: \
                  `workflow.regression_risk.record_sites` is off"
             )]
-        })
+        }
     }
 
     /// A dependency may legitimately be recorded before its target exists

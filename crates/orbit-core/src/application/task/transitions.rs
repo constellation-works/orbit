@@ -519,6 +519,7 @@ impl OrbitRuntime {
                         } else {
                             task.status
                         }]),
+                        drop_inherited_regression_sites: !self.regression_risk_settings().record_sites,
                         ..StoreTaskUpdateParams::from(start_edits.clone())
                     },
                 )?;
