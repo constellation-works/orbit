@@ -77,6 +77,18 @@ MALFORMED_YAML = """extensions:
           "crate::sanitize",
 """
 
+MALFORMED_NESTED_SEQUENCE_PACK = """name: constellation-works/orbit-rust-path-validation
+version: 0.0.1
+library: true
+
+extensionTargets:
+  codeql/rust-all: "*"
+
+dataExtensions:
+  - foo: bar
+    - baz
+"""
+
 UNSUPPORTED_PREDICATE = """extensions:
   - addsTo:
       pack: codeql/rust-all
@@ -204,6 +216,21 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.assertEqual(len(errors), 1, errors)
         self.assertIn("malformed YAML", errors[0])
         self.assertIn(data_file.relative_to(self.root).as_posix(), errors[0])
+
+    def test_malformed_nested_sequence_fails_clearly(self):
+        # A sequence item nested under a "- key: value" mapping used to stall
+        # the parser without advancing; the guard must refuse it promptly
+        # with a path/location diagnostic (ORB-19558).
+        pack_dir = self.root / ".github/codeql/extensions/orbit-rust-path-validation"
+        pack_dir.mkdir(parents=True)
+        pack_file = pack_dir / "codeql-pack.yml"
+        pack_file.write_text(MALFORMED_NESTED_SEQUENCE_PACK, encoding="utf-8")
+        (pack_dir / "path-validation.yaml").write_text(TWO_VALID_ROWS, encoding="utf-8")
+        errors = self.errors()
+        self.assertEqual(len(errors), 1, errors)
+        self.assertIn("malformed YAML", errors[0])
+        self.assertIn(pack_file.relative_to(self.root).as_posix(), errors[0])
+        self.assertIn("line 10", errors[0])
 
     def test_unsupported_predicate_fails_clearly(self):
         self.write_pack(UNSUPPORTED_PREDICATE)

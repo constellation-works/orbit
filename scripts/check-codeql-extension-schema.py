@@ -375,8 +375,14 @@ def _parse_sequence(lines: list[LogicalLine], index: int, indent: int) -> tuple[
                 mapping[key] = None
                 index += 1
             while index < len(lines) and lines[index].indent > indent:
-                nested, index = _parse_mapping(lines, index, lines[index].indent)
+                if _is_sequence_item(lines[index].text):
+                    raise YamlError("unexpected sequence item in mapping",
+                                    lines[index].line)
+                nested, next_index = _parse_mapping(lines, index, lines[index].indent)
+                if next_index <= index:
+                    raise YamlError("expected mapping content", lines[index].line)
                 mapping.update(nested)
+                index = next_index
             items.append(mapping)
             continue
         items.append(_parse_scalar(item_text, current.line))
