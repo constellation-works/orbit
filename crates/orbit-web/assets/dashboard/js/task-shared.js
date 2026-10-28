@@ -220,3 +220,17 @@ export const MUTATION_UNDO_WINDOW_MS = 8000;
 export function isOsTag(tag) {
   return typeof tag === "string" && tag.toLowerCase().startsWith("os:");
 }
+
+// Chip words for each status. The five open statuses are the filter's
+// primary chips; the closed ones read as quieter text until they are on.
+export const STATUS_LABELS = {
+  "in-progress": "In progress",
+  review: "Review",
+  blocked: "Blocked",
+  proposed: "Proposed",
+  backlog: "Backlog",
+  someday: "Someday",
+  done: "Done",
+  rejected: "Rejected",
+  archived: "Archived",
+};
