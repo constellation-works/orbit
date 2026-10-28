@@ -1,44 +1,27 @@
-//! Shared SQLite connection defaults for every Orbit SQLite store.
-//!
-//! Historically each store (orbit-store `Store`, its ID allocator and task
-//! registry, and orbit-search's `LexicalStore`) hand-rolled its own pragma
-//! setup, and the copies drifted (missing `foreign_keys` here, missing
-//! `busy_timeout` there). [`apply_default_pragmas`] is the single source of
-//! truth: call it on every freshly opened connection, then layer any
-//! store-specific overrides (e.g. the task registry's `synchronous=FULL`)
-//! on top.
+//! SQLite connection setup: private opens, observational reads and pragmas.
 
 use std::fs;
 use std::io;
-use std::io::Read;
-use std::path::{Component, Path, PathBuf};
-use std::sync::Mutex;
+use std::path::Path;
 
 use rusqlite::{Connection, OpenFlags};
 
-use crate::{OrbitError, SqliteContention, StorageLayer};
+use crate::{OrbitError, StorageLayer};
 
-pub mod pragma;
-
-/// Default `busy_timeout` applied to every Orbit SQLite connection, in
-/// milliseconds. Writers under WAL still serialize; this bounds how long a
-/// contending connection spins before surfacing `database is locked`.
-pub const DEFAULT_BUSY_TIMEOUT_MS: u32 = 5_000;
+use super::DEFAULT_BUSY_TIMEOUT_MS;
+use super::errors::{
+    is_readonly_or_access_sqlite_error, sqlite_error_detail, sqlite_operation_error,
+    sqlite_path_error,
+};
+use super::hardening::{
+    database_uses_wal, harden_read_only_sqlite_files, harden_sqlite_files,
+    prepare_private_database_file, sidecar_metadata, sqlite_sidecar_paths, validated_sqlite_path,
+};
+use super::pragma;
 
 /// Bytes in a WAL file header. A `-wal` of at most this size carries no
 /// frames, so the main database file already holds every committed page.
 const WAL_HEADER_BYTES: u64 = 32;
-
-/// Leading bytes of every SQLite database file.
-const DATABASE_MAGIC: &[u8] = b"SQLite format 3\0";
-
-/// Bytes of the database header this module reads: through offsets 18 and 19,
-/// the write and read file-format versions.
-const DATABASE_HEADER_BYTES: u64 = 20;
-
-/// File-format version recorded at offsets 18 and 19 while a database is in
-/// WAL mode. Rollback-journal databases record `1`.
-const WAL_FILE_FORMAT: u8 = 2;
 
 /// A file-backed SQLite connection opened under Orbit's filesystem policy.
 pub struct OpenedConnection {
@@ -50,74 +33,6 @@ pub struct OpenedConnection {
     /// Whether this connection keeps up with commits made after it was opened.
     /// Writable connections are always [`ObservationCurrency::Live`].
     pub currency: ObservationCurrency,
-}
-
-/// A live SQLite connection that keeps one WAL file set linked.
-///
-/// Linux runtime sandboxes bind the database, WAL, and shared-memory files by
-/// descriptor so a pathname replacement cannot redirect a grant. SQLite may
-/// normally unlink those sidecars when its last connection closes. Keeping a
-/// connection alive until the sandboxed provider exits prevents the bound
-/// descriptors from becoming a coherent but obsolete file set.
-pub struct WalFileSetLease {
-    path: PathBuf,
-    _connection: Mutex<Connection>,
-}
-
-impl std::fmt::Debug for WalFileSetLease {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("WalFileSetLease")
-            .field("path", &self.path)
-            .finish_non_exhaustive()
-    }
-}
-
-/// Keep an existing WAL database's sidecars linked until this lease is dropped.
-///
-/// Returns `None` for a missing database or a database that is not in WAL mode.
-/// The connection does not hold a transaction, so it does not pin a read
-/// snapshot or prevent ordinary checkpoints; it only prevents last-close WAL
-/// cleanup from replacing the descriptor-backed sandbox file set.
-pub fn lease_wal_file_set(path: &Path) -> Result<Option<WalFileSetLease>, OrbitError> {
-    if !path
-        .try_exists()
-        .map_err(|error| sqlite_path_error("inspect", path, error))?
-    {
-        return Ok(None);
-    }
-
-    let connection = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE
-            | OpenFlags::SQLITE_OPEN_NO_MUTEX
-            | OpenFlags::SQLITE_OPEN_NOFOLLOW,
-    )
-    .map_err(|error| sqlite_operation_error(Some(path), "open WAL file-set lease", &error))?;
-    connection
-        .busy_timeout(std::time::Duration::from_millis(u64::from(
-            DEFAULT_BUSY_TIMEOUT_MS,
-        )))
-        .map_err(|error| sqlite_operation_error(Some(path), "set lease busy_timeout", &error))?;
-    let journal_mode = pragma::get::<String>(&connection, "journal_mode").map_err(|error| {
-        sqlite_operation_error(Some(path), "inspect lease journal mode", &error)
-    })?;
-    if !journal_mode.eq_ignore_ascii_case("wal") {
-        return Ok(None);
-    }
-
-    connection
-        .query_row("SELECT count(*) FROM sqlite_schema", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .map_err(|error| {
-            sqlite_operation_error(Some(path), "initialize WAL file-set lease", &error)
-        })?;
-
-    Ok(Some(WalFileSetLease {
-        path: path.to_path_buf(),
-        _connection: Mutex::new(connection),
-    }))
 }
 
 /// Open an Orbit SQLite database without exposing its persisted state.
@@ -193,255 +108,6 @@ fn open_private_read_only(
     open_observational(&path)
 }
 
-/// Resolve a SQLite file path through its existing parent and reject traversal
-/// and final-component symlinks before any SQLite or database-file permission
-/// operation.
-///
-/// Orbit callers provide complete paths because the database may live in a
-/// caller-selected state root. The root remains caller-owned, but path
-/// traversal and symlink redirection are not part of that contract. Creating
-/// missing parents preserves the existing first-open behavior; once they exist,
-/// all subsequent operations use the canonical parent path.
-fn validated_sqlite_path(path: &Path) -> Result<PathBuf, OrbitError> {
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(OrbitError::InvalidInput(format!(
-            "SQLite path '{}' must not contain parent-directory traversal",
-            path.display()
-        )));
-    }
-
-    let file_name = path.file_name().ok_or_else(|| {
-        OrbitError::InvalidInput(format!(
-            "SQLite path '{}' must name a database file",
-            path.display()
-        ))
-    })?;
-    let parent = path.parent().ok_or_else(|| {
-        OrbitError::InvalidInput(format!(
-            "SQLite path '{}' must have a parent directory",
-            path.display()
-        ))
-    })?;
-
-    create_private_dir_all(parent)?;
-    let canonical_parent = fs::canonicalize(parent)
-        .map_err(|error| sqlite_path_error("resolve parent for", parent, error))?;
-    let canonical_path = canonical_parent.join(file_name);
-
-    if !canonical_path.starts_with(&canonical_parent) {
-        return Err(OrbitError::InvalidInput(format!(
-            "SQLite path '{}' escapes its parent directory",
-            path.display()
-        )));
-    }
-
-    match fs::symlink_metadata(&canonical_path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            return Err(OrbitError::InvalidInput(format!(
-                "SQLite path must not be a symlink: {}",
-                path.display()
-            )));
-        }
-        Ok(metadata) if !metadata.is_file() => {
-            return Err(OrbitError::InvalidInput(format!(
-                "SQLite path must be a regular file: {}",
-                path.display()
-            )));
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(sqlite_path_error("inspect", &canonical_path, error)),
-    }
-
-    Ok(canonical_path)
-}
-
-/// Create a sensitive SQLite-adjacent state directory.
-///
-/// On Unix, directories created by this call are `0o700`; existing ancestors
-/// are deliberately left unchanged.
-pub fn create_private_dir_all(path: &Path) -> Result<(), OrbitError> {
-    crate::fs::io::create_private_dir_all(path)
-        .map_err(|error| sqlite_path_error("create private directory", path, error))
-}
-
-fn prepare_private_database_file(path: &Path) -> Result<(), OrbitError> {
-    match crate::fs::io::create_new_private_file(path) {
-        Ok(file) => {
-            drop(file);
-            Ok(())
-        }
-        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-            crate::fs::io::set_private_file_permissions(path)
-                .map_err(|error| sqlite_path_error("harden", path, error))
-        }
-        Err(error) => Err(sqlite_path_error("create", path, error)),
-    }
-}
-
-/// Restrict the database and its existing sidecars to owner-only access
-/// through no-follow descriptors; see
-/// [`crate::fs::io::set_private_file_permissions`].
-fn harden_sqlite_files(path: &Path) -> Result<(), OrbitError> {
-    harden_existing_file(path)?;
-    for sidecar in sqlite_sidecar_paths(path) {
-        harden_existing_file(&sidecar)?;
-    }
-    Ok(())
-}
-
-fn harden_existing_file(path: &Path) -> Result<(), OrbitError> {
-    match crate::fs::io::set_private_file_permissions(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(sqlite_path_error("harden", path, error)),
-    }
-}
-
-fn harden_read_only_sqlite_files(path: &Path) -> Result<(), OrbitError> {
-    harden_existing_read_only_file(path)?;
-    for sidecar in sqlite_sidecar_paths(path) {
-        harden_existing_read_only_file(&sidecar)?;
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn harden_existing_read_only_file(path: &Path) -> Result<(), OrbitError> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let file = match open_read_no_follow(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
-    };
-
-    let owner_only_mode = file
-        .metadata()
-        .map_err(|error| sqlite_path_error("inspect", path, error))?
-        .permissions()
-        .mode()
-        & 0o700;
-    file.set_permissions(fs::Permissions::from_mode(owner_only_mode))
-        .map_err(|error| sqlite_path_error("harden", path, error))
-}
-
-#[cfg(not(unix))]
-fn harden_existing_read_only_file(_path: &Path) -> Result<(), OrbitError> {
-    Ok(())
-}
-
-/// Open a database or sidecar file for reading without traversing a final
-/// symlink, so inspection stays inside the directory
-/// [`validated_sqlite_path`] resolved.
-#[cfg(unix)]
-fn open_read_no_follow(path: &Path) -> io::Result<fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-
-    fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)
-}
-
-#[cfg(not(unix))]
-fn open_read_no_follow(path: &Path) -> io::Result<fs::File> {
-    fs::File::open(path)
-}
-
-fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 2] {
-    [
-        path_with_suffix(path, "-wal"),
-        path_with_suffix(path, "-shm"),
-    ]
-}
-
-/// Metadata for an existing sidecar, or `None` when it is absent.
-///
-/// A symlinked or otherwise irregular sidecar is rejected: read-only opens
-/// decide what to trust from these files, and SQLite would follow a link out
-/// of the state directory [`validated_sqlite_path`] just checked.
-fn sidecar_metadata(path: &Path) -> Result<Option<fs::Metadata>, OrbitError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.is_file() => Ok(Some(metadata)),
-        Ok(_) => Err(OrbitError::InvalidInput(format!(
-            "SQLite sidecar must be a regular file: {}",
-            path.display()
-        ))),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(sqlite_path_error("inspect", path, error)),
-    }
-}
-
-fn path_with_suffix(path: &Path, suffix: &str) -> PathBuf {
-    let mut value = path.as_os_str().to_os_string();
-    value.push(suffix);
-    PathBuf::from(value)
-}
-
-fn sqlite_path_error(action: &str, path: &Path, error: io::Error) -> OrbitError {
-    OrbitError::storage(
-        StorageLayer::Store,
-        crate::fs::io::is_readonly_or_access_error(&error),
-        format!(
-            "failed to {action} SQLite state '{}': {error}",
-            path.display()
-        ),
-    )
-}
-
-/// Whether SQLite refused an operation because the database or its directory
-/// is read-only or denies access: `SQLITE_READONLY` (and its extended codes),
-/// `SQLITE_CANTOPEN` or `SQLITE_PERM`.
-pub fn is_readonly_or_access_sqlite_error(error: &rusqlite::Error) -> bool {
-    use rusqlite::ErrorCode;
-
-    matches!(
-        error.sqlite_error_code(),
-        Some(ErrorCode::ReadOnly | ErrorCode::CannotOpen | ErrorCode::PermissionDenied)
-    )
-}
-
-/// Whether SQLite gave up on another connection's lock: `SQLITE_BUSY` or
-/// `SQLITE_LOCKED` (and their extended codes).
-fn is_lock_busy_sqlite_error(error: &rusqlite::Error) -> bool {
-    use rusqlite::ErrorCode;
-
-    matches!(
-        error.sqlite_error_code(),
-        Some(ErrorCode::DatabaseBusy | ErrorCode::DatabaseLocked)
-    )
-}
-
-/// A `layer` failure described by `message`, keeping whether SQLite refused
-/// it as read-only or access-denied (see
-/// [`is_readonly_or_access_sqlite_error`]) or lost it to a lock that outlasted
-/// the busy timeout ([`OrbitError::StorageLockBusy`]). Use it wherever a
-/// `rusqlite::Error` on a write or open path is wrapped into an
-/// [`OrbitError`].
-pub fn sqlite_error(
-    layer: StorageLayer,
-    error: &rusqlite::Error,
-    message: impl Into<String>,
-) -> OrbitError {
-    if is_lock_busy_sqlite_error(error) {
-        return OrbitError::StorageLockBusy {
-            layer,
-            message: message.into(),
-        };
-    }
-    OrbitError::storage(layer, is_readonly_or_access_sqlite_error(error), message)
-}
-
-/// [`OrbitError::Store`] carrying `error`'s own text, classified as
-/// [`sqlite_error`] does; the `map_err` form of `Store(e.to_string())`.
-pub fn sqlite_store_error(error: rusqlite::Error) -> OrbitError {
-    sqlite_error(StorageLayer::Store, &error, error.to_string())
-}
-
 /// Result of [`apply_default_pragmas`]: what SQLite actually settled on for
 /// the best-effort settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -473,7 +139,7 @@ pub fn apply_default_pragmas(conn: &Connection) -> Result<PragmaOutcome, OrbitEr
     apply_default_pragmas_inner(conn, None)
 }
 
-fn apply_default_pragmas_for_path(
+pub(super) fn apply_default_pragmas_for_path(
     conn: &Connection,
     path: &Path,
 ) -> Result<PragmaOutcome, OrbitError> {
@@ -510,42 +176,6 @@ fn apply_default_pragmas_inner(
         journal_mode,
         write_denied,
     })
-}
-
-fn sqlite_operation_error(path: Option<&Path>, phase: &str, error: &rusqlite::Error) -> OrbitError {
-    let detail = sqlite_error_detail(error);
-    if is_lock_busy_sqlite_error(error)
-        && let Some(path) = path
-    {
-        return OrbitError::SqliteContention(Box::new(SqliteContention {
-            path: path.display().to_string(),
-            phase: phase.to_string(),
-            detail,
-        }));
-    }
-
-    let operation = match phase {
-        "set busy_timeout" => "failed to set busy_timeout",
-        "enable foreign keys" => "failed to enable foreign keys",
-        "set synchronous=NORMAL" => "failed to set synchronous=NORMAL",
-        _ => phase,
-    };
-    let path = path.map_or_else(String::new, |path| format!(" for '{}'", path.display()));
-    sqlite_error(
-        StorageLayer::Store,
-        error,
-        format!("{operation}{path}: {detail}"),
-    )
-}
-
-fn sqlite_error_detail(error: &rusqlite::Error) -> String {
-    match error.sqlite_error() {
-        Some(sqlite) => format!(
-            "{} [code={:?}, extended_code={}]",
-            error, sqlite.code, sqlite.extended_code
-        ),
-        None => error.to_string(),
-    }
 }
 
 /// Whether a connection keeps up with commits another process makes after the
@@ -658,30 +288,6 @@ fn observation_currency(path: &Path) -> Result<ObservationCurrency, OrbitError> 
         )),
         (Some(_) | None, None) => Ok(ObservationCurrency::MainFileOnly),
     }
-}
-
-/// Whether the database file records WAL mode in its header.
-///
-/// A missing or truncated file, and any file that does not carry the SQLite
-/// magic, is reported as not WAL: there are no committed WAL frames to miss,
-/// and SQLite gives a better diagnosis of the file itself than this check
-/// could.
-fn database_uses_wal(path: &Path) -> Result<bool, OrbitError> {
-    let file = match open_read_no_follow(path) {
-        Ok(file) => file,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(error) => return Err(sqlite_path_error("inspect", path, error)),
-    };
-
-    let mut header = Vec::with_capacity(DATABASE_HEADER_BYTES as usize);
-    file.take(DATABASE_HEADER_BYTES)
-        .read_to_end(&mut header)
-        .map_err(|error| sqlite_path_error("read the header of", path, error))?;
-    if header.len() < DATABASE_HEADER_BYTES as usize || !header.starts_with(DATABASE_MAGIC) {
-        return Ok(false);
-    }
-
-    Ok(header[18] == WAL_FILE_FORMAT || header[19] == WAL_FILE_FORMAT)
 }
 
 fn open_read_only_connection(
