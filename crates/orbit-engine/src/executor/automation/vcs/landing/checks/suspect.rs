@@ -15,6 +15,13 @@ use super::super::super::{
 };
 use super::{annotations, jobs};
 
+/// Whether an untouched-path failure still needs a fresh base result.
+pub(super) enum UntouchedBaseEvidence {
+    Unrelated,
+    Waiting(String),
+    FreshPass,
+}
+
 /// Independently guard the repair evidence path, including job-level recovery.
 pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -61,6 +68,10 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
         job,
         paths,
     )
+    .map(|evidence| match evidence {
+        UntouchedBaseEvidence::Waiting(reason) => Some(reason),
+        _ => None,
+    })
 }
 
 /// The repository files a log cites at `head`. A relative citation must
@@ -112,7 +123,7 @@ pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     base_branch: &str,
     job: &Value,
     log: &str,
-) -> Result<Option<String>, String> {
+) -> Result<UntouchedBaseEvidence, String> {
     let paths = repository_citations(workspace, head, log)?;
     untouched_without_fresh_base(host, workspace, head, base, tip, base_branch, job, paths)
 }
@@ -158,44 +169,36 @@ fn untouched_without_fresh_base<H: RuntimeHost + ?Sized>(
     base_branch: &str,
     job: &Value,
     paths: BTreeSet<String>,
-) -> Result<Option<String>, String> {
+) -> Result<UntouchedBaseEvidence, String> {
     if paths.is_empty() {
-        return Ok(None);
+        return Ok(UntouchedBaseEvidence::Unrelated);
     }
     let changed = annotations::candidate_changed_paths(workspace, base, head)?;
     if !paths.is_disjoint(&changed) {
-        return Ok(None);
+        return Ok(UntouchedBaseEvidence::Unrelated);
     }
     let response = host
         .run_private_vcs_operation(
             operations::CI_COMMIT_JOBS,
-            json!({"commit":tip,"workspace_path":workspace,"latest_push_branch":base_branch}),
+            json!({"commit":base,"workspace_path":workspace,"latest_push_branch":base_branch,"base_push_tip":tip,"base_push_after":job["completed_at"]}),
         )
         .map_err(|error| format!("the base re-check on {tip} could not be read: {error}"))?;
     let base_jobs = response["jobs"]
         .as_array()
         .ok_or("the base re-check carried no job list")?;
-    let same = base_jobs
-        .iter()
-        .filter(|base_job| jobs::same_job(base_job, job))
-        .collect::<Vec<_>>();
-    let completed = job["completed_at"]
-        .as_str()
-        .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
-    if let [base_job] = same.as_slice()
-        && base_job["status"] == "completed"
-        && base_job["conclusion"] == "success"
-        && let Some(completed) = completed
-        && base_job["started_at"]
-            .as_str()
-            .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok())
-            .is_some_and(|started| started >= completed)
-    {
-        return Ok(None);
+    if base_jobs.iter().any(|base_job| {
+        jobs::same_job(base_job, job)
+            && base_job["run_status"] == "completed"
+            && base_job["status"] == "completed"
+            && base_job["conclusion"] == "success"
+            && started_after_completion(job, base_job)
+            && started_after_completion(job, &json!({"started_at":base_job["run_started_at"]}))
+    }) {
+        return Ok(UntouchedBaseEvidence::FreshPass);
     }
-    Ok(Some(format!(
+    Ok(UntouchedBaseEvidence::Waiting(format!(
         "base-suspect: its cited repository files ({}) are outside the candidate's changed paths; \
-         waiting for the next push run of '{}' on base {tip} to re-check this base-wide failure \
+         waiting for a fresh push run of '{}' from base {base} through {tip} to re-check this base-wide failure \
          after the candidate failure; an earlier passing base run does not authorize repair",
         paths.into_iter().take(20).collect::<Vec<_>>().join(", "),
         jobs::job_label(job),

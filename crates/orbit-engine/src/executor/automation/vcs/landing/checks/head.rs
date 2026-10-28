@@ -218,9 +218,15 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
             job,
             log,
         ) {
-            Ok(Some(why)) => (CheckFailureClass::BaseSuspect, why, false, signature.text),
+            Ok(super::suspect::UntouchedBaseEvidence::Waiting(why)) => (CheckFailureClass::BaseSuspect, why, false, signature.text),
+            Ok(super::suspect::UntouchedBaseEvidence::FreshPass) => (
+                CheckFailureClass::Flaky,
+                "a fresh base push passes this job, and its cited files are untouched; rerun before attributing it to the candidate".into(),
+                false,
+                signature.text,
+            ),
             Err(gap) => (CheckFailureClass::Inconclusive, gap, false, signature.text),
-            Ok(None) => (
+            Ok(super::suspect::UntouchedBaseEvidence::Unrelated) => (
                 CheckFailureClass::Candidate,
                 format!(
                     "base {base} does not fail it that way{}",
@@ -458,8 +464,8 @@ fn inherited<H: RuntimeHost + ?Sized>(
             format!("the jobs on the current base {tip} could not be read: {error}")
         })?;
     // A base-suspect failure (only untouched files cited, and the old base
-    // does not fail it that way) is decided only by a fresh tip run: leave
-    // it to `stale_untouched_failure`, which makes a fresh pass candidate
+    // does not fail it that way) is decided by a fresh base push run: leave
+    // it to `stale_untouched_failure`, which makes a fresh pass rerunnable
     // and anything else base-suspect. A stale tip pass must not become the
     // inherited branch update, and a fresh same-signature tip failure is
     // inherited below.

@@ -5960,7 +5960,9 @@ commit_ci_api() {
                     head_sha=*) sha=${arg#head_sha=} ;;
                 esac
             done
-            if [ -n "$sha" ] && [ -f "$forge/commit-ci/$sha/runs.json" ]; then
+            if [ -z "$sha" ] && [ -f "$forge/base-push-runs.json" ]; then
+                cat "$forge/base-push-runs.json"
+            elif [ -n "$sha" ] && [ -f "$forge/commit-ci/$sha/runs.json" ]; then
                 cat "$forge/commit-ci/$sha/runs.json"
             else
                 echo '{"workflow_runs":[]}'
