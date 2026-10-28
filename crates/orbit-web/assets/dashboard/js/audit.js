@@ -307,8 +307,8 @@ async function revalidateAuditTail(path, head) {
   const headOldest = head.events[head.events.length - 1].id;
   const exhausted = head.events.length < AUDIT_LIMIT && !head.nextBefore;
   if (!exhausted && headOldest > lastAudit[0].id) return head;
-  if (!head.nextBefore) return { ...head, tailRows: [], tailNextBefore: null, tailRevalidated: true };
   const priorOldest = lastAudit[lastAudit.length - 1].id;
+  if (!head.nextBefore) return { ...head, tailRows: [], tailNextBefore: null, tailRevalidated: true, tailFloor: priorOldest };
   const seen = new Set(head.events.map(ev => ev.id));
   const tail = [];
   let cursor = head.nextBefore;
@@ -326,7 +326,7 @@ async function revalidateAuditTail(path, head) {
     if (tail.length > 0 && tail[tail.length - 1].id <= priorOldest) break;
     cursor = nextBefore;
   }
-  return { ...head, tailRows: tail, tailNextBefore: nextBefore, tailRevalidated: true };
+  return { ...head, tailRows: tail, tailNextBefore: nextBefore, tailRevalidated: true, tailFloor: priorOldest };
 }
 
 // Fold a freshly fetched newest page into the rows already on screen. Older
@@ -348,10 +348,22 @@ function mergeAuditHead(path, head, pageable) {
       // A revalidated head carries the tail the server returned afresh; only
       // an unrevalidated one (no older page to fetch) falls back to the prior
       // rows by ID.
-      const tail = head.tailRevalidated ? (head.tailRows || []).filter(ev => ev.id < headOldest) : prior.filter(ev => ev.id < headOldest);
+      let tail;
+      let tailNextBefore;
+      if (head.tailRevalidated) {
+        const walked = (head.tailRows || []).filter(ev => ev.id < headOldest);
+        const walkedIds = new Set(walked.map(ev => ev.id));
+        const floor = head.tailFloor;
+        const loadedDuringRefresh = floor == null ? [] : prior.filter(ev => ev.id < floor && ev.id < headOldest && !walkedIds.has(ev.id));
+        tail = walked.concat(loadedDuringRefresh);
+        tailNextBefore = loadedDuringRefresh.length > 0 ? auditPaging.nextBefore : head.tailNextBefore;
+      } else {
+        tail = prior.filter(ev => ev.id < headOldest);
+        tailNextBefore = auditPaging.nextBefore;
+      }
       if (tail.length > 0) {
         rows = rows.concat(tail);
-        nextBefore = head.tailRevalidated ? head.tailNextBefore : auditPaging.nextBefore;
+        nextBefore = tailNextBefore;
         keptTail = true;
       } else if (head.tailRevalidated) {
         nextBefore = head.tailNextBefore;

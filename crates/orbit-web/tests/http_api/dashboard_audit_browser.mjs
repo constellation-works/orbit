@@ -646,6 +646,48 @@ try {
   assert.deepEqual(await rowTitles(), Array.from({ length: 61 }, (_, index) => `event ${120 - index}`), 'only events still in the 1h window remain, in order');
   assert.ok(auditRequests.some(params => params.has('before')), 'the retained tail was revalidated against the server, not kept by ID alone');
   assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'no older events remain in the shrunken window');
+  // A Load older page that settles while a same-scope refresh is revalidating
+  // its tail must survive that refresh, and paging must continue from it.
+  auditCutoffMs = null;
+  pagedEvents = Array.from({ length: 170 }, (_, index) => {
+    const id = 170 - index;
+    return { ...events[1], id, execution_id: `reval-${id}`, status: 'success', role: 'codex' };
+  });
+  await page.evaluate(async () => {
+    auditFixture.applyAuditHashQuery(new URLSearchParams('status=all'));
+    await auditFixture.fetchAndRenderAudit(auditContext);
+  });
+  assert.equal(await page.locator('.audit-row').count(), 50);
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 100);
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 71', 'two pages load events 170 through 71');
+  holdAudit = params => params.has('before');
+  await page.evaluate(() => { globalThis.revalRefresh = auditFixture.fetchAndRenderAudit(auditContext).then(() => 'loaded', () => 'failed'); });
+  const walk = await takeHeld(params => params.get('before') === '121');
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  const olderDuringRefresh = await takeHeld(params => params.get('before') === '71');
+  holdAudit = null;
+  olderDuringRefresh.answer();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 150);
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: path.join(evidence, `events-revalidation-held-dark-${width}.png`), animations: 'disabled' });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  walk.answer();
+  assert.equal(await page.evaluate(() => revalRefresh), 'loaded');
+  assert.equal(await page.locator('.audit-row').count(), 150, 'the page loaded during revalidation stays on screen after the refresh lands');
+  for (const width of [1440, 375]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: path.join(evidence, `events-revalidation-landed-dark-${width}.png`), animations: 'disabled' });
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  assert.equal(await page.locator('.audit-row').last().getAttribute('title'), 'event 21', 'the refreshed list still ends at the page loaded during revalidation');
+  auditRequests.length = 0;
+  await page.getByRole('button', { name: 'Load older events' }).click();
+  await page.waitForFunction(() => document.querySelectorAll('.audit-row').length === 170);
+  assert.equal(auditRequests.at(-1).get('before'), '21', 'Load older continues from the oldest row on screen');
+  assert.equal(await page.getByRole('button', { name: 'Load older events' }).count(), 0, 'no button once the window is exhausted after the refresh');
   auditCutoffMs = null;
   pagedEvents = null;
   await page.evaluate(async () => {
