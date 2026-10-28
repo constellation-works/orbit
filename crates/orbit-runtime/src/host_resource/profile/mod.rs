@@ -35,8 +35,8 @@
 //!   several times the series peak. A sparse profile still reports them.
 //!
 //! Profiles change only when a delivery finishes, so `ResourceProfileCache`
-//! keeps them across admission passes and rebuilds when a freshness probe
-//! changes. Live load is never cached here.
+//! keeps them across admission passes and rebuilds when the freshness probe,
+//! the bounds, or the crew-model map changes. Live load is never cached here.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
