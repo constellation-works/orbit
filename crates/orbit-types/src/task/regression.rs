@@ -63,7 +63,7 @@ pub struct RegressionClassification {
 }
 
 impl RegressionClassification {
-    /// Check the shape of [`Self::sites`]: at most [`MAX_REGRESSION_SITES`],
+    /// Check the shape of [`Self::sites`]: at most `MAX_REGRESSION_SITES`,
     /// no duplicates, each a `symbol:` or `file:` selector. Callers that can
     /// resolve selectors also canonicalize them against the workspace.
     pub fn validate_sites(&self) -> Result<(), String> {
