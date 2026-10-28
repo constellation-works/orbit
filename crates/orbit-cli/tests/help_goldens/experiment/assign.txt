@@ -1,4 +1,4 @@
-Force a task into a shadow experiment arm
+Force a task into an active arm of a running experiment (shadow or live)
 
 Usage: orbit experiment assign [OPTIONS] --task <TASK_ID> --arm <ARM> <ID>
 

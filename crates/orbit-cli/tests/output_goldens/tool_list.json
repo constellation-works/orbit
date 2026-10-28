@@ -1027,7 +1027,7 @@
   },
   {
     "name": "orbit.experiment.assign",
-    "description": "Force an unassigned nonterminal task into an active arm of a running shadow experiment. Records forced=true. Existing assignments and exclusions are immutable; overlapping experiment surfaces are refused. Operator only: an agent session is refused.",
+    "description": "Force an unassigned nonterminal task into an active arm of a running experiment, shadow or live. Records forced=true. Existing assignments and exclusions are immutable; overlapping experiment surfaces are refused. Operator only: an agent session is refused.",
     "enabled": true,
     "active": true,
     "status": "active",
