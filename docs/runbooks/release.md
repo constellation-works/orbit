@@ -4,7 +4,7 @@ summary: Cut and verify an Orbit release across agent plugins, Cargo, GitHub art
 tags: [operations, release, plugins, npm, signing]
 paths: [".github/workflows/release.yml", "plugin/**", "npm/**", "scripts/release-check.sh"]
 related_features: [orbit-docs-plugin]
-last_validated: 2026-10-19
+last_validated: 2026-10-27
 ---
 
 # Release Orbit
@@ -65,6 +65,20 @@ an empty date remains optional.
 > the overlap window's protection.
 
 ## Steps to cut a release
+
+Before step 1, decide the version. Run
+`scripts/release-breaking-changes.py --range v<prev>..HEAD` (RELEASING.md
+[step 1](../../RELEASING.md#1-survey-commits-since-the-last-tag)). It reports
+**minor** when a landed task carries the `breaking-change` tag or the detector
+finds a breaking signal (schema or layout version bump, removed CLI command,
+flag or possible value, non-additive MCP schema change, new field on a
+persisted `deny_unknown_fields` type, new deprecated config key, removed
+seeded asset). Otherwise it reports **patch**. It also drafts the Breaking
+Changes bullets from each task's `Breaking:` note. The human confirms the
+candidates and the bump in
+[step 3](../../RELEASING.md#3-confirm-breaking-changes-with-the-human). Use the
+script's version unless the human overrides it, and tag any confirmed
+*detected, untagged* task `breaking-change`.
 
 1. **Bump Cargo, npm, and MCP Registry metadata together.**
 
