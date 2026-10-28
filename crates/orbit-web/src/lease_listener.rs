@@ -214,6 +214,7 @@ pub fn serve_lease_listener(
         .build()
         .map_err(|error| OrbitError::Execution(format!("lease listener runtime: {error}")))?;
     runtime.block_on(async move {
+        let shutdown = crate::serve::shutdown_signal()?;
         let listener = tokio::net::TcpListener::bind(config.bind)
             .await
             .map_err(|error| {
@@ -231,7 +232,7 @@ pub fn serve_lease_listener(
             let scheme = if config.tls.is_some() { "https" } else { "http" };
             println!("Lease listener on {scheme}://{local} (lease routes and /healthz only)");
         }
-        serve_lease_listener_on(listener, config, store, crate::serve::shutdown_signal()).await
+        serve_lease_listener_on(listener, config, store, shutdown).await
     })
 }
 
