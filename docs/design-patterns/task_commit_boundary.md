@@ -61,8 +61,8 @@ once per read. Inside it, a pass must not wait on another thread's task reads or
 admission: either would wait behind the shared lock the pass itself holds.
 
 Long-hold diagnostics snapshot each lock's duration after holder cleanup and
-descriptor close. They include named holder-record, holder-cleanup, lock-release
-and interrupted-commit-check steps alongside operation and recovery work.
+descriptor close. They include named `holder record`, `holder cleanup`, `lock release`
+and `interrupted commit check` steps alongside operation and recovery work.
 Release reports are emitted only after the enclosing lock helper scopes have
 released and removed their re-entrancy records. This keeps slow synchronous
 tracing I/O out of the host and partition critical sections; emitting a
