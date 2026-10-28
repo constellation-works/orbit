@@ -1,8 +1,10 @@
 //! Explicit admission receipt maintenance; tombstone identities never expire.
 
+use std::collections::BTreeSet;
+
 use super::super::Section;
-use super::{CLAIM_KIND, RECEIPT_KIND, StoredReceipt, TaskCommitBoundary, decode, digest, row};
-use crate::contracts::{AdmissionReceiptMaintenance, AdmissionReceiptStorage, ExecutionClaim};
+use super::{RECEIPT_KIND, StoredReceipt, TaskCommitBoundary, decode, digest, row};
+use crate::contracts::{AdmissionReceiptMaintenance, AdmissionReceiptStorage, ExecutionClaimPhase};
 use orbit_common::OrbitError;
 
 const CLAIM_MUTATION_RECEIPT_KIND: &str = "distributed-claim-mutation-v1";
@@ -24,10 +26,29 @@ impl TaskCommitBoundary {
         })
     }
 
-    /// Compact idle and settled receipts atomically under the same exclusive
-    /// boundary as admission and claim mutations. No identity is deleted.
+    /// Compact idle and settled receipts that no longer authorize a kept PR,
+    /// atomically with admission and claim mutations. No identity is deleted.
     pub fn compact_admission_receipts(&self) -> Result<AdmissionReceiptMaintenance, OrbitError> {
         self.with_admission(|| {
+            // Read lifecycle state under the same boundary as receipt updates.
+            // Failed/revoked claims still need their original ship contract to
+            // authorize external settlement of a PR they kept, even without an
+            // accepted handoff. Malformed state fails before any compaction.
+            let compactable_claims: BTreeSet<_> = self
+                .claim_states_locked()?
+                .into_iter()
+                .filter(|state| {
+                    !state.claim.phase.is_unsettled()
+                        && !(matches!(
+                            state.claim.phase,
+                            ExecutionClaimPhase::Failed | ExecutionClaimPhase::Revoked
+                        ) && state
+                            .preserved_candidate
+                            .as_ref()
+                            .is_some_and(|kept| kept.candidate.pull_request.is_some()))
+                })
+                .map(|state| state.claim.claim_id)
+                .collect();
             let mut compacted = Vec::new();
             for existing in self
                 .store
@@ -37,16 +58,8 @@ impl TaskCommitBoundary {
                     continue;
                 };
                 if let Some(original) = &receipt.claim {
-                    let current = self.store.task_coordination_row(
-                        &self.workspace_id,
-                        CLAIM_KIND,
-                        &original.claim_id,
-                    )?;
-                    // Missing is not proof of settlement. Fail closed on a
-                    // malformed row too, before publishing any compaction.
-                    let Some(current) = current else { continue };
-                    let claim: ExecutionClaim = decode(&current.payload_json)?;
-                    if claim.phase.is_unsettled() {
+                    // Missing is not proof of settlement.
+                    if !compactable_claims.contains(&original.claim_id) {
                         continue;
                     }
                 }

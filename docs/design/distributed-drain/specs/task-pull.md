@@ -615,8 +615,9 @@ executor crew capability and provider-unavailable release under [ORB-13941], 202
 
 ## Internal storage accounting
 
-An idle receipt is eligible to compact immediately; a claim in claimed, running, or handed-off phase
-retains its full receipt. At the default 60-second idle sleep, one idle drain leaves 1,440 request
+An idle receipt is eligible to compact immediately; claimed, running, handed-off and
+repair-pending claims retain full receipts, as do failed or revoked claims with a preserved
+PR. At the default 60-second idle sleep, one idle drain leaves 1,440 request
 identities per day even after compaction. No age-based tombstone deletion is supported.
 
 Run `orbit doctor admission-receipts` on the owner for a read-only snapshot. It reports
@@ -626,9 +627,11 @@ not include row keys, indexes, free pages or WAL and are not filesystem usage.
 A pending journal recovery refuses this inspection rather than mutating state.
 
 Add `--compact` for explicit runtime maintenance. Under the exclusive admission boundary,
-it recovers pending commits, then replaces idle receipts and receipts whose current claim
-is failed, revoked or landed with permanent tombstones. Claimed, running, handed-off and
-repair-pending claims retain full receipts, as does a receipt whose current claim is missing.
+it recovers pending commits, then replaces idle receipts, landed claim receipts and receipts
+of failed or revoked claims without a preserved PR with permanent tombstones. Failed and
+revoked claims with a preserved PR retain full receipts to authorize later external-merge
+settlement, even if no handoff was accepted. Claimed, running, handed-off and repair-pending
+claims retain full receipts, as does a receipt whose current claim is missing.
 Reservation expiry and age never establish settlement. The tombstone preserves the original
 machine ID, request ID and digest of the original input using the same persisted encoding
 as replay. Exact replay returns `request_expired`, changed-input replay returns
