@@ -33,8 +33,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use orbit_common::fs::io::{
-    FileLockGuard, FileLockOptions, acquire_exclusive_file_lock, create_private_dir_all,
-    write_new_private_text,
+    FileLockOptions, ReportScopedFileLockGuard, acquire_exclusive_file_lock_with_report_scope,
+    create_private_dir_all, write_new_private_text,
 };
 use orbit_common::{DecisionRefusalCode, OrbitError};
 use orbit_types::identity::is_automation_actor;
@@ -903,14 +903,18 @@ impl OrbitRuntime {
         })
     }
 
-    fn lock_decision_channel_store(&self) -> Result<FileLockGuard, OrbitError> {
+    fn lock_decision_channel_store(&self) -> Result<ReportScopedFileLockGuard, OrbitError> {
         self.refuse_masked_decision_channel_store()?;
         let lock_path = self.decision_channel_dir().join("channels.lock");
-        acquire_exclusive_file_lock(&lock_path, "decision channels", FileLockOptions::default())
-            .map_err(|error| match error.kind() {
-                std::io::ErrorKind::PermissionDenied => not_visible("the decision channel store"),
-                _ => OrbitError::Io(format!("lock {}: {error}", lock_path.display())),
-            })
+        acquire_exclusive_file_lock_with_report_scope(
+            &lock_path,
+            "decision channels",
+            FileLockOptions::default(),
+        )
+        .map_err(|error| match error.kind() {
+            std::io::ErrorKind::PermissionDenied => not_visible("the decision channel store"),
+            _ => OrbitError::Io(format!("lock {}: {error}", lock_path.display())),
+        })
     }
 
     /// Callers hold `lock_decision_channel_store` across their whole

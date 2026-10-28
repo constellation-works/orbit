@@ -9,7 +9,7 @@ use crate::fs::io::{
     classify_lock_io, classify_or_wrap_lock_io, create_private_dir_all, open_private_file,
 };
 
-use super::hold::{HoldReport, duration_millis, hold_step, record_lock_wait};
+use super::hold::{HoldReport, LockReportScope, duration_millis, hold_step, record_lock_wait};
 use super::holders::{
     clear_file_lock_holder, describe_file_lock_holders, describe_queued_exclusive_waiter,
     read_file_lock_holder, read_shared_file_lock_holders, write_file_lock_holder,
@@ -48,6 +48,17 @@ pub struct FileLockGuard {
     shared_record: Option<PathBuf>,
     /// Logs the hold on release once it passes the configured threshold.
     hold: Option<HoldReport>,
+}
+
+/// A direct exclusive lock whose release reports wait until after its
+/// descriptor closes. The guard is thread-affine because report scopes are
+/// tracked per thread.
+#[must_use = "the advisory lock and report scope are released as soon as the guard is dropped"]
+pub struct ReportScopedFileLockGuard {
+    // Drop the descriptor before the report scope can emit queued reports.
+    _guard: FileLockGuard,
+    _reports: LockReportScope,
+    _not_send: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
 impl Drop for FileLockGuard {
@@ -92,6 +103,26 @@ pub fn acquire_exclusive_file_lock(
 
     let lock_file = open_lock_file(lock_path, label)?;
     acquire_file_lock(lock_file, lock_path, label, options, true)
+}
+
+/// Acquire an exclusive advisory lock at the exact `lock_path`, deferring
+/// release reports until after its descriptor closes.
+///
+/// Use this when a direct lock guard can enclose another reporting lock hold.
+/// Closure and held-path helpers already provide the same report deferral;
+/// the bare [`acquire_exclusive_file_lock`] does not.
+pub fn acquire_exclusive_file_lock_with_report_scope(
+    lock_path: &Path,
+    label: &str,
+    options: FileLockOptions,
+) -> io::Result<ReportScopedFileLockGuard> {
+    let reports = LockReportScope::enter();
+    let guard = acquire_exclusive_file_lock(lock_path, label, options)?;
+    Ok(ReportScopedFileLockGuard {
+        _guard: guard,
+        _reports: reports,
+        _not_send: std::marker::PhantomData,
+    })
 }
 
 /// Attempt one exclusive acquisition at the exact `lock_path` without queueing

@@ -153,15 +153,26 @@ pub struct FileLockGuard {
 }
 ```
 
+`ReportScopedFileLockGuard` wraps a direct `FileLockGuard` with a
+`LockReportScope`; its descriptor field drops before the scope. It is
+thread-affine because the report scope uses thread-local accounting.
+
 Patterns to copy:
 
 - **Release before reporting.** `FileLockGuard` keeps the locked `File` alive
   in `file`. `Drop` clears holder metadata while still locked, takes and drops
-  the file, then snapshots the long hold. Reports wait until enclosing lock
-  helper scopes have also closed their descriptors and removed their
-  re-entrancy records. A synchronous subscriber can block on I/O, so emitting
-  a nested report while an outer lock remains held extends that critical
-  section. The snapshot preserves the actual hold duration and step timings.
+  the file, then snapshots the long hold. Release reports defer for the
+  closure and held-path helpers `with_exclusive_file_lock`,
+  `with_exclusive_file_lock_options`,
+  `with_exclusive_file_lock_named_options`, `with_shared_file_lock`,
+  `with_shared_file_lock_options` and `hold_exclusive_file_lock_options`;
+  they enter `LockReportScope` through `claim_lock_path`. The direct
+  `acquire_exclusive_file_lock_with_report_scope` helper provides the same
+  deferral for an exact-path exclusive lock. Bare direct acquisition helpers
+  do not create a report scope. A synchronous subscriber can block on I/O, so
+  emitting a nested report while an outer lock remains held extends that
+  critical section. The snapshot preserves the actual hold duration and step
+  timings.
 
 ---
 

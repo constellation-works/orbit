@@ -98,10 +98,20 @@ impl FinishedHoldReport {
     }
 }
 
-/// Defer release reports until the outermost closure/held-path scope has
-/// released its descriptor and removed its re-entrancy record. Even a scope
-/// without a hold warning can enclose a reporting lock. A synchronous tracing
-/// subscriber must never extend these enclosing critical sections.
+/// Defer release reports until the outermost report scope closes.
+///
+/// The closure and held-path helpers [`crate::fs::io::with_exclusive_file_lock`],
+/// [`crate::fs::io::with_exclusive_file_lock_options`],
+/// [`crate::fs::io::with_exclusive_file_lock_named_options`],
+/// [`crate::fs::io::with_shared_file_lock`],
+/// [`crate::fs::io::with_shared_file_lock_options`] and
+/// [`crate::fs::io::hold_exclusive_file_lock_options`] enter a scope through
+/// `claim_lock_path`. The exact-path direct-lock helper
+/// [`crate::fs::io::acquire_exclusive_file_lock_with_report_scope`] also opens
+/// one and drops its descriptor before the scope. Bare direct acquisition
+/// helpers do not open a report scope themselves. Even a scope without a hold
+/// warning can enclose a reporting lock, so a synchronous tracing subscriber
+/// must not extend those critical sections.
 pub(crate) struct LockReportScope;
 
 impl LockReportScope {

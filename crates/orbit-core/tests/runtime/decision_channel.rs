@@ -4,6 +4,10 @@
 //! token, and every refusal in the §5 table applies nothing.
 
 use std::path::PathBuf;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::time::Duration;
 
 use orbit_core::application::task::{
     DecisionSubmitCaller, DecisionSubmitParams, DkimTxtResolver, FinalRecoveryCompletion,
@@ -17,6 +21,8 @@ use orbit_types::task::{
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tracing_subscriber::layer::{Context, Layer};
+use tracing_subscriber::prelude::*;
 
 const CHANNEL: &str = "email";
 const PLUGIN: &str = "decision-mail";
@@ -361,6 +367,131 @@ impl Fixture {
             )
             .unwrap();
     }
+}
+
+struct ParkTaskBoundaryReport {
+    parked: Sender<()>,
+    release: Mutex<Receiver<()>>,
+    captured: AtomicBool,
+}
+
+#[derive(Default)]
+struct TaskBoundaryReportFields {
+    label: Option<String>,
+    message: Option<String>,
+}
+
+impl tracing::field::Visit for TaskBoundaryReportFields {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let value = format!("{value:?}");
+        match field.name() {
+            "label" => self.label = Some(value),
+            "message" => self.message = Some(value),
+            _ => {}
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        match field.name() {
+            "label" => self.label = Some(value.to_string()),
+            "message" => self.message = Some(value.to_string()),
+            _ => {}
+        }
+    }
+}
+
+impl<S: tracing::Subscriber> Layer<S> for ParkTaskBoundaryReport {
+    fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+        if event.metadata().target() != "orbit.common.fs.file_lock" {
+            return;
+        }
+        let mut fields = TaskBoundaryReportFields::default();
+        event.record(&mut fields);
+        let is_task_boundary_report = fields
+            .label
+            .as_deref()
+            .is_some_and(|label| label.contains("task commit boundary"))
+            && fields.message.as_deref().is_some_and(|message| {
+                message.contains("advisory file lock held past its threshold")
+            });
+        if is_task_boundary_report && !self.captured.swap(true, Ordering::SeqCst) {
+            let _ = self.parked.send(());
+            let _ = self.release.lock().expect("report release lock").recv();
+        }
+    }
+}
+
+#[test]
+fn a_slow_decision_task_report_does_not_hold_the_channel_store_lock() {
+    let fx = fixture();
+    fx.register();
+    let (task, request) = fx.blocked_task_with_request();
+    let token = fx
+        .runtime
+        .mint_decision_token(CHANNEL, &request.id)
+        .unwrap();
+    let lock_path = fx
+        .global
+        .join("state/decision-channels")
+        .join("channels.lock");
+    let (parked_tx, parked_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let runtime = fx.runtime.clone();
+    let request_id = request.id;
+    let answer_token = token;
+    let submit = std::thread::spawn(move || {
+        let subscriber = tracing_subscriber::registry().with(ParkTaskBoundaryReport {
+            parked: parked_tx,
+            release: Mutex::new(release_rx),
+            captured: AtomicBool::new(false),
+        });
+        tracing::subscriber::with_default(subscriber, || {
+            orbit_store::test_support::with_task_commit_write_hold(
+                Duration::from_millis(2_100),
+                || {
+                    runtime.submit_decision_via_channel(DecisionSubmitParams {
+                        channel: CHANNEL.to_string(),
+                        request_id,
+                        answer_id: "1".to_string(),
+                        note: None,
+                        token: answer_token,
+                        sender: Some(SENDER.to_string()),
+                        auth_results: Some(AUTH_PASS.to_string()),
+                        raw_message: None,
+                        caller: Fixture::plugin_caller(),
+                    })
+                },
+            )
+        })
+    });
+
+    let parked = parked_rx.recv_timeout(Duration::from_secs(10)).is_ok();
+    let acquired_while_report_parked = if parked {
+        let probe = orbit_common::fs::io::try_acquire_exclusive_file_lock(
+            &lock_path,
+            "decision channel report regression probe",
+        )
+        .expect("probe the decision-channel store lock");
+        let acquired = probe.is_some();
+        drop(probe);
+        acquired
+    } else {
+        false
+    };
+    let _ = release_tx.send(());
+    let result = submit.join().expect("decision submission thread");
+
+    assert!(
+        parked,
+        "the slow task write did not emit a parked boundary report"
+    );
+    assert!(
+        acquired_while_report_parked,
+        "channels.lock stayed held while the task-boundary report subscriber was parked"
+    );
+    let answered = result.expect("the public decision-channel submission applies");
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    assert_eq!(fx.status(&task), TaskStatus::Backlog);
 }
 
 #[test]

@@ -20,7 +20,8 @@ mod private;
 
 pub use super::file_lock::{
     DEFAULT_FILE_LOCK_TIMEOUT, FileLockGuard, FileLockHolderInfo, FileLockOptions, FileLockProbe,
-    FileLockTimeout, LeaseFile, acquire_exclusive_file_lock, hold_step, probe_file_lock,
+    FileLockTimeout, LeaseFile, ReportScopedFileLockGuard, acquire_exclusive_file_lock,
+    acquire_exclusive_file_lock_with_report_scope, hold_step, probe_file_lock,
     read_file_lock_holder, try_acquire_exclusive_file_lock,
 };
 pub(crate) use atomic::{DURABLE_SYNC_HOLDS, atomic_write_private_bytes};
