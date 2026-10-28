@@ -28,11 +28,14 @@ impl TaskCommitBoundary {
         mutation: &ClaimMutation,
         receipt_id: &str,
         input: String,
-    ) -> Result<ClaimMutationResult, OrbitError> {
+    ) -> Result<ClaimMutationOutcome, OrbitError> {
         if let Some(result) = hold_step(RECEIPT_STEP, || {
             self.replay_claim_receipt(auth, mutation, receipt_id, &input)
         })? {
-            return Ok(result);
+            return Ok(ClaimMutationOutcome {
+                result,
+                committed: false,
+            });
         }
         let ClaimAuthority {
             row: old,
@@ -822,9 +825,10 @@ impl TaskCommitBoundary {
             )
         })?;
         match outcome {
-            TaskCoordinationCommitOutcome::Committed(_) => {
-                self.with_friction_result(result, receipt_id)
-            }
+            TaskCoordinationCommitOutcome::Committed(_) => Ok(ClaimMutationOutcome {
+                result: self.with_friction_result(result, receipt_id)?,
+                committed: true,
+            }),
             _ => Err(OrbitError::claim_refused(ClaimRefusalKind::StaleClaim)),
         }
     }

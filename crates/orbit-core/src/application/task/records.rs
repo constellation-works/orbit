@@ -223,6 +223,21 @@ impl crate::OrbitRuntime {
             .mutate_execution_claim(context, mutation_id, mutation)
     }
 
+    /// [`Self::mutate_execution_claim`], also reporting whether this call
+    /// committed the mutation rather than replaying its receipt: the only
+    /// authority for a side effect that must follow the commit exactly once.
+    pub(crate) fn mutate_execution_claim_outcome(
+        &self,
+        context: Option<&orbit_store::contracts::ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &orbit_store::contracts::ClaimMutation,
+    ) -> Result<orbit_store::contracts::ClaimMutationOutcome, OrbitError> {
+        self.ensure_coordination_task_write_permitted()?;
+        self.stores()
+            .tasks()
+            .mutate_execution_claim_outcome(context, mutation_id, mutation)
+    }
+
     /// Refuse a worker whose claim could no longer take its own update: the
     /// read-side fence that matches [`Self::mutate_execution_claim`]'s.
     pub(crate) fn verify_worker_claim(

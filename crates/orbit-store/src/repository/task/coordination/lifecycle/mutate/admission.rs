@@ -84,6 +84,20 @@ impl TaskCommitBoundary {
         mutation_id: &str,
         mutation: &ClaimMutation,
     ) -> Result<ClaimMutationResult, OrbitError> {
+        self.mutate_execution_claim_outcome(invocation, mutation_id, mutation)
+            .map(|outcome| outcome.result)
+    }
+
+    /// [`Self::mutate_execution_claim`], reporting whether this call
+    /// committed the mutation. Only the commit inside the admission section
+    /// reports `committed`, so a caller that raced another call's commit and
+    /// then replayed its receipt learns it did not perform the mutation.
+    pub fn mutate_execution_claim_outcome(
+        &self,
+        invocation: Option<&ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &ClaimMutation,
+    ) -> Result<ClaimMutationOutcome, OrbitError> {
         let auth = invocation.ok_or_else(|| invalid("claim invocation context required"))?;
         if [mutation_id, &auth.task_id, &auth.claim_id, &auth.machine_id]
             .iter()
@@ -119,15 +133,18 @@ impl TaskCommitBoundary {
         } else {
             None
         };
-        let result = match replayed {
-            Some(result) => result,
+        let outcome = match replayed {
+            Some(result) => ClaimMutationOutcome {
+                result,
+                committed: false,
+            },
             None => self
                 .with_admission(|| self.mutate_claim_locked(auth, mutation, &receipt_id, input))?,
         };
         // Each settlement sweeps receipts past retention, outside the section.
-        if !result.phase.is_unsettled() {
+        if !outcome.result.phase.is_unsettled() {
             self.prune_settled_receipts_after_settlement();
         }
-        Ok(result)
+        Ok(outcome)
     }
 }

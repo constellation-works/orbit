@@ -564,6 +564,16 @@ pub struct ClaimMutationResult {
     pub friction: Option<orbit_types::record::FrictionRecord>,
 }
 
+/// A claim mutation's result and whether this call committed it. Exactly one
+/// call commits a mutation; every replay of its receipt, including one that
+/// raced the commit, reports `committed: false`. Never persisted: the receipt
+/// keeps only the result, so a replay returns the original result unchanged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimMutationOutcome {
+    pub result: ClaimMutationResult,
+    pub committed: bool,
+}
+
 /// SQL effects checked and published at the journal's existing commit point.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ClaimCommitEffects {
