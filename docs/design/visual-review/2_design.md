@@ -254,7 +254,7 @@ Each browser context is created with:
 | Timezone, locale | `UTC`, `en-US` |
 | Clock | Playwright's clock fixed at the fixture instant before navigation; timers do not advance |
 | Animations | an injected stylesheet sets `animation: none`, `transition: none` and `caret-color: transparent` on every element |
-| Fonts | the app's self-hosted fonts (the dashboard serves Geist and Geist Mono); capture waits for `document.fonts.ready`. The kit's fontconfig covers fallback glyphs, so the fallback font is the same on every host |
+| Fonts | the app's self-hosted fonts (the dashboard serves Geist and Geist Mono); capture waits for `document.fonts.ready`. Fallback glyphs may differ between Linux and macOS |
 | Network | Browser-context requests are loopback only; any request off loopback is blocked and recorded as a check finding |
 | Ready | the view's `ready` selector visible, network idle, then two animation frames |
 | Masks | the view's `mask` selectors painted a flat colour |
