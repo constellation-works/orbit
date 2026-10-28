@@ -53,7 +53,8 @@ file, marking a path more than one task holds, with a filter by task ID; the com
 local Start stays disabled with the runtime checkout refusal and a link to
 `#drain/start` to pull from the owner.
 The Drain page shows the fleet drains, including in **All workspaces** mode,
-grouped under one heading per host: one line per workspace with its drain
+with one tab per host when more than one is registered (the chosen tab is
+remembered): one line per workspace with its drain
 phase and used/ceiling leaf slots, live drains first. Eligible tasks, the most
 common wait reason, admission/provider holds and queued windows (naming any
 Claude crew a queued window would run without a credential) add a second line
