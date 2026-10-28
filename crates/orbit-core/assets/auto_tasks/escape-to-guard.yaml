@@ -105,14 +105,25 @@ template:
     - `spec_ambiguous`: the task or spec left the expected behavior open to the shipped reading.
     - `nondeterministic`: it depends on timing, ordering or environment and passed when gated.
     - `unclassified`: the evidence does not settle the escape.
+    `severity` is how much the defect matters, on the one five-level scale
+    review issues and regression links share. A link that already has a `regression` payload
+    keeps its recorded severity: send its `severity` and `severity_source`
+    unchanged. An `absent` link is new to classification and is refused
+    without one, so rate it from the same evidence: the worst real impact, not
+    the size of the fix, taking the lower level when torn:
+    - `critical`: data loss or corruption, a security hole, every drain halted, or silently wrong results (a migration drops task history).
+    - `high`: a core workflow broken with no workaround (every `ui` delivery fails at handoff).
+    - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` drops a field the plain output shows).
+    - `low`: an edge case, a misleading message or a minor UX defect (an error names the wrong flag).
+    - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a reference doc).
 
     Record each settled classification through the supported relation
     write: read the regression task's current `relations`, then send
     the full replacement list, preserving every existing relation and
-    adding `"regression":{"nature":"<nature>","escape":"<escape>"}` to
-    its `regression_from` entry, sending its existing `sites` array
-    unchanged, with
-    `orbit tool run orbit.task.update --input '{"id":"<regression task ID>","relations":[{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>","sites":<existing sites>}}],"model":"<agent-family>"}'`
+    adding `"regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>"}` to
+    its `regression_from` entry, sending its existing `sites` array and
+    severity unchanged, with
+    `orbit tool run orbit.task.update --input '{"id":"<regression task ID>","relations":[{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>","severity_source":"<existing source, or filer>","sites":<existing sites>}}],"model":"<agent-family>"}'`
     (the payload shows the one classified entry; send every existing
     relation, not only that entry; replace `<existing sites>` with the
     link's current `sites` array verbatim, omitting the `sites` key when

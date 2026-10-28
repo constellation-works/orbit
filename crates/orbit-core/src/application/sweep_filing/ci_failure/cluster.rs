@@ -616,11 +616,11 @@ impl FailureCluster {
              file. Then set the relation with `orbit tool run orbit.task.update --input \
              '{\"id\":\"<this task ID>\",\"relations\":[<existing relations from \
              orbit.task.show>,{\"type\":\"regression_from\",\"target\":\"<culprit task \
-             ID>\",\"regression\":{\"nature\":\"<nature>\",\"escape\":\"<escape>\"}}]}'` — \
+             ID>\",\"regression\":{\"nature\":\"<nature>\",\"escape\":\"<escape>\",\"severity\":\"<severity>\"}}]}'` — \
              `relations` replaces the whole list, so carry the existing entries forward. In \
              claimed execution, where `orbit.task.update` is unavailable, return \
              `\"regression_from\":[\"<culprit task ID>\"]` in your output instead and name \
-             the culprit commit, nature and escape in the execution summary; the owner checks \
+             the culprit commit, nature, escape and severity in the execution summary; the owner checks \
              the target and records the relation when it accepts the handoff. When the culprit \
              commit carries no task ID, or the failure is infrastructure rather than \
              repository-owned, record that conclusion and its evidence in the execution \
@@ -648,7 +648,22 @@ impl FailureCluster {
              shipped reading.\n\
              - `nondeterministic`: it depends on timing, ordering or environment and passed \
              when gated.\n\
-             - `unclassified`: the evidence does not settle the escape.\n",
+             - `unclassified`: the evidence does not settle the escape.\n\
+             \n\
+             `severity` is how much the defect matters, on the one scale findings and \
+             regression links share; a new link without it is refused. Rate the worst real \
+             impact the evidence shows, not the size of the fix, and take the lower level when \
+             torn:\n\
+             - `critical`: data loss or corruption, a security hole, every drain halted, or \
+             silently wrong results (a migration drops task history).\n\
+             - `high`: a core workflow broken with no workaround (every `ui` delivery fails at \
+             handoff).\n\
+             - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` \
+             drops a field the plain output shows).\n\
+             - `low`: an edge case, a misleading message or a minor UX defect (an error names \
+             the wrong flag).\n\
+             - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a \
+             reference doc).\n",
         );
         out
     }

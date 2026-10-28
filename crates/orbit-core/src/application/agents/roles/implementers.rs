@@ -69,7 +69,7 @@ const TERMS: &[Term] = &[
         key: "escaped_regressions",
         label: "Escaped regressions",
         weight: -2.0,
-        definition: "Regressions with escape no_test against tasks whose final implementation run is the row's.",
+        definition: "Regressions with escape no_test against tasks whose final implementation run is the row's, each weighted by the link's severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one costs -16 to -0.5.",
         group: "problem",
     },
 ];
@@ -266,7 +266,7 @@ fn compute_tallies<'a>(
             };
             tallies.entry(term).or_default().add(
                 task,
-                1.0,
+                charge.severity_weight(),
                 Some(Occurrence {
                     at: charge.at,
                     detail: charge.detail.clone(),

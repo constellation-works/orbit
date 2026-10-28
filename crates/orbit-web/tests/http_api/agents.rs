@@ -12,9 +12,10 @@ use orbit_core::application::agents::{AgentRole, Owner, Problem};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{JobRun, JobRunState, TaskStatus};
 use orbit_types::task::{
-    DESCRIPTION_DOCUMENT, RegressionClassification, RegressionEscape, RegressionNature,
-    TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME, TaskComplexity, TaskEventRowV2,
-    TaskOrigin, TaskRelation, TaskRelationType, task_fields_updated_note,
+    DESCRIPTION_DOCUMENT, DefectSeverity, RegressionClassification, RegressionEscape,
+    RegressionNature, SeveritySource, TASK_ARTIFACT_SCHEMA_VERSION, TASK_EVENTS_FILE_NAME,
+    TaskComplexity, TaskEventRowV2, TaskOrigin, TaskRelation, TaskRelationType,
+    task_fields_updated_note,
 };
 use serde_json::{Value, json};
 
@@ -70,6 +71,16 @@ pub(super) fn regression(
     nature: RegressionNature,
     escape: RegressionEscape,
 ) -> String {
+    rated_regression(fixture, culprit, nature, escape, DefectSeverity::Low)
+}
+
+pub(super) fn rated_regression(
+    fixture: &Fixture,
+    culprit: &str,
+    nature: RegressionNature,
+    escape: RegressionEscape,
+    severity: DefectSeverity,
+) -> String {
     add(
         fixture,
         Owned {
@@ -84,6 +95,8 @@ pub(super) fn regression(
                 regression: Some(RegressionClassification {
                     nature,
                     escape,
+                    severity,
+                    severity_source: SeveritySource::Filer,
                     sites: Vec::new(),
                 }),
             }],
@@ -635,11 +648,12 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
             );
 
             // Regressions, each owned by the safeguard its escape names.
-            regression(
+            rated_regression(
                 &fixture,
                 &shared,
                 RegressionNature::Incomplete,
                 RegressionEscape::NoTest,
+                DefectSeverity::High,
             );
             regression(
                 &fixture,
@@ -796,8 +810,8 @@ fn agent_scorecards_attribute_each_problem_once_and_serve_selections_from_one_sc
                 .unwrap();
             assert_eq!(sol["units"], 2);
             assert_eq!(
-                sol["counts"]["escaped_regressions"], 1,
-                "only no_test reaches the implementer; review_missed is the reviewer's"
+                sol["counts"]["escaped_regressions"], 4.0,
+                "only no_test reaches the implementer, weighted by its high severity; review_missed is the reviewer's"
             );
             assert_eq!(sol["counts"]["review_rejects"], 1);
             assert_eq!(

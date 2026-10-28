@@ -14,7 +14,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use orbit_types::task::{RegressionEscape, RegressionNature};
+use orbit_types::task::{DefectSeverity, RegressionEscape, RegressionNature};
 use orbit_types::workflow::ReviewVerdict;
 use serde_json::{Map, Value, json};
 
@@ -59,6 +59,16 @@ pub struct Charge {
     pub detail: String,
     /// The rework cause, for rework.
     pub(super) cause: Option<Cause>,
+    /// The regression link's severity, for a regression.
+    pub severity: Option<DefectSeverity>,
+}
+
+impl Charge {
+    /// How much the charge counts in its term: a regression by its
+    /// severity's weight (critical 8 down to nit 0.25), anything else 1.
+    pub(super) fn severity_weight(&self) -> f64 {
+        self.severity.map_or(1.0, DefectSeverity::weight)
+    }
 }
 
 /// Landed credit for the implementation run whose candidate landed.
@@ -100,6 +110,7 @@ pub(super) fn attribute(
                     at: review.at,
                     detail: format!("review attempt {}: {}", review.attempt_id, finding.line),
                     cause: None,
+                    severity: None,
                 };
                 charges.push(charge.reviewer(Some(review)));
             }
@@ -143,6 +154,7 @@ pub(super) fn attribute(
             at,
             detail: "finding verification REJECTED this review-filed finding".to_string(),
             cause: None,
+            severity: None,
         };
         charges.push(draft.review_job(filing_attempt(&by_id, task)));
     }
@@ -207,6 +219,7 @@ fn pilot_warning_charge(task: &TaskFacts) -> Option<Charge> {
                 findings.join("; ")
             ),
             cause: None,
+            severity: None,
         }
         .orchestrator(),
     )
@@ -227,6 +240,7 @@ struct Draft<'a> {
     at: DateTime<Utc>,
     detail: String,
     cause: Option<Cause>,
+    severity: Option<DefectSeverity>,
 }
 
 impl Draft<'_> {
@@ -249,6 +263,7 @@ impl Draft<'_> {
             anchor,
             detail: self.detail,
             cause: self.cause,
+            severity: self.severity,
         }
     }
 
@@ -342,6 +357,7 @@ fn record_charge(task: &TaskFacts, record: &Record) -> Charge {
         at: record.at,
         detail: record.detail.clone(),
         cause: record.cause,
+        severity: None,
     };
     match record.problem {
         Problem::SpecEdit | Problem::CriteriaBlock | Problem::CriteriaEscalation => {
@@ -404,6 +420,7 @@ fn review_charge(task: &TaskFacts, review: &Review) -> Option<Charge> {
             review.verdict.as_str()
         ),
         cause: None,
+        severity: None,
     };
     Some(match problem {
         Problem::FalseReject => Draft {
@@ -428,12 +445,15 @@ fn regression_charge(task: &TaskFacts, link: &RegressionLink) -> Charge {
         problem: Problem::Regression,
         at: link.at,
         detail: format!(
-            "{} regressed it (nature {}, escape {})",
+            "{} regressed it (nature {}, escape {}, severity {} from {})",
             link.regressing,
             label(&classification.nature),
             label(&classification.escape),
+            classification.severity.as_str(),
+            classification.severity_source.as_str(),
         ),
         cause: None,
+        severity: Some(classification.severity),
     };
     match classification.nature {
         RegressionNature::MergeReintroduced => return draft.not_scored("merge_reintroduced"),
@@ -477,6 +497,7 @@ fn pilot_charges(graded: &Graded) -> impl Iterator<Item = Charge> + '_ {
             anchor: graded.at,
             detail,
             cause: None,
+            severity: None,
         }
     };
     let misses = graded.costly.iter().map(move |(path, contest)| {

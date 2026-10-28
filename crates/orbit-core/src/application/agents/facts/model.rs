@@ -2,7 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{
-    RegressionClassification, TaskComplexity, TaskOrigin, TaskStatus, is_no_diff_expected,
+    DefectSeverity, RegressionClassification, TaskComplexity, TaskOrigin, TaskStatus,
+    is_no_diff_expected,
 };
 use orbit_types::workflow::ReviewVerdict;
 
@@ -10,7 +11,7 @@ use super::super::attribution::{Charge, Credit};
 use super::super::records::Cause;
 use super::super::roles::pilot_warnings::Warnings;
 use super::super::roles::pilots::Graded;
-use crate::application::task::{FindingSeverity, FindingVerdict};
+use crate::application::task::FindingVerdict;
 
 /// How far back the scan reads. Every window, `all` included, fits inside it.
 pub(in crate::application::agents) const SCAN_DAYS: i64 = 90;
@@ -262,7 +263,7 @@ pub(in crate::application::agents) struct FiledFinding {
     /// The latest verdict, with when it was recorded and the severity the
     /// verifier rated.
     pub(in crate::application::agents) verdict:
-        Option<(FindingVerdict, DateTime<Utc>, Option<FindingSeverity>)>,
+        Option<(FindingVerdict, DateTime<Utc>, Option<DefectSeverity>)>,
 }
 
 /// A typed `regression_from` link: `regressing` regressed `culprit`.

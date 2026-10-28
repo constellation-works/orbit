@@ -45,8 +45,8 @@ const tasks = statuses.map((status, index) => ({
   } : {}),
   ...(index === 9 ? {
     relations: [
-      { type: 'regression_from', target: 'PANEL-1', regression: { nature: 'contract_drift', escape: 'no_test' } },
-      { type: 'regression_from', target: 'PANEL-2', regression: { nature: 'broke_existing', escape: 'unclassified', sites: ['file:crates/orbit-web/assets/dashboard/js/tasks.js', 'symbol:crates/orbit-web/assets/dashboard/js/tasks.js#relationTargets:function'] } },
+      { type: 'regression_from', target: 'PANEL-1', regression: { nature: 'contract_drift', escape: 'no_test', severity: 'high', severity_source: 'verified' } },
+      { type: 'regression_from', target: 'PANEL-2', regression: { nature: 'broke_existing', escape: 'unclassified', severity: 'low', severity_source: 'filer', sites: ['file:crates/orbit-web/assets/dashboard/js/tasks.js', 'symbol:crates/orbit-web/assets/dashboard/js/tasks.js#relationTargets:function'] } },
       { type: 'regression_from', target: 'PANEL-3' },
       { type: 'related_to', target: 'PANEL-4' },
     ],
@@ -1219,10 +1219,12 @@ try {
     assert.match(await firstHead.innerText(), /PANEL-1/, 'The classified link keeps its id');
     assert.match(await firstHead.innerText(), /contract drift/, 'Nature renders as readable words, not the raw enum');
     assert.match(await firstHead.innerText(), /escaped: no test/, 'Escape renders beside the id');
+    assert.match(await firstHead.innerText(), /severity: high \(verified\)/, 'Severity renders with who set it when not the filer');
     assert.equal(await entries.nth(0).locator('.regression-sites').count(), 0, 'A classified link without sites adds no site list');
     const secondHead = entries.nth(1).locator('.regression-head');
     assert.match(await secondHead.innerText(), /PANEL-2/);
     assert.match(await secondHead.innerText(), /broke existing/);
+    assert.match(await secondHead.innerText(), /severity: low\s*$/, 'A filer-rated severity renders alone');
     assert.match(await secondHead.innerText(), /unclassified/, 'An unclassified escape still reads on the row');
     const muted = entries.nth(1).locator('.regression-label.regression-unclassified');
     assert.equal(await muted.count(), 1, 'Unclassified renders muted');

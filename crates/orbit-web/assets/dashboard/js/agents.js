@@ -757,6 +757,10 @@ function detailNode(row) {
   return node;
 }
 
+// The roles whose terms weigh regressions or findings by severity.
+const SEVERITY_ROLES = new Set(["implementers", "reviewers"]);
+const SEVERITY_HOW = "Regressions and findings count by severity: critical 8, high 4, medium 2, low 1, nit 0.25, so one escaped or missed regression costs twice its weight, from −16 for critical to −0.5 for nit. A review-job finding counts once finding verification CONFIRMS it, at the severity the verifier rated, and a review gate finding at the reviewer's own; a regression link counts at its recorded severity, which verification replaces when it confirms the finding that filed it, and a link stored without one counts as medium.";
+
 function howNode() {
   const list = el("dl", { class: "agents-how-terms" });
   for (const term of terms()) {
@@ -777,6 +781,7 @@ function howNode() {
     ...ownUnitText(),
     el("p", { class: "agents-formula", text: `score = min(raw, (${unit} × raw + ${SMOOTHING} × fleet average) ÷ (${unit} + ${SMOOTHING}))` }),
     el("p", { text: `A row above the fleet average, the mean raw score weighted by ${unit}, is pulled down toward it, the more the less work backs it; a row below keeps its raw score. So a small row never rises on the fleet's evidence, and at an equal raw score the row with more ${unit} ranks higher. Rows with fewer than ${scorecard.min_support} ${unit} are greyed, unranked and listed last. Every problem counts against one role only, and cost and time are shown, never scored.` }),
+    ...(SEVERITY_ROLES.has(role) ? [el("p", { text: SEVERITY_HOW })] : []),
     ...(panel && Array.isArray(panel.how) ? panel.how.map((text) => el("p", { text })) : []),
   ]);
   details.open = howOpen;

@@ -22,7 +22,9 @@ spec:
     judged the task and the verified sha, and is written as one task update by
     `finding-verification`: a `finding_verified` history entry, a comment
     whose first line is `finding-verification: confirmed` or `rejected`, and
-    for REJECTED the move to `rejected`. A task that left its prepared status,
+    for REJECTED the move to `rejected`. For CONFIRMED it also rates the
+    task's classified `regression_from` links at the verified severity
+    (`severity_source: verified`), leaving an operator's rating. A task that left its prepared status,
     stopped being a review finding, or was verified by another run meanwhile
     settles superseded without a write. Any task left unverified fails the
     run with `status: failed`.

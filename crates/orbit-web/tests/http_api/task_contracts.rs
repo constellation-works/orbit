@@ -1652,7 +1652,8 @@ fn regression_classification_round_trips_over_http() {
                 .to_string();
             let link = |nature: &str| {
                 json!([{"type": "regression_from", "target": culprit,
-                        "regression": {"nature": nature, "escape": "platform_only"}}])
+                        "regression": {"nature": nature, "escape": "platform_only",
+                                       "severity": "medium"}}])
             };
             let filed = super::support::json_ok(create("Regression", link("broke_existing")));
             let id = filed["id"].as_str().unwrap();
@@ -1662,7 +1663,8 @@ fn regression_classification_round_trips_over_http() {
             assert_eq!(
                 detail["relations"],
                 json!([{"type": "regression_from", "target": culprit,
-                        "regression": {"nature": "broke_existing", "escape": "platform_only"}}])
+                        "regression": {"nature": "broke_existing", "escape": "platform_only",
+                                       "severity": "medium", "severity_source": "filer"}}])
             );
 
             let refused = create("Bad nature", link("regressed"));

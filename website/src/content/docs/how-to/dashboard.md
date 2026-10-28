@@ -279,10 +279,12 @@ value, or click it to copy the complete branch or worktree path.
 
 The card lists relations one row per type, with each task id opening that
 task. A **Regression from** id that carries a classification adds its readable
-nature and escape beside the id — for example `ORB-1 · contract drift ·
-escaped: no test`, with `unclassified` muted — and lists each of its defect
-sites under that id, one per line in monospace with the start elided and the
-full selector in its title. A link without a classification stays a plain id,
+nature, escape and severity beside the id — for example `ORB-1 · contract
+drift · escaped: no test · severity: high (verified)`, with `unclassified`
+muted. The severity names who rated it unless that was the filer, and a link
+stored before severity existed shows `medium (unrated)`, muted. Each link also
+lists its defect sites under that id, one per line in monospace with the start
+elided and the full selector in its title. A link without a classification stays a plain id,
 as do the other relation types.
 
 ### Edit task metadata
@@ -654,7 +656,7 @@ ranked.
 **File** opens when you select a path. The address is
 `#analytics/codebase/file` with that path in the query. It shows the path's
 signals and rank, **Regressed tasks** (the task that regressed each one,
-with nature, layer, and detected-by), and **Changes with**: files that
+with nature, layer, detected-by and severity), and **Changes with**: files that
 landed in the same tasks. **Changes with** lists single files, so group by
 file to see it.
 

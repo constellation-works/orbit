@@ -1892,6 +1892,31 @@
         "## Record the run",
         "## Rules and command surfaces"
       ],
+      "digest": "72e10d0d1ff155f5d675056efc738466139e528f4a1f4efb29f8a27c8961290e",
+      "revision": "39415c57bce0ae873d1257b50996d644608702e8",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 7 * * 1"
+        },
+        "tags": [
+          "escape-to-guard",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Classify unclassified and absent escapes",
+        "## Cluster by nature, escape, layer and mechanism",
+        "## File remedies for clusters at the bar",
+        "## Follow up earlier remedies",
+        "## Record the run",
+        "## Rules and command surfaces"
+      ],
       "digest": "782e729ba10627672f933138f3362631c4fbf682963af415f3ccab76e9f06b07",
       "revision": "ba32c4cae9d3b473bb9e2b0aa4e9d79b52884169",
       "settings": {

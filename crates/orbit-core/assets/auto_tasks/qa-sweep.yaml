@@ -67,7 +67,7 @@ template:
     or pull request, then confirm with `orbit.task.show` that the task exists
     and its change made the code wrong. Never blame a later task that merely
     touched the file or exposed an older defect. Add
-    `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>","sites":["<defect site selector>"]}}`
+    `{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>","sites":["<defect site selector>"]}}`
     to the finding's `relations` and name the culprit commit in its description.
     `sites` names where the defect lives, not everything the culprit touched:
     the `symbol:<path>#<name>:<kind>` of the function, method or type that is
@@ -79,6 +79,15 @@ template:
     In owner and claimed runs, include a `spawned_from` relation targeting this
     review/QA task; claimed runs may also file the classified `regression_from`
     to a task in the claimed workspace while their claim is active.
+    `severity` is how much the defect matters, on the one scale findings and
+    regression links share; a new link without it is refused. Rate the worst
+    real impact the evidence shows, not the size of the fix, and take the lower
+    level when torn:
+    - `critical`: data loss or corruption, a security hole, every drain halted, or silently wrong results (a migration drops task history).
+    - `high`: a core workflow broken with no workaround (every `ui` delivery fails at handoff).
+    - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` drops a field the plain output shows).
+    - `low`: an edge case, a misleading message or a minor UX defect (an error names the wrong flag).
+    - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a reference doc).
     Choose `unclassified` rather than guess. `nature` is what kind of regression
     the link records:
     - `broke_existing`: the culprit broke behavior that worked before it landed.
@@ -139,7 +148,7 @@ template:
     In claimed mode, `orbit.task.update` is unavailable. Return the same
     execution summary in the output so the owner can import it.
   acceptance_criteria:
-  - Every filed finding carries a `regression_from` classified with nature and escape, or its description states why no landed task can be held responsible.
+  - Every filed finding carries a `regression_from` classified with nature, escape and severity, or its description states why no landed task can be held responsible.
   - Recent changes were exercised through their real user-facing paths.
   - Real, non-duplicate issues were filed on the workspace's configured task or issue surface with evidence and reproduction steps.
   - The validated candidate revision is attached as this task's `sweep-cursor.json` artifact (`schema_version` 1, the integration branch, and the full commit SHA).

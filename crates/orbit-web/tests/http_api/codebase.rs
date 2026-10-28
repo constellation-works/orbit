@@ -9,7 +9,8 @@ use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_core::{OrbitError, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
-    RegressionClassification, RegressionEscape, RegressionNature, TaskComplexity, TaskOrigin,
+    DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
+    TaskComplexity, TaskOrigin,
 };
 use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
 use serde_json::{Value, json};
@@ -1245,6 +1246,8 @@ analytics_test!(
                     Some(RegressionClassification {
                         nature: RegressionNature::BrokeExisting,
                         escape: RegressionEscape::NoTest,
+                        severity: DefectSeverity::Medium,
+                        severity_source: SeveritySource::Filer,
                         sites: Vec::new(),
                     }),
                 ),
@@ -1276,6 +1279,8 @@ analytics_test!(
                     Some(RegressionClassification {
                         nature: RegressionNature::Unclassified,
                         escape: RegressionEscape::Unclassified,
+                        severity: DefectSeverity::Medium,
+                        severity_source: SeveritySource::Filer,
                         sites: Vec::new(),
                     }),
                 ),

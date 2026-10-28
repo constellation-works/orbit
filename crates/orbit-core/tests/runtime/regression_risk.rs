@@ -14,7 +14,8 @@ use orbit_core::application::task::{TaskAddParams, TaskWriteScreen};
 use orbit_core::{Task, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
-    RegressionClassification, RegressionEscape, RegressionNature, TaskRelation, TaskRelationType,
+    DefectSeverity, RegressionClassification, RegressionEscape, RegressionNature, SeveritySource,
+    TaskRelation, TaskRelationType,
 };
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -75,6 +76,8 @@ impl Fixture {
         let broke = Some(RegressionClassification {
             nature: RegressionNature::BrokeExisting,
             escape: RegressionEscape::NoTest,
+            severity: DefectSeverity::Medium,
+            severity_source: SeveritySource::Filer,
             sites: Vec::new(),
         });
         fx.fix(
@@ -399,6 +402,8 @@ fn regression_sites_are_canonicalized_against_the_workspace() {
             regression: Some(RegressionClassification {
                 nature: RegressionNature::BrokeExisting,
                 escape: RegressionEscape::NoTest,
+                severity: DefectSeverity::Medium,
+                severity_source: SeveritySource::Filer,
                 sites: vec![site.into()],
             }),
         }],
@@ -475,7 +480,7 @@ fn regression_sites_invalid_writes_are_rejected() {
     for sites in cases {
         let relation = json!({
             "type": "regression_from", "target": target,
-            "regression": {"nature": "broke_existing", "escape": "no_test", "sites": sites}
+            "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "low", "sites": sites}
         });
         for (tool, args) in [
             (
@@ -511,7 +516,7 @@ fn regression_sites_are_kept_without_configuration() {
                 "title": "Keep regression sites", "complexity": "low", "model": "codex",
                 "description": "Regression sites fixture", "workspace": checkout,
                 "relations": [{"type": "regression_from", "target": target,
-                 "regression": {"nature": "broke_existing", "escape": "no_test", "sites": ["file:src/hot.rs"]}}]
+                 "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "low", "sites": ["file:src/hot.rs"]}}]
             }),
         )
         .unwrap();
@@ -533,7 +538,7 @@ fn regression_sites_are_kept_without_configuration() {
             json!({
                 "id": added["id"], "model": "codex",
                 "relations": [{"type": "regression_from", "target": target,
-                 "regression": {"nature": "broke_existing", "escape": "no_test", "sites": ["file:src/cold.rs"]}}]
+                 "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "low", "sites": ["file:src/cold.rs"]}}]
             }),
         )
         .unwrap();
@@ -561,7 +566,7 @@ fn regression_sites_relink_keeps_inherited_sites() {
         "description": "Regression sites fixture", "workspace": checkout,
         "relations": [
             {"type": "regression_from", "target": target,
-             "regression": {"nature": "broke_existing", "escape": "no_test", "sites": ["file:src/hot.rs"]}},
+             "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "low", "sites": ["file:src/hot.rs"]}},
             {"type": "related_to", "target": fx.ids[0]}
         ]
     })).unwrap();

@@ -121,11 +121,21 @@ on the operator-only `orbit.workflow.run.show`.
   relation types require a task ID. A dangling target (unknown in every
   workspace this host can see) succeeds but emits a `TaskRelationDangling` audit event.
 - A `regression_from` relation may carry
-  `"regression": {"nature": "<nature>", "escape": "<escape>", "sites": [...]}`
-  (`nature` and `escape` required;
+  `"regression": {"nature": "<nature>", "escape": "<escape>", "severity": "<severity>", "sites": [...]}`
+  (`nature` and `escape` required, and `severity` on a new link;
   no other type accepts it). Choose `unclassified` rather than guess; an
   omitted payload reads back as absent, not as `unclassified`. Unknown values
   are refused with the allowed list.
+  - `severity` — how much the defect matters, on the same scale review
+    findings use ([severity rubric](#severity-rubric)). A new classified link
+    without one is refused. A link the task already holds may be re-sent
+    without it and keeps its recorded severity and source. Every link reads
+    back with `severity_source`: `filer` (set by the writer, the default),
+    `verified` (finding verification confirmed or adjusted it; only
+    verification sets it), `operator` (an operator override), `backfill` (a
+    backfill of older links), or `default` (stored before severity existed;
+    reads as `medium`). Send `"severity_source": "operator"` only for an
+    operator's override.
   - `sites` (optional, up to 8) — where the defect lives, not everything the
     culprit touched: `symbol:<path>#<name>:<kind>` of the function, method or
     type that is wrong, or `file:<path>` for a file without symbols. Never
@@ -257,6 +267,33 @@ on the operator-only `orbit.workflow.run.show`.
   `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`. Preserve existing
   relations and append it in the same update that archives/rejects the finding;
   see [CI recovery](../../orbit-orchestrate/references/recovery.md).
+
+## Severity rubric
+
+Review findings and `regression_from` links rate on one scale. Rate by the
+worst real impact the evidence shows, not by the size of the fix; when torn
+between two levels, take the lower and say why.
+
+- `critical` (weight 8): data loss or corruption, a security hole, every
+  drain halted, or silently wrong results. Examples: a migration drops task
+  history; a sandbox profile lets an agent write outside its worktree; a
+  store lock deadlock stops every drain; a scorecard ranks rows from the
+  wrong window without saying so.
+- `high` (4): a core workflow broken with no workaround. Examples: every
+  delivery of a task tagged `ui` fails at handoff; `orbit task update`
+  refuses all relation writes; the dashboard task list never loads.
+- `medium` (2): a feature broken or wrong in a real path, with a
+  workaround. Examples: `--json` drops a field the plain output shows; a
+  filter ignores one of its values; a retry needs a manual requeue.
+- `low` (1): an edge case, a misleading message or a minor UX defect.
+  Examples: an error names the wrong flag; a 375px layout wraps a label; an
+  empty state reads as a failure.
+- `nit` (0.25): wording or doc drift, cosmetic, no behavior impact.
+  Examples: a stale sentence in a reference doc; a misspelled help string;
+  an off-by-one-pixel border.
+
+The agent scorecards use these weights: a held review finding earns its
+weight, and an escaped or missed regression costs twice its weight.
 
 ## Operator runbook: granting tools
 

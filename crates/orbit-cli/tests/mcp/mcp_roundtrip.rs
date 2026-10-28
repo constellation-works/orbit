@@ -5424,7 +5424,7 @@ fn mcp_regression_from_classification_round_trips_and_refuses_unknown_values() {
             "relations": [{
                 "type": "regression_from",
                 "target": culprit,
-                "regression": {"nature": "defect_in_new", "escape": "test_not_selected"},
+                "regression": {"nature": "defect_in_new", "escape": "test_not_selected", "severity": "high"},
             }],
         }),
     )["id"]
@@ -5436,14 +5436,57 @@ fn mcp_regression_from_classification_round_trips_and_refuses_unknown_values() {
         json!([{
             "type": "regression_from",
             "target": culprit,
-            "regression": {"nature": "defect_in_new", "escape": "test_not_selected"},
+            "regression": {
+                "nature": "defect_in_new", "escape": "test_not_selected",
+                "severity": "high", "severity_source": "filer",
+            },
         }])
     );
     let output = workspace.run_ok(&["task", "show", &classified]);
     let stdout = stdout(&output);
     assert!(
-        stdout.contains("(nature: defect_in_new, escape: test_not_selected)"),
+        stdout.contains(
+            "(nature: defect_in_new, escape: test_not_selected, severity: high, severity source: filer)"
+        ),
         "the human show names the classification: {stdout}"
+    );
+
+    // A new classified link must rate its severity; a link the task already
+    // holds may be re-sent without one and keeps its recorded rating.
+    let unrated = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title": "Unrated regression",
+            "description": "Filed without a severity",
+            "complexity": "low",
+            "relations": [{
+                "type": "regression_from",
+                "target": culprit,
+                "regression": {"nature": "defect_in_new", "escape": "no_test"},
+            }],
+        }),
+    );
+    assert!(
+        unrated
+            .to_string()
+            .contains("`regression.severity` is required"),
+        "{unrated}"
+    );
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({
+            "id": classified,
+            "relations": [{
+                "type": "regression_from",
+                "target": culprit,
+                "regression": {"nature": "defect_in_new", "escape": "no_test"},
+            }],
+        }),
+    );
+    assert_eq!(
+        relations(&classified, &mut client)[0]["regression"]["severity"],
+        "high",
+        "a re-sent link keeps its recorded severity"
     );
 
     // An unclassified link — the shape every link stored before the payload
@@ -5454,7 +5497,10 @@ fn mcp_regression_from_classification_round_trips_and_refuses_unknown_values() {
         json!([{
             "type": "regression_from",
             "target": culprit,
-            "regression": {"nature": "unclassified", "escape": "unclassified"},
+            "regression": {
+                "nature": "unclassified", "escape": "unclassified",
+                "severity": "nit", "severity_source": "filer",
+            },
         }]),
     ] {
         client.call_tool_ok(

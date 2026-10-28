@@ -139,7 +139,7 @@ fn claimed_qa_and_area_reviews_file_only_workspace_regressions() {
             json!([
                 {"type": "spawned_from", "target": leaf.task},
                 {"type": "regression_from", "target": target,
-                 "regression": {"nature": "broke_existing", "escape": "no_test"}},
+                 "regression": {"nature": "broke_existing", "escape": "no_test", "severity": "high"}},
             ])
         };
         let file = |target: &str| {
@@ -154,9 +154,11 @@ fn claimed_qa_and_area_reviews_file_only_workspace_regressions() {
             )
         };
         let filed = file(&culprit).unwrap_or_else(|error| panic!("{tags:?}: {error}"));
+        let mut stored = relations(&culprit);
+        stored[1]["regression"]["severity_source"] = json!("filer");
         assert_eq!(
             leaf.pair.owner_task(filed["id"].as_str().unwrap())["relations"],
-            relations(&culprit)
+            stored
         );
         let before = owner.list_tasks().unwrap().len();
         let refused = file(&foreign).unwrap_err().to_string();

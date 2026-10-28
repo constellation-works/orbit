@@ -824,6 +824,17 @@ function regressedTaskNode(task, regressedPaths) {
         tag.dataset.value = found[key];
         line.appendChild(tag);
       }
+      if (found.severity && found.severity !== "absent") {
+        const source = found.severity_source || "";
+        const tag = el("span", {
+          class: "codebase-by-dim",
+          text: source === "default" ? `${found.severity} (unrated)` : found.severity,
+          title: source === "default" ? "Severity not rated: reads as medium" : `Severity, set by ${source || "filer"}`,
+        });
+        tag.dataset.dimension = "severity";
+        tag.dataset.value = found.severity;
+        line.appendChild(tag);
+      }
     }
     item.appendChild(line);
   }

@@ -1796,7 +1796,7 @@ function regressionValueLabel(value) {
 // The typed relations in RELATION_GROUPS order, one entry per relation type,
 // carrying the label that says how its targets relate. A `regression_from`
 // target keeps its optional `regression` classification with it, so the row
-// can show each link's own nature, escape and sites; every other type stays a
+// can show each link's own nature, escape, severity and sites; every other type stays a
 // plain id string as before.
 function relationTargets(relations) {
   const byType = new Map(RELATION_GROUPS.map(([key]) => [key, []]));
@@ -1859,8 +1859,28 @@ function buildRegressionHead(entry, context) {
       });
       head.appendChild(escapeLabel);
     }
+    const severity = regression.severity == null ? "" : String(regression.severity);
+    if (severity) {
+      head.append(document.createTextNode(" · severity: "));
+      head.appendChild(buildRegressionSeverity(severity, regression.severity_source));
+    }
   }
   return head;
+}
+
+// A link's severity, with who set it when that is not its filer. A link
+// nobody rated reads as medium by default and is shown muted.
+function buildRegressionSeverity(severity, source) {
+  const from = source == null ? "" : String(source);
+  const unrated = from === "default";
+  const label = el("span", {
+    class: unrated ? "regression-label regression-unclassified" : "regression-label",
+    text: from && from !== "filer" ? `${severity} (${unrated ? "unrated" : from})` : severity,
+    title: unrated ? "Not rated: reads as medium" : `Severity ${severity}, set by ${from || "filer"}`,
+  });
+  label.dataset.severity = severity;
+  if (from) label.dataset.severitySource = from;
+  return label;
 }
 
 // The blocked_by ids the Readiness card already lists under "Depends on".

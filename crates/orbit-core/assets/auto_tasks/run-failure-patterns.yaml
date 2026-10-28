@@ -179,11 +179,17 @@ template:
       reproduction of the signature through the same code path, the fix, and proof that the
       reproduction now passes. Never "after deploy", never numbers from another host.
     - When a landed task's change caused the class, add
-      `{"type":"regression_from","target":"<culprit>","regression":{"nature":"<nature>","escape":"<escape>"}}`
+      `{"type":"regression_from","target":"<culprit>","regression":{"nature":"<nature>","escape":"<escape>","severity":"<severity>"}}`
       (natures: broke_existing, defect_in_new, incomplete, merge_reintroduced,
       contract_drift, unclassified; escapes: no_test, test_not_selected, platform_only,
       review_missed, spec_ambiguous, nondeterministic, unclassified). Never blame a bystander;
-      choose `unclassified` rather than guess.
+      choose `unclassified` rather than guess. `severity` is required on a new link; rate the
+      worst real impact, not the size of the fix, taking the lower level when torn:
+      - `critical`: data loss or corruption, a security hole, every drain halted, or silently wrong results (a migration drops task history).
+      - `high`: a core workflow broken with no workaround (every `ui` delivery fails at handoff).
+      - `medium`: a feature broken or wrong in a real path, with a workaround (`--json` drops a field the plain output shows).
+      - `low`: an edge case, a misleading message or a minor UX defect (an error names the wrong flag).
+      - `nit`: wording or doc drift, cosmetic, no behavior impact (a stale sentence in a reference doc).
     - Redact excerpts: at most a few lines, with tokens, credentials, authorization headers,
       cookies, email addresses and home paths replaced. Put excerpts only in text sent through
       `orbit.task.add`, `orbit.task.update` or `orbit.friction.add`; when a response reports
