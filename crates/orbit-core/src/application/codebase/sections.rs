@@ -296,9 +296,13 @@ pub(super) struct RegressionRows<'a> {
 /// The sites a link records, each with the path it names; a site that names
 /// no path is no site.
 fn link_sites(link: &RegressionLink) -> impl Iterator<Item = (&str, Anchor)> {
-    link.sites
-        .iter()
-        .filter_map(|site| Some((site.as_str(), Anchor::parse(site)?)))
+    link.sites.iter().filter_map(|site| {
+        let anchor = Anchor::parse(site).or_else(|| match Selector::from_str(site).ok()? {
+            Selector::Dir { path } if path == "." => Some(Anchor { path, dir: true }),
+            _ => None,
+        })?;
+        Some((site.as_str(), anchor))
+    })
 }
 
 /// Site-attributed regressions: distinct done tasks counted against a path
@@ -307,11 +311,12 @@ fn link_sites(link: &RegressionLink) -> impl Iterator<Item = (&str, Anchor)> {
 /// in the window.
 ///
 /// A `symbol:` or `file:` site counts under its file's key at the rollup; a
-/// `dir:` site under its own key and under every key below it that a
-/// footprint touched. A regressed task counts once per key however many
-/// sites name it, and joins the denominator of a key it did not declare, so
-/// the rate stays at most 1. Links without a site are attributed to no path:
-/// they are counted, with their regressed tasks, as unsited.
+/// non-root `dir:` site under its own key and every touched key below it.
+/// The root `dir:.` site covers all touched keys without creating a root-only
+/// key. A regressed task counts once per key however many sites name it, and
+/// joins the denominator of a key it did not declare, so the rate stays at
+/// most 1. Links without a site are attributed to no path: they are counted,
+/// with their regressed tasks, as unsited.
 pub(super) fn regression_rows<'a>(facts: &'a CodebaseFacts, params: &Params) -> RegressionRows<'a> {
     let mut rows: BTreeMap<String, RegressionRow> = BTreeMap::new();
     let mut population = 0;
@@ -349,13 +354,22 @@ pub(super) fn regression_rows<'a>(facts: &'a CodebaseFacts, params: &Params) -> 
     for (task, crew, declared, sites) in sited {
         let mut keys: BTreeMap<String, BTreeSet<&str>> = BTreeMap::new();
         for (site, anchor) in &sites {
-            keys.entry(params.rollup.key(anchor))
-                .or_default()
-                .insert(site);
+            let is_root_dir = anchor.dir && anchor.path == ".";
+            if !is_root_dir {
+                keys.entry(params.rollup.key(anchor))
+                    .or_default()
+                    .insert(site);
+            }
             if anchor.dir {
-                let under = format!("{}/", anchor.path);
-                for key in touched.iter().filter(|key| key.starts_with(&under)) {
-                    keys.entry(key.clone()).or_default().insert(site);
+                if is_root_dir {
+                    for key in &touched {
+                        keys.entry(key.clone()).or_default().insert(site);
+                    }
+                } else {
+                    let under = format!("{}/", anchor.path);
+                    for key in touched.iter().filter(|key| key.starts_with(&under)) {
+                        keys.entry(key.clone()).or_default().insert(site);
+                    }
                 }
             }
         }
