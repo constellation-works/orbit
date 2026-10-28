@@ -219,9 +219,9 @@ pub(super) fn classify_logged_job<H: RuntimeHost + ?Sized>(
             log,
         ) {
             Ok(super::suspect::UntouchedBaseEvidence::Waiting(why)) => (CheckFailureClass::BaseSuspect, why, false, signature.text),
-            Ok(super::suspect::UntouchedBaseEvidence::FreshPass) => (
+            Ok(super::suspect::UntouchedBaseEvidence::PassingBaseRun) => (
                 CheckFailureClass::Flaky,
-                "a fresh base push passes this job, and its cited files are untouched; rerun before attributing it to the candidate".into(),
+                "a successful same-check run exists on the accepted base ancestry, and its cited files are untouched; rerun the unchanged pull-request head before attributing it to the candidate".into(),
                 false,
                 signature.text,
             ),
@@ -311,7 +311,30 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             CheckFailureClass::Inherited => reasons.push(why),
             CheckFailureClass::BaseSuspect => {
                 let evidence = serde_json::json!({
-                    "base": tip, "check": label, "signature": signature, "reason": why,
+                    "base": tip, "head": head, "check": label, "signature": signature,
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"],
+                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason": why,
+                });
+                super::suspect::record_base_suspect(host, tasks, &evidence, None)
+                    .map_err(|error| error.to_string())?;
+                suspect = true;
+                reasons.push(why);
+            }
+            CheckFailureClass::Flaky
+                if super::suspect::has_matching_candidate_rerun(
+                    host, tasks, head, job, &label, &signature,
+                ) =>
+            {
+                candidate_owned = true;
+            }
+            CheckFailureClass::Flaky => {
+                let why = format!(
+                    "base-suspect: a successful same-check run on the accepted base ancestry is not enough by itself; waiting for the unchanged pull-request head to fail the same signature again ({signature})"
+                );
+                let evidence = serde_json::json!({
+                    "base": tip, "head": head, "check": label, "signature": signature,
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"],
+                    "started_at":job["started_at"], "completed_at":job["completed_at"], "reason": why,
                 });
                 super::suspect::record_base_suspect(host, tasks, &evidence, None)
                     .map_err(|error| error.to_string())?;
@@ -464,11 +487,11 @@ fn inherited<H: RuntimeHost + ?Sized>(
             format!("the jobs on the current base {tip} could not be read: {error}")
         })?;
     // A base-suspect failure (only untouched files cited, and the old base
-    // does not fail it that way) is decided by a fresh base push run: leave
-    // it to `stale_untouched_failure`, which makes a fresh pass rerunnable
-    // and anything else base-suspect. A stale tip pass must not become the
-    // inherited branch update, and a fresh same-signature tip failure is
-    // inherited below.
+    // does not fail it that way) is decided by base and PR rerun evidence:
+    // leave it to `stale_untouched_failure`, which makes a passing base run
+    // authorize one unchanged-head rerun. A moved-tip pass must not become an
+    // inherited branch update for an untouched failure; a same-signature tip
+    // failure remains inherited below.
     let untouched = super::suspect::is_untouched_failure(workspace, head, base, log)?;
     if tip_jobs.iter().any(|candidate| {
         same_job(candidate, job) && candidate["conclusion"].as_str() == Some("success")

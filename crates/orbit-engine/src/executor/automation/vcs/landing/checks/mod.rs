@@ -22,13 +22,13 @@
 //!   rule the validation gates already rerun on. The landing reruns the
 //!   failed jobs once and waits again.
 //! - **base-suspect**: the log cites only files the candidate did not
-//!   change, and the base's recorded run does not fail it that way. Only a
-//!   same-job base run that started after the candidate's job completed
-//!   decides, on the candidate's base commit and on a moved landing tip
-//!   alike: a fresh pass is **candidate** (no branch update on a moved
-//!   tip), and a fresh same-signature failure is **inherited**. A stale
-//!   tip pass or failure decides nothing; the landing waits for a fresh
-//!   run until its deadline.
+//!   change, and the base's recorded run does not fail it that way. A
+//!   successful same-job run on the accepted base ancestry, even if it
+//!   predates the PR failure, only authorizes one unchanged-head PR rerun.
+//!   A passing rerun clears the failure; the same signature failing again
+//!   is **candidate**. Without that pass, the landing waits for base evidence
+//!   until its configurable cycle limit or deadline; a same-signature base
+//!   failure remains **inherited**.
 //! - **candidate**: the failed step names a diagnostic, and the base's own
 //!   jobs were read and do not explain it. The landing stops for the same
 //!   single automatic repair a conflicting base gets, with the failed step's

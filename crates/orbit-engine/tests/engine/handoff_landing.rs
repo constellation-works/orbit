@@ -1897,7 +1897,8 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
     );
 }
 
-/// ORB-19342: a finished push on a superseded base still decides freshness.
+/// A finished push on the accepted base ancestry can authorize the PR rerun
+/// even when its job or run predates the first candidate failure.
 #[test]
 fn untouched_failure_uses_a_fresh_pass_behind_the_moving_tip() {
     crate::git_fixture::isolated(
@@ -1929,14 +1930,25 @@ fn untouched_failure_uses_a_fresh_pass_behind_the_moving_tip() {
                             ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z")
                         },
                     );
-                    state.after_rerun = Some(passed(1, 12));
+                    state.after_rerun = Some(if case == "stale_middle" {
+                        failed(1, 12, UNTOUCHED_TEST_FAILURE)
+                    } else {
+                        passed(1, 12)
+                    });
                 }
                 let outcome = land_now(&forge);
                 if case == "stale_middle" {
+                    let error = outcome.expect_err(case);
                     assert!(
-                        matches!(outcome, Err(OrbitError::DeliveryRefused { refusal, .. }) if refusal.error_code() == "delivery_base_checks_pending")
+                        error.to_string().contains("classified `candidate`"),
+                        "{error}"
                     );
-                    assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], case);
+                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+                    assert_steps(
+                        &forge.steps(),
+                        &[HandoffLandingStep::Stop { repairable: true }],
+                        case,
+                    );
                 } else {
                     assert_eq!(outcome.expect(case)["phase"], "landed");
                     assert_sent_len(&forge, "ci.rerun_failed", 1, case);
@@ -2004,7 +2016,7 @@ fn untouched_failure_checks_push_history_through_the_real_adapter() {
                 let _env = orbit_common::test_env::scoped([("PATH", Some(path.to_str().unwrap()))]);
 
                 let outcome = land_now(&forge);
-                if case == "fresh" {
+                if matches!(case, "fresh" | "stale_job" | "stale_run") {
                     assert_eq!(outcome.expect(case)["phase"], "landed");
                     assert_sent_len(&forge, "ci.rerun_failed", 1, case);
                 } else {
@@ -2318,11 +2330,11 @@ fn a_candidate_caused_check_failure_gets_one_repair_then_a_requeue() {
     }
 }
 
-/// An earlier green base run cannot attribute a newly emitted diagnostic in
-/// an untouched file to the candidate. Re-read the base until a later run
-/// proves it green or red, without spending a repair on the stale result.
+/// A green base run, even an earlier one, only authorizes one unchanged-head
+/// PR rerun. The same signature on that rerun is candidate-caused; a passing
+/// rerun clears it, and missing base evidence remains a bounded hold.
 #[test]
-fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
+fn untouched_failure_requires_the_same_signature_unchanged_head_rerun() {
     // Runner checkout paths, as a hosted lockfile audit cites them.
     const UNTOUCHED: &str = "error[vulnerability]: allocator shim corrupts memory\n    \
                              ┌─ /home/runner/work/repo/repo/README.md:365:1\n";
@@ -2339,6 +2351,7 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
         "fresh_red",
         "github_stale",
         "github_changed",
+        "stale_pass",
     ] {
         let (_sandbox, mut forge, original_candidate, base) = forge_fixture(false, false);
         let candidate = if case == "github_changed" {
@@ -2363,11 +2376,28 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
                 },
             ),
         );
-        forge.job(&base, passed(2, 21));
+        forge.job(
+            &base,
+            if case == "fresh_red" {
+                failed(2, 21, CLIPPY_DEAD_CODE)
+            } else {
+                passed(2, 21)
+            },
+        );
         {
             let mut state = forge.state.lock().unwrap();
-            if case == "fresh_green" {
-                state.after_rerun = Some(failed(1, 12, UNTOUCHED));
+            if matches!(case, "fresh_green" | "stale" | "github_stale") {
+                state.after_rerun = Some(failed(
+                    1,
+                    12,
+                    if case == "github_stale" {
+                        UNCHANGED_GITHUB
+                    } else {
+                        UNTOUCHED
+                    },
+                ));
+            } else if case == "stale_pass" {
+                state.after_rerun = Some(passed(1, 12));
             }
             state
                 .job_times
@@ -2402,15 +2432,26 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
                 )
             },
         );
+        if case == "stale_pass" {
+            assert_eq!(
+                outcome.expect("a passing same-head rerun clears the failure")["phase"],
+                "landed"
+            );
+            assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+            continue;
+        }
         let error = outcome.expect_err(case);
-        if matches!(case, "stale" | "github_stale" | "fresh_red") {
+        if matches!(case, "fresh_red") {
             assert!(
                 matches!(&error, OrbitError::DeliveryRefused { refusal, .. }
                     if refusal.error_code() == "delivery_base_checks_pending"),
                 "{case}: the base wait must not dispatch job recovery: {error}"
             );
         }
-        let repairable = matches!(case, "changed" | "fresh_green" | "github_changed");
+        let repairable = matches!(
+            case,
+            "changed" | "fresh_green" | "github_changed" | "stale" | "github_stale"
+        );
         assert_steps(
             &forge.steps(),
             &[HandoffLandingStep::Stop { repairable }],
@@ -2420,11 +2461,24 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
         assert_sent_len(
             &forge,
             "ci.rerun_failed",
-            usize::from(case == "fresh_green"),
+            usize::from(matches!(case, "fresh_green" | "stale" | "github_stale")),
             case,
         );
         if matches!(case, "changed" | "github_changed") {
             assert_reason(&forge, case, &["classified `candidate`"]);
+        } else if matches!(case, "stale" | "fresh_green" | "github_stale") {
+            assert_reason(&forge, case, &["classified `candidate`"]);
+            assert_eq!(
+                forge
+                    .history
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| row.event == "ci_base_suspect")
+                    .count(),
+                0,
+                "{case}: a passing base run authorizes a rerun, not a base-suspect hold"
+            );
         } else {
             let records = forge
                 .history
@@ -2456,6 +2510,60 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
             }
         }
     }
+}
+
+/// A base-suspect hold with no decisive base result escalates at the configured
+/// observation-cycle limit and keeps the failed check and signature in its stop.
+#[test]
+fn untouched_failure_escalates_after_configured_base_ci_cycles() {
+    let (_sandbox, forge, candidate, base) = forge_fixture(false, false);
+    forge.job(&candidate, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+
+    let error = orbit_engine::test_support::with_vcs_retry_wait(
+        |_| {},
+        || {
+            land_with(
+                &forge,
+                json!({
+                    "max_wait_seconds": 30,
+                    "poll_interval_seconds": 5,
+                    "max_base_ci_cycles": 2,
+                }),
+            )
+        },
+    )
+    .expect_err("the unresolved base evidence is escalated");
+
+    assert!(
+        error
+            .to_string()
+            .contains("escalated after 2 base CI observation cycles"),
+        "{error}"
+    );
+    assert_reason(
+        &forge,
+        "base cycle limit",
+        &["CI / clippy", "shutdown test timed out", "agent-main"],
+    );
+    assert_steps(
+        &forge.steps(),
+        &[HandoffLandingStep::Stop { repairable: false }],
+        "base cycle limit",
+    );
+    assert_eq!(
+        forge
+            .sent("ci.commit_jobs")
+            .iter()
+            .filter(|input| input["commit"] == base && input["latest_push_branch"] == "main")
+            .count(),
+        2,
+        "one base ancestry observation per configured cycle"
+    );
+    assert_not_sent(
+        &forge,
+        &["ci.rerun_failed", "pr.update_branch", "pr.merge"],
+        "base cycle limit",
+    );
 }
 
 /// A base-suspect failure whose landing tip has moved is decided only by

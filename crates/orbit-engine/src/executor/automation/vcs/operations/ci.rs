@@ -24,7 +24,9 @@ use super::process::execute_with_transient_retry;
 const MAX_JOB_LOG_BYTES: usize = 64 * 1024;
 
 /// Every job of the newest attempt of each workflow run GitHub recorded for
-/// `commit`, with its conclusion and first failed step.
+/// `commit`, with its conclusion and first failed step. Base ancestry reads
+/// retain completed successful pushes on the accepted base or its descendants;
+/// the candidate rerun supplies the other half of attribution evidence.
 pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
     let commit = required_string(input, "commit")?;
     let workspace_path = Path::new(required_string(input, "workspace_path")?);
@@ -34,7 +36,7 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
         )));
     }
     // Exact-tip reads retain the latest push per workflow. Untouched-file
-    // freshness reads retain the latest push per workflow and commit in the
+    // evidence reads retain the latest push per workflow and commit in the
     // accepted base's ancestry range, including superseded base tips.
     let push_branch = input.get("latest_push_branch").and_then(Value::as_str);
     let base_push_tip = input.get("base_push_tip").and_then(Value::as_str);
@@ -110,20 +112,11 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
     }
     let mut jobs = Vec::new();
     for run in selected {
-        // A partial or cancelled workflow cannot establish a fresh base pass.
+        // A partial or cancelled workflow cannot establish a passing base result.
         // The bounded recent-run window can miss evidence, which conservatively
         // keeps the base wait; it never treats a partial listing as a pass.
         if let Some(tip) = base_push_tip {
-            let completed = input["base_push_after"]
-                .as_str()
-                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
-            let started = run["run_started_at"]
-                .as_str()
-                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
-            if run["status"] != "completed"
-                || run["conclusion"] != "success"
-                || !matches!((completed, started), (Some(completed), Some(started)) if started >= completed)
-            {
+            if run["status"] != "completed" || run["conclusion"] != "success" {
                 continue;
             }
             let sha = run["head_sha"].as_str().unwrap_or_default();
@@ -190,6 +183,7 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 "completed_at": job["completed_at"],
                 "run_status": run["status"],
                 "run_started_at": run["run_started_at"],
+                "run_attempt": run["run_attempt"],
             }));
         }
     }

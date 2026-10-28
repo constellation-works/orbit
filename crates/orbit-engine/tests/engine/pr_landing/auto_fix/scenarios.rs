@@ -2271,6 +2271,31 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                         },
                         log,
                     );
+                    if case == "suspect" {
+                        let candidate_dir = fx.forge.join("commit-ci").join(&fx.candidate);
+                        let mut jobs: Value = serde_json::from_slice(
+                            &fs::read(candidate_dir.join("jobs.json")).unwrap(),
+                        )
+                        .unwrap();
+                        jobs["jobs"][0]["started_at"] = json!("2026-10-27T04:59:00Z");
+                        jobs["jobs"][0]["completed_at"] = json!("2026-10-27T05:00:00Z");
+                        fs::write(
+                            candidate_dir.join("jobs.json"),
+                            serde_json::to_vec(&jobs).unwrap(),
+                        )
+                        .unwrap();
+                        let mut runs: Value = serde_json::from_slice(
+                            &fs::read(candidate_dir.join("runs.json")).unwrap(),
+                        )
+                        .unwrap();
+                        runs["workflow_runs"][0]["run_attempt"] = json!(1);
+                        runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T04:59:00Z");
+                        fs::write(
+                            candidate_dir.join("runs.json"),
+                            serde_json::to_vec(&runs).unwrap(),
+                        )
+                        .unwrap();
+                    }
                     fx.script_checks(if case == "held_then_dirty" {
                         &["failure", "dirty_failure"]
                     } else if case.starts_with("dirty_") {
@@ -2378,18 +2403,42 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                         "{case}"
                     );
                     if case == "suspect" {
-                        // A later watcher re-observes the held PR. Only a
-                        // base pass newer than the failure clears suspicion.
-                        for (sha, field, time) in [
-                            (&fx.candidate, "completed_at", "2026-10-27T05:00:00Z"),
-                            (&fx.base_sha, "started_at", "2026-10-27T05:01:00Z"),
-                        ] {
-                            let path = fx.forge.join("commit-ci").join(sha).join("jobs.json");
-                            let mut jobs: Value =
-                                serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-                            jobs["jobs"][0][field] = json!(time);
-                            fs::write(path, serde_json::to_vec(&jobs).unwrap()).unwrap();
-                        }
+                        // A later watcher re-observes the held PR. A base pass
+                        // alone still holds; the unchanged-head rerun must fail
+                        // the same signature before repair admission.
+                        let candidate_dir = fx.forge.join("commit-ci").join(&fx.candidate);
+                        let mut jobs: Value = serde_json::from_slice(
+                            &fs::read(candidate_dir.join("jobs.json")).unwrap(),
+                        )
+                        .unwrap();
+                        jobs["jobs"][0]["id"] = json!(13);
+                        jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");
+                        jobs["jobs"][0]["completed_at"] = json!("2026-10-27T05:03:00Z");
+                        fs::write(
+                            candidate_dir.join("jobs.json"),
+                            serde_json::to_vec(&jobs).unwrap(),
+                        )
+                        .unwrap();
+                        let mut runs: Value = serde_json::from_slice(
+                            &fs::read(candidate_dir.join("runs.json")).unwrap(),
+                        )
+                        .unwrap();
+                        runs["workflow_runs"][0]["run_attempt"] = json!(2);
+                        runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:02:00Z");
+                        fs::write(
+                            candidate_dir.join("runs.json"),
+                            serde_json::to_vec(&runs).unwrap(),
+                        )
+                        .unwrap();
+                        let base_jobs_path = fx
+                            .forge
+                            .join("commit-ci")
+                            .join(&fx.base_sha)
+                            .join("jobs.json");
+                        let mut base_jobs: Value =
+                            serde_json::from_slice(&fs::read(&base_jobs_path).unwrap()).unwrap();
+                        base_jobs["jobs"][0]["started_at"] = json!("2026-10-27T04:58:00Z");
+                        fs::write(base_jobs_path, serde_json::to_vec(&base_jobs).unwrap()).unwrap();
                         let path = fx
                             .forge
                             .join("commit-ci")
@@ -2399,14 +2448,14 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                             serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
                         runs["workflow_runs"][0]["status"] = json!("completed");
                         runs["workflow_runs"][0]["conclusion"] = json!("success");
-                        runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:01:00Z");
+                        runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T04:58:00Z");
                         fx.write_forge("base-push-runs.json", runs.to_string());
                         let mut next = auto_fix_input(&fx);
                         next["run_id"] = json!("jrun-base-recheck");
                         let error = action(&host, "pr_complete", &next).unwrap_err();
                         assert!(
                             is_check_repair(&error.to_string()),
-                            "fresh base result releases the hold: {error}"
+                            "same-signature PR rerun plus green base releases the hold: {error}"
                         );
                         assert_eq!(repair_attempts(&host).len(), 1);
                     }
