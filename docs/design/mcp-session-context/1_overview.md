@@ -4,7 +4,7 @@ type: design
 title: "MCP Session Context — Overview"
 owner: codex
 last_updated: 2026-09-30
-last_validated: 2026-10-25
+last_validated: 2026-10-28
 status: Accepted
 stage: shipped
 next: "—"
@@ -40,7 +40,8 @@ The external workspace value is addressing input, not a trusted workspace identi
 - A direct SSH proxy forwards the caller's persisted machine ID when available and host/local otherwise.
 - caller_ip is best-effort audit data taken from SSH_CONNECTION when an SSH server exposes it.
 - process_machine_id and process_machine_name describe the machine accepting and executing the call.
-- transport is local or ssh-mcp.
+- transport is `local` or `ssh-mcp`; TCP listener sessions are recorded as
+  `local`, with their peer address in `caller_ip`.
 
 ## Current boundary
 
