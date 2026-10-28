@@ -300,6 +300,21 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "patch")
         self.assertEqual(report["next_version"], "0.35.1")
 
+    def test_same_line_skipped_fields_do_not_decide_minor(self):
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n"
+                          '    #[doc = "local only"] #[serde(skip)]\n'
+                          "    pub local_cache: Option<String>,\n"
+                          '    #[doc = "transient only"] #[serde(skip_serializing)]\n'
+                          "    pub transient_state: Option<String>,\n")
+        self.repo.commit("feat: Add local task state on shared lines [ORB-52] (#1)")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
     def test_quoted_serde_examples_do_not_hide_persisted_fields(self):
         additions = (
             '    #[doc = "Persisted field; unlike #[serde(skip)], it is on disk."]\n'
