@@ -433,12 +433,13 @@ a base update or prevent a sibling workflow from proving its own emission. The
 inherited-failure and absent-context paths use durable owner-task reservations.
 Inherited recovery admits up to three updates per handoff, each onto a distinct
 base, while absent-context refresh and auto-fix retain their one-update limits
-[ORB-19393]. Each landing run keeps its own deadline; an explicit later retry
-does not inherit an already expired deadline. Reservation
-precedes the expected-head provider update; an unknown outcome is observed,
-never repeated. Current effective policy and every exact new-head required and
-owner-owed success gate the ordinary merge. Other conditional/dynamic or incomplete
-emission evidence refuses; it grants no source-repair or policy-bypass authority.
+[ORB-19393]. A later retry that reuses an existing reservation remains bounded
+by that reservation's original absolute deadline; if the deadline has expired,
+the retry is refused. Reservation precedes the expected-head provider update;
+an unknown outcome is observed, never repeated. Current effective policy and
+every exact new-head required and owner-owed success gate the ordinary merge.
+Other conditional/dynamic or incomplete emission evidence refuses; it grants no
+source-repair or policy-bypass authority.
 A legacy status cannot stand in for the positive workflow CheckRun proof in
 absent-context refresh or prerequisite-rerun recovery.
 
