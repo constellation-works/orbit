@@ -1138,6 +1138,233 @@ fn explorer_budgets_refuse_with_the_setting_named() {
     assert_eq!(explorer_count(&fx.runtime), 2);
 }
 
+/// A read-only primary state directory still admits one bounded explorer from
+/// the calling run's own writable worktree [ORB-19448].
+///
+/// The admission lock lives in the worktree scratch, so the primary
+/// `.orbit/state` mount being read-only refuses nothing. Same-parent
+/// concurrent calls from differing `cwd` values still share that lock and
+/// enforce call/concurrency budgets; differing directories never split it.
+fn a_read_only_primary_state_dir_still_admits_one_bounded_explorer() {
+    struct ReadOnlyStateGuard {
+        path: PathBuf,
+        original: std::fs::Permissions,
+    }
+
+    impl ReadOnlyStateGuard {
+        fn make(state_dir: &Path) -> Self {
+            let original = std::fs::metadata(state_dir)
+                .expect("stat the primary state directory")
+                .permissions();
+            let mut read_only = original.clone();
+            read_only.set_readonly(true);
+            std::fs::set_permissions(state_dir, read_only)
+                .expect("make the primary state directory read-only");
+            Self {
+                path: state_dir.to_path_buf(),
+                original,
+            }
+        }
+    }
+
+    impl Drop for ReadOnlyStateGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::set_permissions(&self.path, self.original.clone());
+        }
+    }
+
+    let fx = fixture(BUDGETS);
+    let tests_dir = fx.worktree.join("tests");
+    std::fs::create_dir_all(&tests_dir).expect("sibling directory for a retry");
+    // The worker log and other state stores are created before the primary
+    // state directory goes read-only: existing writable subdirectories stay
+    // writable under a read-only parent (only new entries directly in the
+    // parent refuse), which is exactly the mount state the regression covers.
+    for dir in [
+        &fx.runtime.paths().logs_dir,
+        &fx.runtime.paths().audit_dir,
+        &fx.runtime.paths().job_runs_dir,
+    ] {
+        std::fs::create_dir_all(dir).expect("pre-create a writable state subdirectory");
+    }
+    let guard = ReadOnlyStateGuard::make(&fx.runtime.paths().state_dir);
+    as_managed_agent(&fx.parent.run_id, "agent_implement");
+    let session = agent_session();
+    let src_cwd = fx.worktree.join("src").display().to_string();
+    let tests_cwd = tests_dir.display().to_string();
+
+    // Through the governed tool surface, as the MCP server calls it.
+    let response = fx
+        .runtime
+        .run_tool(
+            "orbit.agent.invoke",
+            json!({
+                "prompt": "where is the retry budget enforced",
+                "cwd": src_cwd,
+                "idempotency_key": "readonly-first",
+            }),
+        )
+        .expect("a read-only primary state directory still admits an explorer");
+    assert_eq!(response["job_id"], json!(EXPLORE_JOB_ID));
+    assert_eq!(
+        (&response["sandboxed"], &response["read_only"]),
+        (&json!(true), &json!(true))
+    );
+    assert_eq!(response["deduplicated"], json!(false));
+    assert_eq!(response["parent_run_id"], json!(fx.parent.run_id));
+    assert!(
+        response.get("authorized_by").is_none(),
+        "no operator authorized an explorer"
+    );
+    let run_id = response["run_id"]
+        .as_str()
+        .expect("explorer run")
+        .to_string();
+    assert_eq!(explorer_count(&fx.runtime), 1);
+    let scratch_lock = fx.worktree.join(".orbit/tmp/.agent_explore_admission.lock");
+    assert!(
+        scratch_lock.exists(),
+        "the admission lock lives in the calling worktree scratch: {}",
+        scratch_lock.display()
+    );
+    let state_lock = fx
+        .runtime
+        .paths()
+        .state_dir
+        .join(".agent_explore_admission.lock");
+    assert!(
+        !state_lock.exists(),
+        "no admission lock is placed in the read-only primary state directory"
+    );
+    let persisted = input_of(&fx.runtime, &run_id);
+    assert!(
+        persisted.get(TRUSTED_HOST_ADMISSION_KEY).is_none(),
+        "an explorer never carries a trusted-host admission"
+    );
+
+    // A retry with the same key but a sibling directory resolves the same run
+    // and keeps its persisted settings, so differing `cwd` values share the
+    // same per-parent lock.
+    let retried = explore(
+        &fx.runtime,
+        AgentInvokeRequest {
+            idempotency_key: Some("readonly-first"),
+            crew: Some("haiku"),
+            timeout_seconds: Some(30),
+            ..ask(&tests_cwd, &session)
+        },
+    );
+    assert!(retried.deduplicated);
+    assert_eq!(retried.run_id, run_id);
+    assert_eq!(
+        retried.cwd,
+        response["cwd"].as_str().expect("persisted cwd")
+    );
+    assert_eq!(explorer_count(&fx.runtime), 1);
+
+    // A second new call from a sibling directory while one explorer is active
+    // is refused on the concurrency budget, not split into a second run.
+    let concurrent = refusal(&fx.runtime, ask(&tests_cwd, &session));
+    assert!(
+        matches!(&concurrent, OrbitError::CapabilityDenied(message)
+            if message.contains("workflow.explore.max_concurrent_per_run")),
+        "a second active explorer is refused: {concurrent:?}"
+    );
+    assert_eq!(explorer_count(&fx.runtime), 1);
+
+    finish(&fx.runtime, &run_id);
+
+    // Two concurrent new calls from differing directories still serialize on
+    // the same per-parent lock: exactly one is admitted.
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let (first, second) = std::thread::scope(|scope| {
+        let fx_ref = &fx;
+        let session_ref = &session;
+        let barrier_first = std::sync::Arc::clone(&barrier);
+        let barrier_second = std::sync::Arc::clone(&barrier);
+        let src = src_cwd.clone();
+        let sibling = tests_cwd.clone();
+        let first = scope.spawn(move || {
+            barrier_first.wait();
+            fx_ref.runtime.submit_agent_invocation(AgentInvokeRequest {
+                prompt: "where is the retry budget enforced",
+                cwd: &src,
+                crew: None,
+                timeout_seconds: None,
+                idempotency_key: None,
+                provider_sandbox: None,
+                actor: Some("claude-opus-4-6"),
+                session_context: session_ref,
+            })
+        });
+        let second = scope.spawn(move || {
+            barrier_second.wait();
+            fx_ref.runtime.submit_agent_invocation(AgentInvokeRequest {
+                prompt: "where is the retry budget enforced",
+                cwd: &sibling,
+                crew: None,
+                timeout_seconds: None,
+                idempotency_key: None,
+                provider_sandbox: None,
+                actor: Some("claude-opus-4-6"),
+                session_context: session_ref,
+            })
+        });
+        (
+            first.join().expect("first concurrent call joins"),
+            second.join().expect("second concurrent call joins"),
+        )
+    });
+    let admitted = [first, second]
+        .into_iter()
+        .partition::<Vec<_>, _>(|result| result.is_ok());
+    assert_eq!(
+        admitted.0.len(),
+        1,
+        "exactly one concurrent call is admitted while the other keeps the budget"
+    );
+    let refused = admitted.1.into_iter().next().expect("one refusal");
+    let error = refused.expect_err("the losing call is refused");
+    assert!(
+        matches!(&error, OrbitError::CapabilityDenied(message)
+            if message.contains("workflow.explore.max_concurrent_per_run")
+                || message.contains("workflow.explore.max_calls_per_run")),
+        "the concurrent loser names a per-run budget: {error:?}"
+    );
+    assert_eq!(explorer_count(&fx.runtime), 2);
+
+    // The per-run call budget is now spent.
+    let exhausted = refusal(&fx.runtime, ask(&src_cwd, &session));
+    assert!(
+        matches!(&exhausted, OrbitError::CapabilityDenied(message)
+            if message.contains("workflow.explore.max_calls_per_run")),
+        "an exhausted run names its call budget: {exhausted:?}"
+    );
+    assert_eq!(explorer_count(&fx.runtime), 2);
+
+    // Invalid caller and outside-worktree directories still refuse before an
+    // explorer is submitted, even with the primary state read-only.
+    let foreign = refusal(&fx.runtime, ask(&fx.repo.display().to_string(), &session));
+    assert!(
+        matches!(foreign, OrbitError::PolicyDenied(_)),
+        "an explorer reads only its caller's own worktree, got {foreign:?}"
+    );
+    as_managed_agent(&fx.parent.run_id, "agent_review");
+    let wrong_activity = refusal(&fx.runtime, ask(&src_cwd, &session));
+    assert!(
+        matches!(wrong_activity, OrbitError::CapabilityDenied(_)),
+        "only an implement or review-repair agent delegates: {wrong_activity:?}"
+    );
+    as_managed_agent(&fx.parent.run_id, "agent_implement");
+    assert_eq!(explorer_count(&fx.runtime), 2);
+
+    drop(guard);
+    #[cfg(unix)]
+    {
+        prove_substitute_reaped_on_teardown(fx);
+    }
+}
+
 fn the_switch_off_refuses_every_caller() {
     let fx = fixture("[workflow.explore]\nenabled = false\n");
     as_managed_agent(&fx.parent.run_id, "agent_implement");
@@ -1480,6 +1707,7 @@ fn compare_explorer_invocations(implement_step: &str, explore_step: &str) {
 crate::scenario_table!(
     agent_explore_admission_scenarios,
     an_implement_run_delegates_to_a_sandboxed_pool_explorer_in_its_worktree,
+    a_read_only_primary_state_dir_still_admits_one_bounded_explorer,
     an_out_of_pool_crew_and_a_foreign_cwd_are_refused,
     explorer_draws_record_pressure_and_retries_keep_the_original_pool,
     explorer_budgets_refuse_with_the_setting_named,
