@@ -33,8 +33,8 @@ use orbit_store::contracts::{
 };
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
-    ChildDispatch, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
-    REVIEW_CONTRACT_VERSION, ReviewAdmission, ReviewTiming,
+    JobRunState, JobRunTrigger, JobTargetType, PipelineState, REVIEW_CONTRACT_VERSION,
+    ReviewAdmission, ReviewTiming,
 };
 use orbit_types::workspace::{Workspace, WorkspaceStatus};
 use serde_json::json;
@@ -579,8 +579,7 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
     let current = upgrade_interrupted_run(&ctx, "test_pipeline", now, |_| {});
 
     // Drains the current upgrade interrupted: one whose window has elapsed,
-    // one an operator stopped while its window was still open, and a ship
-    // wrapper that never stamped a window of its own.
+    // and one an operator stopped while its window was still open.
     let expired_drain = upgrade_interrupted_run(&ctx, "workspace_auto_pipeline", now, |state| {
         state.record_pipeline_output(
             "open_window",
@@ -594,7 +593,6 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
         );
         state.set_drain_admissions_stop("operator".into(), Some("on-call".into()));
     });
-    let windowless_ship = upgrade_interrupted_run(&ctx, "workspace_ship_pipeline", now, |_| {});
     // [ORB-15383] A drain whose stamped window elapsed but which an operator
     // extended (`orbit run extend`) is still inside its window. Its job is
     // deployed the way `orbit init` does, so the resume can be planned.
@@ -621,43 +619,6 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
             now + Duration::hours(1),
             "operator".into(),
             None
-        ));
-    });
-
-    // A ship wrapper delegates its window and stop control to its auto drain
-    // child. The wrapper itself has no stop flag, so inspect the child state.
-    let child_input = json!({"review": review_admission(&ctx.runtime)});
-    let stopped_ship_child = ctx
-        .jobs
-        .insert_job_run(
-            "workspace_auto_pipeline",
-            1,
-            Utc::now(),
-            Some(child_input.clone()),
-            None,
-        )
-        .unwrap();
-    let mut child_state = PipelineState::new(
-        stopped_ship_child.run_id.clone(),
-        "workspace_auto_pipeline".into(),
-        child_input,
-    );
-    child_state.record_pipeline_output(
-        "open_window",
-        json!({"deadline": deadline(now + Duration::hours(1))}),
-    );
-    child_state.set_drain_admissions_stop("operator".into(), Some("on-call".into()));
-    ctx.jobs
-        .write_run_state(&stopped_ship_child.run_id, &child_state)
-        .unwrap();
-    let stopped_ship = upgrade_interrupted_run(&ctx, "workspace_ship_pipeline", now, |state| {
-        state.record_child_dispatch(ChildDispatch::submitted(
-            stopped_ship_child.run_id.clone(),
-            "workspace_auto_pipeline".into(),
-            "invoke_and_wait".into(),
-            true,
-            false,
-            now,
         ));
     });
 
@@ -720,21 +681,14 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
     assert_skipped(&ctx, &review_changed, "review_admission_changed");
     assert_skipped(&ctx, &expired_drain, "drain_window_elapsed");
     assert_skipped(&ctx, &stopped_drain, "drain_admissions_stopped");
-    assert_skipped(&ctx, &windowless_ship, "drain_window_elapsed");
-    assert_skipped(&ctx, &stopped_ship, "drain_admissions_stopped");
     assert_skipped(&ctx, &superseded, "superseded");
 
     // A skipped drain admitted nothing: no run of a drain job exists beyond
     // the interrupted ones and the extended drain's resume.
-    for job in [
-        "workspace_auto_pipeline",
-        "workspace_pull_pipeline",
-        "workspace_ship_pipeline",
-    ] {
+    for job in ["workspace_auto_pipeline", "workspace_pull_pipeline"] {
         let expected = match job {
-            "workspace_auto_pipeline" => 3, // includes the stopped ship child
+            "workspace_auto_pipeline" => 2,
             "workspace_pull_pipeline" => 3, // the extended drain resumed once
-            "workspace_ship_pipeline" => 2,
             _ => unreachable!(),
         };
         assert_eq!(
@@ -752,8 +706,6 @@ fn clock_sweep_resumes_only_the_current_upgrades_interruptions_and_audits_each_d
         &review_changed,
         &expired_drain,
         &stopped_drain,
-        &windowless_ship,
-        &stopped_ship,
         &superseded,
     ] {
         assert_eq!(decisions(&ctx, run_id).len(), 1, "{run_id} decided once");

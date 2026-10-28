@@ -36,6 +36,6 @@ their existing meanings and are not redefined here.
 | **Receipt namespace** | The original caller machine a request receipt is keyed under. A worker session reads its own; cross-attempt inspection is an operator act. [Pull spec](../specs/task-pull.md#read-only-receipt-reconciliation) |
 | **Request receipt** | Durable result for one caller/workspace/request ID; replay never creates another admission. [Pull spec](../specs/task-pull.md#idempotency-and-admission) |
 | **Review policy** | The ship contract captures whether a claimed PR leaf runs before-PR review; the handoff records review evidence or a typed not-required disposition. Task status `review` marks the landing handoff, not the review verdict. [Design §3.2](../2_design.md#32-durable-review-and-landing-handoff) |
-| **Ship sweep** | Retained routine, wrapper, and CLI entry points, all subject to owner claim admission and explicit completion authority. [Design §7.3](../2_design.md#73-ship-sweep) |
+| **Ship sweep** | Retired routine, wrapper, and CLI entry points; a leftover routine loads as retired and never fires. Dispatch is an `orbit run auto` drain or `orbit run ship`. [Design §7.3](../2_design.md#73-ship-sweep) |
 | **Slot** | Local capacity consumed by live leaves and pending admissions not yet counted as live leaves. [Design §3](../2_design.md#3-pull-mode-drain-and-the-pulled-leaf-pipeline) |
 | **Version parity** | Binary/schema compatibility precondition, distinct from provider, crew, policy, and toolchain availability. [Design §4](../2_design.md#4-follower-preconditions) |

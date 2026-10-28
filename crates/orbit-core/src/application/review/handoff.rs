@@ -35,7 +35,7 @@ impl OrbitRuntime {
 
     /// Accepting a completion-authorized handoff records its landing-start
     /// request; the owner landing job is dispatched from that request here, so
-    /// no drain or ship sweep has to be running for authorized work to land.
+    /// no drain has to be running for authorized work to land.
     /// A review-only handoff records no request and dispatches nothing.
     ///
     /// An accepted before-PR handoff's certificate is recorded in this
@@ -132,8 +132,8 @@ impl OrbitRuntime {
         )
     }
 
-    /// The durable outbox, readable without a live drain or ship sweep. Dispatch
-    /// and external merge reconciliation belong to
+    /// The durable outbox, readable without a live drain. Dispatch and external
+    /// merge reconciliation belong to
     /// [`crate::application::landing`].
     pub fn landing_start_requests(&self) -> Result<Vec<LandingStartRequest>, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;

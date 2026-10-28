@@ -33,7 +33,7 @@ mediates auto-task evaluation. See
 ## 1. Motivation
 
 Every periodic need in orbit used to be bespoke: qa-sweep (ORB-10039) was an
-inline check sweep, ship-sweep had its own systemd unit, and each future
+inline check sweep, ship-sweep had its own systemd unit (since retired), and each future
 recurring chore would mean another hardcoded routine. The marginal cost of a new
 chore was a code change, a review, and a release. Auto-tasks replace the pattern
 with a primitive so the marginal cost is a YAML record. qa-sweep V1 (ORB-10148)

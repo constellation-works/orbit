@@ -344,9 +344,9 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
 `task_pilot.yaml`, `finding_verification.yaml`, `pilot_warning_triage.yaml`,
-`blocked_task_triage.yaml`, `ship_sweep.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
+`blocked_task_triage.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
 and `task_publication.yaml` with workspace-unique names and `enabled: false`.
-[ORB-17816] added the eleventh default, `crew_performance_refresh.yaml`, seeded
+[ORB-17816] added `crew_performance_refresh.yaml`, seeded
 enabled: hourly at :23 it skips scanning and writes no snapshot while
 `workflow.crew_performance` is `off`, but still records a job run.
 [ORB-18378] added the disabled publication default: Sunday 04:47 host-local,
@@ -548,13 +548,13 @@ wrong dependency requirement, a broken manifest, a packaging script bug — rema
 for ordinary promotion. The same finding also clears the state automation's readiness flag,
 so neither promotion path can turn a pending publication into automatic version edits.
 
-The seeded `ship_sweep` targets `job:workspace_ship_pipeline` with `missed_run: skip` and
-`overlap: forbid`. The wrapper resolves the source runtime's ship mode and configured base
-branch, invokes and waits for `workspace_auto_pipeline` without explicit task IDs, and guards
-its result. It never calls the legacy cross-workspace CLI sweep or consults
-`[workflow] auto_ship`; the child's existing empty-backlog path is a successful no-op.
-Waiting keeps the wrapper run active for the whole shipment, so routine overlap protection
-covers the child rather than only submission ([Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job)).
+The `ship_sweep` default and its `job:workspace_ship_pipeline` wrapper are retired: no routine
+ships work, and dispatch is an `orbit run auto` drain or `orbit run ship`. Its last shape is
+under `assets/routines/retired/`, and copies of the earlier superseded shape are judged retired
+too, so `orbit workspace sync` retires a seeded copy whatever its `enabled` flag. A workspace
+that keeps one loads it as `retired` (the target job no longer resolves) and never fires it
+([Delegate workspace ship routines through a synchronous wrapper job](./4_decisions.md#delegate-workspace-ship-routines-through-a-synchronous-wrapper-job)
+records the original design).
 
 ### Delivered worktree cleanup
 
@@ -615,8 +615,8 @@ entry is disposable.
 ## 2. Discovery and Registration
 
 Discovery reuses the global workspace registry (`~/.orbit/workspaces.json`) rather than a
-new pointer mechanism — the same shape `orbit run ship-sweep` established for unattended
-cross-workspace dispatch.
+new pointer mechanism — the shape the since-retired `orbit run ship-sweep` established for
+unattended cross-workspace dispatch.
 
 Registering an **owner** checkout is the whole opt-in — there is no config key
 ([Registration is the automation opt-in](./4_decisions.md#registration-is-the-automation-opt-in-there-is-no-routine-source-role)). On each pass, sweep loads the registry and loads
@@ -656,7 +656,7 @@ coordination store. A follower-only host otherwise cannot trim that store:
 every checkout is a replica, and the owner's store-gc routine runs against the
 owner's store, not the follower's.
 
-Every other replica definition — ship sweep, task pilot, CI and Dependabot sweeps, and
+Every other replica definition — task pilot, CI and Dependabot sweeps, and
 any delivery- or state-triggered routine, including one targeting either GC job — is owner
 work. The sweep reports it as `skipped` with an `owner_only_in_replica:` reason naming
 the owner machine and never dispatches it. `orbit routine list` and `show`, the
@@ -703,8 +703,7 @@ health, or remote placement service in the v1 path.
 ## 3. Clock tick
 
 `orbit clock tick` is the stateless entrypoint the OS clock invokes every minute;
-`orbit sweep` invokes the same implementation as a compatibility alias. Like
-`ship-sweep`, it never bootstraps a workspace from the caller's cwd, isolates per-routine
+`orbit sweep` invokes the same implementation as a compatibility alias. It never bootstraps a workspace from the caller's cwd, isolates per-routine
 failures, and exits non-zero on infrastructure errors such as malformed host identity,
 an unreadable registry, or an unopenable store. A valid empty local registry simply
 produces no routines and exits successfully.
@@ -753,17 +752,6 @@ Per pass:
    accept no caller-supplied parameters, and every step in such a job must declare its own
    `default_input` rather than inheriting the job base input (which would expose the
    reserved field to the activity).
-   A due `workspace_ship_pipeline` slot's first attempt is consumed as `skipped` when a
-   `workspace_auto_pipeline` is already running or retrying in its source
-   workspace. A retry of a failed fire yields to that drain without writing another
-   skipped row, so the attempt stays free. A skipped retry already stored on the slot
-   does not stick later ticks on `slot_already_claimed`: the sweep dispatches the next
-   free attempt, and that skipped row does not spend `retries.max`. The tick reports
-   `workspace_drain_live: <run id>` even without
-   `--verbose`; `orbit routine show` retains that detail in recent fires when the
-   first attempt was recorded. It does not queue a sweep behind a manual drain: the
-   later sweep would use its
-   own review completion policy after a manual `--complete` window expires.
    Readiness names the running `workspace_auto_pipeline` and its live worker
    ceiling in `capacity.drain_run_id` and `capacity.max_active_leaf_runs`.
    Pending coordinators appear separately in `capacity.queued_drains` with
@@ -825,8 +813,8 @@ delivery-triggered routine admits carries `routine` and the automation `consumer
 admitted it, with no slot ([ORB-12255], [ORB-13016]).
 
 Naming note: `orbit clock tick` is the general scheduler pass and `orbit sweep` is its
-compatibility alias. The seeded `ship_sweep` routine is workspace-local; the legacy
-`orbit run ship-sweep` cross-workspace entrypoint is separate.
+compatibility alias. The retired `ship_sweep` routine and `orbit run ship-sweep` command are
+unrelated to it.
 
 The shipped clock, delivery/state evaluation and replica-local exceptions are
 complete: [ORB-12237] consolidated the clock, [ORB-11330] and [ORB-11331]

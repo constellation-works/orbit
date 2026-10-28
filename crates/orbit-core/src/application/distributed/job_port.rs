@@ -16,7 +16,7 @@ impl JobDrainPort for OrbitRuntime {
         entry_point: DrainEntryPoint,
         task_ids: &[String],
     ) -> Result<(), OrbitError> {
-        self.drain_entry_admission(entry_point, task_ids, false)?
+        self.drain_entry_admission(entry_point, task_ids)?
             .into_result()
             .map(|_| ())
     }

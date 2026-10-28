@@ -660,12 +660,12 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
         || {
             let fixture = Fixture::replica_of("hm_fixture_remote");
             fixture.job("worktree_gc_pipeline");
-            fixture.job("workspace_ship_pipeline");
+            fixture.job("ci_failure_sweep_pipeline");
             let routines = fixture.work.join("routines");
             fs::create_dir_all(&routines).unwrap();
             for (name, job) in [
                 ("replica-gc", "worktree_gc_pipeline"),
-                ("replica-ship", "workspace_ship_pipeline"),
+                ("replica-ci-sweep", "ci_failure_sweep_pipeline"),
             ] {
                 fs::write(
                     routines.join(format!("{name}.yaml")),
@@ -675,8 +675,8 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
                 )
                 .unwrap();
             }
-            let ship_path = routines.join("replica-ship.yaml");
-            let ship_before = fs::read(&ship_path).unwrap();
+            let ci_sweep_path = routines.join("replica-ci-sweep.yaml");
+            let ci_sweep_before = fs::read(&ci_sweep_path).unwrap();
             let server = fixture.server(true);
             let report = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
             let scheduled = report["routines"].as_array().unwrap();
@@ -685,11 +685,11 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
             assert_eq!(scheduled[0]["origin"], "workspace", "{report}");
             let owner_only = report["owner_only"].as_array().unwrap();
             assert_eq!(owner_only.len(), 1, "{report}");
-            assert_eq!(owner_only[0]["name"], "replica-ship");
+            assert_eq!(owner_only[0]["name"], "replica-ci-sweep");
             assert_eq!(owner_only[0]["owner_machine"], "hm_fixture_remote");
             assert_eq!(
                 fs::canonicalize(owner_only[0]["path"].as_str().unwrap()).unwrap(),
-                fs::canonicalize(&ship_path).unwrap(),
+                fs::canonicalize(&ci_sweep_path).unwrap(),
                 "{report}"
             );
 
@@ -716,7 +716,7 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
                     "workspace_mismatch",
                 ),
                 (
-                    toggle("replica-gc", "job:workspace_ship_pipeline"),
+                    toggle("replica-gc", "job:ci_failure_sweep_pipeline"),
                     409,
                     "target_mismatch",
                 ),
@@ -730,7 +730,7 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
                 assert_eq!(fs::read(&gc_path).unwrap(), gc_before, "{code} wrote");
             }
             let refused = error_code(
-                toggle("replica-ship", "job:workspace_ship_pipeline"),
+                toggle("replica-ci-sweep", "job:ci_failure_sweep_pipeline"),
                 409,
                 "owner_authority",
             );
@@ -740,7 +740,7 @@ fn replica_routines_project_only_worktree_gc_as_toggleable() {
                     .is_some_and(|error| error.contains("hm_fixture_remote")),
                 "{refused}"
             );
-            assert_eq!(fs::read(&ship_path).unwrap(), ship_before);
+            assert_eq!(fs::read(&ci_sweep_path).unwrap(), ci_sweep_before);
             let enabled = json_ok(toggle("replica-gc", "job:worktree_gc_pipeline"));
             assert_eq!(enabled["changed"], true, "{enabled}");
             assert!(

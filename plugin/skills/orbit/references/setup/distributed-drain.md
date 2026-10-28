@@ -40,8 +40,6 @@ routing is in [tool-surface.md](../tool-surface.md).
   is on the task's `review-gate.json`.
 - Age, reservation TTL, and a missing local run are diagnostics, not proof of
   death.
-- Seeded `ship_sweep`, `workspace_ship_pipeline`, and `orbit run ship-sweep`
-  stay at their current enablement. This setup does not turn them on.
 - Remote machine labels (`--remote-caller-machine-id`) supply audit attribution,
   the receipt namespace and the machine fence for claim bind/settle. The journal
   compares the session label with the claim's execution machine, bound run and

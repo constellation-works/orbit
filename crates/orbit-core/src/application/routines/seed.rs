@@ -77,10 +77,6 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/routines/blocked_task_triage.yaml"),
     ),
     (
-        "ship_sweep",
-        include_str!("../../../assets/routines/ship_sweep.yaml"),
-    ),
-    (
         "worktree_gc",
         include_str!("../../../assets/routines/worktree_gc.yaml"),
     ),
@@ -115,13 +111,18 @@ pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
         "task_triage",
         include_str!("../../../assets/routines/retired/task_triage.yaml"),
     ),
+    (
+        "ship_sweep",
+        include_str!("../../../assets/routines/retired/ship_sweep.yaml"),
+    ),
 ];
 
-/// Earlier shapes of routines this Orbit still ships: every template whose
+/// Earlier shapes of routines this Orbit ships: every template whose
 /// template-owned fields differed from the current one. A workspace seeded by
 /// that release and since opted in (`enabled: true`) is refreshed onto the
 /// current template with its opt-in kept, instead of being reported as
-/// locally modified forever.
+/// locally modified forever. An earlier shape of a default since retired
+/// ([`RETIRED_ROUTINE_FILES`]) stays here and is judged retired.
 ///
 /// Changing a shipped template's fields (not its comments): copy the previous
 /// version here as `<stem>.<last-shipped-date>.yaml` in the same change.

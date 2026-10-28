@@ -112,10 +112,9 @@ impl OrbitRuntime {
     /// Submit a `ship` workflow run (the `task_auto_pipeline` job).
     ///
     /// Shared entry point for every non-interactive submission surface
-    /// (dashboard HTTP endpoint, MCP `orbit.workflow.ship`, `orbit run
-    /// ship-sweep`). `base_branch` falls back to the workspace's `[workflow]
-    /// base_branch`; an empty `task_ids` slice selects auto
-    /// (backlog-discovery) mode. One-shot: returns as soon as the run is
+    /// (dashboard HTTP endpoint, MCP `orbit.workflow.ship`). `base_branch`
+    /// falls back to the workspace's `[workflow] base_branch`; an empty
+    /// `task_ids` slice selects auto (backlog-discovery) mode. One-shot: returns as soon as the run is
     /// persisted and its worker spawned.
     ///
     /// [ORB-10544] An explicit task selection is guarded against duplicate

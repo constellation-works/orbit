@@ -68,7 +68,7 @@ let heldConfigDelete = null;
 let holdConfigDelete = false;
 const redundantConfig = {
   config_set: { authorized: true },
-  sections: [{ token: 'workflow', keys: ['workflow.base_branch', 'workflow.auto_ship'].map((key) => ({
+  sections: [{ token: 'workflow', keys: ['workflow.base_branch', 'pr.draft'].map((key) => ({
     key, label: key, value: 'same', value_type: 'string', state: 'set', settable: true,
     source: { layer: 'workspace' }, equals: { built_in: true },
   })).concat([{ key: 'workflow.resource_throttle.enabled', label: 'Enabled', value: true, value_type: 'bool', state: 'set', settable: true, source: { layer: 'global' } }]) }],

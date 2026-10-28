@@ -233,9 +233,8 @@ pub(crate) fn run_deterministic(
         // [ORB-13625] One follower pull-drain iteration: reconcile earlier
         // admissions, then top free slots up from the owner.
         CoreDeterministicAction::PullRefill => pull_drain::pull_refill(runtime, action, input),
-        // ADR-0223: scheduled shipment resolves only the active runtime's
-        // canonical ship input; cross-workspace enumeration stays in the
-        // legacy CLI sweep and `workflow.auto_ship` is deliberately ignored.
+        // ADR-0223: a drain resolves only the active runtime's canonical ship
+        // input, never another registered workspace's.
         CoreDeterministicAction::ResolveWorkspaceShipInput => {
             resolve_workspace_ship_input(runtime, action)
         }

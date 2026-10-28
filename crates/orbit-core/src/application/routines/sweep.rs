@@ -1,7 +1,6 @@
 //! The stateless scheduler tick [ORB-10021, ORB-12237]: what runs when the OS
 //! clock invokes `orbit clock tick` (`orbit sweep` is a compatibility alias).
-//! Modeled on `orbit run ship-sweep`: never
-//! bootstraps a workspace from the caller's cwd, isolates per-routine
+//! It never bootstraps a workspace from the caller's cwd, isolates per-routine
 //! failures into report rows, and returns `Err` only for infrastructure
 //! failures (registry unreadable, store unopenable) — an unconfigured host
 //! is a clean no-op, because launchd/systemd will invoke this forever.
@@ -30,7 +29,6 @@ pub use orbit_automation::routines::sweep::{
 };
 use orbit_common::OrbitError;
 use orbit_common::observability::log_rotation::{self, LogRotationConfig};
-use orbit_store::contracts::JobRunQuery;
 use orbit_types::workflow::{JobRun, JobRunState};
 use orbit_types::workspace::Workspace;
 use serde_json::json;
@@ -43,36 +41,6 @@ pub(crate) struct RuntimeDispatch<'a> {
 }
 
 impl RoutineDispatch for RuntimeDispatch<'_> {
-    fn live_workspace_drain(&self, source_orbit_dir: &Path) -> Result<Option<String>, OrbitError> {
-        let runtime = self.runtimes.get(source_orbit_dir).ok_or_else(|| {
-            OrbitError::WorkspaceError(format!(
-                "no runtime for source workspace '{}'",
-                source_orbit_dir.display()
-            ))
-        })?;
-        let running = runtime
-            .stores()
-            .jobs()
-            .list_pending_or_running_job_runs("workspace_auto_pipeline")?
-            .into_iter()
-            .find(|run| run.state == JobRunState::Running);
-        if let Some(run) = running {
-            return Ok(Some(run.run_id));
-        }
-        Ok(runtime
-            .stores()
-            .jobs()
-            .list_job_runs_filtered(&JobRunQuery {
-                job_id: Some("workspace_auto_pipeline".to_string()),
-                state: Some(JobRunState::Retrying),
-                include_steps: false,
-                ..JobRunQuery::default()
-            })?
-            .into_iter()
-            .next()
-            .map(|run| run.run_id))
-    }
-
     fn evaluate_delivery(
         &self,
         routine: &super::loader::LoadedRoutine,

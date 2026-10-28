@@ -508,7 +508,7 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
             for (key, value) in [
                 ("workflow.base_brunch", json!("main")),
                 ("execution.codex.sandbox", json!("wide-open")),
-                ("workflow.auto_ship", json!("true")),
+                ("decision_channel.enabled", json!("true")),
             ] {
                 let before = std::fs::read(&config).unwrap();
                 let response = server.send(
@@ -547,7 +547,7 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
             }
             let written = super::support::json_ok(server.send(
                 "PUT",
-                "/api/config/keys/workflow.auto_ship?workspace=ws_http_fixture",
+                "/api/config/keys/decision_channel.enabled?workspace=ws_http_fixture",
                 json!({"value":true}),
             ));
             assert_eq!(written["old_value"], false);
@@ -557,7 +557,7 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                     .as_array()
                     .unwrap()
                     .iter()
-                    .any(|row| row["key"] == "workflow.auto_ship" && row["value"] == true)
+                    .any(|row| row["key"] == "decision_channel.enabled" && row["value"] == true)
             );
             let read = super::support::json_ok(
                 server.get("/api/config/effective?workspace=ws_http_fixture"),
@@ -567,7 +567,7 @@ fn config_key_admission_refuses_invalid_writes_and_preserves_types() {
                 .unwrap()
                 .iter()
                 .flat_map(|section| section["keys"].as_array().unwrap())
-                .find(|row| row["key"] == "workflow.auto_ship")
+                .find(|row| row["key"] == "decision_channel.enabled")
                 .unwrap();
             assert_eq!(
                 row["value"], true,

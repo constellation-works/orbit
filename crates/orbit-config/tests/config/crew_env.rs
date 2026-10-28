@@ -19,7 +19,7 @@ fn crew_env_is_global_only_and_refused_from_a_workspace_file_naming_the_crew() {
     let env_line = "env = [\"ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1\"]\n";
 
     crew_env_write_config(global.path(), &format!("{CREW_ENV_CREW}{env_line}"));
-    crew_env_write_config(workspace.path(), "[workflow]\nauto_ship = true\n");
+    crew_env_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
     let loaded = ResolvedConfig::load(&roots).expect("a global crew env loads");
     let entries: Vec<String> = loaded.crews["opus-credits"]
         .env
@@ -44,7 +44,7 @@ fn crew_env_is_global_only_and_refused_from_a_workspace_file_naming_the_crew() {
 
     // `orbit config set` at workspace scope refuses before touching the file.
     let workspace_path = workspace.path().join("config.toml");
-    crew_env_write_config(workspace.path(), "[workflow]\nauto_ship = true\n");
+    crew_env_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
     let before = std::fs::read(&workspace_path).expect("read workspace config");
     let mut store = ConfigStore::open_for_workspace_set(
         &workspace_path,

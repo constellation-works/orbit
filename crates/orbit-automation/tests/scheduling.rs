@@ -418,9 +418,6 @@ struct RoutineHost {
 }
 
 impl RoutineDispatch for RoutineHost {
-    fn live_workspace_drain(&self, _: &Path) -> Result<Option<String>, OrbitError> {
-        Ok(None)
-    }
     fn submit(&self, _: &Path, _: &str, _: &str, slot: &str) -> Result<String, OrbitError> {
         let mut submitted = self.submitted.borrow_mut();
         submitted.push(slot.into());

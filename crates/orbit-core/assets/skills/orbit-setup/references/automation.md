@@ -84,13 +84,13 @@ may still carry a `[routines]` section, which is ignored with a warning and can
 be deleted.
 
 <a id="the-nine-seeded-routines"></a>
-<a id="the-ten-seeded-routines"></a>
-## The eleven seeded routines
+<a id="the-eleven-seeded-routines"></a>
+## The ten seeded routines
 
-`orbit workspace init` seeds all eleven with a workspace-unique name
-(`<base>-<workspace>`) resolved at seed time. Ten are seeded disabled;
+`orbit workspace init` seeds all ten with a workspace-unique name
+(`<base>-<workspace>`) resolved at seed time. Nine are seeded disabled;
 `crew-performance-refresh` is the one exception, seeded enabled because it
-no-ops while `workflow.crew_performance` is `off`. The seven cron routines
+no-ops while `workflow.crew_performance` is `off`. The six cron routines
 resolve nothing else per machine, so two hosts seed identical bytes.
 `task-pilot`, `finding-verification`, `pilot-warning-triage` and
 `blocked-task-triage` are state-triggered and additionally resolve this host's
@@ -111,7 +111,6 @@ on this host.
 | `dependabot-alert-sweep` | daily at 03:25 host-local time | `dependabot_alert_sweep_pipeline` | Collects Dependabot, code-scanning, and secret-scanning findings and files remediation tasks. |
 | `store-gc` | daily at 04:17 | `store_gc_pipeline` | Applies `orbit gc audit` and `orbit gc runs`: prunes audit rows older than `retention.audit_days` (this workspace and workspace ids that are no longer registered) and the audit blobs nothing names, and drops the pipeline state of terminal runs older than `retention.runs_days` and the per-minute resource history and admission forecasts older than 30 days, except the newest counted rows that stay at any age. Another registered workspace keeps its own window. Review both plans before enabling it — [maintenance.md](maintenance.md#store-retention). On a large store, consider `retention.runs_days = 30` first; smaller windows are refused to preserve 30-day reliability and forecast-accuracy evidence. |
 | `task-publication` | weekly Sunday at 04:47 host-local time (`47 4 * * 0`) | `task_publication_pipeline` | Disabled by default because publishing task prose to a remote is an operator decision. Publishes only this owned workspace; unbound workspaces record `skipped: publication_unbound`. Unchanged content is a recorded no-op. Attachments default to `omit` under `publication.routine_attachments`; `include` fails closed without the explicit unscanned opt-in. Replicas report it owner-only and never fire it. Missed runs skip; overlaps are forbidden — [publication.md](publication.md#weekly-publication-routine). |
-| `ship-sweep` | every 30m | `workspace_ship_pipeline` | Ships this workspace's ready backlog through the gated pipeline, unattended. The 30-minute cadence leaves 10 minutes of slack past the job's 20-minute drain, so `overlap: forbid` does not skip the next fire. |
 
 ### Crew performance snapshot
 
@@ -273,8 +272,8 @@ without the ones after it; **the reverse is not true.**
 
 1. **`worktree-gc` first.** It is the only one that reclaims disk, and every
    implementation workflows create runs that can leave worktrees behind.
-   Deterministic evidence-filing sweeps do not create worktrees. Turning on
-   scheduled shipping without GC is how a workspace fills a disk. Watch one
+   Deterministic evidence-filing sweeps do not create worktrees. Running
+   unattended drains without GC is how a workspace fills a disk. Watch one
    cycle with `orbit gc worktrees --dry-run` before enabling. →
    [maintenance.md](maintenance.md)
 2. **`task-pilot`.** Its agent inspection is read-only; its apply step writes validated task selectors, and it makes everything downstream safer:
@@ -283,13 +282,11 @@ without the ones after it; **the reverse is not true.**
    or a material edit (debounced two minutes, at most ten) rather than on a
    clock, so an unchanged backlog costs nothing. See
    [Tuning which tasks task-pilot prepares](#tuning-which-tasks-task-pilot-prepares).
-3. **`ship-sweep` last, and only deliberately.** This is the one that commits,
-   pushes, and opens PRs without a human present. Its `enabled: true` is the
-   only switch: the routine does not read `workflow.auto_ship`, which gates only
-   the cross-workspace `orbit run ship-sweep` command. It never grants
-   `--complete`, so shipped work stops in `review`. Do not enable it in the same
-   change as anything above; let the earlier ones prove themselves against real
-   traffic first.
+
+No routine ships work. Dispatch the backlog with `orbit run auto` drains or
+`orbit run ship` once the steps above have proved themselves against real
+traffic. A workspace that still holds the retired `ship-sweep` routine loads it,
+warns, and never runs it; `orbit workspace sync` retires the seeded copy.
 
 ## Authoring a routine
 
@@ -528,5 +525,5 @@ filing, and dedupe-lookup errors must remain visible and retryable. A previous d
 to inspect, not blanket dedupe: an old failed release already fixed on the
 current integration branch stays proposed as already-landed, while a distinct
 defect that still reproduces at the current revision remains eligible. Choose
-these routines independently of `ship-sweep`; admission to backlog does not
-authorize implementation or completion.
+these routines independently of how you dispatch; admission to backlog does
+not authorize implementation or completion.

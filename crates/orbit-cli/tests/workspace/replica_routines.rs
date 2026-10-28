@@ -3,7 +3,7 @@
 //!
 //! The fixture host owns one owner checkout and one replica checkout of a
 //! workspace owned by another machine. Both carry the seeded routines. The
-//! replica's worktree GC, ship sweep and an auto-task are all enabled; only the
+//! replica's worktree GC, CI-failure sweep and an auto-task are all enabled; only the
 //! GC may fire there, and the GC run must retain a task whose prefix it cannot
 //! route. The owner checkout's
 //! scheduling is the control: its routines are evaluated exactly as before.
@@ -116,7 +116,7 @@ fn replica_store_gc_prunes_the_local_store_and_does_not_contact_the_owner() {
     }
 
     enable_routine(&replica_repo, "store_gc.yaml");
-    enable_routine(&replica_repo, "ship_sweep.yaml");
+    enable_routine(&replica_repo, "ci_failure_sweep.yaml");
     fs::write(
         replica_repo.join(".orbit/routines/store_gc_on_delivery.yaml"),
         "schemaVersion: 1\nname: store-gc-on-delivery\nenabled: true\ntrigger:\n  \
@@ -179,7 +179,7 @@ fn replica_store_gc_prunes_the_local_store_and_does_not_contact_the_owner() {
 
     let replica_gc = format!("store-gc-{REPLICA}");
     let owner_gc = format!("store-gc-{OWNER}");
-    let replica_ship = format!("ship-sweep-{REPLICA}");
+    let replica_ci_sweep = format!("ci-failure-sweep-{REPLICA}");
     let listed = run_json(&owner_repo, &home, &["routine", "list", "--json"]);
     let scheduled = names(&listed["routines"]);
     assert!(
@@ -199,7 +199,7 @@ fn replica_store_gc_prunes_the_local_store_and_does_not_contact_the_owner() {
         !owner_only_names.contains(&owner_gc),
         "owner store GC was treated as owner work: {listed}"
     );
-    for name in [&replica_ship, "store-gc-on-delivery"] {
+    for name in [&replica_ci_sweep, "store-gc-on-delivery"] {
         assert!(
             owner_only_names.iter().any(|row| row == name),
             "{name} was not kept owner-only: {listed}"
@@ -208,13 +208,13 @@ fn replica_store_gc_prunes_the_local_store_and_does_not_contact_the_owner() {
 
     let baseline = sweep(&owner_repo, &home);
     runs.retain_sweep(&baseline);
-    assert_owner_work_refused(&baseline, &replica_ship);
+    assert_owner_work_refused(&baseline, &replica_ci_sweep);
     assert_owner_work_refused(&baseline, "store-gc-on-delivery");
     make_routine_due(&home, &replica_gc);
 
     let fired = sweep(&owner_repo, &home);
     runs.retain_sweep(&fired);
-    assert_owner_work_refused(&fired, &replica_ship);
+    assert_owner_work_refused(&fired, &replica_ci_sweep);
     assert_owner_work_refused(&fired, "store-gc-on-delivery");
     let owner_row = routine_report(&fired, &owner_gc).expect("owner store GC row");
     assert_eq!(owner_row["action"], "skipped", "{owner_row}");
@@ -416,7 +416,7 @@ fn exercise_routine_settlement(assertion_failure: bool) {
     // Every replica-side candidate is switched on, so only the replica rule
     // can keep the owner work from firing.
     enable_routine(&replica_repo, "worktree_gc.yaml");
-    enable_routine(&replica_repo, "ship_sweep.yaml");
+    enable_routine(&replica_repo, "ci_failure_sweep.yaml");
     enable_auto_task(&replica_repo, "qa-sweep.yaml");
     enable_routine(&owner_repo, "worktree_gc.yaml");
     zero_worktree_gc_age_floor(&home);
@@ -425,24 +425,24 @@ fn exercise_routine_settlement(assertion_failure: bool) {
     runs.hold_owner(&owner_repo);
 
     let replica_gc = format!("worktree-gc-{REPLICA}");
-    let replica_ship = format!("ship-sweep-{REPLICA}");
+    let replica_ci_sweep = format!("ci-failure-sweep-{REPLICA}");
     let owner_gc = format!("worktree-gc-{OWNER}");
-    let owner_ship = format!("ship-sweep-{OWNER}");
+    let owner_ci_sweep = format!("ci-failure-sweep-{OWNER}");
 
     // Discovery: the replica GC is listed beside the owner's routines; the
-    // replica's ship sweep is listed as owner work with the owner named.
+    // replica's CI-failure sweep is listed as owner work with the owner named.
     let listed = run_json(&owner_repo, &home, &["routine", "list", "--json"]);
     let scheduled = names(&listed["routines"]);
-    for name in [&replica_gc, &owner_gc, &owner_ship] {
+    for name in [&replica_gc, &owner_gc, &owner_ci_sweep] {
         assert!(scheduled.contains(name), "{name} not listed: {listed}");
     }
-    assert!(!scheduled.contains(&replica_ship), "{listed}");
+    assert!(!scheduled.contains(&replica_ci_sweep), "{listed}");
     let owner_only = listed["owner_only"]
         .as_array()
         .expect("owner_only array")
         .iter()
-        .find(|row| row["name"] == replica_ship.as_str())
-        .unwrap_or_else(|| panic!("replica ship sweep not listed as owner-only: {listed}"));
+        .find(|row| row["name"] == replica_ci_sweep.as_str())
+        .unwrap_or_else(|| panic!("replica CI-failure sweep not listed as owner-only: {listed}"));
     assert_eq!(owner_only["owner_machine"], REMOTE_OWNER, "{owner_only}");
     assert!(
         owner_only["reason"]
@@ -454,7 +454,7 @@ fn exercise_routine_settlement(assertion_failure: bool) {
     // An owner-only routine never fires here, so a pause is refused rather
     // than recorded as if it changed something.
     let paused = command(&owner_repo, &home)
-        .args(["routine", "pause", &replica_ship])
+        .args(["routine", "pause", &replica_ci_sweep])
         .assert()
         .failure()
         .get_output()
@@ -471,13 +471,13 @@ fn exercise_routine_settlement(assertion_failure: bool) {
     // First observation baselines the cursors; then both GC routines are due.
     let baseline = sweep(&owner_repo, &home);
     runs.retain_sweep(&baseline);
-    assert_owner_work_refused(&baseline, &replica_ship);
+    assert_owner_work_refused(&baseline, &replica_ci_sweep);
     make_routine_due(&home, &replica_gc);
     make_routine_due(&home, &owner_gc);
 
     let fired = sweep(&owner_repo, &home);
     runs.retain_sweep(&fired);
-    assert_owner_work_refused(&fired, &replica_ship);
+    assert_owner_work_refused(&fired, &replica_ci_sweep);
     for name in [&replica_gc, &owner_gc] {
         let report = routine_report(&fired, name)
             .unwrap_or_else(|| panic!("{name} was not evaluated: {fired}"));
@@ -486,13 +486,17 @@ fn exercise_routine_settlement(assertion_failure: bool) {
             "{name} did not dispatch on its due pass: {report}"
         );
     }
-    // Owner evaluation is unchanged: its disabled ship sweep is evaluated as
+    // Owner evaluation is unchanged: its disabled CI-failure sweep is evaluated as
     // a disabled routine, not deferred to anyone.
-    let owner_ship_row = routine_report(&fired, &owner_ship).expect("owner ship sweep row");
-    assert_eq!(owner_ship_row["action"], "skipped", "{owner_ship_row}");
+    let owner_ci_sweep_row =
+        routine_report(&fired, &owner_ci_sweep).expect("owner CI-failure sweep row");
     assert_eq!(
-        owner_ship_row["reason"], "disabled_in_definition",
-        "{owner_ship_row}"
+        owner_ci_sweep_row["action"], "skipped",
+        "{owner_ci_sweep_row}"
+    );
+    assert_eq!(
+        owner_ci_sweep_row["reason"], "disabled_in_definition",
+        "{owner_ci_sweep_row}"
     );
     assert!(
         fired["auto_task_reports"]

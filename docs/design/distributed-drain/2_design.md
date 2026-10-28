@@ -7,7 +7,7 @@ status: Draft
 feature: distributed-drain
 doc_role: design
 type: design
-summary: "One owner, multiple execution hosts: idempotent claims, routed authority, manual recovery, explicit landing, retained ship sweep, owner-captured review timing, and non-pruning context footprints."
+summary: "One owner, multiple execution hosts: idempotent claims, routed authority, manual recovery, explicit landing, shared entry admission, owner-captured review timing, and non-pruning context footprints."
 tags: [distributed-drain, multi-host, pull, federated-mcp]
 paths: ["crates/orbit-core/assets/jobs/workspace_auto_pipeline.yaml", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/activities/classify_workspace_auto_tasks.yaml", "crates/orbit-runtime/src/task/locks/", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-mcp/**"]
 related_features: [distributed-drain, federated-mcp, host-registry, activity-job, policy-sandbox]
@@ -1041,7 +1041,7 @@ Landing rechecks it before merge intent and completion.
 The landing consumer is the durable owner job `task_landing_pipeline`, one attempt per handoff
 at a time, keyed by handoff identity. Recording completion authority (accepting a
 completion-authorized handoff, or approving a review-only one) dispatches it from the outbox in the
-same call; no drain, ship sweep, routine or schedule is involved. A merged handoff refuses
+same call; no drain, routine or schedule is involved. A merged handoff refuses
 re-dispatch, a live owner job is left alone, and a pending request whose job never started or died
 is taken by the next explicit dispatch pass. Landing a named handoff is also an explicit owner
 operation (retry or reconcile).
@@ -1310,10 +1310,10 @@ Dashboard execution labels prefer the name; their tooltip includes the name and 
 Until federated run inspection ([3_vision.md](./3_vision.md#1-open-questions)) exists, these
 fields only say where to inspect a run manually.
 
-## 7. Retirements and retained ship sweep
+## 7. Retirements and entry admission
 
-Epic execution and failed-run triage are retired; ship sweep is retained behind the shared
-admission boundary.
+Epic execution, failed-run triage and the ship sweep are retired; the remaining entry points
+share one admission boundary.
 
 ### 7.1 Epic machinery
 
@@ -1388,24 +1388,24 @@ hourly `blocked-task-triage` auto-task ([ORB-17245]) with an event trigger on th
 
 ### 7.3 Ship sweep
 
-Retained ([Ship sweep remains an admission entry
-point](./4_decisions.md#ship-sweep-remains-an-admission-entry-point)): the seeded `ship_sweep`
-routine, `workspace_ship_pipeline`, and the registry-driven `orbit run ship-sweep` CLI with its
-`workflow.auto_ship` opt-in and external scheduler support. Existing enablement and schedules are
-preserved; nothing is enabled or scheduled by this design. Scheduled invocation confers no
-completion authority, and landing never depends on a sweep.
+Retired. The design first kept it as an admission entry point ([Ship sweep remains an
+admission entry point](./4_decisions.md#ship-sweep-remains-an-admission-entry-point)); the
+seeded `ship_sweep` routine, `workspace_ship_pipeline`, the registry-driven `orbit run
+ship-sweep` CLI and its `workflow.auto_ship` opt-in have since been removed. Owner dispatch is an
+`orbit run auto` drain or an explicit `orbit run ship`; follower dispatch is a pull drain. A
+workspace that still holds the routine loads it as retired and never fires it, and a config that
+still sets `workflow.auto_ship` loads with a deprecation warning. Landing never depended on a
+sweep.
 
-[ORB-12500] put every retained entry point behind one decision,
-`OrbitRuntime::drain_entry_admission`, taken before dispatch: `orbit run ship` (and the MCP and
-dashboard surfaces behind `submit_ship_run`), `orbit run auto`, and `orbit run ship-sweep`. The
-seeded routine and `workspace_ship_pipeline` reach it through the drain beneath them. It reads and
-reports:
+[ORB-12500] put every entry point behind one decision, `OrbitRuntime::drain_entry_admission`,
+taken before dispatch: `orbit run ship` (and the MCP and dashboard surfaces behind
+`submit_ship_run`) and `orbit run auto`. Every caller is an explicit operator command, so no
+reading stands a caller down; it reads and reports:
 
-- **Destination authority.** A replica serves no owner coordination from any entry point; the
-  unattended sweep reports this before reading a backlog. Followers execute through pull.
-- **One capacity reading.** `JobRunStoreBackend::drain_leaf_occupancy`, as in §3. Saturation
-  stands the *unattended* sweep down, not an operator's explicit invocation, which its own leaf
-  definition bounds.
+- **Destination authority.** A replica serves no owner coordination from any entry point.
+  Followers execute through pull.
+- **One capacity reading.** `JobRunStoreBackend::drain_leaf_occupancy`, as in §3. It is reported,
+  not enforced here: an operator's explicit invocation is bounded by its own leaf definition.
 - **The claim ledger.** A claimed task is never admitted again: `submit_ship_run` and explicit
   overrides in `list_backlog_tasks` consult the ledger. Automatic discovery need not, since a
   claimed task is `in-progress` or `review` (a status lock holder) and the journal refuses ordinary
@@ -1451,12 +1451,11 @@ reboot.
   `host_shutdown_scheduled`, so `orbit run show` says `Requests held:` instead of an unexplained
   `queued=0`. A later schedule does not set that refusal. Settlement still runs either way. Host
   pressure keeps its own field and does not also set this refusal.
-- **Entry admission.** While holding, `drain_entry_admission` refuses an unattended caller
-  (`orbit run ship-sweep`) with `host_shutdown_scheduled`. Explicit operator commands (`orbit run
-  ship`, `orbit run auto`) are admitted with a warning and `host_shutdown` on the decision. That
-  is the documented override: an operator who ships one task during the window chooses to risk it.
-  Beyond the horizon both explicit and unattended commands proceed, and the decision still carries
-  the raw `host_shutdown`. An explicit drain started during a hold still holds its own waves.
+- **Entry admission.** While holding, `drain_entry_admission` admits the explicit operator
+  commands (`orbit run ship`, `orbit run auto`) with a warning and `host_shutdown` on the
+  decision. That is the documented override: an operator who ships one task during the window
+  chooses to risk it. Beyond the horizon the decision still carries the raw `host_shutdown`. An
+  explicit drain started during a hold still holds its own waves.
 - **Surfaces.** `orbit run readiness` names the schedule either way. Inside the horizon every
   waiting backlog task has reason `host_shutdown_scheduled` and the text says admissions are held.
   Beyond it, admissions continue and the text names `machine.host_shutdown_hold_minutes`.
@@ -1497,8 +1496,8 @@ Acceptance criteria, not reported as passing.
 | In-progress `no-diff-expected` task overlaps a backlog task | Backlog task stays eligible; no `context_lock_conflict` names the tagged task; ordinary overlaps still conflict ([ORB-14247]) |
 | Critical or high-priority task waits on several locks that free one at a time | It reserves its surface: lower-ranked backlog work overlapping it waits as `surface_reserved` naming it, non-overlapping work admits, and it takes the wave once its locks free. At most two reserve per pass; nothing persists between passes ([ORB-14310]) |
 | Backlog task with no `context_files` in a multi-slot local drain or discovery ship | Waits for this host's task pilot (`awaiting_footprint`), else runs only with no other leaf in flight (`awaiting_exclusive_slot`) and holds the tree while it runs; single-slot runs, explicit ship and owner pull admission keep admitting it on the next pass ([ORB-15191]) |
-| Authorized handoff with no drain or ship sweep running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
-| Retained routine, wrapper, CLI ship-sweep, explicit owner drains | All take common admission; enablement retained; none grants merge rights or bypasses slot accounting |
+| Authorized handoff with no drain running | One pending landing-start request survives restart and is dispatched once; review-only work has none |
+| Explicit ship, owner drains, leftover `ship_sweep` routine | Ship and drains take common admission and none grants merge rights or bypasses slot accounting; a leftover routine loads as retired and never fires |
 | Epic retirement with active old runs, including roots in review | Operator reconciles execution and reservations before migration following the runbook checklist |
 | Missing file selector, then reservation expiry | Full declared footprint stays protected |
 | Truly empty legacy task/epic context | Diagnostic with repair; no guessed or inherited surface |
@@ -1510,7 +1509,7 @@ Acceptance criteria, not reported as passing.
 | Approve twice, or revoke before merge | Operator required; one immutable authorization/start request under concurrent retries; revoked or stale candidate cannot publish merge intent |
 | Missing, failed, replaced or wrong-candidate validation artifact | Acceptance, approval and merge-intent publication rejected with no partial effects |
 | Idle polling and receipt compaction | One idle request per pass; tombstones cannot re-admit; unsettled receipts kept; growth metrics visible |
-| Host shutdown or reboot scheduled | Inside `machine.host_shutdown_hold_minutes` (default 180, the instant included): sweep fires and mints nothing, drain waves and the ship sweep admit nothing, a pull drain records `admission_refusal` `host_shutdown_scheduled`, and readiness and doctor name mode and time. Beyond the horizon those admissions proceed and readiness still names the schedule. In-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
+| Host shutdown or reboot scheduled | Inside `machine.host_shutdown_hold_minutes` (default 180, the instant included): sweep fires and mints nothing, drain waves admit nothing, a pull drain records `admission_refusal` `host_shutdown_scheduled`, and readiness and doctor name mode and time. Beyond the horizon those admissions proceed and readiness still names the schedule. In-flight runs untouched; no schedule, or a non-systemd host, admits unchanged |
 | Mixed legacy and claimed admission under one ceiling | One occupancy reading; wrapper → gate → queued claimed leaf is one slot; terminal leaf holds its slot until settlement; `max_active_runs` per definition |
 
 ## 9. Concerns & Honest Limitations

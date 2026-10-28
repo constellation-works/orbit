@@ -152,9 +152,9 @@ the `claude` CLI.
 
 ## 2. Turn on routines
 
-`orbit workspace init` seeds eleven routines into `.orbit/routines/`: task
-pilot, finding verification, pilot-warning triage, blocked-task triage, ship
-sweep, worktree GC, store GC (daily audit and run-state retention), the
+`orbit workspace init` seeds ten routines into `.orbit/routines/`: task
+pilot, finding verification, pilot-warning triage, blocked-task triage,
+worktree GC, store GC (daily audit and run-state retention), the
 CI-failure and dependency-alert sweeps, crew-performance refresh, and
 [task publication](../task-publication/#scheduled-publication) (weekly Sunday
 at 04:47 host-local time, disabled until you opt into publishing task prose;
@@ -180,16 +180,16 @@ orbit routine show <name>
 
 ```yaml
 schemaVersion: 1
-name: ship_sweep_myrepo
-description: Ship this workspace's ready backlog
-  through the gated pipeline.
+name: ci_failure_sweep_myrepo
+description: File failing CI runs as proposed
+  repair tasks.
 enabled: true
 trigger:
-  cron: "*/30 * * * *"  # 5-field cron, host-local time
+  cron: "5 * * * *"     # 5-field cron, host-local time
   missed_run: skip      # or catch_up_once
-target: job:workspace_ship_pipeline
+target: job:ci_failure_sweep_pipeline
 policy:
-  timeout_minutes: 120
+  timeout_minutes: 30
   overlap: forbid       # or allow
   retries:
     max: 0
@@ -465,15 +465,15 @@ Approve anything filed as `proposed`, then let a
 
 ## Ship unattended
 
-To ship on a schedule, turn on the seeded ship-sweep routine. As seeded, it
-runs every 30 minutes and ships this workspace's ready backlog through the
-gated pipeline. It never grants `--complete`, so shipped work waits in
-`review` for you. Turn on worktree GC first.
+No routine ships work. To ship while you are away, start an `orbit run auto`
+drain for a window, or run `orbit run ship` yourself. A drain without
+`--complete` leaves shipped work in `review` for you. Turn on worktree GC
+first.
 
-`orbit run ship-sweep` is the cross-workspace command for an external
-scheduler. It ships only in workspaces with `workflow.auto_ship = true`, and
-it never grants `--complete` either. That setting does not affect the
-routine.
+The `ship-sweep` routine, `orbit run ship-sweep`, and the
+`workflow.auto_ship` setting were removed. A workspace that still holds the
+routine warns and never runs it, and a config that still sets the key loads
+with a deprecation warning.
 
 ## If nothing fires
 

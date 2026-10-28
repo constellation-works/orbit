@@ -435,11 +435,7 @@ pub(super) fn dispatch_update(command: Commands, context: DispatchContext<'_>) -
 }
 
 pub(super) fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> CommandOut {
-    use super::super::run::{RunCommand, RunSubcommand};
     match command {
-        Commands::Run(RunCommand {
-            command: RunSubcommand::ShipSweep(args),
-        }) => args.execute_without_runtime(context.root_override),
         Commands::Run(command) => command.execute(context.runtime()?),
         _ => dispatch_mismatch("Run"),
     }

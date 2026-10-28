@@ -270,7 +270,6 @@ pub(crate) fn build_context_from_roots(
         conventions: runtime_config.pr.conventions.clone(),
     };
     let workflow_base_branch = runtime_config.workflow_base_branch.clone();
-    let workflow_auto_ship = runtime_config.workflow_auto_ship;
     let workflow_required_validation_commands = runtime_config
         .snapshot
         .workflow_required_validation_commands
@@ -342,7 +341,6 @@ pub(crate) fn build_context_from_roots(
             pr_config,
             runtime_config.pr.clone(),
             workflow_base_branch,
-            workflow_auto_ship,
             runtime_config.resource_throttle.clone(),
             runtime_config.auto_concurrency.clone(),
             workflow_required_validation_commands,

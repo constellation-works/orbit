@@ -16,8 +16,8 @@ related_artifacts: [ORB-12488]
 
 # Distributed Drain — Vision
 
-V1 distributes execution while retaining one coordination authority. Explicit drains and retained
-ship-sweep entry points share claim admission, while authorized landing follows durable handoff
+V1 distributes execution while retaining one coordination authority. Explicit drains and ship
+entry points share claim admission, while authorized landing follows durable handoff
 requests. Its required scope includes idempotent admission, attempt ownership, manual recovery,
 routed task reads/writes, and durable landing handoff. The questions below extend that contract;
 they are not prerequisites hidden as future work.

@@ -126,7 +126,7 @@ routines = ["office-daily-digest"]
 auto_tasks = []
 
 [config]
-"workflow.auto_ship" = false
+"pr.draft" = true
 ```
 
 `orbit workspace init --preset <file>` applies it to a new or an existing workspace:

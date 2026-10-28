@@ -1695,7 +1695,7 @@ fn a_throttled_pull_drain_keeps_settling_and_pulls_again_below_resume() {
 
 /// [ORB-15637] A pull claim runs on the follower, so only the follower's own
 /// host pressure gates it. With the owner held on CPU, the owner's own
-/// unattended discovery stands down, yet a calm follower still claims. With
+/// discovery stands down, yet a calm follower still claims. With
 /// the follower held on CPU and the owner calm, the follower requests nothing
 /// and reports its own throttle, not an admission refusal.
 fn a_pull_claim_is_gated_by_the_follower_host_never_the_owner() {
@@ -1718,15 +1718,15 @@ fn a_pull_claim_is_gated_by_the_follower_host_never_the_owner() {
         .throttle
         .expect("the owner is throttled on CPU");
     assert_eq!(owner_hold.resources[0].resource, "cpu", "{owner_hold:?}");
-    let sweep = pair
+    let discovery = pair
         .wire
         .owner
-        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+        .drain_entry_admission(DrainEntryPoint::ExplicitShip, &[])
         .unwrap();
     assert_eq!(
-        sweep.refusal.map(|refusal| refusal.code()),
+        discovery.refusal.map(|refusal| refusal.code()),
         Some(RESOURCE_THROTTLED),
-        "the owner's own unattended discovery stands down"
+        "the owner's own discovery stands down"
     );
 
     // The fixture cannot launch the claimed leaf, so the pass ends at that

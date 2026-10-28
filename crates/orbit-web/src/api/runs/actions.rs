@@ -710,7 +710,7 @@ fn drain_start_options(
     });
     let local_refusal = match owner {
         Some(_) => runtime
-            .drain_entry_admission(DrainEntryPoint::OwnerDrain, &[], false)?
+            .drain_entry_admission(DrainEntryPoint::OwnerDrain, &[])?
             .into_result()
             .err()
             .map(|error| error.to_string()),

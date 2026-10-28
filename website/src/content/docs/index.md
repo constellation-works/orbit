@@ -201,7 +201,7 @@ next: false
     <p class="orbit-section-lede"><code>orbit run ship</code> and <code>orbit run auto</code> submit work, print a durable run ID, and return; the run carries on without you. Authorize completion per run with <code>--complete</code>, or configure the owner to finish <a href="/how-to/distributed-drain/">distributed handoffs</a> with <code>workflow.distributed_completion = "done"</code>.</p>
   </div>
 
-  <div class="orbit-card-grid orbit-card-grid-4 orbit-mode-grid">
+  <div class="orbit-card-grid orbit-card-grid-3 orbit-mode-grid">
     <a class="orbit-card orbit-mode" href="/getting-started/workflows/">
       <div class="orbit-mode-head"><h3>One task, one PR</h3><span class="orbit-mode-badge">default</span></div>
       <div class="orbit-card-cmd">orbit run ship "$TASK_ID"</div>
@@ -224,14 +224,6 @@ next: false
       <dl>
         <div><dt>Stops at</dt><dd>the end of the window; work already shipping still finishes</dd></div>
         <div><dt>With <code>--complete</code></dt><dd>covers every task the drain admits during the window</dd></div>
-      </dl>
-    </a>
-    <a class="orbit-card orbit-mode" href="/how-to/recurring-work/">
-      <div class="orbit-mode-head"><h3>Scheduled sweep</h3><span class="orbit-mode-badge is-muted">scheduler</span></div>
-      <div class="orbit-card-cmd">orbit run ship-sweep <span class="orbit-command-token">--dry-run</span></div>
-      <dl>
-        <div><dt>Stops at</dt><dd><em>review</em>, in each workspace with <code>auto_ship</code> on</dd></div>
-        <div><dt>With <code>--complete</code></dt><dd>never; a sweep cannot be granted completion</dd></div>
       </dl>
     </a>
   </div>

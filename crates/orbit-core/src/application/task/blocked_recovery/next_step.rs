@@ -1,6 +1,6 @@
 //! The next step for a task a failed run left `blocked`.
 //!
-//! `blocked` is a dead end for automation: the ship sweep and the auto drain
+//! `blocked` is a dead end for automation: the auto drain and `orbit run ship`
 //! skip it until an operator acts. The history note names the failed run but
 //! not what to do about it, so the task readout states the command.
 

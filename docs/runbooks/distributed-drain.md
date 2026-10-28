@@ -89,9 +89,8 @@ layout-version change is involved.
   reviewer ran.
 - **Managed agents never become operators.** A client inside a managed run, or
   with an agent envelope, does not propagate `--operator` or `ORBIT_OPERATOR`.
-- **Seeded schedules stay as they are.** This procedure does not enable
-  `ship_sweep`, `workspace_ship_pipeline`, or the independent
-  `orbit run ship-sweep` CLI.
+- **Seeded schedules stay as they are.** This procedure enables no routine,
+  and no routine ships work.
 
 Placeholders:
 
@@ -533,8 +532,8 @@ see [build-budget.md](./build-budget.md).
 On the host that will remain owner, keep its checkout as `owner`. On every
 other host that currently owns a copy of the same logical workspace:
 
-1. Stop owner-side admission: cancel or wait out `orbit run auto` /
-   `orbit run ship-sweep` windows on that host. Stopping a drain stops new
+1. Stop owner-side admission: cancel or wait out `orbit run auto`
+   windows on that host. Stopping a drain stops new
    admissions; it does not cancel live children.
 2. Reconcile in-flight runs, pull requests, and reservations (migration
    section below) **before** changing the role.
@@ -1514,7 +1513,7 @@ Deliberate recovery is operator-driven:
    become authoritative.
 
 Owner-local landing of an already-authorized handoff does not need a drain or
-ship-sweep. Followers never merge. Review-only work stays in `review` until
+routine. Followers never merge. Review-only work stays in `review` until
 explicit completion authority is recorded.
 
 ### Dead leaves and their pull requests
@@ -2157,25 +2156,20 @@ Failed-run triage is also retired. A failed claimed or family run parks the
 task in `blocked` with `job_run_machine`. Re-backlog is a deliberate
 `orbit task update --status backlog`, made by whoever inspected the evidence.
 
-## Retained ship-sweep (do not enable as part of setup)
+## Retired ship-sweep
 
-Keep the seeded `ship_sweep` routine, `workspace_ship_pipeline`, and
-`orbit run ship-sweep`. Existing `enabled` flags, cadences, and
-`workflow.auto_ship` stay as the operator left them.
+The `ship_sweep` routine, its `workspace_ship_pipeline` job, `orbit run
+ship-sweep`, and `workflow.auto_ship` were removed. Owner-side dispatch is an
+`orbit run auto` drain or an explicit `orbit run ship`; follower dispatch is a
+pull drain. A workspace that still holds a `ship_sweep` routine loads it,
+reports it retired, and never fires it; `orbit workspace sync` retires the
+seeded copy. A config that still sets `workflow.auto_ship` loads with a
+deprecation warning. Do not enable a dark routine to "turn on" distributed
+drain.
 
 ```bash
-orbit routine list
-orbit run ship-sweep --dry-run
+orbit routine list   # a leftover ship_sweep routine shows as retired
 ```
-
-The CLI sweep reads the registry selected by `--root <dir>`, then `ORBIT_ROOT`,
-then `~/.orbit`. Use `orbit --root <dir> run ship-sweep --dry-run --json` to
-inspect an alternate registry before allowing dispatch. It does not create a
-workspace in the directory from which the scheduler invokes it.
-
-A replica sweep reports destination-authority refusal before it reads a
-backlog. Scheduled invocation still confers no completion authority. Do not
-enable a dark routine to "turn on" distributed drain.
 
 ## Replica worktree GC
 
@@ -2292,7 +2286,6 @@ further ahead is still reported, and routines, auto-tasks, and drain waves
 admit as usual, so the host is not idle for the whole lead time. Inside the
 horizon, routines and auto-tasks do not fire, drain waves admit no leaves, a
 pull drain requests no claim and records `admission_refusal` beginning
-`host_shutdown_scheduled`, and `orbit run ship-sweep` skips with
 `host_shutdown_scheduled`. Runs already in flight are not cancelled or
 signalled.
 
@@ -2323,13 +2316,13 @@ filesystem stays at or above its high mark for ten seconds (`[workflow.resource_
 starts no new task work until that resource falls back below its resume mark.
 Local drain waves admit no leaves and poll for recovery, pull drains request
 no new claims but keep settling and reconciling, and `orbit run ship` without
-task ids (and `orbit run ship-sweep`) is refused with `resource_throttled`.
+task ids is refused with `resource_throttled`.
 Running work is never cancelled, paused or killed.
 
 **Whose resources gate a pull claim.** A claimed leaf runs on the follower,
 so the follower's own readings decide whether its pull drain requests a
 claim. The owner's throttle holds only the owner's own drain waves and
-discovery (`orbit run ship` without task ids, `ship-sweep`). The owner never
+discovery (`orbit run ship` without task ids). The owner never
 reads its throttle when it serves `orbit.task.pull` or the probe, so a busy
 owner does not idle its followers. The owner's `orbit run readiness`
 "Admissions throttled" line and its backlog's `resource_throttled` waits
@@ -2358,7 +2351,7 @@ on hosts that report it.
 
 - Sampling monitors share recent pressure history in
   `<global-root>/cache/host-resource-pressure.json`, independently of drain
-  records and workspace. A fresh `orbit run ship` or `ship-sweep` evaluates
+  records and workspace. A fresh `orbit run ship` evaluates
   its sample against that history using its configured thresholds. Unknown
   readings, observation gaps over fifteen seconds and changed thresholds
   reset the affected resource's history; a first high sample alone does not

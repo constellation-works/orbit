@@ -114,12 +114,22 @@ pub(crate) fn shipped_shape_of(file_stem: &str, existing: &str) -> Option<Shippe
                     .is_some_and(|rendered| template_owned_shape(&rendered) == shape)
             })
     };
+    // An earlier shape of a default since retired is retired with it, so sync
+    // and doctor treat a copy seeded before the last template change the same
+    // as one seeded from the last template.
+    let retired_stem = RETIRED_ROUTINE_FILES
+        .iter()
+        .any(|(stem, _)| *stem == file_stem);
     if matches(DEFAULT_ROUTINE_FILES) {
         Some(ShippedShape::Current)
-    } else if matches(SUPERSEDED_ROUTINE_TEMPLATES) {
-        Some(ShippedShape::Superseded)
     } else if matches(RETIRED_ROUTINE_FILES) {
         Some(ShippedShape::Retired)
+    } else if matches(SUPERSEDED_ROUTINE_TEMPLATES) {
+        Some(if retired_stem {
+            ShippedShape::Retired
+        } else {
+            ShippedShape::Superseded
+        })
     } else {
         None
     }

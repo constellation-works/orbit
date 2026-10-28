@@ -1554,15 +1554,16 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         matches!(refused, OrbitError::PolicyDenied(ref reason) if reason.starts_with("resource_throttled:")),
         "fresh discovery must refuse before looking up/submitting its pipeline: {refused}"
     );
-    // Sweep opens its own runtime too, and shares history across workspace roots.
+    // Another workspace on the host shares the throttle history, so its
+    // discovery stands down too.
     let other_workspace = root.path().join("other/.orbit");
     std::fs::create_dir_all(&other_workspace).unwrap();
-    let sweep = open(&other_workspace);
-    let decision = sweep
-        .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+    let other = open(&other_workspace);
+    let decision = other
+        .drain_entry_admission(DrainEntryPoint::ExplicitShip, &[])
         .unwrap();
     assert_eq!(decision.refusal.unwrap().code(), "resource_throttled");
-    for runtime in [&runtime, &sweep] {
+    for runtime in [&runtime, &other] {
         let jobs = orbit_store::compose::workspace_job_run_store(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
@@ -1582,7 +1583,6 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         .drain_entry_admission(
             DrainEntryPoint::ExplicitShip,
             std::slice::from_ref(&queued.id),
-            false,
         )
         .unwrap();
     assert!(explicit.refusal.is_none());
@@ -1628,7 +1628,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
     );
     assert!(
         runtime
-            .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+            .drain_entry_admission(DrainEntryPoint::ExplicitShip, &[])
             .unwrap()
             .refusal
             .is_none()
@@ -1808,7 +1808,6 @@ fn sustained_host_pressure(kind: HostPressure) {
             .drain_entry_admission(
                 DrainEntryPoint::ExplicitShip,
                 std::slice::from_ref(&queued.id),
-                false,
             )
             .unwrap();
         assert!(explicit.refusal.is_none(), "{:?}", explicit.refusal);
@@ -2355,9 +2354,9 @@ pub(super) fn admitted_frozen_batch(
     assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
 }
 
-/// A shutdown inside the configured horizon holds a local wave, readiness, and
-/// an unattended entry. One minute past that horizon admits, while readiness
-/// and the entry decision still name the schedule.
+/// A shutdown inside the configured horizon holds a local wave and readiness.
+/// One minute past that horizon admits, while readiness and the entry decision
+/// still name the schedule.
 fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_admits() {
     let (_root, runtime, _probe) = configured_runtime(
         "[machine]\nhost_shutdown_hold_minutes = 30\n",
@@ -2409,20 +2408,20 @@ fn a_shutdown_inside_the_hold_horizon_holds_local_admission_and_one_beyond_it_ad
             "{case}: {ready}"
         );
         let entry = readiness_task(&ready, &queued.id);
+        // An explicit entry is reported the schedule and proceeds past it.
         let decision = runtime
-            .drain_entry_admission(DrainEntryPoint::ShipSweep, &[], true)
+            .drain_entry_admission(DrainEntryPoint::ExplicitShip, &[])
             .unwrap();
         assert!(decision.host_shutdown.is_some(), "{case}: {decision:?}");
+        assert!(decision.refusal.is_none(), "{case}: {decision:?}");
         if holding {
             assert_eq!(
                 entry["reason"], "host_shutdown_scheduled",
                 "{case}: {entry}"
             );
-            assert_eq!(decision.refusal.unwrap().code(), "host_shutdown_scheduled");
         } else {
             assert_ne!(entry["reason"], "host_shutdown_scheduled", "{entry}");
             assert_eq!(entry["reason"], "ready", "{entry}");
-            assert!(decision.refusal.is_none(), "{decision:?}");
         }
     }
 }

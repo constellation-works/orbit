@@ -115,7 +115,7 @@ every entry point uses the same claim admission. No schedule is enabled by this 
 | Failure and concurrency acceptance coverage | [2_design.md §8](./2_design.md#8-required-validation-scenarios) | [ORB-12617] | partial |
 | Execution provenance on runs, tasks, artifacts | [2_design.md §6](./2_design.md#6-execution-provenance) | [ORB-13649] | done |
 | Retire epic machinery; `epic` becomes a tag | [2_design.md §7.1](./2_design.md#71-epic-machinery) | [ORB-12491] | done |
-| Retain ship sweep and adapt all entry points to claim admission | [2_design.md §7.3](./2_design.md#73-ship-sweep) | [ORB-12500] | done |
+| Adapt all entry points to claim admission (ship sweep since retired) | [2_design.md §7.3](./2_design.md#73-ship-sweep) | [ORB-12500] | done |
 | Retire failed-run triage | [2_design.md §7.2](./2_design.md#72-failed-run-triage) | [ORB-12492] | done |
 | Read-only identity/capability/version probe and receipt reconciliation | `orbit.drain.probe`, `orbit.drain.receipt.lookup`; [2_design.md §4](./2_design.md#4-follower-preconditions) | [ORB-12495] | done |
 | Followers pull; the owner never places | [4_decisions.md](./4_decisions.md#followers-pull-the-owner-never-places) | [ORB-12488] | recorded |
