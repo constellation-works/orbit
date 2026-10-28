@@ -89,6 +89,7 @@ pub use repository::task::{TaskCommitBoundary, admission_refusal};
 pub mod test_support {
     pub use crate::repository::task::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
     pub use crate::repository::task::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
+    pub use crate::repository::task::coordination::task_write_hold_hook::with_task_commit_write_hold;
 }
 
 pub(crate) fn parse_timestamp(raw: &str) -> rusqlite::Result<DateTime<Utc>> {

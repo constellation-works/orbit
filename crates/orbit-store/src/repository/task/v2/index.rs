@@ -580,6 +580,8 @@ impl TaskV2Store {
         // inside it, so a caller that acquired them the other way round could
         // deadlock against it (ORB-12528).
         self.in_boundary(|| {
+            #[cfg(feature = "test-support")]
+            crate::repository::task::coordination::task_write_hold_hook::after_boundary_acquired();
             if let Some(boundary) = &self.coordination {
                 boundary.refuse_unscoped_claim_write(id)?;
             }
