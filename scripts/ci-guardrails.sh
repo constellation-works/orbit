@@ -538,6 +538,7 @@ fi
   run_guard "$repo_root/scripts/test-check-dependency-direction.py"
   run_guard "$repo_root/scripts/test-release-workflow.py"
   run_guard "$repo_root/scripts/test-release-promotion.py"
+  run_guard "$repo_root/scripts/test-release-breaking-changes.py"
   run_guard "$repo_root/scripts/test-pr-state-workflows.py"
   run_guard "$repo_root/scripts/test-website-workflow.py"
   run_guard "$repo_root/scripts/test-windows-portability.py"
