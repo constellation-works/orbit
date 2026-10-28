@@ -30,7 +30,8 @@ pub const CPU_ACCOUNTING_MACOS_OWN_ONLY: &str = "macos-mach-ns-v1";
 pub struct RunResourceMinute {
     pub workspace_id: String,
     pub run_id: String,
-    /// Minutes since the worker started sampling.
+    /// Minutes since the worker started sampling. The first sample is index
+    /// zero; retention leaves it until the run's other samples are removed.
     pub minute_index: u32,
     /// When that minute began.
     pub minute_started_at: DateTime<Utc>,

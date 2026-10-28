@@ -214,12 +214,15 @@ impl ResourceUsageStoreBackend for Store {
 
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
         let conn = self.read()?;
+        // The partial v69 index has one marker per sampled run; retention keeps
+        // it until the run's other minute rows have been removed.
         let (newest, finished) = conn
             .query_row(
                 r#"
                 SELECT MAX(j.finished_at), COUNT(j.finished_at)
-                FROM (SELECT DISTINCT workspace_id, run_id FROM run_resource_minutes) r
+                FROM run_resource_minutes r
                 JOIN job_runs j ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
+                WHERE r.minute_index = 0
                 "#,
                 [],
                 |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
@@ -367,7 +370,7 @@ impl ResourceUsageStoreBackend for Store {
                  (cpu_accounting IS NOT NULL AND cpu_accounting NOT IN ('{}', '{}', '{}')) OR \
                  NOT EXISTS (SELECT 1 FROM job_runs j WHERE j.workspace_id = r.workspace_id \
                      AND j.run_id = r.run_id AND j.job_id IS NOT NULL AND j.finished_at IS NOT NULL) \
-                 THEN 1 ELSE 0 END",
+                 THEN 1 ELSE 0 END, CASE WHEN minute_index = 0 THEN 1 ELSE 0 END",
                 if cfg!(target_os = "linux") { 0 } else { 1 },
                 CPU_ACCOUNTING_LINUX,
                 CPU_ACCOUNTING_MACOS,

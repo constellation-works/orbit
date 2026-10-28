@@ -1,7 +1,7 @@
 ---
 type: context
 summary: "Layered crate graph, dependency rules, per-crate roles, store internals and scoping"
-last_validated: 2026-10-26
+last_validated: 2026-10-28
 ---
 
 # Architecture
@@ -20,6 +20,12 @@ Foundation    orbit-common · orbit-types
 ```
 
 Domain crates own their data and transport. Application layers compose them. Kernel crates expose reusable mechanisms and never depend back on a feature.
+
+The store's run-resource minute history uses a partial index on minute zero
+for profile-cache freshness. Each sampler starts a run at minute zero, and
+retention prunes a run's other samples before removing that marker.
+The migration is read-compatible: older binaries can read the database but
+stay read-only because their retention order may remove the marker too soon.
 
 ## Crates
 
