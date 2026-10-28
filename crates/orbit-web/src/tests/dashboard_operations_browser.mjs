@@ -353,7 +353,8 @@ try {
   // app.js does, and the harness holds, refuses or loses the window's POST.
   // ORB-17503: the Tasks dock keeps the simple Start card in its first view and
   // offers no Start a window view; a browser that last chose that view on
-  // Drain opens the first view. The composer stays on #drain/start.
+  // Drain opens the first view. The composer stays on #drain/start. Its tabs
+  // are Drain, Locks held and Log.
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(async () => (await import('/js/log-tail.js')).setDockMode('start'));
   await page.click('.tab[data-tab="tasks"]');
@@ -370,7 +371,7 @@ try {
       .filter(id => !document.getElementById('auto-drain-quick-start-body').contains(document.getElementById(id))),
     feedback: document.getElementById('auto-drain-quick-start').nextElementSibling?.id,
   }));
-  if (tasksDock.mode !== 'drain' || tasksDock.tabs !== 'drain log' || tasksDock.composer !== 0 || tasksDock.column !== 'dock-pane-drain'
+  if (tasksDock.mode !== 'drain' || tasksDock.tabs !== 'drain locks log' || tasksDock.composer !== 0 || tasksDock.column !== 'dock-pane-drain'
     || tasksDock.durations !== 6 || tasksDock.fields.length || tasksDock.feedback !== 'auto-drain-operation-feedback') {
     throw new Error(`The Tasks dock must keep the simple Start card and no Start a window view: ${JSON.stringify(tasksDock)}`);
   }
