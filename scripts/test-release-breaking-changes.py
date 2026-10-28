@@ -327,6 +327,43 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["next_version"], "0.35.1")
         self.assertEqual(report["changelog_breaking"], [])
 
+    def test_required_children_of_new_optional_mcp_object_decide_patch(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["options"] = {
+            "type": "object",
+            "properties": {"mode": {"type": "string"}},
+            "required": ["mode"],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add optional task options [ORB-49] (#1)")
+
+        report = self.report()
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
+    def test_required_field_added_to_existing_mcp_object_decides_minor(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["options"] = {
+            "type": "object",
+            "properties": {"mode": {"type": "string"}},
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Add optional task options [ORB-50] (#1)")
+
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"]["properties"]["options"]["required"] = ["mode"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Require option mode [ORB-51] (#2)")
+
+        report = self.report()
+        self.assertEqual(self.signals(report), {
+            ("ORB-51", "mcp-schema",
+             "`orbit_task_show` property `inputSchema.options.mode` newly required"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
     def test_tag_forces_minor_and_breaking_notes_draft_bullets(self):
         self.repo.write("docs/ship.md", "ship\n")
         self.repo.commit("feat: Retire ship-sweep [ORB-30] (#1)")
