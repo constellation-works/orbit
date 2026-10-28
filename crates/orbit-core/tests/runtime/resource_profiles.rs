@@ -940,12 +940,15 @@ crate::scenario_table!(
     a_class_with_no_profile_borrows_the_heaviest_on_the_host,
     profiles_stay_cached_until_a_delivery_finishes,
     no_diff_profiles_flag_build_like_deliveries_except_templates_that_build_by_design,
-    profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes
+    profiles_exclude_untrusted_cpu_without_rewriting_raw_minutes,
+    profiles_keep_their_newest_deliveries_after_a_month_without_any,
+    gc_preserves_profiles_behind_ineligible_deliveries,
+    gc_preserves_the_current_regime_window,
+    a_regime_change_drops_earlier_deliveries_once_the_new_regime_has_enough
 );
 
 /// A month off must not blank admission: the newest deliveries of each key
 /// still make its profile when every one of them is older than 30 days.
-#[test]
 fn profiles_keep_their_newest_deliveries_after_a_month_without_any() {
     let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
     let workspace = fixture.workspace.clone();
@@ -983,7 +986,6 @@ fn profiles_keep_their_newest_deliveries_after_a_month_without_any() {
 }
 
 /// GC must retain the usable window even when newer deliveries cannot train it.
-#[test]
 fn gc_preserves_profiles_behind_ineligible_deliveries() {
     let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
     let workspace = fixture.workspace.clone();
@@ -1058,7 +1060,6 @@ fn gc_preserves_profiles_behind_ineligible_deliveries() {
 }
 
 /// Retention must keep the newest profile regime's window across intervening regimes.
-#[test]
 fn gc_preserves_the_current_regime_window() {
     let fixture = Fixture::new("min_profile_deliveries = 3\nprofile_window = 4\n");
     let workspace = fixture.workspace.clone();
@@ -1111,7 +1112,6 @@ fn gc_preserves_the_current_regime_window() {
 /// A crew model or Orbit release change makes earlier deliveries stale: the
 /// window follows the newest regime, topped up from earlier ones only to the
 /// minimum, so the change never empties the key.
-#[test]
 fn a_regime_change_drops_earlier_deliveries_once_the_new_regime_has_enough() {
     let fixture = Fixture::new("min_profile_deliveries = 2\nprofile_window = 10\n");
     let workspace = fixture.workspace.clone();
