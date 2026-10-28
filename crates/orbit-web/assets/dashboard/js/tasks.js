@@ -3760,19 +3760,9 @@ function buildTaskMeta(task, context, { editor, showsEditor, drain }) {
   const head = el("div", { class: "task-meta-block" }, [levers]);
   const riskDetail = buildRiskDetail(task);
   if (riskDetail) head.appendChild(riskDetail);
-  if (showsEditor("not_before")) {
-    head.appendChild(el("div", { class: "task-schedule" }, [
-      el("span", { class: "fact-label", text: "Scheduled" }), editor("not_before"),
-    ]));
-  }
-  if (task.started_at) {
-    head.appendChild(el("div", { class: "task-started-at" }, [
-      el("span", { class: "fact-label", text: "Actual start" }), absTimeNode(context, task.started_at),
-    ]));
-  }
   const lifecycle = buildLifecycleStrip(task.status);
   if (lifecycle) head.appendChild(lifecycle);
-  const delivery = buildDeliveryCard(task, drain, context);
+  const delivery = buildDeliveryCard(task, drain, context, { editor, showsEditor });
   if (delivery) head.appendChild(delivery);
   return head;
 }
@@ -3896,10 +3886,11 @@ function buildHandsChain(task) {
   return el("span", { class: "value task-hands" }, chain);
 }
 
-function buildDeliveryCard(task, drain, context) {
+function buildDeliveryCard(task, drain, context, { editor, showsEditor }) {
   const row = (kind, label, value) =>
     el("div", { class: `property-row fact task-delivery-row ${kind}` }, [el("span", { class: "label", text: label }), value]);
   const rows = [];
+  if (showsEditor("not_before")) rows.push(row("schedule", "Scheduled", editor("not_before")));
   const pullRequest = pullRequestLink(task);
   if (pullRequest || task.pr_number) {
     const value = el("span", { class: "value" });
@@ -4011,7 +4002,10 @@ function buildRunValue(task) {
 function buildRunWorktreeValue(recorded, noun, unrecorded) {
   const value = el("span", { class: "value run-worktree-value" });
   if (recorded) {
-    value.appendChild(makeCopyButton(recorded, { class: "mono run-worktree-copy", title: `Copy the run's ${noun}` }));
+    // Isolate the label's LTR path order while CSS uses RTL to elide its start.
+    const copy = makeCopyButton(recorded, { class: "mono run-worktree-copy", text: `\u2066${recorded}\u2069`, title: recorded });
+    copy.setAttribute("aria-label", `Copy the run's ${noun}: ${recorded}`);
+    value.appendChild(copy);
     return value;
   }
   value.appendChild(el("span", { class: "fact-note", text: "unavailable" }));

@@ -140,7 +140,7 @@ export function buildRiskChip(task) {
 // The task detail's breakdown, readable without hover (a phone has none).
 export function buildRiskDetail(task) {
   const riskiness = riskinessOf(task);
-  if (!riskiness) return null;
+  if (!riskiness || !estimated(riskiness)) return null;
   const lines = riskinessLines(riskiness);
   const [lead, ...rest] = lines;
   const summary = el("summary", {}, [

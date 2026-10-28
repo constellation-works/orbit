@@ -675,6 +675,8 @@
 .task-delivery-card .property-row + .property-row { border-top: 1px solid var(--hair); }
 .task-delivery-card .property-row .label { font-size: 12px; line-height: 20px; }
 .task-delivery-card .property-row.fact .value { padding: 0; }
+.task-delivery-card .schedule > .field-editor-cell { min-width: 0; width: 100%; }
+.task-delivery-card .schedule .field-editor { overflow-wrap: anywhere; }
 .task-delivery-card .property-row.readiness { align-items: start; }
 .task-delivery-card .readiness-list { min-width: 0; overflow-wrap: anywhere; }
 .task-delivery-card .readiness-drain-head strong { font-weight: 500; }
@@ -770,11 +772,19 @@
 }
 .property-row.fact .fact-note { color: var(--fg-mute); }
 .property-row.fact .run-value .exec-origin { font-size: 12px; color: var(--fg-dim); }
-/* A worktree path runs long: the copy button wraps anywhere, like the row's
-   other values, rather than overflowing a narrow pane. */
+/* Keep the distinctive end of a long worktree path or branch on one line.
+   Direction controls the ellipsis edge; the full value stays in the title
+   and the copy handler. */
+.property-row.fact .run-worktree-value { width: 100%; }
 .property-row.fact .run-worktree-copy {
+  display: block;
+  max-width: 100%;
   font-size: 12px;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
 }
 .detail-tag-row .chip {
   cursor: default;
@@ -1850,18 +1860,7 @@ input.field-editor-input {
 .task-risk[open] > summary::before { content: "▾"; }
 .task-risk-value { font-variant-numeric: tabular-nums; color: var(--fg-dim); }
 .task-risk-value.risk-elevated { color: var(--warn-fg); }
-.task-risk-value.risk-none { color: var(--fg-mute); }
 .task-risk-body { margin: 6px 0 0 16px; }
 .task-risk-body > p { margin: 2px 0; overflow-wrap: anywhere; }
 .task-risk-lead { color: var(--fg-soft); }
 .task-risk-file { padding-left: 12px; font-size: 12px; }
-
-.task-schedule, .task-started-at {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-.task-schedule > .field-editor-cell { flex: 1 1 180px; min-width: 0; }
-.task-schedule .field-editor { overflow-wrap: anywhere; }

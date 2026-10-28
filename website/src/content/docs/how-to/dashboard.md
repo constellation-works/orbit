@@ -253,13 +253,14 @@ live `orbit.log` tail you can filter to **all**, **err**, **deny**, or
 
 A task's detail leads with **Details**: status, complexity, crew, the
 operating systems it can run on, who created and carried it, its run and the
-machine it ran on, its pull request, when it was created and updated, and its
-tags, and a **Risk** chip with the regression-risk score. The **Regression
-risk** breakdown gives the same estimate, its window and support, driving
-paths, and any limits. Partial support uses `~`; without an estimate, the Risk
-chip says **No estimate** and the breakdown gives the reason: `no files` (no
-context files), `no paths` (selectors identify no file or directory), `thin
-history` (too few done tasks touched its paths in the window), or `unavailable`
+machine it ran on, its pull request, its tags, and a **Risk** chip with the
+regression-risk score. When an estimate is available, the **Regression risk**
+breakdown gives the same estimate, its window and support, driving
+paths, and any limits. Partial support uses `~`; without an estimate, there is
+no breakdown. The Risk chip says **No estimate** and its tooltip gives the
+reason: `no files` (no context files), `no paths` (selectors identify no file or
+directory), `thin history` (too few done tasks touched its paths in the window),
+or `unavailable`
 (the estimate could not be computed). The score uses `window_days` and
 `min_support` even when
 `workflow.regression_risk.enabled` is off, since that switch controls prompt
@@ -269,6 +270,14 @@ marks only. A circled *i* beside a value explains it on hover or focus. Its tabs
 **Comments**. The Artifacts tab lists files already stored on the task and
 previews the ones that are safe to show. It does not attach files. See
 [Task artifacts](../../concepts/tasks/#task-artifacts).
+
+The metadata card above the tabs starts with **Scheduled**: the scheduled
+time, or **not scheduled**, with **Edit** when you can change it. The row is
+shown when it has a value or you can edit it, and remains visible even when
+the card has no other metadata. The detail head has no **Actual start** line. Run details in the same card include **Branch** and
+**Worktree** on one line; long values lose their beginning to an ellipsis so
+the distinctive end stays visible, including on a phone. Hover for the full
+value, or click it to copy the complete branch or worktree path.
 
 ### Edit task metadata
 
@@ -280,6 +289,7 @@ do not dispatch work.
 | **description** | Left column. **edit** opens a Markdown editor. |
 | **acceptance criteria** | Left column, collapsed section. **edit**, then one criterion per line. |
 | **complexity** | **Details**. Pick **low**, **medium**, **hard**, or **xhard**; it saves on change. A stored **unassessed** is shown but cannot be picked. |
+| **Scheduled** | Top of the metadata card. **Edit**, then an RFC 3339 time with an offset; clear the field to remove the schedule. |
 | **tags** | **edit** after the tags in **Details**. Separate tags with commas or newlines. |
 | **context files** | **context files** section. **edit**, then one selector per line: `file:…`, `dir:…`, or `symbol:…`. |
 
