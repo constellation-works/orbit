@@ -75,10 +75,22 @@ pub trait TaskStoreBackend: Send + Sync {
     /// Internal lifecycle seam; unavailable backends fail closed.
     fn mutate_execution_claim(
         &self,
+        context: Option<&crate::contracts::ClaimInvocation>,
+        mutation_id: &str,
+        mutation: &crate::contracts::ClaimMutation,
+    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+        self.mutate_execution_claim_outcome(context, mutation_id, mutation)
+            .map(|outcome| outcome.result)
+    }
+    /// [`Self::mutate_execution_claim`], also reporting whether this call
+    /// committed the mutation or replayed its receipt. Unavailable backends
+    /// fail closed.
+    fn mutate_execution_claim_outcome(
+        &self,
         _context: Option<&crate::contracts::ClaimInvocation>,
         _mutation_id: &str,
         _mutation: &crate::contracts::ClaimMutation,
-    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+    ) -> Result<crate::contracts::ClaimMutationOutcome, OrbitError> {
         Err(OrbitError::Store("claim lifecycle unavailable".into()))
     }
     /// Refuse a worker invocation whose claim no longer carries the authority

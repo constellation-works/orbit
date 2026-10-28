@@ -56,24 +56,16 @@ impl OrbitRuntime {
         // settlement stands, the leaf's crew is written back to the task,
         // since the leaf drew it on its executor [ORB-19416].
         let leaf_crew = attribution.crew.clone();
-        // Fence the post-receipt write-back against replay [ORB-19486]: a
-        // replayed Fail/Release finds its claim already settled, and a
-        // replayed handoff finds its accepted handoff already recorded.
-        // Attribution is not part of the receipt identity, so it must not
-        // become new mutation authority on replay. Snapshot the task crew
-        // before the mutation so a delayed write also cannot overwrite a
-        // crew recorded after this snapshot.
-        let first_settlement = match &settlement {
-            ClaimMutation::AcceptHandoff(_) => {
-                claim.phase.is_unsettled()
-                    && matches!(
-                        self.stores().tasks().find_accepted_handoff(&claim.claim_id),
-                        Ok(None)
-                    )
-            }
-            ClaimMutation::Fail(_) | ClaimMutation::Release(_) => claim.phase.is_unsettled(),
-            _ => false,
-        };
+        #[cfg(feature = "test-support")]
+        crate::application::distributed::admission_checkpoint::notify_settle();
+        // Fence the post-receipt write-back against replay [ORB-19486,
+        // ORB-19521]: only the call whose mutation committed writes the crew.
+        // A replay, including one that read the claim unsettled before
+        // another call's commit, returns the original receipt with
+        // `committed: false`. Attribution is not part of the receipt
+        // identity, so it must not become new mutation authority on replay.
+        // Snapshot the task crew before the mutation so a delayed write also
+        // cannot overwrite a crew recorded after this snapshot.
         let recorded_crew = self
             .get_task(&claim.task_id)
             .ok()
@@ -85,22 +77,27 @@ impl OrbitRuntime {
             run,
         )
         .with_attribution(attribution);
-        let result = match settlement {
+        let outcome = match settlement {
             ClaimMutation::Fail(evidence) => {
                 self.validate_claimed_review_carry(&claim, evidence.claimed_review.as_ref())?;
                 let evidence = self.prepare_claimed_review_settlement(&claim, evidence);
                 let final_recovery = evidence.final_recovery.clone();
                 let carry = evidence.claimed_review.clone();
-                let result = self.mutate_execution_claim(
+                let outcome = self.mutate_execution_claim_outcome(
                     Some(&context),
                     &fail_mutation_id(&claim.claim_id),
                     &ClaimMutation::Fail(evidence),
                 )?;
                 self.import_claimed_review_ledgers(carry.as_ref());
                 if let Some(final_recovery) = final_recovery {
-                    self.apply_settled_final_recovery(&claim, run_id, &result, &final_recovery);
+                    self.apply_settled_final_recovery(
+                        &claim,
+                        run_id,
+                        &outcome.result,
+                        &final_recovery,
+                    );
                 }
-                Ok(result)
+                Ok(outcome)
             }
             ClaimMutation::Release(evidence) => {
                 self.validate_claimed_review_carry(&claim, evidence.claimed_review.as_ref())?;
@@ -109,13 +106,13 @@ impl OrbitRuntime {
                     Some(hold) => context.with_provider_hold(hold),
                     None => context,
                 };
-                let result = self.mutate_execution_claim(
+                let outcome = self.mutate_execution_claim_outcome(
                     Some(&context),
                     &release_mutation_id(&claim.claim_id),
                     &ClaimMutation::Release(evidence),
                 )?;
                 self.import_claimed_review_ledgers(carry.as_ref());
-                Ok(result)
+                Ok(outcome)
             }
             ClaimMutation::AcceptHandoff(handoff) => {
                 // Recovery ends a claim that never accepted this immutable
@@ -145,7 +142,7 @@ impl OrbitRuntime {
                     ));
                 }
                 observation.known_red = known_red.observations;
-                self.accept_task_handoff(
+                self.accept_task_handoff_outcome(
                     &context,
                     &handoff_mutation_id(&claim.claim_id),
                     handoff,
@@ -160,10 +157,10 @@ impl OrbitRuntime {
         self.write_back_claimed_leaf_crew(
             &claim.task_id,
             leaf_crew.as_deref(),
-            first_settlement,
+            outcome.committed,
             recorded_crew.as_deref(),
         );
-        Ok(result)
+        Ok(outcome.result)
     }
 
     /// [ORB-15573] The hold a release whose leaf its provider refused places

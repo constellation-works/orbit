@@ -127,21 +127,22 @@ impl OrbitRuntime {
     /// settlement. Best effort: the settlement already stands, and a later
     /// admission or the backfill writes the crew again.
     ///
-    /// Fenced against replay [ORB-19486]: `first_settlement` is false when
-    /// the pre-mutation claim snapshot was already settled, so a replayed
-    /// receipt never re-applies its attribution. `recorded_crew` is the
-    /// task crew read before the settlement mutation; the write lands only
-    /// while the task still names it, so a delayed write cannot overwrite
-    /// a crew a newer claim, delivery or operator update recorded after
-    /// that snapshot.
+    /// Fenced against replay [ORB-19486, ORB-19521]: `committed` is true
+    /// only for the call whose settlement mutation the claim journal
+    /// committed, so a replayed receipt never re-applies its attribution,
+    /// even when the replay read the claim before another call settled it.
+    /// `recorded_crew` is the task crew read before the settlement mutation;
+    /// the write lands only while the task still names it, so a delayed
+    /// write cannot overwrite a crew a newer claim, delivery or operator
+    /// update recorded after that snapshot.
     pub(crate) fn write_back_claimed_leaf_crew(
         &self,
         task_id: &str,
         crew: Option<&str>,
-        first_settlement: bool,
+        committed: bool,
         recorded_crew: Option<&str>,
     ) {
-        if !first_settlement {
+        if !committed {
             return;
         }
         let Some(crew) = crew.and_then(non_empty) else {

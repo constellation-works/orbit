@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use orbit_common::{ClaimRefusalKind, OrbitError};
 use orbit_store::contracts::{
-    ClaimInspection, ClaimInvocation, ClaimMutation, ClaimMutationResult, ExecutionClaimPhase,
-    HandoffObservation,
+    ClaimInspection, ClaimInvocation, ClaimMutation, ClaimMutationOutcome, ClaimMutationResult,
+    ExecutionClaimPhase, HandoffObservation,
 };
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::handoff::{
@@ -49,11 +49,24 @@ impl OrbitRuntime {
         handoff: TaskHandoff,
         observation: HandoffObservation,
     ) -> Result<ClaimMutationResult, OrbitError> {
+        self.accept_task_handoff_outcome(context, request_id, handoff, observation)
+            .map(|outcome| outcome.result)
+    }
+
+    /// [`Self::accept_task_handoff`], also reporting whether this call
+    /// committed the acceptance rather than replaying its receipt.
+    pub(crate) fn accept_task_handoff_outcome(
+        &self,
+        context: &ClaimInvocation,
+        request_id: &str,
+        handoff: TaskHandoff,
+        observation: HandoffObservation,
+    ) -> Result<ClaimMutationOutcome, OrbitError> {
         let claim_id = handoff.claim_id.clone();
         // A worker cannot owe a criterion its pilot finding did not type.
         self.check_owed_criteria(&self.get_task(&handoff.task_id)?, &handoff.owed_criteria)?;
         let context = context.clone().with_handoff_observation(observation);
-        let result = self.mutate_execution_claim(
+        let outcome = self.mutate_execution_claim_outcome(
             Some(&context),
             request_id,
             &ClaimMutation::AcceptHandoff(handoff),
@@ -80,7 +93,7 @@ impl OrbitRuntime {
             }
         }
         dispatch_recorded_authority(self);
-        Ok(result)
+        Ok(outcome)
     }
 
     /// Record the certificate an accepted before-PR handoff pinned, read

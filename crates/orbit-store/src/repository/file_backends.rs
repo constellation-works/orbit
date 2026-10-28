@@ -77,14 +77,14 @@ impl TaskStoreBackend for TaskV2Store {
         }
     }
 
-    fn mutate_execution_claim(
+    fn mutate_execution_claim_outcome(
         &self,
         context: Option<&crate::contracts::ClaimInvocation>,
         mutation_id: &str,
         mutation: &crate::contracts::ClaimMutation,
-    ) -> Result<crate::contracts::ClaimMutationResult, OrbitError> {
+    ) -> Result<crate::contracts::ClaimMutationOutcome, OrbitError> {
         self.claim_boundary()?
-            .mutate_execution_claim(context, mutation_id, mutation)
+            .mutate_execution_claim_outcome(context, mutation_id, mutation)
     }
     fn verify_worker_claim(
         &self,

@@ -919,6 +919,124 @@ fn a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_uncha
     );
 }
 
+/// [ORB-19521] A replay that read the claim unsettled, then paused while
+/// another identical call settled it and an operator re-pinned the crew,
+/// returns the original receipt and leaves the newer crew alone.
+fn an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim_id = record
+        .receipt
+        .as_ref()
+        .unwrap()
+        .claim
+        .as_ref()
+        .unwrap()
+        .claim_id
+        .clone();
+    let session = ToolSessionContext {
+        caller_machine_id: Some(FOLLOWER.into()),
+        process_machine_id: Some(OWNER.into()),
+        transport: Some(McpTransport::SshMcp),
+        effective_capabilities: BTreeSet::from([McpCapability::Agent]),
+        ..ToolSessionContext::default()
+    };
+    let attribution = orbit_store::contracts::ClaimAttribution {
+        crew: Some("luna".into()),
+        ..Default::default()
+    };
+    let fail = ClaimMutation::Fail(ClaimEvidence {
+        summary: Some("leaf failed".into()),
+        ..Default::default()
+    });
+    let crew_entries = |task: &Value| {
+        task["history"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["event"] == "crew_assigned")
+            .count()
+    };
+    let crew_entries_before = crew_entries(&pair.owner_task(&task));
+
+    // The other settlement's receipt, and the task once it settled and once
+    // the operator re-pinned its crew.
+    let settled = Rc::new(RefCell::new(None));
+    let hook = {
+        let owner = pair.wire.owner.clone();
+        let (session, claim_id, leaf, task) = (
+            session.clone(),
+            claim_id.clone(),
+            leaf.clone(),
+            task.clone(),
+        );
+        let (fail, attribution, settled) = (fail.clone(), attribution.clone(), settled.clone());
+        move || {
+            let first = owner
+                .serve_claim_settle(&session, &claim_id, Some(&leaf), fail, attribution)
+                .expect("the settlement that wins the commit");
+            let show = |owner: &OrbitRuntime| {
+                owner
+                    .run_tool("orbit.task.show", json!({"id": task}))
+                    .expect("owner task")
+            };
+            let after_first = show(&owner);
+            owner
+                .update_task_as_human(
+                    &task,
+                    orbit_core::application::task::TaskUpdateParams {
+                        crew: Some(Some("opus".into())),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .expect("operator crew update");
+            *settled.borrow_mut() = Some((first, after_first, show(&owner)));
+        }
+    };
+    let replay = orbit_core::test_support::with_claim_settle_checkpoint(hook, || {
+        pair.wire
+            .owner
+            .serve_claim_settle(&session, &claim_id, Some(&leaf), fail, attribution)
+    })
+    .expect("the overlapping replay returns the original receipt");
+
+    let (first, after_first, after_update) = settled
+        .borrow_mut()
+        .take()
+        .expect("the checkpoint ran the other settlement");
+    assert_eq!(
+        first.phase,
+        orbit_store::contracts::ExecutionClaimPhase::Failed
+    );
+    assert_eq!(after_first["crew"], "luna", "{after_first:#}");
+    assert_eq!(
+        after_first["crew_source"], "redraw:claimed_leaf",
+        "{after_first:#}"
+    );
+    assert_eq!(
+        crew_entries(&after_first),
+        crew_entries_before + 1,
+        "the winning settlement writes its crew exactly once: {after_first:#}"
+    );
+    assert_eq!(after_update["crew"], "opus", "{after_update:#}");
+
+    assert_eq!(replay, first, "the replay returns the original receipt");
+    let after_replay = pair.owner_task(&task);
+    for field in ["crew", "crew_source", "history"] {
+        assert_eq!(
+            after_replay[field], after_update[field],
+            "{field} changed on the overlapping replay: {after_replay:#}"
+        );
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
@@ -934,7 +1052,8 @@ crate::scenario_table!(
     a_pending_settlement_is_retried_after_an_owner_outage_before_the_drain_ends,
     a_forced_release_the_owner_missed_is_delivered_by_the_clock_sweep,
     a_replayed_fail_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged,
-    a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged
+    a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged,
+    an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged
 );
 
 #[cfg(unix)]
