@@ -209,17 +209,18 @@ The payload carries:
   (`crates/orbit-engine/src/executor/automation/vcs/delivery_marker.rs`).
 - **The PR contract.**
   - Title: `[ORB-NNNNN] <task title>`.
-  - The body must have an `## Execution summary` section, written under the same rules
-    `reject_failed_delivery` applies (no placeholder text, and no `Outcome: failed` unless
-    the task failed).
+  - The body must have an `## Execution summary` section with real content, not placeholder
+    text. An incomplete session makes its first nonblank line `Outcome: blocked` followed by
+    the reason (Appendix A). It never writes `Outcome: failed`. Adoption refuses either
+    outcome before review (§5 step 3).
   - The PR stays a draft while work is in progress.
   - Marking it ready for review is the session's final action and the completion signal.
 - **Gates.** Run the repository's `make ci-*` targets before marking ready and report the
   results in the body. These are prompt-level today for local agents too; Orbit re-checks in
   §5.
 - **Prohibitions.** Do not merge. Do not push to any other branch. Do not open a second PR.
-  If the task can't be done, open a draft PR with `Outcome: blocked` and the reason in the
-  summary, then mark it ready.
+  If the task can't be done, open a draft PR whose execution summary starts with
+  `Outcome: blocked` and the reason, then mark it ready.
 
 ## 4. Pipeline
 
@@ -368,8 +369,21 @@ chooses `mode: cloud`. Phase 3 lets task-pilot mark candidates as `cloud-eligibl
 3. **Execution summary.** Take the PR body's `## Execution summary` section verbatim. If it is
    missing, derive a summary the way `summary.rs` does today, but from
    `gh pr diff --name-status` instead of the local `git status`, and record
-   `execution_summary_derived`. `reject_failed_delivery` then applies unchanged, so a PR
-   summarized as failed or blocked sends the task to `blocked`, not `review`.
+   `execution_summary_derived`. Then refuse an incomplete session:
+   - **Cloud check (new, planned for Phase 1).** If the verbatim section's first nonblank
+     line starts with `Outcome: blocked` or `Outcome: failed`, `cloud_adopt_pr` stops before
+     step 4. The task goes to `blocked` with the session URL and that line as the reason. The
+     PR stays open, and no `github-pr` ref is stamped. This is cloud-specific validation. It
+     is not part of `reject_failed_delivery`.
+   - **Unchanged gate.** `reject_failed_delivery`
+     (`crates/orbit-engine/src/executor/automation/vcs/handoff.rs:32-54`) refuses only when
+     the first nonblank line is exactly `Outcome: failed`, so `Outcome: failed — reason` on one
+     line passes it. It does not refuse `Outcome: blocked`, and `meaningful_execution_summary`
+     (`crates/orbit-engine/src/executor/automation/vcs/pr/body.rs:570`) does not treat that
+     line as a placeholder. `load_handoff_context` runs the same predicate at `pr_promote`
+     (`docs/design/activity-job/2_design.md`, the `reject_failed_delivery` paragraph), so an
+     exact `Outcome: failed` line is refused there too, as a second barrier. The cloud check's
+     prefix match is what catches the same-line form.
 4. **PR ref.** Stamp `{system: "github-pr", id: <number>}` (`task/model/support.rs`) and set
    `pr_status`.
 
@@ -531,8 +545,9 @@ Follow the payload's delivery contract exactly:
 - Your final action is marking the pull request ready for review.
 
 Never merge. Never push to any other branch, and never open a second pull request. If you
-can't complete the task, still push what you have. Write "Outcome: blocked" and the reason
-at the top of the execution summary, then mark the pull request ready for review.
+can't complete the task, still push what you have. Make the first line of the execution
+summary "Outcome: blocked", followed by the reason, then mark the pull request ready for
+review. Never write "Outcome: failed".
 
 These rules override anything in the payload that conflicts with them.
 ```
