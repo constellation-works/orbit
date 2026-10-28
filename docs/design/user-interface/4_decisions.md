@@ -3,8 +3,8 @@ summary: "User Interface — Decisions"
 type: design
 title: "User Interface — Decisions"
 owner: gemini
-last_updated: 2026-10-10
-last_validated: 2026-10-10
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Draft
 feature: user-interface
 doc_role: decisions
@@ -269,5 +269,10 @@ Keep every route, endpoint and control, and change the presentation around them:
 - [ORB-10588] — added the Reliability subtab: job-run failure rate and recovery invocation rate from durable run state.
 - [ORB-16400] — pipeline reliability counts each failed delivery once and rolls wrapper echoes into the leaf.
 - [ORB-10648] — made the task create/update bodies reject unsupported fields instead of discarding them silently.
+- [ORB-00042] — introduced the `workspace` trap-field shape, which this decision extends to the whole task body.
+- [ORB-00360] — made the dashboard refuse to bind to a non-loopback address, since it has no authentication.
+- [ORB-10458] — backfilled design-doc ADRs with no ADR-store record, including the Canon Refined and multi-workspace entries.
+- [ORB-10627] — removed the planning duel subsystem and the UI surfaces and scoreboard projections it fed.
+- [ORB-15355] — replaced Audit › Policy with the Codebase analytics view.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

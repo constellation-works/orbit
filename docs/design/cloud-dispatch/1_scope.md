@@ -9,7 +9,8 @@ doc_role: scope
 type: design
 summary: "Scope: a cloud delivery mode that ships a task through a Claude Code cloud session, polls GitHub for its PR, and adopts that PR's number and summary onto the task"
 tags: [cloud, dispatch, claude, routines, pr, polling]
-last_validated: 2026-10-24
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 ---
 
 # Scope: Cloud dispatch
@@ -202,12 +203,12 @@ The payload carries:
 
 - **The task.** Its ID, title, description, acceptance criteria and complexity.
 - **Where to work.** The repository and base branch, plus the exact branch to push:
-  `claude/orbit-orb-12345`, lowercased and derived by Orbit.
-- **The commit marker.** `[ORB-12345]` goes in every commit subject. Dependency and
+  `claude/orbit-orb-nnnnn`, lowercased and derived by Orbit.
+- **The commit marker.** `[ORB-NNNNN]` goes in every commit subject. Dependency and
   obsolescence checks already key on this marker
   (`crates/orbit-engine/src/executor/automation/vcs/delivery_marker.rs`).
 - **The PR contract.**
-  - Title: `[ORB-12345] <task title>`.
+  - Title: `[ORB-NNNNN] <task title>`.
   - The body must have an `## Execution summary` section, written under the same rules
     `reject_failed_delivery` applies (no placeholder text, and no `Outcome: failed` unless
     the task failed).
@@ -256,7 +257,7 @@ This follows `handoff_land`'s "intent before the call" rule:
    `{system: "claude-cloud-session", id: "session_…", url: …}`, then checkpoint.
 
 A resumed run that finds an intent but no session ref does not re-fire blindly. It first
-asks GitHub whether `claude/orbit-orb-12345` or a PR titled `[ORB-12345]` exists. If one
+asks GitHub whether `claude/orbit-orb-nnnnn` or a PR titled `[ORB-NNNNN]` exists. If one
 does, it adopts that. If none does and the intent is older than `ready_deadline_seconds`,
 it goes to `blocked` for a human decision. Firing a second session for the same task is the
 failure this rule exists to prevent: it costs a full session and races two PRs.
@@ -274,12 +275,12 @@ Retries are allowed only when no session can have been created:
 loop with a sleep in the run's worker process and GitHub read-back only. Each poll runs:
 
 ```
-gh pr list --head claude/orbit-orb-12345 --state all \
+gh pr list --head claude/orbit-orb-nnnnn --state all \
   --json number,state,isDraft,headRefOid,baseRefName,title,body,url
 ```
 
 If nothing matches the head branch, a second query searches PRs whose title matches
-`[ORB-12345]`. That catches a session that ignored the branch instruction; the PR is adopted
+`[ORB-NNNNN]`. That catches a session that ignored the branch instruction; the PR is adopted
 and the drift is recorded as an event.
 
 | GitHub state | Outcome |
@@ -360,7 +361,7 @@ chooses `mode: cloud`. Phase 3 lets task-pilot mark candidates as `cloud-eligibl
 2. **Structural checks** against a fetched worktree:
    - `git fetch origin <head>`, then a detached worktree at the head SHA;
    - base branch equals `[cloud].base_branch`;
-   - every commit on the branch carries `[ORB-12345]`;
+   - every commit on the branch carries `[ORB-NNNNN]`;
    - the diff touches only the repository.
 
    A failure blocks the task with the PR left open. The branch is never force-reset.
@@ -544,12 +545,12 @@ description (after Appendix A) or the `/fire` `text`.
 ```text
 orbit-dispatch/v1
 nonce: <uuid>
-task: ORB-12345 - <title>
+task: ORB-NNNNN - <title>
 repository: constellation-works/orbit
 base branch: agent-main
-branch: claude/orbit-orb-12345
-commit marker: [ORB-12345]
-pull request title: [ORB-12345] <title>
+branch: claude/orbit-orb-nnnnn
+commit marker: [ORB-NNNNN]
+pull request title: [ORB-NNNNN] <title>
 gates: make ci-lint && make ci-fast
 
 ## Description
