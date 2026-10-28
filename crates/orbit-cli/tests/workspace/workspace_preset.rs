@@ -335,15 +335,16 @@ fn install_job_plugin_impl(machine: &Machine, work: &Path, namespace: &str, with
     let root = machine
         .home
         .join(format!("plugin-sources/{namespace}/.orbit-plugin"));
+    let activity = format!("{namespace}-digest");
+    let activity_yaml = format!(
+        "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: {activity}\nspec:\n  type: deterministic\n  description: Fixture activity.\n  action: sleep\n  config: {{}}\n"
+    );
+    let job_yaml = format!(
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: digest\nspec:\n  state: enabled\n  steps:\n    - id: digest\n      target: activity:{activity}\n"
+    );
     let definitions = [
-        (
-            "activities",
-            "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: digest\nspec:\n  type: deterministic\n  description: Fixture activity.\n  action: sleep\n  config: {}\n",
-        ),
-        (
-            "jobs",
-            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: digest\nspec:\n  state: enabled\n  steps:\n    - id: digest\n      target: activity:digest\n",
-        ),
+        ("activities", activity_yaml.as_str()),
+        ("jobs", job_yaml.as_str()),
         (
             "routines",
             "schemaVersion: 1\nname: digest\ndescription: Fixture routine.\nenabled: false\ntrigger:\n  cron: '0 3 * * *'\ntarget: job:digest\n",
@@ -469,6 +470,97 @@ fn preset_enables_routine_whose_target_job_an_enabled_plugin_supplies() {
         provenance.contains("plugin-target"),
         "provenance must name the applied preset:\n{provenance}"
     );
+}
+
+/// ORB-19282: workspace disables must release catalog names before another
+/// host-enabled plugin's contributions are resolved in preset preflight.
+#[test]
+fn preset_resolves_plugin_job_collisions_after_workspace_disables() {
+    let machine = Machine::new();
+    let work = machine.repo("plugin-collision");
+    let init = machine.run(&work, &["workspace", "init", "--name", "plugin-collision"]);
+    assert!(init.status.success(), "{}", output_text(&init));
+    install_job_plugin(&machine, &work, "alpha");
+    let disabled = machine.run(
+        &work,
+        &["plugin", "disable", "alpha", "--scope", "workspace"],
+    );
+    assert!(disabled.status.success(), "{}", output_text(&disabled));
+    install_job_plugin(&machine, &work, "beta");
+
+    let preset = machine.repos.join("plugin-collision.toml");
+    write_preset(&preset, "plugin-collision", &["beta-digest"], &[]);
+    let init_with_preset = || {
+        machine.run(
+            &work,
+            &[
+                "workspace",
+                "init",
+                "--name",
+                "plugin-collision",
+                "--force",
+                "--preset",
+                preset.to_str().expect("preset path"),
+            ],
+        )
+    };
+    let seeded = work.join(".orbit/routines/beta-digest.yaml");
+    let config = work.join(".orbit/config.toml");
+    let provenance = work.join(".orbit/state/workspace-preset.json");
+
+    let disabled = machine.run(
+        &work,
+        &["plugin", "disable", "beta", "--scope", "workspace"],
+    );
+    assert!(disabled.status.success(), "{}", output_text(&disabled));
+    let config_before = fs::read(&config).expect("workspace config");
+    let registry_before = fs::read(machine.registry()).expect("workspace registry");
+    let routine_before = fs::read(&seeded).expect("seeded routine");
+    let refused = init_with_preset();
+    let text = output_text(&refused);
+    assert!(
+        !refused.status.success() && text.contains("beta-digest") && text.contains("job:digest"),
+        "a job no active plugin supplies must still refuse: {text}"
+    );
+    assert_eq!(
+        fs::read(&config).expect("config after refusal"),
+        config_before
+    );
+    assert_eq!(
+        fs::read(machine.registry()).expect("registry after refusal"),
+        registry_before
+    );
+    assert_eq!(
+        fs::read(&seeded).expect("routine after refusal"),
+        routine_before
+    );
+    assert!(!provenance.exists(), "refusal must not record provenance");
+
+    let enabled = machine.run(&work, &["plugin", "enable", "beta", "--scope", "workspace"]);
+    assert!(enabled.status.success(), "{}", output_text(&enabled));
+    let shown = machine.run(&work, &["plugin", "show", "beta", "--format", "json"]);
+    assert!(shown.status.success(), "{}", output_text(&shown));
+    let plugin: serde_json::Value = serde_json::from_slice(&shown.stdout).expect("plugin JSON");
+    assert_eq!(plugin["status"], "active", "{}", output_text(&shown));
+    let shown = machine.run(
+        &work,
+        &["routine", "show", "beta-digest", "--format", "json"],
+    );
+    assert!(shown.status.success(), "{}", output_text(&shown));
+
+    let applied = init_with_preset();
+    let text = output_text(&applied);
+    assert!(
+        applied.status.success(),
+        "preset must resolve the active replacement's job after workspace disables: {text}"
+    );
+    let routine: serde_yaml::Value =
+        serde_yaml::from_slice(&fs::read(&seeded).expect("enabled routine")).expect("routine YAML");
+    assert_eq!(routine["enabled"], true, "{text}");
+    let provenance: serde_json::Value =
+        serde_json::from_slice(&fs::read(&provenance).expect("preset provenance"))
+            .expect("provenance JSON");
+    assert_eq!(provenance["name"], "plugin-collision", "{text}");
 }
 
 fn write_plugin_config_preset(path: &Path, name: &str, namespace: &str, mode: &str) {

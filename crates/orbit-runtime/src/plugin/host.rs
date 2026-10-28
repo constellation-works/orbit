@@ -308,17 +308,17 @@ pub fn load_workspace_plugins(
 
 /// Load plugins while deliberately avoiding refusal-audit writes.
 ///
-/// Global CLI and MCP discovery open their store read-only before the runtime
-/// has selected its writable handle. They still report refused rows, but the
-/// writable runtime load records the refusal audit event. Attempting that
-/// insert here only produces a misleading error about an audit that is
-/// subsequently recorded by the writable pass.
-pub(super) fn load_host_plugins_without_refusal_audit(
+/// CLI and MCP discovery and workspace preflight open their store read-only
+/// before the runtime has selected its writable handle. They still report
+/// refused rows, but the writable runtime load records the refusal audit event.
+/// Workspace toggles apply before contribution collisions, as in that load.
+pub(super) fn load_workspace_plugins_without_refusal_audit(
     global_root: &Path,
     orbit_dir: &Path,
     store: &Store,
     registry: &mut ToolRegistry,
     plugin_config: &BTreeMap<String, Value>,
+    workspace_toggles: &BTreeMap<String, bool>,
 ) -> PluginHostLoad {
     load_host_plugins_with_audit(
         global_root,
@@ -326,7 +326,7 @@ pub(super) fn load_host_plugins_without_refusal_audit(
         store,
         registry,
         plugin_config,
-        &BTreeMap::new(),
+        workspace_toggles,
         false,
     )
 }

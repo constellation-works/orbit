@@ -1,6 +1,5 @@
-//! Host-global plugin discovery that answers without a workspace runtime:
-//! the MCP tool listing, the `orbit <ns>` CLI groups, and a plugin-only
-//! registry.
+//! Read-only plugin discovery without a runtime: host-global MCP tools and
+//! CLI groups, plus plugin-only registries with optional workspace toggles.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -13,7 +12,7 @@ use orbit_tools::ToolRegistry;
 use orbit_types::plugin::{PluginStatus, plugin_tool_name};
 use orbit_types::tool::McpToolDefinition;
 
-use super::host::{PluginHostLoad, load_host_plugins_without_refusal_audit};
+use super::host::{self, PluginHostLoad};
 
 /// Every active plugin tool this host serves, with the scope its manifest
 /// declares.
@@ -91,12 +90,13 @@ pub fn host_plugin_cli_groups(
         return Ok(Vec::new());
     }
     let mut registry = ToolRegistry::new();
-    let load = load_host_plugins_without_refusal_audit(
+    let load = host::load_workspace_plugins_without_refusal_audit(
         global_root,
         global_root,
         &store,
         &mut registry,
         plugin_config,
+        &BTreeMap::new(),
     );
     Ok(plugin_cli_groups(&load))
 }
@@ -164,16 +164,39 @@ pub fn host_plugin_registry(
     audit_db: &Path,
     plugin_config: &BTreeMap<String, Value>,
 ) -> Result<(ToolRegistry, PluginHostLoad), OrbitError> {
-    let store = Store::open_read_only(audit_db)?;
-    let mut registry = ToolRegistry::new();
     // No workspace here, so no pin file: the global root holds none, and an
     // absent pin file is a valid configuration.
-    let load = load_host_plugins_without_refusal_audit(
+    workspace_plugin_registry(
         global_root,
         global_root,
+        audit_db,
+        plugin_config,
+        &BTreeMap::new(),
+    )
+}
+
+/// A plugin-only registry for one workspace, computed without writes.
+///
+/// Uses the runtime's trust and definition checks with the caller's resolved
+/// plugin config and workspace toggles. Disabled plugins are excluded before
+/// resolving contribution collisions, so they cannot reserve catalog names.
+/// Refused rows are reported without writing refusal-audit events.
+pub fn workspace_plugin_registry(
+    global_root: &Path,
+    workspace_orbit_root: &Path,
+    audit_db: &Path,
+    plugin_config: &BTreeMap<String, Value>,
+    workspace_toggles: &BTreeMap<String, bool>,
+) -> Result<(ToolRegistry, PluginHostLoad), OrbitError> {
+    let store = Store::open_read_only(audit_db)?;
+    let mut registry = ToolRegistry::new();
+    let load = host::load_workspace_plugins_without_refusal_audit(
+        global_root,
+        workspace_orbit_root,
         &store,
         &mut registry,
         plugin_config,
+        workspace_toggles,
     );
     Ok((registry, load))
 }
