@@ -706,6 +706,28 @@ try {
     }
   }
 
+  // A bounded list preview still sends the exact IDs for every raw row.
+  // Opening evidence must explain the preview and keep the Audit drilldown
+  // exact, rather than falling back to a broader actor/surface search.
+  const bounded = incident(80, { surface: 'fixture.validate', message: 'validation failed', runId: 'run-burst', firstAgo: HOUR, events: 65, now: Date.now() });
+  bounded.event_ids = bounded.events.map(event => event.id);
+  bounded.events = bounded.events.slice(0, 5);
+  bounded.events_omitted = 60;
+  await page.goto(`${origin}/message-scope?workspace=ws_orbit`);
+  await page.evaluate(async (row) => {
+    const { renderIncidents } = await import('/static/js/incidents.js');
+    renderIncidents({ window: '24h', class: 'unexpected', limit: 50, incidents: [row], shown_incident_count: 1, matching_incident_count: 1 });
+  }, bounded);
+  await page.locator('.incident-evidence-details > summary').click();
+  const previewNote = await page.locator('.incident-evidence-note').textContent();
+  assert(previewNote.includes('preview') && previewNote.includes('60'), `the bounded preview reports omitted evidence: ${previewNote}`);
+  assert(await page.locator('.incident-evidence tbody tr').count() === 5, 'only the bounded preview is rendered');
+  await page.locator('.incident-evidence-note button').click();
+  const drilldown = new URLSearchParams(new URL(page.url()).hash.split('?')[1]);
+  assert(drilldown.get('ids') === bounded.event_ids.join(','), 'Audit receives every exact ID, including omitted evidence');
+  assert(!drilldown.has('role') && !drilldown.has('tool'), 'exact evidence does not broaden to actor or surface filters');
+  evidenceLog.boundedEvidence = { previewNote, ids: drilldown.get('ids') };
+
   assert(pageErrors.length === 0, `no page errors: ${pageErrors.join('; ')}`);
   fs.writeFileSync(path.join(evidence, 'incidents-assertions.json'), `${JSON.stringify({
     passed: true,
@@ -731,6 +753,7 @@ try {
       'browser-incidents-late-message-keeps-selected-host',
       'browser-incidents-message-host-round-trip',
       'browser-incidents-message-workspace-round-trip',
+      'browser-incidents-bounded-preview-keeps-exact-audit-evidence',
     ],
     viewports: ['1440', '768', '375'],
     ...evidenceLog,

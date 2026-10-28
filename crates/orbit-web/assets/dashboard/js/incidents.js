@@ -890,13 +890,15 @@ function factsNode(group, ctx) {
 }
 
 function groupEventIds(group) {
-  const ids = group.incidents.flatMap(incident => Array.isArray(incident.events) ? incident.events.map(event => event.id) : [])
+  const ids = group.incidents.flatMap(incident => Array.isArray(incident.event_ids)
+    ? incident.event_ids
+    : (Array.isArray(incident.events) ? incident.events.map(event => event.id) : []))
     .filter(id => Number.isSafeInteger(id) && id > 0);
   return ids.length > 0 && ids.length === group.events ? ids : null;
 }
 
-// Exact event IDs when the payload carried every one; otherwise the actor and
-// surface narrow Events to the same population.
+// The complete ID list survives a bounded evidence preview. Older servers
+// carry IDs only in events; otherwise actor and surface narrow the population.
 function openAuditEvents(group) {
   const eventIds = groupEventIds(group);
   const sample = group.sample;
@@ -1001,6 +1003,14 @@ function evidenceNode(group, ctx) {
   details.addEventListener("toggle", () => { if (details.isConnected !== false) evidenceOpen = details.open; });
   const events = group.incidents.flatMap(incidentEvents);
   details.appendChild(el("summary", { text: `Audit evidence (${events.length} of ${eventCountLabel(group.events)} shown)` }));
+  const omitted = group.incidents.reduce((sum, incident) => sum + asCount(incident.events_omitted), 0);
+  if (omitted > 0) {
+    details.appendChild(el("p", { class: "incident-message-note incident-evidence-note" }, [
+      `This list shows an evidence preview; ${eventCountLabel(omitted)} omitted. `,
+      auditButton(group, `Open all ${eventCountLabel(group.events)}`, "incident-link-button"),
+      " to read the complete records.",
+    ]));
+  }
   const signatures = [...new Set(group.incidents.map(incident => incident.signature).filter(Boolean))];
   details.appendChild(el("dl", { class: "incident-signature" }, [
     el("dt", { text: "Grouping signature" }),
