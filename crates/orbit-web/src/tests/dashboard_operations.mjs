@@ -887,6 +887,87 @@ const runButton = descendants(fixtureCard).find(node => node.textContent === 'Ru
 assert(runButton && !runButton.disabled, 'authorized job run is enabled');
 assert(!jobRunButton('parked_pipeline').disabled, 'a paused routine does not disable manual Run');
 assert(fixtureCard.textContent.includes('orbit run job fixture --workspace one'), 'job details carry the CLI command');
+// A workspace name with spaces, quotes or shell metacharacters stays one
+// literal shell word in the displayed command and the copied text. Argv is
+// checked by POSIX shell-word parsing, without executing injected syntax.
+{
+  const shared = await import('./js/operations-shared.js');
+  const jobsMod = await import('./js/operations-jobs.js');
+  const originalGetWorkspaces = shared.operationsState.context.getWorkspaces;
+  const originalLastOperations = shared.operationsState.lastOperations;
+  const shellSplit = (command) => {
+    const words = [];
+    let current = '';
+    let quote = null;
+    for (let index = 0; index < command.length; index++) {
+      const char = command[index];
+      if (quote === "'") {
+        if (char === "'") {
+          if (command[index + 1] === '\\' && command[index + 2] === "'" && command[index + 3] === "'") {
+            current += "'"; index += 3;
+          } else {
+            quote = null;
+          }
+        } else {
+          current += char;
+        }
+      } else if (char === "'") {
+        quote = "'";
+      } else if (/\s/.test(char)) {
+        if (current) { words.push(current); current = ''; }
+      } else {
+        current += char;
+      }
+    }
+    if (quote) throw new Error(`unterminated quote in ${command}`);
+    if (current) words.push(current);
+    return words;
+  };
+  const checkWorkspaceArgv = (workspaceName) => {
+    shared.operationsState.context.getWorkspaces = () => [{ id: 'ws-spaced', name: workspaceName, status: 'active' }];
+    setWorkspace('ws-spaced');
+    shared.operationsState.lastOperations = {
+      ...(originalLastOperations || {}),
+      routines: [{ source: workspaceName, target: 'job:sweep', name: 'Sweep', enabled: true, cron: '0 * * * *', description: 'Sweep.', next_evaluation: { state: 'scheduled', at: '2026-09-07T21:30:00Z' } }],
+    };
+    jobsMod.renderJobs({ runs: { items: [] }, view: 'catalogue' });
+    const cards = descendants(get('jobs-body')).filter((node) => String(node.className || '').includes('job-card'));
+    const sweepCard = cards.find((card) => card.dataset.job === 'sweep');
+    assert(sweepCard, `spaced workspace renders its sweep job: ${workspaceName}`);
+    const code = descendants(sweepCard).find((node) => node.tagName === 'CODE' || node.tagName === 'code');
+    const command = code ? code.textContent : sweepCard.textContent.match(/orbit run job sweep --workspace .*/)?.[0];
+    assert(command && command.startsWith('orbit run job sweep --workspace '), `spaced job details carry the CLI command: ${command}`);
+    const argv = shellSplit(command.trim());
+    assert(JSON.stringify(argv.slice(0, 4)) === JSON.stringify(['orbit', 'run', 'job', 'sweep']), `job argv prefix stays intact for ${workspaceName}: ${command}`);
+    assert(argv[4] === '--workspace', `workspace flag stays separate for ${workspaceName}: ${command}`);
+    assert(argv.length === 6, `workspace name stays one shell word for ${workspaceName}: ${command}`);
+    assert(argv[5] === workspaceName, `workspace argv preserves the literal name for ${workspaceName}: ${command}`);
+    return command;
+  };
+  const spacedCommand = checkWorkspaceArgv('My Project');
+  assert(spacedCommand.includes("'My Project'"), `a space in the workspace name is quoted: ${spacedCommand}`);
+  const quotedCommand = checkWorkspaceArgv('a"b$(c)`d');
+  assert(quotedCommand.includes("'a\"b$(c)`d'") || quotedCommand.includes("'a"), `quotes and metacharacters stay literal: ${quotedCommand}`);
+  // The Copy command button copies the same quoted text.
+  const copyButton = [...document.querySelectorAll('#jobs-body button')].find((node) => node.textContent === 'Copy command');
+  assert(copyButton, 'spaced job details offer a Copy command button');
+  let copied = null;
+  const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard') || Object.getOwnPropertyDescriptor(Object.getPrototypeOf(navigator), 'clipboard');
+  try {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: async (text) => { copied = text; } }, configurable: true });
+    copyButton.click();
+    await tick(); await tick();
+    assert(copied === quotedCommand, 'Copy command copies the quoted shell command');
+  } finally {
+    if (clipboardDescriptor) Object.defineProperty(navigator, 'clipboard', clipboardDescriptor);
+    else delete navigator.clipboard;
+  }
+  shared.operationsState.context.getWorkspaces = originalGetWorkspaces;
+  setWorkspace('one');
+  shared.operationsState.lastOperations = originalLastOperations;
+  await fetchAndRenderJobs();
+  assert(get('jobs-body').textContent.includes('orbit run job fixture --workspace one'), 'restored workspace renders its unquoted command');
+}
 assert(jobRunButton('task_pr_pipeline')?.disabled, 'delivery job needs task input');
 assert(descendants(jobCards.find(card => card.dataset.job === 'task_pr_pipeline')).some(node => String(node.title).includes('Use Ship or Drain')), 'disabled delivery button explains its reason');
 assert(requests.some(r => r.path === '/api/job-runs' && r.workspace === 'one'), 'jobs read the workspace-scoped recent runs');

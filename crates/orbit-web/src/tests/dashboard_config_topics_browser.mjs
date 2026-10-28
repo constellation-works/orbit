@@ -211,6 +211,19 @@ try {
             built_in: { value: 2.0 },
             shadowed_by: [],
           },
+          {
+            key: 'review.timing',
+            label: 'Review timing',
+            description: 'When review runs.',
+            value_type: 'string',
+            value: 'off',
+            state: 'set',
+            settable: true,
+            source: { layer: 'workspace' },
+            built_in: { value: 'off' },
+            shadowed_by: [],
+            options: ['off', 'before_pr'],
+          },
         ],
       },
     ],
@@ -548,6 +561,26 @@ try {
   assert.deepEqual(capturedPuts, [{ key: 'pr.draft', body: { value: false, scope: 'workspace' } }], 'false round-trips as false');
 
   // -------------------------------------------------------------------------
+  // Case (enum): changing an enum in the topic drawer refreshes the CLI preview
+  // -------------------------------------------------------------------------
+  await page.goto(`http://127.0.0.1:${port}/#config/review`);
+  const enumRow = page.locator('.topic-row[data-key="review.timing"]');
+  await enumRow.waitFor({ state: 'visible' });
+  await enumRow.locator('button.config-action:has-text("Edit")').click();
+  await drawer.waitFor({ state: 'visible' });
+  const enumSelect = drawer.locator('select.config-input');
+  await enumSelect.waitFor({ state: 'visible' });
+  assert.equal((await drawer.locator('.drawer-cli').textContent()).trim(), 'orbit config set review.timing off');
+  await enumSelect.selectOption('before_pr');
+  assert.equal((await drawer.locator('.drawer-cli').textContent()).trim(), 'orbit config set review.timing before_pr', 'enum selection refreshes the CLI preview to the value Save sends');
+  capturedPuts.length = 0;
+  await drawer.locator('button.config-action:has-text("Save")').click();
+  await page.waitForFunction(() => document.querySelector('aside.config-drawer') === null);
+  assert.deepEqual(capturedPuts, [{ key: 'review.timing', body: { value: 'before_pr', scope: 'workspace' } }], 'enum Save sends the selected value');
+  await page.goto(`http://127.0.0.1:${port}/#config/workflow`);
+  await arrayRow.waitFor({ state: 'visible' });
+
+  // -------------------------------------------------------------------------
   // Case (f): a first workspace write asks how to create the policy file
   // -------------------------------------------------------------------------
   const initButtons = () => drawer.locator('.drawer-actions button.config-action:not(.ghost)').evaluateAll(
@@ -777,6 +810,7 @@ try {
       'boolean-true-with-trailing-space-saves-true-and-cli-preview-matches',
       'boolean-invalid-draft-refused-before-put',
       'boolean-false-round-trips',
+      'enum-selection-refreshes-cli-preview-to-save-value',
     ],
   }, null, 2));
 

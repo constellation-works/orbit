@@ -160,14 +160,17 @@ function providerGroups(described, pressures) {
 }
 
 function pillFor(group) {
-  const live = group.items.filter(item => !item.stale);
-  const gated = live.filter(item => item.gated);
+  const gated = group.items.filter(item => item.gated);
   if (group.items.length === 0) return { tone: 'unknown', text: 'no usage reported' };
-  if (group.stale) return { tone: 'stale', text: `stale · ${group.items[0].ageLabel}` };
   if (gated.length) {
     const until = gated.map(item => item.until).filter(validDate).sort().at(-1);
-    return { tone: 'critical', text: until ? `gated until ${formatDateTime(until)}` : 'gated' };
+    const base = until ? `gated until ${formatDateTime(until)}` : 'gated';
+    // A stale-by-date reading still gates until its lifetime/reset, so the
+    // gate stays visible and the age label rides along.
+    if (group.stale) return { tone: 'critical', text: `${base} · ${group.items[0].ageLabel}` };
+    return { tone: 'critical', text: base };
   }
+  if (group.stale) return { tone: 'stale', text: `stale · ${group.items[0].ageLabel}` };
   if (group.gatingOff) return { tone: 'off', text: 'gating off' };
   return {
     tone: group.severity,
@@ -200,7 +203,7 @@ function rowModel(item, now) {
     name: item.name, sub: item.sub, value: item.value, fill: item.fill, gate: item.gate, severity: item.severity,
     reset: resets ? `${validDate(item.resetsAt).getTime() < now ? 'reset' : 'resets'} ${resets}` : '',
     gateText: item.noGate ? 'no gate' : `gate at ${item.limit}%`,
-    flags: [item.stale ? 'old' : '', item.gated && !item.stale ? 'gated' : '', item.partial ? 'partial' : ''].filter(Boolean),
+    flags: [item.stale ? 'old' : '', item.gated ? 'gated' : '', item.partial ? 'partial' : ''].filter(Boolean),
     stale: item.stale,
   };
 }
@@ -210,7 +213,7 @@ function rowModel(item, now) {
 function groupModel(group, now) {
   const worst = group.worst;
   const pill = pillFor(group);
-  const held = [...new Set(group.items.filter(item => item.gated && !item.stale).flatMap(item => item.crews))];
+  const held = [...new Set(group.items.filter(item => item.gated).flatMap(item => item.crews))];
   const pressure = pressureModel(group.pressure, now);
   const flag = group.stale ? 'old' : group.gatingOff ? 'no gate' : '';
   const value = worst?.value ?? '-';

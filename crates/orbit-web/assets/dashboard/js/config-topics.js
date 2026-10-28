@@ -244,7 +244,7 @@ function drawerNode(payload, context) {
   if ((row.options || []).length) {
     field = el('select', { class: 'config-input' });
     for (const o of row.options) { const opt = el('option', { text: o }); opt.value = o; if (o === session.text) opt.selected = true; field.appendChild(opt); }
-    field.addEventListener('change', () => { session.text = field.value; });
+    field.addEventListener('change', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   } else {
     field = el('textarea', { class: 'config-input' }); field.value = session.text; field.rows = Array.isArray(row.value) ? 4 : 2;
     field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
@@ -360,6 +360,32 @@ export async function loadRaw(scope, context) {
   rawText = text;
   context.rerender?.();
 }
+// A workspace value is only bulk-removable when its admitted removal
+// fallback preserves the effective value. An intentional override whose
+// value equals the built-in default but differs from the global fallback
+// must stay; an unknown (null) fallback is never claimed safe. This mirrors
+// the config layering contract: ordinary keys fall back to the global value,
+// replace-only security keys fall back to built-in while the workspace file
+// exists, and a missing prediction stays null.
+function valuesEqual(a, b) {
+  if (a === b) return true;
+  if (typeof a !== typeof b || a === null || b === null) return false;
+  if (typeof a !== 'object') return Object.is(a, b);
+  if (Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    return a.every((value, index) => valuesEqual(value, b[index]));
+  }
+  const aKeys = Object.keys(a).sort();
+  const bKeys = Object.keys(b).sort();
+  if (aKeys.length !== bKeys.length || aKeys.some((key, index) => key !== bKeys[index])) return false;
+  return aKeys.every((key) => valuesEqual(a[key], b[key]));
+}
+function isFallbackPreserving(row) {
+  if (row?.source?.layer !== 'workspace') return false;
+  if (row.fallback == null) return false;
+  return valuesEqual(row.value, row.fallback.value);
+}
 export function renderAllKeys(body, payload, context) {
   const rows = flatten(payload);
   const nodes = [];
@@ -372,7 +398,7 @@ export function renderAllKeys(body, payload, context) {
   controls.append(el('span', { text: 'Layer' }), mkSelect('Layer filter', layerFilter, ['all','built-in','global','workspace'], (v) => { layerFilter = v; context.rerender?.(); }),
     el('span', { text: 'Topic' }), mkSelect('Topic filter', topicFilter, ['all','workflow','execution','review','machine','crews','housekeeping'], (v) => { topicFilter = v; context.rerender?.(); }));
   nodes.push(controls);
-  const restates = rows.filter((r) => r.source?.layer === 'workspace' && (r.equals?.global === true || r.equals?.built_in === true));
+  const restates = rows.filter(isFallbackPreserving);
   if (restates.length) {
     const sec = section('Keys that only repeat the global or built-in value', restates, context);
     const bulk = el('button', { class: 'config-action', text: `Remove all ${restates.length} workspace values` }); bulk.type = 'button';
