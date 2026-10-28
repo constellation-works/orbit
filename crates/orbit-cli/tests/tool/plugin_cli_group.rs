@@ -2494,6 +2494,30 @@ fn plugin_test_inside_a_worker_seatbelt_profile_defers_to_the_host_replay() {
     );
     assert!(!marker.exists(), "no backend ran unconfined");
 
+    // A summary path alone does not identify a required gate for host replay.
+    // It must be refused before writing a command-less summary that the claim
+    // host cannot derive into a deferred validation handoff.
+    let summary_only_path = fixture.home.join("summary-only.json");
+    let summary_only = fixture
+        .orbit_inside_seatbelt()
+        .args(["plugin", "test", dir])
+        .env("ORBIT_VALIDATION_SUMMARY", &summary_only_path)
+        .env_remove("ORBIT_VALIDATION_GATE")
+        .env_remove("ORBIT_VALIDATION_BASE")
+        .assert()
+        .failure();
+    let stderr = String::from_utf8_lossy(&summary_only.get_output().stderr);
+    assert!(
+        stderr.contains("[validation_route_unavailable]")
+            && stderr.contains("ORBIT_VALIDATION_GATE"),
+        "{stderr}"
+    );
+    assert!(
+        !summary_only_path.exists(),
+        "a gate-less run must not write a null-command summary"
+    );
+    assert!(!marker.exists(), "no backend ran unconfined");
+
     // As a gate: deferred, exit 0, one sanctioned notice per case.
     let summary_path = fixture.home.join("gate-summary.json");
     let deferred = fixture

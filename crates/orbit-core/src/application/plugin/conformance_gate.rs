@@ -77,7 +77,16 @@ pub(super) fn seatbelt_deferral(
     if options.require_sandbox_exec {
         return refuse("ORBIT_REQUIRE_SANDBOX_EXEC=1 refuses to defer it.");
     }
-    if options.validation_gate.is_none() {
+    let has_deferred_validation_route = options.validation_gate.as_ref().is_some_and(|gate| {
+        gate.command
+            .as_deref()
+            .is_some_and(|command| !command.trim().is_empty())
+            && gate
+                .base
+                .as_deref()
+                .is_some_and(|base| !base.trim().is_empty())
+    });
+    if !has_deferred_validation_route {
         return refuse(
             "Run it outside the enclosing sandbox, or, as a required validation gate in an Orbit \
              worker, with ORBIT_VALIDATION_SUMMARY (plus ORBIT_VALIDATION_GATE and \
