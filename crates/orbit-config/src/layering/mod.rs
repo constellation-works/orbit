@@ -45,7 +45,8 @@ pub use load::load_effective_config;
 pub(crate) use load::{
     LoadedResolvedConfig, load_layered_resolved, reject_workspace_crew_env,
     reject_workspace_lease_intake, reject_workspace_machine_table, resolve_workspace_file_document,
-    validate_staged_global_document, validate_staged_workspace_document,
+    strip_workspace_refused_keys, validate_staged_global_document,
+    validate_staged_workspace_document,
 };
 pub use types::{
     ConfigFallback, ConfigValueSource, ConfigValueSourceKind, ConfigValueState, EffectiveConfig,

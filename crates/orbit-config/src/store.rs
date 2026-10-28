@@ -29,7 +29,7 @@ use orbit_common::security::redaction::redact_home_dir;
 use crate::ConfigRoots;
 use crate::layering::{
     reject_workspace_crew_env, reject_workspace_lease_intake, reject_workspace_machine_table,
-    resolve_workspace_file_document, validate_staged_global_document,
+    resolve_workspace_file_document, strip_workspace_refused_keys, validate_staged_global_document,
     validate_staged_workspace_document,
 };
 use crate::operation::OperationLayerSource;
@@ -181,10 +181,11 @@ impl ConfigStore {
             Self::from_content(ConfigScope::Workspace, path, &content, existing.opened)?;
         store.global_config_path = Some(global_config_path.to_path_buf());
         if mode == WorkspaceInitMode::SeedFromGlobal {
-            // `[machine]` belongs to this host and is rejected in workspace
-            // configs. Remove it from the parsed document so all other
-            // global settings and their formatting/comments survive seeding.
-            store.doc.remove("machine");
+            // Global-only keys (`[machine]`, crew env, lease intake and
+            // listener) are rejected in workspace configs. Remove them from
+            // the parsed document so all other global settings and their
+            // formatting/comments survive seeding.
+            strip_workspace_refused_keys(&mut store.doc);
         }
         if let Some(toggles) = toggles {
             store.doc.insert(PLUGIN_ENABLEMENT_TABLE, toggles);

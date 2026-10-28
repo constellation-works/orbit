@@ -313,6 +313,41 @@ fn resolve_operation_layers(
     Ok(policy)
 }
 
+/// Remove from a global document being copied into a new workspace file every
+/// key the workspace layer refuses: `[machine]`, each `[crews.<name>] env`,
+/// `lease.intake.peer_user` and `[lease.listener]`. It pairs with the three
+/// `reject_workspace_*` checks below and reads the same key definitions, so a
+/// seeded file always passes them.
+pub(crate) fn strip_workspace_refused_keys(document: &mut toml_edit::DocumentMut) {
+    document.remove(GLOBAL_ONLY_KEY_PREFIX.trim_end_matches('.'));
+    if let Some(crews) = document
+        .get_mut("crews")
+        .and_then(toml_edit::Item::as_table_like_mut)
+    {
+        for (_, crew) in crews.iter_mut() {
+            if let Some(crew) = crew.as_table_like_mut() {
+                crew.remove("env");
+            }
+        }
+    }
+    let listener = LEASE_LISTENER_KEY_PREFIX.trim_end_matches('.');
+    for key in [LEASE_INTAKE_PEER_USER_KEY, listener] {
+        let Some((parent, leaf)) = key.rsplit_once('.') else {
+            document.remove(key);
+            continue;
+        };
+        let mut table = Some(document.as_table_mut() as &mut dyn toml_edit::TableLike);
+        for segment in parent.split('.') {
+            table = table
+                .and_then(|table| table.get_mut(segment))
+                .and_then(toml_edit::Item::as_table_like_mut);
+        }
+        if let Some(table) = table {
+            table.remove(leaf);
+        }
+    }
+}
+
 /// Refuse `[crews.<name>] env` in a workspace `config.toml`, naming the crew.
 ///
 /// A crew's `env` copies host variables (credentials, typically) into its
