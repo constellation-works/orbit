@@ -469,6 +469,7 @@ try {
   const workspaceDefaults = await assertWorkspaceDefaults(browser, server.address().port);
   const warmup = await assertIndependentWarmup(browser, server.address().port);
   const fleetPartial = await assertFleetPartial(browser, server.address().port);
+  const fleetPartialWidths = [...new Set(fleetPartial.map(({ width }) => width))].join(' and ');
   const page = await browser.newPage({ viewport: { width: 1280, height: 900 } });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -543,7 +544,7 @@ try {
   assert.deepEqual(errors, []);
   const polls = await assertPollBudget(browser, server.address().port);
   fs.writeFileSync(path.join(evidence, 'result.json'), JSON.stringify({ status: 'passed', measurements, polls, warmup, workspaceDefaults, fleetPartial,
-    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', 'ready fleet hosts shown while another host is loading at 1440 and 375px', 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', 'ready workspace focus preserved and Enter selects it when another host settles (success and failure, 1440 and 375px)', 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'host tabs show one host at a time and remember the choice', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
+    guarantees: ['initial Tasks and Run detail render during held remote fleet warmup', 'warmup and first refresh share in-flight fleet reads', 'late fleet completion updates the indicator and preserves the selected view', `ready fleet hosts shown while another host is loading at ${fleetPartialWidths}px`, 'pending host distinct from idle and unavailable and settles without dropping ready rows or changing selection', `ready workspace focus preserved and Enter selects it when another host settles (success and failure, ${fleetPartialWidths}px)`, 'idle workspace fleet indicator', 'host failures retained', '375px no horizontal page scroll', 'one line per workspace with nothing waiting', 'host tabs show one host at a time and remember the choice', 'keyboard remote scope selection', 'row click local scope selection', 'two-host poll stays within 10 requests', 'panel poll does not read fleet drains'], errors }, null, 2));
   console.log('fleet browser startup, scope, mobile, and poll-budget checks passed');
 } finally {
   if (browser) await browser.close();
