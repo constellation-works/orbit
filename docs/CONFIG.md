@@ -2168,7 +2168,31 @@ The review tasks it mints carry `workflow.purpose_crews.review` when that key is
 Each `[[review.host_evidence]]` rule has `kind` (`codeql` or `host_sandbox_test`), `name`, `paths` (workspace-relative globs), `os` (`linux` or `macos`), the exact `command`, and a result `artifact` (a relative `.json` path, unique across rules). A rule Orbit could never fulfil fails load.
 
 - A `codeql` rule is owed on a host of another OS and fulfilled by the owner on `os`.
-- A `linux` `codeql` rule may add `hosted_check`, the pull request check that runs exactly its `command` on every candidate, named as the forge reports it (`CodeQL / Analyze (rust)`, or the check's own name). On a before-landing review on a claim host of another known OS, such as macOS, the requirement is then owed to the owner (`owner_owed_evidence`) instead of holding the review: owner acceptance refuses a certificate that owes it any check its captured rules did not declare that way, and the owner's landing merges the pull request only after that check reports an explicit success on the reviewed head (a CheckRun `SUCCESS` or a StatusContext `SUCCESS`). It waits while the check is absent, still running, or completed without a success (`SKIPPED` or `NEUTRAL`), and when the check failed it recovers or stops as for any failed pull request check (a branch update for a failure inherited from the base, then a wait within the landing deadline for a newer passing base and up to three updates per handoff, one shared rerun for a transient failure or an untouched-path failure with a fresh base pass, the one automatic repair for the candidate's own; see the [distributed drain runbook](runbooks/distributed-drain.md)), whatever branch protection requires. Branch protection's own reading of a skipped or neutral required check is unchanged. Without `hosted_check` — a custom query, or a workspace with no hosted CodeQL — the requirement holds the review like any other owed check. Declare it only for a check that really runs the rule's command: Orbit compares the name, not the queries the job runs. Any other kind or OS with `hosted_check`, or an empty one, fails load.
+- A `linux` `codeql` rule may add `hosted_check`, the pull request check that runs exactly its `command` on every
+  candidate, named as the forge reports it (`CodeQL / Analyze (rust)`, or the check's own name). On a
+  before-landing review on a claim host of another known OS, such as macOS, the requirement is then
+  owed to the owner (`owner_owed_evidence`) instead of holding the review: owner acceptance refuses a
+  certificate that owes it any check its captured rules did not declare that way, and the owner's
+  landing merges the pull request only after that check reports an explicit success on the reviewed
+  head (a CheckRun `SUCCESS` or a StatusContext `SUCCESS`). It waits while the check is absent, still
+  running, or completed without a success (`SKIPPED` or `NEUTRAL`). When the check failed, landing
+  recovers or stops as for any failed pull request check: a failure inherited from the base gets a
+  branch update, and the owner waits within the landing deadline for a newer passing base, up to three
+  updates per handoff. A transient failure gets one shared rerun. For an untouched-path failure, a
+  successful same-check push run on the accepted base ancestry authorizes one rerun of the original
+  `pull_request` run; this base run may predate the candidate failure, and a base pass alone does not
+  attribute the failure to the candidate. Orbit runs `gh run rerun <id> --failed`; GitHub retains the
+  original event's `GITHUB_SHA` and `GITHUB_REF`, while Orbit CI's candidate-build jobs explicitly
+  check out the PR head rather than a merge with the current base. A passing rerun clears the failure;
+  the same signature failing again with the passing base result enters the one automatic repair for
+  the candidate's own failure. If untouched-path evidence remains incomplete, landing stops after
+  `max_base_ci_cycles` observation cycles (default 3) or `max_wait_seconds` (default 3600 seconds),
+  whichever comes first (see the [distributed drain runbook](runbooks/distributed-drain.md)). Branch
+  protection's own reading of a skipped or neutral required check is unchanged. Without
+  `hosted_check` — a custom query, or a workspace with no hosted CodeQL — the requirement holds the
+  review like any other owed check. Declare it only for a check that really runs the rule's command:
+  Orbit compares the name, not the queries the job runs. Any other kind or OS with `hosted_check`, or
+  an empty one, fails load.
 - A `host_sandbox_test` rule is owed on a host of `os`, which runs it outside the agent sandbox at settlement, so its command must be one settlement admits. A held `linux` rule the leaf could not run is fulfilled by a Linux owner whose host can create namespaces.
 - The owner captures the rules on each claim. The reviewer records an owed check `not_run` and never attempts it, and a verdict whose only gaps are owed checks holds for them instead of blocking.
 

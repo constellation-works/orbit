@@ -1677,13 +1677,21 @@ one. From then on:
     explains it. An earlier passing base run alone cannot attribute the
     failure to the candidate: an advisory database or toolchain can change
     without a base commit change. A successful same-check push run on the
-    accepted base or a descendant through the landing tip, including an
-    earlier run, authorizes one rerun of the failed `pull_request` job on the
-    unchanged head; `pull_request` CI evaluates that head as a merge with the
-    current base. A pass on that rerun clears the failure. If it fails with
-    the same signature and the base has that successful same-check result,
-    the landing classifies it as **candidate** and uses the usual automatic
-    repair; it needs no further base run. A same-signature base failure stays
+    accepted base or a descendant through the landing tip, including a run
+    that predates the candidate failure, authorizes one
+    `gh run rerun <id> --failed` for the original `pull_request` run on its
+    unchanged head. GitHub retains the original event's `GITHUB_SHA` and
+    `GITHUB_REF` on a rerun
+    ([GitHub documentation](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)).
+    Orbit CI's candidate-build jobs explicitly check out
+    `github.event.pull_request.head.sha`; they do not build a merge with the
+    current base. The change-scope job checks out the event's merge ref only
+    to classify paths through the GitHub API, and builds no candidate code.
+    Therefore this retry is not a fresh current-base merge check. A pass on
+    the rerun clears the failure. If it fails with the same signature while
+    the base has that successful same-check result, the landing classifies it
+    as **candidate** and uses the usual automatic repair; it needs no further
+    base run. A same-signature base failure stays
     **inherited**. The lookup examines up to 100 recent base-branch push runs,
     retaining the latest run per workflow and commit; evidence outside that
     window does not authorize repair. `orbit run auto --auto-fix` applies the
@@ -1691,8 +1699,9 @@ one. From then on:
     and the same signature is observed again with a passing base check.
     Without decisive evidence, `handoff_land` stops in review after
     `max_base_ci_cycles` (default 3) observation cycles or the existing
-    `max_wait_seconds` deadline, whichever comes first. A cycle is one landing
-    poll that rechecks the same failed job against the accepted base ancestry.
+    `max_wait_seconds` deadline (default 3600 seconds), whichever comes first.
+    A cycle is one landing poll that rechecks the same failed job against the
+    accepted base ancestry.
     Its stop evidence names the check, signature and missing rerun or base
     result for operator review. A log that cites no repository file, or cites
     a file the candidate changed, is classified as before.
