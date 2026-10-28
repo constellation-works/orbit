@@ -1,7 +1,7 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
+import { captureWorkspaceVisit, raiseMessageSlot, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, stateCell, fetchJson, listItems, requestJson, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge as fmtTimestamp, formatDateTime as fmtAbsTime, formatClock, getClockZone, setClockZone, zoneName, fmtDuration } from './js/common.js';
 import { taskPilotWarningsFilter, cancelTaskSearchDebounce, clearTaskSearch, buildChips, buildTasksHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, openVisibleTask, renderTaskPagination, renderTasks, setPinnedExternalTask, syncTaskControls, wireSearch, wireTaskPane } from './js/tasks.js';
 import { initTaskCreate } from './js/task-create.js';
 import { initLocks, paintLocks } from './js/locks.js';
@@ -133,6 +133,15 @@ let activeKnowledgeSubtab = "frictions";
 let activeOperationsSubtab = "routines";
 let refreshSequence = 0;
 let lastCleanRefresh = null;
+// The Tasks page paints its rows, running runs, locks and drain phase live.
+// The reads it shows but which rarely change (crews, the Health summary, the
+// doctor and routine peeks, the backlog forecast) run when the page is
+// entered, on Refresh, after a scope change, and otherwise on this cadence.
+const TASKS_SLOW_READS_INTERVAL_MS = 5 * 60_000;
+let tasksSlowReads = { at: 0, scope: null };
+let lastRefreshTab = null;
+// The workspace visit whose crew options are cached, so a tick reuses them.
+let crewsRevision = null;
 let activeFrictionId = null;
 let frictionSearchQuery = "";
 let frictionStatusFilter = DEFAULT_FRICTION_STATUS_FILTER;
@@ -1126,10 +1135,10 @@ function navigateTaskPage(direction) {
   }
   taskPageError = null;
   taskScrollResetPending = true;
-  fetchAndRenderTasks().catch((error) => console.error("Failed to navigate task pages", error));
+  fetchAndRenderTasks({ includeCrews: false }).catch((error) => console.error("Failed to navigate task pages", error));
 }
 
-function fetchAndRenderTasks() {
+function fetchAndRenderTasks({ includeCrews = true } = {}) {
   // In global mode with the aggregate ("All workspaces") view selected, pull
   // every workspace's tasks; otherwise the single/selected workspace's tasks
   // (the workspace query param is applied by fetchJson).
@@ -1137,7 +1146,11 @@ function fetchAndRenderTasks() {
   const detailId = !aggregate && !taskState.pinnedExternalTask ? taskState.selectedTaskId : null;
   const detailSnapshot = taskDetailSnapshot(detailId);
   const includeRuns = Boolean(detailId && taskRunsTabActive());
-  const path = tasksListPath(aggregate ? "/api/tasks/all" : "/api/tasks", detailId, includeRuns);
+  const base = aggregate ? "/api/tasks/all" : "/api/tasks";
+  const path = tasksListPath(base, detailId, includeRuns);
+  // The panel's scope is the list it shows. The bundled detail of the selected
+  // task is left out, so opening a task does not reset and rebuild the list.
+  const scope = tasksListPath(base);
   const sequence = ++taskFetchSequence;
   taskPageLoading = true;
   taskPageError = null;
@@ -1149,11 +1162,18 @@ function fetchAndRenderTasks() {
   // previously-selected concrete workspace so the fallback is consistent (a
   // stale, still-enabled crew <select> would PATCH with no workspace).
   if (aggregate) cacheCrewPayload({ crews: [] });
-  return requestPanel("tasks-body", path, () => Promise.all([
+  // Crew options change with configuration, not with tasks: a refresh that
+  // does not ask for them reuses this workspace visit's cached options.
+  const revision = getWorkspaceRevision();
+  const fetchCrews = !aggregate && (includeCrews || crewsRevision !== revision);
+  return requestPanel("tasks-body", scope, () => Promise.all([
     fetchJson(path),
-    aggregate ? Promise.resolve({ crews: [] }) : fetchJson("/api/crews"),
+    fetchCrews ? fetchJson("/api/crews") : Promise.resolve(null),
   ]), ([payload, crews]) => {
-    cacheCrewPayload(crews);
+    if (crews) {
+      cacheCrewPayload(crews);
+      crewsRevision = revision;
+    }
     // Both task-list endpoints answer `{ items, total, limit, truncated }`.
     const tasks = listItems(payload);
     const refreshedDetail = payload && payload.detail;
@@ -1329,24 +1349,50 @@ function persistWorkspaceToUrl(id) {
   persistScopeToUrl();
 }
 
-function activeRefreshJobs() {
+// Whether this refresh makes the Tasks page's slow reads: always off the Tasks
+// page, and on it when the page was just entered, on an explicit Refresh,
+// after a host or workspace change, or once the slow cadence has elapsed.
+function tasksSlowReadsDue(explicit) {
+  const entered = lastRefreshTab !== activeTab;
+  lastRefreshTab = activeTab;
+  if (activeTab !== "tasks") return true;
+  const scope = `${getHostRevision()}:${getWorkspaceRevision()}`;
+  const due = explicit || entered || tasksSlowReads.scope !== scope
+    || Date.now() - tasksSlowReads.at >= TASKS_SLOW_READS_INTERVAL_MS;
+  if (due) tasksSlowReads = { at: Date.now(), scope };
+  return due;
+}
+
+// The Locks held panel shows while the dock is on its Drain or Locks view and
+// no task pane has replaced the dock.
+function locksPanelShown() {
+  const panel = $("locks-panel");
+  if (!panel || typeof panel.getClientRects !== "function") return true;
+  return panel.getClientRects().length > 0;
+}
+
+function activeRefreshJobs({ poll = false, explicit = false } = {}) {
   // ORB-00039: in the aggregate "All workspaces" view there is no concrete
   // workspace to scope per-workspace endpoints to, so skip every per-workspace
   // fetch (they'd 400) and render placeholders for the panels they feed. Only
   // the cross-workspace aggregate task list (/api/tasks/all) is fetched.
   const aggregate = isAggregateView();
+  const slowReads = tasksSlowReadsDue(explicit);
 
-  // The health strip is global; refresh on every tick alongside the active tab.
+  // The health strip is global; refresh on every tick alongside the active tab,
+  // except that the Tasks page reads it on its slow cadence (tasksSlowReadsDue).
   // The per-workspace summary (/api/audit/summary) is replaced by a placeholder
   // instead of fetched in aggregate mode. Host chips start on this tick too,
   // but a stalled /api/host/resources must not leave the status line on
   // "fetching…" or postpone the next poll. The call has its own 30s abort.
-  void fetchAndRenderHostResources().catch(error => console.error(error));
+  // The chips also read every 5 s on their own (initHostResources), so the
+  // Tasks page's tick leaves them to that.
+  if (!(poll && activeTab === "tasks")) void fetchAndRenderHostResources().catch(error => console.error(error));
   // The Health rail's doctor count comes from the server's cached report;
   // the poll never runs doctor itself (ORB-14830).
-  void peekDoctor().catch(error => console.error(error));
+  if (slowReads) void peekDoctor().catch(error => console.error(error));
   // Routines and Jobs already read this status in their active-panel request.
-  if (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate) {
+  if (slowReads && (activeTab !== "operations" || activeOperationsSubtab === "auto-tasks" || aggregate)) {
     void peekRoutineFailures().catch(error => console.error(error));
   }
   const jobs = [];
@@ -1357,7 +1403,7 @@ function activeRefreshJobs() {
   };
   if (aggregate) {
     renderAggregatePlaceholders();
-  } else {
+  } else if (slowReads) {
     add("Health summary", fetchAndRenderSummary());
   }
   const includeRunningRuns = activeTab === "tasks" && !aggregate && activeStatuses.has("in-progress");
@@ -1369,13 +1415,14 @@ function activeRefreshJobs() {
     ? lastTasks.find((task) => task.id === taskState.selectedTaskId)
     : null;
   const detailTaskId = ["proposed", "backlog"].includes(selectedTask?.status) ? selectedTask.id : null;
-  add("Drain", fetchAndRenderAutoDrainPane({ detailTaskId }));
+  add("Drain", fetchAndRenderAutoDrainPane({ detailTaskId, forecast: slowReads }));
 
   if (activeTab === "tasks") {
-    add("Tasks", fetchAndRenderTasks());
-    // Task rows show their locked-file counts, and the dock beside them holds
-    // the Locks held panel.
-    if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
+    add("Tasks", fetchAndRenderTasks({ includeCrews: slowReads }));
+    // In progress and Blocked rows show their locked-file counts, and the dock
+    // beside the list holds the Locks held panel; read locks while either shows.
+    const runRowsShown = activeStatuses.has("in-progress") || activeStatuses.has("blocked");
+    if (!aggregate && !document.hidden && (runRowsShown || locksPanelShown())) add("Locked files", fetchAndRenderTaskLocks());
     // When each running task's run started, for the In progress rows' elapsed
     // time. Only while that group can show.
     if (includeRunningRuns) add("Running runs", fetchRunningRuns(activeRunsRequest));
@@ -1829,7 +1876,9 @@ function showHostUnavailable(now) {
   markRefreshStale(true);
 }
 
-async function refreshDashboard() {
+// `poll` marks the visible tab's 30 s tick, whose re-reads of loaded panels are
+// quiet; `explicit` marks the Refresh button, which also makes the slow reads.
+async function refreshDashboard({ poll = false, explicit = false } = {}) {
   const sequence = ++refreshSequence;
   const host = getHost();
   setMetaText("fetching…");
@@ -1844,7 +1893,7 @@ async function refreshDashboard() {
   }
   const revision = getWorkspaceRevision();
   // Refresh stays available so a slow request never locks navigation or retry.
-  const jobs = activeRefreshJobs();
+  const jobs = runPanelPoll(poll, () => activeRefreshJobs({ poll, explicit }));
   const results = await Promise.allSettled(jobs.map(job => job.request));
   if (sequence !== refreshSequence || revision !== getWorkspaceRevision()) return null;
   const errors = results.flatMap((result, index) => result.status === "rejected"
@@ -1951,7 +2000,7 @@ function wireClockControls() {
   syncClockControls();
 }
 
-$("refresh-btn").addEventListener("click", refreshDashboard);
+$("refresh-btn").addEventListener("click", () => refreshDashboard({ explicit: true }));
 wireClockControls();
 initHostResources();
 wireReliabilityWindowSelector();

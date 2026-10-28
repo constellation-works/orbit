@@ -530,7 +530,10 @@ function panelStatusHost(body) {
 function panelMessage(bodyId, state) {
   const body = document.getElementById(bodyId);
   if (!body) return;
-  body.setAttribute("aria-busy", state.pending ? "true" : "false");
+  // A poll's re-read of a panel that already shows data is quiet: the panel
+  // keeps reading as settled, so a tick that changes nothing writes nothing.
+  const busy = state.pending && !(state.loaded && state.poll) ? "true" : "false";
+  if (body.getAttribute("aria-busy") !== busy) body.setAttribute("aria-busy", busy);
   const host = panelStatusHost(body);
   let note = Array.from(host.children).find(node => node.dataset.panelStatus);
   if (!note) {
@@ -604,11 +607,25 @@ onWorkspaceChange(() => {
   for (const [bodyId, state] of panelRequests) resetPanel(bodyId, state.countId);
 });
 
+// Set while the visible tab's poll starts its panel requests (runPanelPoll).
+let pollingPanels = false;
+
+/// Start a refresh's panel requests; `poll` marks them as the background tick.
+export function runPanelPoll(poll, start) {
+  const previous = pollingPanels;
+  pollingPanels = Boolean(poll);
+  try {
+    return start();
+  } finally {
+    pollingPanels = previous;
+  }
+}
+
 export async function requestPanel(bodyId, scope, request, render, countId) {
   const revision = getWorkspaceRevision();
   const previous = panelRequests.get(bodyId);
   if (!previous || previous.scope !== scope) resetPanel(bodyId, countId);
-  const state = { ...panelRequests.get(bodyId), scope, pending: true, error: null };
+  const state = { ...panelRequests.get(bodyId), scope, pending: true, error: null, poll: pollingPanels };
   panelRequests.set(bodyId, state);
   panelMessage(bodyId, state);
   const current = () => revision === getWorkspaceRevision() && panelRequests.get(bodyId) === state;
@@ -881,7 +898,9 @@ function syncRovingRows(container) {
   const current = rows.find((row) => state.key !== null && rowIdentity(row) === state.key) || rows[0];
   for (const row of rows) {
     const tabIndex = row === current ? 0 : -1;
-    for (const control of row.querySelectorAll(ROW_CONTROLS)) control.tabIndex = tabIndex;
+    for (const control of row.querySelectorAll(ROW_CONTROLS)) {
+      if (control.tabIndex !== tabIndex) control.tabIndex = tabIndex;
+    }
   }
 }
 
@@ -1267,8 +1286,7 @@ export function syncNodes(container, newNodesArr) {
     teardownNode(node);
   };
 
-  for (let i = 0; i < newNodesArr.length; i++) {
-    const newNode = newNodesArr[i];
+  const placed = newNodesArr.map((newNode) => {
     const key = newNode.dataset.key;
     let nodeToPlace = newNode;
 
@@ -1286,29 +1304,27 @@ export function syncNodes(container, newNodesArr) {
     if (newNode !== nodeToPlace) {
       teardownOnce(newNode);
     }
-    if (key) nodeToPlace.dataset.clockZone = clockZone;
+    if (key && nodeToPlace.dataset.clockZone !== clockZone) nodeToPlace.dataset.clockZone = clockZone;
+    return nodeToPlace;
+  });
 
-    if (container.children[i] !== nodeToPlace) {
-      if (container.children[i]) {
-        container.insertBefore(nodeToPlace, container.children[i]);
-      } else {
-        container.appendChild(nodeToPlace);
-      }
-    }
-  }
-
-  while (container.children.length > newNodesArr.length) {
-    const removed = container.lastElementChild;
-    container.removeChild(removed);
-    teardownOnce(removed);
-  }
-
-  const currentChildren = new Set(container.children);
+  // Nodes leaving the list, a replaced row's old node among them, go first.
+  // Placing then moves only nodes whose order changed, so one changed row is
+  // one swap in place rather than a shift of every sibling after it.
+  const kept = new Set(placed);
   for (const node of oldNodes) {
-    if (!currentChildren.has(node)) {
+    if (!kept.has(node)) {
+      container.removeChild(node);
       teardownOnce(node);
     }
   }
+
+  placed.forEach((node, i) => {
+    const current = container.children[i];
+    if (current === node) return;
+    if (current) container.insertBefore(node, current);
+    else container.appendChild(node);
+  });
 
   if (state) panelMessage(container.id, state);
   syncRovingRows(container);
