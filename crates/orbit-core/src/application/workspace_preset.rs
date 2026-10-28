@@ -605,8 +605,9 @@ fn effective_routine_catalog_lookup(
 ///
 /// The host plugin rows are read from a read-only store and pass the same
 /// grant, install-path, build-witness and definition checks a runtime load
-/// applies; the workspace `[plugin_enablement]` toggles then narrow them as
-/// the runtime does. A host with no plugin store has no active plugin.
+/// applies. Workspace `[plugin_enablement]` toggles exclude disabled plugins
+/// before contribution collisions are resolved, as in the runtime. A host
+/// with no plugin store has no active plugin.
 fn active_plugin_job_files(
     global_root: &Path,
     workspace_orbit_root: &Path,
@@ -622,16 +623,17 @@ fn active_plugin_job_files(
     // When the preset stages config, plugin eligibility is judged against
     // the staged effective sections; otherwise the on-disk sections apply.
     let plugin_sections = staged_plugin_sections.unwrap_or(&config.plugins);
-    let (_registry, load) = crate::runtime::plugin::discovery::host_plugin_registry(
+    let (_registry, load) = crate::runtime::plugin::discovery::workspace_plugin_registry(
         global_root,
+        workspace_orbit_root,
         &config.persistence.audit_db,
         plugin_sections,
+        &config.plugin_enablement,
     )?;
     Ok(load
         .registered
         .iter()
         .filter(|entry| entry.status == orbit_types::plugin::PluginStatus::Active)
-        .filter(|entry| config.plugin_enablement.get(&entry.name) != Some(&false))
         .filter_map(|entry| entry.loaded.as_ref())
         .filter(|plugin| !plugin.definitions.jobs.is_empty())
         .map(|plugin| {
