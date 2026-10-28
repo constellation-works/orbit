@@ -50,11 +50,20 @@ export function mergeTaskRecord(previous, updated) {
   return merged;
 }
 
+// Capture the cached object's identity before starting a list request.
+export function taskDetailSnapshot(taskId) {
+  return taskDetails.get(taskId);
+}
+
 // The Tasks refresh can carry its selected task's full projection in the list
 // response. Seed the same cache the detail endpoint owns so rendering that
 // refreshed row does not issue a duplicate GET for the same task.
-export function primeTaskDetail(summary, full) {
+export function primeTaskDetail(summary, full, snapshot) {
   if (!summary?.id || full?.id !== summary.id || !isTaskSummary(summary)) return;
+  // A save or detail read completed after this list request began. Keep that
+  // newer projection; the new summary will trigger a fresh detail GET instead
+  // of treating the list's potentially pre-save projection as already loaded.
+  if (taskDetails.get(summary.id) !== snapshot) return;
   const merged = mergeTaskRecord(summary, full);
   taskDetails.set(summary.id, merged);
   taskDetailLoads.set(summary.id, {

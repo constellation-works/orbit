@@ -27,7 +27,7 @@ import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJo
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { taskState } from './js/task-shared.js';
-import { primeTaskDetail } from './js/task-data.js';
+import { primeTaskDetail, taskDetailSnapshot } from './js/task-data.js';
 import { primeTaskRuns, taskRunsTabActive } from './js/task-detail.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
 import { fetchAndRenderHostResources, initHostResources } from './js/host-resources.js';
@@ -1127,6 +1127,7 @@ function fetchAndRenderTasks() {
   // (the workspace query param is applied by fetchJson).
   const aggregate = isAggregateView();
   const detailId = !aggregate && !taskState.pinnedExternalTask ? taskState.selectedTaskId : null;
+  const detailSnapshot = taskDetailSnapshot(detailId);
   const includeRuns = Boolean(detailId && taskRunsTabActive());
   const path = tasksListPath(aggregate ? "/api/tasks/all" : "/api/tasks", detailId, includeRuns);
   const sequence = ++taskFetchSequence;
@@ -1151,7 +1152,7 @@ function fetchAndRenderTasks() {
     const selectedTaskSummary = includeRuns ? tasks.find((task) => task.id === detailId) : null;
     if (refreshedDetail && typeof refreshedDetail.id === "string") {
       const summary = tasks.find((task) => task.id === refreshedDetail.id);
-      if (summary) primeTaskDetail(summary, refreshedDetail);
+      if (summary) primeTaskDetail(summary, refreshedDetail, detailSnapshot);
     }
     if (includeRuns && (payload?.detail_runs || payload?.detail_runs_error)) {
       primeTaskRuns(detailId, payload.detail_runs || { error: payload.detail_runs_error }, selectedTaskSummary);
