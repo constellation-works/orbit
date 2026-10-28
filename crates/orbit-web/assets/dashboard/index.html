@@ -211,6 +211,11 @@
         </div>
         <!-- The dock gives way to the task pane when one opens. -->
         <div class="tasks-dock" id="tasks-dock">
+          <!-- The dock starts level with the first task block (log-tail.js sets
+               --tasks-dock-lead); when that leaves room above the tabs, the
+               selected host's readings fill it, repainted with the rail's Host
+               block by host-resources.js. -->
+          <div class="host-strip stale" id="tasks-host-strip" role="group" aria-label="Host resources: unknown"></div>
           <div class="col-log" id="side-dock" data-home="tasks" data-mode="drain" data-card="drain">
             <div class="dock-head">
               <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Drain views">

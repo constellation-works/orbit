@@ -850,6 +850,18 @@ main.tasks-layout.task-pane-open > .tasks-dock { display: none; }
   .tasks-dock { display: none; }
 }
 .tasks-dock #side-dock { flex: 1 1 auto; gap: 12px; }
+/* The dock starts level with the first task block: log-tail.js sets
+   `--tasks-dock-lead` to the room above the tabs that takes. With room for it
+   (`data-strip="on"`) the host strip fills it up to 88px, level with the
+   toolbar; with less, the room stays an empty spacer. */
+.tasks-dock { --tasks-dock-lead: 0px; }
+.tasks-dock .host-strip {
+  flex: 0 0 auto;
+  height: min(calc(var(--tasks-dock-lead) - 12px), 88px);
+  margin-bottom: max(12px, calc(var(--tasks-dock-lead) - 88px));
+}
+.tasks-dock:not([data-strip="on"]) .host-strip { display: none; }
+.tasks-dock:not([data-strip="on"]) #side-dock { margin-top: var(--tasks-dock-lead); }
 .tasks-dock .drain-throttle-line { display: block; }
 .tasks-dock #dock-pane-drain { overflow-y: auto; padding-bottom: 16px; }
 .tasks-dock .drain-columns { display: block; }
@@ -881,6 +893,68 @@ main.tasks-layout.task-pane-open > .tasks-dock { display: none; }
   white-space: nowrap;
 }
 .tasks-dock #dock-pane-log > #log-panel { flex: 1 1 auto; }
+
+/* The host strip: the rail Host block's readings as a horizontal row. Rows
+   reuse .host-resource, so severity, held state and tooltips are the rail's. */
+.host-strip {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 0 12px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-control);
+  color: var(--fg-mute);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.host-strip.elevated { border-color: var(--warn-line); background: var(--warn-wash); }
+.host-strip.critical { border-color: var(--danger-line); background: var(--danger-wash); }
+.host-strip.stale { border-style: dashed; border-color: var(--border-strong); opacity: 0.8; }
+.host-strip-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-width: 0; }
+.host-strip-kicker {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.host-strip-verdict { display: inline-flex; align-items: flex-start; justify-content: flex-end; gap: 5px; min-width: 0; color: var(--fg-dim); font-variant-numeric: tabular-nums; text-align: right; }
+.host-strip-dot { flex: none; width: 6px; height: 6px; margin-top: 4px; border-radius: 50%; background: var(--status-done); }
+.host-strip.elevated .host-strip-verdict { color: var(--warn-fg); }
+.host-strip.elevated .host-strip-dot { background: var(--warn-fg); }
+.host-strip.critical .host-strip-verdict { color: var(--danger-fg); }
+.host-strip.critical .host-strip-dot { background: var(--danger-fg); }
+.host-strip.stale .host-strip-dot { background: var(--fg-disabled); }
+.host-strip-rows { display: grid; grid-template-columns: repeat(auto-fit, minmax(3.75rem, 1fr)); gap: 6px 12px; min-width: 0; }
+.host-strip .host-resource,
+.host-strip .host-resource[data-resource] {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: baseline;
+  gap: 4px 6px;
+  min-width: 0;
+  height: auto;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 12px;
+}
+.host-strip .host-resource .k { color: var(--fg-mute); }
+.host-strip .host-resource .v { justify-self: end; color: var(--fg); font-weight: 400; }
+.host-strip .host-resource.elevated,
+.host-strip .host-resource.elevated .k,
+.host-strip .host-resource.elevated .v { color: var(--warn-fg); }
+.host-strip .host-resource.critical,
+.host-strip .host-resource.critical .k,
+.host-strip .host-resource.critical .v { color: var(--danger-fg); }
+.host-strip .host-resource.unknown .v { color: var(--fg-dim); }
+.host-strip .host-resource.throttled { outline: none; }
+.host-strip .host-resource-bar { display: block; grid-column: 1 / -1; width: auto; height: 4px; margin: 0; background: var(--border-strong); }
 
 /* The task pane: the list, a resizer, then the selected task's detail at the
    operator's remembered share of the width (`--task-pane-width`, set from

@@ -193,6 +193,48 @@ export function revealDockStart() {
   card.scrollIntoView?.({ block: "nearest" });
 }
 
+// The least room above the tabs that the host strip fits in (its height, plus
+// the 12px gap that tasks.css puts between it and the tabs).
+const DOCK_STRIP_MIN_LEAD = 72;
+
+/// Level the dock's content with the first task block. `--tasks-dock-lead` on
+/// #tasks-dock is the room above the tabs that takes; it is measured against
+/// where the dock's view sits now, so a repeat run settles on the same value.
+/// Room for the host strip turns it on (`data-strip`), less leaves it a spacer.
+export function alignTasksDock() {
+  const dock = $("tasks-dock");
+  const body = $("tasks-body");
+  const pane = dock && Array.from(dock.querySelectorAll(".dock-pane")).find(node => node.getClientRects().length);
+  if (!pane || !body) return;
+  const first = body.querySelector(":scope > .group-header, :scope > .row");
+  const target = first ? first.getBoundingClientRect().top + body.scrollTop : body.getBoundingClientRect().top;
+  const current = parseFloat(dock.style.getPropertyValue("--tasks-dock-lead")) || 0;
+  const lead = Math.max(0, Math.round((current + target - pane.getBoundingClientRect().top) * 100) / 100);
+  if (Math.abs(lead - current) >= 0.01) dock.style.setProperty("--tasks-dock-lead", `${lead}px`);
+  dock.dataset.strip = lead >= DOCK_STRIP_MIN_LEAD ? "on" : "off";
+}
+
+// Re-level whenever something above the first task block, or the dock itself,
+// changes size or is redrawn: the toolbar wrapping, the notice row, a new list,
+// the dock coming back after a task closes.
+function wireDockAlignment() {
+  const dock = $("tasks-dock");
+  const panel = $("tasks-panel");
+  if (!dock || !panel || typeof ResizeObserver !== "function") return;
+  let queued = false;
+  const queue = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; alignTasksDock(); });
+  };
+  const resize = new ResizeObserver(queue);
+  resize.observe(dock);
+  for (const node of panel.children) resize.observe(node);
+  for (const node of panel.querySelectorAll(":scope > header > *")) resize.observe(node);
+  new MutationObserver(queue).observe($("tasks-body"), { childList: true });
+  queue();
+}
+
 function wireDockModeToggle() {
   const toggle = $("dock-mode-toggle");
   if (!toggle) return;
@@ -486,6 +528,7 @@ export function initLogTail() {
   wireLogVisibility();
   wireLogPanelPreferences();
   wireLogWrapToggle();
+  wireDockAlignment();
   fitLogPanelToViewport();
   syncLogFilterPills();
   loadLogSnapshot();
