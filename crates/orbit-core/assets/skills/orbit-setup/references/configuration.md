@@ -249,9 +249,12 @@ values with their source, or `orbit config get <key>` for one value.
 An operator creates an experiment as a draft, edits a draft with `update`, or
 copies a definition into a new draft with `clone`. `start` opens the first
 segment and freezes the definition. Operators may `pause` and `resume`,
-`reweight` a running or paused experiment to open a new segment, or `assign` an
-unassigned nonterminal task to an active arm of a running experiment in either
-mode. They finish with `conclude` (recording a chosen arm or no choice) or
+`reweight` a running or paused experiment to open a new segment, or `assign` a
+nonterminal task to an active arm of a running experiment in either mode when
+the task has no assignment for that experiment or has only an
+`explicit_crew` exclusion for it. Existing arm assignments and other exclusions
+for that experiment remain sticky. They finish with `conclude` (recording a
+chosen arm or no choice) or
 `abandon` (without a conclusion). An agent session may only use these
 read-only commands:
 
