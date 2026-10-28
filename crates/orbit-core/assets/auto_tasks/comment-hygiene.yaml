@@ -107,15 +107,14 @@ template:
        and exclude every candidate a listed task's `context_files` footprint
        covers (an exact `file:` selector, or a `dir:` selector containing it).
        An excluded file is not selected and gets no ledger row; name the files
-       skipped this way, with the holding task, in the execution summary.
-    5. Escalate repeat skips. A candidate whose two most recent carried rows
+       skipped this way, with the holding task, in the assessment rationale.
+    5. Hold repeat skips. A candidate whose two most recent carried rows
        both have outcome `skipped` or `partial` is not selected. List it in the
-       execution summary as needing its own task (for example range-by-range
-       checking of an oversized file) with both reasons. Optionally file
-       that task: first search `orbit tool run orbit.search --input '{"query":"<the path>","kind":"task","all":true,"model":"<agent-family>"}'`
-       and skip the path when an open task already names it, then
-       `orbit tool run orbit.task.add --input '{"title":"Check comments in <path> range by range","description":"<why it was skipped, with the ledger reasons>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","type":"chore","tags":["comment-hygiene","comment-hygiene-escalation"],"context_files":["file:<path>"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"low","workspace":"<current workspace path>","model":"<agent-family>"}'`.
-       A later `clean` or `fixed` row for the path ends the escalation.
+       assessment rationale as needing its own task (for example range-by-range
+       checking of an oversized file) with both reasons. The executing run
+       files that task from the carried state, after the ledger is attached
+       (see "Escalate repeat skips"), because preparation holds no task-write
+       grant.
     6. Order the rest: files changed since their last check first, oldest
        `attempted_on` first; then never-checked files, oldest git date first
        (the date part of `git log -1 --format=%cI -- <path>`). Break ties by
@@ -127,6 +126,11 @@ template:
        within the line budget; it is not `clean` until every range of it has
        been checked. If no candidates remain, explain why in the execution
        summary and finish without a diff.
+
+    The selected `file:` selectors, in selection order, are the footprint the
+    preparation returns as `context_files_after`. Include every selected file,
+    even one that may end `clean`: the executing run reads each of them and
+    may edit any of them, so an omitted file would be unlocked while checked.
 
     ## Use the prepared footprint
 
@@ -223,6 +227,15 @@ template:
     an edit to mark a clean run complete; when no file required changes,
     follow the workspace's validated no-diff evidence requirements (attach
     `no-diff.json` and captured validation logs).
+    ## Escalate repeat skips
+
+    After the ledger is attached, file a dedicated task for each path in the
+    new `state` whose two newest rows both have outcome `skipped` or `partial`.
+    First search `orbit tool run orbit.search --input '{"query":"<the path>","kind":"task","all":true,"model":"<agent-family>"}'`
+    and skip the path when an open task already names it, then
+    `orbit tool run orbit.task.add --input '{"title":"Check comments in <path> range by range","description":"<why it was skipped, with the ledger reasons>","acceptance_criteria":["<observable outcome>"],"complexity":"medium","type":"chore","tags":["comment-hygiene","comment-hygiene-escalation"],"context_files":["file:<path>"],"relations":[{"type":"spawned_from","target":"<this task ID>"}],"priority":"low","workspace":"<current workspace path>","model":"<agent-family>"}'`.
+    Name every filed task in the execution summary. A later `clean` or `fixed`
+    row for the path ends the escalation.
   acceptance_criteria:
   - At most six files and about 1,500 lines were selected, ordered changed-since-last-check first (oldest check first) then never-checked (oldest git date first), ties by path; files unchanged since a `clean`/`fixed` check and files in an open or in-progress task's footprint were not selected, and a missing or unreadable ledger is stated explicitly.
   - Every selected file has an outcome of `clean`, `fixed`, `partial` or `skipped`; a file over 800 lines was taken alone or as recorded ranges and is not `clean` until every range is checked; a `skipped` or `partial` file gives a reason.

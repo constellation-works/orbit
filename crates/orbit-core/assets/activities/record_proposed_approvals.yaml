@@ -15,7 +15,9 @@ spec:
     counted once, and the held view of every remaining `proposed` task is
     refreshed with its reason: the qualification it misses, the task-pilot
     classification that held it, `pilot_running` while a live pilot carries
-    it, or `pilot_unresolved` when the pilot left no decision. A task whose
+    it, or `pilot_unresolved` when the pilot left no decision. That record is
+    written onto the task, so later drains hold it the same way until it
+    changes; a pilot that failed on a provider outage writes none. A task whose
     current pilot assessment is `verified_no_diff` (and is not tagged
     `no-diff-expected`) is held as `pilot_verified_no_diff` with the pilot's
     evidence and cited commits; one Orbit automation filed is archived
