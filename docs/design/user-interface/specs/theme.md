@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canon Refined Theme"
 tags: ["user-interface"]
-last_validated: 2026-10-24
+last_validated: 2026-10-28
 ---
 
 # Spec: Canon Refined Theme
