@@ -49,6 +49,11 @@ fn row<'a>(rows: &'a [Value], name: &str) -> &'a Value {
 /// storage diagnostic. The command must expose both without running broad checks.
 #[test]
 fn doctor_admission_receipts_reports_storage_and_compacts() {
+    if crate::isolated_test::run_in_child(
+        "doctor::doctor_admission_receipts_reports_storage_and_compacts",
+    ) {
+        return;
+    }
     let fixture = WorkCheckout::new();
     command(&fixture)
         .args(["workspace", "init", "--name", "receipt-maintenance"])
