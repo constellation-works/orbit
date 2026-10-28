@@ -708,6 +708,30 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
                 self.assertEqual(report["bump"], "patch")
                 self.assertEqual(report["next_version"], "0.35.1")
 
+    def test_removing_whole_applicator_with_surviving_sibling_is_additive(self):
+        # Deleting a whole keyword relaxes the schema when the sibling keyword
+        # still constrains the same location (ORB-19578).
+        for keep, delete in (("anyOf", "oneOf"), ("oneOf", "anyOf")):
+            with self.subTest(keep=keep, delete=delete):
+                tools = self.repo.mcp()
+                schema = tools[0]["inputSchema"]
+                schema.pop("anyOf", None)
+                schema.pop("oneOf", None)
+                schema["anyOf"] = [{"required": ["view"]}]
+                schema["oneOf"] = [{"required": ["mode"]}]
+                self.repo.write_mcp(tools)
+                self.repo.commit("feat: Add co-located applicators [ORB-82] (#1)")
+                self.repo.git("tag", "-f", "v0.35.0")
+
+                del schema[delete]
+                self.repo.write_mcp(tools)
+                self.repo.commit(f"feat: Remove whole {delete} with {keep} surviving [ORB-83] (#2)")
+
+                report = self.report("--range", "v0.35.0..HEAD")
+                self.assertEqual(report["signals"], [])
+                self.assertEqual(report["bump"], "patch")
+                self.assertEqual(report["next_version"], "0.35.1")
+
     def test_removing_nested_input_mcp_applicator_is_additive(self):
         tools = self.repo.mcp()
         options = {
