@@ -27,19 +27,7 @@ fn disabled_and_stale_admissions_enroll_once_experiments_run() {
         "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[experiments]\nenabled = false\n",
     )
     .unwrap();
-    let job_path = root.path().join("task_local_pipeline.yaml");
-    std::fs::write(
-        &job_path,
-        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_local_pipeline\nspec:\n  state: enabled\n  steps: []\n",
-    )
-    .unwrap();
-    orbit_core::test_support::install_substitute_pipeline_worker([
-        std::env::current_exe()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned(),
-        "--list".to_string(),
-    ]);
+    let job_path = capture_job(root.path());
 
     // This runtime keeps the disabled settings snapshot after the config is
     // enabled below, just like a long-lived drain process.
@@ -124,6 +112,116 @@ fn disabled_and_stale_admissions_enroll_once_experiments_run() {
             .as_deref(),
         captured_arm
     );
+}
+
+#[test]
+fn disabled_setting_stops_new_enrollment_but_keeps_sticky_rows() {
+    if !super::dispatch_admission::isolated(
+        "experiment_lifecycle::disabled_setting_stops_new_enrollment_but_keeps_sticky_rows",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let config_path = workspace.join("config.toml");
+    std::fs::write(
+        &config_path,
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let job_path = capture_job(root.path());
+
+    let enabled_runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "experiment-lifecycle-test".into(),
+        reason: None,
+    };
+    let experiment = enabled_runtime
+        .create_experiment(
+            "disabled-after-start",
+            ExperimentDefinitionInput {
+                arms: Some(json!([
+                    { "name": "control", "control": true },
+                    { "name": "treatment" }
+                ])),
+                primary_metric: Some("implement_tokens".into()),
+                ..ExperimentDefinitionInput::default()
+            },
+            actor.clone(),
+        )
+        .unwrap();
+    enabled_runtime
+        .change_experiment(&experiment.id, ExperimentChange::Start, actor)
+        .unwrap();
+    let sticky_task = enabled_runtime
+        .add_task(TaskAddParams {
+            title: "Task enrolled while the experiment runs".into(),
+            complexity: TaskComplexity::Medium,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .unwrap();
+    let fresh_task = enabled_runtime
+        .add_task(TaskAddParams {
+            title: "Task admitted after experiments were disabled".into(),
+            complexity: TaskComplexity::Medium,
+            task_type: Some(TaskType::Chore),
+            status: Some(TaskStatus::Backlog),
+            ..TaskAddParams::default()
+        })
+        .unwrap();
+
+    let sticky_capture = submit_experiment_capture(&enabled_runtime, &job_path, &sticky_task.id);
+    assert_eq!(sticky_capture["assignments"].as_array().unwrap().len(), 1);
+    let sticky_rows = enabled_runtime.task_experiments(&sticky_task.id).unwrap();
+
+    // Turn experiments off without pausing the running experiment, then open a
+    // fresh runtime that reads the disabled setting.
+    std::fs::write(
+        &config_path,
+        "[workflow]\ndefault_crew = \"sol\"\n\n[crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n[experiments]\nenabled = false\n",
+    )
+    .unwrap();
+    let disabled_runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+
+    let fresh_capture = submit_experiment_capture(&disabled_runtime, &job_path, &fresh_task.id);
+    assert!(fresh_capture["assignments"].as_array().unwrap().is_empty());
+    assert!(
+        disabled_runtime
+            .task_experiments(&fresh_task.id)
+            .unwrap()
+            .is_empty()
+    );
+
+    // The sticky assignment is still captured and stored, unchanged.
+    let kept_capture = submit_experiment_capture(&disabled_runtime, &job_path, &sticky_task.id);
+    assert_eq!(kept_capture["assignments"], sticky_capture["assignments"]);
+    assert_eq!(
+        disabled_runtime.task_experiments(&sticky_task.id).unwrap(),
+        sticky_rows
+    );
+}
+
+fn capture_job(root: &std::path::Path) -> std::path::PathBuf {
+    let job_path = root.join("task_local_pipeline.yaml");
+    std::fs::write(
+        &job_path,
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_local_pipeline\nspec:\n  state: enabled\n  steps: []\n",
+    )
+    .unwrap();
+    orbit_core::test_support::install_substitute_pipeline_worker([
+        std::env::current_exe()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned(),
+        "--list".to_string(),
+    ]);
+    job_path
 }
 
 fn submit_experiment_capture(

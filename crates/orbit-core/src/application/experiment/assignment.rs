@@ -15,7 +15,7 @@ impl OrbitRuntime {
         &self,
         task: &Task,
     ) -> Result<Vec<ExperimentAssignment>, OrbitError> {
-        let enabled = self.experiment_settings().enabled;
+        let enabled = self.current_experiments_enabled();
         self.sqlite_store()?.assign_experiments(
             &self.workspace_id()?,
             &task.id,
@@ -113,7 +113,7 @@ impl OrbitRuntime {
                 "cannot assign an experiment to a terminal task".into(),
             ));
         }
-        if !self.experiment_settings().enabled {
+        if !self.current_experiments_enabled() {
             return Err(OrbitError::PolicyDenied(
                 "experiments.enabled is false".into(),
             ));
