@@ -5102,6 +5102,8 @@ struct DeliveryHost {
     failing: Mutex<BTreeMap<String, String>>,
     failure_checkpoints: Mutex<Vec<(String, String, Value)>>,
     fail_evidence_writes: Mutex<bool>,
+    /// Task-history events whose automation writes this host refuses.
+    fail_history_events: Mutex<Vec<String>>,
     artifacts: Mutex<BTreeMap<(String, String), Vec<u8>>>,
     artifact_creators: Mutex<BTreeMap<(String, String), String>>,
     releases: Mutex<Vec<ReviewReleaseRequest>>,
@@ -5491,6 +5493,15 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         Ok(task.clone())
     }
     fn apply_task_automation_update(&self, task_id: &str, update: TaskAutomationUpdate) -> Res<()> {
+        let refused = update
+            .append_history
+            .iter()
+            .any(|entry| locked(&self.fail_history_events).contains(&entry.event));
+        if refused {
+            return Err(OrbitError::Execution(format!(
+                "history write for task {task_id} refused by the test host"
+            )));
+        }
         let mut tasks = locked(&self.tasks);
         let task = tasks
             .get_mut(task_id)

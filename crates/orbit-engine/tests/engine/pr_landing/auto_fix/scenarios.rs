@@ -2734,6 +2734,42 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
     assert!(fx.merge_requests().is_empty(), "{case}: no merge");
 }
 
+/// Plants a candidate whose `CI / test` failed on run 11, attempt 1, beside a
+/// passing older base run: the state an untouched-path failure holds on.
+fn plant_older_green_base(fx: &Fixture) {
+    let log = "error: source failure\n --> src/contract:1:1\n";
+    plant_commit_ci(fx, &fx.candidate, 11, "failure", log);
+    plant_commit_ci(fx, &fx.base_sha, 21, "success", "passed");
+    for (sha, start, end, conclusion) in [
+        (&fx.candidate, "05:00:00", "05:01:00", "failure"),
+        (&fx.base_sha, "04:58:00", "04:59:00", "success"),
+    ] {
+        let dir = fx.forge.join("commit-ci").join(sha);
+        let mut jobs = jobs_listing(
+            if sha == &fx.candidate { 11 } else { 21 },
+            &[("test", conclusion)],
+        );
+        jobs["jobs"][0]["started_at"] = json!(format!("2026-10-27T{start}Z"));
+        jobs["jobs"][0]["completed_at"] = json!(format!("2026-10-27T{end}Z"));
+        fs::write(dir.join("jobs.json"), serde_json::to_vec(&jobs).unwrap()).unwrap();
+        let mut runs: Value =
+            serde_json::from_slice(&fs::read(dir.join("runs.json")).unwrap()).unwrap();
+        runs["workflow_runs"][0]["status"] = json!("completed");
+        runs["workflow_runs"][0]["conclusion"] = json!(conclusion);
+        runs["workflow_runs"][0]["run_attempt"] = json!(1);
+        runs["workflow_runs"][0]["run_started_at"] = json!(format!("2026-10-27T{start}Z"));
+        if sha == &fx.candidate {
+            runs["workflow_runs"][0]["event"] = json!("pull_request");
+            runs["workflow_runs"][0]["pull_requests"] = json!([{"number": 42}]);
+        }
+        fs::write(dir.join("runs.json"), serde_json::to_vec(&runs).unwrap()).unwrap();
+        if sha == &fx.base_sha {
+            fx.write_forge("base-push-runs.json", runs.to_string());
+        }
+    }
+    fx.script_checks(&["failure"]);
+}
+
 /// An older green base permits a PR rerun, but cannot by itself admit either
 /// the auto-fix repair or completion's independent final recovery.
 #[test]
@@ -2744,41 +2780,7 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
             for auto_fix in [false, true] {
                 in_fresh_row(sandbox, |row| {
                     let (fx, host) = docs_only_pr(row);
-                    let log = "error: source failure\n --> src/contract:1:1\n";
-                    plant_commit_ci(&fx, &fx.candidate, 11, "failure", log);
-                    plant_commit_ci(&fx, &fx.base_sha, 21, "success", "passed");
-                    for (sha, start, end, conclusion) in [
-                        (&fx.candidate, "05:00:00", "05:01:00", "failure"),
-                        (&fx.base_sha, "04:58:00", "04:59:00", "success"),
-                    ] {
-                        let dir = fx.forge.join("commit-ci").join(sha);
-                        let mut jobs = jobs_listing(
-                            if sha == &fx.candidate { 11 } else { 21 },
-                            &[("test", conclusion)],
-                        );
-                        jobs["jobs"][0]["started_at"] = json!(format!("2026-10-27T{start}Z"));
-                        jobs["jobs"][0]["completed_at"] = json!(format!("2026-10-27T{end}Z"));
-                        fs::write(dir.join("jobs.json"), serde_json::to_vec(&jobs).unwrap())
-                            .unwrap();
-                        let mut runs: Value =
-                            serde_json::from_slice(&fs::read(dir.join("runs.json")).unwrap())
-                                .unwrap();
-                        runs["workflow_runs"][0]["status"] = json!("completed");
-                        runs["workflow_runs"][0]["conclusion"] = json!(conclusion);
-                        runs["workflow_runs"][0]["run_attempt"] = json!(1);
-                        runs["workflow_runs"][0]["run_started_at"] =
-                            json!(format!("2026-10-27T{start}Z"));
-                        if sha == &fx.candidate {
-                            runs["workflow_runs"][0]["event"] = json!("pull_request");
-                            runs["workflow_runs"][0]["pull_requests"] = json!([{"number": 42}]);
-                        }
-                        fs::write(dir.join("runs.json"), serde_json::to_vec(&runs).unwrap())
-                            .unwrap();
-                        if sha == &fx.base_sha {
-                            fx.write_forge("base-push-runs.json", runs.to_string());
-                        }
-                    }
-                    fx.script_checks(&["failure"]);
+                    plant_older_green_base(&fx);
                     let context = host.task(TASK_ID).context_files;
                     host.script(
                         "test_checkpoint",
@@ -2818,6 +2820,30 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                         "auto_fix={auto_fix}: no step recovery"
                     );
                     assert!(repair_attempts(&host).is_empty());
+                    // The held first failure is retained without any
+                    // pre-seeded rerun record, so the repeated failure
+                    // below can be matched against it.
+                    let suspects: Vec<Value> = host
+                        .history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == "ci_base_suspect")
+                        .filter_map(|entry| serde_json::from_str(entry.note.as_deref()?).ok())
+                        .collect();
+                    assert!(
+                        suspects.iter().any(|note| note["head"] == fx.candidate
+                            && note["run_id"] == 11
+                            && note["run_attempt"] == 1
+                            && note["check"] == "CI / test"
+                            && note["signature"] == "error: source failure"),
+                        "auto_fix={auto_fix}: first failure is recorded: {suspects:?}"
+                    );
+                    assert!(
+                        !host
+                            .history(TASK_ID)
+                            .iter()
+                            .any(|entry| entry.event == "ci_check_rerun"),
+                        "auto_fix={auto_fix}: no rerun record is pre-seeded"
+                    );
                     assert!(host.widenings().is_empty());
                     assert_eq!(host.task(TASK_ID).context_files, context);
                     assert!(
@@ -2837,19 +2863,11 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                         "older green base",
                     );
 
-                    // The same unchanged head now repeats the recorded failure.
-                    // Final recovery observes it independently, with auto-fix off.
+                    // The same unchanged head now repeats the failure the
+                    // first attempt recorded above. Final recovery observes
+                    // it independently, with auto-fix off and no pre-seeded
+                    // `ci_check_rerun` or `ci_base_suspect` history.
                     host.set_status(TASK_ID, TaskStatus::Review);
-                    seed_auto_fix_history(
-                        &host,
-                        "ci_check_rerun",
-                        &json!({
-                            "head":fx.candidate,"run_id":11,"jobs":[{
-                                "check":"CI / test","signature":"error: source failure",
-                                "job_id":12,"run_attempt":1,"completed_at":"2026-10-27T05:01:00Z"
-                            }]
-                        }),
-                    );
                     let dir = fx.forge.join("commit-ci").join(&fx.candidate);
                     let mut jobs = jobs_listing(12, &[("test", "failure")]);
                     jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");
@@ -2882,6 +2900,59 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                     );
                 });
             }
+        },
+    );
+}
+
+/// A first failure whose history record is refused must still hold: the
+/// refusal may not hand the unjudged failure to completion's final recovery.
+#[test]
+fn held_first_failure_survives_a_refused_history_write() {
+    isolated(
+        "auto_fix::held_first_failure_survives_a_refused_history_write",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = docs_only_pr(row);
+                plant_older_green_base(&fx);
+                *locked(&host.fail_history_events) = vec!["ci_base_suspect".into()];
+                host.script(
+                    "test_checkpoint",
+                    json!({"workspace_path":fx.repo,"base_sha":fx.base_sha}),
+                );
+                host.script("unexpected_step", json!({}));
+                host.script("test_final_decision", json!({"decision":"escalate", "diagnosis":"repeated source failure", "human_action":"repair"}));
+                let mut input = auto_fix_input(&fx);
+                input["auto_fix"] = json!(false);
+                input["max_wait_seconds"] = json!(15);
+                let mut job = job_asset(json!([
+                    {"id":"setup","target":"activity:checkpoint"},
+                    {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
+                ]));
+                job.final_recovery_activity = Some("decide".into());
+                let activities = [
+                    ("checkpoint", "test_checkpoint"),
+                    ("pr_complete", "pr_complete"),
+                    ("pr_conflict_recovery", "unexpected_step"),
+                    ("decide", "test_final_decision"),
+                ];
+                let result = run_job(
+                    &host,
+                    job,
+                    &activities,
+                    RUN_ID,
+                    json!({"task_ids":[TASK_ID]}),
+                    None,
+                );
+                assert!(!matches!(&result, Ok(outcome) if outcome.success));
+                assert!(
+                    !scripted_ran(&host, "unexpected_step"),
+                    "a refused first-failure record dispatched step recovery: {result:?}"
+                );
+                assert!(
+                    !scripted_ran(&host, "test_final_decision"),
+                    "a refused first-failure record dispatched final recovery: {result:?}"
+                );
+            });
         },
     );
 }
