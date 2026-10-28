@@ -894,6 +894,35 @@ fn an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_ch
     assert!(selected(&workspace.select(&drain), &creating));
 }
 
+/// A pilot a drain finished without deciding about a task is recorded on the
+/// task when that drain records its approvals. A later drain, which has none
+/// of that pilot's children, holds the task rather than piloting it again,
+/// until a real change [ORB-19544].
+fn an_undecided_pilot_is_not_run_again_by_a_later_drain_until_the_task_really_changes() {
+    let workspace = Workspace::new();
+    let drain = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let ordinary = workspace.task("ordinary", &[], &["file:README.md"], TaskComplexity::Low);
+
+    let selection = workspace.select(&drain);
+    assert_eq!(selection["task_ids"], json!([ordinary.id]), "{selection}");
+    let pilot = workspace.pilot_child(&drain, &selection["task_ids"]);
+    workspace.pilot_failed(&pilot);
+    workspace.record(&drain);
+
+    let later = workspace.running("workspace_auto_pipeline", json!({"approve_proposed": true}));
+    let next = workspace.select(&later);
+    assert_eq!(next["task_ids"], json!([]), "{next}");
+    assert_eq!(
+        held_reason(&next, &ordinary),
+        Some("pilot_unresolved"),
+        "{next}"
+    );
+
+    workspace.rename(&ordinary);
+    let next = workspace.select(&later);
+    assert_eq!(next["task_ids"], json!([ordinary.id]), "{next}");
+}
+
 fn selected(selection: &Value, task: &Task) -> bool {
     selection["task_ids"]
         .as_array()
@@ -1638,6 +1667,7 @@ crate::scenario_table!(
     drain_authority_is_verified_before_any_approval,
     a_pilot_hold_on_a_creation_target_task_survives_until_the_task_really_changes,
     an_unresolved_pilot_of_a_creation_target_task_is_retried_only_after_a_real_change,
+    an_undecided_pilot_is_not_run_again_by_a_later_drain_until_the_task_really_changes,
     proposed_candidates_of_mixed_crews_are_selected_homogeneously_and_deferred,
     candidates_with_no_crew_are_never_bundled_with_crewed_candidates,
     verified_no_diff_merge_proof_uses_only_the_first_parent_change,

@@ -361,6 +361,13 @@ spec:
       test or run validation commands.
     - Do not inspect or report on other tasks, except to cite a concrete
       dependency, duplicate, or decision recorded in current maintained docs.
+      A task's own description may direct read-only lookups of other tasks to
+      select its footprint, such as an auto-task's batch selection from its
+      predecessors' artifacts or from open tasks' selectors. Make only those
+      lookups, use them only to choose selectors and their reasons, and report
+      no other task's content. Such a description may also name the exact
+      `file:` selectors its footprint is; return those as `context_files_after`
+      in the order given, subject to the existence rule below.
     - Route Orbit task tools by the logical workspace, never by the checkout
       path.
 
