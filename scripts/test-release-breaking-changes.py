@@ -285,6 +285,21 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertIn("Bump: minor → 0.36.0", text)
         self.assertIn("ORB-19214 [detected, untagged]", text)
 
+    def test_unconditionally_skipped_fields_do_not_decide_minor(self):
+        self.repo.replace(TYPES, "    pub tags: Vec<String>,\n",
+                          "    pub tags: Vec<String>,\n"
+                          "    #[serde(skip)]\n"
+                          "    pub local_cache: Option<String>,\n"
+                          "    #[serde(skip_serializing)]\n"
+                          "    pub transient_state: Option<String>,\n")
+        self.repo.commit("feat: Add local task state [ORB-52] (#1)")
+        self.repo.git("tag", "v0.35.1")
+
+        report = self.report("--range", "v0.35.0..v0.35.1")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
     def test_additive_changes_decide_patch(self):
         # New optional field on a type without deny_unknown_fields.
         self.repo.replace(TYPES, "pub struct TaskRow {\n    pub id: String,\n",
