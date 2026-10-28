@@ -197,7 +197,7 @@ First entries, chosen to cover the most edited views and the components they sha
 | `analytics-metrics` | `#analytics/metrics` | `busy-workspace` | default, loading | `js/metrics*.js`, `js/sparkline.js`, `api/diagnostics/**` |
 | `analytics-experiments` | `#analytics/experiments` | `experiments` | default, empty | `js/experiments.js`, `js/experiment-form.js`, `css/experiments.css` |
 | `health-doctor` | `#diagnostics/doctor` | `busy-workspace` | default | `js/doctor.js`, `css/health.css`, `api/doctor.rs` |
-| `automation-routines` | `#operations/routines` | `busy-workspace` | default, empty | `js/operations.js`, `js/automation.js`, `css/automation.css` |
+| `automation-routines` | `#operations/routines` | `busy-workspace` | default, empty | `js/operations-routines.js`, `js/operations-auto-tasks.js`, `js/automation.js`, `css/automation.css` |
 | `settings` | `#config` | `busy-workspace` | default | `js/config*.js`, `css/settings.css`, `api/config.rs` |
 
 The smoke set is `tasks-list`, `task-detail` and `run-detail`. Theme is `dark` only, because

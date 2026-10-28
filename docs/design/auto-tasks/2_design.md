@@ -1,15 +1,15 @@
 ---
 title: Auto-tasks — Design
 owner: claude
-last_updated: 2026-10-27
-last_validated: 2026-10-27
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Accepted
 feature: auto-tasks
 doc_role: design
 type: design
 summary: Current implementation of the auto-task record, due-math, host-local cursor, generic scheduler, CRUD surfaces, the on-demand manual mint, and the dashboard Operations surface.
 tags: [auto-tasks]
-paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations.js"]
+paths: ["crates/orbit-core/src/application/auto_tasks/**", "crates/orbit-core/src/adapter/tool_host/auto_task_tools.rs", "crates/orbit-web/src/api/auto_tasks.rs", "crates/orbit-web/assets/dashboard/js/operations-auto-tasks.js"]
 related_features: [auto-tasks, routines]
 related_artifacts: [ORB-10149, ORB-10439, ORB-10441, ORB-10446, ORB-10472, ORB-10583, ORB-10800, ORB-10876, ORB-11095, ORB-11315, ORB-11730, ORB-12665, ORB-12698, ORB-13422, ORB-15327]
 ---
