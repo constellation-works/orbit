@@ -217,6 +217,77 @@ fn a_future_schedule_holds_the_task_until_the_operator_overrides_it() {
     );
 }
 
+/// Fractional instants remain future between their whole-second boundary and
+/// requested time. The public task tool stores and shows that instant, and an
+/// override for it matches the same precise time.
+fn a_fractional_schedule_retains_its_instant_through_show_and_override() {
+    const REQUESTED: &str = "2099-01-01T09:00:00.900Z";
+    const SHOWN: &str = "2099-01-01T09:00:00.900Z";
+
+    let (_root, runtime) = super::review_run_option::open(ShipMode::Local, CONFIG, true);
+    std::fs::write(
+        runtime.paths().repo_root.join("fractional-tool.txt"),
+        "fixture\n",
+    )
+    .unwrap();
+    let workspace = runtime.paths().repo_root.to_string_lossy().into_owned();
+    let added = runtime
+        .run_tool(
+            "orbit.task.add",
+            json!({
+                "title": "Fractionally scheduled by tool", "description": "Fixture.",
+                "acceptance_criteria": ["Observable."], "complexity": "medium",
+                "context_files": ["file:fractional-tool.txt"],
+                "not_before": "2099-01-01T11:00:00.900+02:00",
+                "model": "codex", "workspace": workspace,
+            }),
+        )
+        .expect("add a fractionally scheduled task");
+    let id = added["id"].as_str().expect("added id").to_string();
+    runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({"id": id, "status": "backlog", "model": "codex", "workspace": workspace}),
+        )
+        .expect("promote the task");
+
+    let scheduled = runtime.get_task(&id).expect("read the scheduled task");
+    let requested = at(REQUESTED);
+    assert_eq!(scheduled.not_before, Some(requested));
+    assert_eq!(
+        scheduled.scheduled_after(at("2099-01-01T09:00:00.500Z")),
+        Some(requested),
+        "the public schedule API keeps the hold after the whole-second boundary"
+    );
+    assert_eq!(
+        scheduled.scheduled_after(at("2099-01-01T09:00:00.900Z")),
+        None,
+        "the schedule is due at its requested instant"
+    );
+
+    let shown = runtime
+        .run_tool("orbit.task.show", json!({"id": id}))
+        .expect("show the scheduled task");
+    assert_eq!(shown["not_before"], SHOWN, "{shown}");
+
+    // The fixture worker cannot start; the override still records its event.
+    match ship(&runtime, &id, true) {
+        Ok(_) | Err(OrbitError::Execution(_)) => {}
+        Err(other) => panic!("the operator override admits the task: {other:?}"),
+    }
+    assert_eq!(
+        overrides(&runtime, &id),
+        vec![format!(
+            "operator:fixture: scheduled for {SHOWN}; operator `operator:fixture` started it early with `orbit run ship --ignore-schedule`"
+        )]
+    );
+    let after = backlog(&runtime);
+    assert!(
+        excluded(&after, &id).is_none_or(|entry| entry["reason"] != "scheduled"),
+        "the precise override lifts the hold: {after}"
+    );
+}
+
 /// The override names the tasks it starts: without task ids it is refused
 /// before any run exists.
 fn the_override_needs_named_tasks() {
@@ -341,6 +412,7 @@ fn add_and_update_set_clear_and_refuse_the_schedule() {
 crate::scenario_table!(
     a_future_schedule_holds_the_task_until_the_operator_overrides_it_scenarios,
     a_future_schedule_holds_the_task_until_the_operator_overrides_it,
+    a_fractional_schedule_retains_its_instant_through_show_and_override,
     the_override_needs_named_tasks,
     add_and_update_set_clear_and_refuse_the_schedule
 );
