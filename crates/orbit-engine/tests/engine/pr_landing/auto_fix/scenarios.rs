@@ -2687,6 +2687,157 @@ fn inherited_failure_case(row: &std::path::Path, case: &str) {
     assert!(fx.merge_requests().is_empty(), "{case}: no merge");
 }
 
+/// An older green base permits a PR rerun, but cannot by itself admit either
+/// the auto-fix repair or completion's independent final recovery.
+#[test]
+fn older_green_base_holds_recovery_until_matching_pr_rerun() {
+    isolated(
+        "auto_fix::older_green_base_holds_recovery_until_matching_pr_rerun",
+        |sandbox| {
+            for auto_fix in [false, true] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = docs_only_pr(row);
+                    let log = "error: source failure\n --> src/contract:1:1\n";
+                    plant_commit_ci(&fx, &fx.candidate, 11, "failure", log);
+                    plant_commit_ci(&fx, &fx.base_sha, 21, "success", "passed");
+                    for (sha, start, end, conclusion) in [
+                        (&fx.candidate, "05:00:00", "05:01:00", "failure"),
+                        (&fx.base_sha, "04:58:00", "04:59:00", "success"),
+                    ] {
+                        let dir = fx.forge.join("commit-ci").join(sha);
+                        let mut jobs = jobs_listing(
+                            if sha == &fx.candidate { 11 } else { 21 },
+                            &[("test", conclusion)],
+                        );
+                        jobs["jobs"][0]["started_at"] = json!(format!("2026-10-27T{start}Z"));
+                        jobs["jobs"][0]["completed_at"] = json!(format!("2026-10-27T{end}Z"));
+                        fs::write(dir.join("jobs.json"), serde_json::to_vec(&jobs).unwrap())
+                            .unwrap();
+                        let mut runs: Value =
+                            serde_json::from_slice(&fs::read(dir.join("runs.json")).unwrap())
+                                .unwrap();
+                        runs["workflow_runs"][0]["status"] = json!("completed");
+                        runs["workflow_runs"][0]["conclusion"] = json!(conclusion);
+                        runs["workflow_runs"][0]["run_attempt"] = json!(1);
+                        runs["workflow_runs"][0]["run_started_at"] =
+                            json!(format!("2026-10-27T{start}Z"));
+                        if sha == &fx.candidate {
+                            runs["workflow_runs"][0]["event"] = json!("pull_request");
+                        }
+                        fs::write(dir.join("runs.json"), serde_json::to_vec(&runs).unwrap())
+                            .unwrap();
+                        if sha == &fx.base_sha {
+                            fx.write_forge("base-push-runs.json", runs.to_string());
+                        }
+                    }
+                    fx.script_checks(&["failure"]);
+                    let context = host.task(TASK_ID).context_files;
+                    host.script(
+                        "test_checkpoint",
+                        json!({"workspace_path":fx.repo,"base_sha":fx.base_sha}),
+                    );
+                    host.script("unexpected_step", json!({}));
+                    host.script("test_final_decision", json!({"decision":"escalate", "diagnosis":"repeated source failure", "human_action":"repair"}));
+                    let mut input = auto_fix_input(&fx);
+                    input["auto_fix"] = json!(auto_fix);
+                    input["max_wait_seconds"] = json!(15);
+                    let mut job = job_asset(json!([
+                        {"id":"setup","target":"activity:checkpoint"},
+                        {"id":"complete_pr","target":"activity:pr_complete","recovery_activity":"pr_conflict_recovery","default_input":input}
+                    ]));
+                    job.final_recovery_activity = Some("decide".into());
+                    let activities = [
+                        ("checkpoint", "test_checkpoint"),
+                        ("pr_complete", "pr_complete"),
+                        ("pr_conflict_recovery", "unexpected_step"),
+                        ("decide", "test_final_decision"),
+                    ];
+                    let result = run_job(
+                        &host,
+                        job,
+                        &activities,
+                        RUN_ID,
+                        json!({"task_ids":[TASK_ID]}),
+                        None,
+                    );
+                    assert!(!matches!(&result, Ok(outcome) if outcome.success));
+                    assert!(
+                        !scripted_ran(&host, "test_final_decision"),
+                        "auto_fix={auto_fix}: an older green base alone cannot dispatch final recovery: {result:?}"
+                    );
+                    assert!(
+                        !scripted_ran(&host, "unexpected_step"),
+                        "auto_fix={auto_fix}: no step recovery"
+                    );
+                    assert!(repair_attempts(&host).is_empty());
+                    assert!(host.widenings().is_empty());
+                    assert_eq!(host.task(TASK_ID).context_files, context);
+                    assert!(
+                        !host
+                            .history(TASK_ID)
+                            .iter()
+                            .any(|entry| entry.event == "context_files_widened")
+                    );
+                    assert_nothing_landed(
+                        &fx,
+                        &host,
+                        if auto_fix {
+                            TaskStatus::Review
+                        } else {
+                            TaskStatus::Backlog
+                        },
+                        "older green base",
+                    );
+
+                    // The same unchanged head now repeats the recorded failure.
+                    // Final recovery observes it independently, with auto-fix off.
+                    host.set_status(TASK_ID, TaskStatus::Review);
+                    seed_auto_fix_history(
+                        &host,
+                        "ci_check_rerun",
+                        &json!({
+                            "head":fx.candidate,"run_id":11,"jobs":[{
+                                "check":"CI / test","signature":"error: source failure",
+                                "job_id":12,"run_attempt":1,"completed_at":"2026-10-27T05:01:00Z"
+                            }]
+                        }),
+                    );
+                    let dir = fx.forge.join("commit-ci").join(&fx.candidate);
+                    let mut jobs = jobs_listing(12, &[("test", "failure")]);
+                    jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");
+                    jobs["jobs"][0]["completed_at"] = json!("2026-10-27T05:03:00Z");
+                    fs::write(dir.join("jobs.json"), serde_json::to_vec(&jobs).unwrap()).unwrap();
+                    let mut runs: Value =
+                        serde_json::from_slice(&fs::read(dir.join("runs.json")).unwrap()).unwrap();
+                    runs["workflow_runs"][0]["run_attempt"] = json!(2);
+                    runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:02:00Z");
+                    fs::write(dir.join("runs.json"), serde_json::to_vec(&runs).unwrap()).unwrap();
+                    let mut input = input;
+                    input["auto_fix"] = json!(false);
+                    let mut job = job_asset(json!([
+                        {"id":"setup","target":"activity:checkpoint"},
+                        {"id":"complete_pr","target":"activity:pr_complete","default_input":input}
+                    ]));
+                    job.final_recovery_activity = Some("decide".into());
+                    let result = run_job(
+                        &host,
+                        job,
+                        &activities,
+                        "jrun-matching-rerun",
+                        json!({"task_ids":[TASK_ID]}),
+                        None,
+                    );
+                    assert!(!matches!(&result, Ok(outcome) if outcome.success));
+                    assert!(
+                        scripted_ran(&host, "test_final_decision"),
+                        "same-signature rerun admits final recovery: {result:?}"
+                    );
+                });
+            }
+        },
+    );
+}
+
 /// A second required failure must reach both repair admission and the job's
 /// independent final-recovery observation, even when the earlier error is stale.
 #[test]

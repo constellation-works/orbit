@@ -142,6 +142,7 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
     let (evidence, annotations) = match head_check_evidence(
         host,
         Path::new(workspace_path),
+        &auto_fix.task_ids,
         pr_number,
         head_sha,
         status.base_branch.as_deref(),

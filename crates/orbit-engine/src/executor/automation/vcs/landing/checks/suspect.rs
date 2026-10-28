@@ -23,13 +23,16 @@ pub(super) enum UntouchedBaseEvidence {
 }
 
 /// Independently guard the repair evidence path, including job-level recovery.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace: &Path,
+    tasks: &[String],
     head: &str,
     base_branch: Option<&str>,
     job: &Value,
     log: &str,
+    signature: &str,
 ) -> Result<Option<String>, String> {
     let paths = repository_citations(workspace, head, log)?;
     if paths.is_empty() {
@@ -70,7 +73,24 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     )
     .map(|evidence| match evidence {
         UntouchedBaseEvidence::Waiting(reason) => Some(reason),
-        _ => None,
+        UntouchedBaseEvidence::PassingBaseRun
+            if !has_matching_candidate_rerun(
+                host,
+                tasks,
+                head,
+                job,
+                &jobs::job_label(job),
+                signature,
+            ) =>
+        {
+            Some(format!(
+                "base-suspect: '{}' has a successful same-check base run, but head {head} \
+                 has no unchanged-head pull_request rerun with the same failure signature; \
+                 a base pass alone does not authorize repair",
+                jobs::job_label(job),
+            ))
+        }
+        UntouchedBaseEvidence::Unrelated | UntouchedBaseEvidence::PassingBaseRun => None,
     })
 }
 
