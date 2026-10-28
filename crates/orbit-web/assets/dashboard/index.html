@@ -45,7 +45,7 @@
             </div>
           </div>
           <span class="topbar-spacer"></span>
-          <a id="global-drain-state" class="global-drain-state" href="#drain" title="Open Drain" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span><span class="global-drain-running" id="global-drain-running"></span></a>
+          <a id="global-drain-state" class="global-drain-state" href="#tasks?dock=drain" title="Open Tasks dock" hidden><span class="drain-dot" aria-hidden="true"></span><span class="global-drain-label">Draining</span><span class="global-drain-running" id="global-drain-running"></span></a>
           <!-- Opt-in browser notifications for a drain end or a new hold while
                this tab is in the background; shown where notifications exist. -->
           <button id="notify-btn" class="refresh-btn notify-btn" type="button" aria-pressed="false" title="Notify me when a drain ends or a task is held while this tab is in the background" hidden><svg class="refresh-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 8a5 5 0 0 1 10 0c0 4 1.5 5.5 2 6H3c.5-.5 2-2 2-6M8.5 17a1.5 1.5 0 0 0 3 0"/></svg><span class="refresh-label">Notify</span></button>
@@ -66,7 +66,6 @@
             <div class="rail-group-label">Work</div>
           <button class="tab" data-tab="tasks" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h9"/></svg><span class="rail-label">Tasks</span><span class="rail-count" id="rail-count-tasks"></span></button>
           <button class="tab" data-tab="jobs" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 4.5l9 5.5-9 5.5z"/></svg><span class="rail-label">Jobs</span><span class="rail-count" id="rail-count-jobs"></span></button>
-          <button class="tab" data-tab="drain" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h12l-4 6v5l-4 2v-7z"/></svg><span class="rail-label">Drain</span></button>
           <button class="tab" data-tab="leases" type="button"><svg class="rail-ico" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="9" width="10" height="8" rx="1.5"/><path d="M7 9V6.5a3 3 0 0 1 6 0V9"/></svg><span class="rail-label">Leases</span></button>
           </div>
 
@@ -210,133 +209,88 @@
             </div>
           </section>
         </div>
-        <!-- The Drain page's dock (Start a window, Locks held, Log) moves here
-             while Tasks shows; it gives way to the task pane when one opens. -->
-        <div class="tasks-dock" id="tasks-dock"></div>
+        <!-- The dock gives way to the task pane when one opens. -->
+        <div class="tasks-dock" id="tasks-dock">
+          <div class="col-log" id="side-dock" data-home="tasks" data-mode="drain" data-card="drain">
+            <div class="dock-head">
+              <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Drain views">
+                <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0"><span class="dock-seg-label">Drain</span> <span id="dock-drain-state" class="dock-drain-state"></span></button>
+                <button type="button" role="tab" class="dock-seg" id="dock-tab-locks" data-mode="locks" aria-selected="false" aria-controls="dock-pane-drain" tabindex="-1">Locks held</button>
+                <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
+              </div>
+            </div>
+            <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
+              <div class="drain-columns">
+                <div class="drain-col drain-col-main">
+                  <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
+                    <header>
+                      <h2 class="drain-title" id="auto-drain-title">Auto-drain</h2>
+                      <span class="drain-phase" id="auto-drain-phase"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-phase-label">—</span></span>
+                      <span class="drain-when" id="auto-drain-when"></span>
+                    </header>
+                    <div class="body" id="auto-drain-body">
+                      <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
+                    </div>
+                  </section>
+                </div>
+                <div class="drain-col drain-col-side">
+                  <section class="panel drain-start-card" id="auto-drain-quick-start" aria-labelledby="auto-drain-quick-start-title" hidden>
+                    <header>
+                      <h2 class="drain-title" id="auto-drain-quick-start-title">Start a window</h2>
+                      <span class="drain-start-sub" id="auto-drain-quick-start-sub"></span>
+                    </header>
+                    <div class="body" id="auto-drain-quick-start-body"></div>
+                  </section>
+                  <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
+                  <section class="panel" id="locks-panel" aria-labelledby="locks-title">
+                    <header>
+                      <h2 class="drain-title" id="locks-title">Locks held</h2><span class="count" id="locks-count">0 files · 0 tasks</span>
+                      <div class="scoreboard-window-selector locks-view" id="locks-view" role="tablist" aria-label="Locks held view">
+                        <button type="button" role="tab" class="scoreboard-window-seg" data-view="task" aria-selected="false" tabindex="-1" title="One row per holding task">By task</button>
+                        <button type="button" role="tab" class="scoreboard-window-seg" data-view="file" aria-selected="false" tabindex="-1" title="One row per locked file, with the tasks holding it">By file</button>
+                      </div>
+                    </header>
+                    <div class="locks-filter">
+                      <input type="search" id="locks-filter" class="mono" placeholder="Filter by task ID" autocomplete="off" spellcheck="false" aria-label="Filter locked files by a task's context files" aria-describedby="locks-filter-note" />
+                      <p id="locks-filter-note" class="locks-filter-note" role="status" hidden></p>
+                    </div>
+                    <div class="body" id="locks-body"></div>
+                  </section>
+                </div>
+              </div>
+            </div>
+
+            <div class="dock-pane" id="dock-pane-log" role="tabpanel" aria-labelledby="dock-tab-log" data-pane="log">
+              <section class="panel" id="log-panel">
+                <div class="log-foot log-filters">
+                  <div class="log-filter-group" role="group" aria-label="Filter log lines">
+                    <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">All</button>
+                    <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">Err <span class="filter-count" data-count="err">0</span></button>
+                    <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">Deny <span class="filter-count" data-count="deny">0</span></button>
+                    <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">Warn <span class="filter-count" data-count="warn">0</span></button>
+                    <button type="button" class="filter-pill on" id="log-show-agent" title="Show agent stdout relays" aria-label="Show agent stdout relays" aria-pressed="true">Agent</button>
+                  </div>
+                  <div class="log-view-group">
+                    <button type="button" class="seg on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Follow</button>
+                    <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">Wrap</button>
+                    <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
+                  </div>
+                </div>
+                <div class="log-caption">
+                  <span>Newest first · <span id="log-count">0</span> shown</span>
+                  <span class="log-live"><span class="live-dot" aria-hidden="true"></span><span class="log-live-label" id="log-live-label">Live</span></span>
+                </div>
+                <div class="log-stream" tabindex="0" role="region" aria-label="Live log entries">
+                  <div class="inner" id="logInner"></div>
+                </div>
+              </section>
+            </div>
+          </div>
+        </div>
         <div class="task-pane-resizer" id="task-pane-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-controls="task-detail-pane" aria-label="Resize the task detail pane" aria-valuemin="25" aria-valuemax="70" aria-valuenow="42" title="Drag, or use the arrow keys, to resize; double-click to reset"></div>
         <aside class="task-detail-pane" id="task-detail-pane" aria-label="Task detail" hidden>
           <div class="task-detail-body" id="task-detail-body"></div>
         </aside>
-      </main>
-    </section>
-    <section class="tab-pane" data-tab="drain" tabindex="0" role="region" aria-labelledby="topbar-crumb">
-      <main class="drain-layout" id="drain-main">
-        <div class="col-log" id="side-dock" data-mode="drain">
-          <div class="drain-page-head">
-            <p class="drain-page-title" aria-hidden="true">Drain</p>
-            <p class="drain-page-sub">Admit approved backlog in timed windows, within what this host can carry.</p>
-          </div>
-          <div class="dock-head">
-            <div class="dock-seg-group" id="dock-mode-toggle" role="tablist" aria-label="Drain views">
-              <button type="button" role="tab" class="dock-seg on" id="dock-tab-drain" data-mode="drain" aria-selected="true" aria-controls="dock-pane-drain" tabindex="0"><span class="dock-seg-label">Overview</span> <span id="dock-drain-state" class="dock-drain-state"></span></button>
-              <button type="button" role="tab" class="dock-seg" id="dock-tab-start" data-mode="start" aria-selected="false" aria-controls="dock-pane-start" tabindex="-1">Start a window</button>
-              <button type="button" role="tab" class="dock-seg" id="dock-tab-locks" data-mode="locks" aria-selected="false" aria-controls="dock-pane-drain" tabindex="-1" hidden>Locks held</button>
-              <button type="button" role="tab" class="dock-seg" id="dock-tab-log" data-mode="log" aria-selected="false" aria-controls="dock-pane-log" tabindex="-1">Log <span id="dock-log-state" class="dock-log-state"></span></button>
-            </div>
-          </div>
-          <!-- A Start's result and its no-retry warning. On Drain it sits above
-               every view, so the receipt stays in sight when Start opens
-               Overview; in the Tasks dock operations.js moves it under the
-               dock's Start card. -->
-          <div class="operation-feedback" id="auto-drain-operation-feedback" role="status" aria-live="polite"></div>
-
-          <div class="dock-pane" id="dock-pane-drain" role="tabpanel" aria-labelledby="dock-tab-drain" data-pane="drain">
-            <div class="drain-banner" id="drain-banner" hidden></div>
-            <div class="drain-summary" id="drain-summary" role="group" aria-label="Drain summary" hidden></div>
-            <div class="drain-columns">
-              <div class="drain-col drain-col-main">
-                <section class="panel drain-card" id="auto-drain-panel" aria-labelledby="auto-drain-title">
-                  <header>
-                    <h2 class="drain-title" id="auto-drain-title">Auto-drain</h2>
-                    <span class="drain-phase" id="auto-drain-phase"><span class="drain-dot" id="auto-drain-dot" aria-hidden="true"></span><span id="auto-drain-phase-label">—</span></span>
-                    <span class="drain-when" id="auto-drain-when"></span>
-                  </header>
-                  <div class="body" id="auto-drain-body">
-                    <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
-                  </div>
-                </section>
-                <section class="panel drain-started-card" id="drain-started-panel" aria-labelledby="drain-started-title" hidden>
-                  <header><h2 class="drain-title" id="drain-started-title">How this window was started</h2><span class="count">From the run's recorded inputs</span></header>
-                  <div class="body" id="drain-started-body"></div>
-                </section>
-                <section class="panel drain-pull-card" id="drain-pull-panel" aria-labelledby="drain-pull-title" hidden>
-                  <header><h2 class="drain-title" id="drain-pull-title">Pulling from the owner</h2><span class="count">Workspace capacity and running claims</span></header>
-                  <div class="body" id="drain-pull-body"></div>
-                </section>
-                <section class="panel drain-waits-card" id="drain-waits-panel" aria-labelledby="drain-waits-title">
-                  <header><h2 class="drain-title" id="drain-waits-title">Why tasks are waiting</h2><span class="count">Snapshot · can change before admission</span></header>
-                  <div class="body" id="drain-waits-body"></div>
-                  <div class="body" id="drain-pass-body"></div>
-                </section>
-              </div>
-              <div class="drain-col drain-col-side">
-                <section class="panel drain-fleet-card" id="drain-fleet-panel" aria-labelledby="drain-fleet-title" hidden>
-                  <header><h2 class="drain-title" id="drain-fleet-title">Fleet drains</h2></header>
-                  <div class="body" id="drain-fleet-body"></div>
-                </section>
-                <!-- The Tasks dock's simple Start card; the Drain page starts a
-                     window from its own Start a window view. -->
-                <section class="panel drain-start-card" id="auto-drain-quick-start" aria-labelledby="auto-drain-quick-start-title" hidden>
-                  <header>
-                    <h2 class="drain-title" id="auto-drain-quick-start-title">Start a window</h2>
-                    <span class="drain-start-sub" id="auto-drain-quick-start-sub"></span>
-                  </header>
-                  <div class="body" id="auto-drain-quick-start-body"></div>
-                </section>
-                <section class="panel" id="locks-panel" aria-labelledby="locks-title">
-                  <header>
-                    <h2 class="drain-title" id="locks-title">Locks held</h2><span class="count" id="locks-count">0 files · 0 tasks</span>
-                    <div class="scoreboard-window-selector locks-view" id="locks-view" role="tablist" aria-label="Locks held view">
-                      <button type="button" role="tab" class="scoreboard-window-seg" data-view="task" aria-selected="false" tabindex="-1" title="One row per holding task">By task</button>
-                      <button type="button" role="tab" class="scoreboard-window-seg" data-view="file" aria-selected="false" tabindex="-1" title="One row per locked file, with the tasks holding it">By file</button>
-                    </div>
-                  </header>
-                  <div class="locks-filter">
-                    <input type="search" id="locks-filter" class="mono" placeholder="Filter by task ID" autocomplete="off" spellcheck="false" aria-label="Filter locked files by a task's context files" aria-describedby="locks-filter-note" />
-                    <p id="locks-filter-note" class="locks-filter-note" role="status" hidden></p>
-                  </div>
-                  <div class="body" id="locks-body"></div>
-                </section>
-              </div>
-            </div>
-          </div>
-
-          <div class="dock-pane" id="dock-pane-start" role="tabpanel" aria-labelledby="dock-tab-start" data-pane="start">
-            <section class="panel drain-start-card" id="auto-drain-start" aria-labelledby="auto-drain-start-title" hidden>
-              <header>
-                <h2 class="drain-title" id="auto-drain-start-title">Start a window</h2>
-                <span class="drain-start-sub" id="auto-drain-start-sub"></span>
-              </header>
-              <div class="body" id="auto-drain-start-body"></div>
-            </section>
-          </div>
-
-          <div class="dock-pane" id="dock-pane-log" role="tabpanel" aria-labelledby="dock-tab-log" data-pane="log">
-            <section class="panel" id="log-panel">
-              <div class="log-foot log-filters">
-                <div class="log-filter-group" role="group" aria-label="Filter log lines">
-                  <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">All</button>
-                  <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">Err <span class="filter-count" data-count="err">0</span></button>
-                  <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">Deny <span class="filter-count" data-count="deny">0</span></button>
-                  <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">Warn <span class="filter-count" data-count="warn">0</span></button>
-                  <button type="button" class="filter-pill on" id="log-show-agent" title="Show agent stdout relays" aria-label="Show agent stdout relays" aria-pressed="true">Agent</button>
-                </div>
-                <div class="log-view-group">
-                  <button type="button" class="seg on" id="log-follow-tail" title="Follow the tail" aria-pressed="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Follow</button>
-                  <button type="button" class="seg" id="log-wrap-lines" title="Wrap lines" aria-pressed="false">Wrap</button>
-                  <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
-                </div>
-              </div>
-              <div class="log-caption">
-                <span>Newest first · <span id="log-count">0</span> shown</span>
-                <span class="log-live"><span class="live-dot" aria-hidden="true"></span><span class="log-live-label" id="log-live-label">Live</span></span>
-              </div>
-              <div class="log-stream" tabindex="0" role="region" aria-label="Live log entries">
-                <div class="inner" id="logInner"></div>
-              </div>
-            </section>
-          </div>
-        </div>
       </main>
     </section>
     <section class="tab-pane" data-tab="run-detail" tabindex="0" role="region" aria-labelledby="topbar-crumb">

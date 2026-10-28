@@ -163,12 +163,12 @@ async function assertFleetPartial(browser, port) {
     { name: 'success', extra: '', settledPhase: 'draining' },
     { name: 'failure', extra: '&remoteFleetFailure=1', settledPhase: 'unavailable' },
   ]) {
-    for (const width of [1440, 375]) {
+    for (const width of [1440, 1024]) {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
       try {
-        await page.goto(`http://127.0.0.1:${port}/?budget=1&holdFleet=1${scenario.extra}&workspace=all#drain`);
+        await page.goto(`http://127.0.0.1:${port}/?budget=1&holdFleet=1${scenario.extra}&workspace=all#tasks?dock=drain`);
         await page.waitForFunction(() => globalThis.remoteFleetPending);
         await page.locator('#auto-drain-body .fleet-row[data-phase="idle"]').first().waitFor({ state: 'visible', timeout: 5000 });
         const before = await page.evaluate(() => ({
@@ -332,7 +332,7 @@ async function assertPollBudget(browser, port) {
     await page.evaluate(async () => {
       const { setActiveTab } = await import('/js/router.js');
       const meta = document.getElementById('meta-text');
-      setActiveTab('drain');
+      setActiveTab('tasks?dock=drain');
       const deadline = performance.now() + 3000;
       let sawFetching = false;
       while (performance.now() < deadline) {
@@ -345,9 +345,10 @@ async function assertPollBudget(browser, port) {
     });
     assert.ok(await backlogForecastReads() > beforeDrainForecast, 'the Drain route refreshes its backlog forecast');
     await page.waitForFunction(() => document.querySelector('#auto-drain-body .drain-backlog-forecast-figures'));
-    assert.ok(await page.locator('#auto-drain-body .drain-backlog-forecast-figures').textContent(), 'the Drain page paints its backlog forecast summary');
+    assert.ok(await page.locator('#auto-drain-body .drain-backlog-forecast-figures').textContent(), 'the Tasks dock paints its backlog forecast summary');
     const beforeCard = await fleetReads();
-    await page.locator('#global-drain-state').click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('#global-drain-state').click();
     await page.locator('.fleet-drains').waitFor({ state: 'visible' });
     assert.equal(await fleetReads(), beforeCard, 'opening the fleet card paints the snapshot without another host fan-out');
     const field = (row, name) => page.locator(`.fleet-drains .fleet-row[data-phase="${row}"] [data-field="${name}"]`).first().textContent();
@@ -439,7 +440,8 @@ async function assertWorkspaceDefaults(browser, port) {
     await page.goto(bare);
     await page.waitForFunction(() => globalThis.fleetReady);
     assert.equal(await page.locator('#workspace-select').inputValue(), '', 'aggregate picker choice restored');
-    await page.locator('#global-drain-state').click();
+    await page.setViewportSize({ width: 1440, height: 900 });
+  await page.locator('#global-drain-state').click();
     await page.getByRole('button', { name: 'Show Idle workspace with ready work on owner', exact: true }).click();
     await page.goto(bare);
     await page.waitForFunction(() => globalThis.fleetReady);
@@ -480,12 +482,13 @@ try {
     await page.setViewportSize({ width, height: 900 });
     await page.screenshot({ path: path.join(evidence, `header-after-dark-${width}.png`), animations: 'disabled' });
   }
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator('#global-drain-state').click();
   await page.locator('.fleet-drains').waitFor({ state: 'visible' });
   assert.equal(new URL(page.url()).searchParams.get('workspace'), 'all', 'header chip opens All workspaces');
   assert.equal(await page.locator('.fleet-drains .fleet-row').count(), 4);
   assert.equal(await page.locator('.fleet-unavailable [data-field="error"]').textContent(), 'Error Host unreachable');
-  assert.equal(await page.locator('#auto-drain-start').isVisible(), false, 'fleet inspection exposes no workspace write controls');
+  assert.equal(await page.locator('#auto-drain-quick-start').isVisible(), false, 'fleet inspection exposes no workspace write controls');
   const measurements = [];
   for (const width of [1440, 375]) {
     await page.setViewportSize({ width, height: 900 });
@@ -505,9 +508,10 @@ try {
       assert.ok(line <= 24, `each workspace keeps its name, phase and slots on one line: ${JSON.stringify(layout)}`);
       if (!detail) assert.ok(height <= line + 10, `a row with nothing waiting is one line: ${JSON.stringify(layout)}`);
     }
-    await page.locator('.fleet-drains .fleet-row').first().scrollIntoViewIfNeeded();
+    if (width >= 1000) await page.locator('.fleet-drains .fleet-row').first().scrollIntoViewIfNeeded();
     await page.screenshot({ path: path.join(evidence, 'fleet-' + width + '.png'), fullPage: true });
   }
+  await page.setViewportSize({ width: 1440, height: 900 });
   // Select a row on another host through its native keyboard control, after
   // choosing that host's tab.
   await page.getByRole('tab', { name: /^remote/ }).click();
@@ -525,6 +529,7 @@ try {
   await page.waitForFunction(() => globalThis.fleetRequests.some(url => url.startsWith('/api/on/remote/workflows/auto/readiness?workspace=busy')));
   // Return through the pill, then select a serving-host row by clicking its
   // slots: the whole row, not only the workspace button, is navigable.
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.locator('#global-drain-state').click();
   await page.locator('.fleet-drains').waitFor({ state: 'visible' });
   assert.equal(await page.locator('.fleet-host-tab[aria-selected="true"]').getAttribute('data-host'), 'remote', 'the chosen host tab is remembered');

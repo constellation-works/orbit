@@ -191,20 +191,21 @@ async function assertLockedTaskNavigation(page) {
   }, tasks);
 
   try {
-    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('drain'));
+    await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks?dock=locks'));
+    await page.locator('#locks-view [data-view="task"]').click();
     await page.locator('#refresh-btn').click();
     await page.waitForFunction(() =>
       document.querySelectorAll('#locks-body .lock-task-group').length === 2
       && document.querySelector('#tasks-body [data-key="task-LOCKED-1"]')
       && document.querySelector('#tasks-body [data-key="task-LOCKED-2"]'));
 
-    const nested = await nestedInteractive(page, '#drain-main');
+    const nested = await nestedInteractive(page, '#tasks-dock');
     if (nested.length) throw new Error(`Drain pane nests controls in an interactive element: ${nested.join('\n')}`);
 
     if (process.env.AXE_CORE_SCRIPT) {
       await page.addScriptTag({ path: process.env.AXE_CORE_SCRIPT });
       const axeNodes = await page.evaluate(async () => {
-        const result = await globalThis.axe.run('#drain-main', {
+        const result = await globalThis.axe.run('#tasks-dock', {
           runOnly: { type: 'rule', values: ['nested-interactive'] },
         });
         return result.violations.flatMap(violation => violation.nodes.map(node => node.target.join(' ')));
@@ -213,7 +214,7 @@ async function assertLockedTaskNavigation(page) {
     }
 
     for (const task of tasks) {
-      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('drain'));
+      await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('tasks?dock=locks'));
       const group = page.locator(`#locks-body [data-key="lock-task-${task.id}"]`);
       const summary = group.locator(':scope > details > summary');
       const link = group.locator(':scope > .lock-task-id');

@@ -22,8 +22,7 @@ page.on('pageerror', error => errors.push(String(error)));
 await page.route('**/static/app.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
 const boot = async () => {
   await page.evaluate(async () => {
-    // The dock's markup home is the Drain page; app.js, stubbed here, is what
-    // moves it beside Tasks. Show whichever pane holds it.
+    // The dock lives on Tasks. Show its pane while app.js is stubbed.
     const dock = document.getElementById('side-dock');
     for (const pane of document.querySelectorAll('.tab-pane')) {
       pane.classList.toggle('active', pane.contains(dock));

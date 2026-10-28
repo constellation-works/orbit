@@ -1,5 +1,5 @@
 // Why a backlog task is not starting: the drain readiness snapshot, shared by
-// the Drain card (operations.js) and the Tasks list (tasks.js).
+// the Tasks dock (operations.js) and the Tasks list (tasks.js).
 // The Drain card owns the fetch and hands each payload to `setDrainReadiness`;
 // the Tasks list reads each task's pool and wait back for its readiness dot and
 // the Backlog card's readiness strip, and repaints on a change. A task detail's

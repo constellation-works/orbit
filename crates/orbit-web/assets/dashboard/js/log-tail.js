@@ -1,12 +1,12 @@
 // Orbit dashboard log-tail panel (SSE stream, buffered logs, filters).
 // Pure vanilla JS, split into ES modules with no build step.
 //
-// This module owns the #log-panel behavior on the Drain page. It is initialized
+// This module owns the #log-panel behavior in the Tasks dock. It is initialized
 // by a single `initLogTail();` call from app.js (the bootstrap call site is kept
 // in app.js per the extraction contract; the call still fires exactly once at
 // page load). The module exports `initLogTail` and `fitLogPanelToViewport` for
 // the two call sites that remain in app.js (`refreshDashboard` and `setActiveTab`),
-// and `setDockMode` for the router to select the Drain or Log view.
+// and `setDockMode` for the router to select the Drain, Locks held or Log view.
 
 import { bindTaskLink, el, fetchJson, formatClock, formatDateTime, onClockZoneChange, onWorkspaceChange, getHost, isHostUnavailable, withHost } from './common.js';
 
@@ -49,23 +49,16 @@ let logSnapshotRetryMs = LOG_STREAM_RETRY_MIN_MS;
 let logSnapshotAttempt = 0;
 let logVisibilityWired = false;
 
-// Overview, Start a window and Log share one dock. It sits on the Drain page and, while Tasks
-// shows, beside the task list (placeDock). The Drain route selects its view;
-// on Tasks the view is the last one chosen that Tasks offers. Agent and
-// wrapping preferences stay local to this browser.
 const LOG_PANEL_PREFS_KEY = "orbit.dashboard.logPanel";
-const DOCK_MODES = ["drain", "start", "log"];
-// Docked on Tasks, Locks held is a tab of its own: it shows that card of the
-// drain pane, and `drain` the rest.
-const DRAIN_CARD_MODES = ["locks"];
+const DOCK_MODES = ["drain", "locks", "log"];
 
 function loadLogPanelPrefs() {
   try {
     const raw = window.localStorage.getItem(LOG_PANEL_PREFS_KEY);
     const parsed = raw ? JSON.parse(raw) : {};
     // `status` is the Drain mode's name before ORB-12898; a stored one opens as Drain.
-    const dockMode = parsed.dockMode === "status" ? "drain" : parsed.dockMode;
-    const known = DOCK_MODES.includes(dockMode) || DRAIN_CARD_MODES.includes(dockMode);
+    const dockMode = ["status", "start"].includes(parsed.dockMode) ? "drain" : parsed.dockMode;
+    const known = DOCK_MODES.includes(dockMode);
     return { dockMode: known ? dockMode : "drain", showAgent: parsed.showAgent !== false };
   } catch (_) {
     return { dockMode: "drain", showAgent: true };
@@ -137,6 +130,7 @@ function wireLogWrapToggle() {
 export function fitLogPanelToViewport() {
   applyDockMode();
   applyLogWrap(loadLogWrapPref());
+  revealDockStart();
 }
 
 function applyDockMode() {
@@ -144,12 +138,9 @@ function applyDockMode() {
   if (!dock) return;
   const modes = dockModes();
   const mode = shownDockMode();
-  const card = DRAIN_CARD_MODES.includes(mode) ? mode : null;
+  const card = mode === "locks" ? mode : null;
   dock.dataset.mode = card ? "drain" : mode;
-  // On Tasks the drain pane splits into Drain and Locks; on Drain it shows
-  // every card.
-  if (dockHome() === "tasks") dock.dataset.card = card || "drain";
-  else delete dock.dataset.card;
+  dock.dataset.card = card || "drain";
   for (const btn of document.querySelectorAll("#dock-mode-toggle .dock-seg")) {
     const on = btn.dataset.mode === mode;
     btn.hidden = !modes.includes(btn.dataset.mode);
@@ -159,66 +150,47 @@ function applyDockMode() {
   }
 }
 
-// One dock, two homes: the Tasks page's right column and the Drain page. It
-// moves to whichever of the two is shown, so its cards keep one renderer and
-// one set of element ids. On Tasks its first view is named Drain, since the
-// page around it is not, and Locks held is a view of its own. Start a window
-// is the Drain page's own view: Tasks starts a window from the simple card in
-// its first view.
-const DOCK_HOMES = {
-  tasks: { slot: "tasks-dock", label: "Drain", modes: ["drain", "locks", "log"] },
-  drain: { slot: "drain-main", label: "Overview", modes: DOCK_MODES },
-};
-const dockHomeListeners = new Set();
-
-// The dock starts on the Drain page until the router first places it.
-export function dockHome() {
-  return $("side-dock")?.dataset.home || "drain";
-}
-
 function dockModes() {
-  return DOCK_HOMES[dockHome()]?.modes || DOCK_MODES;
+  return DOCK_MODES;
 }
 
-// A remembered view this home does not offer (Start a window, chosen on
-// Drain) opens the first view instead of an empty pane.
 function shownDockMode() {
-  return dockModes().includes(logPanelPrefs.dockMode) ? logPanelPrefs.dockMode : "drain";
+  return logPanelPrefs.dockMode;
 }
 
-// Each home renders its own Start form (operations.js), so a move repaints it.
-export function onDockHomeChange(listener) {
-  dockHomeListeners.add(listener);
-  return () => dockHomeListeners.delete(listener);
-}
-
-export function placeDock(tab) {
-  const dock = $("side-dock");
-  const home = DOCK_HOMES[tab];
-  const slot = home ? $(home.slot) : null;
-  if (!dock || !slot || dock.parentNode === slot) return;
-  slot.appendChild(dock);
-  dock.dataset.home = tab;
-  const button = $("dock-tab-drain");
-  const label = button && button.querySelector(".dock-seg-label");
-  if (label) label.textContent = home.label;
-  if (button && button.dataset.drainLabel) button.setAttribute("aria-label", `${home.label}: ${button.dataset.drainLabel}`);
-  applyDockMode();
-  for (const listener of dockHomeListeners) listener(tab);
-}
-
-// On the Drain page a view is a route; on Tasks choosing one only switches it.
 export function chooseDockMode(mode) {
   setDockMode(mode);
-  if ($("side-dock")?.dataset.home !== "tasks") window.location.hash = mode === "drain" ? "#drain" : `#drain/${mode}`;
+  const url = new URL(window.location.href);
+  const [route, query = ""] = url.hash.slice(1).split("?");
+  if (route !== "tasks") return;
+  const params = new URLSearchParams(query);
+  params.set("dock", mode);
+  url.hash = `tasks?${params}`;
+  window.history.replaceState(null, "", url);
 }
 
-// The router selects the Drain page view through this presentation handle.
+// Legacy Start links reveal the existing Start card in the Drain view.
 export function setDockMode(mode) {
-  if (!DOCK_MODES.includes(mode) && !DRAIN_CARD_MODES.includes(mode)) return;
+  if (mode === "start") {
+    const dock = $("side-dock");
+    if (dock) dock.dataset.revealStart = "true";
+    mode = "drain";
+  } else {
+    const dock = $("side-dock");
+    if (dock) delete dock.dataset.revealStart;
+  }
+  if (!DOCK_MODES.includes(mode)) return;
   logPanelPrefs = { ...logPanelPrefs, dockMode: mode };
   saveLogPanelPrefs(logPanelPrefs);
   applyDockMode();
+}
+
+export function revealDockStart() {
+  const dock = $("side-dock");
+  const card = $("auto-drain-quick-start");
+  if (dock?.dataset.revealStart !== "true" || !card || card.hidden || !card.getClientRects().length) return;
+  delete dock.dataset.revealStart;
+  card.scrollIntoView?.({ block: "nearest" });
 }
 
 function wireDockModeToggle() {
@@ -245,7 +217,7 @@ function wireDockModeToggle() {
 }
 
 // ORB-10972: the bottom status bar carries the newest line on every tab, not
-// just the Drain page where the full tail is mounted. The SSE connection is opened
+// just Tasks where the full tail is mounted. The SSE connection is opened
 // once at boot and never torn down on a tab change, so mirroring here is
 // enough to keep the bar live everywhere.
 //

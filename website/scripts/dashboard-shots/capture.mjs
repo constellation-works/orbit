@@ -310,14 +310,11 @@ await tall(1600, async () => {
   await shot("dashboard-approve-ship", [page.locator("#tasks-panel > header"), end]);
 });
 
-// The Drain page's Overview: the throttle banner and summary tiles, the
-// Auto-drain card and why tasks wait, then Fleet drains and Locks held.
+// The Tasks dock: auto-drain status, its throttle note and Start a window.
 drainThrottled = true;
 await tall(1800, async () => {
-  await open("drain", "#drain-summary:not([hidden])");
-  // The pane fills the page height, so crop to its visible cards.
-  const cards = await page.locator("#drain-banner:not([hidden]), #drain-summary, #dock-pane-drain .drain-col > .panel:not([hidden])").all();
-  await shot("dashboard-drain-card", [page.locator("#side-dock .dock-head"), ...cards], 12);
+  await open("tasks?dock=drain", "#auto-drain-panel .drain-throttle-line");
+  await shot("dashboard-drain-card", [page.locator("#side-dock .dock-head"), page.locator("#auto-drain-panel"), page.locator("#auto-drain-quick-start")], 12);
 });
 drainThrottled = false;
 

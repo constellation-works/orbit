@@ -6471,8 +6471,8 @@ function buildBacklogReadiness(group, context) {
     }),
     counts.unknown > 0 ? el("span", { class: "ready-unknown", text: `${counts.unknown} not in the drain snapshot` }) : null,
   ]);
-  const why = el("a", { class: "ready-why", text: "Why? See Drain", title: "Open the Drain view: what each backlog task waits on" });
-  why.href = "#drain";
+  const why = el("a", { class: "ready-why", text: "Why? See Tasks dock", title: "Open the Tasks dock: admission status and window controls" });
+  why.href = "#tasks?dock=drain";
   const strip = el("div", { class: "group-readiness" }, [bar, legend, why]);
   strip.dataset.key = "readiness-backlog";
   strip.dataset.hash = `${DRAIN_POOLS.map(({ key }) => counts[key]).join(",")},${counts.unknown}-${readyPoolFilter || ""}`;

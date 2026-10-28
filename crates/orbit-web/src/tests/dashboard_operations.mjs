@@ -43,9 +43,8 @@ let failJobRunsWorkspace = null;
 let workspaceTwoRunId = null;
 let nextTask = 1;
 let drainRunId = null;
-// The page the harness reports; the Drain Overview reads run detail only on Drain.
+// The page the harness reports for optional forecast reads.
 let harnessTab = 'operations';
-let runDetailFixture = null;
 let drainPhase = 'idle';
 let controlsAuthorized = true;
 let replicaWorkspace = false;
@@ -229,8 +228,6 @@ globalThis.fetch = async (path, options = {}) => {
     readinessPending = false;
   }
   if (url.pathname === '/api/workflows/auto/readiness' && failThisReadiness) return response({ error: 'readiness unavailable' }, thisReadinessFailureStatus);
-  const detailRun = url.pathname.match(/^\/api\/runs\/([^/]+)$/)?.[1];
-  if (detailRun && runDetailFixture) return response(runDetailFixture);
   if (url.pathname === '/api/workflows/auto/readiness') return response({
     auto_concurrency: { mode: 'enforce', source: 'explicit', configured_mode: 'shadow' },
     controls_authorized: controlsAuthorized,
@@ -339,18 +336,17 @@ assert(getComputedStyle(mintedStatus, '::before').backgroundColor === getCompute
 assert(getComputedStyle(mintedStatus).getPropertyValue('--dot').trim() === getComputedStyle(mintedStatus).getPropertyValue('--status-in-progress').trim(), 'in-progress status uses its theme colour');
 taskStatus.remove();
 
-// The Drain pane leads with a host-throttle banner, then the status card
+// The Tasks dock holds the status card
 // (live window, workspace slots, holds, Stop) and Start a window (duration,
 // concurrency, completion, approving, Start). The Tasks list reads each
 // backlog task's wait from the same readiness payload.
 const drainBody = get('auto-drain-body');
-const startBody = get('auto-drain-start-body');
-const drainBanner = get('drain-banner');
-const drainText = () => `${drainBanner.textContent} ${get('auto-drain-body').textContent} ${get('auto-drain-start-body').textContent}`;
-const drainButton = label => button('auto-drain-body', label) || button('auto-drain-start-body', label);
-const startNode = id => descendants(get('auto-drain-start-body')).find(node => node.id === id);
+const startBody = get('auto-drain-quick-start-body');
+const drainText = () => `${get('auto-drain-body').textContent} ${get('auto-drain-quick-start-body').textContent}`;
+const drainButton = label => button('auto-drain-body', label) || button('auto-drain-quick-start-body', label);
+const startNode = id => descendants(get('auto-drain-quick-start-body')).find(node => node.id === id);
 const durations = descendants(startBody.querySelector('.drain-durations')).filter(node => node.type === 'button');
-assert(durations.map(node => node.textContent).join(' ') === 'One pass 1h 2h 4h 8h 12h 24h', `duration segments: ${durations.map(node => node.textContent)}`);
+assert(durations.map(node => node.textContent).join(' ') === '1h 2h 4h 8h 12h 24h', `duration segments: ${durations.map(node => node.textContent)}`);
 assert(durations.every(node => node.type === 'button' && ['true', 'false'].includes(node.getAttribute('aria-pressed'))), 'duration segments are pressed-state buttons');
 assert(durations.find(node => node.getAttribute('aria-pressed') === 'true')?.textContent === '1h', 'one hour is the default window');
 const pools = ids => ids.map(id => drainReadinessFor(id)?.pool).join(' ');
@@ -367,7 +363,7 @@ for (const gone of ['Task readiness', 'Waiting on deps', 'slots busy', 'Snapshot
 assert(!descendants(drainBody).some(node => /auto-drain-(task|slot)/.test(String(node.className || ''))), 'no readiness rows or slot tiles');
 assert(get('auto-drain-phase-label').textContent === 'Idle' && !get('auto-drain-live'), 'no live window reads idle');
 assert(drainBody.querySelector('.drain-forecast-state')?.textContent === 'no forecast this pass', 'a readiness payload with no forecast says no forecast this pass');
-assert(!get('auto-drain-start').hidden, 'the Start card shows for a writable workspace');
+assert(!get('auto-drain-quick-start').hidden, 'the Start card shows for a writable workspace');
 // With no live window Stop becomes "Send pending results": the settle-only pass
 // needs no drain, so it stays usable and says what it does in visible text.
 assert(!drainButton('Stop') && drainButton('Send pending results') && !drainButton('Send pending results').disabled, 'Stop relabels to Send pending results and stays enabled without a live window');
@@ -530,313 +526,6 @@ typeConcurrency('');
 assert(!drainButton('Start 2h window').disabled, 'blank means the runtime default and is valid');
 typeConcurrency('2');
 
-// Start a window covers every `orbit run auto` start option, each beside its
-// flag, and the command it shows is the one Start submits. A claim token is
-// sent and never shown: not in the command, the confirm dialog or the receipt.
-const startCommand = () => startNode('auto-drain-command')?.textContent || '';
-const commandParts = () => startCommand().split(/ (?=--(?!host\b))/);
-const startIssues = () => [...(startNode('auto-drain-issues')?.children || [])].map(node => node.textContent);
-const startFlags = [...startBody.querySelectorAll('.drain-flag')].map(node => node.textContent).join(' | ');
-for (const flag of ['--workspace ws-one', '--for', '--concurrency', '--auto-concurrency', '--complete', '--approve-proposed', '--auto-fix', '--review', '--allow-crew', '--<tier>-complexity-crews', '--strict-worker-containment', '--claim-token']) {
-  assert(startFlags.includes(flag), `the composer names ${flag}: ${startFlags}`);
-}
-assert(startCommand() === 'orbit run auto --workspace ws-one --for 2h --concurrency 2', `the live command mirrors the choices: ${startCommand()}`);
-assert(![...startBody.querySelectorAll('[data-crew]')].some(chip => chip.dataset.crew === 'retired'), 'a disabled crew is not offered');
-const tierButton = (tier, label) => [...startBody.querySelectorAll(`[data-tier="${tier}"] button`)].find(node => node.textContent === label);
-startBody.querySelector('[data-crew="luna"]').click();
-assert(startBody.querySelector('[data-crew="luna"]').getAttribute('aria-pressed') === 'false' && commandParts().includes('--allow-crew opus,sol'), `excluding a crew lists the allowed ones: ${startCommand()}`);
-assert(startIssues().includes('Low pool has no allowed crew: unassigned low tasks will wait.'), `a tier with no allowed crew warns: ${startIssues()}`);
-tierButton('hard', 'Override').click();
-assert(startNode('auto-drain-pool-hard').value === 'opus', 'an override starts from the workspace pool');
-// Parse shell words without evaluating substitutions or executing the command.
-function shellWords(command) {
-  const words = []; let word = ''; let quote = null; let started = false;
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (quote === "'") { if (ch === "'") quote = null; else word += ch; }
-    else if (ch === "'") { quote = ch; started = true; }
-    else if (ch === '\\') { word += command[++i]; started = true; }
-    else if (/\s/.test(ch)) { if (started) { words.push(word); word = ''; started = false; } }
-    else { word += ch; started = true; }
-  }
-  assert(!quote, 'command shell quote is closed');
-  if (started) words.push(word);
-  return words;
-}
-// Crew overrides use comma delimiters; whitespace and shell metacharacters
-// inside a name must remain literal in the copyable command.
-startNode('auto-drain-pool-hard').value = "fast crew:2, quote'$(literal):1";
-startNode('auto-drain-pool-hard').dispatchEvent(new Event('input'));
-const quotedOverride = startCommand();
-const overrideArgv = shellWords(quotedOverride);
-assert(overrideArgv[overrideArgv.indexOf('--hard-complexity-crews') + 1] === "fast crew:2,quote'$(literal):1", `literal override remains one argument: ${quotedOverride}`);
-startNode('auto-drain-pool-hard').value = 'opus:3, sol:1';
-startNode('auto-drain-pool-hard').dispatchEvent(new Event('input'));
-startNode('auto-drain-pool-hard').dispatchEvent(new Event('change'));
-tierButton('xhard', 'Off').click();
-setSwitch(startNode('auto-drain-strict'), true);
-const claimToken = startNode('auto-drain-claim-token');
-assert(claimToken.type === 'password', 'the claim token is a password field');
-claimToken.value = 'SECRET-CLAIM-7f3a';
-claimToken.dispatchEvent(new Event('input'));
-await fetchAndRenderOperations();
-assert(startNode('auto-drain-claim-token').value === 'SECRET-CLAIM-7f3a', 'a poll keeps the typed token in its field');
-assert(['--hard-complexity-crews opus:3,sol:1', '--xhard-complexity-crews', '--strict-worker-containment', '--claim-token <token>'].every(part => commandParts().includes(part)), `pools, containment and the token placeholder are in the command: ${startCommand()}`);
-drainButton('Start 2h window').click(); await tick(); await tick(); await tick();
-const fullStart = autoPosts().at(-1).body;
-assert(JSON.stringify(fullStart.allow_crew) === '["opus","sol"]' && JSON.stringify(fullStart.hard_complexity_crews) === '["opus:3","sol:1"]'
-  && JSON.stringify(fullStart.xhard_complexity_crews) === '[]' && !Object.hasOwn(fullStart, 'low_complexity_crews') && !Object.hasOwn(fullStart, 'medium_complexity_crews')
-  && fullStart.strict_worker_containment === true && fullStart.claim_token === 'SECRET-CLAIM-7f3a' && fullStart.for_duration === '2h', `Start submits what the command says: ${JSON.stringify(fullStart)}`);
-for (const [surface, text] of [['command', startCommand()], ['confirm dialog', confirmations.at(-1)], ['receipt', get('auto-drain-operation-feedback').textContent], ['page', document.body.innerHTML]]) {
-  assert(!text.includes('SECRET-CLAIM-7f3a'), `the claim token never appears in the ${surface}`);
-}
-assert(startNode('auto-drain-claim-token').value === '', 'a token is for one start and is cleared after it');
-startBody.querySelector('.drain-crews-bulk button').click();
-for (const tier of ['hard', 'xhard']) tierButton(tier, 'Workspace').click();
-setSwitch(startNode('auto-drain-strict'), false);
-// One pass is a window with no --for.
-drainButton('One pass').click();
-assert(drainButton('Run one pass') && !commandParts().some(part => part.startsWith('--for')), `one pass drops --for: ${startCommand()}`);
-drainButton('Run one pass').click(); await tick(); await tick(); await tick();
-assert(autoPosts().at(-1).body.one_pass === true && !Object.hasOwn(autoPosts().at(-1).body, 'for_duration'), `one pass posts one_pass: ${JSON.stringify(autoPosts().at(-1).body)}`);
-drainButton('2h').click();
-
-// A replica pulls from its owner by host; the selector it resolves to is
-// shown, Local is blocked with the runtime's words, and Start submits the
-// same pull run `orbit run auto --pull <workspace> --host <owner>` does.
-replicaWorkspace = true;
-await fetchAndRenderOperations();
-assert(startNode('auto-drain-source-pull').getAttribute('aria-checked') === 'true', 'a replica starts on Pull');
-assert(startNode('auto-drain-pull-selector').textContent.includes('m-owner/ws-one') && startNode('auto-drain-source-local').textContent.includes(LOCAL_REFUSAL), 'the resolved selector and the local refusal are shown');
-assert(commandParts().slice(0, 3).join(' | ') === 'orbit run auto | --pull ws-one --host server | --for 2h', `the pull command names the owner host: ${startCommand()}`);
-startBody.querySelector('[data-crew="opus"]').click();
-drainButton('Start pulling for 2h').click(); await tick(); await tick(); await tick();
-const pullStart = autoPosts().at(-1).body;
-assert(JSON.stringify(Object.keys(pullStart).sort()) === '["allow_crew","concurrency","for_duration","host","pull"]' && pullStart.pull === 'ws-one' && pullStart.host === 'server' && JSON.stringify(pullStart.allow_crew) === '["sol","luna"]', `a pull start sends only what --pull takes: ${JSON.stringify(pullStart)}`);
-assert(get('auto-drain-operation-feedback').textContent.startsWith('Run jrun-pull-1 submitted: pulling from m-owner/ws-one.'), `the pull receipt names the owner: ${get('auto-drain-operation-feedback').textContent}`);
-startBody.querySelector('.drain-crews-bulk button').click();
-// Options --pull refuses are refused here in the CLI's words before dispatch,
-// and Local on a replica is refused as the runtime refuses it.
-startNode('auto-drain-source-local').click();
-assert(startIssues().includes(LOCAL_REFUSAL) && drainButton('Start 2h window').disabled, `local on a replica is blocked verbatim: ${startIssues()}`);
-setSwitch(approveSwitch(), true);
-modeInput().value = 'enforce'; modeInput().dispatchEvent(new Event('change'));
-startNode('auto-drain-review').value = 'before-pr'; startNode('auto-drain-review').dispatchEvent(new Event('change'));
-startNode('auto-drain-source-pull').click();
-for (const refusal of [
-  "the argument '--pull <SELECTOR>' cannot be used with '--auto-concurrency <MODE>'",
-  "the argument '--pull <SELECTOR>' cannot be used with '--approve-proposed'",
-  "--review does not apply to a pull drain: the owner decides the review of the claims it hands out, so request review on the owner's own run or in its workspace policy",
-]) assert(startIssues().includes(refusal), `pull refuses as the CLI does: ${refusal} in ${startIssues()}`);
-assert(drainButton('Start pulling for 2h').disabled, 'a refused option blocks Start');
-setSwitch(approveSwitch(), false);
-modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
-startNode('auto-drain-review').value = ''; startNode('auto-drain-review').dispatchEvent(new Event('change'));
-assert(!drainButton('Start pulling for 2h').disabled && startIssues().length === 0, `clearing the refused options unblocks Start: ${startIssues()}`);
-// Pull on the owner is refused with the runtime's words.
-replicaWorkspace = false;
-await fetchAndRenderOperations();
-assert(startIssues().includes(PULL_REFUSAL) && drainButton('Start pulling for 2h').disabled, `pull on the owner is blocked verbatim: ${startIssues()}`);
-startNode('auto-drain-source-local').click();
-assert(drainButton('Start 2h window') && !drainButton('Start 2h window').disabled, 'Local starts again on the owner');
-
-// Overview: how the live window was started, from the inputs its run
-// recorded, with each setting's flag or config key; the equivalent command;
-// and "Start a window like this", which loads those settings.
-harnessTab = 'drain';
-drainPhase = 'draining';
-drainRunId = 'jrun-20260923-0400-a1';
-runDetailFixture = { run: { run_id: drainRunId, input: {
-  for_seconds: 14400, max_active_leaf_runs: 3, allowed_crews: ['opus', 'sol'], auto_fix: true,
-  auto_concurrency: 'enforce', auto_concurrency_source: 'explicit',
-  auto_crew_pools: {
-    low: { crews: [{ name: 'luna', weight: 1 }], source: 'workflow.low_complexity_crews' },
-    medium: { crews: [{ name: 'sol', weight: 2 }, { name: 'luna', weight: 1 }], source: 'workflow.medium_complexity_crews' },
-    hard: { crews: [{ name: 'opus', weight: 3 }, { name: 'sol', weight: 1 }], source: 'run_input.hard_complexity_crews' },
-    xhard: { crews: [], source: 'run_input.xhard_complexity_crews' },
-  },
-} }, claimed_leaves: [] };
-await fetchAndRenderOperations();
-const startedCells = () => Object.fromEntries([...get('drain-started-body').querySelectorAll('.drain-started-cell')].map(cell => [cell.querySelector('dt').textContent, `${cell.querySelector('.drain-started-value').textContent} ← ${cell.querySelector('.drain-flag').textContent}`]));
-let cells = startedCells();
-assert(!get('drain-started-panel').hidden && get('drain-pull-panel').hidden, 'a local window shows how it started and no pull claims');
-for (const [label, value] of [
-  ['Source', 'Local backlog ← --workspace'], ['Concurrency', '3 ← --concurrency'], ['Admission control', 'enforce ← --auto-concurrency'],
-  ['Allowed crews', 'opus, sol ← --allow-crew'], ['Low pool', 'luna ← workflow.low_complexity_crews'], ['Hard pool', 'opus:3, sol:1 ← --hard-complexity-crews'],
-  ['Extra hard pool', 'Off ← --xhard-complexity-crews'], ['Authority', 'stops at review · auto-fix ← --auto-fix'],
-  ['Review', 'not recorded ← --review'], ['Workspace claim', 'not recorded ← --claim-token'],
-]) assert(cells[label] === value, `${label} reads ${value}: ${cells[label]}`);
-assert(cells.Window.startsWith('4h · admits until'), `the window shows its length and close: ${cells.Window}`);
-const startedCommand = get('drain-started-command').textContent;
-assert(startedCommand === 'orbit run auto --workspace ws-one --for 4h --concurrency 3 --auto-concurrency enforce --allow-crew opus,sol --hard-complexity-crews opus:3,sol:1 --xhard-complexity-crews --auto-fix', `the equivalent command is rebuilt from the run: ${startedCommand}`);
-get('drain-start-like').click();
-assert(startCommand() === startedCommand, `Start a window like this loads the run's settings: ${startCommand()}`);
-const savedInput = structuredClone(runDetailFixture.run.input);
-runDetailFixture.run.input.allowed_crews = ["fast crew", "quote'$(literal)"];
-runDetailFixture.run.input.auto_crew_pools.hard.crews = [{ name: "fast crew", weight: 2 }, { name: "quote'$(literal)", weight: 1 }];
-await fetchAndRenderOperations();
-const specialRecorded = shellWords(get('drain-started-command').textContent);
-assert(specialRecorded[specialRecorded.indexOf('--allow-crew') + 1] === "fast crew,quote'$(literal)", 'recorded command preserves allowed crew literals');
-assert(specialRecorded[specialRecorded.indexOf('--hard-complexity-crews') + 1] === "fast crew:2,quote'$(literal):1", 'recorded command preserves weighted crew literals');
-assert(get('drain-started-command').parentElement.querySelector('.drain-copy'), 'the recorded command has a copy control for the same text');
-if (globalThis.captureDrainEvidence) await globalThis.captureDrainEvidence('drain-recorded-dark-375.png', '#drain-started-command');
-extraStartCrews = ["fast crew", "quote'$(literal)"];
-await fetchAndRenderOperations();
-get('drain-start-like').click();
-await fetchAndRenderOperations();
-const clonedSpecial = shellWords(startCommand());
-assert(clonedSpecial[clonedSpecial.indexOf('--allow-crew') + 1] === "fast crew,quote'$(literal)", 'cloning preserves allowed crew literals');
-assert(clonedSpecial[clonedSpecial.indexOf('--hard-complexity-crews') + 1] === "fast crew:2,quote'$(literal):1", 'cloning preserves weighted crew literals');
-runDetailFixture.run.input.auto_crew_pools.hard.crews = [{ name: "fast crew", weight: 1 }, { name: "quote'$(literal)", weight: 1 }];
-await fetchAndRenderOperations();
-const unweightedRecorded = shellWords(get('drain-started-command').textContent);
-assert(unweightedRecorded[unweightedRecorded.indexOf('--hard-complexity-crews') + 1] === "fast crew,quote'$(literal)", 'an unweighted recorded pool keeps literal names');
-get('drain-start-like').click();
-await fetchAndRenderOperations();
-const unweightedCloned = shellWords(startCommand());
-assert(unweightedCloned[unweightedCloned.indexOf('--hard-complexity-crews') + 1] === "fast crew,quote'$(literal)", 'cloning an unweighted pool keeps literal names');
-assert(startNode('auto-drain-pool-hard').value === "fast crew,quote'$(literal)", `an unweighted clone keeps internal spaces in the override: ${startNode('auto-drain-pool-hard').value}`);
-assert(get('auto-drain-command').parentElement.querySelector('.drain-copy'), 'the Start command has a copy control for the same text');
-if (globalThis.captureDrainEvidence) await globalThis.captureDrainEvidence('drain-start-dark-375.png', '#auto-drain-command');
-extraStartCrews = [];
-runDetailFixture.run.input = savedInput;
-await fetchAndRenderOperations();
-
-// Cloning must not extend a recorded window to the composer's default merely
-// because its duration is absent from the preset buttons. Check the public
-// Start-like action through confirmation and the HTTP submission, including
-// a preset and a one-pass control.
-for (const [seconds, window] of [[900, '15m'], [91, '91s'], [14400, '4h'], [null, 'once']]) {
-  runDetailFixture.run.input.for_seconds = seconds;
-  await fetchAndRenderOperations();
-  const recordedCommand = get('drain-started-command').textContent;
-  get('drain-start-like').click();
-  await fetchAndRenderOperations();
-  assert(startCommand() === recordedCommand, `cloning ${window} keeps its command across a readiness poll: ${startCommand()}`);
-  const selected = [...startBody.querySelectorAll('.drain-durations [aria-pressed="true"]')];
-  const label = window === 'once' ? 'One pass' : window;
-  assert(selected.length === 1 && selected[0].textContent === label, `cloning ${window} shows its selected duration`);
-  const postsBeforeClone = autoPosts().length;
-  const start = startBody.querySelector('.drain-start');
-  assert(start && !start.disabled, `cloning ${window} can be submitted`);
-  start.click(); await tick(); await tick(); await tick();
-  assert(autoPosts().length === postsBeforeClone + 1, `cloning ${window} submits exactly once`);
-  assert(confirmations.at(-1).includes(`Duration: ${window === 'once' ? 'one pass' : window} ·`), `cloning ${window} confirms the recorded duration`);
-  const cloned = autoPosts().at(-1).body;
-  assert(window === 'once'
-    ? cloned.one_pass === true && !Object.hasOwn(cloned, 'for_duration')
-    : cloned.for_duration === window && !Object.hasOwn(cloned, 'one_pass'),
-  `cloning ${window} preserves the HTTP window semantics: ${JSON.stringify(cloned)}`);
-}
-startBody.querySelector('.drain-crews-bulk button').click();
-for (const tier of ['hard', 'xhard']) tierButton(tier, 'Workspace').click();
-modeInput().value = ''; modeInput().dispatchEvent(new Event('change'));
-autoFixInput().click();
-drainButton('2h').click();
-typeConcurrency('2');
-
-// A replica's pull drain: the owner selector, the claim budget written out as
-// `held − min(reviewing, N) < N` over 2N cells, claims by stage as `orbit run
-// show` counts them, and the owner's settings greyed.
-replicaWorkspace = true;
-drainPhase = 'idle';
-drainRunId = null;
-pullDrainRunId = 'jrun-pull-1';
-const leaf = (id, stage) => ({ leaf_run_id: `jrun-leaf-${id}`, job_id: 'task_pr_pipeline', task_id: `ORB-${id}`, owner: 'm-owner', leaf_state: 'running', stage });
-runDetailFixture = { run: { run_id: 'jrun-pull-1', input: {
-  for_seconds: 28800, max_active_leaf_runs: 3, allowed_crews: ['sol'],
-  destination: { owner_machine_id: 'm-owner', owner_workspace_id: 'ws-one', selector: 'm-owner/ws-one', execution_machine_id: 'm-mac' },
-} }, pull_occupancy: { occupied: 4, reviewing: 2 }, claimed_leaves: [leaf(1, 'implementing'), leaf(2, 'reviewing'), leaf(3, 'reviewing'), leaf(4, 'implementing')], refused_settlements: [] };
-await fetchAndRenderOperations();
-assert(!get('drain-pull-panel').hidden && get('drain-pull-body').textContent.includes('m-owner/ws-one'), 'the pull panel names the owner selector');
-const budgetCells = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => cell.classList[1]).join(' ');
-assert(budgetCells === 'implementing implementing reviewing reviewing open later', `the budget draws 2N cells: ${budgetCells}`);
-assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 4 − min(2, 3) = 2 < 3 → claims up to 1 more', `the admission sum is written out: ${get('drain-claim-budget-sum').textContent}`);
-assert(get('drain-claims-summary').textContent === 'Claimed leaves: 4 running (2 implementing, 2 reviewing)', `claims by stage match orbit run show: ${get('drain-claims-summary').textContent}`);
-cells = startedCells();
-assert(cells.Source === 'Pull from m-owner/ws-one ← --pull --host server', `a pull window names its owner: ${cells.Source}`);
-const greyed = [...get('drain-started-body').querySelectorAll('.drain-started-cell.owner-decides dt')].map(node => node.textContent).join(', ');
-assert(greyed === 'Complexity pools, Authority, Review, Worker containment', `owner-decided settings are greyed: ${greyed}`);
-
-// A pull drain's live ceiling can move independently of its submitted input.
-// One implementing claim uses the lower live value, then a raised value; an
-// unsent composer request must not override the live run's budget.
-runDetailFixture = {
-  run: {
-    ...runDetailFixture.run,
-    drain_worker_limit: { max_active_leaf_runs: 1 },
-  },
-  pull_occupancy: { occupied: 1, reviewing: 0 },
-  claimed_leaves: [leaf(5, 'implementing')],
-  refused_settlements: [],
-};
-drainCapacityOverride = { max_active_leaf_runs: 1, limit_source: 'pull_run_control' };
-await fetchAndRenderOperations();
-assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 1) = 1 ≥ 1 → no new claim', `the live lowered ceiling closes admission at one claim: ${get('drain-claim-budget-sum').textContent}`);
-
-runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 4 };
-drainCapacityOverride = { max_active_leaf_runs: 4, limit_source: 'pull_run_control' };
-await fetchAndRenderOperations();
-assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 4) = 1 < 4 → claims up to 3 more', `the live raised ceiling opens three claims: ${get('drain-claim-budget-sum').textContent}`);
-const raisedBudgetCells = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => cell.classList[1]).join(' ');
-assert(raisedBudgetCells === 'implementing open open open later later later later', `the raised budget draws eight cells: ${raisedBudgetCells}`);
-
-// ORB-17302 drew one element per claim cell, 2N for any recorded ceiling up
-// to u32::MAX. Past 24 cells the budget is one segment per kind, labelled
-// with its count, while the admission sum stays exact.
-for (const ceiling of [13, 1000, 4294967295]) {
-  runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: ceiling };
-  drainCapacityOverride = { max_active_leaf_runs: ceiling, limit_source: 'pull_run_control' };
-  await fetchAndRenderOperations();
-  const segments = [...get('drain-pull-body').querySelectorAll('.drain-budget-cell')].map(cell => `${cell.classList[1]}:${cell.textContent}`).join(' ');
-  assert(segments === `implementing:1 open:${ceiling - 1} later:${ceiling}`, `a ${ceiling} ceiling draws one segment per kind: ${segments.slice(0, 200)}`);
-  assert(get('drain-pull-body').querySelector('.drain-budget-cells').getAttribute('aria-label') === `1 held outside review, 0 reviewing, ${ceiling - 1} open of ${2 * ceiling} claim cells`, 'the segmented budget keeps its accessible counts');
-  assert(get('drain-claim-budget-sum').textContent === `held − min(reviewing, N) < N: 1 − min(0, ${ceiling}) = 1 < ${ceiling} → claims up to ${ceiling - 1} more`, `the admission sum stays exact at ${ceiling}: ${get('drain-claim-budget-sum').textContent}`);
-}
-runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 4 };
-drainCapacityOverride = { max_active_leaf_runs: 4, limit_source: 'pull_run_control' };
-
-typeConcurrency('6');
-runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 1 };
-drainCapacityOverride = { max_active_leaf_runs: 6, limit_source: 'requested' };
-await fetchAndRenderOperations();
-assert(lastReadiness().concurrency === '6', 'the unsent composer value is included in readiness');
-assert(get('drain-claim-budget-sum').textContent === 'held − min(reviewing, N) < N: 1 − min(0, 1) = 1 ≥ 1 → no new claim', `the unsent requested limit does not change the live budget: ${get('drain-claim-budget-sum').textContent}`);
-
-typeConcurrency('2');
-drainCapacityOverride = {};
-assert(get('drain-started-command').textContent === 'orbit run auto --pull ws-one --host server --for 8h --concurrency 3 --allow-crew sol', `the pull command is rebuilt: ${get('drain-started-command').textContent}`);
-// Capacity comes from the allocator's workspace reading, independently of
-// this drain's running-leaf table or whether settlement has a refusal yet.
-runDetailFixture.run.drain_worker_limit = { max_active_leaf_runs: 1 };
-for (const fixture of [
-  { name: 'launching admission', occupied: 1, reviewing: 0, leaves: [], open: false },
-  { name: 'running bound claim counted once', occupied: 1, reviewing: 0, leaves: [leaf(6, 'implementing')], open: false },
-  { name: 'review replacement', occupied: 1, reviewing: 1, leaves: [leaf(6, 'reviewing')], open: true },
-  { name: 'capped review credit', occupied: 2, reviewing: 2, leaves: [leaf(6, 'reviewing'), leaf(7, 'reviewing')], open: false },
-  { name: 'terminal leaf awaiting settlement', occupied: 1, reviewing: 0, leaves: [], open: false, refused: true },
-  { name: 'other workspace leaf', occupied: 1, reviewing: 0, leaves: [], open: false },
-  { name: 'settlement released capacity', occupied: 0, reviewing: 0, leaves: [], open: true },
-]) {
-  runDetailFixture.pull_occupancy = { occupied: fixture.occupied, reviewing: fixture.reviewing };
-  runDetailFixture.claimed_leaves = fixture.leaves;
-  runDetailFixture.refused_settlements = fixture.refused ? [{ owner: 'm-owner/ws-one', refusals: 1, reason: 'validation evidence missing' }] : [];
-  await fetchAndRenderOperations();
-  const sum = get('drain-claim-budget-sum').textContent;
-  const counted = fixture.occupied - Math.min(fixture.reviewing, 1);
-  assert(sum.includes(`${fixture.occupied} − min(${fixture.reviewing}, 1) = ${counted}`) && sum.endsWith(fixture.open ? 'claims up to 1 more' : 'no new claim'), `${fixture.name}: authoritative occupancy determines admission: ${sum}`);
-  assert(fixture.leaves.length ? get('drain-claims-summary').textContent.includes(`${fixture.leaves.length} running`) : get('drain-claims-summary').textContent === 'No running claimed leaves.', `${fixture.name}: stage table describes only live claimed leaves`);
-  if (fixture.refused) assert(get('drain-pull-body').textContent.includes('validation evidence missing'), 'settlement refusal stays visible beside held capacity');
-}
-runDetailFixture.pull_occupancy = null;
-await fetchAndRenderOperations();
-assert(!get('drain-claim-budget-sum') && get('drain-pull-body').textContent.includes('occupancy is unavailable'), 'an unavailable read never advertises free capacity');
-replicaWorkspace = false;
-pullDrainRunId = null;
-runDetailFixture = null;
-harnessTab = 'operations';
-await fetchAndRenderOperations();
-
 // A payload without capacity figures reads as unknown, not as zero: `Number(null)`
 // is 0, which printed "0 free slots" and a placeholder of "null".
 nullCapacity = true;
@@ -866,15 +555,11 @@ assert(
   `the throttle names both thresholds for held resources above high and in hysteresis band: ${drainText()}`
 );
 assert(!drainText().includes('89% ≥'), 'hysteresis band reading must not render a false comparison against high threshold');
-assert(descendants(drainBanner).some(node => node.getAttribute?.('role') === 'status' && node.textContent.includes('Admissions throttled')), 'the throttle banner is announced as status');
-assert(!drainBanner.hidden && !drainBody.querySelector('.drain-throttle-note'), 'the throttle leads the page once, not again in the status card');
-// The card keeps its own one-line copy for the Tasks dock, which hides the
-// banner; on the Drain page that copy is not drawn.
 const throttleLine = drainBody.querySelector('.drain-throttle-line');
-assert(throttleLine?.getAttribute('role') === 'status' && throttleLine.textContent.startsWith('Admissions throttled: memory 93%') && throttleLine.getClientRects().length === 0, `the card's throttle note is held back on Drain: ${throttleLine?.outerHTML}`);
+assert(throttleLine?.getAttribute('role') === 'status' && throttleLine.textContent.startsWith('Admissions throttled: memory 93%'), `the card's throttle note is visible in Tasks: ${throttleLine?.outerHTML}`);
 resourceThrottle = null;
 await fetchAndRenderOperations();
-assert(!drainText().includes('Admissions throttled') && drainBanner.hidden, 'the note clears with the throttle');
+assert(!drainText().includes('Admissions throttled') , 'the note clears with the throttle');
 
 // ORB-14705: every readiness task lands in exactly one pool, so the Backlog
 // strip's counts add up to the backlog; "blocked" stays a task status.
@@ -888,23 +573,6 @@ drainTasksOverride = [
   backlogTask(35, 'surface_reserved'),
 ];
 await fetchAndRenderAutoDrainPane();
-const waitsBody = get('drain-waits-body');
-const waitRows = [...waitsBody.querySelectorAll('.drain-wait')];
-const waitTaskLinks = [...waitsBody.querySelectorAll('.drain-wait-task-links a')];
-const waitTaskIdsIn = row => [...row.querySelectorAll('.drain-wait-task-links a')].map(link => link.textContent).sort();
-const expectedWaitGroups = [
-  Array.from({ length: 17 }, (_, i) => `ORB-${9000 + i}`),
-  Array.from({ length: 13 }, (_, i) => `ORB-${9017 + i}`),
-  Array.from({ length: 3 }, (_, i) => `ORB-${9030 + i}`),
-  ['ORB-9033'], ['ORB-9034'], ['ORB-9035'],
-].sort((left, right) => left[0].localeCompare(right[0]));
-const actualWaitGroups = waitRows.map(waitTaskIdsIn).sort((left, right) => left[0].localeCompare(right[0]));
-assert(waitTaskLinks.length === 36 && waitTaskLinks.every(link => link.getAttribute('href')?.includes(link.textContent)), 'every readiness task is linked from its reason row');
-assert(JSON.stringify(actualWaitGroups) === JSON.stringify(expectedWaitGroups), 'each wait reason links exactly the tasks in its reason group');
-const lockWaitRow = waitRows.find(row => row.dataset.pool === 'locks' && row.querySelector('.drain-wait-count')?.textContent === '17');
-assert(lockWaitRow?.querySelector('details.drain-wait-task-disclosure') && !lockWaitRow.querySelector('details').open && lockWaitRow.querySelectorAll('.drain-wait-task-links a').length === 17, 'long reason groups fold all member task links in a closed disclosure');
-const shortWaitRow = waitRows.find(row => row.dataset.pool === 'capacity' && row.querySelector('.drain-wait-count')?.textContent === '3');
-assert(shortWaitRow && !shortWaitRow.querySelector('details') && shortWaitRow.querySelectorAll('.drain-wait-task-links a').length === 3, 'short reason groups show their task links inline');
 const poolSizes = {};
 for (const task of drainTasksOverride) {
   const pool = drainReadinessFor(task.task_id)?.pool;
@@ -924,7 +592,7 @@ drainTasksOverride = null;
   const chip = get('host-block').querySelector('[data-resource="cpu"] .v');
   resourceThrottle = { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
   await fetchAndRenderAutoDrainPane();
-  const note = drainBanner.querySelector('.drain-throttle-note').title;
+  const note = drainBody.querySelector('.drain-throttle-line').textContent;
   const cpuReadings = [...note.matchAll(/(\d+(?:\.\d+)?×)\s+cores/g)].map(([, value]) => value);
   assert(cpuReadings.length === 3 && cpuReadings[0] === chip.textContent.trim() && cpuReadings[1] === '0.9×' && cpuReadings[2] === '0.75×', `host load ${chip.textContent} vs throttle readings ${cpuReadings.join(', ')}`);
   assert(!/cpu \d|164/.test(note), `the note never states cpu as a bare percentage: ${note}`);
@@ -941,13 +609,8 @@ drainTasksOverride = null;
   resourceThrottle = { resources: [{ resource: 'cpu', percent: 92, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] };
   drainTasksOverride = [{ task_id: 'ORB-9100', status: 'backlog', eligible: false, reason: 'resource_throttled' }];
   await fetchAndRenderAutoDrainPane();
-  const note = drainBanner.querySelector('.drain-throttle-note');
-  assert(note.title.includes('Admissions throttled: cpu 92% (throttled at ≥ 90% since 2026-10-04 08:40 UTC; resumes below 75%)') && !/load|×|cores/.test(note.title), `utilization reads as a busy percentage: ${note.title}`);
-  const visible = note.textContent.replace(/\s+/g, ' ');
-  assert(visible.includes('host cpu is throttled') && visible.includes('New tasks start once cpu falls below 75%.') && !/load|×|cores/.test(visible), `the banner names cpu utilization: ${visible}`);
-  const gauge = [...note.querySelectorAll('.drain-gauge span')].map(node => node.textContent).filter(Boolean);
-  assert(['cpu now', '92%', 'resume 75%', 'stop 90%'].every(text => gauge.includes(text)), `the gauge reads utilization in percent: ${gauge.join(' | ')}`);
-  assert(get('drain-waits-body').textContent.includes('Clears when cpu falls below 75%'), `the throttle wait names utilization: ${get('drain-waits-body').textContent}`);
+  const note = drainBody.querySelector('.drain-throttle-line');
+  assert(note.textContent.includes('Admissions throttled: cpu 92% (throttled at ≥ 90% since 2026-10-04 08:40 UTC; resumes below 75%)') && !/load|×|cores/.test(note.textContent), `utilization reads as a busy percentage: ${note.textContent}`);
   drainTasksOverride = null;
   resourceThrottle = null;
   drainCapacityOverride = savedCapacity;
@@ -1132,7 +795,7 @@ assert(get('auto-tasks-body').textContent.includes('Chore one') && !get('auto-ta
 assert(get('auto-tasks-body').querySelector('.operations-readonly-note')?.textContent === hostReadOnly, 'the auto-task note gives the host refusal');
 const readOnlySwitch = descendants(get('auto-tasks-body')).find(node => node.type === 'button' && node.getAttribute('role') === 'switch' && node.getAttribute('aria-label')?.includes('Chore one'));
 assert(button('auto-tasks-body', 'Mint now').disabled && readOnlySwitch?.disabled, 'auto-task writes stay refused');
-assert(get('auto-drain-start').hidden, 'the Start composer stays hidden on a read-only host');
+assert(get('auto-drain-quick-start').hidden, 'the Start card stays hidden on a read-only host');
 button('auto-tasks-body', 'Mint now').click(); await tick();
 assert(requests.filter(r => r.method !== 'GET').length === writesBeforeReadOnly, 'a read-only host is sent no write');
 setHostWrites(null);
@@ -1181,7 +844,7 @@ drainPhase = 'winding_down';
 setWorkspace(null);
 const readinessRequests = requests.filter(r => r.path === '/api/workflows/auto/readiness').length;
 await fetchAndRenderOperations();
-assert(get('auto-drain-body').querySelector('.fleet-drains') && get('auto-drain-phase-label').textContent === 'Fleet' && get('auto-drain-start').hidden, 'aggregate mode shows the fleet and offers no Start');
+assert(get('auto-drain-body').querySelector('.fleet-drains') && get('auto-drain-phase-label').textContent === 'Fleet' && get('auto-drain-quick-start').hidden, 'aggregate mode shows the fleet and offers no Start');
 assert(requests.filter(r => r.path === '/api/workflows/auto/readiness').length === readinessRequests, 'aggregate mode does not fetch readiness');
 setWorkspace('one');
 drainPhase = 'idle';
@@ -1701,7 +1364,7 @@ drainCapacityOverride = { allowed_crews: ['sol', 'terra'] };
 await fetchAndRenderAutoDrainPane();
 const crewNote = get('auto-drain-body').querySelector('.drain-crew-note');
 assert(crewNote && crewNote.textContent.includes('Allowed crews: sol, terra.') && crewNote.textContent.includes('waits: ORB-6 (luna).') && !crewNote.textContent.includes('ORB-1 '), `crew note: ${crewNote?.textContent}`);
-assert(get('auto-drain-start-sub').textContent.startsWith('1 eligible now'), `a crew-excluded task is not eligible now: ${get('auto-drain-start-sub').textContent}`);
+assert(get('auto-drain-quick-start-sub').textContent.startsWith('1 eligible now'), `a crew-excluded task is not eligible now: ${get('auto-drain-quick-start-sub').textContent}`);
 assert(drainReadinessFor('ORB-6').label === 'Waiting, other: crew luna not allowed' && drainReadinessFor('ORB-6').title.includes('it allows only sol, terra'), `the task dot names the crew and allowlist: ${JSON.stringify(drainReadinessFor('ORB-6'))}`);
 drainCapacityOverride = {};
 await fetchAndRenderAutoDrainPane();
@@ -1775,7 +1438,7 @@ drainCapacityOverride = { admission_forecast: { ...enforceForecast, series: fore
 await fetchAndRenderAutoDrainPane();
 forecast = forecastCard();
 forecastText = forecast?.textContent || '';
-assert([...forecast.querySelectorAll('.drain-forecast-meter')].every(meter => meter.getClientRects().length === 0), `a series replaces the bars on Drain: ${forecastText}`);
+assert([...forecast.querySelectorAll('.drain-forecast-meter')].every(meter => getComputedStyle(meter).display !== "none"), `the Tasks dock shows compact forecast meters: ${forecastText}`);
 const sparkExpect = [
   { name: 'CPU', minute: '6', label: '+6m', limit: 89, left: 2 * 5 / 60 * 100, peak: '90.0%', text: '90.0% / 89%', sub: 'peak at +6m · 7.2 cores · 1.0 pts over the ceiling' },
   { name: 'Memory', minute: '2', label: '+2m', limit: 74, left: 5 / 60 * 100, peak: '40.0%', text: '40.0% / 74%', sub: 'peak at +2m · 1.0 KiB · 34.0 pts under the ceiling' },
@@ -1963,8 +1626,8 @@ const forecastTextIncludesAdmission = () => (forecastCard()?.textContent || '').
 // Hold only the optional forecast: readiness, fleet and action readback all
 // succeed. Neither the dashboard refresh promise nor its control may wait for
 // the forecast, and repeated readbacks must reuse the same in-flight request.
-// The summary is read only where the card is shown: the Drain page (ORB-19062).
-harnessTab = 'drain';
+// The summary is read only where the card is shown: the Tasks dock (ORB-19062).
+harnessTab = 'tasks';
 backlogForecastMode = 'ready';
 delayBacklogForecast = true;
 const searchesBeforeHeld = backlogForecastSearches.length;

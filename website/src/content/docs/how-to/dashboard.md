@@ -239,17 +239,13 @@ owner. The status list shows every status:
   same as `orbit task update <id> --status <status> --force` and is recorded
   in task history as a `forced` event. Agents cannot force a status.
 
-The right dock has two tabs. **Drain** shows the auto-drain card, a simple
-**Start a window** card (window length, parallel tasks, admission control and
-what happens after a task ships; see [auto-drain](#auto-drain)) and the files
-tasks currently lock. Every other `orbit run auto` option is on the Drain
-page's **Start a window** tab. On a replica checkout, the Tasks card disables
-Start, shows why local draining is refused, and links to the Drain composer
-to pull from the owner. There the card states a host throttle as its own amber note and draws each
-forecast peak as a bar against its threshold. **Log** is a
-live `orbit.log` tail you can filter to **all**, **err**, **deny**, or
-**warn**. Opening a task replaces the dock with the task's detail; below
-1000px wide the dock is only on the Drain page.
+The right dock has three tabs. **Drain** shows the auto-drain card and
+**Start a window** (window length, parallel tasks, admission control and
+what happens after a task ships; see [auto-drain](#auto-drain)). On a replica,
+Start pulls directly from the owner. **Locks held** lists the files tasks
+currently lock, by file or by task. **Log** is a live `orbit.log` tail you can
+filter to **all**, **err**, **deny**, or **warn**. Opening a task replaces the
+dock with its detail; below 1000px the task list fills the width.
 
 A task's detail leads with **Details**: status, complexity, crew, the
 operating systems it can run on, who created and carried it, its run and the
@@ -428,21 +424,18 @@ and the other admission checks that still apply after a decision.
 
 ## Auto-drain
 
-The auto-drain card starts and stops a
-[delivery window](../continuous-delivery/): a time-bounded run that ships
-approved backlog tasks in parallel. It leads the **Drain** page's
-**Overview** tab, with **Fleet drains** and **Locks held** beside it (below
-it on a narrow screen); `#drain`, `#auto-drain` and `#operations/auto-drain`
-open it. The page's **Start a window** tab (`#drain/start`) starts one. It
-needs a single active workspace.
+The **Drain** tab in the Tasks dock contains the auto-drain card and
+**Start a window**: a time-bounded [delivery window](../continuous-delivery/)
+that ships approved backlog tasks in parallel. Select one active workspace to
+start a window. On a replica checkout, Start pulls work from its owner without
+leaving Tasks. The header drain indicator opens the dock's fleet overview in
+**All workspaces** mode.
 
-Above the cards, an amber banner says when a host resource throttle is
-holding admissions: which resource, when admissions resume and since when,
-with a gauge of the reading against its resume and stop thresholds. Summary
-tiles follow: the window's state, slots in use, the queue's waiting and
-eligible counts, and locked files with how many tasks hold them.
+Old `#drain`, `#drain/start` and `#drain/log` bookmarks open Tasks with the
+auto-drain card, Start card or Log selected. The dock keeps the throttle as an
+amber note and forecast peaks as compact meters against their thresholds.
 
-![The Drain page: a header with Overview and Log tabs; an amber banner saying admissions are paused while host load is throttled, with a gauge against its resume and stop thresholds; summary tiles for the window state, slots in use, the queue and locked files; the Auto-drain card with its slots and forecast; and Why 2 tasks are waiting, with each wait reason. A right column holds Fleet drains above Locks held.](../../../assets/dashboard/dashboard-drain-card.png)
+![The Tasks dock: Drain, Locks held and Log tabs above Auto-drain status, a host-throttle note, admission forecast and the Start a window controls.](../../../assets/dashboard/dashboard-drain-card.png)
 
 The card shows:
 
@@ -453,58 +446,36 @@ The card shows:
 - **Capacity.** Running tasks against the limit, free slots, and what a window
   started now would admit.
 - **Admission forecast.** The last pass's forecast time, CPU and memory peaks
-  against the admit thresholds (for example `85.6% / 98%`, then
-  `peak at +10m · 27.4 cores · 12.4 pts under the ceiling`), the tasks it
+  against the admit thresholds (for example `85.6% / 98%`, with timing, amount and headroom in the tooltip), the tasks it
   admitted with the profile that priced each one, and any candidate enforce
   held. A pass that built no
   forecast says `no forecast this pass` and, when an earlier forecast was
   kept, shows that one too. Shadow decisions are marked hypothetical; they
   do not hold anyone.
-- **How this window was started.** Each setting the live window recorded,
-  with the flag or configuration key that set it, and `not recorded` for one
-  it did not record. Below it are the equivalent `orbit run auto` command with
-  **Copy command**, and **Start a window like this**, which opens the composer
-  with those settings.
-- **Pulling from the owner.** On a replica running a pull window: the claim
-  budget `held − min(reviewing, N) < N` with this window's figures, its claimed
-  tasks by stage, and any settlement the owner refused, with its remedy.
 - **Readiness.** **Start a window** counts the tasks eligible now and those
   waiting, from a read-only readiness snapshot. The task list's **Backlog**
   card splits the same snapshot into **Eligible now**, **Waiting on locks**,
   **Waiting on capacity**, and **Waiting, other**; click one to filter the
   card. Each backlog row's dot shows its pool, and its tooltip names the wait,
-  such as `Waits on ABC-2` and the lock they contend for. On the Drain page,
-  **Why N tasks are waiting** splits the same snapshot by pool and lists each
-  wait with its count, a link to the task it waits on, and what that task
-  holds. **Locks held** has two views. **By task** lists each task holding
-  locked files, its status, file count, and how many waiting tasks it blocks;
-  expand a row for the paths. **By file** lists each locked path instead;
-  expand a row for the tasks holding it, how (context lock, run reservation
-  or both) and their runs. A path held by more than one task is marked and
-  sorted first, and typing a task ID in the filter keeps only the locked
-  paths that task's `context_files` overlap. Drain opens on By task and the
-  Tasks dock on By file; a view you pick is remembered for that page.
+  such as `Waits on ABC-2` and the lock they contend for. **Locks held** has
+  **By file** (default) and **By task** views. Expand a locked path to see its
+  holders or a task to see its paths. Shared paths are marked and sorted first;
+  typing a task ID filters to the paths its context overlaps. The chosen view
+  is remembered.
 
-**Start a window** offers every option of `orbit run auto`, each with its
-flag beside it. A sticky footer sums the window up, lists anything that blocks
-**Start** or warns, and shows the equivalent command with **Copy command**.
-Refusals use the command line's own words, and the server refuses whatever the
-command line refuses (an unknown crew, for example) before any run exists.
+**Start a window** offers duration, parallelism, admission control and the
+permissions below. Its footer sums the window up and shows any refusal or
+throttle warning. The server validates the request before starting a run.
 
 | Control | Effect |
 |---|---|
-| **Where the work comes from** | **Local backlog** (`--workspace`) drains this workspace's backlog on its owner. **Pull from the owner** (`--pull <workspace> --host <owner>`) claims the owner's work from a replica and hands each result back. Pull is offered only on a replica, and Local is blocked there. A pull window greys the options the owner decides. |
-| **Window length** | **One pass** (no `--for`), or `1h`, `2h`, `4h`, `8h`, `12h` or `24h` (`--for`). The default is `1h`. |
+| **Window length** | `1h`, `2h`, `4h`, `8h`, `12h` or `24h` (`--for`). The default is `1h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the runtime default (5). Anything but a whole number of 1 or more disables **Start**. |
-| **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. It needs an operator session. |
+| **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships from `review` to `done`, not only those in the readiness snapshot before the window starts. It needs an operator session on the owner; disabled on a replica. |
 | **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets every pass approve proposed tasks that have context files and an assessed complexity (or the `no-diff-expected` tag) and a clean task-pilot verification, including tasks filed while the window runs; `no-auto-approve` tasks are skipped. It needs an operator session and is disabled on a replica, where only the owner approves work. A live window started with it shows **Approving proposed tasks** with its approved and held counts. A hold for pilot warnings also shows each finding's kind and first line. |
 | **Auto-fix PR blockers** | Off by default. Repairs failed required checks and merge conflicts on the window's own PRs through the existing watcher and repair ledger. Needs an operator session on the owner machine; disabled on pull replicas with a visible reason. It never grants merging or proposed-task approval; merging still requires **Mark shipped tasks done**. |
 | **Review before landing** | **Workspace policy** (default) leaves review to `review.timing`. **Add before-PR review** or **Add before-landing review** (`--review`) adds that layer to this window only when policy applies none. The layer policy already applies is accepted, and the other one, a workspace that sets neither `workflow.purpose_crews.pre_landing_review` nor `workflow.purpose_crews.review`, and local-only delivery are refused when you start. Disabled on a replica, where the owner decides review. See [Review layers](../../concepts/tasks/#adding-review-to-one-run). |
-| **Allowed crews** | The configured crews this window may start (`--allow-crew`). All selected is unrestricted. |
-| **Complexity pools** | For each tier, **Workspace** keeps `workflow.<tier>_complexity_crews`, **Override** replaces it for this window with `crew` or `crew:weight` entries, and **Off** turns it off (`--<tier>-complexity-crews`). Disabled for a pull window. |
-| **Strict worker containment** | Requires a systemd user scope for the coordinator and every worker (`--strict-worker-containment`). |
-| **Workspace claim token** | The token for this workspace's exclusive claim when another operator holds one (`--claim-token`). It never appears in the command, the confirmation or the run's detail. |
-| **Start … window** | After a confirmation, runs `orbit run auto` with these settings and returns to **Overview**. Reads **Start another … window** while one is draining, **Run one pass** for one pass, and **Start pulling for …** or **Claim once** for a pull. |
+| **Start … window** | After a confirmation, starts a window with these settings and stays on Tasks. On a replica, it pulls from the owner. Reads **Start another … window** while one is draining. |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. Needs an operator session. |
 | **Send pending results** | Replaces **Stop** when no window is admitting. Delivers pull settlements this replica recorded but has not yet delivered to its owner. Needs an operator session. |
 

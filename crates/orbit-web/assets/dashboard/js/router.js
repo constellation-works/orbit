@@ -43,9 +43,9 @@ function markWorkspaceSelectorScope(fleetWide) {
   }
 }
 
-// Drain is a Work destination. Retired auto-drain and Tasks dock links are
+// Retired Drain and auto-drain links are
 // normalized in place so Back never gets trapped on a redirect.
-const TABS = ["tasks", "jobs", "drain", "leases", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
+const TABS = ["tasks", "jobs", "leases", "diagnostics", "analytics", "operations", "knowledge", "plugins", "config", "run-detail"];
 const DIAG_SUBTABS = ["incidents", "doctor"];
 // Health › Incidents views: `#diagnostics/incidents[/events|/errors]`.
 const INCIDENTS_VIEWS = ["incidents", "events", "errors"];
@@ -79,7 +79,6 @@ const RUN_DETAIL_SUBTABS = ["steps", "events"];
 const RAIL_LABELS = {
   tasks: "Tasks",
   jobs: "Jobs",
-  drain: "Drain",
   leases: "Leases",
   diagnostics: "Health",
   analytics: "Analytics",
@@ -432,13 +431,20 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   const { segments, query } = parseHashRoute(raw);
   let head = segments[0] || "tasks";
   let legacyRoute = false;
-  const dockView = segments[1] || query.get("dock") || query.get("dockMode") || query.get("panel");
-  if (head === "auto-drain" || (head === "operations" && segments[1] === "auto-drain") ||
-      (head === "tasks" && ["drain", "auto-drain", "log"].includes(dockView))) {
-    head = "drain";
-    segments.splice(1, segments.length, dockView === "log" || segments[2] === "log" ? "log" : "drain");
+  let dockView = query.get("dock") || query.get("dockMode") || query.get("panel");
+  if (["drain", "auto-drain"].includes(head) || (head === "operations" && segments[1] === "auto-drain") ||
+      (head === "tasks" && ["drain", "auto-drain", "log", "locks", "start"].includes(segments[1]))) {
+    dockView = ["log", "start", "locks"].includes(segments.at(-1)) ? segments.at(-1) : dockView || "drain";
+    head = "tasks";
+    segments.splice(0, segments.length, "tasks");
     legacyRoute = true;
   }
+  if (head === "tasks" && ["drain", "auto-drain", "start", "locks", "log"].includes(dockView)) {
+    dockView = dockView === "auto-drain" ? "drain" : dockView;
+    query.set("dock", dockView);
+    query.delete("dockMode");
+    query.delete("panel");
+  } else dockView = null;
   // Old standalone Agents links normalize to Analytics › Agents in place.
   if (head === "agents") {
     const role = AGENT_ROLES.includes(segments[1]) ? segments[1] : ctx.getAgentsRole();
@@ -527,8 +533,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
   for (const pane of document.querySelectorAll(".tab-pane")) {
     pane.classList.toggle("active", pane.dataset.tab === top);
   }
-  if (ctx.placeDock) ctx.placeDock(top);
-  if (top === "drain" || top === "tasks") requestAnimationFrame(ctx.fitLogPanelToViewport || (() => {}));
+  if (top === "tasks") requestAnimationFrame(ctx.fitLogPanelToViewport || (() => {}));
 
   const indicator = $("tab-indicator") || el("div", {id: "tab-indicator", class: "tab-indicator"});
   if (!indicator.parentNode) document.querySelector(".tabs").appendChild(indicator);
@@ -554,11 +559,7 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     }
   };
   let hash;
-  if (top === "drain") {
-    const mode = ["log", "start"].includes(segments[1]) ? segments[1] : "drain";
-    if (ctx.setDrainView) ctx.setDrainView(mode);
-    hash = mode === "drain" ? "#drain" : `#drain/${mode}`;
-  } else if (top === "jobs") {
+  if (top === "jobs") {
     const sub = JOBS_SUBTABS.includes(segments[1]) ? segments[1] : ctx.getJobsSubtab();
     adoptHashedWindow();
     setJobsSubtabImpl(ctx, sub);
@@ -641,6 +642,13 @@ function setActiveTabImpl(ctx, raw, opts = {}) {
     if (ctx.applyTasksHashQuery) ctx.applyTasksHashQuery(query, page);
     if (ctx.syncTaskControls) ctx.syncTaskControls();
     hash = ctx.buildTasksHash ? ctx.buildTasksHash() : "#tasks";
+    if (dockView) {
+      if (ctx.setDrainView) ctx.setDrainView(dockView);
+      const [route, taskQuery = ""] = hash.split("?");
+      const params = new URLSearchParams(taskQuery);
+      params.set("dock", dockView);
+      hash = `${route}?${params}`;
+    }
   } else {
     hash = `#${top}`;
   }

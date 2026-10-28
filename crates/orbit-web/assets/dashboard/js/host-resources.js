@@ -278,8 +278,8 @@ function renderHostDetail(payload, rows, verdict, tone, pill, compact, alarm) {
     : tone === 'ok' ? 'Nothing is held back on this host. '
     : `Admission is still open; ${alarm.row.label} is between ${markText(payload, resource, limits.resume)} and its limit at ${markText(payload, resource, limits.high)}. `;
   const foot = `${plain}Throttle verdict: ${verdict.status}. ${verdict.reason}`;
-  const link = el('a', { class: 'host-detail-drain', text: 'Open Drain' });
-  link.setAttribute('href', '#drain');
+  const link = el('a', { class: 'host-detail-drain', text: 'Open Tasks dock' });
+  link.setAttribute('href', '#tasks?dock=drain');
   panel.className = `host-detail ${tone}`;
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-label', `${name} resources`);

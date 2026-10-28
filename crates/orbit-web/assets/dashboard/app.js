@@ -11,7 +11,7 @@ import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/sco
 import { fetchAndRenderAgents, getAgentsRole, placeholdAgentsAggregate, setAgentsRole, wireAgentControls } from './js/agents.js';
 import { fetchAndRenderReliability, wireReliabilityWindowSelector } from './js/reliability.js';
 import { openDoctor, peekDoctor, wireDoctorPanel } from './js/doctor.js';
-import { initLogTail, fitLogPanelToViewport, placeDock, setDockMode } from './js/log-tail.js';
+import { initLogTail, fitLogPanelToViewport, setDockMode } from './js/log-tail.js';
 import { renderDiagnostics } from './js/diagnostics.js';
 import { fetchAndRenderMetrics, placeholdMetricsAggregate } from './js/metrics.js';
 import { fetchAndRenderResources, placeholdResourcesAggregate } from './js/resources.js';
@@ -23,7 +23,7 @@ import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
 import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
-import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, setDrainLocks, startFleetIndicatorRefresh } from './js/operations.js';
+import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
 import { onDrainReadinessChange } from './js/drain-waits.js';
 import { onTaskRuntimeChange, setRunningRuns, setTaskLocks } from './js/task-runtime.js';
 import { fetchAndRenderConfig, getConfigSubtab, initConfig, setConfigSubtab } from './js/config.js';
@@ -280,7 +280,6 @@ function routerContext() {
     openDoctor: () => openDoctor().catch((e) => console.error("Failed to run doctor", e)),
     fitLogPanelToViewport,
     setDrainView: (mode) => setDockMode(mode),
-    placeDock,
 
     // Events and Codebase pass-throughs (re-exported here for router;
     // imported at top of this file)
@@ -399,9 +398,8 @@ let lastLocks = null;
 
 function renderLocksPanel(payload) {
   // The In progress rows count each task's locked files from the same read,
-  // and the Drain summary and wait rows read it too.
+  // and the dock renders the same locks read.
   setTaskLocks(payload);
-  setDrainLocks(payload);
   lastLocks = { payload, workspace: getWorkspace() };
   paintLocksPanel(payload);
 }
@@ -1380,11 +1378,6 @@ function activeRefreshJobs() {
     return jobs;
   }
 
-  if (activeTab === "drain") {
-    if (!aggregate && !document.hidden) add("Locked files", fetchAndRenderTaskLocks());
-    return jobs;
-  }
-
   if (activeTab === "analytics") {
     // ORB-10588: /api/metrics/reliability takes the whole DashboardState, not
     // the `Ws` extractor, so Pipeline answers in aggregate mode too. Tools
@@ -1978,7 +1971,7 @@ function selectFleetScope(host, workspace) {
   if (workspace) rememberWorkspace();
   persistScopeToUrl();
   if (!changed) buildWorkspaceSelector();
-  sAT("drain", { refresh: false });
+  sAT("tasks?dock=drain", { refresh: false });
   refreshDashboard();
 }
 
@@ -2005,7 +1998,7 @@ void startFleetIndicatorRefresh().catch(error => console.error(error));
 iT();
 
 initLogTail();
-// The status bar opens the full tail on Drain.
+// The status bar opens the full tail in the Tasks dock.
 document.getElementById("log-statusbar-open")?.addEventListener("click", () => {
-  sAT("drain/log");
+  sAT("tasks?dock=log");
 });
