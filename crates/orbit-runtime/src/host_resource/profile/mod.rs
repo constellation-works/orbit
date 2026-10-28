@@ -34,9 +34,11 @@
 //!   blurs peaks that fall at different times, so these quantiles can be
 //!   several times the series peak. A sparse profile still reports them.
 //!
-//! Profiles change only when a delivery finishes, so `ResourceProfileCache`
-//! keeps them across admission passes and rebuilds when the freshness probe,
-//! the bounds, or the crew-model map changes. Live load is never cached here.
+//! Profiles change when a delivery finishes or a template's `no-diff-expected`
+//! tag is edited, so `ResourceProfileCache` keeps them across admission passes
+//! and rebuilds when the freshness probe, the bounds, the crew-model map or
+//! those tags change. A tag edit finishes no run, so each pass re-reads the
+//! tags of the cached templates. Live load is never cached here.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -48,6 +50,8 @@ use serde::Serialize;
 mod build;
 mod cache;
 mod lookup;
+#[cfg(test)]
+mod tests;
 
 pub(crate) use build::{ProfileBounds, build_profiles, template_task_ids};
 pub(crate) use cache::{ResourceProfileCache, build_uncached};

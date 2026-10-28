@@ -475,6 +475,7 @@
     },
     "orbit-runtime": {
       "test_function_paths": [
+        "host_resource/profile/tests/cache.rs::no_diff_tag_edit_reclassifies_a_cached_template",
         "host_resource/tests/platform.rs::cpu_window_handles_tick_wrap_and_the_freshness_boundary",
         "host_resource/tests/platform.rs::cpu_window_missing_stale_future_or_identical_baselines_take_a_real_window",
         "host_resource/tests/platform.rs::cpu_window_native_failures_clock_reversal_and_stalls_remain_unknown",

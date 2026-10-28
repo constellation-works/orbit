@@ -546,11 +546,14 @@ Implemented in `runtime/host_resource/profile/` (`build.rs`, `lookup.rs`,
   build budgets.
 - **Heaviest** means the most expected core-minutes before the horizon,
   `Σ cpu(m)·alive(m)`, then the highest memory peak.
-- **Caching.** Profiles change only when a delivery finishes, so they are
-  cached in memory across passes and runtime clones, not just for the pass.
-  Each read runs a freshness probe over the sampled runs, returning the newest
-  `finished_at` and count of finished sampled runs, and rebuilds when it, the
-  `[machine.auto_concurrency]` bounds, or the crew-model map changes. A sampled
+- **Caching.** Profiles change when a delivery finishes or a template's
+  `no-diff-expected` tag is edited, so they are cached in memory across passes
+  and runtime clones, not just for the pass. Each read runs a freshness probe
+  over the sampled runs, returning the newest `finished_at` and count of
+  finished sampled runs, and rebuilds when it, the `[machine.auto_concurrency]`
+  bounds, the crew-model map, or the `no-diff-expected` tags of the cached
+  templates change; a tag edit finishes no run, so each read re-reads those
+  tags. A sampled
   run counts from its first recorded minute, so a run whose minute zero was
   never recorded still changes the key when it finishes. Pruning changes the
   count when a run's last minute row goes; removing its earlier rows leaves the
