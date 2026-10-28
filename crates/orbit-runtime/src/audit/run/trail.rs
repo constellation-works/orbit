@@ -10,7 +10,7 @@ use serde_json::Value;
 use crate::RuntimeKernel;
 use orbit_store::V2AuditEventFilter;
 
-use super::run_projection::{
+use super::projection::{
     audit_step_attempts_from_events, audit_steps_from_events, bound_provider_processes,
     cli_invocation_record, latest_timestamp_from_envelope_rows, provider_processes_from_events,
     recovery_attempts_from_partitioned_rows, run_audit_event, step_index_by_id,
@@ -165,7 +165,7 @@ pub struct RunRecoveryAttemptsPage {
 }
 
 /// One finished CLI invocation. Surfaces render it through a named
-/// [`super::run_logs::RunCliInvocationProfile`].
+/// [`super::logs::RunCliInvocationProfile`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct RunCliInvocationRecord {
     pub run_id: String,
@@ -181,7 +181,7 @@ pub struct RunCliInvocationRecord {
     /// True when
     /// `read_blob_text_preview_best_effort`
     /// cut the blob before its end. Independent of the preview profile's own
-    /// truncation ([`super::run_logs::RunCliInvocationProfile`]), which cannot
+    /// truncation ([`super::logs::RunCliInvocationProfile`]), which cannot
     /// see past whatever window was read here.
     pub stdout_blob_truncated: bool,
     pub stderr_blob_truncated: bool,

@@ -100,9 +100,10 @@ The migration is additive. A binary without it reads every lease row, advisory o
 exclusive file reservation and refuses overlapping reserves (checked against 0.33.0, the
 previous release), and the rows it writes read here as hard task reservations.
 
-**Runtime operations.** `crates/orbit-runtime/src/task/locks/lease.rs` holds one function per
-verb: `request`, `renew`, `release`, `show`, `list`, `check` and `notices`, each refused naming
-`lease.enabled` while it is false, and `lease/queue.rs` holds `expand` and the grant pass.
+**Runtime operations.** `crates/orbit-runtime/src/task/locks/lease/` holds one function per
+verb: `request` in `lease/request.rs`, and `renew`, `release`, `show`, `list`, `check` and
+`notices` in `lease/operations.rs`, each refused naming `lease.enabled` while it is false, and
+`lease/queue.rs` holds `expand` and the grant pass.
 `request` applies §3: advisory is granted and names the holders it overlaps; hard drops
 `unlocked_context_paths` from the stored surface and, when what is left overlaps a task context
 lock, task reservation, hard lease or a queued request ranked ahead of it, queues with the holders
