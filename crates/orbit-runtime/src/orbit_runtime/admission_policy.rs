@@ -15,6 +15,7 @@ pub(super) struct AdmissionPolicy {
     auto_concurrency: AutoConcurrencySettings,
     provider_limit: ProviderLimitPolicy,
     mid_run_steering: MidRunSteeringSettings,
+    experiments_enabled: bool,
 }
 
 pub(super) struct CachedPolicy {
@@ -51,6 +52,7 @@ impl RuntimeKernel {
                 auto_concurrency: self.context.settings().auto_concurrency().clone(),
                 provider_limit: self.context.settings().provider_limit().clone(),
                 mid_run_steering: self.context.settings().mid_run_steering(),
+                experiments_enabled: self.context.settings().experiments().enabled,
             })
         };
         let mut cache = self
@@ -77,6 +79,7 @@ impl RuntimeKernel {
                 provider_limit: config.snapshot.provider_limit_policy(),
                 mid_run_steering: config.snapshot.mid_run_steering(),
                 auto_concurrency: config.auto_concurrency,
+                experiments_enabled: config.snapshot.experiments().enabled,
             }),
             Err(error) => {
                 tracing::warn!(%error, "could not reload admission configuration; keeping previous policy");
@@ -95,6 +98,14 @@ impl RuntimeKernel {
         // Unlike admission decisions, enablement applies to runs already in
         // flight. Do not pin it to a drain pass's admission snapshot.
         self.refresh_workflow_policy().mid_run_steering
+    }
+
+    /// Whether experiments may enroll new tasks, from the current config rather
+    /// than this runtime's open-time snapshot. Not pinned to a drain pass: an
+    /// operator's disable stops new assignments at the next admission, and a
+    /// long-lived runtime picks up a later enable.
+    pub fn current_experiments_enabled(&self) -> bool {
+        self.refresh_workflow_policy().experiments_enabled
     }
 
     /// Pin both policies for this pass so all decisions use one config version.

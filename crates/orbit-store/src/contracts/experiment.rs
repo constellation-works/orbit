@@ -137,8 +137,8 @@ pub type ExperimentAssignmentDecision<'a> = dyn Fn(
 
 pub trait ExperimentStoreBackend: Send + Sync {
     /// Serialize assignment decisions with lifecycle changes and other admissions.
-    /// Disabled settings do not consume admission unless a running experiment
-    /// is already stored, which keeps long-lived processes from missing it.
+    /// `experiments_enabled` is the caller's current effective enablement. While
+    /// it is false, a marked admission writes nothing and returns existing rows.
     fn assign_experiments(
         &self,
         workspace_id: &str,
