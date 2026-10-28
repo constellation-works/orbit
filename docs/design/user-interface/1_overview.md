@@ -42,25 +42,21 @@ Agent runs produce more state changes, logs, and diagnostics than a human can re
   aggregate views without a selected workspace) is shown as unknown. Lock refreshes
   update open details without discarding unsaved editors.
 
-WORK › Drain (`#drain`) shows the auto-drain state, forecast, how the live
-window was started, admission passes and waits, fleet drains and locked files.
-Its **Start a window** view (`#drain/start`) composes any `orbit run auto`
-start, local or pull, and its Log view is `#drain/log`. The same dock sits
-beside the task list on Tasks, as Drain (the Auto-drain status card and a
-simple Start a window card), Locks held and Log tabs, and gives way to the task
-pane when a task opens. Locks held lists holders by task or locked paths by
-file, marking a path more than one task holds, with a filter by task ID; the composer stays on Drain. On a replica checkout, the simple
-local Start stays disabled with the runtime checkout refusal and a link to
-`#drain/start` to pull from the owner.
-The Drain page shows the fleet drains, including in **All workspaces** mode,
-with one tab per host when more than one is registered (the chosen tab is
-remembered): one line per workspace with its drain
-phase and used/ceiling leaf slots, live drains first. Eligible tasks, the most
-common wait reason, admission/provider holds and queued windows (naming any
-Claude crew a queued window would run without a credential) add a second line
-only when present. Selecting a row switches host and workspace using the dashboard scope
-controls. The top-bar fleet indicator remains visible when an idle
-workspace is selected; opening it selects the fleet overview.
+The Tasks dock holds the Auto-drain status and forecast, a simple **Start a
+window** card, **Locks held** and **Log**. It gives way to the task pane when
+a task opens, and to the list below 1000px. Locks held lists holders by task
+or locked paths by file, marking a path more than one task holds, with a
+filter by task ID. On a replica checkout, Start pulls directly from the
+owner; the Auto-drain card can stop that pull's admissions.
+
+The top-bar fleet indicator opens the Tasks dock in **All workspaces** mode.
+There the Auto-drain card lists fleet drains, one tab per host when more
+than one is registered (the chosen tab is remembered), with phase and
+used/ceiling leaf slots for each workspace. Live drains lead; eligible work,
+waits, holds and queued windows add a second line only when present.
+Selecting a row switches host and workspace. The indicator remains visible
+when an idle workspace is selected. Legacy `#drain`, `#drain/start` and
+`#drain/log` links open the corresponding Tasks dock content.
 
 `GET /api/fleet/drains` returns `{ items: [...] }` with one row per registered
 workspace on the addressed host. Each row includes `workspace_id`, `workspace_name`,

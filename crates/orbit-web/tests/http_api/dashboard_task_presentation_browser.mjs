@@ -149,14 +149,12 @@ export async function checkTaskPresentation({ openPage, row, waitShown, capture,
       await footer.getByRole('button', { name: 'archive', exact: true }).click();
       await page.waitForFunction(() => panelFixture.lifecycle.length === 2);
     }
-    // The Drain wait card opens the same task renderer and scroll viewport.
+    // A direct task route opens the same renderer and scroll viewport.
     if (width === 375) {
-      await page.locator('button.tab[data-tab="drain"]').click();
-      const drainLink = page.locator('#drain-waits-panel .drain-wait-task-links').getByRole('link', { name: 'PANEL-6', exact: true });
-      await drainLink.click();
+      await page.evaluate(() => { location.hash = '#tasks?open=PANEL-6'; });
       await waitShown(page, 'PANEL-6');
       await visibleFooter();
-      await capture(page, `presentation-from-drain-dark-${width}.png`);
+      await capture(page, `presentation-from-route-dark-${width}.png`);
       await readiness.getByRole('link', { name: 'PANEL-2', exact: true }).click();
       await waitShown(page, 'PANEL-2');
       await capture(page, `presentation-short-task-dark-${width}.png`);

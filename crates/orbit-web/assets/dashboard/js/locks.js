@@ -8,12 +8,8 @@
 // only the locked paths a given task's `context_files` overlap.
 
 import { bindTaskLink, detailsPanel, el, fetchJson, onWorkspaceChange, statusPill, syncNodes } from './common.js';
-import { dockHome, onDockHomeChange } from './log-tail.js';
 import { drainHolderCounts } from './operations.js';
 
-// Each dock home opens on its own view until the viewer picks one there:
-// Drain on tasks, the Tasks page (where task details sit beside it) on files.
-const VIEW_DEFAULTS = { drain: "task", tasks: "file" };
 const VIEW_STORAGE_KEY = "orbit.dashboard.locksView";
 
 function storedViews() {
@@ -26,18 +22,17 @@ function storedViews() {
 }
 
 function currentView() {
-  const home = dockHome();
-  const view = storedViews()[home] || sessionViews[home];
-  return view === "task" || view === "file" ? view : VIEW_DEFAULTS[home] || "task";
+  const view = storedViews().tasks || sessionViews.tasks;
+  return view === "task" || view === "file" ? view : "file";
 }
 
 function chooseView(view) {
-  const views = { ...storedViews(), [dockHome()]: view };
+  const views = { ...storedViews(), ["tasks"]: view };
   try {
     localStorage.setItem(VIEW_STORAGE_KEY, JSON.stringify(views));
   } catch {
     // Private windows refuse storage; the choice then lasts until reload.
-    sessionViews[dockHome()] = view;
+    sessionViews["tasks"] = view;
   }
   if (lastPayload) paintLocks(lastPayload);
   else syncViewTabs(view);
@@ -492,9 +487,6 @@ export function initLocks() {
       clearTimeout(filterTimer);
       applyFilter("");
     }
-  });
-  onDockHomeChange(() => {
-    if (lastPayload) paintLocks(lastPayload);
   });
   // Task IDs belong to one workspace; a switch starts the card unfiltered.
   onWorkspaceChange(() => {

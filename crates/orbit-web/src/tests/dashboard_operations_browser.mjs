@@ -117,92 +117,6 @@ try {
   const pageErrors = [];
   page.on('pageerror', error => { pageErrors.push(String(error)); console.error(error); });
   await page.goto(`http://127.0.0.1:${server.address().port}/#operations/routines`);
-  await page.exposeFunction('captureDrainEvidence', async (name, selector) => {
-    const previous = page.viewportSize();
-    await page.setViewportSize({ width: 375, height: 900 });
-    const placed = await page.evaluate((target) => {
-      const node = document.querySelector(target);
-      if (!node) return { missing: true };
-      const restore = {
-        activePanes: [...document.querySelectorAll('.tab-pane.active')].map((pane) => pane.dataset.tab),
-        activeTabs: [...document.querySelectorAll('.tab.active')].map((tab) => tab.dataset.tab),
-        mode: document.getElementById('side-dock')?.dataset.mode || null,
-        segments: [...document.querySelectorAll('#dock-mode-toggle .dock-seg')].map((btn) => ({
-          mode: btn.dataset.mode,
-          on: btn.classList.contains('on'),
-          selected: btn.getAttribute('aria-selected'),
-        })),
-      };
-      // The operations fixture renders Drain cards while the Automation tab is
-      // open, so those cards have no box until the Drain page and the card's
-      // own dock view are shown. Restore both after the shot.
-      document.querySelectorAll('.tab-pane').forEach((pane) => {
-        pane.classList.toggle('active', pane.dataset.tab === 'drain');
-      });
-      document.querySelectorAll('.tab').forEach((tab) => {
-        const on = tab.dataset.tab === 'drain';
-        tab.classList.toggle('active', on);
-        tab.setAttribute('aria-current', on ? 'page' : 'false');
-      });
-      document.querySelector('.tab[data-tab="drain"]')?.scrollIntoView({ inline: 'center', block: 'nearest' });
-      const dock = document.getElementById('side-dock');
-      const pane = node.closest('.dock-pane');
-      if (dock && pane?.dataset.pane) {
-        dock.dataset.mode = pane.dataset.pane;
-        for (const btn of document.querySelectorAll('#dock-mode-toggle .dock-seg')) {
-          const on = btn.dataset.mode === pane.dataset.pane;
-          btn.classList.toggle('on', on);
-          btn.setAttribute('aria-selected', on ? 'true' : 'false');
-        }
-      }
-      const textNode = node.firstChild;
-      const quotedCrew = node.textContent.indexOf("'fast crew");
-      const marker = quotedCrew >= 0 ? quotedCrew : node.textContent.indexOf('--allow-crew');
-      if (textNode && marker >= 0) {
-        const range = document.createRange();
-        range.setStart(textNode, marker);
-        range.setEnd(textNode, Math.min(node.textContent.length, marker + 16));
-        const markerBox = range.getBoundingClientRect();
-        const box = node.getBoundingClientRect();
-        node.scrollLeft += markerBox.left - box.left - 8;
-      }
-      node.scrollIntoView({ block: 'center', inline: 'nearest' });
-      const rect = node.getBoundingClientRect();
-      window.__drainShotRestore = restore;
-      return {
-        top: rect.top, left: rect.left, width: rect.width, height: rect.height,
-        text: node.innerText.slice(0, 180),
-      };
-    }, selector);
-    if (!placed.missing && placed.width > 0 && placed.height > 0) {
-      await page.screenshot({ path: path.join(evidence, name), animations: 'disabled' });
-    }
-    await page.evaluate(() => {
-      const restore = window.__drainShotRestore;
-      if (!restore) return;
-      document.querySelectorAll('.tab-pane').forEach((pane) => {
-        pane.classList.toggle('active', restore.activePanes.includes(pane.dataset.tab));
-      });
-      document.querySelectorAll('.tab').forEach((tab) => {
-        const on = restore.activeTabs.includes(tab.dataset.tab);
-        tab.classList.toggle('active', on);
-        tab.setAttribute('aria-current', on ? 'page' : 'false');
-      });
-      const dock = document.getElementById('side-dock');
-      if (dock && restore.mode) dock.dataset.mode = restore.mode;
-      for (const saved of restore.segments) {
-        const btn = document.querySelector(`#dock-mode-toggle .dock-seg[data-mode="${saved.mode}"]`);
-        if (!btn) continue;
-        btn.classList.toggle('on', saved.on);
-        if (saved.selected != null) btn.setAttribute('aria-selected', saved.selected);
-      }
-      delete window.__drainShotRestore;
-    });
-    await page.setViewportSize(previous || { width: 1440, height: 1000 });
-    if (placed.missing || placed.width <= 0 || placed.height <= 0) {
-      throw new Error(`drain evidence ${name} has no layout: ${JSON.stringify(placed)}`);
-    }
-  });
   await page.addScriptTag({ type: 'module', url: '/dock-feedback.mjs' });
   await page.waitForFunction(() => globalThis.operationsTestsPassed, undefined, { timeout: 15000 });
   await page.evaluate(() => {
@@ -225,7 +139,7 @@ try {
   });
   await page.evaluate(async () => {
     const { initRouter, initTabs } = await import('/js/router.js');
-    const { setDockMode, placeDock } = await import('/js/log-tail.js');
+    const { setDockMode } = await import('/js/log-tail.js');
     let tab = 'operations';
     let diag = 'incidents';
     let jobs = 'live';
@@ -250,7 +164,7 @@ try {
       getRunDetail: () => null, setRunDetail: () => {}, getRunEvents: () => [], setRunEvents: () => {},
       getRunLogs: () => [], setRunLogs: () => {}, getExpandedSteps: () => new Set(), setExpandedSteps: () => {},
       getLastRuns: () => [], refreshDashboard: () => {}, renderDiagnostics: () => {},
-      fitLogPanelToViewport: () => {}, placeDock, setDrainView: (mode) => setDockMode(mode),
+      fitLogPanelToViewport: () => {}, setDrainView: (mode) => setDockMode(mode),
       getIncidentsView: () => incidentsView, setIncidentsView: (value) => { incidentsView = value; },
       getAnalyticsSubtab: () => analytics, setAnalyticsSubtab: (value) => { analytics = value; },
       getReliabilityView: () => reliabilityView, setReliabilityView: (value) => { reliabilityView = value; },
@@ -274,7 +188,7 @@ try {
     await forecast.waitFor({ state: 'visible' });
     await forecast.screenshot({ path: path.join(evidence, `drain-forecast-${scenario}-dark-1440.png`), animations: 'disabled' });
     await page.setViewportSize({ width: 375, height: 812 });
-    await forecast.screenshot({ path: path.join(evidence, `drain-forecast-${scenario}-dark-375.png`), animations: 'disabled' });
+    await page.screenshot({ path: path.join(evidence, `tasks-forecast-${scenario}-dark-375.png`), animations: 'disabled' });
     await page.setViewportSize({ width: 1440, height: 1000 });
   };
   await captureDrainForecast('live');
@@ -348,64 +262,50 @@ try {
     await fullWidthView(`Analytics › Reliability › Tools at ${width}px`, ['#analytics-subtabs .subtab[data-subtab="reliability"]', '#reliability-views .subtab[data-view="tools"]'], 'analytics-tools-main', 'audit-summary-panel');
   }
 
-  // ORB-16962: a Start from the Tasks dock keeps its result beside the Start
-  // card, on Tasks and again on Drain. The router places the shipped dock, as
-  // app.js does, and the harness holds, refuses or loses the window's POST.
-  // ORB-17503: the Tasks dock keeps the simple Start card in its first view and
-  // offers no Start a window view; a browser that last chose that view on
-  // Drain opens the first view. The composer stays on #drain/start. Its tabs
-  // are Drain, Locks held and Log.
+  // A Start keeps its receipt beside the Tasks Start card across successful,
+  // refused and lost POST responses. Legacy Start preferences open that card.
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.evaluate(async () => (await import('/js/log-tail.js')).setDockMode('start'));
   await page.click('.tab[data-tab="tasks"]');
   const dockStart = page.locator('#tasks-dock #auto-drain-quick-start button.drain-start');
   const dockStatus = page.locator('#tasks-dock #auto-drain-operation-feedback');
   await dockStart.waitFor({ state: 'visible' });
+  await page.locator('#auto-drain-quick-start .drain-duration').filter({ hasText: /^1h$/ }).click();
+  await page.locator('#auto-drain-concurrency').fill('');
+
   const tasksDock = await page.evaluate(() => ({
     mode: document.getElementById('side-dock').dataset.mode,
     tabs: [...document.querySelectorAll('#dock-mode-toggle .dock-seg')].filter(tab => tab.getClientRects().length > 0).map(tab => tab.dataset.mode).join(' '),
-    composer: document.getElementById('dock-pane-start').getClientRects().length + document.getElementById('auto-drain-start-body').childElementCount,
     column: document.getElementById('auto-drain-quick-start').closest('.dock-pane')?.id,
     durations: document.querySelectorAll('#auto-drain-quick-start .drain-durations .drain-duration[aria-pressed]').length,
     fields: ['auto-drain-concurrency', 'auto-drain-mode', 'auto-drain-complete', 'auto-drain-approve', 'auto-drain-auto-fix', 'auto-drain-review']
       .filter(id => !document.getElementById('auto-drain-quick-start-body').contains(document.getElementById(id))),
     feedback: document.getElementById('auto-drain-quick-start').nextElementSibling?.id,
   }));
-  if (tasksDock.mode !== 'drain' || tasksDock.tabs !== 'drain locks log' || tasksDock.composer !== 0 || tasksDock.column !== 'dock-pane-drain'
+  if (tasksDock.mode !== 'drain' || tasksDock.tabs !== 'drain locks log' || tasksDock.column !== 'dock-pane-drain'
     || tasksDock.durations !== 6 || tasksDock.fields.length || tasksDock.feedback !== 'auto-drain-operation-feedback') {
     throw new Error(`The Tasks dock must keep the simple Start card and no Start a window view: ${JSON.stringify(tasksDock)}`);
   }
-  // A replica can only start a pull drain. Tasks keeps its local Start
-  // visible but refused, with a working route to the pull composer.
-  await page.evaluate(() => globalThis.dockReview.checkout(true));
-  const replicaPosts = await page.evaluate(() => globalThis.dockReview.posts());
-  await dockStart.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: path.join(evidence, 'tasks-replica-start-dark-1440.png') });
-  if (!await dockStart.isDisabled()) throw new Error('Replica Tasks must disable its local-only Start');
-  const refusal = page.locator('#auto-drain-quick-start .drain-field-hint.warn').filter({ hasText: await page.evaluate(() => globalThis.dockReview.localRefusal()) });
-  if (!await refusal.isVisible()) throw new Error('Replica Tasks must display the runtime checkout refusal');
-  // Native disabled clicks and a dispatched event must both avoid submission.
-  await dockStart.evaluate(button => { button.click(); button.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
-  if (await page.evaluate(() => globalThis.dockReview.posts()) !== replicaPosts) throw new Error('Refused replica Tasks Start sent a POST');
+  // A replica starts a pull directly from the Tasks Start card. An older
+  // readiness payload without owner routing keeps the visible refusal.
   await page.evaluate(() => globalThis.dockReview.checkout(true, true));
+  const replicaPosts = await page.evaluate(() => globalThis.dockReview.posts());
   if (!await dockStart.isDisabled() || !await page.locator('#auto-drain-quick-start .drain-start-foot .drain-field-hint.warn').isVisible()) {
-    throw new Error('Older replica readiness must keep Start disabled with a visible checkout explanation');
+    throw new Error('Older replica readiness must keep Start disabled without owner routing');
   }
   await dockStart.evaluate(button => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
   if (await page.evaluate(() => globalThis.dockReview.posts()) !== replicaPosts) throw new Error('Legacy replica Tasks Start sent a POST');
   await page.evaluate(() => globalThis.dockReview.checkout(true));
-  const pullRoute = page.locator('#auto-drain-quick-start a[href="#drain/start"]');
-  await pullRoute.click();
-  await page.waitForFunction(() => location.hash === '#drain/start');
-  const pullStart = page.locator('#auto-drain-start-body button.drain-start');
-  await pullStart.waitFor({ state: 'visible' });
-  if (await pullStart.isDisabled() || !(await pullStart.textContent()).includes('pulling')) throw new Error('The Tasks remedy must open a supported pull start');
-  await pullStart.click();
+  await dockStart.scrollIntoViewIfNeeded();
+  if (await dockStart.isDisabled()) throw new Error('Replica Tasks must offer a pull start');
+  await page.screenshot({ path: path.join(evidence, 'tasks-replica-start-dark-1440.png') });
+  await dockStart.click();
   await page.waitForFunction(before => globalThis.dockReview.posts() === before + 1, replicaPosts);
   const pullBody = await page.evaluate(() => globalThis.dockReview.lastBody());
-  if (pullBody.pull !== 'ws-one' || pullBody.host !== 'server' || ['complete', 'approve_proposed', 'auto_fix'].some(key => Object.hasOwn(pullBody, key))) {
-    throw new Error(`The Drain remedy must preserve the supported pull request: ${JSON.stringify(pullBody)}`);
+  if (pullBody.pull !== 'ws-one' || pullBody.host !== 'server' || ['complete', 'approve_proposed', 'auto_fix', 'review', 'auto_concurrency'].some(key => Object.hasOwn(pullBody, key))) {
+    throw new Error(`Tasks must preserve the supported pull request: ${JSON.stringify(pullBody)}`);
   }
+  if (!new URL(page.url()).hash.startsWith('#tasks')) throw new Error('Pull Start left Tasks');
   await page.click('.tab[data-tab="tasks"]');
   await page.setViewportSize({ width: 375, height: 812 });
   if (await dockStart.isVisible()) throw new Error('The Tasks dock must give way to the list at phone width');
@@ -441,7 +341,7 @@ try {
   if (Object.keys(dockBody).sort().join(' ') !== 'approve_proposed auto_fix complete for_duration' || dockBody.for_duration !== '1h') {
     throw new Error(`The Tasks dock Start card must post its own fields: ${JSON.stringify(dockBody)}`);
   }
-  if (await page.locator('#side-dock').getAttribute('data-mode') !== 'drain' || await page.evaluate(() => location.hash.startsWith('#drain'))) {
+  if (await page.locator('#side-dock').getAttribute('data-mode') !== 'drain' || await page.evaluate(() => !location.hash.startsWith('#tasks'))) {
     throw new Error('A Start from Tasks stays on the Tasks dock\'s first view');
   }
   await page.screenshot({ path: path.join(evidence, 'tasks-dock-feedback-success-dark-1440.png') });
@@ -459,35 +359,14 @@ try {
     if (!expected.every(part => text.includes(part))) throw new Error(`Tasks dock ${kind} feedback lacks its remedy: ${text}`);
     await page.waitForTimeout(300);
     if (await page.evaluate(() => globalThis.dockReview.posts()) !== before + 1) throw new Error(`A ${kind} from Tasks must not repeat the POST`);
-    if (await page.evaluate(() => location.hash.startsWith('#drain'))) throw new Error(`A ${kind} from Tasks navigated to Drain`);
+    if (await page.evaluate(() => !location.hash.startsWith('#tasks'))) throw new Error(`A ${kind} from Tasks navigated to Drain`);
     await page.screenshot({ path: path.join(evidence, `tasks-dock-feedback-${kind}-dark-1440.png`) });
   }
-  // Drain shows the same status line above its views, so the unknown
-  // outcome and its remedy stay visible after the dock moves there.
-  await page.evaluate(async () => (await import('/js/router.js')).setActiveTab('auto-drain'));
-  await page.waitForFunction(() => location.hash.startsWith('#drain'));
-  const drainStatus = page.locator('#drain-main #auto-drain-operation-feedback.error');
-  await drainStatus.waitFor({ state: 'visible' });
-  if (await page.locator('#drain-main #auto-drain-quick-start').isVisible() || !(await page.locator('#drain-main #dock-tab-start').isVisible())) {
-    throw new Error('Drain offers Start a window as its own view, not the Tasks dock card');
-  }
-  const drainText = await drainStatus.textContent();
-  if (!drainText.includes('Submission outcome unknown') || !drainText.includes('not retried')) {
-    throw new Error(`Drain lost the unknown-outcome remedy: ${drainText}`);
-  }
-  await drainStatus.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(350);
-  await page.screenshot({ path: path.join(evidence, 'drain-feedback-lost-dark-1440.png'), animations: 'disabled' });
-  await page.setViewportSize({ width: 375, height: 812 });
-  await drainStatus.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(350);
-  await page.screenshot({ path: path.join(evidence, 'drain-feedback-lost-dark-375.png'), animations: 'disabled' });
-  await page.evaluate(() => globalThis.dockReview.next('success'));
-
   await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(() => globalThis.dockReview.next('success'));
   await page.evaluate(() => globalThis.dockReview.showUncertainStop());
-  await page.waitForFunction(() => location.hash.startsWith('#drain'));
-  const uncertainDrainStatus = page.locator('#drain-main #auto-drain-operation-feedback.error');
+  await page.waitForFunction(() => location.hash.startsWith('#tasks'));
+  const uncertainDrainStatus = page.locator('#tasks-dock #auto-drain-operation-feedback.error');
   await uncertainDrainStatus.waitFor({ state: 'visible' });
   const uncertainDrainText = await uncertainDrainStatus.textContent();
   if (!uncertainDrainText.includes('the leaf may still be running')
@@ -502,16 +381,12 @@ try {
     nextTop: node.nextElementSibling?.getBoundingClientRect().top,
   }));
   if (drainFeedbackLayout.height < drainFeedbackLayout.contentHeight
-    || drainFeedbackLayout.bottom > drainFeedbackLayout.nextTop + 1) {
+    || drainFeedbackLayout.nextTop > 0 && drainFeedbackLayout.bottom > drainFeedbackLayout.nextTop + 1) {
     throw new Error(`Drain recovery guidance must fit above the panel without clipping: ${JSON.stringify(drainFeedbackLayout)}`);
   }
   await uncertainDrainStatus.scrollIntoViewIfNeeded();
   await page.waitForTimeout(350);
   await page.screenshot({ path: path.join(evidence, 'drain-launch-uncertain-dark-1440.png'), animations: 'disabled' });
-  await page.setViewportSize({ width: 375, height: 812 });
-  await uncertainDrainStatus.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(350);
-  await page.screenshot({ path: path.join(evidence, 'drain-launch-uncertain-dark-375.png'), animations: 'disabled' });
 
   await page.click('.tab[data-tab="tasks"]');
   for (const width of [1251, 1250, 1073, 901, 900]) {
@@ -583,7 +458,7 @@ try {
     work: [...document.querySelector('.rail-group').querySelectorAll('.tab')].map(button => button.dataset.tab),
     automation: [...document.querySelectorAll('#operations-subtabs .subtab')].map(button => button.dataset.subtab),
   }));
-  if (menus.work.join() !== 'tasks,jobs,drain,leases' || menus.automation.join() !== 'routines,auto-tasks') throw new Error(`Navigation menus: ${JSON.stringify(menus)}`);
+  if (menus.work.join() !== 'tasks,jobs,leases' || menus.automation.join() !== 'routines,auto-tasks') throw new Error(`Navigation menus: ${JSON.stringify(menus)}`);
   const jobsNavigation = [];
   for (const subtab of ['live', 'history', 'catalogue']) {
     await page.click(`.tab[data-tab="jobs"]`);
@@ -715,14 +590,14 @@ try {
   await assertRunningTaskHeader('375px viewport', 1);
   await page.evaluate(() => { document.querySelector('#jobs-live-main .operation-running-grid').style.gridTemplateColumns = ''; });
 
-  // Retired drain routes reach the full-page Drain controls without overflow.
+  // Retired drain routes reach the Tasks dock without overflow.
   await page.evaluate(async () => {
     const { setDockMode } = await import('/js/log-tail.js');
     const { setActiveTab } = await import('/js/router.js');
     setDockMode('log');
     setActiveTab('auto-drain');
   });
-  await page.waitForFunction(() => location.hash.startsWith('#drain'));
+  await page.waitForFunction(() => location.hash.startsWith('#tasks'));
   const setDock = (mode) => page.evaluate(async (mode) => (await import('/js/log-tail.js')).setDockMode(mode), mode);
   const overflowOf = (box) => {
     const bounds = box.getBoundingClientRect();
@@ -753,31 +628,30 @@ try {
     // The main column (status, how it started, pull claims, waits) comes
     // before the side column (fleet, locks) in reading and tab order.
     // The Tasks dock's Start card stays empty and hidden on Drain.
-    if (result.panels.join(' ') !== 'auto-drain-panel drain-started-panel drain-pull-panel drain-waits-panel drain-fleet-panel auto-drain-quick-start locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
+    if (result.panels.join(' ') !== 'auto-drain-panel auto-drain-quick-start locks-panel') throw new Error(`Drain dock cards out of order at ${label}: ${result.panels}`);
     if (result.scroll || result.clipped || result.overflowing.length || result.pageScroll) throw new Error(`Drain card overflows at ${label} (dock ${result.dockWidth}px): ${JSON.stringify(result)}`);
     if (!result.bar) throw new Error(`Drain card incomplete at ${label}: ${JSON.stringify(result)}`);
     await page.waitForTimeout(350);
     await page.screenshot({ path: path.join(evidence, `drain-${label}.png`), fullPage: true });
     await setDock('start');
     const compose = await page.evaluate(() => {
-      const start = document.getElementById('auto-drain-start');
+      const start = document.getElementById('auto-drain-quick-start');
       return {
         mode: document.getElementById('side-dock').dataset.mode,
         visible: start.getBoundingClientRect().height > 0,
         scroll: start.scrollWidth > start.clientWidth + 1,
         pageScroll: document.scrollingElement.scrollWidth > window.innerWidth,
         durations: start.querySelectorAll('.drain-durations .drain-duration[aria-pressed]').length,
-        command: document.getElementById('auto-drain-command')?.textContent || '',
         // The footer holds its parts only: an absent part leaves no text.
         footText: [...start.querySelector('.drain-start-foot').childNodes]
           .filter(node => node.nodeType === Node.TEXT_NODE && node.textContent.trim())
           .map(node => node.textContent),
       };
     });
-    compose.overflowing = await page.locator('#auto-drain-start').evaluate(overflowOf);
-    if (compose.mode !== 'start' || !compose.visible || compose.scroll || compose.overflowing.length || compose.pageScroll) throw new Error(`Start a window does not fit at ${label}: ${JSON.stringify(compose)}`);
+    compose.overflowing = await page.locator('#auto-drain-quick-start').evaluate(overflowOf);
+    if (compose.mode !== 'drain' || !compose.visible || compose.scroll || compose.overflowing.length || compose.pageScroll) throw new Error(`Start a window does not fit at ${label}: ${JSON.stringify(compose)}`);
     if (compose.footText.length) throw new Error(`Start a window footer renders stray text at ${label}: ${JSON.stringify(compose.footText)}`);
-    if (compose.durations !== 7 || !compose.command.startsWith('orbit run auto')) throw new Error(`Start a window incomplete at ${label}: ${JSON.stringify(compose)}`);
+    if (compose.durations !== 6) throw new Error(`Start a window incomplete at ${label}: ${JSON.stringify(compose)}`);
     await page.waitForTimeout(200);
     await page.screenshot({ path: path.join(evidence, `drain-start-${label}.png`) });
     await setDock('drain');
@@ -785,7 +659,7 @@ try {
   };
   await page.setViewportSize({ width: 1440, height: 1000 });
   const fullWidth = await drainCheck('1440', null);
-  if (fullWidth < 1000) throw new Error(`Drain does not use the full page: ${fullWidth}`);
+  if (fullWidth < 280) throw new Error(`Tasks dock is too narrow: ${fullWidth}`);
   for (const [phase, label] of [['draining', 'Draining'], ['winding_down', 'Winding down'], ['idle', 'idle']]) {
     await page.evaluate(state => globalThis.setDrainFixturePhase(state), phase);
     const rendered = await page.evaluate(() => ({
@@ -813,7 +687,7 @@ try {
   // observe confirmation and warnings, trigger clear, verify confirmation
   // cleared while warning lines stay.
   await page.evaluate(() => {
-    const start = document.querySelector('#auto-drain-start-body .drain-start');
+    const start = document.querySelector('#auto-drain-quick-start-body .drain-start');
     if (start) start.click();
   });
   await page.waitForFunction(() => {
@@ -847,13 +721,13 @@ try {
   }));
   await page.evaluate(() => globalThis.setDrainFixturePull({ runId: 'jrun-pull-fixture' }));
   let pulled = await pullIndicator();
-  if (pulled.globalHidden || !pulled.global.includes('1 of 2 workspaces draining') || pulled.tabLabel !== 'Overview: Pull drain') throw new Error(`Pull drain indicator: ${JSON.stringify(pulled)}`);
+  if (pulled.globalHidden || !pulled.global.includes('1 of 2 workspaces draining') || pulled.tabLabel !== 'Drain: Pull drain') throw new Error(`Pull drain indicator: ${JSON.stringify(pulled)}`);
   await page.evaluate(() => globalThis.setDrainFixturePull({ runId: 'jrun-pull-fixture', admissionsStopped: true }));
   pulled = await pullIndicator();
-  if (pulled.globalHidden || !pulled.global.includes('1 of 2 workspaces draining') || pulled.tabLabel !== 'Overview: Pull drain · admissions stopped') throw new Error(`Stopped pull drain indicator: ${JSON.stringify(pulled)}`);
+  if (pulled.globalHidden || !pulled.global.includes('1 of 2 workspaces draining') || pulled.tabLabel !== 'Drain: Pull drain · admissions stopped') throw new Error(`Stopped pull drain indicator: ${JSON.stringify(pulled)}`);
   await page.evaluate(() => globalThis.setDrainFixturePull({}));
   const cleared = await pullIndicator();
-  if (cleared.globalHidden || !cleared.global.includes('1 of 2 workspaces draining') || cleared.tabLabel !== 'Overview: idle') throw new Error(`Indicator after pull drain ends: ${JSON.stringify(cleared)}`);
+  if (cleared.globalHidden || !cleared.global.includes('1 of 2 workspaces draining') || cleared.tabLabel !== 'Drain: idle') throw new Error(`Indicator after pull drain ends: ${JSON.stringify(cleared)}`);
 
   // ORB-14566: changing concurrency alters the readiness URL but must keep
   // the panel scope stable while that refresh is pending, then restore focus.
@@ -1000,7 +874,7 @@ try {
     (await import('/js/router.js')).setActiveTab('auto-drain');
     await globalThis.setDrainFixturePhase('draining');
   });
-  await page.waitForFunction(() => location.hash.startsWith('#drain'));
+  await page.waitForFunction(() => location.hash.startsWith('#tasks'));
 
   // ORB-14489: render the live throttle case with spare workspace capacity:
   // the summary blames the throttle, not running tasks.
@@ -1018,90 +892,16 @@ try {
       workspace: card.querySelector('.drain-capacity-bar').getAttribute('aria-label'),
       admitted: card.querySelector('[data-stat="admitted"] dd')?.textContent,
       running: card.querySelector('[data-stat="running"] dd')?.textContent,
-      throttle: Boolean(document.querySelector('#drain-banner:not([hidden]) .drain-throttle-note')),
+      throttle: Boolean(document.querySelector('#auto-drain-panel .drain-throttle-line')),
       tab: document.getElementById('dock-tab-drain').textContent.trim(),
       stop: card.querySelector('.drain-stop-note:not([hidden])').textContent,
     };
   });
   if (!/throttle.*cpu/.test(drainEvidence.summary) || /finish|must clear/.test(drainEvidence.summary) || !drainEvidence.throttle) throw new Error(`Throttle blamed on running tasks: ${drainEvidence.summary}`);
   if (drainEvidence.workspace !== 'Workspace: 6 of 12 leaf slots in use' || drainEvidence.admitted !== '3' || drainEvidence.running !== '1') throw new Error(`Unscoped Drain counts: ${JSON.stringify(drainEvidence)}`);
-  if (drainEvidence.tab !== 'Overview') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
+  if (drainEvidence.tab !== 'Drain') throw new Error(`Duplicated Drain tab state: ${drainEvidence.tab}`);
   if (!/Stop starting new tasks/.test(drainEvidence.stop) || !/keep running/.test(drainEvidence.stop) || /settlements/.test(drainEvidence.stop)) throw new Error(`Stop help must explain the operator's action: ${drainEvidence.stop}`);
   fs.writeFileSync(path.join(evidence, 'drain-readiness-1024.json'), `${JSON.stringify(drainEvidence, null, 2)}\n`);
-  // ORB-14705: a 36-task backlog (17 locks, 13 throttled, 3 saturated, 3 other)
-  // leaves the cards fitting at desktop and phone widths, every task in a pool.
-  await page.evaluate(() => {
-    const task = (n, reason) => ({ task_id: `ORB-${9000 + n}`, status: 'backlog', eligible: false, reason, conflicts: reason === 'context_lock_conflict' ? [{ requested_file: 'file:a.rs', locking_task_id: 'ORB-30' }] : undefined });
-    const reasons = [...Array(17).fill('context_lock_conflict'), ...Array(13).fill('resource_throttled'), ...Array(3).fill('capacity_saturated'), 'operator_validation_handoff', 'pilot_already_landed', 'surface_reserved'];
-    globalThis.__drainWaitReadinessFixture = {
-      capacity: { active_leaf_runs: 6, max_active_leaf_runs: 12, free_slots: 0, resource_throttle: { resources: [{ resource: 'cpu', percent: 164, high_percent: 90, resume_percent: 75, since: '2026-10-04T08:40:00Z' }] } },
-      tasks: reasons.map((reason, i) => task(i, reason)),
-    };
-    return globalThis.setDrainFixtureReadiness(globalThis.__drainWaitReadinessFixture);
-  });
-  for (const [label, width, dock, height] of [['1440', 1440, 336, 1000], ['390', 390, null, 1000], ['375', 375, null, 812]]) {
-    await page.setViewportSize({ width, height });
-    await drainCheck(`backlog36-${label}`, dock);
-    if (label !== '390') {
-      await page.locator('#drain-waits-panel').scrollIntoViewIfNeeded();
-      await page.waitForTimeout(350);
-      await page.screenshot({ path: path.join(evidence, `drain-waits-${label}.png`) });
-    }
-    const pooled = await page.evaluate(async () => {
-      const { drainReadinessFor } = await import('/js/drain-waits.js');
-      return Array.from({ length: 36 }, (_, i) => drainReadinessFor(`ORB-${9000 + i}`)?.pool).filter(Boolean).length;
-    });
-    if (pooled !== 36) throw new Error(`Readiness at ${label}px does not place all 36 tasks: ${pooled}`);
-  }
-  const waitRows = await page.evaluate(() => {
-    const body = document.getElementById('drain-waits-body');
-    const rows = [...body.querySelectorAll('.drain-wait')];
-    const links = [...body.querySelectorAll('.drain-wait-task-links a')].map(link => ({ id: link.textContent, href: link.getAttribute('href') }));
-    const large = rows.find(row => row.querySelector('.drain-wait-count')?.textContent === '17');
-    const short = rows.find(row => row.querySelector('.drain-wait-count')?.textContent === '3');
-    return {
-      links,
-      groups: rows.map(row => ({
-        count: Number(row.querySelector('.drain-wait-count')?.textContent),
-        ids: [...row.querySelectorAll('.drain-wait-task-links a')].map(link => link.textContent).sort(),
-      })),
-      largePool: large?.dataset.pool,
-      largeDisclosure: Boolean(large?.querySelector('details.drain-wait-task-disclosure')),
-      largeOpen: large?.querySelector('details')?.open,
-      largeLinkCount: large?.querySelectorAll('.drain-wait-task-links a').length,
-      shortDisclosure: Boolean(short?.querySelector('details')),
-      shortLinkCount: short?.querySelectorAll('.drain-wait-task-links a').length,
-      poolBar: Boolean(body.querySelector('.drain-pool-bar[role="img"]')),
-      legend: Boolean(body.querySelector('.drain-pool-legend')),
-      holderLink: large?.querySelector('.drain-wait-reason a')?.textContent,
-      detail: Boolean(rows.some(row => row.querySelector('.drain-wait-detail'))),
-      truncationNote: Boolean(body.querySelector('.drain-waits-note')),
-    };
-  });
-  const expectedWaitTaskIds = Array.from({ length: 36 }, (_, i) => `ORB-${9000 + i}`).sort();
-  const expectedWaitGroups = [
-    Array.from({ length: 17 }, (_, i) => `ORB-${9000 + i}`),
-    Array.from({ length: 13 }, (_, i) => `ORB-${9017 + i}`),
-    Array.from({ length: 3 }, (_, i) => `ORB-${9030 + i}`),
-    ['ORB-9033'], ['ORB-9034'], ['ORB-9035'],
-  ].sort((left, right) => left[0].localeCompare(right[0]));
-  const actualWaitTaskIds = waitRows.links.map(link => link.id).sort();
-  const actualWaitGroups = waitRows.groups.map(group => group.ids).sort((left, right) => left[0].localeCompare(right[0]));
-  if (JSON.stringify(actualWaitTaskIds) !== JSON.stringify(expectedWaitTaskIds)
-      || waitRows.links.some(link => !link.href?.includes(link.id))) throw new Error(`Drain reason rows must link every waiting task to its task: ${JSON.stringify(waitRows.links)}`);
-  if (JSON.stringify(actualWaitGroups) !== JSON.stringify(expectedWaitGroups)) throw new Error(`Drain reason rows must list only their waiting tasks: ${JSON.stringify(waitRows.groups)}`);
-  if (waitRows.largePool !== 'locks' || !waitRows.largeDisclosure || waitRows.largeOpen || waitRows.largeLinkCount !== 17
-      || waitRows.shortDisclosure || waitRows.shortLinkCount !== 3) throw new Error(`Drain reason link groups do not use the expected disclosure boundary: ${JSON.stringify(waitRows)}`);
-  if (!waitRows.poolBar || !waitRows.legend || waitRows.holderLink !== 'ORB-30' || !waitRows.detail || !waitRows.truncationNote) throw new Error(`Drain waits lost part of the existing card layout: ${JSON.stringify(waitRows)}`);
-  await page.locator('#drain-waits-body .drain-wait[data-pool="locks"] details summary').click();
-  if (!await page.locator('#drain-waits-body .drain-wait[data-pool="locks"] details').evaluate(details => details.open)) throw new Error('Drain wait disclosure did not open');
-  await page.evaluate(() => globalThis.setDrainFixtureReadiness(globalThis.__drainWaitReadinessFixture));
-  const expandedWaits = await page.locator('#drain-waits-body .drain-wait[data-pool="locks"] details').evaluate(details => ({
-    open: details.open,
-    visibleLinks: [...details.querySelectorAll('.drain-wait-task-links a')].filter(link => link.checkVisibility()).length,
-  }));
-  const waitsOverflow = await page.locator('#drain-waits-panel').evaluate(panel => panel.scrollWidth > panel.clientWidth + 1);
-  if (!expandedWaits.open || expandedWaits.visibleLinks !== 17 || waitsOverflow) throw new Error(`Expanded task links must survive refresh and fit on a phone: ${JSON.stringify({ expandedWaits, waitsOverflow })}`);
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.evaluate(() => globalThis.setDrainFixtureReadiness());
   await page.evaluate(async () => { const { setDockMode } = await import('/js/log-tail.js'); setDockMode('log'); });
@@ -1109,17 +909,15 @@ try {
   if (!logDrainState.includes('Draining')) throw new Error(`Drain tab loses its accessible live state while Log is selected: ${logDrainState}`);
   await page.click('.tab[data-tab="jobs"]');
   await page.click('#global-drain-state');
-  if (!page.url().includes('#drain') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');
+  if (!page.url().includes('#tasks') || await page.locator('#side-dock').getAttribute('data-mode') !== 'drain') throw new Error('Global Drain indicator did not open the card');
   await page.emulateMedia({ reducedMotion: 'reduce' });
   for (const selector of ['#auto-drain-dot', '#global-drain-state .drain-dot']) {
     const animation = await page.locator(selector).evaluate(node => getComputedStyle(node).animationName);
     if (animation !== 'none') throw new Error(`Reduced-motion drain indicator ${selector} animates: ${animation}`);
   }
   await page.emulateMedia({ reducedMotion: 'no-preference' });
-  await page.setViewportSize({ width: 900, height: 900 });
-  await drainCheck('900', null);
-  await page.setViewportSize({ width: 375, height: 812 });
-  await drainCheck('375x812', null);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await drainCheck('1280', null);
   // The approve-proposed opt-in and the live window's approvals line fit the
   // card with no overflow, and the card is captured on its own for review.
   const approveCard = async (label) => {
@@ -1129,7 +927,7 @@ try {
       document.getElementById('auto-drain-approve').click();
     });
     const form = await page.evaluate(() => {
-      const card = document.getElementById('auto-drain-start');
+      const card = document.getElementById('auto-drain-quick-start');
       const box = card.getBoundingClientRect();
       const label = card.querySelector('.drain-field-approve');
       return {
@@ -1140,7 +938,7 @@ try {
     });
     if (!form.selected || !form.reachable || form.overflowing.length) throw new Error(`Approve-proposed control at ${label}: ${JSON.stringify(form)}`);
     await page.waitForTimeout(400);
-    await page.locator('#auto-drain-start .drain-field-approve').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
+    await page.locator('#auto-drain-quick-start .drain-field-approve').screenshot({ path: path.join(evidence, `drain-approve-form-${label}.png`) });
     await setDock('drain');
     await page.evaluate(async () => {
       await globalThis.setDrainFixturePhase('draining');
@@ -1166,12 +964,11 @@ try {
       await globalThis.setDrainFixturePhase('draining');
     });
   };
-  await approveCard('375x812');
   await page.setViewportSize({ width: 1440, height: 1000 });
   await approveCard('1440-dock336');
-  await page.setViewportSize({ width: 375, height: 812 });
+  await page.setViewportSize({ width: 1440, height: 1000 });
 
-  // The full-page Log toolbar keeps every control reachable on desktop and
+  // The Tasks dock Log toolbar keeps every control reachable on desktop and
   // phone, while following and while paused with
   // the buffered action shown. Pausing and buffering go through the real
   // follow handler and SSE consumer, fed by a fixture stream.
@@ -1332,7 +1129,7 @@ try {
       });
       return { dockWidth: Math.round(document.getElementById('side-dock').getBoundingClientRect().width), clipped: bar.scrollWidth > bar.clientWidth + 1, unreachable };
     }, ids);
-    if (layout.dockWidth < viewport.width - 300) throw new Error(`Log does not fill the page at ${label}: ${layout.dockWidth}`);
+    if (layout.dockWidth < 280) throw new Error(`Log does not fill the page at ${label}: ${layout.dockWidth}`);
     if (layout.clipped || layout.unreachable.length) throw new Error(`Log toolbar clips controls at ${label}: ${JSON.stringify(layout)}`);
     for (const selector of ids) {
       await page.focus(selector);
@@ -1346,7 +1143,6 @@ try {
   const logToolbarSizes = [
     ['1024', { width: 1024, height: 900 }, null],
     ['1440', { width: 1440, height: 1000 }, null],
-    ['375', { width: 375, height: 812 }, null],
   ];
   for (const [label, viewport, width] of logToolbarSizes) await logToolbarCheck(`${label}-following`, viewport, width, false);
   await page.click('#log-follow-tail');
@@ -1709,7 +1505,7 @@ try {
   await feedbackPage.close();
 
   if (pageErrors.length) throw new Error(`page errors during the scenario: ${pageErrors.join(' | ')}`);
-  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Drain page at 1440/900/375, full-page Log toolbar following and paused, Running now task-grouped job id wrapping at 280px, reload, history, feedback timer expiry. Screenshots: ${evidence}`);
+  console.log(`PASS: Chromium Operations fixture; 1440/672/390/375; phone shell, subtabs, Tasks dock at 1440/1280/1024, dock Log toolbar following and paused, Running now task-grouped job id wrapping at 280px, reload, history, feedback timer expiry. Screenshots: ${evidence}`);
 } finally {
   await browser?.close(); server.close();
 }

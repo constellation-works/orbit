@@ -1,6 +1,6 @@
-/* Drain page: the Overview | Log tabs and the Locks held panel. */
+/* Tasks dock: Drain, Locks held and Log. */
 
-/* The shared view host: the page heading, the tabs, then one view. */
+/* The view host: the tabs, then one view. */
 #side-dock {
   display: flex;
   flex-direction: column;
@@ -39,7 +39,7 @@
   white-space: nowrap;
   transition: color 0.15s ease, border-color 0.15s ease;
 }
-/* A view the dock's current home does not offer (log-tail.js). */
+/* Explicitly hidden view controls. */
 .dock-seg[hidden] { display: none; }
 .dock-seg:hover { color: var(--fg); }
 .dock-seg.on { color: var(--fg-strong); border-bottom-color: var(--accent); }
