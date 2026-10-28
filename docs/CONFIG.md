@@ -1039,7 +1039,7 @@ by a flood of failures says what they were.
 
 Network-inconclusive output (HTTP status `000`; a curl connect, resolve, timeout, TLS or receive error such as `curl: (6)`, `(7)`, `(28)`, `(35)`, `(56)`; a DNS resolution failure; a TLS handshake timeout) reruns the command up to twice, after 2 s and 6 s. Only the last attempt counts; the log records `network_retries`.
 
-#### Completion and landing refusals are held
+#### Delivery refusals are held
 
 A fail-closed delivery decision ends the run `held` with a typed diagnostic code:
 
@@ -1057,13 +1057,16 @@ A fail-closed delivery decision ends the run `held` with a typed diagnostic code
 | `delivery_completion_budget_expired` | The completion budget (deadline) expired before completion could be confirmed; the last observed pull request state was unmerged and the task stays in review. The pull request may have merged since, through auto-merge (a hold does not cancel it) or another actor, so check the forge. |
 | `delivery_check_evidence_inconclusive` | An auto-fix stop whose check log could not be read conclusively; no repair agent runs. |
 | `delivery_forge_observation_unavailable` | Completion's read-only forge reads (PR status, required checks, merge policy, prerequisite evidence) kept failing with a transport error before any completion mutation: after the one authenticated completion retry, when the run has no final recovery, past the completion budget, or after repair provenance that rules the retry out. Nothing changed on the forge and the task stays in review; `orbit job resume` reads the forge again and continues completion from its checkpoints. |
+| `delivery_origin_unavailable` | `worktree_setup` could not reach origin during pre-admission base fetch, including a fetch-lock wait whose bounded origin probe confirms a transport outage. The run is held before the task changes from backlog; a later admission retries after origin recovers. Authentication, permission and missing-ref refusals remain failures. |
 
 These codes come from typed refusals, never from matching diagnostic wording.
 The refusing action keeps its existing task transition and landing evidence;
 run finalization does not change the task's status. Retry, step recovery, final
 recovery and the failure handoff do not run for these decisions. Gate and auto
 parents pass the held child, run history lists it as `held`, and reliability
-counts it under held, outside the failure rate. Routine fires retain their
+counts it under held, outside the failure rate. For `delivery_origin_unavailable`,
+the task remains in backlog and a later normal admission retries worktree setup;
+the held run itself has no generic resume path. Routine fires retain their
 existing `succeeded` status for a held underlying run.
 
 Missing pinned identity fields, including the PR head, and contradictory merge

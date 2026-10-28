@@ -168,6 +168,12 @@ run was persisted but its detached worker could not start, Orbit terminalizes it
 (plus transient `retrying` and step-level `skipped`). A `held` run is resumable through its
 specific recovery path; it is not an ordinary failed terminal run.
 
+When `worktree_setup` cannot reach origin before admitting a task, the run is held as
+`delivery_origin_unavailable` and the task stays in backlog. A bounded origin probe also
+confirms transport failure before a fetch-lock timeout is held; authentication, permission
+and missing-ref errors remain failures. Once origin answers, admit the same backlog task
+through a new run; do not resume the held run.
+
 Completion and owner landing also end `held` on typed parked decisions: a
 reported head changed, a repair is already dispatched, the PR is draft or
 closed, the task refuses promotion, owner landing needs a validated conflict
@@ -178,7 +184,7 @@ observed but may have merged since, through auto-merge (a held run does not
 cancel it) or another actor, so check the forge. Failed checks that need the
 base's own result are held as `delivery_base_checks_pending` until candidate
 recovery can proceed. Their `delivery_*` diagnostic codes are listed in
-[completion and landing refusals](../CONFIG.md#completion-and-landing-refusals-are-held).
+[delivery refusals](../CONFIG.md#delivery-refusals-are-held).
 The task keeps the state the refusing action left it in, and gate/auto parents
 pass the held child. Missing or contradictory evidence, permanent forge read
 refusals (credentials, permissions) and red candidate checks still fail. A
