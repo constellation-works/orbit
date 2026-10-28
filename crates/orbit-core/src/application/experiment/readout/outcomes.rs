@@ -289,12 +289,15 @@ impl OrbitRuntime {
             let Some(selection) = selection else {
                 continue;
             };
-            // Only the delivery that ran the crew the task now names is
-            // relevant: a crew redrawn by a later complexity rerate (or
-            // changed after admission) has no such delivery, so its
-            // historical membership is unavailable rather than a mismatch.
+            // The latest run with admission evidence for this task is the
+            // latest relevant delivery [ORB-19520]: resolve it first, then
+            // verify its crew. A crew redrawn by a later complexity rerate
+            // (or changed after admission) has no such delivery, so its
+            // historical membership is unavailable rather than a mismatch;
+            // an older superseded delivery that happens to name the current
+            // crew must not invent one.
             if selection.get("crew").and_then(Value::as_str) != Some(crew) {
-                continue;
+                return Ok(None);
             }
             let source = selection
                 .get("source")
