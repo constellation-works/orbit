@@ -110,10 +110,14 @@ template:
     write: read the regression task's current `relations`, then send
     the full replacement list, preserving every existing relation and
     adding `"regression":{"nature":"<nature>","escape":"<escape>"}` to
-    its `regression_from` entry, keeping any `sites` it already lists, with
-    `orbit tool run orbit.task.update --input '{"id":"<regression task ID>","relations":[{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>"}}],"model":"<agent-family>"}'`
+    its `regression_from` entry, sending its existing `sites` array
+    unchanged, with
+    `orbit tool run orbit.task.update --input '{"id":"<regression task ID>","relations":[{"type":"regression_from","target":"<culprit task ID>","regression":{"nature":"<nature>","escape":"<escape>","sites":<existing sites>}}],"model":"<agent-family>"}'`
     (the payload shows the one classified entry; send every existing
-    relation, not only that entry). Read the task back and confirm the
+    relation, not only that entry; replace `<existing sites>` with the
+    link's current `sites` array verbatim, omitting the `sites` key when
+    the link lists none -- a replacement that omits `sites` clears them).
+    Read the task back and confirm the
     classification took effect. If that write refuses, or the read-back
     shows the stored classification did not change, record that link as
     unsettled in `escape-to-guard.json` with the refusal or the read-back
