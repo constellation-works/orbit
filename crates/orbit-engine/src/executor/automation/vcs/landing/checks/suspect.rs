@@ -103,7 +103,12 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
                 "event": job["event"], "started_at": job["started_at"],
                 "completed_at": job["completed_at"], "reason": reason,
             });
-            record_base_suspect(host, tasks, &record, None).map_err(|error| error.to_string())?;
+            // A refused write must keep the hold: an error here would reach
+            // completion's final recovery as an unjudged failure. The next
+            // observation of this failure records it again.
+            if let Err(error) = record_base_suspect(host, tasks, &record, None) {
+                tracing::warn!(%error, "base-suspect: the first failure could not be recorded; holding it and recording it on a later observation");
+            }
             Ok(Some(reason))
         }
         UntouchedBaseEvidence::Unrelated | UntouchedBaseEvidence::PassingBaseRun => Ok(None),
