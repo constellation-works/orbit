@@ -346,32 +346,11 @@ spec:
 
     Sanctioned sandbox deferral
 
-    The only deferrable check is a required affected-test gate that exits 0
-    but prints only these notices for tests whose sandbox the agent sandbox
-    refuses: `DEFERRED: bubblewrap unavailable:` (Linux),
-    `SKIP: sandbox-exec cannot apply a profile:` (macOS) and, in claimed mode
-    on macOS only, `DEFERRED: ps denied:`. One run may print several kinds.
-    Do not fail the step for it:
-    - Run the gate with its comparison base pinned to `input.base_sha` and
-      `ORBIT_VALIDATION_SUMMARY` set to a new file under `.orbit/tmp/`.
-    - Return only that path:
-      `{"deferred_sandbox_validation":{"summary":".orbit/tmp/<file>.json"}}`.
-      Orbit derives and checks the record from the summary and replays the
-      gate outside the sandbox before delivery; any other key is refused, and
-      a summary without a command, exit status or executed-test count cannot
-      be deferred.
-    - In the execution summary, record the gate, summary path and notices,
-      and mark that coverage `not_run`, never passed.
-    A required `orbit plugin test` gate defers this way inside a macOS
-    worker: also set `ORBIT_VALIDATION_GATE` to the gate exactly as
-    configured and `ORBIT_VALIDATION_BASE` to `input.base_sha`. Without
-    them it fails `validation_route_unavailable` and runs no case.
-    Nothing else is deferrable: a nonzero exit, any other `SKIP:` or
-    `skipping` notice, a gate that ran or selected no tests, notices of a
-    kind this lane's sandbox does not refuse, `DEFERRED: ps denied:` outside
-    a macOS claimed leaf, a host-required criterion, a `baseline_red`
-    command, and every other required command (formatting, lint, goldens,
-    static analysis).
+    Before attempting or claiming a sandbox deferral, read and follow
+    “Sanctioned sandbox deferral” in the Orbit skill’s task-execution reference.
+    Only a required affected-test gate or the documented macOS plugin-test route
+    can qualify. Keep all other required checks mandatory, return the documented
+    summary-only handoff, and record deferred coverage as `not_run`.
 
     Post-deploy criteria
 

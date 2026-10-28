@@ -540,6 +540,8 @@ running it in the implementer's lane. Every notice must be one of these
 kinds, and the lane must refuse the probe of each kind present; the implement
 step refuses anything else before commit:
 
+Follow the [Sanctioned sandbox deferral contract](../../crates/orbit-core/assets/skills/orbit/references/task-execution.md#sanctioned-sandbox-deferral) for the implementer's eligibility, summary-only handoff, probe, replay and exclusion rules.
+
 | Host | Notices | Probe Orbit runs | Probe result |
 |---|---|---|---|
 | Linux | `DEFERRED: bubblewrap unavailable:` | `bwrap --unshare-user --ro-bind / / -- /bin/true` | nonzero, `No permissions to create a new namespace` (0.11) or `No permissions to create new namespace` (0.9) |

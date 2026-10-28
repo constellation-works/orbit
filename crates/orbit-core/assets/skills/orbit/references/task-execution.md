@@ -412,6 +412,46 @@ recorded false result, not a hypothetical one. Before comparing two revisions:
 If the workspace ships a helper for this comparison, use it rather than
 hand-rolling the steps; check the workspace's build and CI instructions.
 
+### Sanctioned sandbox deferral
+
+Before attempting or claiming a sandbox deferral, read and follow this
+subsection. Only a required affected-test gate may qualify, and it must exit 0
+while printing only notices for tests whose nested sandbox the agent lane
+refuses: `DEFERRED: bubblewrap unavailable:` on Linux,
+`SKIP: sandbox-exec cannot apply a profile:` on macOS, or `DEFERRED: ps denied:`
+on a claimed macOS leaf. A single gate may report multiple notice kinds only
+when every corresponding sandbox probe refuses in the implementer's lane.
+For an eligible case, use this route instead of failing the step for the
+deferred test coverage.
+
+Run the gate with its comparison base pinned to `input.base_sha` and set
+`ORBIT_VALIDATION_SUMMARY` to a new file under `.orbit/tmp/`. The summary must
+record the gate command, exit status, executed-test count, pinned base and
+notices. Return only the summary path in this handoff:
+
+```json
+{"deferred_sandbox_validation":{"summary":".orbit/tmp/<file>.json"}}
+```
+
+Do not add other output keys. Orbit derives and checks the record from the
+summary, including that the command is a required gate, the exit status is 0,
+tests ran, the base matches, and every notice is eligible for this lane. Orbit
+runs one refusal probe for each notice kind; every probe must refuse. It then
+replays the gate outside the agent sandbox before delivery, and the replay must
+run tests without deferral. In the execution summary, name the gate, summary
+path and notices, and mark the deferred coverage `not_run`, never passed.
+
+A required `orbit plugin test` gate in a macOS worker must also set
+`ORBIT_VALIDATION_GATE` to the gate exactly as configured and
+`ORBIT_VALIDATION_BASE` to `input.base_sha`. Without both values, the route
+fails with `validation_route_unavailable` and runs no case.
+
+No other check can be deferred. This includes a nonzero exit, any other `SKIP:`
+or `skipping` notice, a gate that ran or selected no tests, a notice for a
+sandbox this lane does not refuse, `DEFERRED: ps denied:` outside a claimed
+macOS leaf, a host-required criterion, a `baseline_red` command, and every
+other required command such as formatting, lint, goldens or static analysis.
+
 ## Step 5 — Summarize and hand off
 
 Persist `execution_summary` via `orbit.task.update` **first**.
