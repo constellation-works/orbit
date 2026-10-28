@@ -7,10 +7,11 @@
 use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Utc};
+use orbit_common::OrbitError;
 use orbit_core::OrbitRuntime;
-use orbit_core::TaskStatus;
 use orbit_core::application::codebase::CodebaseQuery;
-use orbit_core::application::task::TaskAddParams;
+use orbit_core::application::task::{TaskAddParams, TaskWriteScreen};
+use orbit_core::{Task, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_types::task::{
     RegressionClassification, RegressionEscape, RegressionNature, TaskRelation, TaskRelationType,
@@ -377,9 +378,85 @@ fn shipped_implement_and_review_activities_ask_for_marks() {
     }
 }
 
+/// An operator surface's `regression.sites` are canonicalized against the
+/// checkout the way its `context_files` are, so one path has one spelling.
+fn regression_sites_are_canonicalized_against_the_workspace() {
+    let mut fx = Fixture::new();
+    fx.reconfigure("[workflow.regression_risk]\nrecord_sites = true\n");
+    let checkout = fx.workspace.parent().unwrap();
+    let inside = format!("file:{}", checkout.join(HOT).display());
+    let outside = format!(
+        "file:{}",
+        fx._root.path().join("elsewhere/outside.rs").display()
+    );
+    let screen = TaskWriteScreen::unbound(true);
+    let regressed = fx.task.clone();
+    let linked = |site: &str| TaskAddParams {
+        title: "Guard the retry budget".into(),
+        description: "regression risk fixture".into(),
+        relations: vec![TaskRelation {
+            relation_type: TaskRelationType::RegressionFrom,
+            target: regressed.parse().unwrap(),
+            regression: Some(RegressionClassification {
+                nature: RegressionNature::BrokeExisting,
+                escape: RegressionEscape::NoTest,
+                sites: vec![site.into()],
+            }),
+        }],
+        ..Default::default()
+    };
+    let stored_sites = |task: &Task| -> Vec<String> {
+        task.relations
+            .iter()
+            .filter_map(|relation| relation.regression.as_ref())
+            .flat_map(|regression| regression.sites.clone())
+            .collect()
+    };
+
+    let site_task = fx
+        .runtime
+        .add_task_screened(linked(&inside), &screen, None, None)
+        .unwrap()
+        .task;
+    let context_task = fx
+        .runtime
+        .add_task_screened(
+            TaskAddParams {
+                title: "Scope the retry budget".into(),
+                description: "regression risk fixture".into(),
+                context_files: vec![inside.clone()],
+                ..Default::default()
+            },
+            &screen,
+            None,
+            None,
+        )
+        .unwrap()
+        .task;
+    assert_eq!(
+        stored_sites(&site_task),
+        context_task.context_files,
+        "a site for a workspace path is stored in the form its context selector takes"
+    );
+    assert_eq!(stored_sites(&site_task), [format!("file:{HOT}")]);
+
+    match fx
+        .runtime
+        .add_task_screened(linked(&outside), &screen, None, None)
+        .unwrap_err()
+    {
+        OrbitError::InvalidInput(message) => assert!(
+            message.contains(&format!("`{outside}`")),
+            "the refusal names the entry as written: {message}"
+        ),
+        other => panic!("an outside-workspace site is invalid input, not {other:?}"),
+    }
+}
+
 crate::scenario_table!(
     regression_risk_scenarios,
     qualifying_paths_are_marked_highest_risk_first_and_recorded_once_per_prompt,
     support_cap_and_switch_are_configurable_and_off_marks_nothing,
-    shipped_implement_and_review_activities_ask_for_marks
+    shipped_implement_and_review_activities_ask_for_marks,
+    regression_sites_are_canonicalized_against_the_workspace
 );

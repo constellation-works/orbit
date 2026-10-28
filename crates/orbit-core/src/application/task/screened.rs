@@ -9,7 +9,7 @@
 //! about to create, and they have no one to warn.
 
 use orbit_common::OrbitError;
-use orbit_common::fs::selector::canonical_selector;
+use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_types::task::{Task, TaskRelation, backlog_footprint_warning};
 
 use crate::OrbitRuntime;
@@ -322,15 +322,19 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         };
         let record = self.regression_risk_settings().record_sites;
+        let root = &self.paths().repo_root;
         let mut dropped = 0;
         for regression in relations
             .iter_mut()
             .filter_map(|relation| relation.regression.as_mut())
         {
             for site in &mut regression.sites {
-                *site = canonical_selector(site).map_err(|error| {
-                    OrbitError::InvalidInput(format!("invalid `regression.sites` entry: {error}"))
+                let canonical = canonical_selector_in_workspace(site, root).map_err(|error| {
+                    OrbitError::InvalidInput(format!(
+                        "invalid `regression.sites` entry `{site}`: {error}"
+                    ))
                 })?;
+                *site = canonical;
             }
             regression
                 .validate_sites()

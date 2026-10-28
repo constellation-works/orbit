@@ -131,7 +131,8 @@ on the operator-only `orbit.workflow.run.show`.
     type that is wrong, or `file:<path>` for a file without symbols. Never
     tests, goldens, docs or wiring the culprit only touched alongside. Kept
     only while `workflow.regression_risk.record_sites` is on; otherwise the
-    write drops them with a warning. A relations replacement that omits
+    write drops them with a warning. An absolute path outside the workspace
+    refuses the write either way. A relations replacement that omits
     `sites` clears them, so preserve an existing list.
   - `nature` — what kind of regression the link records:
     - `broke_existing`: the culprit broke behavior that worked before it landed.
