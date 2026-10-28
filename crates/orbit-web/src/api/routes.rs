@@ -298,6 +298,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         // Analytics › Codebase: per-path regression, contention, footprint-miss,
         // coupling, blocked and rejected rates from one cached scan.
         .route("/codebase/analytics", get(codebase::codebase_analytics))
+        .route("/codebase/show", get(codebase::codebase_show))
         .route("/codebase/related", get(codebase::codebase_related))
         // Observe › Agents: one scorecard per agent role ranked by crew and
         // model, and who each problem counts against, from one cached scan.

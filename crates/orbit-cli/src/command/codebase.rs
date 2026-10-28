@@ -40,8 +40,8 @@ const PATH_RANKINGS: &[Ranking] = &[
     Ranking {
         key: "regressions",
         label: "Regressions",
-        numerator: "done tasks a later task regressed",
-        denominator: "done tasks that declared it",
+        numerator: "done tasks a later task regressed with a recorded site under it",
+        denominator: "done tasks that declared it or were sited there",
     },
     Ranking {
         key: "footprint_misses",
@@ -190,6 +190,15 @@ fn regression_blocks(section: &Value) -> Vec<Block> {
         };
         let _ = write!(out, "\n  {dimension}: {values}");
     }
+    let unsited = &section["unsited"];
+    let _ = write!(
+        out,
+        "\n  attributed by: {} · {} regressed tasks ({} links) have no recorded sites and are \
+         not attributed to paths",
+        text(&section["attribution"]),
+        count(&unsited["tasks"]),
+        count(&unsited["links"]),
+    );
     let mut blocks = vec![Block::text(out)];
     for (slice, heading) in [("crew", "CREW"), ("complexity", "COMPLEXITY")] {
         let rates = &section[format!("by_{slice}")];
@@ -263,6 +272,9 @@ fn show_blocks(value: &Value) -> Vec<Block> {
             continue;
         }
         write_tasks(&mut out, ranking.label, ranking.numerator, &row["tasks"]);
+        if ranking.key == "regressions" && !row.is_null() {
+            write_sites(&mut out, row);
+        }
         if ranking.key == "blocked" {
             write_tasks(
                 &mut out,
@@ -325,6 +337,10 @@ fn write_tasks(out: &mut String, label: &str, numerator: &str, tasks: &Value) {
             let _ = write!(out, "  (regressed by {})", regressions.join(", "));
         }
         out.push('\n');
+        let sites = strings(&task["sites"]);
+        if !sites.is_empty() {
+            let _ = writeln!(out, "      sites: {}", sites.join(", "));
+        }
         for link in task["regressions"].as_array().into_iter().flatten() {
             let _ = writeln!(
                 out,
@@ -339,6 +355,38 @@ fn write_tasks(out: &mut String, label: &str, numerator: &str, tasks: &Value) {
                 text(&link["detected_by"]),
             );
         }
+    }
+}
+
+/// The recorded sites under a path, most regressed tasks first, each with
+/// the regressed tasks and regression tasks naming it; else how many
+/// regressed tasks declared the path without recording a site.
+fn write_sites(out: &mut String, row: &Value) {
+    let sites = row["sites"].as_array().cloned().unwrap_or_default();
+    if sites.is_empty() {
+        let _ = writeln!(
+            out,
+            "\nRegression sites: none recorded under this path; {} regressed tasks that \
+             declared it have no recorded sites",
+            count(&row["unsited"]["tasks"]),
+        );
+        return;
+    }
+    let _ = writeln!(out, "\nRegression sites ({})", sites.len());
+    for site in &sites {
+        let name = match site["scope"].as_str() {
+            Some("symbol") => format!("{} ({})", text(&site["symbol"]), text(&site["kind"])),
+            Some("dir") => format!("whole directory {}", text(&site["path"])),
+            _ => format!("whole file {}", text(&site["path"])),
+        };
+        let _ = writeln!(
+            out,
+            "  {name}  {} regressed tasks · {} links\n    regressed {} · by {}",
+            count(&site["tasks"]),
+            count(&site["links"]),
+            strings(&site["regressed_tasks"]).join(", "),
+            strings(&site["regression_tasks"]).join(", "),
+        );
     }
 }
 

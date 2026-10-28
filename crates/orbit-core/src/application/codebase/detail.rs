@@ -1,7 +1,8 @@
 //! One path's standing in every ranking, with what stands behind each
-//! numerator: the tasks for the four task rankings, the refused requesters
-//! and their wait episodes for lock contention and the reserving requesters
-//! of each coupled pair.
+//! numerator: the tasks for the four task rankings (for Regressions, with
+//! every recorded site under the path and the declaring regressed tasks no
+//! site attributes), the refused requesters and their wait episodes for
+//! lock contention and the reserving requesters of each coupled pair.
 //!
 //! It reads the rows the rankings rank, so a count here is the count the
 //! ranking shows, and reports the path's place in each ranking's whole order
@@ -15,7 +16,7 @@ use super::facts::{CodebaseFacts, TaskFacts};
 use super::lock_waits::{WaitEpisode, wait_summary};
 use super::sections::{
     Params, blocked_rows, coupling_pairs, footprint_rows, lock_rows, lock_tally, merge, rank,
-    rank_blocked, rate_fields, regressed_fields, regression_rows, rejected_rows,
+    rank_blocked, rate_fields, regressed_fields, regression_rows, rejected_rows, site_entries,
 };
 
 pub(super) fn path_detail(
@@ -23,7 +24,7 @@ pub(super) fn path_detail(
     params: &Params,
     path: &str,
 ) -> Result<Value, OrbitError> {
-    let (regressions, _) = regression_rows(facts, params);
+    let regressions = regression_rows(facts, params).rows;
     let (footprint, _) = footprint_rows(facts, params);
     let blocked = blocked_rows(facts, params).rows;
     let rejected = rejected_rows(facts, params).rows;
@@ -72,13 +73,22 @@ pub(super) fn path_detail(
             .map(|task| {
                 merge(
                     task_entry(task, task.done_at.unwrap_or(task.updated_at)),
-                    regressed_fields(task, &params.filter),
+                    regressed_fields(task, row, &params.filter),
                 )
             })
             .collect();
+        let unsited_links: usize = row
+            .unsited
+            .iter()
+            .map(|task| params.filter.links(task).len())
+            .sum();
         merge(
             rate_fields(row.tally.numerator, row.tally.denominator),
-            json!({ "tasks": tasks }),
+            json!({
+                "tasks": tasks,
+                "sites": site_entries(row, &params.filter),
+                "unsited": { "tasks": row.unsited.len(), "links": unsited_links },
+            }),
         )
     });
     let (ranked, _) = rank(regressions, min_support, |row| {

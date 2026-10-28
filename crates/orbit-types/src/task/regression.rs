@@ -63,8 +63,9 @@ pub struct RegressionClassification {
     /// Who set [`Self::severity`]; `filer` when a severity is given alone.
     pub severity_source: SeveritySource,
     /// Where the defect lives: canonical `symbol:` or `file:` selectors of
-    /// the code that is wrong, as opposed to everything the culprit touched.
-    /// Absent on links filed without it.
+    /// the code that is wrong, as opposed to everything the culprit touched,
+    /// or a `dir:` selector when no narrower site can be named. Absent on
+    /// links filed without it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sites: Vec<String>,
 }
@@ -117,7 +118,7 @@ impl RegressionClassification {
     }
 
     /// Check the shape of [`Self::sites`]: at most `MAX_REGRESSION_SITES`,
-    /// no duplicates, each a `symbol:` or `file:` selector. Callers that can
+    /// no duplicates, each a `symbol:`, `file:` or `dir:` selector. Callers that can
     /// resolve selectors also canonicalize them against the workspace.
     pub fn validate_sites(&self) -> Result<(), String> {
         if self.sites.len() > MAX_REGRESSION_SITES {
@@ -128,9 +129,12 @@ impl RegressionClassification {
         }
         let mut seen = std::collections::BTreeSet::new();
         for site in &self.sites {
-            if !(site.starts_with("symbol:") || site.starts_with("file:")) {
+            if !["symbol:", "file:", "dir:"]
+                .iter()
+                .any(|prefix| site.starts_with(prefix))
+            {
                 return Err(format!(
-                    "`regression.sites` entry {site:?} must be a `symbol:` or `file:` selector"
+                    "`regression.sites` entry {site:?} must be a `symbol:`, `file:` or `dir:` selector"
                 ));
             }
             if !seen.insert(site.as_str()) {

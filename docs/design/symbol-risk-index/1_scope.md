@@ -1,7 +1,7 @@
 ---
 title: "Scope: symbol risk index"
 owner: claude
-last_updated: 2026-10-27
+last_updated: 2026-10-28
 last_validated: 2026-10-27
 status: Draft
 stage: designing
@@ -27,7 +27,8 @@ shipped as estimator version 1 by [ORB-18690] and consumed unchanged by the back
 [ORB-19361] is replacing its per-file maximum with a size-based fit: declared path count
 before a diff exists, lines changed once one does. Lines changed per landed delivery are
 already recorded by `codebase/diff_stats.rs` ([ORB-18383]). A `regression_from` link can carry
-`regression.sites`, the `symbol:`/`file:` selectors of the code that was wrong
+`regression.sites`, the `symbol:`/`file:` selectors of the code that was wrong (`dir:` when no
+narrower site can be named)
 (`crates/orbit-types/src/task/regression.rs`), and [ORB-19276] made Orbit always record
 them. The Coverage workflow (`.github/workflows/coverage.yml`) uploads a workspace LCOV report
 for `main` every six hours ([DEVELOPMENT.md](../../DEVELOPMENT.md#coverage)). The orbit-graph
@@ -137,7 +138,7 @@ gives the exact protocol and the index reconstruction per fold.
 |---|---|---|---|
 | **G1 admission** | `declared_lines` basis, falling back to `declared_files` where unresolved | `declared_files` on the same tasks (AUC 0.704 in the 2026-10-27 run), by at least 0.01 AUC | Riskiness keeps `declared_files`; nothing in admission reads the index. Size remains a view input. |
 | **G2 site history in task risk** | The shipped size model plus the footprint's maximum shrunk site rate, judged separately for the declared and diff bases | The shipped size model alone, by at least 0.01 AUC | Site history never enters task risk for a basis that fails. |
-| **G3a view risk axis** | Symbol risk (size, plus site rate where it improves the fit) predicting the symbols named as sites in the next four weeks | The symbol's file-level shrunk regression rate, which is the existing Regressions ranking | No per-symbol risk ranking ships. The view and both of its lists are dropped; size and coverage stay readable as index data only. |
+| **G3a view risk axis** | Symbol risk (size, plus site rate where it improves the fit) predicting the symbols named as sites in the next four weeks | The symbol's file-level shrunk regression rate, which is the existing Regressions ranking: since [ORB-19442] it counts a regressed task against a file only where its links' `regression.sites` resolve under it, not its whole footprint | No per-symbol risk ranking ships. The view and both of its lists are dropped; size and coverage stay readable as index data only. |
 | **G3b view coverage axis** | G3a's model plus coverage | G3a's model alone, by at least 0.01 AUC | The under-tested list is dropped. Coverage stays a column, not a ranking input. |
 | **G3c retirement list** | The low-risk half of symbols | Its next-window site rate must sit below the all-symbol site rate, with the upper 95% bound below it | The retirement list is dropped. |
 
@@ -288,6 +289,7 @@ coverage priorities, retirement evidence and timing.
 - [ORB-19358] — wrote this scope and design
 - [ORB-19361] — replaces the per-file maximum with a size-based riskiness fit (declared files, diff lines)
 - [ORB-19276] — made Orbit always record `regression.sites`
+- [ORB-19442] — attributed the Regressions ranking (the G3a baseline) to `regression.sites` and admitted `dir:` sites
 - [ORB-18690] — shipped per-task riskiness estimator version 1
 - [ORB-18691] — made the backlog forecast consume riskiness for regression rework
 - [ORB-18383] — recorded lines added and deleted per landed delivery

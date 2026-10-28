@@ -1,5 +1,6 @@
-//! `GET /api/codebase/analytics` and `/related`: which repository files are expensive
-//! or risky to change and which files change alongside them.
+//! `GET /api/codebase/analytics`, `/show` and `/related`: which repository
+//! files are expensive or risky to change, one path's standing with the tasks
+//! and regression sites behind it, and which files change alongside them.
 //!
 //! The scan and rankings are the core codebase analytics service, shared with
 //! `orbit codebase` and the `orbit.codebase.*` tools. The scan reuses the
@@ -9,7 +10,8 @@
 //! [`CODEBASE_ANALYTICS_TTL`]; the window, minimum support, rollup and
 //! regression filters (`nature`, `escape`, `layer`, `detected_by`; an
 //! unknown value is a 400) only slice the cached facts, so changing them or
-//! polling inside the cache period never rescans. Past that period, for up
+//! polling inside the cache period never rescans. Show reads the same cached
+//! facts and selection plus a required `path`. Past that period, for up
 //! to [`CODEBASE_ANALYTICS_STALE_LIMIT`], a request is answered from the last
 //! facts at once while one background scan replaces them: the payload's
 //! `computed_at` and the `Age` header say how old they are. Analytics uses
@@ -30,7 +32,7 @@ use super::{bad_request, map_runtime_error};
 use crate::runtime_memo::{CODEBASE_ANALYTICS_STALE_LIMIT, CODEBASE_ANALYTICS_TTL};
 use crate::state::{DashboardState, Ws};
 
-/// Query string for `GET /api/codebase/analytics`.
+/// Query string for `GET /api/codebase/analytics` and `/show`.
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct CodebaseAnalyticsQuery {
     /// `7d`, `30d`, `90d` (default) or `all`.
@@ -51,9 +53,9 @@ pub(super) struct CodebaseAnalyticsQuery {
     layer: Option<String>,
     #[serde(default)]
     detected_by: Option<String>,
-    /// Present so a non-string `path` is still rejected. Analytics does not read it.
+    /// The ranked key `/show` reports; required there. Analytics does not
+    /// read it but still rejects a non-string value.
     #[serde(default)]
-    #[allow(dead_code)]
     path: Option<String>,
     /// Present so a non-numeric `top` is still rejected. Analytics does not read it.
     #[serde(default)]
@@ -81,11 +83,8 @@ pub(super) struct CodebaseRelatedQuery {
     top: Option<usize>,
 }
 
-pub(super) async fn codebase_analytics(
-    State(state): State<DashboardState>,
-    Ws(runtime): Ws,
-    Query(query): Query<CodebaseAnalyticsQuery>,
-) -> Response {
+/// The validated selection of an analytics or show query.
+fn codebase_selection(query: &CodebaseAnalyticsQuery) -> Result<CodebaseQuery, Box<Response>> {
     let selection = CodebaseQuery::parse(
         query.window.as_deref(),
         query.min_support,
@@ -99,26 +98,46 @@ pub(super) async fn codebase_analytics(
             query.detected_by.as_deref(),
         )?))
     });
-    let query = match selection {
-        Ok(query) => query,
-        Err(orbit_core::OrbitError::InvalidInput(message)) => return bad_request(message),
-        Err(error) => return map_runtime_error(error),
-    };
+    selection.map_err(|error| {
+        Box::new(match error {
+            orbit_core::OrbitError::InvalidInput(message) => bad_request(message),
+            error => map_runtime_error(error),
+        })
+    })
+}
 
-    let scan_runtime = Arc::clone(&runtime);
-    let served = match state
+/// The workspace's history-only scan, cached and served stale like the
+/// analytics payload, with its `Age` header.
+async fn cached_codebase_scan(
+    state: &DashboardState,
+    runtime: &Arc<orbit_core::OrbitRuntime>,
+) -> Result<crate::runtime_memo::Served<codebase::CodebaseFacts>, Box<Response>> {
+    let scan_runtime = Arc::clone(runtime);
+    state
         .codebase_memo()
         .get_or_refresh(
-            &runtime,
+            runtime,
             None,
             CODEBASE_ANALYTICS_TTL,
             CODEBASE_ANALYTICS_STALE_LIMIT,
             move || scan_runtime.codebase_scan(),
         )
         .await
-    {
+        .map_err(|error| Box::new(map_runtime_error(error)))
+}
+
+pub(super) async fn codebase_analytics(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(query): Query<CodebaseAnalyticsQuery>,
+) -> Response {
+    let query = match codebase_selection(&query) {
+        Ok(query) => query,
+        Err(response) => return *response,
+    };
+    let served = match cached_codebase_scan(&state, &runtime).await {
         Ok(served) => served,
-        Err(error) => return map_runtime_error(error),
+        Err(response) => return *response,
     };
     (
         served.age_header(),
@@ -129,6 +148,31 @@ pub(super) async fn codebase_analytics(
         )),
     )
         .into_response()
+}
+
+/// One path's standing in every ranking, as `orbit codebase show` reports
+/// it; a path nothing in the window touched or sited is a 400.
+pub(super) async fn codebase_show(
+    State(state): State<DashboardState>,
+    Ws(runtime): Ws,
+    Query(query): Query<CodebaseAnalyticsQuery>,
+) -> Response {
+    let selection = match codebase_selection(&query) {
+        Ok(selection) => selection,
+        Err(response) => return *response,
+    };
+    let Some(path) = query.path.as_deref().filter(|path| !path.trim().is_empty()) else {
+        return bad_request("path is required".into());
+    };
+    let served = match cached_codebase_scan(&state, &runtime).await {
+        Ok(served) => served,
+        Err(response) => return *response,
+    };
+    match codebase::codebase_path_detail(&served.body, &selection, path) {
+        Ok(value) => (served.age_header(), Json(value)).into_response(),
+        Err(orbit_core::OrbitError::InvalidInput(message)) => bad_request(message),
+        Err(error) => map_runtime_error(error),
+    }
 }
 
 pub(super) async fn codebase_related(

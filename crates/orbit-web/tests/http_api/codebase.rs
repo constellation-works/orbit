@@ -250,7 +250,8 @@ analytics_test!(
     |fixture| {
         let now = Utc::now();
 
-        // Regressions: three edges on one done task, a second done task.
+        // Regressions: three edges on one done task, each naming its site,
+        // and a second done task.
         let regressed = done(&fixture, "regressed", &["src/flaky.rs"]);
         done(&fixture, "clean", &["src/flaky.rs"]);
         for index in 0..3 {
@@ -258,7 +259,7 @@ analytics_test!(
                 &fixture,
                 &format!("regression {index}"),
                 &["src/fix.rs"],
-                regression_from(&regressed),
+                sited_link(&regressed, &["file:src/flaky.rs"]),
             );
         }
 
@@ -851,12 +852,15 @@ analytics_test!(codebase_window_rollup_and_cache_reuse_one_scan, |fixture| {
         Some(TaskStatus::Done),
     );
     let new = done(&fixture, "new", &["crates/alpha/tests/new.rs"]);
-    for target in [&old, &new] {
+    for (target, site) in [
+        (&old, "file:crates/alpha/src/old.rs"),
+        (&new, "file:crates/alpha/tests/new.rs"),
+    ] {
         add(
             &fixture,
             "regression",
             &["README.md"],
-            regression_from(target),
+            sited_link(target, &[site]),
         );
     }
 
@@ -1096,11 +1100,12 @@ analytics_test!(
         let shared = "src/shared.rs";
         let regressed = done(&fixture, "regressed", &[shared]);
         done(&fixture, "clean", &[shared]);
+        let site = "symbol:src/shared.rs#Shared::run:method";
         let regression = add(
             &fixture,
             "regression",
             &["src/fix.rs"],
-            regression_from(&regressed),
+            sited_link(&regressed, &[site]),
         );
         widen(&fixture, &regression, shared, true);
         let failed = add(&fixture, "run block", &[shared], vec![]);
@@ -1156,6 +1161,16 @@ analytics_test!(
             rankings["regressions"]["tasks"][0]["regression_tasks"],
             json!([regression])
         );
+        assert_eq!(rankings["regressions"]["tasks"][0]["sites"], json!([site]));
+        assert_eq!(
+            rankings["regressions"]["sites"],
+            json!([{
+                "selector": site, "scope": "symbol", "path": shared,
+                "symbol": "Shared::run", "kind": "method", "tasks": 1, "links": 1,
+                "regressed_tasks": [regressed], "regression_tasks": [regression],
+            }]),
+            "the detail lists every site under the path with what names it"
+        );
         assert_eq!(ids("footprint_misses"), std::slice::from_ref(&regression));
         assert_eq!(ids("blocked"), std::slice::from_ref(&failed));
         for ranking in ["regressions", "footprint_misses", "blocked"] {
@@ -1182,6 +1197,24 @@ analytics_test!(
         assert!(rankings["rejected"]["tasks"].as_array().unwrap().is_empty());
         assert_eq!(rankings["lock_contention"], Value::Null);
 
+        // The dashboard's file view reads the same detail over HTTP; a path
+        // nothing in the window touched or sited is a 400.
+        let mut routed = json_ok(server.get(&format!(
+            "/api/codebase/show?{WS}&path={shared}&window=30d&min_support=1"
+        )));
+        let mut detail = detail.clone();
+        for payload in [&mut routed, &mut detail] {
+            let object = payload.as_object_mut().unwrap();
+            for scan_time in ["computed_at", "since"] {
+                object.remove(scan_time);
+            }
+        }
+        assert_eq!(routed, detail, "one service serves the route and the tool");
+        let absent = server.get(&format!("/api/codebase/show?{WS}&path=src/absent.rs"));
+        assert_eq!(absent.status(), 400);
+        let unnamed = server.get(&format!("/api/codebase/show?{WS}"));
+        assert_eq!(unnamed.status(), 400, "path is required");
+
         // A directory key is accepted without its trailing slash.
         let by_dir = fixture
             .runtime
@@ -1199,6 +1232,152 @@ analytics_test!(
             matches!(unknown, Err(OrbitError::InvalidInput(_))),
             "{unknown:?}"
         );
+    }
+);
+
+// A regressed task counts against the paths its links record as sites, not
+// every path it declared: a hub file every task declares takes no blame, a
+// site outside the footprint still shows, and links without sites are
+// counted as unsited instead of spread over the footprint.
+analytics_test!(
+    codebase_regressions_count_culprits_at_recorded_sites_not_their_footprint,
+    |fixture| {
+        let hub = "src/mod.rs";
+        let hot = "src/hot.rs";
+        let symbol = "symbol:src/hot.rs#Hot::run:function";
+        let sited = done(&fixture, "sited twice", &[hub, hot]);
+        let first = add(
+            &fixture,
+            "fix one",
+            &["src/fix.rs"],
+            sited_link(&sited, &[symbol]),
+        );
+        let second = add(
+            &fixture,
+            "fix two",
+            &["src/fix.rs"],
+            sited_link(&sited, &[symbol, "file:src/hot.rs"]),
+        );
+        let outside = done(&fixture, "sited outside", &[hub]);
+        add(
+            &fixture,
+            "fix outside",
+            &["src/fix.rs"],
+            sited_link(&outside, &["file:src/other.rs"]),
+        );
+        let area = done(
+            &fixture,
+            "sited directory",
+            &[hub, "src/area/a.rs", "src/area/b.rs"],
+        );
+        add(
+            &fixture,
+            "fix directory",
+            &["src/fix.rs"],
+            sited_link(&area, &["dir:src/area"]),
+        );
+        let unsited = done(&fixture, "unsited", &[hub, hot]);
+        add(
+            &fixture,
+            "fix unsited",
+            &["src/fix.rs"],
+            regression_from(&unsited),
+        );
+        done(&fixture, "clean", &[hub, hot]);
+
+        let server = fixture.server(false);
+        let by = |query: &str| analytics(&server, &format!("window=30d&min_support=1&{query}"));
+        let files = by("rollup=file");
+        let section = &files["regressions"];
+        assert_eq!(section["attribution"], "sites");
+        assert_eq!(
+            section["unsited"],
+            json!({ "tasks": 1, "links": 1 }),
+            "{section}"
+        );
+        assert!(
+            row(section, hub).is_none(),
+            "the hub no regression sited takes no blame: {section}"
+        );
+        assert_eq!(
+            rate_of(section, hot),
+            (1, 3),
+            "two links naming one task count it once"
+        );
+        let hot_row = row(section, hot).unwrap();
+        assert_eq!(hot_row["regressed_tasks"][0]["task_id"], sited.as_str());
+        assert_eq!(
+            hot_row["regressed_tasks"][0]["sites"],
+            json!(["file:src/hot.rs", symbol])
+        );
+        let sites: Vec<(&str, u64, u64)> = hot_row["sites"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|site| {
+                (
+                    site["selector"].as_str().unwrap(),
+                    site["tasks"].as_u64().unwrap(),
+                    site["links"].as_u64().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            sites,
+            [(symbol, 1, 2), ("file:src/hot.rs", 1, 1)],
+            "sites rank by regressed tasks, then links"
+        );
+        assert_eq!(
+            hot_row["sites"][0]["regression_tasks"],
+            json!([first, second])
+        );
+        assert_eq!(
+            rate_of(section, "src/other.rs"),
+            (1, 1),
+            "a culprit sited outside its footprint joins that path's denominator"
+        );
+        for key in ["src/area/", "src/area/a.rs", "src/area/b.rs"] {
+            assert_eq!(
+                rate_of(section, key),
+                (1, 1),
+                "a directory site counts at {key}"
+            );
+        }
+
+        let dirs = by("rollup=dir");
+        assert_eq!(rate_of(&dirs["regressions"], "src/"), (2, 5));
+        assert_eq!(rate_of(&dirs["regressions"], "src/area/"), (1, 1));
+        let crates = by("rollup=crate");
+        assert_eq!(rate_of(&crates["regressions"], "src/"), (3, 5));
+
+        let kept = by("rollup=file&nature=unclassified");
+        assert_eq!(
+            kept["regressions"]["unsited"],
+            json!({ "tasks": 0, "links": 0 }),
+            "unsited counts only the links the filter keeps"
+        );
+
+        let show = |path: &str| {
+            fixture
+                .runtime
+                .run_tool(
+                    "orbit.codebase.show",
+                    json!({ "path": path, "window": "30d", "min_support": 1 }),
+                )
+                .unwrap()
+        };
+        let detail = show(hot);
+        let standing = &detail["rankings"]["regressions"];
+        assert_eq!(standing["sites"], hot_row["sites"], "{detail}");
+        assert_eq!(standing["unsited"], json!({ "tasks": 1, "links": 1 }));
+        let hub_detail = show(hub);
+        let hub_standing = &hub_detail["rankings"]["regressions"];
+        assert_eq!(
+            (&hub_standing["numerator"], &hub_standing["denominator"]),
+            (&json!(0), &json!(5))
+        );
+        assert_eq!(hub_standing["sites"], json!([]));
+        assert_eq!(hub_standing["unsited"], json!({ "tasks": 1, "links": 1 }));
     }
 );
 
@@ -1248,7 +1427,7 @@ analytics_test!(
                         escape: RegressionEscape::NoTest,
                         severity: DefectSeverity::Medium,
                         severity_source: SeveritySource::Filer,
-                        sites: Vec::new(),
+                        sites: vec![format!("file:{area}")],
                     }),
                 ),
                 tags: vec!["delivery-code-review".into()],
@@ -1281,15 +1460,16 @@ analytics_test!(
                         escape: RegressionEscape::Unclassified,
                         severity: DefectSeverity::Medium,
                         severity_source: SeveritySource::Filer,
-                        sites: Vec::new(),
+                        sites: vec![format!("symbol:{area}#Area::draw:function")],
                     }),
                 ),
                 tags: vec!["qa-sweep:dashboard".into()],
                 ..Default::default()
             },
         );
-        // An operator's link stored without a classification.
-        let filed = seed_task(
+        // An operator's link stored without a classification, so without
+        // sites: it is attributed to no path.
+        seed_task(
             &fixture,
             "operator finding",
             &["docs/guide.md"],
@@ -1377,10 +1557,14 @@ analytics_test!(
                 .unwrap();
             assert_eq!(fix["layer"], "store_migration");
             assert_eq!(fix["layer_source"], "landed");
-            let expected_links = if layer.is_some() { 1 } else { 3 };
-            assert_eq!(detail_links.len(), expected_links);
-            assert_eq!(analytics["regressions"]["matching_links"], expected_links);
-            assert_eq!(standing["numerator"], if layer.is_some() { 1 } else { 2 });
+            // Only the sited task counts against the path; the operator's
+            // unsited link is kept by the filter but attributed nowhere.
+            assert_eq!(detail_links.len(), if layer.is_some() { 1 } else { 2 });
+            assert_eq!(
+                analytics["regressions"]["matching_links"],
+                if layer.is_some() { 1 } else { 3 }
+            );
+            assert_eq!(standing["numerator"], 1);
         }
         drop(guard);
 
@@ -1442,11 +1626,7 @@ analytics_test!(
                 )
             })
             .collect();
-        for (task, source) in [
-            (&reviewed, "landed"),
-            (&swept, "footprint"),
-            (&filed, "footprint"),
-        ] {
+        for (task, source) in [(&reviewed, "landed"), (&swept, "footprint")] {
             assert!(sources.contains(&(task.as_str(), source)), "{sources:?}");
         }
         assert_eq!(
@@ -1470,7 +1650,8 @@ analytics_test!(
         let tiers = slice_rows(section, "complexity");
         assert_eq!(tiers[0], ("hard".into(), 1, 1), "{tiers:?}");
         assert!(tiers.contains(&("low".into(), 1, 3)), "{tiers:?}");
-        assert_eq!(rate_of(section, area), (2, 4));
+        assert_eq!(rate_of(section, area), (1, 4));
+        assert_eq!(section["unsited"], json!({ "tasks": 1, "links": 1 }));
 
         // A filter narrows the path rate, the rates and the cross-tabs;
         // each breakdown still counts its own dimension's other values.
@@ -1496,7 +1677,8 @@ analytics_test!(
             json!([[1]])
         );
 
-        // The detail lists only the regressed tasks and links that match.
+        // Under a filter that keeps only the unsited link, the path counts
+        // nothing and the detail reports that link's task as unsited.
         let detail = fixture
         .runtime
         .run_tool(
@@ -1506,12 +1688,10 @@ analytics_test!(
         .unwrap();
         assert_eq!(detail["regression_filter"]["detected_by"], "operator");
         let standing = &detail["rankings"]["regressions"];
-        assert_eq!(standing["numerator"], 1, "{detail}");
-        let tasks = standing["tasks"].as_array().unwrap();
-        assert_eq!(tasks.len(), 1, "{detail}");
-        assert_eq!(tasks[0]["task_id"], low.as_str());
-        assert_eq!(tasks[0]["regression_tasks"], json!([filed]));
-        assert_eq!(tasks[0]["regressions"][0]["nature"], "absent");
+        assert_eq!(standing["numerator"], 0, "{detail}");
+        assert_eq!(standing["tasks"], json!([]), "{detail}");
+        assert_eq!(standing["sites"], json!([]), "{detail}");
+        assert_eq!(standing["unsited"], json!({ "tasks": 1, "links": 1 }));
 
         let bad = codebase_get(&server, "analytics", "layer=frontend");
         assert_eq!(bad.status(), 400, "an unknown layer is refused");

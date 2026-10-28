@@ -10,7 +10,10 @@
 //! `regression_from` link. Low-support paths and hub files every task
 //! touches therefore stay unmarked, and a fixed hotspot drops out once its
 //! regressed tasks age out of the window. At most `max_files` paths are
-//! marked, by the Regressions ranking's order.
+//! marked, highest rate first. Marks count a regressed task against every
+//! path it declared, as the Regressions ranking did before it attributed
+//! regressions to recorded sites: a site names only where the defect was,
+//! not every file a later task should be warned about.
 //!
 //! Each mark carries the two natures and escapes most of its links record
 //! (an unrecorded one reads `unclassified`, never a guess) and one lesson:
@@ -34,7 +37,9 @@ use serde_json::{Value, json};
 
 use super::facts::{Anchor, CodebaseFacts, TaskFacts};
 use super::regression::{RegressionFilter, RegressionLink, top_categories};
-use super::sections::{Params, ROW_LIMIT, Rollup, Tally, rank, rate_fields, regression_rows};
+use super::sections::{
+    Params, ROW_LIMIT, Rollup, Tally, footprint_regression_rows, rank, rate_fields,
+};
 use crate::OrbitRuntime;
 use crate::application::task::SYSTEM_ACTOR_LABEL;
 
@@ -152,7 +157,7 @@ fn marks<'a>(
         rollup: Rollup::File,
         filter: RegressionFilter::default(),
     };
-    let (mut rows, _) = regression_rows(facts, &params);
+    let mut rows = footprint_regression_rows(facts, &params);
     rows.retain(|path, row| {
         let Tally {
             numerator,
