@@ -42,8 +42,6 @@ pub struct RegressionRiskSettings {
     pub threshold_percent: u8,
     /// `workflow.regression_risk.max_files` (default 3).
     pub max_files: u32,
-    /// `workflow.regression_risk.record_sites` (default `false`).
-    pub record_sites: bool,
 }
 
 /// Admitted `experiments.*`: the workspace's experiment policy. Experiment
@@ -472,7 +470,6 @@ impl ConfigSnapshot {
             min_support: self.workflow_regression_risk_min_support,
             threshold_percent: self.workflow_regression_risk_threshold_percent,
             max_files: self.workflow_regression_risk_max_files,
-            record_sites: self.workflow_regression_risk_record_sites,
         }
     }
 

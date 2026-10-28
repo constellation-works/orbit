@@ -185,13 +185,6 @@ macro_rules! with_tail_keys {
         tier: ConfigKeyTier::Advanced,
         resolve: |raw: Option<u32>| resolve_bounded_count(raw, 3, 20, "workflow.regression_risk.max_files"),
     },
-    workflow_regression_risk_record_sites: bool => bool {
-        key: "workflow.regression_risk.record_sites", value_type: "bool",
-        description: "Whether regression_from links keep their `regression.sites`; turn on only once every host that reads this workspace runs a build that knows the field.",
-        section: ConfigSection::Delivery, order: 155,
-        tier: ConfigKeyTier::Advanced,
-        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(false)),
-    },
     workflow_provider_limit_budgets: Vec<String> => Vec<String> {
         key: "workflow.provider_limit_budgets", value_type: "array<string>",
         description: "Rolling spend budgets for providers, or crew accounts, that report no usage.",

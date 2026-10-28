@@ -214,6 +214,24 @@ fn retired_scoring_table_loads_with_a_warning_and_refuses_edits() {
     );
 }
 
+/// `workflow.regression_risk.record_sites` was retired once sites became
+/// always recorded: a config that still sets it loads with a deprecation
+/// warning, and edits are refused with the retirement note.
+#[test]
+fn retired_record_sites_loads_with_a_warning_and_refuses_edits() {
+    let (_config, logs) = load_workspace("[workflow.regression_risk]\nrecord_sites = true\n");
+    assert!(
+        warned_deprecated(&logs, "workflow.regression_risk.record_sites"),
+        "record_sites ignored with a deprecation warning: {logs}"
+    );
+    let error = admit_settable_config_key("workflow.regression_risk.record_sites")
+        .expect_err("retired key refused");
+    assert!(
+        error.to_string().contains("always recorded"),
+        "the refusal says sites are always recorded: {error}"
+    );
+}
+
 #[test]
 fn retired_review_keys_are_not_settable() {
     for key in [

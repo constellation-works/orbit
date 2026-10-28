@@ -139,7 +139,6 @@ impl TaskRecordService<'_> {
                     external_refs: params.external_refs.clone(),
                     pr_status: params.pr_status.clone(),
                     source_task_id: params.source_task_id.clone(),
-                    drop_inherited_regression_sites: params.drop_inherited_regression_sites,
                     job_run_id: params.job_run_id.clone(),
                     job_run_machine: params.job_run_machine.clone(),
                     crew: params.crew.clone(),
