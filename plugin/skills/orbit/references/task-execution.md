@@ -426,7 +426,9 @@ it — see [friction.md](friction.md). Then:
 - **Claimed mode** (`input.claimed` is true, a distributed-drain leaf):
   another machine owns the task. Work from the injected envelope; you are not
   granted `orbit.task.update`. `orbit.task.show` and `orbit.task.artifact.get`
-  read any task in the claimed workspace through the run's coordinator. Return the summary as the output's
+  read any task in the claimed workspace through the run's coordinator, except
+  that a `review-*` artifact of another task is refused on the remote route
+  (the review gate keeps its stricter scope). Return the summary as the output's
   `execution_summary` (with `context_files_added` and `comment` for anything
   you would have written to the task); the pipeline's handoff carries it to
   the owner. When the task asks you to record a `regression_from` relation,
