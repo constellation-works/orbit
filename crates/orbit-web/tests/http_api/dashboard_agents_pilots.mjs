@@ -1,13 +1,12 @@
 // Observe › Agents › Pilots through contract-shaped payloads: the ranking,
-// the detail column (structured stats left to the panel, the biggest
-// penalty's tasks), and the tier-calibration panel with one assessed-by-
+// the scorecard-driven detail column and the tier-calibration panel with one assessed-by-
 // observed matrix per row, its diagonal and its too-easy and too-hard counts.
 // The warning terms are rated per 100 settled assessments, provisional ones
 // read as such and add nothing, and an unmeasured missed-scope-block source
 // gets a banner instead of passing for no misses.
 import assert from 'node:assert/strict';
 import { agents, common, answer, takeAll, response, settle, part, click, selectButton, byId, notComputed, attribution } from './dashboard_agents.mjs';
-import { pilotCard, pilotDetail } from './agents_pilots_fixture.mjs';
+import { pilotCard } from './agents_pilots_fixture.mjs';
 
 common.setWorkspace('ws-a');
 common.setWindow('30d');
@@ -65,10 +64,10 @@ assert.equal(cards[2].querySelector('table'), null, 'a row with nothing placed h
 assert.ok(cards[2].classList.contains('agents-row-below'), 'a below-support row is greyed');
 assert.match(cards[2].querySelector('p.agents-muted').textContent, /No assessed task/);
 
-for (const request of takeAll()) request.resolve(response(pilotDetail('luna', 'luna-model')));
-await settle();
 const detail = part('detail');
 assert.ok(!detail.textContent.includes('[object Object]'), 'the tier matrix is left to the panel');
+assert.deepEqual(takeAll(), [], 'the dashboard does not request pilot detail');
+assert.equal(detail.querySelector('section.agents-penalty'), null);
 const stats = Object.fromEntries(detail.querySelectorAll('dt').map((dt, at) => [dt.textContent, detail.querySelectorAll('dd')[at].textContent]));
 assert.equal(stats['Recall (%)'], '88.9', 'rounded as every agents number is');
 assert.equal(stats['Cost per assessment (USD)'], '—', 'an unpriced cost is no number');
@@ -77,17 +76,10 @@ assert.equal(stats['Holds per 100 assessments'], '40');
 assert.equal(stats['Settled assessments'], '20');
 assert.equal(stats['Excluded or pending assessments'], '5');
 assert.equal(stats['Missed scope blocks'], '0');
-assert.equal(detail.querySelector('section.agents-penalty').dataset.term, 'lock_wait_hours');
-assert.deepEqual(detail.querySelectorAll('li.agents-task').map(item => item.dataset.taskId), ['ORB-41'], 'the wait is listed under its holder');
-
 click(selectButton('haiku'));
-const requests = takeAll();
-assert.equal(requests[0].url.pathname, '/api/agents/pilots/detail');
-assert.equal(requests[0].url.searchParams.get('model'), 'claude-haiku-5-5');
-requests[0].resolve(response(pilotDetail('haiku', 'claude-haiku-5-5')));
-await settle();
+assert.deepEqual(takeAll(), [], 'selecting another pilot row does not request agent detail');
 assert.equal(part('detail').querySelector('h3').textContent, 'haiku');
-assert.equal(part('detail').querySelector('section.agents-penalty').dataset.term, 'costly_misses', 'a provisional missed scope block is no penalty');
+assert.equal(part('detail').querySelector('section.agents-penalty'), null);
 assert.equal(breakdown().missed_scope_blocks.querySelector('span.agents-term-value').textContent, '+0');
 assert.match(breakdown().missed_scope_blocks.querySelector('small.agents-term-context').textContent, /1 of 6 settled assessments · provisional, not scored/);
 console.log('dashboard pilots ok');

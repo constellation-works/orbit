@@ -78,22 +78,3 @@ export function pilotCard() {
       detail: 'Unavailable: no blocked-task triage record in the window, so missed scope blocks read 0 because nothing measured them, not because no clean assessment missed one.' } },
   };
 }
-
-export function pilotDetail(crew, model) {
-  const card = pilotCard();
-  const selected = card.rows.find(each => each.crew === crew && each.model === model);
-  const tasks = {
-    lock_wait_hours: [{ task_id: 'ORB-41', title: 'Reserve the shared parser', status: 'done', count: 3.5, occurrences: [
-      { at: '2026-10-12T09:00:00Z', detail: 'ORB-52 waited 3.50 h on src/parser.rs (admitted)', run_id: 'jrun-pilot-1' },
-    ] }],
-    costly_misses: [{ task_id: 'ORB-43', title: 'Widen the merge queue', status: 'done', count: 1, occurrences: [
-      { at: '2026-10-13T09:00:00Z', detail: 'src/queue.rs: uncovered, then a lock conflict', run_id: 'jrun-pilot-2' },
-    ] }],
-  };
-  return { ...card, row: selected, terms: card.terms.map(term => ({ ...term,
-    count: selected.counts[term.key], per_100: selected.per_100[term.key],
-    contribution: selected.provisional_terms.includes(term.key) ? 0 : selected.per_100[term.key] * term.weight,
-    tasks: tasks[term.key] || [],
-    ...(term.unit ? { units: selected.term_units[term.key], provisional: selected.provisional_terms.includes(term.key) } : {}),
-  })) };
-}
