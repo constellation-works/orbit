@@ -25,7 +25,7 @@ routines still name only `job:<name>`, and a job may now contain a step that nam
 granted script. Neither decision is superseded until phase 2 ships; both link here.
 
 Bearing: Orbit already has these pieces, read from source at `a5b5408ea` (the `local_shell`
-bullet was rechecked at `ddfeaad6`).
+bullet was rechecked at `d10fae79b`).
 
 - **Job steps name catalog targets by prefix.** A job step's `target:` is a
   namespace-prefixed reference. Today only `activity:<name>` resolves
@@ -42,8 +42,12 @@ bullet was rechecked at `ddfeaad6`).
   runs one child process with no shell, in one of two declared forms: `command` with
   `args` (an `execve`), or `shell` with a non-empty inline `script`, run as
   `<shell> -c <script>`. Setting both `command` and `shell` is refused, and so is `args`
-  with `shell`. The program comes from the activity config only, never from step input.
-  The executor defaults to `local-shell` when `config.executor` is absent, and its shipped
+  with `shell`. The program comes from the activity config or, when the activity names
+  none, from the selected executor definition's `command`; with neither, the step fails.
+  The definition's `args` are used when the activity names no program, and otherwise
+  prefix the `args` of a `command` activity. Neither source is step input: templated input
+  never supplies the program or argv. The executor defaults to `local-shell` when
+  `config.executor` is absent, and its shipped
   definition declares no `sandbox`, so a step runs bare under the process supervisor and
   is confined only by a `cwd` check: the
   directory must resolve inside the workspace root. Kernel confinement is opt-in, through
@@ -190,8 +194,8 @@ compares the two routes for one script.
 
 | | `local_shell` (existing) | Script step (proposed) |
 |---|---|---|
-| Program | `command` + `args`, or `shell` + inline `script`, in the activity config | A manifest and an entry file, with no inline text (§1) |
-| Authority | The workspace YAML that names the program; no digest and no operator check | An operator grant, host-local, bound to the manifest and entry digest (§2) |
+| Program | `command` + `args`, or `shell` + inline `script`, in the activity config; or the selected executor definition's `command` when the activity names none | A manifest and an entry file, with no inline text (§1) |
+| Authority | The activity YAML, or the executor definition it selects, that names the program; no digest and no operator check | An operator grant, host-local, bound to the manifest and entry digest (§2) |
 | Content change | Not checked. Neither the YAML nor the file it runs is digested | Voids the grant; the next run refuses with `grant_stale` (§2) |
 | Sandbox | None by default. A `sandbox:` on the executor definition and an `fsProfile` on the activity opt in | The script profile, default-deny, with no unsandboxed fallback (§3) |
 | Network | The host's, by default | `none` by default; a grant can widen it (§3) |
