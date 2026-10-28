@@ -3891,6 +3891,7 @@ function buildDeliveryCard(task, drain, context, { editor, showsEditor }) {
     el("div", { class: `property-row fact task-delivery-row ${kind}` }, [el("span", { class: "label", text: label }), value]);
   const rows = [];
   if (showsEditor("not_before")) rows.push(row("schedule", "Scheduled", editor("not_before")));
+  if (task.started_at) rows.push(row("started-at task-started-at", "Actual start", absTimeNode(context, task.started_at)));
   const pullRequest = pullRequestLink(task);
   if (pullRequest || task.pr_number) {
     const value = el("span", { class: "value" });

@@ -274,7 +274,9 @@ previews the ones that are safe to show. It does not attach files. See
 The metadata card above the tabs starts with **Scheduled**: the scheduled
 time, or **not scheduled**, with **Edit** when you can change it. The row is
 shown when it has a value or you can edit it, and remains visible even when
-the card has no other metadata. The detail head has no **Actual start** line. Run details in the same card include **Branch** and
+the card has no other metadata. When the task has started, an **Actual start**
+row follows **Scheduled** with the actual started-at time, so the two times are
+not implied to be the same; a task that has not started has no such row. Run details in the same card include **Branch** and
 **Worktree** on one line; long values lose their beginning to an ellipsis so
 the distinctive end stays visible, including on a phone. Hover for the full
 value, or click it to copy the complete branch or worktree path.

@@ -219,7 +219,7 @@ try {
     await schedule.waitFor({ state: 'visible' });
     assert.equal(await schedule.count(), 1, 'Scheduled belongs in the metadata card');
     assert.equal(await schedule.locator('.label').textContent(), 'Scheduled');
-    assert.equal(await pane(page).locator('.task-schedule, .task-started-at').count(), 0);
+    assert.equal(await pane(page).locator('.task-schedule, .task-started-at').count(), 0, 'A task that has not started has no Actual start line');
     await schedule.getByRole('button', { name: 'Edit scheduled time for PANEL-6', exact: true }).click();
     const input = schedule.getByRole('textbox', { name: 'Edit scheduled time for PANEL-6', exact: true });
     await input.fill('2099-02-02T11:00:00+01:00');
@@ -252,7 +252,16 @@ try {
     const riskBreakdown = pane(page).locator('.task-risk');
     await riskBreakdown.locator('summary').click();
     assert.match(await riskBreakdown.locator('.task-risk-lead').textContent(), /Regression risk 23%/);
-    assert.equal(await pane(page).locator('.task-started-at').count(), 0, 'Even a task with started_at has no Actual start line');
+    const started = pane(page).locator('.task-started-at');
+    assert.equal(await started.count(), 1, 'A task with started_at shows its Actual start beside Scheduled (scheduled-tasks scope: the started-at time must be shown beside the scheduled time once known)');
+    assert.equal(await started.locator('.label').textContent(), 'Actual start');
+    assert.match(await started.innerText(), /12:00/, 'Actual start shows the task started_at time');
+    assert.deepEqual(
+      await pane(page).locator('.task-delivery-card .property-row').evaluateAll(rows => rows.slice(0, 2).map(r => r.querySelector('.label')?.textContent)),
+      ['Scheduled', 'Actual start'],
+      'Actual start sits immediately beside Scheduled in the metadata card',
+    );
+    await capture(page, `task-detail-actual-start-dark-${width}.png`);
     await riskBreakdown.locator('summary').click();
     // Real clipboard permission checks the full value, beyond the clipped label.
     await context.grantPermissions(['clipboard-read', 'clipboard-write']);
