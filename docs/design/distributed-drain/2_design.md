@@ -1088,7 +1088,14 @@ A failed pull request check, owed or not, is classified from its failed-step log
 error signature [ORB-15956]: `inherited` (the signature also fails on the candidate's base, or the
 same job passes on the moved landing tip) updates the pull request branch from the landing branch
 once; `transient` (the network or runner rule the validation gates rerun on) reruns the failed jobs
-once; `candidate` is a repairable stop whose evidence carries the failed job, its signature and a log
+once. An untouched-path failure waits for fresh base evidence: a successful completed push run
+of the same job on the accepted base or a descendant through the landing tip counts even if that
+tip has since moved, provided both run and job started after the failed candidate job completed.
+The lookup is bounded to 100 recent base-branch push runs and retains the latest per workflow and
+commit. A fresh pass classifies the failure `flaky`, sharing the transient rerun budget; a passing
+rerun clears it, while the same signature failing again becomes `candidate` without another base
+wait. Reruns record `ci_check_rerun` history with the head, run and failed-job identities.
+`candidate` is a repairable stop whose evidence carries the failed job, its signature and a log
 excerpt. An `inherited` failure that still fails after that one update, on a base tip where the same
 job passes, is the candidate's and takes that same repairable stop [ORB-16322]. When the automatic
 repair is already spent (a repair claim, or a task that already returned to the backlog for a landing

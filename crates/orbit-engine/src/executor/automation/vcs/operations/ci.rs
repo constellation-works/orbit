@@ -33,19 +33,29 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
             "private automation VCS commit jobs requires a full commit id, not '{commit}'"
         )));
     }
-    // Auto-fix compares against the latest push run of each workflow on the
-    // exact base tip, never an older green run or a PR run of the same commit.
+    // Exact-tip reads retain the latest push per workflow. Untouched-file
+    // freshness reads retain the latest push per workflow and commit in the
+    // accepted base's ancestry range, including superseded base tips.
     let push_branch = input.get("latest_push_branch").and_then(Value::as_str);
+    let base_push_tip = input.get("base_push_tip").and_then(Value::as_str);
+    if let Some(tip) = base_push_tip
+        && (push_branch.is_none() || !valid_expected_remote_sha(Some(tip)))
+    {
+        return Err(OrbitError::InvalidInput(
+            "base push history requires a branch and full tip commit id".into(),
+        ));
+    }
     let mut args = vec![
         "api".to_string(),
         "--method".to_string(),
         "GET".to_string(),
         "repos/{owner}/{repo}/actions/runs".to_string(),
         "-F".to_string(),
-        format!("head_sha={commit}"),
-        "-F".to_string(),
         "per_page=100".to_string(),
     ];
+    if base_push_tip.is_none() {
+        args.extend(["-F".into(), format!("head_sha={commit}")]);
+    }
     if let Some(branch) = push_branch {
         args.extend([
             "-F".into(),
@@ -60,17 +70,27 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
         .ok_or_else(|| OrbitError::Execution("commit runs carried no workflow run list".into()))?;
     let mut selected: Vec<&Value> = listed.iter().collect();
     if let Some(branch) = push_branch {
-        if runs["total_count"]
-            .as_u64()
-            .is_none_or(|total| total > listed.len() as u64)
+        if base_push_tip.is_none()
+            && runs["total_count"]
+                .as_u64()
+                .is_none_or(|total| total > listed.len() as u64)
         {
             return Err(OrbitError::Execution(
                 "base push runs were incomplete".into(),
             ));
         }
-        let mut newest = BTreeMap::<u64, &Value>::new();
+        let mut newest = BTreeMap::<(u64, &str), &Value>::new();
         for run in &selected {
-            if run["event"] != "push" || run["head_sha"] != commit || run["head_branch"] != branch {
+            if run["event"] != "push" || run["head_branch"] != branch {
+                continue;
+            }
+            let Some(sha) = run["head_sha"]
+                .as_str()
+                .filter(|sha| valid_expected_remote_sha(Some(sha)))
+            else {
+                continue;
+            };
+            if base_push_tip.is_none() && sha != commit {
                 continue;
             }
             let (Some(workflow), Some(id)) = (run["workflow_id"].as_u64(), run["id"].as_u64())
@@ -80,16 +100,47 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 ));
             };
             if newest
-                .get(&workflow)
+                .get(&(workflow, sha))
                 .is_none_or(|prior| prior["id"].as_u64().is_some_and(|prior| id > prior))
             {
-                newest.insert(workflow, run);
+                newest.insert((workflow, sha), run);
             }
         }
         selected = newest.into_values().collect();
     }
     let mut jobs = Vec::new();
     for run in selected {
+        // A partial or cancelled workflow cannot establish a fresh base pass.
+        // The bounded recent-run window can miss evidence, which conservatively
+        // keeps the base wait; it never treats a partial listing as a pass.
+        if let Some(tip) = base_push_tip {
+            let completed = input["base_push_after"]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+            let started = run["run_started_at"]
+                .as_str()
+                .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
+            if run["status"] != "completed"
+                || run["conclusion"] != "success"
+                || !matches!((completed, started), (Some(completed), Some(started)) if started >= completed)
+            {
+                continue;
+            }
+            let sha = run["head_sha"].as_str().unwrap_or_default();
+            if !super::super::git::git_command_success(
+                workspace_path,
+                &["merge-base", "--is-ancestor", commit, sha],
+            )
+            .unwrap_or(false)
+                || !super::super::git::git_command_success(
+                    workspace_path,
+                    &["merge-base", "--is-ancestor", sha, tip],
+                )
+                .unwrap_or(false)
+            {
+                continue;
+            }
+        }
         let Some(run_id) = run["id"].as_u64() else {
             continue;
         };
@@ -137,6 +188,8 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 "failed_steps": failed_steps,
                 "started_at": job["started_at"],
                 "completed_at": job["completed_at"],
+                "run_status": run["status"],
+                "run_started_at": run["run_started_at"],
             }));
         }
     }

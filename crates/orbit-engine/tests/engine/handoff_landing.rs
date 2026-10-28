@@ -698,6 +698,8 @@ struct ForgeState {
     jobs: HashMap<String, FakeJob>,
     /// Provider timestamps for the stale-base regression; absent in other fixtures.
     job_times: HashMap<u64, (&'static str, &'static str)>,
+    /// Exercise the real branch-run adapter against a local substitute gh.
+    base_push_provider: bool,
     /// Commits whose job query fails.
     unreadable: Vec<String>,
     /// What a rerun of a failed job leaves on the head.
@@ -944,6 +946,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 )
             }
             "ci.commit_jobs" => {
+                if state.base_push_provider && input["base_push_tip"].is_string() {
+                    return orbit_engine::run_private_vcs_operation(operation, &input);
+                }
                 let commit = input["commit"].as_str().unwrap();
                 if state.unreadable.iter().any(|bad| bad == commit) {
                     return Err(OrbitError::Execution(
@@ -952,16 +957,25 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                 }
                 let jobs: Vec<Value> = state
                     .jobs
-                    .get(commit)
-                    .map(|job| {
+                    .iter()
+                    .filter(|(sha, _)| {
+                        if let Some(tip) = input["base_push_tip"].as_str() {
+                            git(&self.repo, &["merge-base", commit, sha]) == commit
+                                && git(&self.repo, &["merge-base", sha, tip]) == **sha
+                        } else {
+                            *sha == commit
+                        }
+                    })
+                    .map(|(_, job)| {
                         let mut value = Self::job_json(job);
                         if let Some((started, completed)) = state.job_times.get(&job.job_id) {
                             value["started_at"] = json!(started);
                             value["completed_at"] = json!(completed);
+                            value["run_started_at"] = json!(started);
+                            value["run_status"] = json!("completed");
                         }
                         value
                     })
-                    .into_iter()
                     .collect();
                 Ok(json!({"commit": commit, "jobs": jobs}))
             }
@@ -1706,6 +1720,235 @@ fn passed(run_id: u64, job_id: u64) -> FakeJob {
     }
 }
 
+const UNTOUCHED_TEST_FAILURE: &str = "error: shutdown test timed out\n --> README.md:1:1\n";
+
+/// ORB-19342: a fresh base pass warrants a flake rerun before a repair,
+/// including when the repair is spent or a retry finishes after that pass.
+#[test]
+fn untouched_failure_reruns_once_after_fresh_base_pass() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "untouched_failure_reruns_once_after_fresh_base_pass",
+        || {
+            for case in [
+                "pass",
+                "repeat",
+                "repair_spent",
+                "repeat_spent",
+                "shared_budget",
+                "transient_after_flake",
+            ] {
+                let (_sandbox, forge, head, base) =
+                    forge_fixture(true, matches!(case, "repair_spent" | "repeat_spent"));
+                forge.job(
+                    &head,
+                    failed(
+                        1,
+                        11,
+                        if case == "shared_budget" {
+                            NETWORK_FLAKE
+                        } else {
+                            UNTOUCHED_TEST_FAILURE
+                        },
+                    ),
+                );
+                forge.job(&base, passed(2, 21));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state
+                        .job_times
+                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+                    state.job_times.insert(
+                        21,
+                        if case == "shared_budget" {
+                            ("2026-10-26T14:06:00Z", "2026-10-26T14:07:00Z")
+                        } else {
+                            ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z")
+                        },
+                    );
+                    // A repeated failure must not wait for yet another base run.
+                    state
+                        .job_times
+                        .insert(12, ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"));
+                    state.after_rerun = Some(if matches!(case, "pass" | "repair_spent") {
+                        passed(1, 12)
+                    } else if case == "transient_after_flake" {
+                        failed(1, 12, NETWORK_FLAKE)
+                    } else {
+                        failed(1, 12, UNTOUCHED_TEST_FAILURE)
+                    });
+                }
+                let outcome = land_now(&forge);
+                assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+                assert_not_sent(&forge, &["pr.update_branch"], case);
+                if matches!(case, "pass" | "repair_spent") {
+                    assert_eq!(outcome.expect(case)["phase"], "landed");
+                    assert_eq!(forge.steps().last(), Some(&HandoffLandingStep::Complete));
+                    assert!(
+                        !forge
+                            .steps()
+                            .iter()
+                            .any(|step| matches!(step, HandoffLandingStep::Stop { .. }))
+                    );
+                } else {
+                    outcome.expect_err(case);
+                    let step = if case == "repeat_spent" {
+                        HandoffLandingStep::StopForRequeue
+                    } else {
+                        HandoffLandingStep::Stop {
+                            repairable: case != "transient_after_flake",
+                        }
+                    };
+                    assert_steps(&forge.steps(), &[step], case);
+                    assert_reason(
+                        &forge,
+                        case,
+                        if case == "transient_after_flake" {
+                            &["classified `transient`", "one rerun"]
+                        } else {
+                            &["classified `candidate`", "automatic repair"]
+                        },
+                    );
+                }
+                let history = forge.history.lock().unwrap();
+                let reruns = history
+                    .iter()
+                    .filter(|row| row.event == "ci_check_rerun")
+                    .collect::<Vec<_>>();
+                assert_eq!(reruns.len(), 1, "{case}: record the rerun once");
+                let note: Value = serde_json::from_str(reruns[0].note.as_deref().unwrap()).unwrap();
+                assert_eq!(note["head"], head);
+                assert_eq!(note["run_id"], 1);
+                assert_eq!(note["jobs"][0]["job_id"], 11);
+                assert_eq!(note["jobs"][0]["check"], "CI / clippy");
+            }
+        },
+    );
+}
+
+/// ORB-19342: a finished push on a superseded base still decides freshness.
+#[test]
+fn untouched_failure_uses_a_fresh_pass_behind_the_moving_tip() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "untouched_failure_uses_a_fresh_pass_behind_the_moving_tip",
+        || {
+            for case in ["fresh_base", "fresh_middle", "stale_middle"] {
+                let (_sandbox, forge, head, base) = forge_fixture(true, false);
+                let middle = fix_base(&forge.repo);
+                git(
+                    &forge.repo,
+                    &["commit", "--allow-empty", "-m", "tip moved again"],
+                );
+                forge.job(&head, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+                forge.job(
+                    if case == "fresh_base" { &base } else { &middle },
+                    passed(2, 21),
+                );
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state
+                        .job_times
+                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+                    state.job_times.insert(
+                        21,
+                        if case == "stale_middle" {
+                            ("2026-10-26T12:00:00Z", "2026-10-26T12:01:00Z")
+                        } else {
+                            ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z")
+                        },
+                    );
+                    state.after_rerun = Some(passed(1, 12));
+                }
+                let outcome = land_now(&forge);
+                if case == "stale_middle" {
+                    assert!(
+                        matches!(outcome, Err(OrbitError::DeliveryRefused { refusal, .. }) if refusal.error_code() == "delivery_base_checks_pending")
+                    );
+                    assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], case);
+                } else {
+                    assert_eq!(outcome.expect(case)["phase"], "landed");
+                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+                }
+                assert_not_sent(&forge, &["pr.update_branch"], case);
+            }
+        },
+    );
+}
+
+/// The real provider adapter finds a superseded push, and cannot substitute
+/// a stale run, PR run, foreign branch/commit or incomplete workflow for it.
+#[cfg(unix)]
+#[test]
+fn untouched_failure_checks_push_history_through_the_real_adapter() {
+    use std::os::unix::fs::PermissionsExt;
+
+    crate::git_fixture::isolated(
+        module_path!(),
+        "untouched_failure_checks_push_history_through_the_real_adapter",
+        || {
+            for case in [
+                "fresh",
+                "stale_job",
+                "stale_run",
+                "pull_request",
+                "other_branch",
+                "foreign_commit",
+                "pending",
+                "cancelled",
+                "wrong_job",
+            ] {
+                let (_sandbox, forge, head, base) = forge_fixture(true, false);
+                let middle = fix_base(&forge.repo);
+                git(
+                    &forge.repo,
+                    &["commit", "--allow-empty", "-m", "tip moved again"],
+                );
+                let tip = git(&forge.repo, &["rev-parse", "main"]);
+                forge.job(&head, failed(1, 11, UNTOUCHED_TEST_FAILURE));
+                forge.job(&base, passed(9, 91));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state.base_push_provider = true;
+                    state
+                        .job_times
+                        .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
+                    state.after_rerun = Some(passed(1, 12));
+                }
+                let runs = json!({"total_count":200,"workflow_runs":[
+                    {"id":2,"workflow_id":1,"name":"CI","event":if case == "pull_request" {"pull_request"} else {"push"},"head_branch":if case == "other_branch" {"other"} else {"main"},"head_sha":if case == "foreign_commit" {&head} else {&middle},"status":if case == "pending" {"in_progress"} else {"completed"},"conclusion":if case == "cancelled" {"cancelled"} else {"success"},"run_started_at":if case == "stale_run" {"2026-10-26T12:00:00Z"} else {"2026-10-26T14:02:00Z"}},
+                    {"id":3,"workflow_id":1,"name":"CI","event":"push","head_branch":"main","head_sha":tip,"status":"in_progress","conclusion":null,"run_started_at":"2026-10-26T14:04:00Z"}
+                ]});
+                let jobs = json!({"total_count":1,"jobs":[{"id":21,"name":if case == "wrong_job" {"other"} else {"clippy"},"status":"completed","conclusion":"success","started_at":if case == "stale_job" {"2026-10-26T12:00:00Z"} else {"2026-10-26T14:02:00Z"},"completed_at":"2026-10-26T14:03:00Z","steps":[]}]});
+                std::fs::write(forge.repo.join("ci-runs.json"), runs.to_string()).unwrap();
+                std::fs::write(forge.repo.join("ci-jobs.json"), jobs.to_string()).unwrap();
+                let bin = forge.repo.join("bin");
+                std::fs::create_dir(&bin).unwrap();
+                let gh = bin.join("gh");
+                std::fs::write(&gh, "#!/bin/sh\nset -eu\ncase \"$*\" in\n *'/actions/runs/2/jobs'*) cat ci-jobs.json ;;\n *'/actions/runs') exit 1 ;;\n *'/actions/runs '*)\n  case \"$*\" in\n   *head_sha=*) printf '%s' '{\"total_count\":0,\"workflow_runs\":[]}' ;;\n   *event=push*branch=main*) cat ci-runs.json ;;\n   *) exit 1 ;;\n  esac ;;\n *) exit 1 ;;\nesac\n").unwrap();
+                std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let mut paths = vec![bin];
+                paths.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap()));
+                let path = std::env::join_paths(paths).unwrap();
+                let _env = orbit_common::test_env::scoped([("PATH", Some(path.to_str().unwrap()))]);
+
+                let outcome = land_now(&forge);
+                if case == "fresh" {
+                    assert_eq!(outcome.expect(case)["phase"], "landed");
+                    assert_sent_len(&forge, "ci.rerun_failed", 1, case);
+                } else {
+                    assert!(
+                        matches!(&outcome, Err(OrbitError::DeliveryRefused { refusal, .. }) if refusal.error_code() == "delivery_base_checks_pending"),
+                        "{case}: {outcome:?}"
+                    );
+                    assert_not_sent(&forge, &["ci.rerun_failed", "pr.merge"], case);
+                }
+                assert_not_sent(&forge, &["pr.update_branch"], case);
+            }
+        },
+    );
+}
+
 /// [ORB-15956] The incident: a pull request goes red on its base's own
 /// dead-code error, which the base fails the same way, while `main` has
 /// since moved past a fix and passes. The landing merges `main` into the
@@ -1951,6 +2194,9 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
         forge.job(&base, passed(2, 21));
         {
             let mut state = forge.state.lock().unwrap();
+            if case == "fresh_green" {
+                state.after_rerun = Some(failed(1, 12, UNTOUCHED));
+            }
             state
                 .job_times
                 .insert(11, ("2026-10-26T14:00:00Z", "2026-10-26T14:01:00Z"));
@@ -1998,9 +2244,11 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
             &[HandoffLandingStep::Stop { repairable }],
             case,
         );
-        assert_not_sent(
+        assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
+        assert_sent_len(
             &forge,
-            &["pr.merge", "pr.update_branch", "ci.rerun_failed"],
+            "ci.rerun_failed",
+            usize::from(case == "fresh_green"),
             case,
         );
         if matches!(case, "changed" | "github_changed") {
@@ -2039,8 +2287,8 @@ fn untouched_failure_waits_for_a_fresh_base_check_before_candidate_repair() {
 }
 
 /// A base-suspect failure whose landing tip has moved is decided only by
-/// a fresh run of the same job on that tip: a fresh pass is the
-/// candidate's (one repair, no branch update), and a fresh
+/// a fresh run of the same job on that tip: a fresh pass permits one
+/// rerun before repair, with no branch update, and a fresh
 /// same-signature failure is inherited (one branch update, then a review
 /// stop while the tip does not pass).
 #[test]
@@ -2062,6 +2310,8 @@ fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
         );
         if !tip_passes {
             forge.state.lock().unwrap().after_update = Some(failed(4, 41, UNTOUCHED));
+        } else {
+            forge.state.lock().unwrap().after_rerun = Some(failed(1, 12, UNTOUCHED));
         }
         {
             let mut state = forge.state.lock().unwrap();
@@ -2085,7 +2335,8 @@ fn untouched_failure_on_a_moved_tip_follows_the_fresh_base_check() {
             error.to_string().contains("allocator shim"),
             "{case}: {error}"
         );
-        assert_not_sent(&forge, &["pr.merge", "ci.rerun_failed"], case);
+        assert_not_sent(&forge, &["pr.merge"], case);
+        assert_sent_len(&forge, "ci.rerun_failed", usize::from(tip_passes), case);
         if tip_passes {
             assert_not_sent(&forge, &["pr.update_branch"], case);
             assert_steps(
