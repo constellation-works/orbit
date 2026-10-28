@@ -289,6 +289,23 @@ pub fn execute_job_with_resume(
                     index = target;
                     continue;
                 }
+                // [ORB-19430] A read-only completion observation whose bounded
+                // retry is spent, or that has none, holds: nothing changed on
+                // the forge, so the held run resumes completion once it answers.
+                if let (
+                    FinalRecoveryVerdict::Skipped,
+                    DispatchError::CompletionObservationUnavailable { action, message },
+                ) = (&verdict, &error)
+                {
+                    return Err(DispatchError::DeliveryRefused {
+                        action: action.clone(),
+                        refusal:
+                            orbit_types::workflow::DeliveryRefusal::ForgeObservationUnavailable,
+                        message: crate::executor::automation::vcs::forge_observation_hold_message(
+                            message,
+                        ),
+                    });
+                }
                 if verdict.runs_failure_activity() {
                     attempt_failure_activity(step, &ctx, &error);
                 }

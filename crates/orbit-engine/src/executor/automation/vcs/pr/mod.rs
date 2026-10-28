@@ -41,6 +41,7 @@ pub(crate) use auto_fix::{
 pub(in crate::executor::automation::vcs) use body::{
     meaningful_execution_summary, render_acceptance_criteria, task_url,
 };
+pub(crate) use complete::forge_observation_hold_message;
 pub(in crate::executor::automation) use complete::pr_complete;
 pub(in crate::executor::automation::vcs) use delivery::{
     BlockedCheckWait, DeliveryPin, OwedHostedChecks, PrMergeState, UnreportedChecks,

@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-runtime/src/audit/run/trail.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179, ORB-18166]
-last_validated: 2026-10-25
+last_validated: 2026-10-28
 ---
 
 # Recover Stuck Job Runs
@@ -180,12 +180,15 @@ base's own result are held as `delivery_base_checks_pending` until candidate
 recovery can proceed. Their `delivery_*` diagnostic codes are listed in
 [completion and landing refusals](../CONFIG.md#completion-and-landing-refusals-are-held).
 The task keeps the state the refusing action left it in, and gate/auto parents
-pass the held child. Missing or contradictory evidence, forge read failures and
-red candidate checks still fail. A provider read that errors or times out,
-including its subprocess timeout, remains a failure; eligible transient
-transport failures may use the read-only recovery below. Resolve the decision
-before a new delivery attempt; these holds do not add a generic checkpoint-resume
-path.
+pass the held child. Missing or contradictory evidence, permanent forge read
+refusals (credentials, permissions) and red candidate checks still fail. A
+provider read that errors or times out, including its subprocess timeout,
+remains a failure; eligible transient transport failures may use the read-only
+recovery below. Transport failures that outlast it, or that it cannot take,
+hold as `delivery_forge_observation_unavailable` unless a completion mutation
+started. Resolve the decision before a new delivery attempt; apart from
+`delivery_forge_observation_unavailable`, which `orbit job resume` continues
+once the forge answers, these holds do not add a generic checkpoint-resume path.
 
 `interrupted` means the run was orphaned: its owner process died through a crash, SIGKILL,
 or reboot without finalizing the run. A job that genuinely failed is `failed`;
@@ -534,9 +537,10 @@ and the calling agent continues without the answer. Never resume or resubmit one
 
 The v2 executor checkpoints every completed top-level step into
 `job_run_states.pipeline_state_json` (one row per run, beside `job_runs`) in
-`~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`, and a `held` run whose push the
-forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)). Any
-other state errors with `resume requires an interrupted, failed, or timed-out run`.
+`~/.orbit/orbit.db`; there is no separate checkpoint file. Resume accepts runs in `interrupted`, `failed`, or `timeout`, a `held` run whose push the
+forge refused ([A delivery held for the forge](#a-delivery-held-for-the-forge)), and
+a `held` run whose completion could not read the forge
+(`delivery_forge_observation_unavailable`). Any other state errors with `resume requires an interrupted, failed, or timed-out run`.
 
 ```sh
 orbit job resume <run_id>
@@ -677,8 +681,8 @@ An eligible lookup is one of completion's authenticated reads made before any
 mutation: the PR status, required-check and merge-policy reads, and the
 base-refresh and missing-prerequisite evidence reads, such as a commit's combined
 status. Only a transport failure qualifies: an HTTP 5xx answer, a GraphQL
-timeout, or a TLS handshake timeout, including a REST call that never reached
-GraphQL. Invalid or truncated evidence, a changed head, base, policy or
+timeout, a TLS handshake timeout or a connection `gh` could not open, including
+a REST call that never reached GraphQL. Invalid or truncated evidence, a changed head, base, policy or
 identity, a credential, permission, administrative-rule or other permanent
 refusal keep their ordinary failure. If the completion budget expires between
 reads or while waiting, completion instead returns the typed
@@ -686,9 +690,11 @@ reads or while waiting, completion instead returns the typed
 read-only final-recovery path is not dispatched. The PR state the hold reports is
 the last one completion read, so the PR may have merged since, through auto-merge
 (a hold does not cancel it) or another actor; check the forge. A provider
-read that itself errors or exhausts its subprocess timeout remains a failure,
-even when the completion deadline has also passed; it is not reclassified as a
-budget hold. A failed read never counts as passing required checks; the resumed
+read that itself errors or exhausts its subprocess timeout is not reclassified
+as a budget hold, even when the completion deadline has also passed: unless a
+completion mutation started, a transport failure holds as
+`delivery_forge_observation_unavailable` (below), and any other failure remains
+a failure. A failed read never counts as passing required checks; the resumed
 completion reads them again.
 
 The host first authenticates the successful commit, preparation, synchronization,
@@ -728,8 +734,16 @@ completion, which merges only the published head. Unknown mutation replies
 retain the existing reconciliation path; they are not classified as read-only
 failures. The original completion deadline and final-recovery charge survive
 retries and checkpoint resumes, so a run retries once. A second failed
-observation runs the failure handoff, which keeps the PR and the task in review
-and records the failure on the task.
+observation ends the run `held` as `delivery_forge_observation_unavailable`
+without the failure handoff: the task and PR stay in review, nothing on the
+forge changed, and `orbit job resume <run>` reads the forge again and continues
+completion from its checkpoints once it answers. The same hold ends a run whose
+job has no final recovery, a read after the completion budget expired, and a
+read that repair, reservation or source-repair provenance kept from the
+authenticated retry. A transport failure after a merge, auto-merge or rebase
+request, in that run or recorded in the task's history, and a credential or
+permission refusal still fail. `gh`'s `error connecting to api.github.com`
+counts as a transport failure.
 
 Changed task meaning, policy, candidate, review repairs, publication, ownership,
 lease or a dirty checkout refuses reuse, blocks the task with the refusal as

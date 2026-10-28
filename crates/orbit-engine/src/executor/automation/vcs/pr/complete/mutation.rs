@@ -3,7 +3,7 @@
 use orbit_common::{OrbitError, PrivateVcsFailure, PrivateVcsFailureClass};
 use orbit_types::task::{NO_DIFF_EXPECTED_TAG, Task};
 use orbit_types::workflow::{
-    PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance,
+    DeliveryRefusal, PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance,
 };
 use serde_json::{Value, json};
 
@@ -23,8 +23,14 @@ use super::super::merge::{MergeStrategy, PermittedMerge, resolve_permitted_merge
 /// which the host may resume only after authenticating the unchanged prefix.
 /// The transport class is the one the provider boundary decided; the result
 /// carries [`PrivateVcsFailureClass::CompletionObservationUnavailable`] beside
-/// its unchanged message. Every other failure keeps its own error and
-/// recovery path.
+/// its unchanged message.
+///
+/// [ORB-19430] The same transport failure past the budget, or after repair
+/// provenance that rules out the authenticated retry, holds the run as
+/// [`DeliveryRefusal::ForgeObservationUnavailable`]: nothing was mutated, so
+/// the held run can read again once the forge answers. A mutation in this
+/// invocation or recorded write-ahead completion mutation provenance keeps the
+/// failure, as does every other failure class.
 pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -35,37 +41,78 @@ pub(super) fn observation_failure<H: RuntimeHost + ?Sized>(
     let within_budget = deadline_ms.is_none_or(|deadline| {
         super::super::super::completion_deadline::now_ms().is_ok_and(|now| now < deadline)
     });
-    match error.private_vcs_failure() {
-        Some(failure)
-            if !mutated
-                && within_budget
-                && failure.class == PrivateVcsFailureClass::TransientObservation
-                && completion_history_is_read_only(host, input).unwrap_or(false) =>
-        {
+    let Some(failure) = error.private_vcs_failure() else {
+        return error;
+    };
+    if mutated || failure.class != PrivateVcsFailureClass::TransientObservation {
+        return error;
+    }
+    match completion_history(host, input) {
+        Ok(CompletionHistory::ReadOnly) if within_budget => {
             OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
                 operation: failure.operation.clone(),
                 class: PrivateVcsFailureClass::CompletionObservationUnavailable,
                 message: format!("completion_observation_unavailable: {error}"),
             }))
         }
-        _ => error,
+        Ok(CompletionHistory::ReadOnly | CompletionHistory::Repaired) => {
+            OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::ForgeObservationUnavailable,
+                message: forge_observation_hold_message(&error.to_string()),
+            }
+        }
+        Ok(CompletionHistory::Mutated) | Err(_) => error,
     }
 }
 
+/// [ORB-19430] The diagnostic of a run held because completion's read-only
+/// forge observation kept failing with a transport error; `cause` is the
+/// failure's original text.
+pub(crate) fn forge_observation_hold_message(cause: &str) -> String {
+    format!(
+        "{}: completion could not read the forge before any completion mutation ({cause}); \
+         nothing changed on the forge, the task stays in review and resuming the held run \
+         reads it again",
+        DeliveryRefusal::ForgeObservationUnavailable.error_code()
+    )
+}
+
+/// What completion's durable task history allows a failed read to become.
+enum CompletionHistory {
+    /// No repair or completion mutation provenance: the host may authenticate
+    /// the unchanged publication and retry.
+    ReadOnly,
+    /// Repair, reservation or source-repair provenance, but no completion
+    /// mutation: no authenticated retry, though the forge is unchanged by
+    /// completion itself.
+    Repaired,
+    /// A merge, auto-merge or rebase whose outcome must be reconciled.
+    Mutated,
+}
+
 /// Read reservations after pre-observation repair adoption/publication as well
-/// as after polling. Absence is only eligibility: the host still authenticates
-/// the exact original publication, native receipts and current policy.
-fn completion_history_is_read_only<H: RuntimeHost + ?Sized>(
+/// as after polling. `ReadOnly` is only eligibility: the host still
+/// authenticates the exact original publication, native receipts and current
+/// policy.
+fn completion_history<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
-) -> Result<bool, OrbitError> {
+) -> Result<CompletionHistory, OrbitError> {
     let context = load_handoff_context(host, input, "pr_complete")?;
+    let mut answer = CompletionHistory::ReadOnly;
     for task in context.tasks {
-        if pr_completion_has_mutation_provenance(&host.get_task_history(&task.id)?) {
-            return Ok(false);
+        let history = host.get_task_history(&task.id)?;
+        if history
+            .iter()
+            .any(|entry| entry.event == PR_COMPLETION_MUTATION_STARTED_EVENT)
+        {
+            return Ok(CompletionHistory::Mutated);
+        }
+        if pr_completion_has_mutation_provenance(&history) {
+            answer = CompletionHistory::Repaired;
         }
     }
-    Ok(true)
+    Ok(answer)
 }
 
 /// Persist before entering a mutation boundary. In particular an unknown merge

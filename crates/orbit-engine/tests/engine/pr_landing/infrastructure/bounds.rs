@@ -649,7 +649,7 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
 }
 
 #[test]
-fn infrastructure_deadline_refusal_keeps_type_and_provider_failure_class() {
+fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
     struct CompletionDeadlineHost {
         checks: std::sync::atomic::AtomicUsize,
         clock: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -754,13 +754,19 @@ fn infrastructure_deadline_refusal_keeps_type_and_provider_failure_class() {
         );
         assert_eq!(host.checks.load(std::sync::atomic::Ordering::SeqCst), 2);
         if expected_failure {
+            // [ORB-19430] Nothing was mutated, so the run holds on the
+            // unreadable forge, not on the budget, and keeps the provider text.
             assert!(
                 matches!(
                     &result,
-                    Err(orbit_common::OrbitError::PrivateVcs(failure))
-                        if failure.class == orbit_common::PrivateVcsFailureClass::TransientObservation
+                    Err(orbit_common::OrbitError::DeliveryRefused {
+                        refusal: orbit_types::workflow::DeliveryRefusal::ForgeObservationUnavailable,
+                        message,
+                    }) if message.contains("its required checks could not be read")
+                        && message.contains("error connecting to api.github.com")
                 ),
-                "provider failure after the deadline must keep its provider class: {result:?}"
+                "a transport read failure after the deadline holds as an unreadable forge, not \
+                 an expired budget: {result:?}"
             );
         } else {
             assert!(

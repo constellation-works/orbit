@@ -80,4 +80,5 @@ mod mutation;
 mod reviewed;
 mod run;
 
+pub(crate) use mutation::forge_observation_hold_message;
 pub(in crate::executor::automation) use run::pr_complete;

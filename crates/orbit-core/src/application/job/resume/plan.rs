@@ -5,7 +5,7 @@ use orbit_store::contracts::JobRunQuery;
 use orbit_types::record::OrbitEvent;
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::activity_job::run_input_declares_trusted_host;
-use orbit_types::workflow::{JobRun, JobRunState, JobV2, PipelineState};
+use orbit_types::workflow::{DeliveryRefusal, JobRun, JobRunState, JobV2, PipelineState};
 use serde_json::Value;
 
 use super::binding::{
@@ -197,12 +197,18 @@ impl OrbitRuntime {
             )));
         }
         // [ORB-14617] A run held because the forge refused its push resumes
-        // from its checkpoints. Every other hold names its own resumption
-        // (an evidence hold queues a fresh review on receipt).
+        // from its checkpoints, and [ORB-19430] so does one held because
+        // completion could not read the forge. Every other hold names its own
+        // resumption (an evidence hold queues a fresh review on receipt).
         let forge_held = source.state == JobRunState::Held
-            && self
-                .read_run_state(&source.run_id)?
-                .is_some_and(|state| state.pull_drain.forge_hold.is_some());
+            && (source
+                .steps
+                .last()
+                .and_then(|step| step.error_code.as_deref())
+                == Some(DeliveryRefusal::ForgeObservationUnavailable.error_code())
+                || self
+                    .read_run_state(&source.run_id)?
+                    .is_some_and(|state| state.pull_drain.forge_hold.is_some()));
         if !forge_held
             && !matches!(
                 source.state,
@@ -211,7 +217,7 @@ impl OrbitRuntime {
         {
             return Err(OrbitError::JobValidation(format!(
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
-                 or one held because the forge refused its push",
+                 or one held because the forge refused its push or could not be read",
                 source_run_id, source.state
             )));
         }
