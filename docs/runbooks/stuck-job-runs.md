@@ -687,17 +687,18 @@ assigns qualifies: an HTTP 499 or HTTP 5xx answer, a GraphQL timeout, a TLS
 handshake timeout, a connection the peer reset or one `gh` could not open,
 including a REST call that never reached GraphQL, GitHub's `we couldn't
 respond to your request in time` response, or a GraphQL response containing
-`something went wrong while executing your query`. Invalid or truncated evidence, a changed head, base, policy or
-identity, a credential, permission, administrative-rule or other permanent
-refusal keep their ordinary failure. If the completion budget expires between
-reads or while waiting, completion instead returns the typed
+`something went wrong while executing your query`. Invalid or truncated
+evidence, a changed head, base, policy or identity, a credential, permission,
+rate-limit, administrative-rule or other permanent refusal, or a permanent HTTP
+4xx diagnostic keep their ordinary failure. If the completion budget expires
+between reads or while waiting, completion instead returns the typed
 `delivery_completion_budget_expired` hold: the task stays in review, and this
 read-only final-recovery path is not dispatched. The PR state the hold reports is
 the last one completion read, so the PR may have merged since, through auto-merge
 (a hold does not cancel it) or another actor; check the forge. A provider
 read that itself errors or exhausts its subprocess timeout is not reclassified
 as a budget hold, even when the completion deadline has also passed: unless a
-completion mutation started, a transport failure holds as
+completion mutation started, a qualifying failure holds as
 `delivery_forge_observation_unavailable` (below), and any other failure remains
 a failure. A failed read never counts as passing required checks; the resumed
 completion reads them again.
