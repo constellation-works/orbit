@@ -1000,8 +1000,9 @@ function evidenceTable(events, ctx) {
   return table;
 }
 
-// The forensic record: why these rows grouped, what they propagated to, and
-// every underlying audit row the payload carried.
+// The forensic record: the grouping signature and propagation chain, plus a
+// five-row-per-incident audit evidence preview. When events_omitted is
+// positive, the panel shows that count and offers an Open all events action.
 function evidenceNode(group, ctx) {
   const details = el("details", { class: "incident-disclosure incident-evidence-details" });
   details.open = evidenceOpen;
