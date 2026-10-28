@@ -3,45 +3,12 @@
 //! including its bounded projection and validation rather than an echoed request.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
-use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
-use orbit_tools::OwnerCoordinator;
-use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
 
-use super::{Fixture, GET, PUT, SHOW, raw_call};
-use crate::OrbitRuntime;
-
-struct TaskOwner {
-    runtime: OrbitRuntime,
-    calls: AtomicUsize,
-}
-
-impl TaskOwner {
-    fn execute(&self, tool: &str, mut input: Value) -> Result<Value, OrbitError> {
-        // Stand in for the owner's workspace routing, with the real tool
-        // dispatch and stored task on this fixture's disposable owner store.
-        input["workspace"] = json!(self.runtime.workspace_id()?);
-        self.runtime.execute_tool_command(tool, input, None, None)
-    }
-}
-
-impl OwnerCoordinator for TaskOwner {
-    fn call(
-        &self,
-        name: &str,
-        input: Value,
-        session: ToolSessionContext,
-    ) -> Result<Value, OrbitError> {
-        let binding = session.worker_invocation.as_ref().unwrap();
-        assert_eq!(input["id"], binding.task_id);
-        assert_eq!(input["workspace"], binding.owner_destination);
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        self.execute(name, input)
-    }
-}
+use super::{Fixture, GET, PUT, SHOW, TaskOwner, raw_call};
 
 #[test]
 fn claimed_task_detail_pages_preserve_broker_scope_and_owner_validation() {
@@ -51,10 +18,7 @@ fn claimed_task_detail_pages_preserve_broker_scope_and_owner_validation() {
         return;
     }
     let mut fixture = Fixture::new();
-    let owner = Arc::new(TaskOwner {
-        runtime: fixture.runtime.without_worker_routing(),
-        calls: AtomicUsize::new(0),
-    });
+    let owner = Arc::new(TaskOwner::over(&fixture.runtime));
     let task = owner
         .execute(
             "orbit.task.add",
@@ -128,12 +92,15 @@ fn claimed_task_detail_pages_preserve_broker_scope_and_owner_validation() {
     }
     assert!(call(json!({"id": id, "limit": 50})).is_ok());
 
-    let before = owner.calls.load(Ordering::SeqCst);
-    let error = call(json!({"id": "another-task", "limit": 1})).unwrap_err();
+    // A page of a task the owner does not hold in the claimed workspace is
+    // refused as outside the claim, after the owner's own answer [ORB-19270].
+    let error = call(json!({"id": "TSX-404", "limit": 1})).unwrap_err();
     assert!(
-        error.contains("the request names a task other than the claimed task"),
+        error.contains("claimed_owner_bridge_refused")
+            && error.contains("is not a task in the claimed task's workspace"),
         "{error}"
     );
+    let before = owner.calls.load(Ordering::SeqCst);
     for (field, value) in [
         ("workspace", json!(fixture.binding.owner_destination)),
         ("snapshot", json!(true)),

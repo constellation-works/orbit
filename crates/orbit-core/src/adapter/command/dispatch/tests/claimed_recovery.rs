@@ -533,30 +533,22 @@ fn final_recovery_attaches_no_review_artifact() {
     fixture.owner_untouched("a review artifact put");
 }
 
-/// Neighbouring rejection 2: another task, a request that names another
-/// workspace, and a worker bound to another workspace's claim.
+/// Neighbouring rejection 2: another task's review artifact, a request that
+/// names another workspace, and a worker bound to another workspace's claim.
+/// Another task's delivery is the owner's to answer.
 #[test]
 fn final_recovery_reads_nothing_of_another_task_or_workspace() {
     let fixture = Leaf::admit();
     let broker = fixture.serve(FINAL_RECOVERY_ACTIVITY);
-    for (case, name, input) in [
-        (
-            "another task's review artifact",
+    refused_with(
+        fixture.forwarded(
+            &broker,
             GET,
             json!({"id": "TSO-2", "path": REVIEW_REPORT_ARTIFACT}),
         ),
-        (
-            "another task's delivery",
-            SHOW,
-            json!({"id": "TSO-2", "field": "delivery"}),
-        ),
-    ] {
-        refused_with(
-            fixture.forwarded(&broker, name, input),
-            "a task other than the claimed task",
-            case,
-        );
-    }
+        "a task other than the claimed task",
+        "another task's review artifact",
+    );
     let mut other_task = fixture.run(FINAL_RECOVERY_ACTIVITY);
     other_task.task_id = Some("TSO-2".into());
     let other = fixture.serve_run(&fixture.runtime, other_task);
@@ -631,6 +623,19 @@ fn final_recovery_reads_nothing_of_another_task_or_workspace() {
         refused_with(result, "claim_unbound", "another workspace's binding");
     }
     fixture.owner_untouched("another task or workspace");
+
+    // Another task's delivery is no leaf's record: the owner holds it, and
+    // answers it under the claim's workspace [ORB-19270].
+    let broker = fixture.serve(FINAL_RECOVERY_ACTIVITY);
+    fixture
+        .forwarded(&broker, SHOW, json!({"id": "TSO-2", "field": "delivery"}))
+        .unwrap();
+    let calls = fixture.owner.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_eq!(calls[0].0, SHOW);
+    assert_eq!(calls[0].1["id"], "TSO-2");
+    assert_eq!(calls[0].1["field"], "delivery");
+    assert_eq!(calls[0].1["workspace"], fixture.binding.owner_destination);
 }
 
 /// Neighbouring rejection 3: a run that is not the bound leaf, and a leaf
