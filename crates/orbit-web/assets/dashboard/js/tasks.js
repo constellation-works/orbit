@@ -1,43 +1,20 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, withHost, withWorkspace, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, formatDateTime, formatClock, formatDate, formatDayHeading, onClockZoneChange, statusPill, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, formatDateTime, formatClock, formatDate, formatDayHeading, onClockZoneChange, statusPill, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessEntry, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
 import { elapsedLabel, onTaskRuntimeChange, runStartedAt, taskContextContenders, taskLockFiles } from './task-runtime.js';
 import { buildRiskChip, buildRiskDetail, buildRiskRowPart, riskinessSignature } from './task-riskiness.js';
 import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, buildExecutionProvenance, formatExecutionLocation, claimAttention, claimedReviewApproval, deliverySteps, handoffApprovalRequest, invalidateDistributedConsole, lastKnownClaims, registeredMachineHost } from './distributed.js';
+import { $, taskState, setRenderer, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, statusTransitions, statusTransition, fmtAbsTimeValue, absTimeNode, refreshTasks, defaultActiveStatuses, tasksMeta, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, GITHUB_PR_REF_SYSTEM, pullRequestLink, actionErrorNode, plural } from './task-shared.js';
 
-const $ = (id) => document.getElementById(id);
-
-let lastCrewPayload = { default_crew: null, crews: [] };
-// The list row whose detail the side pane shows. One task at a time: the pane
-// beside the list replaces the inline accordion, so selecting another row
-// moves the pane to it and the list itself never reflows around a detail.
-let selectedTaskId = null;
-let taskActionNotice = null;
 let settleMergedInFlight = false;
-let pinnedExternalTask = null;
-// The task the Tasks hash names with `open=`: the one selected and still
-// shown, so a copied URL reopens it. `pendingOpenTaskId` is a hash-named task
-// that has not been shown yet; the next render selects it from the list or
-// pins it when the operator's filter hides it.
-let openTaskId = null;
-let pendingOpenTaskId = null;
+// Advances whenever `taskState.openTaskId` changes, so a pin read for a task
+// the hash no longer names is dropped.
 let openTaskGeneration = 0;
-// `#tasks/<id>` shows the pane across the content width. `taskPageReturn`
-// remembers the list scroll when the page was entered from the list, so Back
-// lands on the same selection at the same place; `listRestore` applies that
-// on the next render. `taskPageError` is a page whose task could not be read.
-let taskPageId = null;
-let taskPageReturn = null;
-let taskPageError = null;
-let listRestore = null;
 let returningFromPage = false;
-let focusPaneTitle = false;
-// A status change folded the pane: focus goes back to the row it came from.
-let rowFocusAfterRender = null;
 // The pane's tab is a page-wide choice: moving the selection keeps it.
 let activeDetailTab = "overview";
 // The Runs tab's read per task (`GET /api/job-runs?task_id=`), kept so a
@@ -45,28 +22,7 @@ let activeDetailTab = "overview";
 let taskRunLoads = new Map();
 const TASK_RUNS_LIMIT = 20;
 const TASK_RUNS_FRESH_MS = 15000;
-// The last context a render ran with, for the keyboard and pane handlers that
-// are wired once.
-let paneContext = null;
 let searchDebounce = null;
-// ORB-10874: per-task inline-edit feedback for the status/crew selects. Each
-// entry is `{ kind: 'pending'|'success'|'error', text, undo }`, where `undo`
-// (when present) is `{ previousValue, expiresAt }` — a bounded window in which
-// the prior value can still be restored with one click. Cleared automatically
-// once that window lapses (see scheduleFeedbackExpiry).
-let statusFeedback = new Map();
-let crewFeedback = new Map();
-// A status change made from a task's open detail folds that detail in: the row
-// has moved to its new status group. The change's feedback and undo then show
-// on the collapsed row, or in a notice above the list while the new status is
-// filtered out, until the feedback expires. Keyed by task id; the value is the
-// updated record, which the undo acts on when the list no longer holds the row.
-let foldedStatusTasks = new Map();
-// ORB-12235: the same feedback shape for the writable fields in the expanded
-// detail — the complexity select and the inline text editors. `fieldFeedback`
-// is keyed `<task id>:<field>` because one detail can hold several editors.
-let complexityFeedback = new Map();
-let fieldFeedback = new Map();
 const MUTATION_UNDO_WINDOW_MS = 8000;
 // A saved text field has no undo (restoring prose would need a second write of
 // its own), so its note only has to stay long enough to be read.
@@ -90,49 +46,46 @@ let taskDetailLoads = new Map();
 const DRAIN_READINESS_STATUSES = new Set(["proposed", "backlog"]);
 let taskDrainLoads = new Map();
 const reviewApprovalsInFlight = new Set();
-// ORB-12645: which comments the operator has opened, and which are showing
-// their Markdown source instead of the rendered body. Both are keyed
-// `<task id>#<index into task.comments>` so a refresh that rebuilds the detail
-// restores the thread the way it was left. The thread order is a page-wide
-// preference, so it persists like the other dashboard presentation prefs.
-let expandedComments = new Set();
+// ORB-12645: which comments show their Markdown source instead of the rendered
+// body, keyed `<task id>#<index into task.comments>` like
+// `taskState.expandedComments` so a refresh that rebuilds the detail restores
+// the thread the way it was left. The thread order is a page-wide preference,
+// so it persists like the other dashboard presentation prefs.
 let rawComments = new Set();
 let commentPrefs = loadCommentPrefs();
-let restoredCommentHash = null;
+
+// Task modules repaint the list through task-shared's `rerender`.
+setRenderer(renderTasks);
 
 onWorkspaceChange(() => {
   invalidateDistributedConsole();
-  pinnedExternalTask = null;
-  taskActionNotice = null;
+  taskState.pinnedExternalTask = null;
+  taskState.taskActionNotice = null;
   quickActionState.clear();
-  selectedTaskId = null;
+  taskState.selectedTaskId = null;
   taskRunLoads.clear();
   // The initial workspace selection also lands here; a task the URL named but
   // no render has shown yet must survive it.
-  if (!pendingOpenTaskId && openTaskId) {
-    taskPageId = null;
-    taskPageReturn = null;
+  if (!taskState.pendingOpenTaskId && taskState.openTaskId) {
+    taskState.taskPageId = null;
+    taskState.taskPageReturn = null;
     setOpenTask(null);
   }
-  statusFeedback.clear();
-  foldedStatusTasks.clear();
-  crewFeedback.clear();
-  complexityFeedback.clear();
-  fieldFeedback.clear();
+  taskState.statusFeedback.clear();
+  taskState.foldedStatusTasks.clear();
+  taskState.crewFeedback.clear();
+  taskState.complexityFeedback.clear();
+  taskState.fieldFeedback.clear();
   taskDetails.clear();
   taskDetailLoads.clear();
   taskDrainLoads.clear();
   recoveryRefusals.clear();
-  taskDecisionLoads.clear();
-  expandedComments.clear();
+  taskState.taskDecisionLoads.clear();
+  taskState.expandedComments.clear();
   rawComments.clear();
-  restoredCommentHash = null;
+  taskState.restoredCommentHash = null;
 });
 
-// Guard duplicate clicks while a Ship request is pending. Once the server
-// accepts it, the server's 409 protects the live run; releasing this guard lets
-// a task returned to backlog be shipped again without reloading the page.
-const shipInFlightTaskIds = new Set();
 // Run pilot: the pilot run this panel submitted for a task, keyed like the ship
 // guard, while it is live. Absent after the run settles or a reload, when the
 // row's own `readiness.preparing` marks a held task.
@@ -156,9 +109,6 @@ const TRIAGE_REFUSAL_MS = 20000;
 // message, kept with the action like a refused Triage.
 const recoveryRefusals = new Map();
 const RECOVERY_REFUSAL_MS = 20000;
-// Operator records (pilot-admission / post-deploy): a refused record's typed
-// code and message, kept with the action like a refused recovery.
-const operatorRecordRefusals = new Map();
 const OPERATOR_RECORD_REFUSAL_MS = 20000;
 // Fix PR: whether the server would start an out-of-run auto-fix of a review
 // task's pull request, keyed like the ship guard. Read once when the panel
@@ -244,72 +194,6 @@ const EMPTY_GROUP_PHRASES = {
   backlog: "in the backlog",
 };
 
-function taskList(context) {
-  return context && typeof context.getTasks === "function" ? context.getTasks() : [];
-}
-
-function searchQueryValue(context) {
-  return context && typeof context.getSearchQuery === "function"
-    ? context.getSearchQuery()
-    : "";
-}
-
-function activeStatusSet(context) {
-  return context && typeof context.getActiveStatuses === "function"
-    ? context.getActiveStatuses()
-    : new Set();
-}
-
-function setSearchQuery(context, value) {
-  if (context && typeof context.setSearchQuery === "function") context.setSearchQuery(value);
-}
-
-function setActiveStatuses(context, statuses) {
-  if (context && typeof context.setActiveStatuses === "function") context.setActiveStatuses(statuses);
-}
-
-function statusOrder(context) {
-  return context && Array.isArray(context.statusOrder) ? context.statusOrder : [];
-}
-
-function statusTransitions(task) {
-  return Array.isArray(task && task.status_transitions)
-    ? task.status_transitions.filter((transition) => transition && transition.status)
-    : [];
-}
-
-function statusTransition(task, targetStatus) {
-  return statusTransitions(task).find((transition) => transition.status === targetStatus) || null;
-}
-
-function fmtAbsTimeValue(context, value) {
-  return context && typeof context.fmtAbsTime === "function"
-    ? context.fmtAbsTime(value)
-    : (value || "-");
-}
-
-// An absolute time in a task detail. The detail is kept while its task is
-// unchanged, so the time is stamped for a UTC/Local switch to repaint.
-function absTimeNode(context, value, attrs = {}) {
-  return clockStamp(el("span", { ...attrs, text: fmtAbsTimeValue(context, value) }), value);
-}
-
-function refreshTasks(context) {
-  return context && typeof context.refreshDashboard === "function"
-    ? context.refreshDashboard()
-    : Promise.resolve();
-}
-
-function defaultActiveStatuses(context) {
-  return context && Array.isArray(context.defaultActiveStatuses)
-    ? context.defaultActiveStatuses
-    : statusOrder(context);
-}
-
-function tasksMeta(context) {
-  return context && typeof context.getTasksMeta === "function" ? context.getTasksMeta() : null;
-}
-
 // Explicit page range and matching total instead of the ambiguous `N/50`
 // shorthand, which could mean either a total or an unreachable hard cap.
 export function formatTaskCount(filteredCount, fetchedCount, meta) {
@@ -324,41 +208,12 @@ export function formatTaskCount(filteredCount, fetchedCount, meta) {
     : `${filteredCount} shown of ${fetchedCount} fetched`;
 }
 
-// ORB-10874: aggregate ("All workspaces") mode has no ambient workspace to
-// scope a mutation to. A task fetched through /api/tasks/all carries its own
-// `workspace_id`, so that's an explicit, workspace-qualified target; anything
-// else is refused rather than silently applied to the wrong (or no) workspace.
-function canMutateTask(task) {
-  return (!isAggregateView() || Boolean(task && task.workspace_id)) && !hostWriteRefusal();
-}
-
-// One sentence for every inline control that cannot write, so the refusal
-// reads the same whichever control the operator hovers: a selected host that
-// refuses forwarded writes, or the aggregate view.
-function aggregateRefusalTitle(label, action) {
-  const host = hostWriteRefusal();
-  if (host) return `${label} — ${host}`;
-  return `${label} — select a specific workspace to ${action} in aggregate view`;
-}
-
-// A row's owner takes precedence over the page selection. Aggregate rows have
-// no page selection, and selected views may still show a cross-workspace task.
-function taskWorkspacePath(task, path) {
-  if (!task.workspace_id) return withWorkspace(path);
-  const sep = path.includes("?") ? "&" : "?";
-  return withHost(`${path}${sep}workspace=${encodeURIComponent(task.workspace_id)}`);
-}
-
-function taskMutationPath(task, suffix = "") {
-  return taskWorkspacePath(task, `/api/tasks/${encodeURIComponent(task.id)}${suffix}`);
-}
-
 function scheduleFeedbackExpiry(map, key, context, delay) {
   const scheduledEntry = map.get(key);
   setTimeout(() => {
     if (map.get(key) === scheduledEntry && scheduledEntry && scheduledEntry.kind !== "pending") {
       map.delete(key);
-      renderTasks(taskList(context), context);
+      rerender(context);
     }
   }, delay);
 }
@@ -402,16 +257,16 @@ export function normalizeCrewPayload(payload) {
 }
 
 export function cacheCrewPayload(payload) {
-  lastCrewPayload = normalizeCrewPayload(payload);
-  return lastCrewPayload;
+  taskState.lastCrewPayload = normalizeCrewPayload(payload);
+  return taskState.lastCrewPayload;
 }
 
 export function hasCrewOptions() {
-  return Array.isArray(lastCrewPayload.crews) && lastCrewPayload.crews.length > 0;
+  return Array.isArray(taskState.lastCrewPayload.crews) && taskState.lastCrewPayload.crews.length > 0;
 }
 
 function crewOptionsSignature() {
-  return JSON.stringify(lastCrewPayload);
+  return JSON.stringify(taskState.lastCrewPayload);
 }
 
 // A stable string for a task's current mutation-feedback entry (or "" when
@@ -428,9 +283,9 @@ function feedbackSignature(map, taskId) {
 // see it the way the row's hash sees the status/crew entries. Without this a
 // saved or failed note would never paint.
 function detailFeedbackSignature(taskId) {
-  const parts = [feedbackSignature(statusFeedback, taskId), feedbackSignature(complexityFeedback, taskId), feedbackSignature(crewFeedback, taskId)];
+  const parts = [feedbackSignature(taskState.statusFeedback, taskId), feedbackSignature(taskState.complexityFeedback, taskId), feedbackSignature(taskState.crewFeedback, taskId)];
   for (const field of Object.keys(TASK_FIELD_EDITORS)) {
-    parts.push(feedbackSignature(fieldFeedback, fieldFeedbackKey(taskId, field)));
+    parts.push(feedbackSignature(taskState.fieldFeedback, fieldFeedbackKey(taskId, field)));
   }
   return parts.join("|");
 }
@@ -441,7 +296,7 @@ function explicitCrewValue(task) {
 
 function isConfiguredCrewValue(value) {
   const name = value ? String(value) : "";
-  return Boolean(name) && lastCrewPayload.crews.some((crew) => crew.name === name);
+  return Boolean(name) && taskState.lastCrewPayload.crews.some((crew) => crew.name === name);
 }
 
 function hasStaleExplicitCrew(task) {
@@ -450,7 +305,7 @@ function hasStaleExplicitCrew(task) {
 }
 
 function resolvedCrewName(task) {
-  if (lastCrewPayload.default_crew) return lastCrewPayload.default_crew;
+  if (taskState.lastCrewPayload.default_crew) return taskState.lastCrewPayload.default_crew;
   if (!explicitCrewValue(task) && task && task.resolved_crew) {
     return String(task.resolved_crew);
   }
@@ -492,8 +347,8 @@ function applyUpdatedTask(updatedTask, context) {
   if (context && typeof context.replaceTask === "function") {
     context.replaceTask(merged);
   }
-  if (pinnedExternalTask && pinnedExternalTask.task && pinnedExternalTask.task.id === merged.id) {
-    pinnedExternalTask.task = merged;
+  if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.task && taskState.pinnedExternalTask.task.id === merged.id) {
+    taskState.pinnedExternalTask.task = merged;
   }
   return merged;
 }
@@ -501,8 +356,8 @@ function applyUpdatedTask(updatedTask, context) {
 function currentCrewTask(task, context) {
   if (!task || !task.id) return task;
   return taskList(context).find((current) => current && current.id === task.id) ||
-    (pinnedExternalTask && pinnedExternalTask.task && pinnedExternalTask.task.id === task.id
-      ? pinnedExternalTask.task
+    (taskState.pinnedExternalTask && taskState.pinnedExternalTask.task && taskState.pinnedExternalTask.task.id === task.id
+      ? taskState.pinnedExternalTask.task
       : null) ||
     taskDetails.get(task.id) ||
     task;
@@ -527,14 +382,14 @@ function loadTaskDetail(task, context) {
       load.pending = false;
       if (taskDetailLoads.get(task.id) === load) {
         applyUpdatedTask(full, context);
-        renderTasks(taskList(context), context);
+        rerender(context);
       }
       return full;
     },
     (error) => {
       load.pending = false;
       load.error = error.message || String(error);
-      if (taskDetailLoads.get(task.id) === load) renderTasks(taskList(context), context);
+      if (taskDetailLoads.get(task.id) === load) rerender(context);
       throw error;
     },
   );
@@ -563,7 +418,7 @@ function taskDetailState(task, context) {
 function forgetTaskDetailLoad(taskId) {
   taskDetailLoads.delete(taskId);
   taskDrainLoads.delete(taskId);
-  taskDecisionLoads.delete(taskId);
+  taskState.taskDecisionLoads.delete(taskId);
 }
 
 function loadTaskDrainReadiness(task, context) {
@@ -588,7 +443,7 @@ function loadTaskDrainReadiness(task, context) {
     },
   ).finally(() => {
     load.pending = false;
-    if (taskDrainLoads.get(task.id) === load) renderTasks(taskList(context), context);
+    if (taskDrainLoads.get(task.id) === load) rerender(context);
   });
 }
 
@@ -669,8 +524,8 @@ function relationTypeKey(value) {
 
 export async function copyTaskIdWithNotice(taskId, context) {
   const copied = await copyText(taskId);
-  taskActionNotice = `${taskId} is not in the filtered task list; ${copied ? "copied ID" : "could not copy the ID"}`;
-  renderTasks(taskList(context), context);
+  taskState.taskActionNotice = `${taskId} is not in the filtered task list; ${copied ? "copied ID" : "could not copy the ID"}`;
+  rerender(context);
 }
 
 function findTaskRow(taskId) {
@@ -705,10 +560,10 @@ function revealTaskRow(taskId, block = "nearest") {
 // rewrap, so selection never costs the operator their place.
 function selectTask(taskId, context, { anchor = null } = {}) {
   const top = anchor && typeof anchor.getBoundingClientRect === "function" ? anchor.getBoundingClientRect().top : null;
-  if (pinnedExternalTask && pinnedExternalTask.id !== taskId) pinnedExternalTask = null;
-  selectedTaskId = taskId;
+  if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id !== taskId) taskState.pinnedExternalTask = null;
+  taskState.selectedTaskId = taskId;
   setOpenTask(taskId);
-  renderTasks(taskList(context), context);
+  rerender(context);
   keepRowInPlace(taskId, top);
 }
 
@@ -723,7 +578,7 @@ function keepRowInPlace(taskId, top) {
 // Close the pane. Focus returns to the row that opened it when it was in the
 // pane (or nowhere), so the keyboard resumes where the operator left the list.
 function closeTaskPane(context, { forget = false } = {}) {
-  if (taskPageId) {
+  if (taskState.taskPageId) {
     leaveTaskPage(context);
     return;
   }
@@ -734,13 +589,13 @@ function closeTaskPane(context, { forget = false } = {}) {
   const focusWasInPane = !active || active === document.body || Boolean(pane && pane.contains && pane.contains(active));
   const row = findTaskRow(taskId);
   const top = row && typeof row.getBoundingClientRect === "function" ? row.getBoundingClientRect().top : null;
-  if (pinnedExternalTask && pinnedExternalTask.id === taskId) pinnedExternalTask = null;
-  if (selectedTaskId === taskId) selectedTaskId = null;
-  if (openTaskId === taskId) setOpenTask(null);
+  if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === taskId) taskState.pinnedExternalTask = null;
+  if (taskState.selectedTaskId === taskId) taskState.selectedTaskId = null;
+  if (taskState.openTaskId === taskId) setOpenTask(null);
   // Reopening re-reads the detail, which is also the retry for a read that
   // failed.
   if (forget) forgetTaskDetailLoad(taskId);
-  renderTasks(taskList(context), context);
+  rerender(context);
   keepRowInPlace(taskId, top);
   if (focusWasInPane) focusTaskRow(taskId);
 }
@@ -753,45 +608,45 @@ function focusTaskRow(taskId) {
 // The task the pane holds right now: the pinned resolver result, else the
 // selected row.
 function shownTaskId() {
-  return (pinnedExternalTask && pinnedExternalTask.id) || selectedTaskId || null;
+  return (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id) || taskState.selectedTaskId || null;
 }
 
 // Enter the full-page view of a task. The list behind it keeps its state; the
 // scroll is remembered because a hidden list loses it.
 function openTaskPage(taskId, context) {
   const body = $("tasks-body");
-  taskPageReturn = { id: taskId, scrollTop: body ? body.scrollTop : 0 };
-  taskPageId = taskId;
-  taskPageError = null;
-  focusPaneTitle = true;
-  if (openTaskId !== taskId) setOpenTask(taskId);
-  renderTasks(taskList(context), context);
+  taskState.taskPageReturn = { id: taskId, scrollTop: body ? body.scrollTop : 0 };
+  taskState.taskPageId = taskId;
+  taskState.taskPageError = null;
+  taskState.focusPaneTitle = true;
+  if (taskState.openTaskId !== taskId) setOpenTask(taskId);
+  rerender(context);
   window.location.hash = `#tasks/${encodeURIComponent(taskId)}`;
 }
 
 // Leave the page state; the next render restores the list where it was.
 function exitTaskPageState() {
-  if (!taskPageId) return;
-  const back = taskPageReturn && taskPageReturn.id === taskPageId ? taskPageReturn : null;
-  listRestore = { id: taskPageId, scrollTop: back ? back.scrollTop : null };
-  taskPageId = null;
-  taskPageReturn = null;
-  taskPageError = null;
+  if (!taskState.taskPageId) return;
+  const back = taskState.taskPageReturn && taskState.taskPageReturn.id === taskState.taskPageId ? taskState.taskPageReturn : null;
+  taskState.listRestore = { id: taskState.taskPageId, scrollTop: back ? back.scrollTop : null };
+  taskState.taskPageId = null;
+  taskState.taskPageReturn = null;
+  taskState.taskPageError = null;
 }
 
 // Back to the list at the same selection. A page entered from the list goes
 // back through history, so the browser's own Back agrees with this control; a
 // page reached by a link has no list entry behind it and opens one.
 function leaveTaskPage(context) {
-  const taskId = taskPageId;
+  const taskId = taskState.taskPageId;
   if (!taskId) return;
-  const fromList = Boolean(taskPageReturn && taskPageReturn.id === taskId);
+  const fromList = Boolean(taskState.taskPageReturn && taskState.taskPageReturn.id === taskId);
   exitTaskPageState();
-  if (!pinnedExternalTask && filterTasks(taskList(context), context).some((task) => task.id === taskId)) {
-    selectedTaskId = taskId;
+  if (!taskState.pinnedExternalTask && filterTasks(taskList(context), context).some((task) => task.id === taskId)) {
+    taskState.selectedTaskId = taskId;
   }
   returningFromPage = true;
-  renderTasks(taskList(context), context);
+  rerender(context);
   if (fromList && typeof window.history?.back === "function") window.history.back();
   else window.location.hash = buildTasksHash(context);
 }
@@ -819,7 +674,7 @@ function writeOpenTaskToUrl(taskId) {
 
 function setOpenTask(taskId) {
   openTaskGeneration += 1;
-  openTaskId = taskId;
+  taskState.openTaskId = taskId;
   writeOpenTaskToUrl(taskId);
 }
 
@@ -827,26 +682,26 @@ function setOpenTask(taskId) {
 // naming a task the page no longer shows. A full-page task stays: the page is
 // that task, and its actions repaint it in place.
 function collapseTask(taskId) {
-  if (taskPageId === taskId) return;
-  if (selectedTaskId === taskId) selectedTaskId = null;
-  if (openTaskId === taskId) setOpenTask(null);
+  if (taskState.taskPageId === taskId) return;
+  if (taskState.selectedTaskId === taskId) taskState.selectedTaskId = null;
+  if (taskState.openTaskId === taskId) setOpenTask(null);
 }
 
 // Show the task a hash names, once the list that may contain it has rendered.
 // A task the filter or page hides is fetched and pinned instead, so following
 // a link never rewrites the saved status or search filter.
 function resolvePendingOpenTask(tasks, context) {
-  const taskId = pendingOpenTaskId;
+  const taskId = taskState.pendingOpenTaskId;
   if (!taskId) return;
-  pendingOpenTaskId = null;
+  taskState.pendingOpenTaskId = null;
   if (filterTasks(tasks, context).some((task) => task.id === taskId)) {
     // A route replay for the row already selected leaves the list where it
     // is, and coming back from the full page restores the list's own scroll.
-    const settled = selectedTaskId === taskId || (listRestore && listRestore.id === taskId);
-    selectedTaskId = taskId;
-    pinnedExternalTask = null;
+    const settled = taskState.selectedTaskId === taskId || (taskState.listRestore && taskState.listRestore.id === taskId);
+    taskState.selectedTaskId = taskId;
+    taskState.pinnedExternalTask = null;
     if (!settled) revealTaskRow(taskId, "center");
-  } else if (!(pinnedExternalTask && pinnedExternalTask.id === taskId)) {
+  } else if (!(taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === taskId)) {
     pinOpenTask(taskId, context);
   }
 }
@@ -854,21 +709,21 @@ function resolvePendingOpenTask(tasks, context) {
 async function pinOpenTask(taskId, context) {
   const visit = captureWorkspaceVisit();
   const generation = openTaskGeneration;
-  const superseded = () => !visit.isCurrent() || openTaskId !== taskId || generation !== openTaskGeneration;
+  const superseded = () => !visit.isCurrent() || taskState.openTaskId !== taskId || generation !== openTaskGeneration;
   try {
     const task = await fetchJson(`/api/tasks/${encodeURIComponent(taskId)}`);
     if (superseded()) return;
     if (!task || task.id !== taskId) throw new Error(`${taskId} not found`);
-    pinnedExternalTask = { task, id: taskId };
+    taskState.pinnedExternalTask = { task, id: taskId };
   } catch (error) {
     if (superseded()) return;
-    taskActionNotice = error && error.status === 404
+    taskState.taskActionNotice = error && error.status === 404
       ? `${taskId} not found`
       : `Could not open ${taskId}: ${(error && error.message) || error}`;
     // A full page has no list on screen to carry the notice.
-    if (taskPageId === taskId) taskPageError = taskActionNotice;
+    if (taskState.taskPageId === taskId) taskState.taskPageError = taskState.taskActionNotice;
   }
-  renderTasks(taskList(context), context);
+  rerender(context);
 }
 
 /* Global ID resolver support (ORB-00211): allow rendering detail for a task that
@@ -879,9 +734,9 @@ async function pinOpenTask(taskId, context) {
 export function setPinnedExternalTask(task, context) {
   if (!task || !task.id) return;
   cancelTaskSearchDebounce();
-  if (selectedTaskId && selectedTaskId !== task.id) selectedTaskId = null;
-  pinnedExternalTask = { task, id: task.id };
-  pendingOpenTaskId = null;
+  if (taskState.selectedTaskId && taskState.selectedTaskId !== task.id) taskState.selectedTaskId = null;
+  taskState.pinnedExternalTask = { task, id: task.id };
+  taskState.pendingOpenTaskId = null;
   setOpenTask(task.id);
   // The resolver has cleared the text query; retire its URL and page too.
   window.history?.replaceState?.(null, "", buildTasksHash(context));
@@ -889,9 +744,9 @@ export function setPinnedExternalTask(task, context) {
 }
 
 export function clearPinnedExternalTask(context) {
-  if (pinnedExternalTask && openTaskId === pinnedExternalTask.id) setOpenTask(null);
-  pinnedExternalTask = null;
-  if (context) renderTasks(taskList(context), context);
+  if (taskState.pinnedExternalTask && taskState.openTaskId === taskState.pinnedExternalTask.id) setOpenTask(null);
+  taskState.pinnedExternalTask = null;
+  if (context) rerender(context);
 }
 
 // Clearing also retires hash-driven reads, so a delayed response cannot restore
@@ -904,18 +759,18 @@ export function cancelTaskSearchDebounce() {
 export function clearTaskSearch(context) {
   cancelTaskSearchDebounce();
   if (context?.cancelTaskLookup) context.cancelTaskLookup();
-  selectedTaskId = null;
-  taskPageId = null;
-  taskPageReturn = null;
-  pendingOpenTaskId = null;
-  pinnedExternalTask = null;
-  taskActionNotice = null;
+  taskState.selectedTaskId = null;
+  taskState.taskPageId = null;
+  taskState.taskPageReturn = null;
+  taskState.pendingOpenTaskId = null;
+  taskState.pinnedExternalTask = null;
+  taskState.taskActionNotice = null;
   setSearchQuery(context, "");
   setOpenTask(null);
   window.history?.replaceState?.(null, "", buildTasksHash(context));
   if (context?.resetTaskPagination) context.resetTaskPagination();
   syncTaskControls(context);
-  renderTasks(taskList(context), context);
+  rerender(context);
   refreshTasks(context).catch((error) => console.error("Failed to clear task search", error));
 }
 
@@ -959,7 +814,7 @@ function refreshChips(context) {
 // restores the same filtered view instead of resetting to the default.
 export function buildTasksHash(context) {
   // The full-page view is its own route; the list filter waits behind it.
-  if (taskPageId) return `#tasks/${encodeURIComponent(taskPageId)}`;
+  if (taskState.taskPageId) return `#tasks/${encodeURIComponent(taskState.taskPageId)}`;
   return buildTasksListHash(context);
 }
 
@@ -979,7 +834,7 @@ function buildTasksListHash(context) {
   if (pilotWarningsOnly) sp.set("pilot", "warnings");
   const q = searchQueryValue(context);
   if (q) sp.set("q", q);
-  if (openTaskId) sp.set("open", openTaskId);
+  if (taskState.openTaskId) sp.set("open", taskState.openTaskId);
   const qs = sp.toString();
   return qs ? `#tasks?${qs}` : "#tasks";
 }
@@ -997,22 +852,22 @@ export function applyTasksHashQuery(query, context, page = null) {
     : query.toString() === (current.split("?")[1] || "");
   if (!replay && context?.cancelTaskLookup) context.cancelTaskLookup();
   const open = pageId || parseOpenTaskId(query.get("open"));
-  if (openTaskId !== open) {
-    if (selectedTaskId && selectedTaskId !== open) selectedTaskId = null;
-    pinnedExternalTask = null;
-    taskActionNotice = null;
+  if (taskState.openTaskId !== open) {
+    if (taskState.selectedTaskId && taskState.selectedTaskId !== open) taskState.selectedTaskId = null;
+    taskState.pinnedExternalTask = null;
+    taskState.taskActionNotice = null;
   }
   openTaskGeneration += 1;
-  openTaskId = open;
-  pendingOpenTaskId = open;
+  taskState.openTaskId = open;
+  taskState.pendingOpenTaskId = open;
   if (pageId) {
-    if (taskPageId !== pageId) taskPageError = null;
-    taskPageId = pageId;
+    if (taskState.taskPageId !== pageId) taskState.taskPageError = null;
+    taskState.taskPageId = pageId;
     return;
   }
   // Back from the full page (this pane's control or the browser's) returns to
   // the list as it was: the same filter, page and scroll.
-  const fromPage = Boolean(taskPageId) || returningFromPage;
+  const fromPage = Boolean(taskState.taskPageId) || returningFromPage;
   returningFromPage = false;
   exitTaskPageState();
   if (fromPage && query.toString() === (buildTasksListHash(context).split("?")[1] || "")) return;
@@ -1129,11 +984,11 @@ async function settleMergedPrs(context) {
     const skipped = Array.isArray(result && result.skipped) ? result.skipped : [];
     const settledText = settled.map((entry) => `${entry.task_id} (#${entry.pr_number})`).join(", ");
     const skippedText = skipped.map((entry) => entry.task_id).join(", ");
-    taskActionNotice = `Settled ${settled.length}${settledText ? `: ${settledText}` : ""}; skipped ${skipped.length}${skippedText ? `: ${skippedText}` : ""}`;
+    taskState.taskActionNotice = `Settled ${settled.length}${settledText ? `: ${settledText}` : ""}; skipped ${skipped.length}${skippedText ? `: ${skippedText}` : ""}`;
   } catch (error) {
     if (!visit.isCurrent()) return;
     const code = error && error.code ? error.code : "settle_merged_failed";
-    taskActionNotice = `[${code}] ${error && error.message ? error.message : String(error)}`;
+    taskState.taskActionNotice = `[${code}] ${error && error.message ? error.message : String(error)}`;
   } finally {
     settleMergedInFlight = false;
   }
@@ -1486,7 +1341,7 @@ function buildPilotAdmissionHold(task, detail, context) {
   approve.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, approve, context, { kind: "pilot", verdict: "approve-anyway" }); });
   actions.appendChild(approve);
   content.appendChild(actions);
-  const refusal = operatorRecordRefusals.get(taskDispatchIdentity(task));
+  const refusal = taskState.operatorRecordRefusals.get(taskDispatchIdentity(task));
   if (refusal) content.appendChild(actionErrorNode(refusal));
   return el("section", { class: "task-attention warning pilot-admission-hold", "aria-label": "Pilot admission hold" }, [
     el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
@@ -1495,7 +1350,7 @@ function buildPilotAdmissionHold(task, detail, context) {
 }
 
 function operatorRecordSignature(task) {
-  return operatorRecordRefusals.get(taskDispatchIdentity(task)) || "";
+  return taskState.operatorRecordRefusals.get(taskDispatchIdentity(task)) || "";
 }
 
 // One-click operator records: pilot-admission decisions and post-deploy
@@ -1526,8 +1381,8 @@ async function runOperatorRecord(task, detail, btnNode, context, request) {
     if (evidence === null) return;
     if (!evidence.trim()) {
       const message = "[pilot_admission_evidence_required] pilot admission needs evidence; it is recorded with the decision";
-      operatorRecordRefusals.set(key, message);
-      renderTasks(taskList(context), context);
+      taskState.operatorRecordRefusals.set(key, message);
+      rerender(context);
       return;
     }
     suffix = "/pilot-admission";
@@ -1543,8 +1398,8 @@ async function runOperatorRecord(task, detail, btnNode, context, request) {
     if (evidence === null) return;
     if (!evidence.trim()) {
       const message = "[post_deploy_evidence_required] post-deploy record needs evidence; it is recorded with the measurement";
-      operatorRecordRefusals.set(key, message);
-      renderTasks(taskList(context), context);
+      taskState.operatorRecordRefusals.set(key, message);
+      rerender(context);
       return;
     }
     suffix = "/post-deploy";
@@ -1552,7 +1407,7 @@ async function runOperatorRecord(task, detail, btnNode, context, request) {
     successText = `${task.id}: criterion ${criterion} recorded met`;
   }
   const requestPath = visit.path(taskMutationPath(task, suffix));
-  operatorRecordRefusals.delete(key);
+  taskState.operatorRecordRefusals.delete(key);
   for (const b of detail.querySelectorAll(".action, .attention-action")) b.disabled = true;
   try {
     await postJson(requestPath, body);
@@ -1560,17 +1415,17 @@ async function runOperatorRecord(task, detail, btnNode, context, request) {
     if (!visit.isCurrent()) return;
     const code = error && error.code ? error.code : "operator_record_refused";
     const message = `[${code}] ${error.message || String(error)}`;
-    operatorRecordRefusals.set(key, message);
-    renderTasks(taskList(context), context);
+    taskState.operatorRecordRefusals.set(key, message);
+    rerender(context);
     setTimeout(() => {
-      if (operatorRecordRefusals.get(key) !== message) return;
-      operatorRecordRefusals.delete(key);
-      renderTasks(taskList(context), context);
+      if (taskState.operatorRecordRefusals.get(key) !== message) return;
+      taskState.operatorRecordRefusals.delete(key);
+      rerender(context);
     }, OPERATOR_RECORD_REFUSAL_MS);
     return;
   }
   if (!visit.isCurrent()) return;
-  taskActionNotice = successText;
+  taskState.taskActionNotice = successText;
   await refreshTasks(context);
 }
 
@@ -1737,17 +1592,6 @@ function buildReadinessBlock(readiness, drain, workspace) {
     ]));
   }
   return wrap;
-}
-
-const GITHUB_PR_REF_SYSTEM = "github-pr";
-
-// The delivery pull request a row links: the task's github-pr ref, when it
-// carries an http(s) page. The server fills that page from the workspace's own
-// origin remote for a ref recorded with only its number.
-function pullRequestLink(task) {
-  const refs = Array.isArray(task.external_refs) ? task.external_refs : [];
-  const ref = refs.find((candidate) => candidate && candidate.system === GITHUB_PR_REF_SYSTEM && isHttpUrl(candidate.url));
-  return ref ? { number: String(ref.id || ""), url: ref.url } : null;
 }
 
 function buildExternalRefs(refs) {
@@ -1992,24 +1836,17 @@ function buildReviewGate(review) {
   return wrap;
 }
 
-// `open_decisions` on a task is compact: each request lists only its answer
-// ids. The label and one-line consequence that tell an operator what an id
-// does live on the decisions API, so the detail reads them from
-// `GET /api/decisions?task_id=` once per set of open requests and renders no
-// answer control until they are in hand.
-const taskDecisionLoads = new Map();
-
 function taskDecisionState(task, context) {
   const key = task.open_decisions.map((request) => request.id).join(",");
-  const existing = taskDecisionLoads.get(task.id);
+  const existing = taskState.taskDecisionLoads.get(task.id);
   if (existing && existing.key === key) return existing;
   const load = { key, pending: true, error: null, requests: new Map() };
-  taskDecisionLoads.set(task.id, load);
+  taskState.taskDecisionLoads.set(task.id, load);
   const visit = captureWorkspaceVisit();
   const settle = () => {
     load.pending = false;
-    if (taskDecisionLoads.get(task.id) === load && visit.isCurrent()) {
-      renderTasks(taskList(context), context);
+    if (taskState.taskDecisionLoads.get(task.id) === load && visit.isCurrent()) {
+      rerender(context);
     }
   };
   fetchJson(taskWorkspacePath(task, `/api/decisions?task_id=${encodeURIComponent(task.id)}`)).then(
@@ -2027,7 +1864,7 @@ function taskDecisionState(task, context) {
 
 // What the detail paints from the decision read, so its repaint follows the read.
 function decisionSignature(task) {
-  const load = taskDecisionLoads.get(task.id);
+  const load = taskState.taskDecisionLoads.get(task.id);
   return load ? `${load.pending}|${load.error || ""}|${load.requests.size}` : "";
 }
 
@@ -2062,8 +1899,8 @@ function buildOpenDecisions(task, detail, context) {
         const retry = el("button", { class: "action", type: "button", text: "Retry" });
         retry.addEventListener("click", (e) => {
           e.stopPropagation();
-          taskDecisionLoads.delete(task.id);
-          renderTasks(taskList(context), context);
+          taskState.taskDecisionLoads.delete(task.id);
+          rerender(context);
         });
         row.appendChild(retry);
       }
@@ -2119,7 +1956,7 @@ async function answerDecision(task, detail, requestId, answer, note, btnNode, co
     return;
   }
   if (!visit.isCurrent()) return;
-  taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
+  taskState.taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
   forgetTaskDetailLoad(task.id);
   await refreshTasks(context);
 }
@@ -2152,7 +1989,7 @@ function buildOwedCriteria(owed, task, detail, context) {
     wrap.appendChild(row);
   }
   if (task && detail && context) {
-    const refusal = operatorRecordRefusals.get(taskDispatchIdentity(task));
+    const refusal = taskState.operatorRecordRefusals.get(taskDispatchIdentity(task));
     if (refusal) wrap.appendChild(actionErrorNode(refusal));
   }
   return wrap;
@@ -2682,7 +2519,7 @@ function buildTaskFieldEditor(task, field, detail, context, editSlot = null) {
       editSlot,
     }),
   );
-  const feedback = fieldFeedback.get(fieldFeedbackKey(task.id, field));
+  const feedback = taskState.fieldFeedback.get(fieldFeedbackKey(task.id, field));
   const feedbackNode = buildMutationFeedback(feedback);
   if (feedbackNode) wrap.appendChild(feedbackNode);
   return wrap;
@@ -2691,9 +2528,9 @@ function buildTaskFieldEditor(task, field, detail, context, editSlot = null) {
 function completeFieldSave(taskId, field, updatedTask, context) {
   applyUpdatedTask(updatedTask, context);
   const key = fieldFeedbackKey(taskId, field);
-  fieldFeedback.set(key, { kind: "success", text: `${TASK_FIELD_EDITORS[field].label} saved` });
-  renderTasks(taskList(context), context);
-  scheduleFeedbackExpiry(fieldFeedback, key, context, FIELD_SAVED_NOTICE_MS);
+  taskState.fieldFeedback.set(key, { kind: "success", text: `${TASK_FIELD_EDITORS[field].label} saved` });
+  rerender(context);
+  scheduleFeedbackExpiry(taskState.fieldFeedback, key, context, FIELD_SAVED_NOTICE_MS);
 }
 
 /* ORB-12235: complexity gates dispatch — an unassessed task is withheld from
@@ -2707,7 +2544,7 @@ const TASK_COMPLEXITY_OPTIONS = ["low", "medium", "hard", "xhard"];
 function buildComplexityUpdateControl(task, context) {
   const cell = el("div", { class: "complexity-cell" });
   const mutable = canMutateTask(task);
-  const feedback = complexityFeedback.get(task.id);
+  const feedback = taskState.complexityFeedback.get(task.id);
   const label = `Update complexity for ${task.id}`;
   const select = el("select", {
     class: "task-complexity-select mono",
@@ -2754,13 +2591,13 @@ async function applyTaskComplexityChange(task, nextValue, context) {
   const mutationPath = visit.path(taskMutationPath(task));
   const previousValue = assessedComplexity(task);
   if (!nextValue || nextValue === previousValue || !canMutateTask(task)) return;
-  complexityFeedback.set(task.id, { kind: "pending", text: "saving…" });
-  renderTasks(taskList(context), context);
+  taskState.complexityFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  rerender(context);
   try {
     const updatedTask = await patchJson(mutationPath, { complexity: nextValue });
     if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
-    complexityFeedback.set(task.id, {
+    taskState.complexityFeedback.set(task.id, {
       kind: "success",
       text: "complexity saved",
       // Undo is offered only back to an assessed value; the endpoint refuses
@@ -2771,14 +2608,14 @@ async function applyTaskComplexityChange(task, nextValue, context) {
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    complexityFeedback.set(task.id, {
+    taskState.complexityFeedback.set(task.id, {
       kind: "error",
       text: `complexity update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
-  renderTasks(taskList(context), context);
-  scheduleFeedbackExpiry(complexityFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  rerender(context);
+  scheduleFeedbackExpiry(taskState.complexityFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
 /* ORB-12645: the comment thread.
@@ -3131,7 +2968,7 @@ function buildCommentCard(task, comment, index, context) {
   const foot = el("div", { class: "comment-foot" }, [summary, toggle]);
 
   const apply = () => {
-    const expanded = !long || expandedComments.has(key);
+    const expanded = !long || taskState.expandedComments.has(key);
     const showsRaw = rawComments.has(key);
     card.className = [
       "comment-card",
@@ -3162,8 +2999,8 @@ function buildCommentCard(task, comment, index, context) {
 
   toggle.addEventListener("click", (event) => {
     event.stopPropagation();
-    if (expandedComments.has(key)) expandedComments.delete(key);
-    else expandedComments.add(key);
+    if (taskState.expandedComments.has(key)) taskState.expandedComments.delete(key);
+    else taskState.expandedComments.add(key);
     apply();
   });
   rawToggle.addEventListener("click", (event) => {
@@ -3200,7 +3037,7 @@ function getCommentHash() {
 function buildCommentsPanel(task, context) {
   let isCollapsed = commentPrefs.collapsed === true;
   const currentHash = getCommentHash();
-  if (currentHash.startsWith(`#comment-${task.id}-`) && restoredCommentHash !== currentHash) {
+  if (currentHash.startsWith(`#comment-${task.id}-`) && taskState.restoredCommentHash !== currentHash) {
     isCollapsed = false;
   }
   let classes = "field-block collapsible comments-panel";
@@ -3281,7 +3118,7 @@ export function scrollToComment(hash = getCommentHash()) {
   }
   const currentHash = getCommentHash();
   if (currentHash && (hash === currentHash || rawId === currentHash.replace(/^#/, ""))) {
-    restoredCommentHash = currentHash;
+    taskState.restoredCommentHash = currentHash;
   }
   return true;
 }
@@ -3291,12 +3128,12 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
     const commentHash = getCommentHash();
     if (commentHash.startsWith("#comment-")) {
       if (scrollToComment(commentHash)) {
-        restoredCommentHash = commentHash;
+        taskState.restoredCommentHash = commentHash;
       } else {
-        restoredCommentHash = null;
+        taskState.restoredCommentHash = null;
       }
     } else {
-      restoredCommentHash = null;
+      taskState.restoredCommentHash = null;
     }
   });
 }
@@ -3334,7 +3171,7 @@ function renderCommentsPanel(panel, task, context) {
     collapseAll.addEventListener("click", (event) => {
       event.stopPropagation();
       for (let index = 0; index < comments.length; index++) {
-        expandedComments.delete(commentKey(task.id, index));
+        taskState.expandedComments.delete(commentKey(task.id, index));
       }
       renderCommentsPanel(panel, task, context);
     });
@@ -3383,10 +3220,6 @@ function renderCommentsPanel(panel, task, context) {
 // off-document and cannot be measured before it paints.
 const LONG_DESCRIPTION_CHARS = 700;
 const LONG_DESCRIPTION_LINES = 12;
-// Tasks whose description the operator expanded; a rebuild keeps it open.
-const expandedDescriptions = new Set();
-// Tasks whose acceptance criteria the operator expanded; a rebuild keeps them open.
-const expandedCriteria = new Set();
 
 function isLongDescription(text) {
   const value = String(text || "");
@@ -3569,7 +3402,7 @@ function buildTaskBlockCallout(task, context, detail) {
     read.addEventListener("click", () => {
       detail.activateTab("comments");
       const id = commentAnchorId(task.id, block.comment_index);
-      expandedComments.add(commentKey(task.id, block.comment_index));
+      taskState.expandedComments.add(commentKey(task.id, block.comment_index));
       const panel = detail.querySelector(".comments-panel");
       if (panel) renderCommentsPanel(panel, task, context);
       scrollToComment(`#${id}`);
@@ -3689,7 +3522,7 @@ function buildTaskDetail(task, context, drain = null) {
       ...(count ? { count } : {}),
     });
     if (isLongCriteria(task.acceptance_criteria)) {
-      const open = expandedCriteria.has(task.id);
+      const open = taskState.expandedCriteria.has(task.id);
       if (!open) block.classList.add("clamped");
       const toggle = el("button", {
         class: "ac-toggle",
@@ -3701,8 +3534,8 @@ function buildTaskDetail(task, context, drain = null) {
         event.stopPropagation();
         const nowOpen = block.classList.contains("clamped");
         block.classList.toggle("clamped", !nowOpen);
-        if (nowOpen) expandedCriteria.add(task.id);
-        else expandedCriteria.delete(task.id);
+        if (nowOpen) taskState.expandedCriteria.add(task.id);
+        else taskState.expandedCriteria.delete(task.id);
         toggle.setAttribute("aria-expanded", String(nowOpen));
         toggle.textContent = nowOpen ? "Show less" : "Show full AC";
       });
@@ -3714,7 +3547,7 @@ function buildTaskDetail(task, context, drain = null) {
     const actions = actionSlot();
     const block = addField(leftCol, "Description", taskMarkdownPanel(editor("description", actions)), false, false, { actions, class: "description-block" });
     if (isLongDescription(task.description)) {
-      const open = expandedDescriptions.has(task.id);
+      const open = taskState.expandedDescriptions.has(task.id);
       if (!open) block.classList.add("clamped");
       const toggle = el("button", {
         class: "description-toggle",
@@ -3726,8 +3559,8 @@ function buildTaskDetail(task, context, drain = null) {
         event.stopPropagation();
         const nowOpen = block.classList.contains("clamped");
         block.classList.toggle("clamped", !nowOpen);
-        if (nowOpen) expandedDescriptions.add(task.id);
-        else expandedDescriptions.delete(task.id);
+        if (nowOpen) taskState.expandedDescriptions.add(task.id);
+        else taskState.expandedDescriptions.delete(task.id);
         toggle.setAttribute("aria-expanded", String(nowOpen));
         toggle.textContent = nowOpen ? "Show less" : "Show full description";
       });
@@ -4774,7 +4607,7 @@ function buildTaskDetailPlaceholder(task, state, context) {
     retry.addEventListener("click", (e) => {
       e.stopPropagation();
       forgetTaskDetailLoad(task.id);
-      renderTasks(taskList(context), context);
+      rerender(context);
     });
     detail.appendChild(el("div", { class: "actions" }, [retry]));
   }
@@ -4798,7 +4631,7 @@ function buildActionsRow(task, detail, context, { includeLifecycle = true, inclu
   const actions = el("div", { class: `actions task-action-row ${kind}` });
   const mutable = canMutateTask(task);
   if (includeLifecycle && SHIP_STATUSES.has(task.status)) {
-    const shipped = shipInFlightTaskIds.has(taskDispatchIdentity(task));
+    const shipped = taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task));
     const btn = el("button", {
       class: "action ship",
       text: shipped ? "shipping" : "ship",
@@ -4876,7 +4709,7 @@ function buildStatusUpdateControl(task, context) {
     (status) => status && status !== task.status && !targets.includes(status),
   );
   const mutable = canMutateTask(task);
-  const feedback = statusFeedback.get(task.id);
+  const feedback = taskState.statusFeedback.get(task.id);
   const label = `Update status for ${task.id}`;
   const select = el("select", {
     class: "task-status-select mono",
@@ -4950,7 +4783,7 @@ function buildCrewUpdateControl(task, context, { withChip = true } = {}) {
   }
 
   const mutable = canMutateTask(task);
-  const feedback = crewFeedback.get(task.id);
+  const feedback = taskState.crewFeedback.get(task.id);
   const label = `Update crew for ${task.id}`;
   const select = el("select", {
     class: "task-crew-select mono",
@@ -4968,7 +4801,7 @@ function buildCrewUpdateControl(task, context, { withChip = true } = {}) {
   defaultOption.value = "";
   select.appendChild(defaultOption);
 
-  const crews = Array.isArray(lastCrewPayload.crews) ? lastCrewPayload.crews : [];
+  const crews = Array.isArray(taskState.lastCrewPayload.crews) ? taskState.lastCrewPayload.crews : [];
   for (const crew of crews) {
     const option = el("option", {
       text: crew.name,
@@ -5040,18 +4873,18 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   // the next change; on a folded row or notice it expires like the feedback it
   // replaced, so a refused undo does not linger there.
   const refuse = (text) => {
-    statusFeedback.set(task.id, { kind: "error", text });
-    renderTasks(taskList(context), context);
-    if (foldedStatusTasks.has(task.id) && selectedTaskId !== task.id) {
-      scheduleFeedbackExpiry(statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+    taskState.statusFeedback.set(task.id, { kind: "error", text });
+    rerender(context);
+    if (taskState.foldedStatusTasks.has(task.id) && taskState.selectedTaskId !== task.id) {
+      scheduleFeedbackExpiry(taskState.statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
     }
   };
   // A summary row lists the governed targets but not what each one requires —
   // the `done` requirement depends on the task's job run, which only the
   // detail endpoint reads. Ask it before deciding whether to prompt.
   if (!forced && !("required_field" in transition)) {
-    statusFeedback.set(task.id, { kind: "pending", text: "checking…" });
-    renderTasks(taskList(context), context);
+    taskState.statusFeedback.set(task.id, { kind: "pending", text: "checking…" });
+    rerender(context);
     let detail;
     try {
       detail = await loadTaskDetail(task, context);
@@ -5090,8 +4923,8 @@ async function applyTaskStatusChange(task, nextStatus, context) {
   }
 
   const previousValue = task.status;
-  statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
-  renderTasks(taskList(context), context);
+  taskState.statusFeedback.set(task.id, { kind: "pending", text: "saving…" });
+  rerender(context);
   try {
     const updatedTask = await patchJson(mutationPath, payload);
     if (!visit.isCurrent()) return;
@@ -5104,26 +4937,26 @@ async function applyTaskStatusChange(task, nextStatus, context) {
     if (reverse && !reverse.required_field) {
       feedback.undo = { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS };
     }
-    statusFeedback.set(task.id, feedback);
+    taskState.statusFeedback.set(task.id, feedback);
     // Fold the open detail in; an undo from a folded row keeps it folded. A
     // pinned detail is the only view of a filtered-out task, so it stays open.
     // A full page is that task's own view, so it stays too.
-    const pinned = pinnedExternalTask && pinnedExternalTask.id === task.id;
-    if (!pinned && taskPageId !== task.id && (selectedTaskId === task.id || foldedStatusTasks.has(task.id))) {
-      if (selectedTaskId === task.id) rowFocusAfterRender = task.id;
+    const pinned = taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === task.id;
+    if (!pinned && taskState.taskPageId !== task.id && (taskState.selectedTaskId === task.id || taskState.foldedStatusTasks.has(task.id))) {
+      if (taskState.selectedTaskId === task.id) taskState.rowFocusAfterRender = task.id;
       collapseTask(task.id);
-      foldedStatusTasks.set(task.id, merged);
+      taskState.foldedStatusTasks.set(task.id, merged);
     }
   } catch (error) {
     if (!visit.isCurrent()) return;
-    statusFeedback.set(task.id, {
+    taskState.statusFeedback.set(task.id, {
       kind: "error",
       text: `status update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
-  renderTasks(taskList(context), context);
-  scheduleFeedbackExpiry(statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
+  rerender(context);
+  scheduleFeedbackExpiry(taskState.statusFeedback, task.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
 // One confirm, naming the exact move, before the override leaves the browser.
@@ -5159,36 +4992,27 @@ async function applyTaskCrewChange(task, nextValue, context) {
   const mutationPath = visit.path(taskMutationPath(currentTask));
   const previousValue = explicitCrewValue(currentTask);
   if (nextValue === previousValue || !canMutateTask(currentTask)) return;
-  crewFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
-  renderTasks(taskList(context), context);
+  taskState.crewFeedback.set(currentTask.id, { kind: "pending", text: "saving…" });
+  rerender(context);
   try {
     const updatedTask = await patchJson(mutationPath, { crew: nextValue || null });
     if (!visit.isCurrent()) return;
     applyUpdatedTask(updatedTask, context);
-    crewFeedback.set(currentTask.id, {
+    taskState.crewFeedback.set(currentTask.id, {
       kind: "success",
       text: "crew saved",
       undo: { previousValue, expiresAt: Date.now() + MUTATION_UNDO_WINDOW_MS },
     });
   } catch (error) {
     if (!visit.isCurrent()) return;
-    crewFeedback.set(currentTask.id, {
+    taskState.crewFeedback.set(currentTask.id, {
       kind: "error",
       text: `crew update failed: ${error.message || String(error)}`,
     });
     console.error(error);
   }
-  renderTasks(taskList(context), context);
-  scheduleFeedbackExpiry(crewFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
-}
-
-// A failed action is announced when it appears: the row's own controls are the
-// only thing the operator is looking at, and a plain div is never read out.
-function actionErrorNode(text, remedy) {
-  const node = el("div", { class: "action-error", text });
-  node.setAttribute("role", "alert");
-  if (remedy) node.appendChild(el("div", { class: "action-error-remedy", text: remedy }));
-  return node;
+  rerender(context);
+  scheduleFeedbackExpiry(taskState.crewFeedback, currentTask.id, context, MUTATION_UNDO_WINDOW_MS + 500);
 }
 
 // Closing a form swaps the actions row back in, which drops focus to the page.
@@ -5261,19 +5085,19 @@ async function runPilot(task, detail, btnNode, context) {
     if (!visit.isCurrent()) return;
     const message = `run pilot failed: ${error.message || String(error)}`;
     pilotRefusals.set(key, message);
-    renderTasks(taskList(context), context);
+    rerender(context);
     setTimeout(() => {
       if (pilotRefusals.get(key) !== message) return;
       pilotRefusals.delete(key);
-      renderTasks(taskList(context), context);
+      rerender(context);
     }, PILOT_REFUSAL_MS);
     return;
   }
   const runId = result && result.run_id ? String(result.run_id) : "";
   if (!visit.isCurrent()) return;
   if (runId) pilotRunsByTask.set(key, { runId });
-  taskActionNotice = `${task.id}: pilot run ${runId || "(no run id)"} ${result && result.state ? result.state : "submitted"}`;
-  renderTasks(taskList(context), context);
+  taskState.taskActionNotice = `${task.id}: pilot run ${runId || "(no run id)"} ${result && result.state ? result.state : "submitted"}`;
+  rerender(context);
   if (runId) watchPilotRun(task, key, runId, visit, context);
 }
 
@@ -5298,7 +5122,7 @@ async function watchPilotRun(task, key, runId, visit, context) {
   }
   pilotRunsByTask.delete(key);
   if (!visit.isCurrent()) return;
-  if (state) taskActionNotice = `${task.id}: pilot run ${runId} ${state}`;
+  if (state) taskState.taskActionNotice = `${task.id}: pilot run ${runId} ${state}`;
   await refreshTasks(context);
 }
 
@@ -5383,19 +5207,19 @@ async function runTriage(task, detail, btnNode, context) {
     if (!visit.isCurrent()) return;
     const message = `triage failed: ${error.message || String(error)}`;
     triageRefusals.set(key, message);
-    renderTasks(taskList(context), context);
+    rerender(context);
     setTimeout(() => {
       if (triageRefusals.get(key) !== message) return;
       triageRefusals.delete(key);
-      renderTasks(taskList(context), context);
+      rerender(context);
     }, TRIAGE_REFUSAL_MS);
     return;
   }
   const runId = result && result.run_id ? String(result.run_id) : "";
   if (!visit.isCurrent()) return;
   if (runId) triageRunsByTask.set(key, { runId });
-  taskActionNotice = `${task.id}: triage run ${runId || "(no run id)"} ${result && result.state ? result.state : "submitted"}`;
-  renderTasks(taskList(context), context);
+  taskState.taskActionNotice = `${task.id}: triage run ${runId || "(no run id)"} ${result && result.state ? result.state : "submitted"}`;
+  rerender(context);
   if (runId) watchTriageRun(task, key, runId, visit, context);
 }
 
@@ -5420,7 +5244,7 @@ async function watchTriageRun(task, key, runId, visit, context) {
   }
   triageRunsByTask.delete(key);
   if (!visit.isCurrent()) return;
-  if (state) taskActionNotice = `${task.id}: triage run ${runId} ${state}`;
+  if (state) taskState.taskActionNotice = `${task.id}: triage run ${runId} ${state}`;
   await refreshTasks(context);
 }
 
@@ -5500,7 +5324,7 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     if (!reason.trim()) {
       const message = "[requeue_reason_required] requeue needs a reason; it is recorded with the decision";
       recoveryRefusals.set(key, message);
-      renderTasks(taskList(context), context);
+      rerender(context);
       return;
     }
     suffix = "/requeue";
@@ -5520,16 +5344,16 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     const code = error && error.code ? error.code : "recovery_refused";
     const message = `[${code}] ${error.message || String(error)}`;
     recoveryRefusals.set(key, message);
-    renderTasks(taskList(context), context);
+    rerender(context);
     setTimeout(() => {
       if (recoveryRefusals.get(key) !== message) return;
       recoveryRefusals.delete(key);
-      renderTasks(taskList(context), context);
+      rerender(context);
     }, RECOVERY_REFUSAL_MS);
     return;
   }
   if (!visit.isCurrent()) return;
-  taskActionNotice = successText;
+  taskState.taskActionNotice = successText;
   await refreshTasks(context);
 }
 
@@ -5595,7 +5419,7 @@ async function loadFixPrReadiness(task, key, prNumber, context) {
   entry.pending = false;
   entry.at = Date.now();
   if (fixPrReadiness.get(key) !== entry || !visit.isCurrent()) return;
-  renderTasks(taskList(context), context);
+  rerender(context);
 }
 
 // Why Fix PR is disabled, or "" when it is offered.
@@ -5664,11 +5488,11 @@ function fixPrSignature(task) {
 
 function showFixPrFeedback(key, feedback, context) {
   fixPrFeedback.set(key, feedback);
-  renderTasks(taskList(context), context);
+  rerender(context);
   setTimeout(() => {
     if (fixPrFeedback.get(key) !== feedback) return;
     fixPrFeedback.delete(key);
-    renderTasks(taskList(context), context);
+    rerender(context);
   }, FIX_PR_FEEDBACK_MS);
 }
 
@@ -5717,8 +5541,8 @@ async function shipTask(task, detail, btnNode, context) {
   const dispatchKey = taskDispatchIdentity(task);
   const requestPath = visit.path(taskWorkspacePath(task, "/api/workflows/ship"));
   if (!canMutateTask(task)) return;
-  if (shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
-  shipInFlightTaskIds.add(dispatchKey);
+  if (taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
+  taskState.shipInFlightTaskIds.add(dispatchKey);
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
   for (const b of detail.querySelectorAll(".action")) b.disabled = true;
@@ -5727,19 +5551,19 @@ async function shipTask(task, detail, btnNode, context) {
   let dispatched = false;
   try {
     const result = await postJson(requestPath, { task_ids: [task.id] });
-    shipInFlightTaskIds.delete(dispatchKey);
+    taskState.shipInFlightTaskIds.delete(dispatchKey);
     dispatched = true;
     if (!visit.isCurrent()) return;
     const runId = result && result.run_id ? result.run_id : "(no run id)";
     const state = result && result.state ? result.state : "submitted";
-    taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
+    taskState.taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
     collapseTask(task.id);
     await refreshTasks(context);
   } catch (error) {
-    if (!dispatched) shipInFlightTaskIds.delete(dispatchKey);
+    if (!dispatched) taskState.shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
     // A refresh may have replaced the detail while this request was pending.
-    renderTasks(taskList(context), context);
+    rerender(context);
     detail = $("detail-" + task.id) || detail;
     btnNode = detail.querySelector(".action.ship") || btnNode;
     for (const b of detail.querySelectorAll(".action")) b.disabled = false;
@@ -5914,7 +5738,7 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     accepted = true;
     if (!visit.isCurrent()) return;
     if (opts.collapseOnSuccess !== false) collapseTask(task.id);
-    if (opts.successNotice) taskActionNotice = opts.successNotice;
+    if (opts.successNotice) taskState.taskActionNotice = opts.successNotice;
     await refreshTasks(context);
   } catch (err) {
     if (!visit.isCurrent()) return;
@@ -5969,17 +5793,17 @@ async function approveReviewTask(task, detail, btnNode, context) {
 // while the detail is open again (it shows the feedback itself) or once the
 // feedback has expired.
 function buildFoldedStatusFeedback(taskId, context) {
-  if (!foldedStatusTasks.has(taskId) || selectedTaskId === taskId) return null;
-  const entry = statusFeedback.get(taskId);
+  if (!taskState.foldedStatusTasks.has(taskId) || taskState.selectedTaskId === taskId) return null;
+  const entry = taskState.statusFeedback.get(taskId);
   return buildMutationFeedback(entry, () => {
     if (!entry || !entry.undo) return;
-    const task = taskList(context).find((t) => t && t.id === taskId) || foldedStatusTasks.get(taskId);
+    const task = taskList(context).find((t) => t && t.id === taskId) || taskState.foldedStatusTasks.get(taskId);
     applyTaskStatusChange(task, entry.undo.previousValue, context);
   });
 }
 
 function foldedStatusSignature(taskId) {
-  return foldedStatusTasks.has(taskId) && selectedTaskId !== taskId ? feedbackSignature(statusFeedback, taskId) : "";
+  return taskState.foldedStatusTasks.has(taskId) && taskState.selectedTaskId !== taskId ? feedbackSignature(taskState.statusFeedback, taskId) : "";
 }
 
 // Folded status feedback for a task with no row on screen, usually because its
@@ -5987,8 +5811,8 @@ function foldedStatusSignature(taskId) {
 // pinned detail shows its own.
 function buildFoldedStatusNotices(rowIds, context) {
   const notices = [];
-  for (const [taskId, task] of foldedStatusTasks) {
-    if (rowIds.has(taskId) || (pinnedExternalTask && pinnedExternalTask.id === taskId)) continue;
+  for (const [taskId, task] of taskState.foldedStatusTasks) {
+    if (rowIds.has(taskId) || (taskState.pinnedExternalTask && taskState.pinnedExternalTask.id === taskId)) continue;
     const feedback = buildFoldedStatusFeedback(taskId, context);
     if (!feedback) continue;
     const notice = el("div", { class: "task-status-notice" }, [
@@ -6003,13 +5827,13 @@ function buildFoldedStatusNotices(rowIds, context) {
 }
 
 function takeTaskActionNotice() {
-  if (!taskActionNotice) return null;
-  const notice = el("div", { class: "task-action-notice", text: taskActionNotice });
+  if (!taskState.taskActionNotice) return null;
+  const notice = el("div", { class: "task-action-notice", text: taskState.taskActionNotice });
   notice.dataset.key = "task-action-notice";
-  notice.dataset.hash = taskActionNotice;
+  notice.dataset.hash = taskState.taskActionNotice;
   notice.setAttribute("role", "status");
   notice.setAttribute("aria-live", "polite");
-  taskActionNotice = null;
+  taskState.taskActionNotice = null;
   return notice;
 }
 
@@ -6109,7 +5933,7 @@ function buildPinnedTask(ptask, context) {
     el("span", { class: "pinned-note", text: `Not in the current list · ${ptask.status}` }),
   ]);
   stopRowInteraction(row);
-  row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, ptask.id)}`;
+  row.dataset.hash = `${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, ptask.id)}`;
 
   const drain = taskDrainState(ptask, context);
   const detail = buildTaskDetail(ptask, context, drain);
@@ -6150,7 +5974,7 @@ function quickActionSignature(task) {
   const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
   const navigable = task.job_run_navigable === false ? "0" : "1";
   const pullRequest = pullRequestLink(task);
-  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}:${state.at || ""}` : ""}`;
+  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}:${state.at || ""}` : ""}`;
 }
 
 function summaryExecutionLocation(machine) {
@@ -6243,7 +6067,7 @@ function buildQuickAction(task, context) {
     spec = { kind: "ship", text: "Ship", title: `Ship ${task.id}: dispatch it through the pipeline with its own crew` };
   }
   if (!spec) return cell;
-  const pending = (state && state.kind === "pending") || (spec.kind === "ship" && shipInFlightTaskIds.has(taskDispatchIdentity(task)));
+  const pending = (state && state.kind === "pending") || (spec.kind === "ship" && taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task)));
   // Ship reads in the accent while nothing holds the task, and quietly while
   // the drain snapshot says it waits; it ships either way.
   const ready = spec.kind === "ship" && drainReadinessFor(task.id)?.pool === "eligible";
@@ -6306,7 +6130,7 @@ function buildQuickActionError(task, context) {
     event.stopPropagation();
     if (quickActionState.get(task.id) === state) {
       quickActionState.delete(task.id);
-      renderTasks(taskList(context || paneContext), context || paneContext);
+      rerender(context || taskState.paneContext);
     }
   });
   const wrap = el("div", { class: "task-quick-error", title: "" }, [
@@ -6325,20 +6149,20 @@ async function runQuickAction(task, kind, context) {
   const requestPath = visit.path(kind === "ship" ? taskWorkspacePath(task, "/api/workflows/ship") : taskMutationPath(task, "/approve"));
   if (!canRunQuickAction(task)) return;
   if (quickActionState.get(task.id)?.kind === "pending") return;
-  if (kind === "ship" && shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
+  if (kind === "ship" && taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
   quickActionState.set(task.id, { kind: "pending", text: kind });
-  if (kind === "ship") shipInFlightTaskIds.add(dispatchKey);
-  renderTasks(taskList(context), context);
+  if (kind === "ship") taskState.shipInFlightTaskIds.add(dispatchKey);
+  rerender(context);
   let dispatched = false;
   try {
     if (kind === "ship") {
       const result = await postJson(requestPath, { task_ids: [task.id] });
-      shipInFlightTaskIds.delete(dispatchKey);
+      taskState.shipInFlightTaskIds.delete(dispatchKey);
       dispatched = true;
       if (!visit.isCurrent()) return;
       const runId = result && result.run_id ? result.run_id : "(no run id)";
       const state = result && result.state ? result.state : "submitted";
-      taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
+      taskState.taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
     } else {
       let claimed = null;
       if (task.status === "review") {
@@ -6359,19 +6183,19 @@ async function runQuickAction(task, kind, context) {
       }
       dispatched = true;
       if (!visit.isCurrent()) return;
-      taskActionNotice = claimed?.claim
+      taskState.taskActionNotice = claimed?.claim
         ? `${task.id}: handoff approved; the owner landing job completes it`
         : `${task.id} approved and moved to ${task.status === "review" ? "done" : "backlog"}`;
     }
     quickActionState.delete(task.id);
     await refreshTasks(context);
   } catch (error) {
-    if (kind === "ship" && !dispatched) shipInFlightTaskIds.delete(dispatchKey);
+    if (kind === "ship" && !dispatched) taskState.shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
     quickActionState.set(task.id, { kind: "error", text: dispatched
       ? `${kind === "ship" ? "Ship" : "Approval"} was accepted, but the view could not refresh: ${error.message || String(error)}. Use Refresh to update it.`
       : `${kind} failed: ${error.message || String(error)}`, at: Date.now() });
-    renderTasks(taskList(context), context);
+    rerender(context);
     scheduleFeedbackExpiry(quickActionState, task.id, context, QUICK_ACTION_ERROR_MS);
   }
 }
@@ -6409,10 +6233,6 @@ function showOnOwnerButton(name) {
 // it is a glance filter, cleared when the workspace changes.
 let readyPoolFilter = null;
 onWorkspaceChange(() => { readyPoolFilter = null; });
-
-function plural(count, word) {
-  return `${count} ${word}${count === 1 ? "" : "s"}`;
-}
 
 // The In progress card's head: where the runs are and how many files they
 // hold, from the rows themselves. Falls back to the plain hint when no row
@@ -6485,7 +6305,7 @@ function buildBacklogReadiness(group, context) {
       button.disabled = counts[key] === 0 && !on;
       button.addEventListener("click", () => {
         readyPoolFilter = on ? null : key;
-        renderTasks(taskList(context), context);
+        rerender(context);
       });
       return button;
     }),
@@ -6511,7 +6331,7 @@ export function renderTasks(tasks, context) {
   if (!panelCanRender("tasks-body")) return;
   const body = $("tasks-body");
   if (!body) return;
-  paneContext = context;
+  taskState.paneContext = context;
   // Expired row-action errors clear on the next render (the regular refresh
   // included), so the row recovers its layout without operator action.
   pruneQuickActionErrors();
@@ -6527,16 +6347,16 @@ export function renderTasks(tasks, context) {
   // Auto-clear a pinned jump only when the task is actually in the filtered
   // list. Matching status/search chips is not enough: a truncated fetch can
   // omit the jumped task even when its chip is on.
-  if (pinnedExternalTask && pinnedExternalTask.task) {
-    const p = pinnedExternalTask.task;
+  if (taskState.pinnedExternalTask && taskState.pinnedExternalTask.task) {
+    const p = taskState.pinnedExternalTask.task;
     if (filterTasks(tasks, context).some((task) => task.id === p.id)) {
-      pinnedExternalTask = null;
-      if (openTaskId === p.id) selectedTaskId = p.id;
+      taskState.pinnedExternalTask = null;
+      if (taskState.openTaskId === p.id) taskState.selectedTaskId = p.id;
     }
   }
   resolvePendingOpenTask(tasks, context);
-  for (const taskId of foldedStatusTasks.keys()) {
-    if (!statusFeedback.has(taskId)) foldedStatusTasks.delete(taskId);
+  for (const taskId of taskState.foldedStatusTasks.keys()) {
+    if (!taskState.statusFeedback.has(taskId)) taskState.foldedStatusTasks.delete(taskId);
   }
 
   // Collected as a plain array rather than a document fragment: a fragment
@@ -6618,7 +6438,7 @@ export function renderTasks(tasks, context) {
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -6671,7 +6491,7 @@ export function renderTasks(tasks, context) {
           expanded: false,
           controls: "task-detail-pane",
           onToggle: () => {
-            if (selectedTaskId === t.id && !pinnedExternalTask) closeTaskPane(context, { forget: true });
+            if (taskState.selectedTaskId === t.id && !taskState.pinnedExternalTask) closeTaskPane(context, { forget: true });
             else selectTask(t.id, context, { anchor: row });
           },
         });
@@ -6697,20 +6517,20 @@ export function renderTasks(tasks, context) {
   finishTaskRender(body);
   const commentHash = getCommentHash();
   if (commentHash.startsWith("#comment-")) {
-    if (restoredCommentHash !== commentHash) {
+    if (taskState.restoredCommentHash !== commentHash) {
       if (scrollToComment(commentHash)) {
-        restoredCommentHash = commentHash;
+        taskState.restoredCommentHash = commentHash;
       }
     }
   } else {
-    restoredCommentHash = null;
+    taskState.restoredCommentHash = null;
   }
 }
 
 // The selected row reads as selected without being rebuilt: its class and
 // its disclosure state are set on the node the list already holds.
 function syncRowSelection(body) {
-  const selected = !pinnedExternalTask && selectedTaskId ? `task-${selectedTaskId}` : null;
+  const selected = !taskState.pinnedExternalTask && taskState.selectedTaskId ? `task-${taskState.selectedTaskId}` : null;
   for (const row of body.querySelectorAll(".row")) {
     if (!row.dataset.key || !row.dataset.key.startsWith("task-")) continue;
     const on = row.dataset.key === selected;
@@ -6726,16 +6546,16 @@ function finishTaskRender(body) {
   const active = document.activeElement;
   const pane = $("task-detail-pane");
   const focusLost = !active || active === document.body;
-  if (listRestore && !taskPageId) {
-    const restore = listRestore;
-    listRestore = null;
+  if (taskState.listRestore && !taskState.taskPageId) {
+    const restore = taskState.listRestore;
+    taskState.listRestore = null;
     if (restore.scrollTop != null) body.scrollTop = restore.scrollTop;
     else revealTaskRow(restore.id, "center");
     if (focusLost || (pane && pane.contains && pane.contains(active))) focusTaskRow(restore.id);
   }
-  if (rowFocusAfterRender) {
-    const taskId = rowFocusAfterRender;
-    rowFocusAfterRender = null;
+  if (taskState.rowFocusAfterRender) {
+    const taskId = taskState.rowFocusAfterRender;
+    taskState.rowFocusAfterRender = null;
     if (focusLost) focusTaskRow(taskId);
   }
 }
@@ -6747,8 +6567,8 @@ function renderTaskPane(filtered, context) {
   const pane = $("task-detail-pane");
   const paneBody = $("task-detail-body");
   if (!pane || !paneBody) return;
-  const ptask = pinnedExternalTask && pinnedExternalTask.task ? pinnedExternalTask.task : null;
-  const listTask = !ptask && selectedTaskId ? filtered.find((task) => task.id === selectedTaskId) || null : null;
+  const ptask = taskState.pinnedExternalTask && taskState.pinnedExternalTask.task ? taskState.pinnedExternalTask.task : null;
+  const listTask = !ptask && taskState.selectedTaskId ? filtered.find((task) => task.id === taskState.selectedTaskId) || null : null;
   const shown = ptask || listTask;
   const existing = new Map();
   for (const node of paneBody.children) {
@@ -6765,7 +6585,7 @@ function renderTaskPane(filtered, context) {
     } else {
       nodes.push(buildListTaskDetail(listTask, drafts, existing, context));
     }
-  } else if (taskPageId) {
+  } else if (taskState.taskPageId) {
     nodes.push(buildTaskPagePlaceholder(context));
   }
   syncNodes(paneBody, nodes);
@@ -6774,11 +6594,11 @@ function renderTaskPane(filtered, context) {
   const main = $("tasks-main");
   if (main) {
     main.classList.toggle("task-pane-open", open);
-    main.classList.toggle("task-page-mode", open && Boolean(taskPageId));
+    main.classList.toggle("task-page-mode", open && Boolean(taskState.taskPageId));
   }
   syncPaneChrome(open);
-  if (focusPaneTitle && open) {
-    focusPaneTitle = false;
+  if (taskState.focusPaneTitle && open) {
+    taskState.focusPaneTitle = false;
     focusPaneHeading();
   }
 }
@@ -6812,7 +6632,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${operatorRecordSignature(t)}-${fixPrSignature(t)}-${decisionSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${taskState.shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${operatorRecordSignature(t)}-${fixPrSignature(t)}-${decisionSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
@@ -6838,7 +6658,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
 }
 
 function buildPaneHead(task, pinned, context) {
-  const page = taskPageId === task.id;
+  const page = taskState.taskPageId === task.id;
   const back = el("button", {
     class: "action task-pane-back",
     type: "button",
@@ -6885,19 +6705,19 @@ function buildPaneHead(task, pinned, context) {
 function buildTaskPagePlaceholder(context) {
   const back = el("button", { class: "action task-pane-back", type: "button", text: "Back to list" });
   back.addEventListener("click", () => closeTaskPane(context));
-  const id = makeCopyButton(taskPageId, { class: "id mono", title: "Copy task ID" });
+  const id = makeCopyButton(taskState.taskPageId, { class: "id mono", title: "Copy task ID" });
   const note = el("p", {
-    class: taskPageError ? "panel-placeholder action-error" : "panel-placeholder",
-    text: taskPageError || `Loading ${taskPageId}…`,
+    class: taskState.taskPageError ? "panel-placeholder action-error" : "panel-placeholder",
+    text: taskState.taskPageError || `Loading ${taskState.taskPageId}…`,
     role: "status",
     "aria-live": "polite",
   });
-  const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: taskPageId });
+  const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: taskState.taskPageId });
   title.tabIndex = -1;
   const bar = el("div", { class: "task-pane-bar" }, [id, el("span", { class: "task-pane-spacer" }), back]);
   const node = el("div", { class: "task-pane-head" }, [bar, title, note]);
-  node.dataset.key = `pane-page-${taskPageId}`;
-  node.dataset.hash = taskPageError || "loading";
+  node.dataset.key = `pane-page-${taskState.taskPageId}`;
+  node.dataset.hash = taskState.taskPageError || "loading";
   return node;
 }
 
@@ -6925,23 +6745,23 @@ function taskIdOfRow(row) {
 // Roving focus moved to another row: while the pane shows a list task, it
 // follows. A pinned result or a full page is not a list selection.
 function followRovingSelection(button) {
-  if (!selectedTaskId || pinnedExternalTask || taskPageId || !paneContext) return;
+  if (!taskState.selectedTaskId || taskState.pinnedExternalTask || taskState.taskPageId || !taskState.paneContext) return;
   const taskId = taskIdOfRow(button.closest ? button.closest(".row") : null);
-  if (taskId && taskId !== selectedTaskId) selectTask(taskId, paneContext);
+  if (taskId && taskId !== taskState.selectedTaskId) selectTask(taskId, taskState.paneContext);
 }
 
 // j/k from inside the pane: select the next or previous row and keep the
 // keyboard in the pane, on the new task's heading.
 function moveTaskSelection(step) {
   const body = $("tasks-body");
-  if (!body || !paneContext) return false;
+  if (!body || !taskState.paneContext) return false;
   const buttons = Array.from(body.querySelectorAll("[data-row-focus]"))
     .filter((button) => typeof button.getClientRects !== "function" || button.getClientRects().length > 0);
-  const at = buttons.findIndex((button) => taskIdOfRow(button.closest(".row")) === selectedTaskId);
+  const at = buttons.findIndex((button) => taskIdOfRow(button.closest(".row")) === taskState.selectedTaskId);
   const next = at < 0 ? buttons[0] : buttons[at + step];
   const taskId = next ? taskIdOfRow(next.closest(".row")) : null;
   if (!taskId) return false;
-  selectTask(taskId, paneContext);
+  selectTask(taskId, taskState.paneContext);
   revealTaskRow(taskId);
   focusPaneHeading();
   return true;
@@ -7080,7 +6900,7 @@ function wirePaneResizer() {
 // closes the pane (or leaves the full page), and j/k inside the pane move the
 // selection. Keys typed into a field stay with the field.
 export function wireTaskPane(context) {
-  paneContext = paneContext || context;
+  taskState.paneContext = taskState.paneContext || context;
   applyPaneWidth(loadPaneWidth());
   wirePaneResizer();
   const body = $("tasks-body");
@@ -7091,13 +6911,13 @@ export function wireTaskPane(context) {
     const target = event.target;
     if (!target || !target.matches || !target.matches("[data-row-focus]")) return;
     const taskId = taskIdOfRow(target.closest(".row"));
-    if (!taskId || taskId !== selectedTaskId || pinnedExternalTask) return;
+    if (!taskId || taskId !== taskState.selectedTaskId || taskState.pinnedExternalTask) return;
     event.preventDefault();
-    openTaskPage(taskId, paneContext || context);
+    openTaskPage(taskId, taskState.paneContext || context);
   });
   pane.addEventListener("keydown", (event) => {
     if ((event.key !== "j" && event.key !== "k") || event.altKey || event.ctrlKey || event.metaKey) return;
-    if (taskPageId || pinnedExternalTask || isEditableTarget(event.target)) return;
+    if (taskState.taskPageId || taskState.pinnedExternalTask || isEditableTarget(event.target)) return;
     if (moveTaskSelection(event.key === "j" ? 1 : -1)) event.preventDefault();
   });
   document.addEventListener("keydown", (event) => {
@@ -7106,7 +6926,7 @@ export function wireTaskPane(context) {
     // The composer and other dialogs of the page keep their own Esc.
     if (event.target && event.target.closest && event.target.closest("[role=dialog]:not(#task-detail-pane), #task-create-panel")) return;
     event.preventDefault();
-    closeTaskPane(paneContext || context, { forget: true });
+    closeTaskPane(taskState.paneContext || context, { forget: true });
   });
   // The sheet follows the viewport and is released whenever Tasks is not the
   // destination on screen.
