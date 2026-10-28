@@ -29,7 +29,7 @@ whose requirements never override a deny [ORB-15162]
 field-level operator authorization already exists in
 [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs); and claimed
 (follower) implementers already refuse coordination requirements in
-[`serve.rs`](../../../crates/orbit-core/src/application/distributed/serve.rs).
+[`serve/admission.rs`](../../../crates/orbit-core/src/application/distributed/serve/admission.rs).
 
 ## Problem
 
@@ -78,7 +78,7 @@ denied ones.
 | Requirements must be exact canonical names of registered, agent-facing, enabled tools; wildcards are refused | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) |
 | Field-level operator authorization: `orbit.auto_task.update` carrying `expected_enabled`, and `orbit.auto_task.mint` carrying `acknowledge_unconditional`, additionally require the governed operation `orbit.routine.control` | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs) (`authorize_registered_tool`), [`catalog.rs`](../../../crates/orbit-common/src/governance/authorization/catalog.rs) (`orbit.routine.control`, Operator-only) |
 | Every governed tool call passes one capability chokepoint; a session's capabilities, not its asserted mode, decide | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs), [`authorization.rs`](../../../crates/orbit-runtime/src/authorization.rs) (`authorize_tool_operation`) |
-| A claimed implementer is held when a requirement is in `CLAIMED_MODE_DENIED_TOOLS` or is a coordination tool outside the closed claimed-owner bridge | [`serve.rs`](../../../crates/orbit-core/src/application/distributed/serve.rs) (`claimed_required_tool_hold`), [`invocation.rs`](../../../crates/orbit-types/src/tool/invocation.rs) (`CLAIMED_MODE_DENIED_TOOLS`, `CLAIMED_OWNER_TOOLS`) |
+| A claimed implementer is held when a requirement is in `CLAIMED_MODE_DENIED_TOOLS` or is a coordination tool outside the closed claimed-owner bridge | [`serve/admission.rs`](../../../crates/orbit-core/src/application/distributed/serve/admission.rs) (`claimed_required_tool_hold`), [`invocation.rs`](../../../crates/orbit-types/src/tool/invocation.rs) (`CLAIMED_MODE_DENIED_TOOLS`, `CLAIMED_OWNER_TOOLS`) |
 | An activity's system of record is its durable artifact; agent-loop output is advisory and the returned object is not persisted as the decision record | [`4_decisions.md`](../activity-job/4_decisions.md) (activity-job: "provider output is not the system of record") |
 
 ### 1. Who can grant — operator only, frozen at dispatch

@@ -159,12 +159,12 @@ A new admission exclusion, `Scheduled`, beside `ProviderBackoff`:
     (`application/admission/backlog_exclusion/snapshot.rs`, `listing.rs`,
     `scheduled_exclusion` in `exclusions.rs`). The owner's pull admission,
     before and inside the claim section
-    (`application/distributed/serve.rs`, `admit_pull_request`). And the
+    (`application/distributed/serve/admission.rs`, `admit_pull_request`). And the
     workflow-entry check
     `ensure_task_can_enter_workflow_honouring_schedule`
     (`application/task/transitions.rs`), which is shared by explicit ship
     (`application/job/pipeline/submit.rs`), the gate's dispatch re-check
-    (`application/job/pipeline_actions/gate_admission.rs`) and worktree
+    (`application/job/pipeline_actions/gate/admission.rs`) and worktree
     admission (`admit_task_for_workflow_as_system`, reached from
     `adapter/engine_host/runtime_host/claims.rs`). So a resumed or
     replayed gate re-checks it too. Source repair checks the hold before
