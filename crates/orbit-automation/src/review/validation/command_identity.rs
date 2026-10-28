@@ -11,7 +11,9 @@ use orbit_types::workflow::ReviewValidation;
 /// required pass of `cargo test -p x` that omits `check`. The replacement must
 /// carry `check: "unit"` or normalize to the command `unit`. Conversely, an
 /// explicit `check: "cargo test -p x"` matches that command without a check.
-/// This rule also governs retained obligations and diagnostic contradictions.
+/// An explicit `check` is normalized like a command, so a leading `NAME=value`
+/// on either side does not split one check into two. This rule also governs
+/// retained obligations and diagnostic contradictions.
 pub(super) fn same_check(left: &ReviewValidation, right: &ReviewValidation) -> bool {
     if matches!(
         (left.record_id(), right.record_id()),
@@ -27,18 +29,24 @@ pub(super) fn same_check(left: &ReviewValidation, right: &ReviewValidation) -> b
 
 /// The explicit identity takes precedence over the normalized command.
 fn effective_check_identity(record: &ReviewValidation) -> Option<String> {
-    check_identity(record)
-        .map(str::to_owned)
-        .or_else(|| normalized_command(record))
+    check_identity(record).or_else(|| normalized_command(record))
 }
 
-/// A present, non-empty `check` identity.
-fn check_identity(record: &ReviewValidation) -> Option<&str> {
-    record
-        .check
-        .as_deref()
-        .map(str::trim)
-        .filter(|check| !check.is_empty())
+/// A present, non-empty `check` identity, normalized as a command is, so
+/// `RUSTDOCFLAGS="-D warnings" cargo doc …` and `cargo doc …` name one check.
+fn check_identity(record: &ReviewValidation) -> Option<String> {
+    record.check.as_deref().and_then(identity_text)
+}
+
+/// The identity an explicit `check` or a host command names: the command
+/// normalization, so a leading `NAME=value` does not change the check. Text
+/// that is only assignments keeps its trimmed form rather than falling back
+/// to the command; blank text names nothing.
+fn identity_text(text: &str) -> Option<String> {
+    normalize_command_text(text).or_else(|| {
+        let trimmed = text.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    })
 }
 
 /// Whether `record` is the host-required command.
@@ -47,7 +55,7 @@ fn check_identity(record: &ReviewValidation) -> Option<&str> {
 /// different check. The command that remains is compared in full. A
 /// reviewer may also set `check` to the host command string when the run
 /// is wrapped in any other way (`env`, a shell prefix); that identity is
-/// the host command.
+/// the host command, normalized the same way.
 pub fn same_host_command(record: &ReviewValidation, host_command: &str) -> bool {
     let same_command = matches!(
         (
@@ -56,7 +64,10 @@ pub fn same_host_command(record: &ReviewValidation, host_command: &str) -> bool 
         ),
         (Some(left), Some(right)) if left == right
     );
-    let same_identity = check_identity(record).is_some_and(|check| check == host_command.trim());
+    let same_identity = matches!(
+        (check_identity(record), identity_text(host_command)),
+        (Some(left), Some(right)) if left == right
+    );
     same_command || same_identity
 }
 

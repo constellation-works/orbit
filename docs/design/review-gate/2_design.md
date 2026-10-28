@@ -400,8 +400,10 @@ spent. It also requires every command in the immutable owner snapshot to be
 present as `required` and `passed`, or to be a valid superseded record with
 a passing required check of the same effective identity anywhere in the report.
 A record's effective
-identity is its non-empty, trimmed `check`, falling back to its normalized
-command. Explicit identities take precedence even when command text matches.
+identity is its non-empty `check`, normalized the same way as a command
+(whitespace collapsed, leading `NAME=value` words dropped), falling back to its
+normalized command. Explicit identities take precedence even when command text
+matches.
 Without a shared record id, a superseded `cargo test -p x` attempt with
 `check: "unit"` is therefore not replaced by a required pass of the identical
 command that omits `check`: their effective identities are `unit` and
@@ -432,7 +434,7 @@ invalid regardless of identity.
 | `required` (default) | A check the final candidate must pass | `passed`; `failed`, `denied`, and `not_run` all block |
 | `expected_failure` | A negative control — the superseded assertion, the pre-fix reproduction | `failed`; any other outcome contradicts the claim |
 | `excluded` | An action outside the authorized scope, deliberately not performed | `not_run` or `denied`; actually running it contradicts the exclusion |
-| `superseded` | A diagnostic attempt a required check on the final candidate replaced | a record anywhere in the report that is `required` and `passed` and has the same effective identity: its non-empty, trimmed `check`, otherwise its `command` with whitespace and leading `NAME=value` assignments normalized. An explicit identity can match another record's normalized command. Different effective identities, or a same-identity check that did not pass, are not a replacement |
+| `superseded` | A diagnostic attempt a required check on the final candidate replaced | a record anywhere in the report that is `required` and `passed` and has the same effective identity: its non-empty `check`, normalized as its `command` is (whitespace collapsed, leading `NAME=value` assignments dropped), otherwise its `command` normalized the same way. An explicit identity can match another record's normalized command. Different effective identities, or a same-identity check that did not pass, are not a replacement |
 | `diagnostic` [ORB-14192] | A nonrequired observation of the final candidate, such as a workspace-wide suite beyond the task's checks | `passed` or `failed` as observed (`not_run`/`denied` contradict it: an action never taken is `excluded`). A failed diagnostic lists `sources`, every one outside the candidate's scope, and shares no check with a required pass. A failed check the owner trusts — a captured `workflow.required_validation_commands` or `review.baseline_commands` entry, by the host-command identity rule — is never a diagnostic [ORB-14684]. It supplies no coverage and creates no requirement |
 
 Required passes describe the final candidate, so replacement does not depend on
