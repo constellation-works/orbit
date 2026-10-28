@@ -1,7 +1,7 @@
 ---
 title: Task Publication — Vision
 owner: codex
-last_updated: 2026-09-24
+last_updated: 2026-10-28
 last_validated: 2026-10-28
 status: Draft
 feature: task-publication
@@ -16,9 +16,10 @@ related_artifacts: [ORB-11068, ORB-11077]
 
 # Task Publication — Vision
 
-Task publication should earn trust first as a one-way durability projection in
-one dedicated private repository per workspace. Repository aggregation, offline
-mutation, automatic authority movement, and multi-writer convergence are
+Task publication should earn trust first as a one-way durability projection: one
+branch-scoped lineage per workspace in a private repository, dedicated to
+publication where the operator can make it so. Cross-workspace aggregation,
+offline mutation, automatic authority movement, and multi-writer convergence are
 separate capabilities with different access and safety contracts.
 
 ## 1. Open Questions
@@ -34,9 +35,12 @@ separate capabilities with different access and safety contracts.
    offline inspection need a disposable indexed cache?
 4. What corpus size or fetch-latency threshold justifies checkpoint compaction,
    Git LFS, or an object-store attachment backend?
-5. Can several workspaces safely share one private repository without creating
-   cross-workspace access leakage or serializing independent authorities on one
-   branch? V1 answers no and requires separate repositories.
+5. Can access between workspaces that share one private repository be isolated?
+   Git hosts generally grant read access per repository, not per branch. V1
+   answers no: branch-scoped lineages keep independent authorities from
+   serializing on one branch and keep their publication IDs distinct, but every
+   collaborator sees every branch. Which provider-verifiable boundary would
+   justify recommending a shared repository over one repository per workspace?
 6. Should hosted Orbit reuse the publication manifest as an export format, or
    should hosted backup remain a separate API with different retention and
    authorization guarantees?
@@ -122,5 +126,6 @@ authority merely because a machine can clone or push.
 
 - [ORB-11068] — chose a dedicated private publication repository and deferred aggregation and synchronization.
 - [ORB-11077] — shipped the explicit-only v1 operator workflow and kept routine triggering, authority transfer, and multi-writer synchronization deferred.
+- [ORB-18375] — allowed branch-scoped lineages to share one publication repository, which answers the shared-repository question for branch serialization but not for repository-level access.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

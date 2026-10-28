@@ -1,8 +1,8 @@
 ---
 title: Task Publication — Decisions
 owner: codex
-last_updated: 2026-08-30
-last_validated: 2026-10-12
+last_updated: 2026-10-28
+last_validated: 2026-10-28
 status: Accepted
 feature: task-publication
 doc_role: decisions
@@ -24,6 +24,8 @@ original reasoning stays legible. See
 ## Publication uses one dedicated private repository per workspace
 
 **Recorded:** 2026-08-29 · [ORB-11068]
+
+**Superseded by:** [Publication lineages are branch-scoped within a repository](#publication-lineages-are-branch-scoped-within-a-repository)
 
 ### Context
 
@@ -48,6 +50,46 @@ concurrency design.
 - Source branches cannot accidentally merge publication data.
 - Cost: operators provision and manage an additional private repository and its
   credentials for every publishing workspace.
+
+## Publication lineages are branch-scoped within a repository
+
+**Recorded:** 2026-10-25 · [ORB-18375]
+
+**Code anchors:** `crates/orbit-store/src/workflow/task/publish.rs::publish_task_snapshot`, `crates/orbit-store/src/workflow/task/publish.rs::observe_remote`
+
+### Context
+
+Eleven workspaces bound to one publication repository, each on its own branch,
+failed on every publish after the first: a repository-wide "not empty" check
+refused initializing each new lineage even though its own branch did not exist.
+The alternatives were one repository per workspace, which the superseded standing
+rule required, and a repository-wide foreign-content guard that inspects every
+branch before initializing. That guard would read branches outside the lineage,
+including ordinary source history on a default branch. The bound branch and the
+compare-and-swap that creates it already prevent adopting or overwriting content
+Orbit did not create.
+
+### Decision
+
+A publication lineage is its bound branch plus its publication ID. Publication
+reads, validates, initializes, and compare-and-swaps only the bound branch. An
+absent bound branch initializes regardless of other branches. A bound branch
+carrying anything other than this lineage's matching publication envelope is
+refused. A future publisher scopes its initialization and foreign-content checks
+to the bound branch; a repository-wide check is not a substitute for the
+bound-branch compare-and-swap.
+
+### Consequences
+
+- Several workspaces can share one publication repository, and each branch has
+  one authority and one compare-and-swap stream.
+- Two workspaces bound to one branch are not rejected at bind time. Whichever
+  lineage initializes the branch first owns it, and the other is refused at
+  publish when the envelope names a different workspace or publication ID.
+- Cost: Orbit cannot detect unrelated content on other branches of a shared
+  repository, and every repository collaborator and Git-host administrator sees
+  every lineage's branch. Dedicating a repository to publication keeps that
+  visibility separate from source code, but not from other workspaces.
 
 ## Publication never creates a second mutation authority
 
@@ -155,5 +197,6 @@ checks. Omission is recorded as incomplete backup state.
 
 - [ORB-11068] — recorded the dedicated-repository, authority, acknowledgement, branch-conflict, and privacy rules.
 - [ORB-11077] — shipped those rules through an explicit CLI-only operator surface and deferred unattended publication.
+- [ORB-18375] — shipped branch-scoped lineages in a shared publication repository, superseding the one-repository-per-workspace rule.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
