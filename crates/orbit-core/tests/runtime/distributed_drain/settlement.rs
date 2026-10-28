@@ -1124,6 +1124,104 @@ fn backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement() {
     assert_eq!(after["crew_source"], "backfill:admission", "{after:#}");
 }
 
+/// [ORB-19624] The backfill leaves a task alone when its newest local run
+/// selected no crew after its claimed leaf settled: the older settlement is
+/// not the latest delivery, so its crew must not replace the task's.
+fn backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection() {
+    let pair = Pair::with_crews(&[Some("sol")]);
+    let drain = pair.run_drain();
+    let leaf = pair.running_leaf(&drain, 1);
+    let task = pair.claimed_task(&leaf);
+    let record = pair.admission(&leaf);
+    let claim = record.receipt.as_ref().unwrap().claim.as_ref().unwrap();
+    // Store the settlement without the settle write-back, like a claim that
+    // settled before the owner wrote leaf crews back: the record keeps the
+    // crew, the task keeps its own.
+    let context = ClaimInvocation::trusted_worker(
+        claim.task_id.clone(),
+        claim.claim_id.clone(),
+        claim.executed_on.machine_id.clone(),
+        Some(ClaimRun {
+            machine_id: claim.executed_on.machine_id.clone(),
+            run_id: leaf.clone(),
+        }),
+    );
+    pair.wire
+        .owner
+        .mutate_execution_claim(
+            Some(&context),
+            "backfill-fixture-fail",
+            &ClaimMutation::Fail(ClaimEvidence {
+                summary: Some("leaf failed".into()),
+                crew: Some("luna".into()),
+                ..Default::default()
+            }),
+        )
+        .expect("a direct claim failure stores its settlement");
+    assert_eq!(pair.owner_task(&task)["crew"], "sol");
+    let settled_at = pair
+        .wire
+        .owner
+        .inspect_execution_claims()
+        .expect("owner claims")
+        .into_iter()
+        .find(|inspection| inspection.claim.task_id == task)
+        .and_then(|inspection| inspection.settlement)
+        .map(|settlement| {
+            chrono::DateTime::parse_from_rfc3339(&settlement.settled_at)
+                .expect("settlement timestamp")
+                .with_timezone(&Utc)
+        })
+        .expect("the settled claim");
+    // A newer owner-local delivery run that selected no crew: its input names
+    // the task but carries no crew selection, and it keeps no run state.
+    let store = orbit_store::compose::workspace_job_run_store(
+        pair.wire.owner.sqlite_store().expect("owner store"),
+        pair.wire.owner.workspace_id().expect("owner workspace"),
+    );
+    let inserted = store
+        .insert_job_run(
+            "task_local_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_id": task})),
+            None,
+        )
+        .expect("a newer owner-local run");
+    // `insert_job_run` stamps `created_at` itself, so lift the run strictly
+    // past the settlement when the clock did not move between the two writes.
+    if inserted.created_at <= settled_at {
+        let mut run = inserted.clone();
+        run.created_at = settled_at + chrono::Duration::seconds(1);
+        run.scheduled_at = run.created_at;
+        pair.wire
+            .owner
+            .sqlite_store()
+            .expect("owner store")
+            .upsert_job_run_for_workspace(
+                &pair.wire.owner.workspace_id().expect("owner workspace"),
+                &run,
+                None,
+            )
+            .expect("the newer run stays newer");
+    }
+    let report = pair
+        .wire
+        .owner
+        .backfill_admitted_task_crews()
+        .expect("backfill runs over the newer run");
+    assert!(
+        report.tasks.iter().all(|change| change.task_id != task),
+        "{report:?}"
+    );
+    let after = pair.owner_task(&task);
+    assert_eq!(after["crew"], "sol", "{after:#}");
+    assert_ne!(
+        after["crew_source"], "backfill:admission",
+        "the older settlement must not write back: {after:#}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     another_session_machine_cannot_bind_or_settle_a_followers_claim_scenarios,
@@ -1142,7 +1240,8 @@ crate::scenario_table!(
     a_replayed_release_settlement_after_a_crew_update_leaves_the_newer_crew_unchanged,
     an_overlapping_fail_replay_leaves_the_crew_chosen_after_the_settlement_unchanged,
     a_fail_settlement_reporting_its_crew_in_evidence_writes_it_back,
-    backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement
+    backfill_recovers_a_settled_claimed_leafs_crew_from_its_settlement,
+    backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
 );
 
 #[cfg(unix)]
