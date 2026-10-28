@@ -125,7 +125,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Path Leases](./design/path-leases/1_overview.md) | Land native TLS and the listener's full rate limits (ORB-18413, ORB-18421) | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Phase 1: ORB-18488 browser-session credential (in review); then the terminal routes | claude |
 
-### Designing (5)
+### Designing (6)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -134,6 +134,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Conflict Budget](./design/conflict-budget/1_scope.md) | Settle the open questions (sum vs max, where weights live), then file phase 1 | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Review this scope; then file phase 1 (script manifests, `target: script:` parsing, the grant store and `orbit script grant`, with nothing executing yet) | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
+| [Visual Review](./design/visual-review/1_scope.md) | Daniel accepts or amends this design; implementation tasks are filed after acceptance | claude |
 
 ### Shipped (35)
 
@@ -238,6 +239,7 @@ a conservative title/status fallback.
 | [Terminal Interface](./design/terminal-interface/1_overview.md) | House style for orbit-cli terminal output — machine-readable first, borderless single-line tables, semantic color resolved at the sink. | Accepted | claude |
 | [Usage Pressure](./design/usage-pressure/1_scope.md) | Scope: weight crew pool draws by how much of each provider account's usage window would expire unused, so Orbit spends the capacity that is about to reset before the capacity that is not | Draft | claude |
 | [User Interface](./design/user-interface/1_overview.md) | Orbit UI covers the dashboard and HTTP API owned by `orbit-web`; `orbit-cli` is the thin `orbit web serve` / `connect` command adapter. | Draft | gemini |
+| [Visual Review](./design/visual-review/1_scope.md) | Scope: Orbit captures before/after screenshots of the views a change touches on the final candidate, runs deterministic layout and accessibility checks, and has a vision-capable crew review them against reference views and a design rubric, with findings verified by a different crew | Draft | claude |
 | [Web Terminal](./design/web-terminal/1_scope.md) | Scope: an interactive shell on any registered host from the dashboard — a PTY over a WebSocket, carried by the existing host forward, behind a browser-session credential that a confined agent cannot read. | Draft | claude |
 
 ### Archived designs

@@ -292,5 +292,6 @@ Retired features are removed from this table along with their folder.
 | Terminal Interface | [docs/design/terminal-interface/](./terminal-interface/) | claude |
 | Usage Pressure | [docs/design/usage-pressure/](./usage-pressure/) | claude |
 | User Interface | [docs/design/user-interface/](./user-interface/) | gemini |
+| Visual Review | [docs/design/visual-review/](./visual-review/) | claude |
 
 Ownership means: the lead is accountable for keeping the folder's docs in sync with implementation, for recording task provenance when decisions change, and for responding to cross-review comments. Ownership does not preclude other agents from editing — it names who's on the hook when things drift.
