@@ -661,6 +661,8 @@ struct FakeJob {
     job_id: u64,
     conclusion: &'static str,
     log: FakeLog,
+    run_attempt: u64,
+    event: &'static str,
 }
 
 /// What a read of one job's log answers.
@@ -814,7 +816,7 @@ impl FakeForge {
     }
 
     fn job_json(job: &FakeJob) -> Value {
-        json!({ "run_id": job.run_id, "job_id": job.job_id, "workflow": "CI", "name": "clippy", "status": "completed", "conclusion": job.conclusion, "failed_step": (job.conclusion == "failure").then_some("Run clippy"), })
+        json!({ "run_id": job.run_id, "job_id": job.job_id, "workflow": "CI", "name": "clippy", "status": "completed", "conclusion": job.conclusion, "failed_step": (job.conclusion == "failure").then_some("Run clippy"), "run_attempt": job.run_attempt, "event": job.event, "pull_requests": [{"number": 42}], "pull_request_numbers": [42], })
     }
 }
 
@@ -1014,8 +1016,9 @@ impl orbit_engine::test_support::NullRuntimeHost for FakeForge {
                             *sha == commit
                         }
                     })
-                    .map(|(_, job)| {
+                    .map(|(sha, job)| {
                         let mut value = Self::job_json(job);
+                        value["head_sha"] = json!(sha);
                         if let Some((started, completed)) = state.job_times.get(&job.job_id) {
                             value["started_at"] = json!(started);
                             value["completed_at"] = json!(completed);
@@ -1756,6 +1759,8 @@ fn failed_reading(run_id: u64, job_id: u64, log: FakeLog) -> FakeJob {
         job_id,
         conclusion: "failure",
         log,
+        run_attempt: 1,
+        event: "pull_request",
     }
 }
 
@@ -1765,6 +1770,8 @@ fn passed(run_id: u64, job_id: u64) -> FakeJob {
         job_id,
         conclusion: "success",
         log: FakeLog::Text(""),
+        run_attempt: 1,
+        event: "push",
     }
 }
 
@@ -1892,6 +1899,96 @@ fn untouched_failure_reruns_once_after_fresh_base_pass() {
                 assert_eq!(note["run_id"], 1);
                 assert_eq!(note["jobs"][0]["job_id"], 11);
                 assert_eq!(note["jobs"][0]["check"], "CI / clippy");
+            }
+        },
+    );
+}
+
+/// A `ci_base_suspect` record proves no rerun was requested. A later push
+/// or workflow_dispatch run on the same head cannot be treated as the
+/// unchanged-head PR rerun
+/// and cannot admit candidate repair. Only a verified rerun of the same
+/// provider run — same PR, head and run, later attempt, same signature —
+/// releases the hold in a resumed landing.
+#[test]
+fn suspicion_only_history_cannot_admit_repair_from_a_non_pr_run() {
+    crate::git_fixture::isolated(
+        module_path!(),
+        "suspicion_only_history_cannot_admit_repair_from_a_non_pr_run",
+        || {
+            for case in ["push_other_run", "dispatch_other_run", "valid_pr_rerun"] {
+                let (_sandbox, forge, head, base) = forge_fixture(true, false);
+                let mut current = if case == "valid_pr_rerun" {
+                    failed(1, 12, UNTOUCHED_TEST_FAILURE)
+                } else {
+                    failed(3, 31, UNTOUCHED_TEST_FAILURE)
+                };
+                current.run_attempt = if case == "valid_pr_rerun" { 2 } else { 1 };
+                current.event = match case {
+                    "push_other_run" => "push",
+                    "dispatch_other_run" => "workflow_dispatch",
+                    _ => "pull_request",
+                };
+                let current_job_id = current.job_id;
+                forge.job(&head, current);
+                forge.job(&base, passed(2, 21));
+                {
+                    let mut state = forge.state.lock().unwrap();
+                    state.job_times.insert(
+                        current_job_id,
+                        ("2026-10-26T14:04:00Z", "2026-10-26T14:05:00Z"),
+                    );
+                    state
+                        .job_times
+                        .insert(21, ("2026-10-26T14:02:00Z", "2026-10-26T14:03:00Z"));
+                }
+                forge
+                    .history
+                    .lock()
+                    .unwrap()
+                    .push(orbit_types::task::TaskHistoryEntry {
+                        at: chrono::Utc::now(),
+                        by: "system".into(),
+                        event: "ci_base_suspect".into(),
+                        note: Some(
+                            json!({
+                                "head": head, "check": "CI / clippy",
+                                "signature": "error: shutdown test timed out",
+                                "run_id": 1, "job_id": 11, "run_attempt": 1,
+                                "pr_number": 42,
+                                "started_at": "2026-10-26T14:00:00Z",
+                                "completed_at": "2026-10-26T14:01:00Z",
+                            })
+                            .to_string(),
+                        ),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                    });
+                let outcome = land_now(&forge);
+                assert_not_sent(&forge, &["pr.merge", "pr.update_branch"], case);
+                if case == "valid_pr_rerun" {
+                    outcome.expect_err(case);
+                    assert_steps(
+                        &forge.steps(),
+                        &[HandoffLandingStep::Stop { repairable: true }],
+                        case,
+                    );
+                    assert_reason(&forge, case, &["classified `candidate`"]);
+                    assert_not_sent(&forge, &["ci.rerun_failed"], case);
+                } else {
+                    let _ = outcome;
+                    assert_sent_len(&forge, "ci.rerun_failed", 0, case);
+                    assert!(
+                        !forge.steps().iter().any(|step| matches!(
+                            step,
+                            HandoffLandingStep::Stop { repairable: true }
+                        )),
+                        "{case}: no repair without a verified rerun: {:?}",
+                        forge.steps()
+                    );
+                }
             }
         },
     );

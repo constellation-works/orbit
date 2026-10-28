@@ -33,6 +33,7 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     job: &Value,
     log: &str,
     signature: &str,
+    pr_number: Option<u64>,
 ) -> Result<Option<String>, String> {
     let paths = repository_citations(workspace, head, log)?;
     if paths.is_empty() {
@@ -81,6 +82,7 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
                 job,
                 &jobs::job_label(job),
                 signature,
+                pr_number,
             ) =>
         {
             Some(format!(
@@ -222,10 +224,69 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     )))
 }
 
+/// The pull-request numbers a job's provider metadata names, in any of
+/// the shapes the adapter or a history note carries them.
+pub(super) fn pull_request_numbers(job: &Value) -> Vec<u64> {
+    let mut numbers = Vec::new();
+    let mut push = |value: &Value| {
+        if let Some(number) = value
+            .as_u64()
+            .or_else(|| value["number"].as_u64())
+            .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
+        {
+            numbers.push(number);
+        }
+    };
+    for key in ["pull_request_numbers", "pull_requests"] {
+        if let Some(list) = job[key].as_array() {
+            for value in list {
+                push(value);
+            }
+        }
+    }
+    for key in ["pr_number", "pull_request_number", "pr"] {
+        if !job[key].is_null() {
+            push(&job[key]);
+        }
+    }
+    numbers
+}
+
+/// Whether `job` is authenticated provider evidence of a `pull_request`
+/// run for `pr_number` on `head`: the event, the PR association and the
+/// tested head must all agree. Metadata that names no PR, or a different
+/// one, is not a PR rerun.
+pub(super) fn is_verified_pull_request_job(
+    job: &Value,
+    pr_number: Option<u64>,
+    head: &str,
+) -> bool {
+    if job["event"].as_str() != Some("pull_request") {
+        return false;
+    }
+    if let Some(sha) = job["head_sha"].as_str()
+        && sha != head
+    {
+        return false;
+    }
+    let Some(pr_number) = pr_number else {
+        return false;
+    };
+    pull_request_numbers(job).contains(&pr_number)
+}
+
 /// Whether task history records an earlier failed attempt with this same
-/// signature on the same head, followed by the current job starting later.
-/// The first failure is retained before the rerun is requested, so a resumed
-/// landing or auto-fix can recognize the same evidence as an in-process rerun.
+/// signature on the same head, and the current job is a verified rerun of
+/// that same provider run: a `pull_request` execution for the same PR and
+/// head, with the same run identity and a later attempt, starting after
+/// the earlier attempt completed. A suspicion record alone proves no
+/// rerun was requested, and a different run — a later push or
+/// workflow_dispatch run on the same head, or a rerun of another run —
+/// is not a rerun of the recorded failure. The first failure is retained
+/// before the rerun is requested, so a resumed landing or auto-fix can
+/// recognize the same evidence as an in-process rerun; a durable
+/// `ci_check_rerun` note written before PR identity was recorded still
+/// qualifies when the current job itself carries that identity.
 pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     host: &H,
     tasks: &[String],
@@ -233,16 +294,22 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
     job: &Value,
     check: &str,
     signature: &str,
+    pr_number: Option<u64>,
 ) -> bool {
+    if !is_verified_pull_request_job(job, pr_number, head) {
+        return false;
+    }
     let current_start = job["started_at"]
         .as_str()
         .and_then(|time| chrono::DateTime::parse_from_rfc3339(time).ok());
     let Some(current_start) = current_start else {
         return false;
     };
-    let current_run = job["run_id"].as_u64();
-    let current_job = job["job_id"].as_u64();
-    let current_attempt = job["run_attempt"].as_u64();
+    let (Some(current_run), Some(current_attempt)) =
+        (job["run_id"].as_u64(), job["run_attempt"].as_u64())
+    else {
+        return false;
+    };
     for task in tasks {
         let Ok(history) = host.get_task_history(task) else {
             continue;
@@ -258,6 +325,17 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
             else {
                 continue;
             };
+            // A note that names a different PR cannot be this PR's rerun.
+            let noted = pull_request_numbers(&note);
+            if !noted.is_empty() && pr_number.is_some_and(|pr_number| !noted.contains(&pr_number)) {
+                continue;
+            }
+            if let Some(event) = note["event"].as_str()
+                && event != "pull_request"
+                && entry.event == "ci_check_rerun"
+            {
+                continue;
+            }
             let prior = if entry.event == "ci_check_rerun" {
                 note["jobs"]
                     .as_array()
@@ -272,10 +350,10 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
                     &note,
                 ))
             };
-            let Some((Some(prior_head), prior_run, prior)) = prior else {
+            let Some((Some(prior_head), Some(prior_run), prior)) = prior else {
                 continue;
             };
-            if prior_head != head {
+            if prior_head != head || prior_run != current_run {
                 continue;
             }
             let completed = prior["completed_at"]
@@ -287,10 +365,14 @@ pub(super) fn has_matching_candidate_rerun<H: RuntimeHost + ?Sized>(
             if current_start < completed {
                 continue;
             }
-            let same_identity = current_run == prior_run
-                && current_job == prior["job_id"].as_u64()
-                && current_attempt == prior["run_attempt"].as_u64();
-            if !same_identity {
+            // A rerun keeps the run identity and advances its attempt.
+            // The numeric job id may be reassigned for the new attempt;
+            // the workflow/job identity is already bound by `check`.
+            let later_attempt = match prior["run_attempt"].as_u64() {
+                Some(prior_attempt) => current_attempt > prior_attempt,
+                None => current_attempt > 1,
+            };
+            if later_attempt {
                 return true;
             }
         }

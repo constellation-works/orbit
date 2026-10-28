@@ -254,10 +254,26 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 job,
                 &label,
                 &signature,
+                Some(pr),
             )
         {
             class = CheckFailureClass::Candidate;
             why = "the unchanged pull-request head failed the same signature again after the base check passed".into();
+        }
+        if class == CheckFailureClass::Flaky
+            && !(job["event"].as_str() == Some("pull_request")
+                && job["head_sha"].as_str().is_none_or(|sha| sha == head)
+                && {
+                    let numbers = super::suspect::pull_request_numbers(job);
+                    numbers.is_empty() || numbers.contains(&pr)
+                })
+        {
+            // A push or workflow_dispatch job on the head is not the pull
+            // request's run: rerunning it would not be a PR rerun, and its
+            // failure alone cannot admit a repair. Hold as base-suspect
+            // until a verified PR rerun repeats the signature.
+            class = CheckFailureClass::BaseSuspect;
+            why = "base-suspect: the failed job is not a verified pull_request run for this pull request, so it cannot authorize a rerun or repair; waiting for an unchanged-head pull_request rerun with the same failure signature".into();
         }
         if recovery
             .rerun_candidates
@@ -274,7 +290,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 std::slice::from_ref(&context.task_id),
                 &json!({
                     "base":landing_tip.unwrap_or(base), "head":head, "check":label, "signature":signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"],
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr, "event":job["event"],
                     "started_at":job["started_at"], "completed_at":job["completed_at"], "reason":why,
                 }),
                 Some(&context.handoff_id),
@@ -350,7 +366,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
                 host.record_handoff_landing_history(
                     &context.handoff_id,
                     "ci_check_rerun",
-                    &json!({"head":head,"run_id":run_id,"jobs":rerun_jobs}).to_string(),
+                    &json!({"head":head,"run_id":run_id,"pr_number":pr,"event":"pull_request","jobs":rerun_jobs})
+                        .to_string(),
                 )?;
             }
             recovery.rerun = true;

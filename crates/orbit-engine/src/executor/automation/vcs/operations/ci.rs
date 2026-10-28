@@ -170,6 +170,22 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 .map(|step| step["name"].clone())
                 .collect();
             let failed_step = failed_steps.first().and_then(Value::as_str);
+            let pull_requests = if run["pull_requests"].is_array() {
+                run["pull_requests"].clone()
+            } else {
+                json!([])
+            };
+            let pull_request_numbers: Vec<Value> = pull_requests
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|pull_request| {
+                    pull_request
+                        .as_u64()
+                        .or_else(|| pull_request["number"].as_u64())
+                        .map(|number| json!(number))
+                })
+                .collect();
             jobs.push(json!({
                 "run_id": run_id,
                 "job_id": job["id"],
@@ -184,6 +200,11 @@ pub(super) fn ci_commit_jobs(input: &Value) -> Result<Value, OrbitError> {
                 "run_status": run["status"],
                 "run_started_at": run["run_started_at"],
                 "run_attempt": run["run_attempt"],
+                "event": run["event"],
+                "head_branch": run["head_branch"],
+                "head_sha": run["head_sha"],
+                "pull_requests": pull_requests,
+                "pull_request_numbers": pull_request_numbers,
             }));
         }
     }

@@ -97,6 +97,7 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
         base_name.strip_prefix("origin/").unwrap_or(&base_name),
         &auto_fix.task_ids,
         &failed,
+        pr_number.parse::<u64>().ok(),
     )
 }
 

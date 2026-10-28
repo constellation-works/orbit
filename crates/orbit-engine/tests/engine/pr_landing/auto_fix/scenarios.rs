@@ -2403,6 +2403,49 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                         "{case}"
                     );
                     if case == "suspect" {
+                        // An unrelated push run on the same head is not a
+                        // rerun of the recorded failure: it still holds and
+                        // spends no repair attempt.
+                        let candidate_dir = fx.forge.join("commit-ci").join(&fx.candidate);
+                        let mut jobs: Value = serde_json::from_slice(
+                            &fs::read(candidate_dir.join("jobs.json")).unwrap(),
+                        )
+                        .unwrap();
+                        jobs["jobs"][0]["id"] = json!(32);
+                        jobs["jobs"][0]["started_at"] = json!("2026-10-27T05:02:00Z");
+                        jobs["jobs"][0]["completed_at"] = json!("2026-10-27T05:03:00Z");
+                        fs::write(
+                            candidate_dir.join("jobs.json"),
+                            serde_json::to_vec(&jobs).unwrap(),
+                        )
+                        .unwrap();
+                        let mut runs: Value = serde_json::from_slice(
+                            &fs::read(candidate_dir.join("runs.json")).unwrap(),
+                        )
+                        .unwrap();
+                        runs["workflow_runs"][0]["id"] = json!(3);
+                        runs["workflow_runs"][0]["run_attempt"] = json!(1);
+                        runs["workflow_runs"][0]["event"] = json!("push");
+                        fs::write(candidate_dir.join("run_id"), "3").unwrap();
+                        runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:02:00Z");
+                        fs::write(
+                            candidate_dir.join("runs.json"),
+                            serde_json::to_vec(&runs).unwrap(),
+                        )
+                        .unwrap();
+                        let mut unrelated = auto_fix_input(&fx);
+                        unrelated["run_id"] = json!("jrun-unrelated-run");
+                        let error = action(&host, "pr_complete", &unrelated).unwrap_err();
+                        assert!(
+                            (error.to_string().contains("base_red")
+                                || error.to_string().contains("base-suspect"))
+                                && !is_check_repair(&error.to_string()),
+                            "unrelated push run cannot admit repair: {error}"
+                        );
+                        assert!(
+                            repair_attempts(&host).is_empty(),
+                            "unrelated push run spends no repair attempt"
+                        );
                         // A later watcher re-observes the held PR. A base pass
                         // alone still holds; the unchanged-head rerun must fail
                         // the same signature before repair admission.
@@ -2423,8 +2466,12 @@ fn base_check_holds_never_dispatch_candidate_recovery() {
                             &fs::read(candidate_dir.join("runs.json")).unwrap(),
                         )
                         .unwrap();
+                        runs["workflow_runs"][0]["id"] = json!(11);
+                        fs::write(candidate_dir.join("run_id"), "11").unwrap();
                         runs["workflow_runs"][0]["run_attempt"] = json!(2);
                         runs["workflow_runs"][0]["run_started_at"] = json!("2026-10-27T05:02:00Z");
+                        runs["workflow_runs"][0]["event"] = json!("pull_request");
+                        runs["workflow_runs"][0]["pull_requests"] = json!([{"number": 42}]);
                         fs::write(
                             candidate_dir.join("runs.json"),
                             serde_json::to_vec(&runs).unwrap(),
@@ -2723,6 +2770,7 @@ fn older_green_base_holds_recovery_until_matching_pr_rerun() {
                             json!(format!("2026-10-27T{start}Z"));
                         if sha == &fx.candidate {
                             runs["workflow_runs"][0]["event"] = json!("pull_request");
+                            runs["workflow_runs"][0]["pull_requests"] = json!([{"number": 42}]);
                         }
                         fs::write(dir.join("runs.json"), serde_json::to_vec(&runs).unwrap())
                             .unwrap();

@@ -132,6 +132,7 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
             job,
             &log,
             &signature.text,
+            pr.parse::<u64>().ok(),
         ) {
             Ok(Some(reason)) => return HeadCheckEvidence::WaitForBase(reason),
             Err(reason) => return HeadCheckEvidence::Stop(reason),
@@ -286,6 +287,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     base_branch: &str,
     tasks: &[String],
     failed: &[(Option<String>, String)],
+    pr_number: Option<u64>,
 ) -> Result<Option<String>, String> {
     let head_jobs = commit_jobs(host, workspace, head).map_err(|error| error.to_string())?;
     let moved_tip = (tip != base).then_some(tip);
@@ -325,7 +327,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             CheckFailureClass::BaseSuspect => {
                 let evidence = serde_json::json!({
                     "base": tip, "head": head, "check": label, "signature": signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"],
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr_number, "event":job["event"],
                     "started_at":job["started_at"], "completed_at":job["completed_at"], "reason": why,
                 });
                 super::suspect::record_base_suspect(host, tasks, &evidence, None)
@@ -335,7 +337,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             }
             CheckFailureClass::Flaky
                 if super::suspect::has_matching_candidate_rerun(
-                    host, tasks, head, job, &label, &signature,
+                    host, tasks, head, job, &label, &signature, pr_number,
                 ) =>
             {
                 candidate_owned = true;
@@ -346,7 +348,7 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
                 );
                 let evidence = serde_json::json!({
                     "base": tip, "head": head, "check": label, "signature": signature,
-                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"],
+                    "run_id":run_id, "job_id":job_id, "run_attempt":job["run_attempt"], "pr_number":pr_number, "event":job["event"],
                     "started_at":job["started_at"], "completed_at":job["completed_at"], "reason": why,
                 });
                 super::suspect::record_base_suspect(host, tasks, &evidence, None)
