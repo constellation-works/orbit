@@ -579,6 +579,54 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.assertEqual(report["bump"], "minor")
         self.assertEqual(report["next_version"], "0.36.0")
 
+    def test_removing_enum_keyword_inside_oneof_decides_minor(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {
+            "type": "object",
+            "oneOf": [
+                {
+                    "properties": {"kind": {"enum": ["a"]}},
+                    "required": ["kind"],
+                },
+                {"required": ["fields"]},
+            ],
+        }
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare oneOf enum fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        # {"kind":"b","fields":[]} matches only the second branch before
+        # this edit, then both branches after it, so oneOf rejects it.
+        del tools[0]["inputSchema"]["oneOf"][0]["properties"]["kind"]["enum"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove enum constraint [ORB-65]")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(self.signals(report), {
+            ("ORB-65", "mcp-schema",
+             "`orbit_task_show` `inputSchema{oneOf0}.kind` enum constraint removed "
+             "inside oneOf alternative"),
+        })
+        self.assertEqual(report["bump"], "minor")
+        self.assertEqual(report["next_version"], "0.36.0")
+
+    def test_removing_root_enum_constraint_stays_additive(self):
+        tools = self.repo.mcp()
+        tools[0]["inputSchema"] = {"type": "object"}
+        tools[0]["outputSchema"] = {"type": "string", "enum": ["a"]}
+        self.repo.write_mcp(tools)
+        self.repo.commit("chore: prepare root enum fixture [ORB-64]")
+        self.repo.git("tag", "-f", "v0.35.0")
+
+        del tools[0]["outputSchema"]["enum"]
+        self.repo.write_mcp(tools)
+        self.repo.commit("feat: Remove root enum constraint [ORB-65]")
+
+        report = self.report("--range", "v0.35.0..HEAD")
+        self.assertEqual(report["signals"], [])
+        self.assertEqual(report["bump"], "patch")
+        self.assertEqual(report["next_version"], "0.35.1")
+
     def test_oneof_overlap_check_respects_json_schema_instance_semantics(self):
         cases = (
             (
