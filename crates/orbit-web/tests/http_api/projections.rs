@@ -1081,8 +1081,9 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
                 )
                 .unwrap();
 
-            let mut detail =
+            let full_detail =
                 json_ok(server.get(&format!("/api/tasks/{id}?workspace=ws_http_fixture")));
+            let mut detail = full_detail.clone();
             let extras = detail.as_object_mut().unwrap();
             for key in ["status_transitions", "job_run_navigable", "riskiness"] {
                 assert!(extras.remove(key).is_some(), "dashboard extra `{key}`");
@@ -1103,6 +1104,10 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
             assert_eq!(detail["artifacts"][0]["size_bytes"], 16);
 
             let page = json_ok(server.get("/api/tasks?workspace=ws_http_fixture"));
+            assert!(
+                page.get("detail").is_none(),
+                "ordinary task pages keep their existing shape"
+            );
             let row = page["items"]
                 .as_array()
                 .or_else(|| page.as_array())
@@ -1131,6 +1136,19 @@ fn task_detail_and_list_rows_serve_the_shared_task_projection() {
                 }
             }
             assert!(row.as_object().unwrap().contains_key("job_run_machine"));
+            let bundled = json_ok(server.get(&format!(
+                "/api/tasks?workspace=ws_http_fixture&detail={id}&detail_runs=true"
+            )));
+            assert_eq!(
+                bundled["detail"], full_detail,
+                "the optional list projection equals task detail"
+            );
+            assert!(
+                bundled["detail_runs"]["items"]
+                    .as_array()
+                    .unwrap()
+                    .is_empty()
+            );
             drop(server);
 
             // Author a task while its crew exists, then serve it from a host

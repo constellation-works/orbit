@@ -3,7 +3,7 @@
 // and never imports tasks.js.
 
 import { fetchJson, isAggregateView } from './common.js';
-import { drainReadinessEntry } from './drain-waits.js';
+import { drainReadinessEntry, drainReadinessFailure } from './drain-waits.js';
 import { rerender, taskList, taskState, taskMutationPath, taskWorkspacePath } from './task-shared.js';
 
 // DANI-10391: a list row is a summary (`projection: "summary"`). It carries what
@@ -48,6 +48,21 @@ export function mergeTaskRecord(previous, updated) {
     if (merged[key] == null && previous[key] != null) merged[key] = previous[key];
   }
   return merged;
+}
+
+// The Tasks refresh can carry its selected task's full projection in the list
+// response. Seed the same cache the detail endpoint owns so rendering that
+// refreshed row does not issue a duplicate GET for the same task.
+export function primeTaskDetail(summary, full) {
+  if (!summary?.id || full?.id !== summary.id || !isTaskSummary(summary)) return;
+  const merged = mergeTaskRecord(summary, full);
+  taskDetails.set(summary.id, merged);
+  taskDetailLoads.set(summary.id, {
+    source: summary,
+    pending: false,
+    error: null,
+    promise: Promise.resolve(merged),
+  });
 }
 
 export function applyUpdatedTask(updatedTask, context) {
@@ -163,11 +178,35 @@ function loadTaskDrainReadiness(task, context) {
 // or failed. Null for a status the drain does not consider.
 export function taskDrainState(task, context) {
   if (!DRAIN_READINESS_STATUSES.has(task.status)) return null;
+  const sharedEntry = drainReadinessEntry(task.id);
+  const sharedError = drainReadinessFailure(task.id);
   const load = taskDrainLoads.get(task.id);
-  if (!load || load.source !== task) loadTaskDrainReadiness(task, context);
+  if (sharedError) {
+    if (!load || load.source !== task || load.error !== sharedError || load.pending) {
+      taskDrainLoads.set(task.id, {
+        source: task,
+        pending: false,
+        error: sharedError,
+        entry: null,
+        sharedSnapshot: true,
+      });
+    }
+  } else if (sharedEntry) {
+    if (!load || load.source !== task || load.entry !== sharedEntry || load.pending || load.error) {
+      taskDrainLoads.set(task.id, {
+        source: task,
+        pending: false,
+        error: null,
+        entry: sharedEntry,
+        sharedSnapshot: true,
+      });
+    }
+  } else if (!load || load.source !== task || load.sharedSnapshot) {
+    loadTaskDrainReadiness(task, context);
+  }
   const current = taskDrainLoads.get(task.id);
   return {
-    entry: current.entry || drainReadinessEntry(task.id),
+    entry: current.error ? null : current.entry || drainReadinessEntry(task.id),
     pending: current.pending,
     error: current.error,
   };

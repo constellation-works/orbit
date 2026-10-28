@@ -1,8 +1,8 @@
 // What the Tasks list says about running work beyond the task row itself:
-// when each running job run started (`/api/job-runs?state=running`) and which
-// files each task holds locked (`/api/tasks/locks`). app.js fetches both with
-// the task list and hands them here; the rows read them back per task and
-// repaint only when what a row shows changed.
+// when each running job run started (the `running_items` projection from the
+// active-run poll) and which files each task holds locked (`/api/tasks/locks`).
+// app.js fetches both with the task list and hands them here; the rows read
+// them back per task and repaint only when what a row shows changed.
 
 import { getWorkspace, onWorkspaceChange } from './common.js';
 
@@ -27,8 +27,9 @@ function publish() {
   for (const listener of listeners) listener();
 }
 
-/// Take a `/api/job-runs?state=running` page. A run without a readable start
-/// time is left out, so its row shows no elapsed time rather than a wrong one.
+/// Take the `running_items` projection from the active job-run page. A run
+/// without a readable start time is left out, so its row shows no elapsed time
+/// rather than a wrong one.
 export function setRunningRuns(payload) {
   const runs = Array.isArray(payload?.items) ? payload.items : Array.isArray(payload) ? payload : [];
   const next = new Map();
