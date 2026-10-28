@@ -44,6 +44,7 @@ pub(crate) struct BoundServer {
     // Reap the server and terminate its owned group before joining readers.
     child: ChildGuard,
     output: Output,
+    stderr: Output,
     addresses: mpsc::Receiver<SocketAddr>,
 }
 
@@ -52,25 +53,31 @@ impl BoundServer {
         let mut child = ChildGuard::spawn(command)?;
         let (sender, addresses) = mpsc::sync_channel(8);
         let mut output = Output::default();
+        let mut stderr = Output::default();
         match announcement {
-            Announcement::Dashboard => output.read(
-                child.stdout.take().expect("piped dashboard stdout"),
-                Some((announcement, sender)),
-            ),
-            Announcement::Mcp => output.read(
-                child.stderr.take().expect("piped MCP stderr"),
-                Some((announcement, sender)),
-            ),
-        }
-        if let Some(stdout) = child.stdout.take() {
-            output.read(stdout, None);
-        }
-        if let Some(stderr) = child.stderr.take() {
-            output.read(stderr, None);
+            Announcement::Dashboard => {
+                output.read(
+                    child.stdout.take().expect("piped dashboard stdout"),
+                    Some((announcement, sender)),
+                );
+                if let Some(pipe) = child.stderr.take() {
+                    stderr.read(pipe, None);
+                }
+            }
+            Announcement::Mcp => {
+                stderr.read(
+                    child.stderr.take().expect("piped MCP stderr"),
+                    Some((announcement, sender)),
+                );
+                if let Some(stdout) = child.stdout.take() {
+                    output.read(stdout, None);
+                }
+            }
         }
         Ok(Self {
             child,
             output,
+            stderr,
             addresses,
         })
     }
@@ -79,12 +86,12 @@ impl BoundServer {
         let deadline = Instant::now() + timeout;
         loop {
             if let Some(status) = self.child.try_wait()? {
-                self.output.join(deadline);
+                self.join_output(deadline);
                 return Err(self.failure(format!("server exited before readiness: {status}")));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                self.output.join(deadline);
+                self.join_output(deadline);
                 return Err(self.failure(format!("no bind announcement within {timeout:?}")));
             }
             match self
@@ -95,7 +102,7 @@ impl BoundServer {
                     // An announcement queued before an exit cannot establish
                     // readiness for a child that has already been reaped.
                     if let Some(status) = self.child.try_wait()? {
-                        self.output.join(deadline);
+                        self.join_output(deadline);
                         return Err(
                             self.failure(format!("server exited after announcing: {status}"))
                         );
@@ -112,12 +119,32 @@ impl BoundServer {
         }
     }
 
+    /// After the child exits, drain its final stderr lines before reporting.
+    // Some integration binaries only need readiness diagnostics.
+    #[allow(dead_code)]
+    pub(crate) fn stderr_tail(&mut self) -> String {
+        self.stderr.join(Instant::now() + Duration::from_secs(2));
+        self.stderr
+            .tail
+            .lock()
+            .expect("stderr lock")
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    fn join_output(&mut self, deadline: Instant) {
+        self.output.join(deadline);
+        self.stderr.join(deadline);
+    }
+
     fn failure(&self, reason: String) -> io::Error {
         io::Error::other(format!(
-            "{reason}; pid={}; {}; output={:?}",
+            "{reason}; pid={}; {}; output={:?}; stderr={:?}",
             self.child.id(),
             orbit_common::test_env::host_load(),
-            self.output.tail.lock().expect("output lock")
+            self.output.tail.lock().expect("output lock"),
+            self.stderr.tail.lock().expect("stderr lock")
         ))
     }
 }
@@ -139,8 +166,9 @@ impl DerefMut for BoundServer {
 impl Drop for BoundServer {
     fn drop(&mut self) {
         // Reader cancellation and child cleanup share a single teardown budget.
-        self.output
-            .finish_by(Instant::now() + Duration::from_secs(2));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        self.output.finish_by(deadline);
+        self.stderr.finish_by(deadline);
     }
 }
 

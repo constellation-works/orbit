@@ -308,6 +308,10 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
 
     let intake_socket = lease_intake.as_mut();
     let serve_result = tokio_runtime.block_on(async move {
+        // On Unix, register before binding or announcing readiness. Axum spawns
+        // its shutdown future separately: a health request can otherwise finish
+        // before that future is polled and SIGTERM still has its default action.
+        let signal = shutdown_signal()?;
         let listener = tokio::net::TcpListener::bind(addr)
             .await
             .map_err(|e| OrbitError::Io(format!("bind {addr}: {e}")))?;
@@ -371,7 +375,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState) -> Result<(), Orbi
         let notify_on_signal = Arc::clone(&shutdown_notify);
         let shutdown = async move {
             tokio::select! {
-                () = shutdown_signal() => {}
+                () = signal => {}
                 target = lifecycle_boundary() => {
                     if let Ok(mut slot) = handover_target.lock() {
                         *slot = target;
@@ -561,27 +565,39 @@ pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitEr
     )))
 }
 
-pub(crate) async fn shutdown_signal() {
+/// Prepare shutdown notification, installing Unix handlers before returning.
+pub(crate) fn shutdown_signal() -> Result<impl Future<Output = ()> + Send, OrbitError> {
+    #[cfg(unix)]
+    let mut interrupt =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+            .map_err(|error| OrbitError::Execution(format!("install SIGINT handler: {error}")))?;
+    #[cfg(unix)]
+    let ctrl_c = async move {
+        interrupt.recv().await;
+    };
+
+    #[cfg(not(unix))]
     let ctrl_c = async {
         let _ = tokio::signal::ctrl_c().await;
     };
 
     #[cfg(unix)]
-    let terminate = async {
-        if let Ok(mut sig) =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-        {
-            sig.recv().await;
-        }
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .map_err(|error| OrbitError::Execution(format!("install SIGTERM handler: {error}")))?;
+    #[cfg(unix)]
+    let terminate = async move {
+        sigterm.recv().await;
     };
 
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
-    tokio::select! {
-        _ = ctrl_c => {}
-        _ = terminate => {}
-    }
+    Ok(async move {
+        tokio::select! {
+            _ = ctrl_c => {}
+            _ = terminate => {}
+        }
+    })
 }
 
 pub(crate) fn open_browser(url: &str) {
