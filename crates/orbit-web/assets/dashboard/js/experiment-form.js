@@ -8,9 +8,10 @@
 // names. "Save and start" is two writes, so a refused start leaves the saved
 // draft open in the form and says so.
 //
-// The form lives in its own host above the polled panel body, so a refresh
-// never rebuilds it; draft actions keep their state per experiment id for
-// the same reason. Every node is built with DOM calls, never markup strings.
+// The form lives in its own host above the polled panel body. An unchanged
+// authoring refresh keeps its nodes; changed choices rebuild from typed state.
+// Draft actions keep their state per experiment id across polls, too.
+// Every node is built with DOM calls, never markup strings.
 
 import { el, captureFocus, captureWorkspaceVisit, onWorkspaceChange, requestJson } from './common.js';
 
@@ -45,7 +46,7 @@ const starts = new Map();
 const $ = (id) => document.getElementById(id);
 
 onWorkspaceChange(() => {
-  closeExperimentForm();
+  syncExperimentAuthoring(null);
   starts.clear();
 });
 
@@ -53,18 +54,24 @@ onWorkspaceChange(() => {
 /// and show the New experiment button only when create is authorized.
 /// `onSaved` refreshes the page after a write.
 export function syncExperimentAuthoring(next, onSaved, onDraftStartStateChange) {
+  const changed = JSON.stringify(authoring) !== JSON.stringify(next || null);
   authoring = next || null;
   if (onSaved) refresh = onSaved;
   if (onDraftStartStateChange) renderDraftStartState = onDraftStartStateChange;
   const button = $(OPEN);
-  if (!button) return;
-  if (!bound) {
+  if (button && !bound) {
     bound = true;
     button.addEventListener("click", () => openExperimentForm(null));
   }
   const allowed = Boolean(authoring?.create?.authorized);
-  button.hidden = !allowed;
-  if (!authoring && form) closeExperimentForm();
+  if (button) button.hidden = !allowed;
+  if (!authoring) closeExperimentForm();
+  else if (changed && form) {
+    // Changed permissions or choices require a fresh confirmation, but keep
+    // the definition the operator typed. In-flight writes retain their fences.
+    form.confirming = false;
+    renderForm();
+  }
 }
 
 /// The draft Start state included in the experiments panel's render hash.
@@ -86,6 +93,7 @@ export function closeExperimentForm() {
 
 /// Open the form: a new draft when `experiment` is null, else that draft.
 export function openExperimentForm(experiment) {
+  if (!(experiment ? authoring?.update : authoring?.create)?.authorized) return;
   form = experiment ? editState(experiment) : createState();
   const host = $(HOST);
   if (!host) return;
@@ -361,6 +369,8 @@ function errorSlot(state, field) {
 async function submit(start) {
   const state = form;
   if (!state || state.pending) return;
+  if (!(state.mode === "create" ? authoring?.create : authoring?.update)?.authorized) return;
+  if (start && (!authoring?.start?.authorized || !state.confirming)) return;
   // Save and start writes the definition its confirmation captured, not the
   // form as it stands when Confirm is pressed.
   const body = start ? state.confirming.body : definitionBody(state);
@@ -853,6 +863,7 @@ function guardrailsView(state, metrics) {
 }
 
 function actionsView(state) {
+  const canSave = Boolean((state.mode === "create" ? authoring?.create : authoring?.update)?.authorized);
   const canStart = Boolean(authoring?.start?.authorized);
   if (state.confirming) {
     const confirm = el("button", { class: "action ship exf-confirm-start", type: "button", text: "Confirm: save and start" });
@@ -865,10 +876,10 @@ function actionsView(state) {
     ]);
   }
   const save = el("button", { class: "action save exf-save", type: "submit", text: state.mode === "create" ? "Save draft" : "Save changes" });
-  save.disabled = state.pending;
+  save.disabled = state.pending || !canSave;
   const start = canStart ? el("button", { class: "action ship exf-save-start", type: "button", text: "Save and start" }) : null;
   if (start) {
-    start.disabled = state.pending;
+    start.disabled = state.pending || !canSave;
     start.addEventListener("click", () => { state.confirming = confirmationOf(state); rerender(); });
   }
   const cancel = el("button", { class: "action cancel exf-cancel", type: "button", text: "Cancel" });
