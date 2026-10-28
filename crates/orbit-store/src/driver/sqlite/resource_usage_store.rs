@@ -214,15 +214,15 @@ impl ResourceUsageStoreBackend for Store {
 
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
         let conn = self.read()?;
-        // The partial v69 index has one marker per sampled run; retention keeps
-        // it until the run's other minute rows have been removed.
+        // Every sampled run counts from its first recorded minute, whatever its
+        // index: a failed first read or insert can leave no minute-zero row. The
+        // probe reads only retained minute rows, never all of `job_runs`.
         let (newest, finished) = conn
             .query_row(
                 r#"
                 SELECT MAX(j.finished_at), COUNT(j.finished_at)
-                FROM run_resource_minutes r
+                FROM (SELECT DISTINCT workspace_id, run_id FROM run_resource_minutes) r
                 JOIN job_runs j ON j.workspace_id = r.workspace_id AND j.run_id = r.run_id
-                WHERE r.minute_index = 0
                 "#,
                 [],
                 |row| Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?)),
