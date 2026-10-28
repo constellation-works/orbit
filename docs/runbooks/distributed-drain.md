@@ -769,19 +769,21 @@ Owner and pull drains accept windows up to 24 hours. CLI `--for`, HTTP
 keeps its one-pass shorthand when `--for` is omitted or zero; HTTP asks for one
 pass explicitly with `one_pass: true`, and MCP requires a positive window.
 
-The dashboard's **Drain** › **Start a window** offers the pull on a replica:
-**Pull from the owner** posts `pull` (and `host`, resolved as `--host` is) with
-`for_duration` or `one_pass`, `concurrency` and `allow_crew` to
-`POST /api/workflows/auto`, and refuses the options `--pull` refuses in the
-command line's words. On a replica running a pull window, the Drain page's
-**Pulling from the owner** card shows the claim budget, the claims by stage and
-any refused settlement from the run's detail. Its budget uses the allocator's
-workspace-wide `pull_occupancy` reading (`occupied` and `reviewing`), counting
+On a replica, the Tasks dock's **Drain** tab starts a pull from the owner with
+its **Start a window** card. The card posts `pull` and `host` (resolved as
+`--host` is) with `for_duration` and, when set, `concurrency` to
+`POST /api/workflows/auto`; it sends no `allow_crew` and no one-pass or
+owner-only option. A running pull window shows in the card's status pill as
+**Pull drain** (or **Pull drain · admissions stopped**), links its run in the
+card footer, and is closed by **Stop**, which also stops admissions on this
+replica. The card is status only: it shows no claim budget, claims by stage or
+refused settlements. The run detail still reports them as `pull_occupancy`
+(`occupied` and `reviewing`), `claimed_leaves` and `refused_settlements`. The
+budget uses the allocator's workspace-wide `pull_occupancy` reading, counting
 launching admissions, terminal leaves awaiting settlement and other workspace
 leaves once each. Review credit is capped at the live concurrency ceiling:
-`occupied − min(reviewing, N) < N`. An unavailable reading shows an unknown
-budget. The claims-by-stage table separately lists only this drain's running
-claimed leaves; an empty table does not mean capacity is free.
+`occupied − min(reviewing, N) < N`. The `claimed_leaves` list holds only this
+drain's running claimed leaves; an empty list does not mean capacity is free.
 
 `<selector>` is the owner's host-qualified selector from federated discovery
 (`orbit_workspace_list`, e.g. `hm_owner/ws_orbit`); an owner with no host entry
