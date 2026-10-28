@@ -11,6 +11,7 @@ pub use acquisition::{
     FileLockGuard, FileLockProbe, acquire_exclusive_file_lock, probe_file_lock,
     try_acquire_exclusive_file_lock,
 };
+pub(crate) use hold::LockReportScope;
 pub use hold::hold_step;
 #[cfg(test)]
 pub(crate) use holders::read_file_lock_holder_after_resolve;

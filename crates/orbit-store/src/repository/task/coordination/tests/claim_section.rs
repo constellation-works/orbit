@@ -32,7 +32,6 @@ use crate::repository::task::v2::TaskV2Store;
 
 const PARTITION: &str = "orbit-test-123456";
 const MACHINE: &str = "machine-a";
-const HELD_PAST_THRESHOLD: &str = "advisory file lock held past its threshold";
 
 /// One owner partition: its commit boundary and a task store inside it.
 pub(super) struct Owner {
@@ -420,7 +419,6 @@ fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
         .history
         .len();
 
-    let (released_tx, released) = mpsc::channel();
     let (applying_tx, applying) = mpsc::channel();
     let (release_tx, release) = mpsc::channel();
     let committer = std::thread::spawn(move || {
@@ -430,27 +428,14 @@ fn a_slow_claim_apply_holds_its_bundle_and_not_its_partition() {
                 .recv_timeout(HANDSHAKE_TIMEOUT)
                 .expect("release the apply after the reader contends");
         });
-        lock_events_observed(
-            || admitted.bind(&writer),
-            move |event| {
-                if event.get("message").map(String::as_str) == Some(HELD_PAST_THRESHOLD)
-                    && event
-                        .get("lock_path")
-                        .is_some_and(|path| path.ends_with("/.task-commit.lock"))
-                {
-                    let _ = released_tx.send(());
-                }
-            },
-        )
+        lock_events_observed(|| admitted.bind(&writer), |_| {})
     });
     applying
         .recv_timeout(HANDSHAKE_TIMEOUT)
         .expect("the commit reaches its apply");
-    released
-        .try_recv()
-        .expect("the admission section released the partition before its apply");
-
-    // The partition admits another decision while the apply is held.
+    // Prove release through another real admission while the apply is held.
+    // Release reports can be deferred until the retained bundle lock closes;
+    // their emission is no longer a handshake for partition release.
     other
         .with_admission(|| Ok(()))
         .expect("an admission passes a held apply");

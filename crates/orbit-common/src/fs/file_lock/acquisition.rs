@@ -9,7 +9,7 @@ use crate::fs::io::{
     classify_lock_io, classify_or_wrap_lock_io, create_private_dir_all, open_private_file,
 };
 
-use super::hold::{HoldReport, duration_millis, record_lock_wait};
+use super::hold::{HoldReport, duration_millis, hold_step, record_lock_wait};
 use super::holders::{
     clear_file_lock_holder, describe_file_lock_holders, describe_queued_exclusive_waiter,
     read_file_lock_holder, read_shared_file_lock_holders, write_file_lock_holder,
@@ -42,7 +42,7 @@ const TURNSTILE_SUFFIX: &str = ".turnstile";
 #[derive(Debug)]
 #[must_use = "the advisory lock is released as soon as the guard is dropped"]
 pub struct FileLockGuard {
-    file: File,
+    file: Option<File>,
     clear_holder_on_drop: bool,
     /// This holder's record beside the lock, removed on release.
     shared_record: Option<PathBuf>,
@@ -52,13 +52,21 @@ pub struct FileLockGuard {
 
 impl Drop for FileLockGuard {
     fn drop(&mut self) {
-        if let Some(record) = &self.shared_record {
-            let _ = std::fs::remove_file(record);
-        }
-        if self.clear_holder_on_drop {
-            let _ = clear_file_lock_holder(&self.file);
-        }
-        if let Some(hold) = &self.hold {
+        hold_step("holder cleanup", || {
+            if let Some(record) = &self.shared_record {
+                let _ = std::fs::remove_file(record);
+            }
+            if self.clear_holder_on_drop
+                && let Some(file) = &self.file
+            {
+                let _ = clear_file_lock_holder(file);
+            }
+        });
+        // Clear exclusive metadata while still locked, then close the actual
+        // descriptor before any subscriber can block. Nested reports remain
+        // queued until the enclosing lock scopes have also released.
+        hold_step("lock release", || drop(self.file.take()));
+        if let Some(hold) = self.hold.take() {
             hold.report();
         }
     }
@@ -129,7 +137,7 @@ pub fn try_acquire_exclusive_file_lock(
                 drop(_timing);
                 write_file_lock_holder(&lock_file, label);
                 return Ok(Some(FileLockGuard {
-                    file: lock_file,
+                    file: Some(lock_file),
                     clear_holder_on_drop: true,
                     shared_record: None,
                     hold: None,
@@ -280,6 +288,9 @@ fn acquire_file_lock(
         };
         match acquisition {
             Ok(()) => {
+                let hold = options
+                    .warn_held_after
+                    .map(|warn_after| HoldReport::new(lock_path, label, exclusive, warn_after));
                 drop(queued);
                 record_lock_wait(lock_path, requested);
                 drop(_timing);
@@ -291,21 +302,21 @@ fn acquire_file_lock(
                     mode = if exclusive { "exclusive" } else { "shared" },
                     "advisory file lock acquired",
                 );
-                let shared_record = if exclusive {
-                    write_file_lock_holder(&lock_file, label);
-                    None
-                } else if options.record_shared_holders {
-                    write_shared_holder_record(lock_path, label)
-                } else {
-                    None
-                };
+                let shared_record = hold_step("holder record", || {
+                    if exclusive {
+                        write_file_lock_holder(&lock_file, label);
+                        None
+                    } else if options.record_shared_holders {
+                        write_shared_holder_record(lock_path, label)
+                    } else {
+                        None
+                    }
+                });
                 return Ok(FileLockGuard {
-                    file: lock_file,
+                    file: Some(lock_file),
                     clear_holder_on_drop: exclusive,
                     shared_record,
-                    hold: options
-                        .warn_held_after
-                        .map(|warn_after| HoldReport::new(lock_path, label, exclusive, warn_after)),
+                    hold,
                 });
             }
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -423,7 +434,7 @@ fn try_hold_turnstile(turnstile: &Path, label: &str) -> Option<FileLockGuard> {
     FileExt::try_lock_exclusive(&gate).ok()?;
     write_file_lock_holder(&gate, label);
     Some(FileLockGuard {
-        file: gate,
+        file: Some(gate),
         clear_holder_on_drop: true,
         shared_record: None,
         hold: None,

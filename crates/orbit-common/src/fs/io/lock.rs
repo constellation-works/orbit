@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::private::{create_private_dir_all, write_access_error_message};
 use crate::fs::file_lock::{
-    FileLockOptions, acquire_exclusive_file_lock, acquire_shared_file_lock,
+    FileLockOptions, LockReportScope, acquire_exclusive_file_lock, acquire_shared_file_lock,
 };
 
 thread_local! {
@@ -22,12 +22,16 @@ thread_local! {
 }
 
 /// Removes `path` from this thread's held set on drop, including on unwind.
-struct HeldLockPath(PathBuf);
+struct HeldLockPath {
+    path: PathBuf,
+    // Drops after the re-entrancy record is removed and the descriptor closes.
+    _reports: LockReportScope,
+}
 
 impl Drop for HeldLockPath {
     fn drop(&mut self) {
         HELD_LOCK_PATHS.with(|held| {
-            held.borrow_mut().remove(&self.0);
+            held.borrow_mut().remove(&self.path);
         });
     }
 }
@@ -38,7 +42,10 @@ fn claim_lock_path(path: &Path) -> Option<HeldLockPath> {
     HELD_LOCK_PATHS.with(|held| {
         held.borrow_mut()
             .insert(path.to_path_buf())
-            .then(|| HeldLockPath(path.to_path_buf()))
+            .then(|| HeldLockPath {
+                path: path.to_path_buf(),
+                _reports: LockReportScope::enter(),
+            })
     })
 }
 
