@@ -638,6 +638,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         tools[0]["inputSchema"]["properties"]["extra"] = False
         self.repo.write_mcp(tools)
         self.repo.commit("feat: Add extra guard [ORB-60] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
 
         tools = self.repo.mcp()
         tools[0]["inputSchema"]["properties"]["extra"] = {
@@ -648,6 +649,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.repo.write_mcp(tools)
         self.repo.commit("feat: Relax extra guard [ORB-61] (#2)")
 
+        # Start the report after the tightening so it covers only the relaxation.
         report = self.report()
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
@@ -660,6 +662,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         tools[0]["inputSchema"]["additionalProperties"] = False
         self.repo.write_mcp(tools)
         self.repo.commit("feat: Forbid extra properties [ORB-62] (#1)")
+        self.repo.git("tag", "-f", "v0.35.0")
 
         tools = self.repo.mcp()
         tools[0]["inputSchema"]["additionalProperties"] = {
@@ -670,6 +673,7 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         self.repo.write_mcp(tools)
         self.repo.commit("feat: Relax extra properties [ORB-63] (#2)")
 
+        # Start the report after forbidding extra properties, leaving only the relaxation.
         report = self.report()
         self.assertEqual(report["signals"], [])
         self.assertEqual(report["bump"], "patch")
