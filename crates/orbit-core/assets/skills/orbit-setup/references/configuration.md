@@ -41,6 +41,104 @@ orbit config path
 assuming a value. Use `orbit config show --all` to include unset advanced keys;
 the defaults below are built-ins, not necessarily this host's effective policy.
 
+## Seeding policy
+
+`seeding.routines` and `seeding.auto_tasks` choose which shipped defaults a
+workspace carries, independently of presets. Both default to `"all"`. Set them
+in `<workspace>/.orbit/config.toml` for one workspace, or use `orbit config set
+--global` for `~/.orbit/config.toml`. Each workspace key overrides its global
+counterpart; a name list replaces the inherited list rather than adding to it.
+
+| Value | Effect |
+|---|---|
+| `"all"` | Seed every shipped default of that kind, including additions in later releases. |
+| `"none"` | Seed none of that kind. |
+| A TOML name list | Seed exactly those shipped defaults; later additions stay excluded. Routine names are file stems such as `["worktree_gc", "store_gc"]`, not the rendered names from `orbit routine list`. Auto-task names use names such as `["doc-duties", "qa-sweep"]`. |
+
+A name Orbit has never shipped is refused by config loading, `orbit config
+set` and seeding commands; the error names the key, bad name and shipped
+choices. A name a later release retired still loads but seeds nothing. This
+policy selects Orbit's shipped defaults, not user-authored or plugin definitions.
+
+The policy applies to `orbit workspace init`, `orbit workspace init --force`,
+`orbit workspace sync`, and the create-only seeding that `orbit init` performs
+over registered workspaces after an upgrade. Use workspace sync to reconcile
+an existing workspace: the upgrade's create-only pass leaves existing files
+alone and does not retire them.
+
+### Changing an existing workspace
+
+Run from the intended registered checkout. Inspect effective values and their
+sources, then save the current config and any local definition edits before
+narrowing. Review the definitions you intend to keep; this example selects
+garbage collection and the crew snapshot refresh, plus two auto-tasks whose
+shipped defaults are disabled:
+
+```bash
+orbit workspace show
+orbit config keys
+orbit config show --all
+orbit config get seeding.routines
+orbit config get seeding.auto_tasks
+orbit routine list
+orbit auto-task list
+
+orbit config set seeding.routines '["worktree_gc", "store_gc", "crew_performance_refresh"]'
+orbit config set seeding.auto_tasks '["doc-duties", "qa-sweep"]'
+orbit config get seeding.routines
+orbit config get seeding.auto_tasks
+orbit workspace sync --check --json
+```
+
+The two config writes are separate, not an atomic preset application. Check
+their effective values before applying. `sync --check` writes nothing and
+exits 3 when changes are pending. Review the whole report, including warnings
+and host-global asset changes, before running:
+
+```bash
+orbit workspace sync --json
+orbit config show --all
+orbit workspace show
+orbit workspace show --json
+orbit doctor
+```
+
+- **Narrowing retires managed defaults by recorded digest.** Sync removes an
+  unedited file Orbit seeded. It moves a locally edited excluded default under
+  `.orbit/.retired-managed/` and warns to migrate it under a new user-authored
+  name. A file Orbit never recorded is left alone. Save and review edits before
+  sync; preservation does not keep the excluded definition active.
+- **Widening reseeds on the next sync.** Add a name to the list or set a key
+  back to `all`, then preview and apply sync again. This seeds the shipped
+  definition, not the preserved edited copy. Selecting a default is separate
+  from enabling it: shipped auto-tasks and nine of the ten routines start
+  disabled; `crew-performance-refresh` starts enabled and no-ops while
+  `workflow.crew_performance` is `off`. Preserve existing enablement choices.
+- **Auto-task deletion remains an opt-out.** An opt-out recorded by `orbit
+  auto-task delete` survives exclusion and later widening, so sync still leaves
+  that default absent. First include it in `seeding.auto_tasks`, then use
+  `orbit auto-task restore <name>` to clear the opt-out and restore its shipped,
+  disabled content. Restore refuses an excluded name or an existing definition.
+  See [Deleting a definition](auto-tasks.md#deleting-a-definition). For routines,
+  a name-list policy is the durable per-name opt-out.
+
+**Verify the result.** `orbit config show --all` reports the effective keys and
+their provenance. `orbit workspace show` reports both policies and the defaults
+left out; JSON carries `seeding.routines`, `seeding.auto_tasks` and
+`seeding.left_out`, with the last applied preset separately under `preset`.
+These describe policy, so also inspect `orbit routine list`, `orbit auto-task
+list` and sync warnings for actual definitions and enablement. `orbit doctor`
+does not report excluded defaults as missing. Its `seeding-policy` row explains
+non-default policies; no such row is emitted when both keys are `all`.
+
+If `workflow.crew_performance` is anything other than `off` and the routine
+policy excludes `crew_performance_refresh`, doctor adds a `seeding-policy`
+warning: nothing refreshes the snapshot crew draws read. Either keep crew
+performance off or include that routine and sync; also verify the host clock
+and routine state as described in [Crew performance snapshot](automation.md#crew-performance-snapshot).
+For applying policy together with config and plugin enables from a reviewed
+file, retain the [workspace preset procedure](first-run.md#workspace-presets).
+
 ## Common settings
 
 | Key | Purpose |
