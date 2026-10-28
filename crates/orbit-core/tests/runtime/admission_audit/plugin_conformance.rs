@@ -353,6 +353,7 @@ fn nested_seatbelt_defers_conformance_rows_without_pass_credit() {
     let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
         .args(["--exact", &table, "--nocapture", "--test-threads=1"])
         .env("ORBIT_TEST_FORCE_SEATBELT_REFUSAL", "1")
+        .env_remove("ORBIT_REQUIRE_SANDBOX_EXEC")
         .output()
         .expect("run the conformance table under a forced Seatbelt refusal");
     let stdout = String::from_utf8_lossy(&output.stdout);
