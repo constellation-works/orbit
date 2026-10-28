@@ -76,12 +76,13 @@ impl OrbitRuntime {
         input["auto_crew_pools"] = serde_json::to_value(self.auto_crew_pools_for_input(input)?)
             .map_err(|error| OrbitError::Execution(format!("serialize crew pools: {error}")))?;
         // The owner writes the leaf's crew back to its task when it settles.
-        self.capture_task_crew_selection(
+        let writes = self.capture_task_crew_selection(
             input,
             &view,
             &mut crate::application::job::crew_pools::random_crew_ticket,
-        )
-        .map(|_| ())
+        )?;
+        self.apply_admission_task_writes(writes.without_crew_write());
+        Ok(())
     }
 
     /// Existing assignments only: eligibility must never enroll a task.

@@ -111,7 +111,7 @@ impl OrbitRuntime {
         yaml_path: &Path,
         input: Value,
     ) -> Result<V2JobRunResult, OrbitError> {
-        self.run_job_v2_from_yaml_with_retry_source(yaml_path, input, None, 1, None)
+        self.run_job_v2_from_yaml_with_retry_source(yaml_path, input, None, 1, None, None)
     }
 
     /// Re-run a completed or historical job run from step 0 using the current
@@ -134,7 +134,7 @@ impl OrbitRuntime {
     ) -> Result<V2JobRunResult, OrbitError> {
         let (source, mut input) = self.admit_job_run_replay(source_run_id, claim_token)?;
         self.install_review_admission(&source.job_id, &mut input, None, false)?;
-        self.install_auto_crew_admission(
+        let task_writes = self.install_auto_crew_admission(
             &source.job_id,
             &mut input,
             None,
@@ -142,7 +142,14 @@ impl OrbitRuntime {
             &mut crew_pools::random_crew_ticket,
         )?;
         let (job_path, _) = self.load_v2_job_asset_by_name(&source.job_id)?;
-        self.run_job_v2_from_yaml_with_retry_source(&job_path, input, Some(source.run_id), 1, None)
+        self.run_job_v2_from_yaml_with_retry_source(
+            &job_path,
+            input,
+            Some(source.run_id),
+            1,
+            None,
+            task_writes,
+        )
     }
 
     /// Persist a whole-run replay and submit it to a detached worker.
@@ -196,6 +203,7 @@ impl OrbitRuntime {
         retry_source_run_id: Option<String>,
         attempt: u32,
         resume: Option<&ResumePlan>,
+        admission_task_writes: Option<crew_pools::AdmissionTaskWrites>,
     ) -> Result<V2JobRunResult, OrbitError> {
         let (job_name, spec) = load_job_definition(yaml_path)?;
         // [ORB-11354] The foreground path takes caller-shaped input too, so it
@@ -233,6 +241,11 @@ impl OrbitRuntime {
             Some(input.clone()),
             retry_source_run_id.clone(),
         )?;
+        // [ORB-19485] The run is durably inserted, so the draw's task writes
+        // may land. A failure before this point wrote nothing to the task.
+        if let Some(writes) = admission_task_writes {
+            self.apply_admission_task_writes(writes);
+        }
         // [ORB-14524] The run row is committed, so a seed or Start-write
         // failure must terminalize it: no worker exists to ever pick it up, and
         // a stranded pending run would hold its concurrency slot and retry key.

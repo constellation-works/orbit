@@ -1,11 +1,14 @@
 //! `task.crew` names the crew of the task's latest delivery [ORB-19416].
 //! Admission writes the crew it chose back to the task when it differs from
 //! the recorded one: an experiment arm's crew overlay, a provider hold or
-//! limit, a usage-pressure or pool draw, or an explicit run crew. A claimed
-//! leaf draws its crew on its executor, so its owner writes the leaf's crew
-//! back when the leaf settles. Each write sets a `crew_source` naming why and
-//! appends a `crew_assigned` history entry, so history keeps every earlier
-//! crew. A one-time backfill repairs tasks admitted before the write-back.
+//! limit, a usage-pressure or pool draw, or an explicit run crew. The write
+//! lands only after the run is durably admitted, and only while the task still
+//! names the crew the draw read, so a refused or duplicate submission and a
+//! newer change to the task leave it alone [ORB-19485]. A claimed leaf draws
+//! its crew on its executor, so its owner writes the leaf's crew back when the
+//! leaf settles. Each write sets a `crew_source` naming why and appends a
+//! `crew_assigned` history entry, so history keeps every earlier crew. A
+//! one-time backfill repairs tasks admitted before the write-back.
 
 use std::collections::BTreeMap;
 
@@ -66,6 +69,26 @@ impl AdmittedCrewSource {
     }
 }
 
+/// The crew an admission drew, with the crew its task named when the draw read
+/// it, held until the run is admitted [ORB-19485].
+pub(crate) struct PendingCrewWriteBack {
+    pub(super) recorded: Option<String>,
+    pub(super) crew: String,
+    pub(super) written: AdmittedCrewSource,
+}
+
+/// What a locked crew write requires of the task before it changes the task.
+#[derive(Clone, Copy)]
+enum CrewWriteGuard<'a> {
+    /// The backfill, which also repairs terminal tasks because analytics read them.
+    Any,
+    /// A claimed leaf's write-back, which leaves terminal tasks alone.
+    Open,
+    /// An admission's write-back, which leaves terminal tasks alone and any task
+    /// whose crew is no longer `recorded`: a newer change to the task owns it.
+    Recorded(Option<&'a str>),
+}
+
 /// What one task-crew backfill changed in this workspace.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TaskCrewBackfill {
@@ -96,8 +119,24 @@ impl OrbitRuntime {
         crew: &str,
         written: &AdmittedCrewSource,
     ) -> Result<bool, OrbitError> {
-        self.write_task_crew(task_id, crew, written, false)
+        self.write_task_crew(task_id, crew, written, CrewWriteGuard::Open)
             .map(|change| change.is_some())
+    }
+
+    /// The write-back of a crew an admitted run drew, applied only while the
+    /// task still names the crew the draw read [ORB-19485].
+    pub(crate) fn write_back_admitted_task_crew(
+        &self,
+        task_id: &str,
+        pending: &PendingCrewWriteBack,
+    ) -> Result<bool, OrbitError> {
+        self.write_task_crew(
+            task_id,
+            &pending.crew,
+            &pending.written,
+            CrewWriteGuard::Recorded(pending.recorded.as_deref()),
+        )
+        .map(|change| change.is_some())
     }
 
     /// The owner's write-back of the crew a claimed leaf reported at
@@ -163,7 +202,7 @@ impl OrbitRuntime {
                 continue;
             };
             report.examined += 1;
-            match self.write_task_crew(&task_id, &crew, &written, true) {
+            match self.write_task_crew(&task_id, &crew, &written, CrewWriteGuard::Any) {
                 Ok(Some(from)) => {
                     report.changed += 1;
                     report.tasks.push(TaskCrewChange {
@@ -205,14 +244,14 @@ impl OrbitRuntime {
             .and_then(|state| selected(state.crew_selection.as_ref())))
     }
 
-    /// The locked write behind both write-backs. `Some(previous crew)` when
+    /// The locked write behind every write-back. `Some(previous crew)` when
     /// it wrote.
     fn write_task_crew(
         &self,
         task_id: &str,
         crew: &str,
         written: &AdmittedCrewSource,
-        terminal: bool,
+        guard: CrewWriteGuard<'_>,
     ) -> Result<Option<Option<String>>, OrbitError> {
         let Some(crew) = non_empty(crew) else {
             return Ok(None);
@@ -222,9 +261,14 @@ impl OrbitRuntime {
             .tasks()
             .with_task_write_lock(task_id, &mut || {
                 let current = self.get_task(task_id)?;
-                if current.crew.as_deref() == Some(crew)
-                    || (!terminal && current.status.is_terminal())
-                {
+                let refused = match guard {
+                    CrewWriteGuard::Any => false,
+                    CrewWriteGuard::Open => current.status.is_terminal(),
+                    CrewWriteGuard::Recorded(recorded) => {
+                        current.status.is_terminal() || current.crew.as_deref() != recorded
+                    }
+                };
+                if current.crew.as_deref() == Some(crew) || refused {
                     return Ok(());
                 }
                 let now = chrono::Utc::now();

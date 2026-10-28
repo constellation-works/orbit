@@ -74,7 +74,7 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
         let mut sources = Vec::new();
         for _ in 0..1000 {
             let mut input = json!({ "task_ids": [task.id] });
-            runtime
+            let writes = runtime
                 .install_auto_crew_admission(
                     "task_local_pipeline",
                     &mut input,
@@ -86,6 +86,10 @@ fn a_limited_pool_member_is_never_drawn_until_its_reading_resets() {
                     },
                 )
                 .expect("admit");
+            // Each admission applies its writes once its run is inserted.
+            if let Some(writes) = writes {
+                runtime.apply_admission_task_writes(writes);
+            }
             *drawn
                 .entry(input["crew"].as_str().unwrap_or_default().to_string())
                 .or_default() += 1;
