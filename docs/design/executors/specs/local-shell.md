@@ -22,7 +22,7 @@ agent is launched with. Model and provider selection stay entirely on the
 | Artifact | What it decides |
 | --- | --- |
 | The `local-shell` **executor definition** (`kind: Executor`) | The environment additions, the fallback program, a static argument prefix, the default timeout, and — if declared — the OS sandbox every shell step runs under. |
-| The **activity** (`kind: Activity`, `type: deterministic`, `action: local_shell`) | The program and arguments for this step, its working directory, its explicit environment, and its timeout. |
+| The **activity** (`kind: Activity`, `type: deterministic`, `action: local_shell`) | The step's declared program and arguments — or neither, to use the definition's `command`/`args` defaults — plus its working directory, its explicit environment, and its timeout. |
 
 The shipped definition declares no `command` and no `sandbox`, so out of the box
 each activity names its own program and the child runs bare under Orbit's
@@ -53,7 +53,13 @@ is an ordinary argument byte string.
 
 ### Step input never reaches argv
 
-The program and its arguments come from `config` only. A job step's `with:`
+The program and its arguments come from static declarations only: the
+activity's `config` may declare `command` + `args` or `shell` + `script`, or
+neither. When the activity names no program, the selected executor
+definition's `command` is the fallback program and its `args` are the argv;
+for an explicit `command`, the definition's static `args` prefix the
+activity's `args`, while `shell` + `script` runs exactly
+`<shell> -c <script>`. A job step's `with:`
 block is rendered from templates and can carry text an agent produced; letting
 it reach `argv` would make every shell step an injection surface. Runtime input
 contributes exactly one thing: `workspace_path`, the checkout to run in. This is
