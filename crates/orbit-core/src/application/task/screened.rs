@@ -416,9 +416,11 @@ fn admit_regression_severity(
         return Ok(());
     }
     let same_severity = recorded.is_some_and(|recorded| recorded.severity == regression.severity);
+    let recorded_verified =
+        recorded.is_some_and(|recorded| recorded.severity_source == SeveritySource::Verified);
     match regression.severity_source {
         SeveritySource::Operator | SeveritySource::Backfill => {}
-        SeveritySource::Verified if same_severity => {}
+        SeveritySource::Verified if same_severity && recorded_verified => {}
         SeveritySource::Verified => {
             return Err(OrbitError::InvalidInput(format!(
                 "`regression.severity_source` verified on the `regression_from` link to `{target}` is recorded only by finding verification; rate it as the filer or name `operator`"
