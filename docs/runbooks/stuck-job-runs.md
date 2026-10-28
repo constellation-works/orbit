@@ -168,11 +168,13 @@ run was persisted but its detached worker could not start, Orbit terminalizes it
 (plus transient `retrying` and step-level `skipped`). A `held` run is resumable through its
 specific recovery path; it is not an ordinary failed terminal run.
 
-When `worktree_setup` cannot reach origin before admitting a task, the run is held as
-`delivery_origin_unavailable` and the task stays in backlog. A bounded origin probe also
-confirms transport failure before a fetch-lock timeout is held; authentication, permission
-and missing-ref errors remain failures. Once origin answers, admit the same backlog task
-through a new run; do not resume the held run.
+When `worktree_setup` cannot reach origin before admitting tasks, the run is held as
+`delivery_origin_unavailable` only while every task is still in backlog. A bounded origin
+probe also confirms transport failure before a fetch-lock timeout is held; authentication,
+permission and missing-ref errors remain failures. Once origin answers, admit the same
+backlog task through a new run; do not resume the held run. If a task is already in progress,
+ordinary run failure handling applies (or claim settlement for a claimed leaf) instead of
+leaving it in an unresumable hold.
 
 Completion and owner landing also end `held` on typed parked decisions: a
 reported head changed, a repair is already dispatched, the PR is draft or

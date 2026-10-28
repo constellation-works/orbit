@@ -36,9 +36,10 @@ pub enum DeliveryRefusal {
     /// retry. Nothing changed on the forge; the task stays in review and the
     /// held run resumes its completion once the forge answers.
     ForgeObservationUnavailable,
-    /// The origin could not be reached while a task was still being admitted
-    /// through `worktree_setup`. The task remains in backlog for a later
-    /// admission after transport recovers.
+    /// The origin could not be reached while backlog tasks were being admitted
+    /// through `worktree_setup`. They remain in backlog for a later admission
+    /// after transport recovers. A task already in progress follows ordinary
+    /// run failure handling, or claim settlement for a claimed leaf, instead.
     OriginUnavailable,
 }
 

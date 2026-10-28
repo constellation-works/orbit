@@ -2,8 +2,9 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_types::identity::lower_hex;
+use orbit_types::task::TaskStatus;
 use orbit_types::workflow::{
-    BRANCH_HASH_LEN, ConventionTemplate, Placeholder, unsafe_branch_name_reason,
+    BRANCH_HASH_LEN, ConventionTemplate, DeliveryRefusal, Placeholder, unsafe_branch_name_reason,
 };
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -63,7 +64,44 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     let repo_root_str = host.repo_root()?;
     let repo_root = Path::new(&repo_root_str);
 
-    let start_point = resolve_worktree_start_point_for_admission(repo_root, &base, base_sync_mode)?;
+    let start_point =
+        match resolve_worktree_start_point_for_admission(repo_root, &base, base_sync_mode) {
+            Err(OrbitError::DeliveryRefused {
+                refusal: DeliveryRefusal::OriginUnavailable,
+                message,
+            }) => {
+                let tasks = task_ids
+                    .iter()
+                    .map(|task_id| host.get_task(task_id))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if tasks.iter().all(|task| task.status == TaskStatus::Backlog) {
+                    return Err(OrbitError::DeliveryRefused {
+                        refusal: DeliveryRefusal::OriginUnavailable,
+                        message,
+                    });
+                }
+
+                // A task already admitted by an earlier run cannot use the
+                // backlog-only hold: held delivery refusals have no generic resume
+                // path. For local tasks, link this failed attempt so the ordinary
+                // run finalizer can move them through failure handling. A claimed
+                // leaf uses its claim settlement for the same outcome.
+                for (task_id, task) in task_ids.iter().zip(&tasks) {
+                    if task.status == TaskStatus::InProgress && host.worker_invocation().is_none() {
+                        host.apply_task_automation_update(
+                            task_id,
+                            TaskAutomationUpdate {
+                                expected_status: Some(TaskStatus::InProgress),
+                                job_run_id: Some(job_run_id.clone()),
+                                ..TaskAutomationUpdate::default()
+                            },
+                        )?;
+                    }
+                }
+                return Err(OrbitError::Execution(message));
+            }
+            result => result?,
+        };
     // ORB-10380: `start_point` is a moving name (`origin/<base>`) shared by every
     // worktree off this `.git`; a sibling run's fetch or a merge can move it
     // mid-run. Resolve it exactly once here and hand the resulting commit id to
