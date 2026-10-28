@@ -94,8 +94,9 @@ several apps.
 schema_version = 1
 
 [app.dashboard]
-# Run from the checkout under the worker sandbox. On Linux, the sandbox retains
-# host network access; the loopback URL below is the server address, not an egress limit.
+# Run from the checkout under the worker sandbox. The sandbox retains host network access on
+# Linux (`--share-net`) and allows network access on macOS (`(allow network*)`); the loopback
+# URL below is the server address, not an egress limit.
 # Must print `ORBIT_VISUAL_URL=<loopback URL>` on stdout once ready, after binding port zero.
 setup = ["scripts/visual-fixture-server.sh", "{fixture}"]
 setup_timeout_s = 120
@@ -217,7 +218,9 @@ they need no seed.
 
 `visual_capture` is a deterministic activity. It needs a verified browser kit on the host
 that runs it (§4) and runs under the worker sandbox. On Linux, that sandbox retains host
-network access and does not limit process egress to loopback. Browser requests are restricted
+network access (`--share-net` in `base_namespace_args`); on macOS, it allows network access
+(`(allow network*)` in the compiled worker profile). Neither limits process egress to
+loopback. Browser requests are restricted
 separately by each browser context (§3.2). It:
 
 1. Creates two detached checkouts under the run's scratch directory: the base revision and
@@ -732,7 +735,8 @@ admission routing to kit hosts is unchanged.
 
 - **Repository commands.** `setup` is repository code run under the worker sandbox, with
   the same rules as required validation commands. On Linux, that sandbox retains host network
-  access and does not limit egress to loopback. `setup` runs from the base checkout for before
+  access (`--share-net`); on macOS, it allows network access (`(allow network*)`). Neither
+  limits egress to loopback. `setup` runs from the base checkout for before
   captures and the candidate checkout for after captures, so a candidate can change what its
   own server renders (that is the change under review) but not the manifest's checks, masks,
   rules or budgets, which are read at the base (§2.3). Loopback request confinement applies
