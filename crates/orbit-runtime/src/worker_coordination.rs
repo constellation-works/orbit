@@ -271,11 +271,46 @@ impl RuntimeKernel {
             );
         }
         session.workspace = Some(bound.owner_destination.clone());
-        self.owner_coordinator
+        // [ORB-19270] A worker reads any task of its claimed workspace. The
+        // owner answers under the binding's workspace only, so a task it does
+        // not hold there is outside the claim's scope rather than missing.
+        let other_task = (!session.worker_host_call
+            && matches!(name, "orbit.task.show" | "orbit.task.artifact.get"))
+        .then(|| input.get("id").and_then(Value::as_str).map(str::to_owned))
+        .flatten()
+        .filter(|id| *id != bound.task_id);
+        let owner = self
+            .owner_coordinator
             .as_ref()
-            .ok_or_else(|| OrbitError::PolicyDenied("owner destination unavailable".into()))?
-            .call(name, input, session)
-            .map_err(owner_route_failure)
+            .ok_or_else(|| OrbitError::PolicyDenied("owner destination unavailable".into()))?;
+        let result = owner
+            .call(name, input, session.clone())
+            .map_err(owner_route_failure);
+        match (result, other_task) {
+            (Err(error), Some(id)) if is_not_found(&error) => {
+                // An artifact read's not-found may be the artifact's; ask
+                // the owner for the task itself before deciding.
+                let task = owner.call(
+                    "orbit.task.show",
+                    serde_json::json!({
+                        "id": id,
+                        "fields": ["id"],
+                        "workspace": bound.owner_destination,
+                    }),
+                    session,
+                );
+                match task {
+                    Err(task_error) if is_not_found(&task_error) => {
+                        Err(OrbitError::PolicyDenied(format!(
+                            "claimed_owner_bridge_refused: `{id}` is not a task in the claimed \
+                             task's workspace; a claimed worker reads that workspace only"
+                        )))
+                    }
+                    _ => Err(error),
+                }
+            }
+            (result, _) => result,
+        }
     }
 
     /// The host owns internal projections. Ordinary tool dispatch cannot
@@ -316,6 +351,19 @@ pub fn check_worker_host_input(input: &Value, host_call: bool) -> Result<(), Orb
 /// neither its host nor its crew and the drain backs off instead. The variant
 /// is kept; a refusal, an ambiguous outcome and a local error are left as
 /// they are.
+/// Whether an owner error says the record does not exist, in process or
+/// across the owner route.
+fn is_not_found(error: &OrbitError) -> bool {
+    matches!(
+        error,
+        OrbitError::NotFound { .. }
+            | OrbitError::RemoteTool {
+                code: RemoteToolCode::NotFound,
+                ..
+            }
+    )
+}
+
 fn owner_route_failure(error: OrbitError) -> OrbitError {
     let typed = |message: String| {
         format!(

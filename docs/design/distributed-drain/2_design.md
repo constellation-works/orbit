@@ -333,14 +333,16 @@ claimed leaves pass `claimed: true` to `agent_implement`, and in that mode:
 
 - The injected task envelope is the task. The claim is the authority to work on it, and the owner
   fences stale work when the claim settles (`stale_claim`). A read through `orbit.task.show` is
-  scoped by the run broker to that claimed task.
+  scoped by the run broker to the claimed task's workspace ([ORB-19270]).
 - The closed claimed-owner bridge carries `orbit.task.show`, `orbit.search`,
   `orbit.task.list`, `orbit.task.add`, `orbit.friction.add`, and
   `orbit.task.artifact.get` / `orbit.task.artifact.put` through the run coordinator.
   Search and task listing read the owner's authoritative records only in the claimed
   workspace; search cannot request federated `workspaces` or `all_workspaces`
-  (including their aliases). Task show and artifacts remain scoped to the claimed
-  task, and follow-up creation retains its claim relation checks. No additional
+  (including their aliases). Task show and artifact get read any task in that
+  workspace; a task the owner does not hold there is refused
+  (`claimed_owner_bridge_refused`). Artifact put stays on the claimed task, and
+  follow-up creation retains its claim relation checks. No additional
   mutations are bridged. A task requiring `orbit.task.update` remains held before
   claim admission, with a reason naming that exact denied tool; audit templates
   that require it must run on the owner. Claimed audits that do not require updates
@@ -1472,7 +1474,7 @@ Acceptance criteria, not reported as passing.
 | Claimed implementer with no SSH route to the owner (agent sandbox) | Scoped owner calls cross the run broker; task updates stay denied, and the output summary reaches `claim_handoff` as the owner's `execution_summary` |
 | Owner's own drain admission pass times out on a task or database lock | The pass is deferred, not failed: it admits nothing, releases any `enforce` gap-fit reservations it wrote for its wave (any it cannot release expire with their TTL), records `lock_busy` and the lock error (naming the holder) as the drain's last pass, and the next pass retries after the poll interval. Ten consecutive deferred passes fail the drain with that error; a completed pass resets the count; any other admission error fails the drain as before |
 | Owner times out waiting on a task or database lock | The owner answers the retryable `lock_busy`, not `internal_error`; a bound worker retries an owner read twice (1 s, then 3 s) before failing, so an agent envelope's task load (final recovery's included) outlasts a burst; a step it still fails settles as `transient`, never as `candidate` or `base_conflict` ([ORB-15088]) |
-| Claimed agent's owner call from inside the sandbox | Only the closed owner-tool list crosses the run's broker. Search and task listing read the claimed workspace; federated search, task show or artifacts for another task, and unsupported relations are refused. A missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
+| Claimed agent's owner call from inside the sandbox | Only the closed owner-tool list crosses the run's broker. Search, task listing, task show and artifact get read the claimed workspace ([ORB-19270]); federated search, a task outside that workspace, an artifact put or friction for another task, and unsupported relations are refused. A missing broker is `owner_route_unavailable`, settled as a release ([ORB-14260]) |
 | Claimed run creates files under an admitted `dir:` selector | Committed and handed off with no exact `file:` selector; eligible additions outside the original module footprint request owner-validated widening; ineligible paths are refused before any index change; `.orbit/tmp/` scratch is never delivered ([ORB-13756]) |
 | Claimed retry of a task whose previous attempt failed | The delivery gate judges this attempt's implementer summary, not the stored `Outcome: failed`; a current failure is still refused before any Git mutation ([ORB-13755]) |
 | Generic resume of an interrupted claimed leaf | Refused; recovery creates a fenced new claim/run, preserving branch evidence |
@@ -1578,5 +1580,6 @@ Acceptance criteria, not reported as passing.
 - [ORB-14938] — added owner-relative OS affinity and the expiring-batch boost to pull admission order (§2).
 - [ORB-17304] — ordered pull and owner-local admission against the live executor census (§2, §9).
 - [ORB-17292] — reported each claimed leaf's crew and model with its settlement and kept them on the owner's settlement record, handoffs included, for the agent scorecards.
+- [ORB-19270] — widened a claimed worker's task show and artifact get to the claimed workspace.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

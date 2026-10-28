@@ -9,11 +9,12 @@
 //! gone coordinator is the typed `owner_route_unavailable` instead.
 
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use orbit_common::OrbitError;
 use orbit_engine::PluginBrokerHandle;
-use orbit_types::tool::WorkerInvocation;
+use orbit_tools::OwnerCoordinator;
+use orbit_types::tool::{ToolSessionContext, WorkerInvocation};
 use orbit_types::workflow::{
     OWNER_ROUTE_UNAVAILABLE_ERROR_CODE, REVIEW_EVIDENCE_HOLD_ARTIFACT, REVIEW_GATE_ARTIFACT,
     REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, REVIEW_REPORT_HISTORY_ARTIFACT,
@@ -24,6 +25,7 @@ use super::super::brokered::RunDispatch;
 use super::super::claimed_owner::{ClaimedOwnerRoute, bridge_through};
 use super::super::execute::ToolEntryPoint;
 use super::claimed_review::{FOLLOWER, Fixture, GET, PUT, TASK};
+use crate::OrbitRuntime;
 use crate::runtime::plugin::broker::{BrokerDispatch, BrokerRequest, EntryPoint};
 
 const SHOW: &str = "orbit.task.show";
@@ -31,6 +33,49 @@ const ADD: &str = "orbit.task.add";
 const FRICTION: &str = "orbit.friction.add";
 
 mod pagination;
+mod workspace_reads;
+
+/// The owner's side of the claim route over a real task store: the owner's
+/// public task tools on this fixture's disposable store, under the binding's
+/// workspace as the owner's routing pins it.
+struct TaskOwner {
+    runtime: OrbitRuntime,
+    calls: AtomicUsize,
+}
+
+impl TaskOwner {
+    fn over(runtime: &OrbitRuntime) -> Self {
+        Self {
+            runtime: runtime.without_worker_routing(),
+            calls: AtomicUsize::new(0),
+        }
+    }
+
+    fn execute(&self, tool: &str, mut input: Value) -> Result<Value, OrbitError> {
+        // Stand in for the owner's workspace routing, with the real tool
+        // dispatch and stored task on this fixture's disposable owner store.
+        input["workspace"] = json!(self.runtime.workspace_id()?);
+        self.runtime.execute_tool_command(tool, input, None, None)
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.load(Ordering::SeqCst)
+    }
+}
+
+impl OwnerCoordinator for TaskOwner {
+    fn call(
+        &self,
+        name: &str,
+        input: Value,
+        session: ToolSessionContext,
+    ) -> Result<Value, OrbitError> {
+        let binding = session.worker_invocation.as_ref().unwrap();
+        assert_eq!(input["workspace"], binding.owner_destination);
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        self.execute(name, input)
+    }
+}
 
 fn spawned_from(target: &str) -> Value {
     json!([{"type": "spawned_from", "target": target}])
@@ -167,7 +212,11 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
             "orbit.search",
             json!({"query": "backlog", "allWorkspaces": "true"}),
         ),
-        ("another task's record", SHOW, json!({"id": "TSO-2"})),
+        (
+            "a caller-supplied view",
+            SHOW,
+            json!({"id": "TSO-2", "view": "bounded"}),
+        ),
         (
             "an internal projection",
             SHOW,
@@ -203,9 +252,14 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
             json!({"body": "b", "model": "codex", "during_task": "TSO-2"}),
         ),
         (
-            "another task's artifact",
+            "another task's artifact put",
+            PUT,
+            json!({"id": "TSO-2", "path": "notes.md", "source_path": report}),
+        ),
+        (
+            "another workspace",
             GET,
-            json!({"id": "TSO-2", "path": "notes.md"}),
+            json!({"id": "TSO-2", "path": "notes.md", "workspace": "hm_owner/ws_other"}),
         ),
         (
             "a path outside the task's artifacts",
@@ -225,7 +279,9 @@ fn the_broker_refuses_cross_task_and_unlisted_calls_without_reaching_the_owner()
             other => panic!("{case} must be refused before reaching the owner: {other:?}"),
         };
         assert!(
-            error.contains("bridge_refused") || error.contains("does not accept"),
+            error.contains("bridge_refused")
+                || error.contains("does not accept")
+                || error.contains("workspace binding mismatch"),
             "{case}: {error}"
         );
     }
@@ -322,51 +378,6 @@ fn the_nested_orbit_keeps_other_routes_outside_a_masked_sandbox() {
         fixture
             .call(None, "orbit.task.update", json!({"id": TASK}))
             .is_none()
-    );
-}
-
-#[test]
-fn a_local_claimed_task_read_stays_on_the_claimed_task() {
-    let fixture = Fixture::new();
-    let local_owner = WorkerInvocation {
-        owner_machine_id: FOLLOWER.into(),
-        ..fixture.binding.clone()
-    };
-    for input in [
-        json!({"id": "TSO-2"}),
-        json!({"id": TASK, "_worker_read": "tasks"}),
-    ] {
-        let error = refused(bridge_through(
-            None,
-            &fixture.global_root,
-            Some(&local_owner),
-            Some(FOLLOWER),
-            SHOW,
-            &input,
-            &fixture.worktree,
-            &fixture.worktree,
-            ToolEntryPoint::Cli,
-        ));
-        assert!(
-            matches!(&error, OrbitError::PolicyDenied(reason)
-                if reason.starts_with("claimed_owner_bridge_refused")),
-            "{error}"
-        );
-    }
-    assert!(
-        bridge_through(
-            None,
-            &fixture.global_root,
-            Some(&local_owner),
-            Some(FOLLOWER),
-            SHOW,
-            &json!({"id": TASK}),
-            &fixture.worktree,
-            &fixture.worktree,
-            ToolEntryPoint::Cli,
-        )
-        .is_none(),
-        "the claimed task remains readable through the local owner route"
     );
 }
 

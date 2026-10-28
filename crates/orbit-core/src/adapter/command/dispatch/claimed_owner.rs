@@ -15,8 +15,13 @@
 //! task and activity. The request contributes only the call's own fields,
 //! each checked against that scope before anything reaches the owner:
 //!
-//! - `orbit.task.show` and the artifact calls name the claimed task;
-//! - `orbit.search` and `orbit.task.list` read only the claimed workspace;
+//! - `orbit.search`, `orbit.task.list`, `orbit.task.show` (plain, a field
+//!   projection, bounded pagination or the delivery view) and
+//!   `orbit.task.artifact.get` read only the claimed workspace, and may name
+//!   any task in it [ORB-19270]. The binding supplies that workspace, so the
+//!   owner answers only from it; a task it does not hold there is refused as
+//!   `claimed_owner_bridge_refused`, never read from another workspace;
+//! - `orbit.task.artifact.put` names the claimed task;
 //! - `orbit.task.add` names the claimed task as `spawned_from`, and any other
 //!   relation only as `regression_from`: the owner, which holds the claimed
 //!   task's tags, allows that only for a review task's findings;
@@ -25,9 +30,17 @@
 //! The before-PR gate's own artifacts keep the reviewer's attempt scope
 //! ([`super::claimed_review`]), except the named ones a claimed leaf's final
 //! recovery reads and the evidence findings on the kept candidate the leaf
-//! resumes ([`super::claimed_findings`]), and the claimed task's delivery
+//! resumes ([`super::claimed_findings`]), and the claimed task's own delivery
 //! view is answered from the leaf's own record ([`super::claimed_recovery`]):
-//! the owner has none of it.
+//! the owner has none of it. Another task's delivery is the owner's record.
+//!
+//! A worker on its owner's machine reaches the owner store in process; the
+//! nested `orbit` applies the same request checks to its reads and puts
+//! there, so both routes widen and refuse alike. This follows STD-05 R1 (the
+//! read scope derives from the claim's binding, which the host holds, never
+//! from a workspace, view or task the request names) and R3 (every entry
+//! route calls the same checks).
+//!
 //! The broker never opens a path the agent named:
 //! the nested `orbit` reads an artifact source inside the sandbox, no-follow,
 //! under the workspace confinement `orbit.task.artifact.put` already applies,
@@ -131,20 +144,10 @@ pub(super) fn bridge_through(
         return Some(ClaimedOwnerRoute::Refused(denied(&error.to_string())));
     }
     let local = process_machine_id?;
-    // A local owner does not need the broker, but the newly granted read
-    // still has to stay within this claim. Reject the internal projections
-    // here too: they are reserved for host-owned reads and can enumerate
-    // records beyond the claimed task.
-    if binding.execution.machine_id == local
-        && binding.owner_machine_id == local
-        && name == TASK_SHOW
-    {
-        if input.get("id").and_then(Value::as_str) != Some(binding.task_id.as_str()) {
-            return Some(ClaimedOwnerRoute::Refused(denied(
-                "the request names a task other than the claimed task",
-            )));
-        }
-        return None;
+    if binding.execution.machine_id == local && binding.owner_machine_id == local {
+        return local_owner_scope(binding, name, input, cwd, workspace_root)
+            .err()
+            .map(ClaimedOwnerRoute::Refused);
     }
     let binding = remote_owner(Some(binding), Some(local))?;
     let masked = || crate::runtime::plugin::sandbox_mask::plugin_trees_masked(global_root);
@@ -239,18 +242,46 @@ fn outside_allowlist(name: &str) -> OrbitError {
     ))
 }
 
-/// The request the broker receives. A `workspace` may only confirm the
-/// binding; it is dropped, since the broker routes to the claim's owner
-/// regardless, as is the MCP envelope's `_meta`, which describes this process
-/// rather than the call. A put carries the bytes read here, base64-encoded so
-/// a full-size artifact fits the broker's frame, never the source path.
-fn bridged_input(
+/// The checks a claimed worker on its owner's machine gets for the calls the
+/// broker scopes: the same request fields, a put on the claimed task only,
+/// and an artifact path inside the task's artifacts. The owner route then
+/// pins the binding's workspace, as the broker's does.
+fn local_owner_scope(
     binding: &WorkerInvocation,
     name: &str,
     input: &Value,
     cwd: &Path,
     workspace_root: &Path,
-    entry_point: ToolEntryPoint,
+) -> Result<(), OrbitError> {
+    if !matches!(name, TASK_SHOW | GET | PUT) {
+        return Ok(());
+    }
+    let request = without_confirmed_workspace(binding, input, cwd, workspace_root)?;
+    let object = request
+        .as_object()
+        .ok_or_else(|| OrbitError::InvalidInput("request input must be an object".into()))?;
+    match name {
+        TASK_SHOW => check_task_show(object).map(|_| ()),
+        GET => {
+            accept_fields(object, &GET_FIELDS)?;
+            canonical_artifact_path(object).map(|_| ())
+        }
+        _ => {
+            require_claimed_task(object, binding)?;
+            canonical_artifact_path(object).map(|_| ())
+        }
+    }
+}
+
+/// The request without the MCP envelope's `_meta`, which describes this
+/// process rather than the call, and without a `workspace` that only
+/// confirms the binding: the route to the claim's owner supplies it
+/// regardless. Any other `workspace` is refused.
+fn without_confirmed_workspace(
+    binding: &WorkerInvocation,
+    input: &Value,
+    cwd: &Path,
+    workspace_root: &Path,
 ) -> Result<Value, OrbitError> {
     let mut input = input.clone();
     if let Some(object) = input.as_object_mut() {
@@ -272,6 +303,21 @@ fn bridged_input(
             }
         }
     }
+    Ok(input)
+}
+
+/// The request the broker receives: [`without_confirmed_workspace`]. A put
+/// carries the bytes read here, base64-encoded so a full-size artifact fits
+/// the broker's frame, never the source path.
+fn bridged_input(
+    binding: &WorkerInvocation,
+    name: &str,
+    input: &Value,
+    cwd: &Path,
+    workspace_root: &Path,
+    entry_point: ToolEntryPoint,
+) -> Result<Value, OrbitError> {
+    let input = without_confirmed_workspace(binding, input, cwd, workspace_root)?;
     if name != PUT {
         return Ok(input);
     }
@@ -346,12 +392,68 @@ pub(super) fn accept_fields(
     }
 }
 
+/// The fields a claimed worker's `orbit.task.show` may carry. The binding
+/// supplies the workspace and the broker the view, so neither is accepted.
+const TASK_SHOW_FIELDS: [&str; 9] = [
+    "id",
+    "fields",
+    "field",
+    "run_id",
+    "model",
+    "limit",
+    "comments_offset",
+    "history_offset",
+    "artifacts_offset",
+];
+
+/// The fields that select the owner's bounded, paginated task view.
+const TASK_SHOW_PAGE_FIELDS: [&str; 4] = [
+    "limit",
+    "comments_offset",
+    "history_offset",
+    "artifacts_offset",
+];
+
+/// The fields a claimed worker's `orbit.task.artifact.get` may carry.
+const GET_FIELDS: [&str; 3] = ["id", "path", "model"];
+
+/// Check a claimed worker's `orbit.task.show` request, of any task in the
+/// claimed workspace, and say whether it asks for a bounded page.
+fn check_task_show(object: &Map<String, Value>) -> Result<bool, OrbitError> {
+    accept_fields(object, &TASK_SHOW_FIELDS)?;
+    if super::claimed_recovery::wants_delivery(object) {
+        accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
+        return Ok(false);
+    }
+    if !TASK_SHOW_PAGE_FIELDS
+        .iter()
+        .any(|key| object.contains_key(*key))
+    {
+        return Ok(false);
+    }
+    for field in ["field", "fields", "run_id"] {
+        if object.contains_key(field) {
+            return Err(OrbitError::InvalidInput(format!(
+                "a paginated task read accepts only id, model, limit, comments_offset, \
+                 history_offset and artifacts_offset; cannot combine pagination with \
+                 `{field}`"
+            )));
+        }
+    }
+    Ok(true)
+}
+
+/// Whether a request names the claimed task.
+fn names_claimed_task(object: &Map<String, Value>, binding: &WorkerInvocation) -> bool {
+    object.get("id").and_then(Value::as_str) == Some(binding.task_id.as_str())
+}
+
 /// Refuse a request whose `id` is not the claimed task.
 pub(super) fn require_claimed_task(
     object: &Map<String, Value>,
     binding: &WorkerInvocation,
 ) -> Result<(), OrbitError> {
-    if object.get("id").and_then(Value::as_str) != Some(binding.task_id.as_str()) {
+    if !names_claimed_task(object, binding) {
         return Err(denied(
             "the request names a task other than the claimed task",
         ));
@@ -448,9 +550,8 @@ pub(super) fn execute_brokered(
     }
     let owner_input = match tool {
         "orbit.search" | "orbit.task.list" => {
-            // These are workspace reads, unlike the task-scoped show/artifact
-            // calls. The binding supplies the destination; search cannot fan
-            // out into any other workspace on the owner.
+            // The binding supplies the destination; search cannot fan out
+            // into any other workspace on the owner.
             if object.keys().any(|key| key.starts_with('_')) {
                 return Err(denied(
                     "internal fields are not accepted for workspace reads",
@@ -462,44 +563,14 @@ pub(super) fn execute_brokered(
             input.clone()
         }
         TASK_SHOW => {
-            accept_fields(
-                object,
-                &[
-                    "id",
-                    "fields",
-                    "field",
-                    "run_id",
-                    "model",
-                    "limit",
-                    "comments_offset",
-                    "history_offset",
-                    "artifacts_offset",
-                ],
-            )?;
-            require_claimed_task(object, binding)?;
-            if super::claimed_recovery::wants_delivery(object) {
-                accept_fields(object, &["id", "fields", "field", "run_id", "model"])?;
+            let paged = check_task_show(object)?;
+            if names_claimed_task(object, binding)
+                && super::claimed_recovery::wants_delivery(object)
+            {
                 return super::claimed_recovery::delivery(runtime, run, binding, object, session);
             }
             let mut input = input.clone();
-            if [
-                "limit",
-                "comments_offset",
-                "history_offset",
-                "artifacts_offset",
-            ]
-            .iter()
-            .any(|key| object.contains_key(*key))
-            {
-                for field in ["field", "fields", "run_id"] {
-                    if object.contains_key(field) {
-                        return Err(OrbitError::InvalidInput(format!(
-                            "a paginated task read accepts only id, model, limit, comments_offset, \
-                             history_offset and artifacts_offset; cannot combine pagination with \
-                             `{field}`"
-                        )));
-                    }
-                }
+            if paged {
                 // Ordinary owner reads ignore pagination. Select its existing
                 // bounded view, which validates page sizes and offsets. The
                 // binding supplies workspace; callers cannot supply the view.
@@ -508,8 +579,7 @@ pub(super) fn execute_brokered(
             input
         }
         GET => {
-            accept_fields(object, &["id", "path", "model"])?;
-            require_claimed_task(object, binding)?;
+            accept_fields(object, &GET_FIELDS)?;
             let mut input = input.clone();
             input["path"] = Value::String(path);
             input

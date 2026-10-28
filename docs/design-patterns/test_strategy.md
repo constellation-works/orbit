@@ -246,9 +246,20 @@ Admitted unit tests:
 - `orbit-core`'s `dispatch/tests/claimed_owner/pagination.rs::claimed_task_detail_pages_preserve_broker_scope_and_owner_validation`
   reproduces F2026-10-599 through the public broker socket and real owner task-tool
   dispatch, in an isolated child. It verifies bounded pages and owner validation
-  while keeping cross-task, internal-field, delivery and artifact-call refusals.
+  while keeping internal-field, delivery and artifact-call refusals, and refuses
+  a page of a task outside the claimed workspace.
   It lives with the existing claimed-worker broker fixture so it can provide a
   disposable owner transport without SSH or a native confined worker.
+
+- `orbit-core`'s `dispatch/tests/claimed_owner/workspace_reads.rs::a_remote_owners_claimed_worker_reads_any_task_of_its_claimed_workspace`
+  and `a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refusals`
+  are criterion 3 regressions for ORB-19270 (a claimed worker could list but not
+  open related tasks). Over the bridge, the broker socket and the real owner
+  task tools in isolated children, they prove a remote-owner and a local-owner
+  claimed worker read any task of the claimed workspace, and that a task outside
+  it, a caller-supplied workspace or view, an internal field and a put on another
+  task stay refused. They replace `claimed_owner.rs::a_local_claimed_task_read_stays_on_the_claimed_task`,
+  whose expectation was the old scope.
 
 - `orbit-core`'s `pilot/tests/drain_promotion.rs::prerequisite_lost_before_atomic_write_holds_both_authorities_and_replay`
   and `completed_prerequisite_lost_before_approval_still_holds` are criterion 2

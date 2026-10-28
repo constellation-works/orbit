@@ -433,8 +433,8 @@ audit and a completed predecessor's cursor artifact or execution summary, even
 if its criterion names no host. Preparation supplies `owner_machine`; the pilot
 reads the evidence contract alongside the criteria and records the affected
 criterion in `required_machine`. Supported tool names are insufficient evidence
-of portability: owner listing/search is bridged, but `task.show` and
-`task.artifact.get` remain scoped to the claimed task. A follower's audit is a
+of portability: owner listing, search, `task.show` and `task.artifact.get` are
+bridged within the claimed workspace, but a follower's audit is a
 different host's data. Preserve the selected predecessor and window; an
 unreadable cursor is never permission to guess one or begin a new baseline.
 
@@ -942,17 +942,17 @@ The drain is an ordinary durable run of `workspace_pull_pipeline`:
   current).
 - An agent in a claimed leaf reaches the owner only through the run's
   coordinator (the step runner's broker, outside the sandbox), for a closed
-  list of calls: `orbit.task.show` of the claimed task,
-  `orbit.search` and `orbit.task.list` against the owner workspace the claim
-  is bound to (a federated scope is refused, and neither is carried to any
-  other workspace), `orbit.task.add` of a task `spawned_from` the claimed task
+  list of calls: `orbit.search`, `orbit.task.list`, `orbit.task.show` and
+  `orbit.task.artifact.get` against the owner workspace the claim is bound to
+  (a federated scope, or a task the owner does not hold in that workspace, is
+  refused, and none is carried to any other workspace), `orbit.task.add` of a task `spawned_from` the claimed task
   and related to nothing else (a claimed `delivery-code-review`, `code-review`, `qa-sweep`
   or `qa-full-sweep` auto-task's finding may also name its culprit as
   `regression_from`; area tasks qualify through `no-diff-expected` together
   with `full-code-review` or `qa-full-sweep`. The owner checks that the culprit
   belongs to the claimed workspace and the claim is active),
   `orbit.friction.add` (during the claimed task, if it names
-  one), and `orbit.task.artifact.get`/`put` on the claimed task. Its nested
+  one), and `orbit.task.artifact.put` on the claimed task. Its nested
   `orbit`, from the CLI or MCP, hands those calls over; the coordinator takes
   the task and claim from its own records, applies the activity's tool
   policy, and carries them to the owner over this follower's SSH route, where

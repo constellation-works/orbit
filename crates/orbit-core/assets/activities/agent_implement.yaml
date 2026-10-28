@@ -23,7 +23,7 @@ spec:
       # Set by the claimed pipelines only. The runner denies
       # `orbit.task.update` for a claimed invocation, whether or not this is
       # set: a claimed leaf's worker binding is enough. `orbit.task.show` is
-      # read-only and scoped by the run broker to the claimed task.
+      # read-only and scoped by the run broker to the claimed workspace.
       claimed:
         type: boolean
       # Set by `candidate_resume` when the checkout already holds this
@@ -479,8 +479,9 @@ spec:
 
     When `input.claimed` is true, the pipeline delivers your output to the
     owning machine. The injected task is authoritative; `orbit.task.update`
-    and owner artifact tools are unavailable, and `orbit.task.show` reads
-    only the claimed task. Return writes as output fields instead:
+    and owner artifact writes are unavailable, while `orbit.task.show` and
+    `orbit.task.artifact.get` read any task in the claimed workspace. Return
+    writes as output fields instead:
     - `execution_summary` (REQUIRED): the Handoff summary.
     - `context_files_added`: selectors you would have declared in step 4.
     - `comment`: any task comment or leftovers. A real blocker is still

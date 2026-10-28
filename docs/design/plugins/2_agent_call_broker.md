@@ -164,8 +164,11 @@ SSH route can only fail host-key verification. With `ORBIT_PLUGIN_BROKER` set, t
 `orbit` of a worker whose claim names a remote owner sends exactly these calls to the broker.
 The broker carries them only for the run bound to the claim, whose task is the claimed task,
 and takes the task, claim and owner from those records, never from the request. Each call is
-scoped to the claim: task show and artifact calls name the claimed task, while search and task
-listing read the claimed workspace; a new task must name the
+scoped to the claim. Search, task listing, task show and artifact get read the claimed
+workspace and may name any task in it ([ORB-19270]): the binding, not the request, supplies the
+owner's workspace, so the owner answers only from that workspace, and a task show or artifact
+get naming a task the owner does not hold there is refused as `claimed_owner_bridge_refused`
+after a task-only check on the owner. An artifact put names the claimed task. A new task must name the
 claimed task as `spawned_from`, and may relate to nothing else, except that a claimed review
 task's finding may also name the task that introduced it as `regression_from` ([ORB-14792]); a
 friction may name only the claimed task as the one it was found during. Internal
@@ -179,10 +182,13 @@ their `*_pagination` metadata. The owner validates the page size (1–50, defaul
 nonnegative integer offsets. A paginated call accepts only `id`, `model` and those four
 pagination fields: `field`, `fields` and `run_id` are refused with the accepted fields
 named, since the bounded owner view cannot honor them. Without pagination, the existing
-task projections remain available. A delivery projection still uses only the leaf's
-delivery route and refuses pagination; artifact get/put keep their own allowlists.
+task projections remain available. The claimed task's delivery projection still uses only the
+leaf's delivery route, and every delivery projection refuses pagination; artifact get/put keep
+their own allowlists. A worker whose owner is on its own machine reaches the owner store in
+process, and its nested `orbit` applies the same request checks first, so it gets the same
+workspace reads and refusals; only the bounded view is not selected for it.
 Claimed mode keeps `orbit.task.update` denied, while `orbit.task.show` remains available as a
-read scoped to the claimed task. The claimed task's own `regression_from` relation does not cross
+read scoped to the claimed workspace. The claimed task's own `regression_from` relation does not cross
 the broker either: the implementer returns the culprit in its output, and the owner records the
 relation when it accepts the handoff ([distributed-drain design](../distributed-drain/2_design.md),
 claimed-mode implementation).
@@ -202,7 +208,8 @@ comment.
 workspace, so a claimed worker can check for duplicate findings before filing. The binding
 supplies the destination; search refuses federated `workspaces` and `all_workspaces` scope,
 including their aliases, and both tools refuse internal (`_`-prefixed) fields. Task show and
-artifacts remain scoped to the claimed task, and `orbit.task.update` remains denied.
+artifact get read any task in the claimed workspace ([ORB-19270]), artifact put stays on the
+claimed task, and `orbit.task.update` remains denied.
 A finding the owner still refuses
 is returned in the implementer's `unfiled_findings` output. The claimed handoff attaches it to
 the claimed task as `unfiled-findings.json` (schema version 1, the task, claim and run, and the
@@ -255,7 +262,8 @@ the owner holds no record of the follower's leaf run, so its answer could only b
 found" or another run's evidence. The broker answers it from the follower's own record of the
 leaf, for any claimed worker of that leaf whose claim is live, and for its final recovery only
 inside the recovery window above. `run_id` may be omitted or name the leaf; any other run is
-refused as `delivery_run_refused`.
+refused as `delivery_run_refused`. Another task's delivery view is the owner's own record, so it
+is forwarded like any other workspace read.
 
 The nested `orbit` reads an artifact source inside the sandbox under `artifact.put`'s own
 confinement and no-follow open, and sends only its bytes; the broker never opens a path the
@@ -486,7 +494,7 @@ service side regardless.
   `dispatch/claimed_review.rs`, which adds the review ledger's attempt; its refusals carry
   `claimed_review_bridge_refused` and, for an attempt that is no longer running or a manifest
   for another attempt, `review_attempt_stale` or `review_manifest_stale`. A final recovery's
-  `review-*` read and every claimed worker's delivery view go to `dispatch/claimed_recovery.rs`
+  `review-*` read and every claimed worker's delivery view of its claimed task go to `dispatch/claimed_recovery.rs`
   instead, which derives the leaf's liveness and its final-recovery window from the follower's
   admission and run state (`live_claimed_leaf` and `claimed_leaf_in_final_recovery` in
   `application/job/claimed.rs`) and projects the leaf's delivery locally. Any other activity's
@@ -697,8 +705,8 @@ anything:
 | Peer authentication fails | The connection is closed with no reply. The client reports `plugin_broker_unavailable` and the host logs the refusal. |
 | The client disconnects mid-call | The backend's process group is killed. A reported rotation is still applied. |
 | A claimed reviewer's artifact call arrives after its reviewer finished, or outside the reviewer activity | `plugin_broker_refused` with `review_attempt_stale` or `claimed_review_bridge_refused`; nothing reaches the owner. The reviewer reports `incomplete`, and the next run admits a fresh attempt. |
-| A claimed worker's owner call names another task, relation or field | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
-| A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
+| A claimed worker's owner call writes to another task, names an unsupported relation or field, or reads a task outside the claimed workspace | `plugin_broker_refused` with `claimed_owner_bridge_refused`; nothing reaches the owner, except the read whose not-found tells the broker the task is outside the claimed workspace. A `regression_from` relation reaches the owner, which refuses it with `PolicyDenied` unless the claimed task is a review task and the target is a task in its workspace. |
+| A claimed final recovery writes a `review-*` artifact, reads one outside the gate's named evidence, or reads after its recovery decided or its claim began settling; or any claimed worker asks for another run's delivery of its claimed task | `plugin_broker_refused` with `review_write_refused`, `review_read_refused`, `final_recovery_stale`, `claim_not_live` or `delivery_run_refused`; nothing reaches the owner. The final-recovery prompt treats a refused read as a gap in its evidence, not a reason to stop. |
 | A claimed worker's owner call cannot reach the broker | `owner_route_unavailable`, `retryable: false`, naming this run's coordinator as stopped (or `ORBIT_PLUGIN_BROKER` as unset). The agent ends its step on that code and must not route around the sandbox. The run skips step and final recovery, and a pull drain releases the claim and stops offering that crew for its window. |
 | The host is an older Orbit that starts no broker | It applies no mask either, so nested calls keep today's in-process path. Rollout order (§8) keeps this pairing. |
 
@@ -751,5 +759,6 @@ The mask ships last, only once every call it would break has a broker to go to:
 - [ORB-14661] — a claimed leaf's final-recovery evidence reads and its leaf delivery view (§3).
 - [ORB-18667] — a claimed leaf's read of the evidence findings on the kept candidate it resumes (§3).
 - [ORB-14792] — a claimed review task's `regression_from` findings and `unfiled-findings.json` (§3).
+- [ORB-19270] — a claimed worker's task show and artifact get of any task in the claimed workspace (§3).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
