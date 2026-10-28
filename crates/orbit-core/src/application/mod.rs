@@ -45,9 +45,9 @@ pub mod task;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub(crate) mod workflow;
+mod workspace;
 pub(crate) mod workspace_auto;
-pub mod workspace_preset;
-pub mod workspace_sync;
+pub use workspace::{preset as workspace_preset, sync as workspace_sync};
 
 #[cfg(test)]
 mod tests;
