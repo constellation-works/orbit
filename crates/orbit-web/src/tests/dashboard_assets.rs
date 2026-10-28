@@ -199,6 +199,53 @@ fn dashboard_imported_modules_are_registered_routes() {
     }
 }
 
+/// True when `source` invokes the raw `marked` parser instead of the
+/// sanitizing wrapper: a direct `marked(…)` call or a method call
+/// `marked.parse(…)` / `marked.parseInline(…)`. Word-boundary matching keeps
+/// helpers like `markedRuntime(` and the wrapper's own indirect dispatch
+/// `marked[methodName](…)` from matching.
+fn calls_raw_marked(source: &str) -> bool {
+    let bytes = source.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if starts_word_at(bytes, i, b"marked") {
+            let mut j = i + b"marked".len();
+            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'(' {
+                return true;
+            }
+            if j < bytes.len() && bytes[j] == b'.' {
+                let mut k = j + 1;
+                while k < bytes.len() && bytes[k].is_ascii_whitespace() {
+                    k += 1;
+                }
+                let method_len = if k + 11 <= bytes.len() && &bytes[k..k + 11] == b"parseInline" {
+                    11
+                } else if k + 5 <= bytes.len() && &bytes[k..k + 5] == b"parse" {
+                    5
+                } else {
+                    0
+                };
+                if method_len > 0
+                    && (k + method_len == bytes.len() || !is_word_byte(bytes[k + method_len]))
+                {
+                    let mut m = k + method_len;
+                    while m < bytes.len() && bytes[m].is_ascii_whitespace() {
+                        m += 1;
+                    }
+                    if m < bytes.len() && bytes[m] == b'(' {
+                        return true;
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
 #[test]
 fn dashboard_markdown_call_sites_use_sanitizing_wrapper() {
     let sources = first_party_dashboard_sources();
@@ -216,16 +263,16 @@ fn dashboard_markdown_call_sites_use_sanitizing_wrapper() {
     );
     for (name, source) in &sources {
         assert!(
-            !source.contains("marked.parse("),
-            "{name} must not bypass the sanitizing markdown wrapper (raw marked output is unsanitized HTML)"
+            !calls_raw_marked(source),
+            "{name} must not bypass the sanitizing markdown wrapper (raw marked output is unsanitized HTML: use renderMarkdown(...) instead of marked(...)/marked.parse(...))"
         );
     }
-    assert!(
-        sources
-            .iter()
-            .any(|(_, source)| source.contains("renderMarkdown(")),
-        "some dashboard module must call the sanitizing markdown wrapper renderMarkdown("
-    );
+    for wanted in ["app.js", "js/tasks.js", "js/plugins.js"] {
+        assert!(
+            by_name(wanted).contains("renderMarkdown("),
+            "{wanted} must call the sanitizing markdown wrapper renderMarkdown("
+        );
+    }
     assert!(
         !by_name("js/plugins.js").contains("innerHTML = source"),
         "plugin source must not be assigned as raw innerHTML"
