@@ -2,7 +2,7 @@
 // The modules split out of tasks.js import this one, and it imports none of
 // them, so they share state and re-render the list without import cycles.
 
-import { clockStamp, el, hostWriteRefusal, isAggregateView, isHttpUrl, withHost, withWorkspace } from './common.js';
+import { clockStamp, el, getWorkspace, hostWriteRefusal, isAggregateView, isHttpUrl, withHost, withWorkspace } from './common.js';
 
 export const $ = (id) => document.getElementById(id);
 
@@ -207,4 +207,8 @@ export function actionErrorNode(text, remedy) {
 
 export function plural(count, word) {
   return `${count} ${word}${count === 1 ? "" : "s"}`;
+}
+
+export function taskDispatchIdentity(task) {
+  return `${task.workspace_id || getWorkspace() || ''}:${task.id}`;
 }
