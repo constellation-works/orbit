@@ -1,34 +1,75 @@
 // Routine-definition, host clock, and auto-task operations [ORB-10875, ORB-10876].
 
-import { normalizeTaskStatus, captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, detailsPanel, el, infoHint, fetchJson, formatClock, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, onWorkspaceChange, postJson, reviewLayerText, runHref, statusPill, submissionNoticeLines, fmtDuration, bindTaskLink } from './common.js';
-import { backlogForecastSummary, drainBacklogForecastLink, fetchBacklogForecast } from './forecast.js';
-import { navigateToRun } from './router.js';
+import { captureWorkspaceVisit, requestPanel, describePullSettlements, copyText, el, infoHint, fetchJson, formatDateTime, getWorkspace, getWorkspaceRevision, hostWriteRefusal, isAggregateView, postJson, reviewLayerText, statusPill, submissionNoticeLines } from './common.js';
 import { revealDockStart } from './log-tail.js';
 import { renderAutomation } from './automation.js';
-import { FLEET_CACHE_MS, fetchFleetDrains, fleetDrainLabel, peekFleetDrains, replaceFleetDrains } from './fleet-drains.js';
 import { cpuReadingLabel, cpuReadingValue } from './host-resources.js';
 import { DRAIN_LOCK_REASONS, drainReason, drainCrewNote, drainPilotNote, drainReadinessView, setDrainReadiness } from './drain-waits.js';
-import { sparkline, svg } from './sparkline.js';
 import { AUTO_DRAIN_APPROVE_RULE, drainCheckout } from './drain-start.js';
 import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, editorObserved, isOpen, openEditor, routineDraft, routineTriggerEditor, scheduleEditButton } from './schedule-editor.js';
 
-const $ = (id) => document.getElementById(id);
-const pendingOperations = new Set();
+import {
+  $,
+  actionReason,
+  autoDrainNumber,
+  cadenceText,
+  clockHm,
+  clockServiceText,
+  clockTickText,
+  clockUnavailable,
+  clockUnavailableReason,
+  controlReason,
+  configureOperationsRefresh,
+  cronText,
+  durationText,
+  explainUnavailable,
+  feedback,
+  field,
+  inactivePluginGroup,
+  inactivePluginToggle,
+  lastMintedText,
+  nextEvaluationText,
+  noteCronZone,
+  operationCell,
+  operationColumns,
+  operationDetails,
+  operationFact,
+  operationGroup,
+  operationStat,
+  operationSwitch,
+  operationsState,
+  outcomeDot,
+  pendingOperations,
+  registerOperationsReset,
+  relativeTime,
+  routineEventDriven,
+  routineScheduleText,
+  runLink,
+  runOperation,
+  selectedWorkspace,
+  selectedWorkspaceName,
+  selectionSnapshot,
+  setRailSubtabCount,
+  taskLink,
+  time,
+  whenCell,
+  withInactivePlugins,
+  workspaceReadOnlyReason,
+  workspaceSelectionReason
+} from './operations-shared.js';
+import { autoDrainForecast, refreshBacklogForecast } from './operations-forecast.js';
+import { configureOperationsFleetCallbacks, loadFleetSnapshot, paintAggregateFleet, renderFleetIndicator, startFleetIndicatorRefresh } from './operations-fleet.js';
+
+export { OPERATION_FEEDBACK_CLEAR_MS, initOperations, triggerFeedbackClear } from './operations-shared.js';
+export { startFleetIndicatorRefresh };
+
 const UNCONDITIONAL_MINT_WARNING = "Manual mint ignores this definition's schedule, enabled flag, and scheduler dedupe policy.";
 // The Tasks dock's Start card.
 const AUTO_DRAIN_DURATION_SECONDS = { "1h": 3600, "2h": 7200, "4h": 14400, "8h": 28800, "12h": 43200, "24h": 86400 };
 const AUTO_DRAIN_DURATIONS = Object.keys(AUTO_DRAIN_DURATION_SECONDS);
 const AUTO_DRAIN_APPROVE_WARNING = "The window will approve qualifying proposed tasks, including ones filed while it runs.";
 const AUTO_DRAIN_COMPLETE_WARNING = "Also marks every task this window ships as done (review -> done), not only the ones eligible right now.";
-let lastOperations = null;
 let routineFailureRequest = 0;
-let lastAutoTasks = null;
-let lastAutoDrain = null;
-// The backlog forecast summary under the admission block. Keyed by workspace
-// revision so a late response cannot paint another workspace. Pending omits
-// the node; a settled miss is one muted line.
-let backlogForecastCache = { revision: null, status: "pending", summary: null };
-let backlogForecastFlight = null;
 let announcedDrainState = null;
 let autoDrainDuration = "1h";
 let autoDrainConcurrency = "";
@@ -41,553 +82,18 @@ let autoDrainReview = "";
 // Set while Start or Stop is refreshing the card after reporting its result, so
 // the state change that result caused is not announced over the result.
 let holdDrainAnnouncement = false;
-let context = null;
-let unsubscribeWorkspace = null;
 // The operator's unapplied cadence choice, held outside the rebuilt <select>
 // so a background refresh cannot revert it. Host-scoped, like the clock itself.
 let pendingCadenceSeconds = null;
-// Definitions a plugin seeded stay hidden while that plugin is off where they
-// live: they never fire. The operator can list them again, marked inactive,
-// to find or delete the file the reason names.
-let showInactivePlugins = false;
-
-export const OPERATION_FEEDBACK_CLEAR_MS = 60000;
-const feedbackClearTimers = new Map();
-
-function clearFeedbackTimer(id) {
-  const timer = feedbackClearTimers.get(id);
-  if (timer) {
-    clearTimeout(timer);
-    feedbackClearTimers.delete(id);
-  }
-}
-
-function clearAllFeedbackTimers() {
-  for (const timer of feedbackClearTimers.values()) {
-    clearTimeout(timer);
-  }
-  feedbackClearTimers.clear();
-}
-
-function isWarningLine(line) {
-  return /^\s*(?:warning|note|refresh failed):/i.test(line);
-}
-
-function expireFeedback(id) {
-  feedbackClearTimers.delete(id);
-  const node = $(id);
-  if (!node) return;
-  const currentText = node.textContent || "";
-  const lines = currentText.split("\n");
-  const warningLines = lines.filter(isWarningLine);
-  if (warningLines.length > 0) {
-    node.textContent = warningLines.join("\n");
-  } else {
-    feedback(id, "", "");
-  }
-}
-
-export function triggerFeedbackClear(id) {
-  const timer = feedbackClearTimers.get(id);
-  if (timer) {
-    clearTimeout(timer);
-    expireFeedback(id);
-  }
-}
-
-export function initOperations(nextContext) {
-  context = nextContext;
-  unsubscribeWorkspace?.();
-  clearAllFeedbackTimers();
-  unsubscribeWorkspace = onWorkspaceChange(() => {
-    clearBacklogForecastCache();
-    lastOperations = lastAutoTasks = lastAutoDrain = lastJobs = null;
-    closeEditors("routine");
-    closeEditors("auto-task");
-    updateRoutineFailureBadge([]);
-    announcedDrainState = null;
-    updateDrainIndicators("idle", "idle");
-    clearStartCard("auto-drain-quick-start");
-    for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback"]) feedback(id, "", "");
-  });
-}
-
-function selectedWorkspace() {
-  const selected = getWorkspace();
-  if (!selected) return null;
-  return context.getWorkspaces().find((workspace) => workspace.id === selected) || null;
-}
-
-function selectedWorkspaceName() {
-  return selectedWorkspace()?.name || null;
-}
-
-// Why the selection cannot be read as one workspace, or "". Reads need only
-// this: a session without forwarding-write authority still reads the selected
-// host (only unsafe methods are refused), so Jobs and Auto-task definitions
-// render there while workspaceReadOnlyReason keeps their controls refused.
-function workspaceSelectionReason() {
-  const selected = getWorkspace();
-  if (!selected) return "All-workspace mode is read-only. Select one workspace; auto-task definitions are workspace-scoped.";
-  const workspace = selectedWorkspace();
-  if (!workspace) return `Workspace ${selected} is not a concrete active selection.`;
-  if (workspace.status && workspace.status !== "active") {
-    return `Workspace ${workspace.name} is inactive; select an active workspace.`;
-  }
-  return "";
-}
-
-// Why a write to the selected workspace cannot be sent, or "": the host's
-// forwarding-write refusal first, then the selection.
-function workspaceReadOnlyReason() {
-  return hostWriteRefusal() || workspaceSelectionReason();
-}
-
-function feedback(id, kind, message) {
-  clearFeedbackTimer(id);
-  const node = $(id);
-  if (!node) return;
-  node.className = `operation-feedback ${kind || ""}`.trim();
-  node.textContent = message || "";
-
-  if (kind === "success") {
-    const timer = setTimeout(() => {
-      expireFeedback(id);
-    }, OPERATION_FEEDBACK_CLEAR_MS);
-    feedbackClearTimers.set(id, timer);
-  }
-}
-
-function looksLikeDuration(value) {
-  const text = String(value).trim();
-  return /\d+\s*(?:h|hr|hrs|hour|hours|min|mins|minute|minutes|s|sec|secs|seconds)\b/i.test(text)
-    && Number.isNaN(new Date(text).getTime());
-}
-
-function time(value) {
-  if (!value) return "Not observed";
-  if (looksLikeDuration(value)) return `Duration ${value}`;
-  return formatDateTime(value);
-}
-
-function cadenceText(seconds) {
-  if (seconds == null || seconds === "") return "Inactive";
-  const n = Number(seconds);
-  if (!Number.isFinite(n)) return String(seconds);
-  if (n % 60 === 0) {
-    const minutes = n / 60;
-    const label = minutes === 1 ? "every 1 minute" : `every ${minutes} minutes`;
-    return `${label} (${n}s)`;
-  }
-  return `every ${n}s`;
-}
-
-function clockUnavailable(clock) {
-  return clock?.health === "unknown" || (typeof clock?.error === "string" && clock.error.length > 0);
-}
-
-function clockUnavailableReason(clock) {
-  return clock?.health_issue || clock?.error || "Clock state is unavailable; controls are disabled.";
-}
-
-function clockServiceText(clock) {
-  if (clockUnavailable(clock)) return "unknown";
-  if (clock.running === true && !clock.enabled) return "active (disabled)";
-  return clock.enabled ? "enabled" : "paused";
-}
-
-// What a waiting definition waits for, by the trigger that holds it. A
-// definition without a trigger of its own (an auto-task) waits for deliveries.
-function waitingText(trigger) {
-  if (trigger?.state?.kind === "execution_failed") return "Waiting for failed tasks";
-  if (trigger?.state) return "Waiting for task creation or edits";
-  return "Waiting for deliveries";
-}
-
-function nextEvaluationText(projection, fallbackAt, trigger) {
-  const state = projection?.state;
-  const at = projection?.at || (state === "disabled" || state === "paused" ? fallbackAt : null);
-  const when = at ? time(at) : null;
-  if (state === "disabled") return when ? `Disabled · hypothetical next ${when}` : "Disabled";
-  if (state === "paused") return when ? `Paused · hypothetical next ${when}` : "Paused";
-  if (state === "waiting") return waitingText(trigger);
-  if (state === "never_observed") return "Never observed";
-  if (state === "unavailable") return "Unavailable";
-  if (state === "scheduled") return when || "Scheduled";
-  return when || "Unavailable";
-}
-
-function lastMintedText(definition) {
-  if (!definition.last_minted_task_id) return "None";
-  const status = definition.last_minted_task_status ? ` · ${normalizeTaskStatus(definition.last_minted_task_status)}` : "";
-  const schedulerId = definition.last_evaluation?.last_task_id;
-  const source = schedulerId && definition.last_minted_task_id !== schedulerId
-    ? " · manual mint"
-    : schedulerId
-      ? " · scheduler"
-      : "";
-  return `${definition.last_minted_task_id}${status}${source}`;
-}
-
-function clockTickText(value, clock) {
-  if (value) {
-    if (looksLikeDuration(value)) {
-      return `Duration from boot ${value} (not a wall-clock tick)`;
-    }
-    return time(value);
-  }
-  if (clockUnavailable(clock)) return "Unknown";
-  if (!clock.enabled && clock.running !== true) return "Paused";
-  if (clock.schedulable) return "Armed; exact wall-clock time unavailable";
-  return "Not scheduled";
-}
-
-function field(label, value) {
-  return el("div", { class: "operation-field" }, [
-    el("span", { class: "operation-field-label", text: label }),
-    el("span", { class: "operation-field-value", text: value == null || value === "" ? "—" : String(value) }),
-  ]);
-}
-
-function lastFireText(fire) {
-  if (!fire) return "Never";
-  const when = time(fire.finished_at || fire.started_at);
-  return fire.state ? `${fire.state} · ${when}` : when;
-}
-
-// "on task creation/edit · debounce 2m": what fires a state-triggered routine
-// and how long it settles first.
-function stateTriggerText(state) {
-  const what = state.kind === "execution_failed" ? "on task execution failure" : "on task creation/edit";
-  return state.debounce_minutes ? `${what} · debounce ${state.debounce_minutes}m` : what;
-}
-
-function routineScheduleText(routine) {
-  if (routine.trigger?.deliveries_landed) {
-    return `${routine.trigger.deliveries_landed.threshold} verified deliveries on ${routine.trigger.deliveries_landed.branch}`;
-  }
-  if (routine.trigger?.state) return stateTriggerText(routine.trigger.state);
-  return routine.cron || "—";
-}
-
-// Delivery- and state-triggered routines have no cron cadence to describe.
-function routineEventDriven(routine) {
-  return Boolean(routine.trigger?.deliveries_landed || routine.trigger?.state);
-}
-
-function operationIdentity(name, state) {
-  return el("div", { class: "operation-identity" }, [
-    el("strong", { text: name }),
-    el("span", { class: `operation-state ${state}`, text: state }),
-  ]);
-}
-
-function operationFact(label, value, title) {
-  return el("div", { class: "operation-fact" }, [
-    el("span", { class: "operation-fact-label", text: label }),
-    el("span", { class: "operation-fact-value", text: value == null || value === "" ? "—" : String(value), title: title || "" }),
-  ]);
-}
-
-function operationDetails(key, children) {
-  const panel = detailsPanel(key, { class: "operation-details" });
-  panel.appendChild(el("summary", { text: "Details" }));
-  // The summary stays in the row; only the opened body is the inset panel.
-  const body = el("div", { class: "operation-details-body" });
-  for (const child of children) {
-    if (child) body.appendChild(child);
-  }
-  panel.appendChild(body);
-  return panel;
-}
-
-function actionReason(payload, action) {
-  const selectionReason = workspaceReadOnlyReason();
-  if (selectionReason) return selectionReason;
-  const capability = payload.capabilities?.[action];
-  if (capability) return capability.authorized === true ? "" : capability.reason || "Action unavailable. See session access above.";
-  return "Action availability is unavailable. Refresh the dashboard server and this page.";
-}
-
-function controlReason(payload, action = "routine_toggle") {
-  return actionReason(payload, action) || "";
-}
-
-function explainUnavailable(button, reason) {
-  if (!reason) return button;
-  // The wrapper is focusable because native disabled buttons cannot receive focus.
-  const wrapper = el("span", { class: "operation-action-unavailable" }, [button]);
-  wrapper.tabIndex = 0;
-  wrapper.title = reason;
-  wrapper.setAttribute("aria-label", `${button.getAttribute("aria-label") || button.textContent}: ${reason}`);
-  return wrapper;
-}
-
-function selectionSnapshot() {
-  const workspace = getWorkspace();
-  const revision = getWorkspaceRevision();
-  return {
-    workspace,
-    revision,
-    current: () => workspace === getWorkspace() && revision === getWorkspaceRevision(),
-  };
-}
-
-// Keep the guard until readback finishes; old results never replace a new selection.
-async function runOperation({ selection, key, feedbackId, pending, failure, render, request, refresh, success }) {
-  if (!selection.current() || pendingOperations.has(key)) return;
-  pendingOperations.add(key);
-  feedback(feedbackId, "pending", pending);
-  render();
-  try {
-    const result = await request();
-    if (!selection.current()) return;
-    feedback(feedbackId, "success", success(result));
-    if (result.task_id) {
-      const link = el("a", { class: "mono operation-run-link operation-task-link operation-link", text: ` Open ${result.task_id} →` });
-      bindTaskLink(link, result.task_id, { workspace: selection.workspace });
-      $(feedbackId)?.appendChild(link);
-    }
-    try {
-      await refresh();
-    } catch (error) {
-      if (selection.current()) {
-        $(feedbackId)?.appendChild(el("span", {
-          text: `\nRefresh failed: ${error.message}. The action succeeded; refresh before submitting another action.`,
-        }));
-      }
-    }
-  } catch (error) {
-    if (selection.current()) feedback(feedbackId, "error", `${failure}: ${error.message}`);
-  } finally {
-    pendingOperations.delete(key);
-    // Repaint current cached data only; host clock guards span workspaces.
-    render();
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Shared row furniture for the Operations subtabs. Routines, auto-tasks and
-// jobs are all "a named thing, its trigger, when it fires next, what happened
-// last time, one control" — so they share one grid row, one switch and one
-// group header instead of three card vocabularies.
-
-function relativeTime(value, now = Date.now()) {
-  if (!value) return null;
-  const at = new Date(value).getTime();
-  if (Number.isNaN(at)) return null;
-  const diff = at - now;
-  const abs = Math.abs(diff);
-  if (abs < 45_000) return diff > 0 ? "in under a minute" : "just now";
-  let text;
-  if (abs < 86_400_000) {
-    // Round the total once; rounding the remainder can carry into a "60 min".
-    const totalMinutes = Math.round(abs / 60_000);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    if (hours === 0) text = `${minutes} min`;
-    else text = minutes ? `${hours} h ${minutes} min` : `${hours} h`;
-  } else {
-    text = `${Math.round(abs / 86_400_000)} d`;
-  }
-  return diff > 0 ? `in ${text}` : `${text} ago`;
-}
-
-function durationText(ms) {
-  const text = fmtDuration(ms);
-  return text === "-" ? null : text;
-}
-
-// Local wall-clock time with its zone, so a next-fire time is never read as
-// the UTC of the cron trigger beside it.
-function clockHm(value, { zone = true } = {}) {
-  return formatClock(value, { seconds: false, zone });
-}
-
-const CRON_DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const TIMELINE_ROWS = 4;
-
-// The zone cron triggers are evaluated in (the host's, from the routines and
-// auto-tasks payloads). Unknown until a payload names it; a trigger is then
-// shown without a zone claim rather than with a wrong one.
-let hostCronZone = null;
-
-function noteCronZone(payload) {
-  if (payload?.cron_zone) hostCronZone = payload.cron_zone;
-}
-
-// "PDT" for an IANA host zone, else "UTC-07:00" from the offset.
-function cronZoneLabel(zone) {
-  if (!zone) return "";
-  if (zone.name) {
-    try {
-      const part = new Intl.DateTimeFormat("en-US", { timeZone: zone.name, timeZoneName: "short" })
-        .formatToParts(new Date()).find((p) => p.type === "timeZoneName");
-      if (part?.value) return part.value;
-    } catch {
-      // Unknown to this browser: fall back to the offset.
-    }
-  }
-  const offset = Number(zone.offset_seconds);
-  if (!Number.isFinite(offset)) return "";
-  if (offset === 0) return "UTC";
-  const minutes = Math.abs(Math.round(offset / 60));
-  const pad = (v) => String(v).padStart(2, "0");
-  return `UTC${offset < 0 ? "-" : "+"}${pad(Math.floor(minutes / 60))}:${pad(minutes % 60)}`;
-}
-
-// A readable cadence for the common cron shapes routines use; anything else
-// is shown verbatim so nothing is misdescribed. Clock times are in the host
-// zone the scheduler evaluates cron in, not UTC.
-function cronText(cron) {
-  const parts = String(cron || "").trim().split(/\s+/);
-  if (parts.length !== 5) return cron || "—";
-  const [minute, hour, dom, month, dow] = parts;
-  const pad = (v) => String(v).padStart(2, "0");
-  const label = cronZoneLabel(hostCronZone);
-  const zone = label ? ` ${label}` : "";
-  if (dom !== "*" || month !== "*") return cron;
-  if (minute === "*" && hour === "*" && dow === "*") return "every minute";
-  const every = /^\*\/(\d+)$/.exec(minute);
-  if (every && hour === "*" && dow === "*") return `every ${every[1]} min`;
-  if (/^\d+$/.test(minute) && hour === "*" && dow === "*") return `hourly at :${pad(minute)}`;
-  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && dow === "*") return `daily ${pad(hour)}:${pad(minute)}${zone}`;
-  if (/^\d+$/.test(minute) && /^\d+$/.test(hour) && /^\d$/.test(dow)) {
-    return `weekly ${CRON_DAYS[Number(dow)] || dow} ${pad(hour)}:${pad(minute)}${zone}`;
-  }
-  return cron;
-}
-
-// One switch for enable/disable. The visible text stays "Enable"/"Disable"
-// (or "Pending…") for the readback contract; CSS draws it as a switch, and
-// aria-label names the item independently of its enabled state.
-function operationSwitch({ name, on, text, pending, reason }) {
-  const button = el("button", {
-    class: `operation-switch ${on ? "on" : "off"}${pending ? " pending" : ""}`,
-    text,
-    title: reason || text,
-  });
-  button.type = "button";
-  button.setAttribute("aria-label", name);
-  button.setAttribute("role", "switch");
-  button.setAttribute("aria-checked", on ? "true" : "false");
-  button.disabled = Boolean(reason) || Boolean(pending);
-  return button;
-}
-
-function operationGroup(tone, title, count, hint) {
-  const group = el("section", { class: "operation-group" });
-  group.appendChild(el("div", { class: "operation-group-head" }, [
-    el("div", { class: "operation-group-title" }, [
-      el("span", { class: `operation-group-dot ${tone}` }),
-      el("strong", { text: title }),
-      el("span", { class: "operation-group-count mono", text: String(count) }),
-    ]),
-    hint ? el("span", { class: "operation-group-hint", text: hint }) : null,
-  ]));
-  return group;
-}
-
-function operationColumns(labels) {
-  const row = el("div", { class: "operation-columns col-head" }, labels.map((label) => el("span", { text: label })));
-  row.setAttribute("aria-hidden", "true");
-  return row;
-}
-
-function operationCell(label, children, extraClass = "") {
-  const cell = el("div", { class: `operation-cell ${extraClass}`.trim() }, children.filter(Boolean));
-  cell.dataset.label = label;
-  return cell;
-}
-
-function whenCell(label, at, { fallback = "—", muted = false } = {}) {
-  const relative = relativeTime(at);
-  if (!relative) return operationCell(label, [el("span", { class: `operation-cell-main${muted ? " muted" : ""}`, text: fallback })]);
-  return operationCell(label, [
-    el("span", { class: `operation-cell-main${muted ? " muted" : ""}`, text: relative, title: time(at) }),
-    el("span", { class: "operation-cell-sub mono", text: clockHm(at) }),
-  ]);
-}
-
-function outcomeDot(state) {
-  const tone = state === "succeeded" || state === "success" || state === "ok" ? "ok"
-    : state === "failed" || state === "error" || state === "timed_out" ? "failed"
-    : state === "running" || state === "pending" || state === "intent" || state === "dispatched" ? "running"
-    : "idle";
-  return el("span", { class: `operation-dot ${tone}`, title: state || "never" });
-}
-
-function runLink(runId, workspaceId, text = runId) {
-  const link = el("a", { class: "mono operation-run-link", text, title: `Open run ${runId}` });
-  link.href = runHref(runId, { workspace: workspaceId || null });
-  link.addEventListener("click", (event) => {
-    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
-    event.preventDefault();
-    navigateToRun(runId, workspaceId || null);
-  });
-  return link;
-}
-
-function operationStat(tone, label, value, note) {
-  return el("div", { class: `operation-stat ${tone}` }, [
-    el("span", { class: "operation-field-label", text: label }),
-    el("span", { class: "operation-stat-value mono", text: String(value) }),
-    note ? el("span", { class: "operation-stat-note", text: note }) : null,
-  ]);
-}
-
-function setRailSubtabCount(id, text) {
-  const node = $(id);
-  if (node) node.textContent = text || "";
-}
-
-function withInactivePlugins(path) {
-  return showInactivePlugins ? `${path}?include_inactive_plugins=true` : path;
-}
-
-// Offered only when something is hidden (or already shown). Flipping it
-// refetches every Operations panel, so routines and auto-tasks agree.
-function inactivePluginToggle(hiddenCount) {
-  if (!showInactivePlugins && !hiddenCount) return null;
-  const button = el("button", {
-    class: "operation-button secondary operation-inactive-toggle",
-    text: showInactivePlugins ? "Hide plugin-off definitions" : `Show ${hiddenCount} hidden · plugin off`,
-    title: "Definitions seeded by a plugin that is switched off here never fire.",
-  });
-  button.type = "button";
-  button.setAttribute("aria-pressed", showInactivePlugins ? "true" : "false");
-  button.addEventListener("click", () => {
-    showInactivePlugins = !showInactivePlugins;
-    return fetchAndRenderOperations();
-  });
-  return el("p", { class: "operation-control-note operation-inactive-note" }, [button]);
-}
-
-// Definitions that never fire here — plugin-parked (listed on request only) or
-// a replica's owner-only routines — sit outside every count, timeline and
-// next-fire summary: the row is the name, what it would run, and the reason.
-function inactivePluginGroup(entries, noun, title = "Plugin off", summary = `seeded by a plugin that is switched off here · never ${noun}`) {
-  const group = operationGroup("", title, entries.length, summary);
-  group.className += " inactive-plugin-group";
-  for (const entry of entries) {
-    group.appendChild(el("article", { class: "operation-card operation-row inactive-plugin-card" }, [
-      el("div", { class: "operation-row-head" }, [
-        operationCell("Definition", [
-          el("div", { class: "operation-identity" }, [
-            el("strong", { text: entry.name }),
-            el("span", { class: "operation-state inactive", text: entry.state || "inactive" }),
-          ]),
-          entry.detail ? el("span", { class: "operation-cell-sub mono", text: entry.detail }) : null,
-        ], "operation-cell-identity"),
-        operationCell("Why", [el("span", { class: "operation-cell-main muted", text: entry.reason || "" })]),
-      ]),
-    ]));
-  }
-  return group;
-}
 
 // ---------------------------------------------------------------------------
 // Routines
+registerOperationsReset(() => {
+  closeEditors("routine");
+  updateRoutineFailureBadge([]);
+});
+
 
 function routineButton(payload, routine) {
   const selection = selectionSnapshot();
@@ -608,7 +114,7 @@ function routineButton(payload, routine) {
     return runOperation({
       selection, key, feedbackId: "routine-operation-feedback",
       pending: `Updating ${routine.name} → ${routine.target}…`, failure: "Routine change failed",
-      render: () => { if (lastOperations) renderOperations(lastOperations); },
+      render: () => { if (operationsState.lastOperations) renderOperations(operationsState.lastOperations); },
       request: () => postJson("/api/routines/toggle", {
         name: routine.name, source: routine.source, target: routine.target,
         machine_name: payload.machine_name, expected_enabled: routine.enabled, enabled: nextEnabled,
@@ -669,7 +175,7 @@ function routineFireTimes(routine, first, until) {
     cronFieldMatcher(fields[0], 0, 59), cronFieldMatcher(fields[1], 0, 23), cronFieldMatcher(fields[2], 1, 31),
     cronFieldMatcher(fields[3], 1, 12), cronFieldMatcher(fields[4], 0, 7),
   ];
-  const offset = Number(hostCronZone?.offset_seconds);
+  const offset = Number(operationsState.hostCronZone?.offset_seconds);
   if (matchers.includes(null) || (!Number.isFinite(offset) && fields.slice(1).some((f) => f !== "*"))) return [first];
   const [minute, hour, dom, month, dow] = matchers;
   const zoneOffset = Number.isFinite(offset) ? offset * 1000 : 0;
@@ -829,7 +335,7 @@ function routineEditButton(payload, routine) {
     reason: controlReason(payload, "routine_trigger"),
     onOpen: () => {
       openEditor(key, "routine", routineDraft(routine.trigger), { source: routine.source, target: routine.target, trigger: routine.trigger });
-      renderOperations(lastOperations || payload, { force: true });
+      renderOperations(operationsState.lastOperations || payload, { force: true });
     },
   });
 }
@@ -854,7 +360,7 @@ function routineEditor(payload, routine) {
     },
     onClose: (saved) => {
       if (saved) fetchAndRenderOperations().catch(() => {});
-      else if (lastOperations) renderOperations(lastOperations, { force: true });
+      else if (operationsState.lastOperations) renderOperations(operationsState.lastOperations, { force: true });
     },
   });
 }
@@ -925,7 +431,7 @@ function routineRow(payload, routine, workspaceId) {
 
 function renderOperations(payload, { force = false } = {}) {
   noteCronZone(payload);
-  lastOperations = payload;
+  operationsState.lastOperations = payload;
   if ($("operations-session")) $("operations-session").textContent = payload.session_explanation || "Operations actions require the capabilities granted to this dashboard server. Refresh to load session access details.";
   const workspace = selectedWorkspaceName();
   const workspaceId = selectedWorkspace()?.id || null;
@@ -1010,7 +516,7 @@ function clockButton(payload, action, label) {
     return runOperation({
       selection, key, feedbackId: "clock-operation-feedback",
       pending: `${verb} host clock…`, failure: "Clock service change failed",
-      render: () => { if (lastOperations) renderClock(lastOperations); },
+      render: () => { if (operationsState.lastOperations) renderClock(operationsState.lastOperations); },
       request: () => postJson("/api/routines/clock", {
         action, machine_name: payload.machine_name, expected_enabled: payload.clock.enabled,
         expected_cadence_seconds: payload.clock.configured_cadence_seconds,
@@ -1071,7 +577,7 @@ function renderClock(payload) {
     return runOperation({
       selection, key, feedbackId: "clock-operation-feedback",
       pending: `Changing cadence to ${cadence.value}s…`, failure: "Cadence change failed",
-      render: () => { if (lastOperations) renderClock(lastOperations); },
+      render: () => { if (operationsState.lastOperations) renderClock(operationsState.lastOperations); },
       request: () => postJson("/api/routines/clock", {
         action: "set_cadence", machine_name: payload.machine_name, expected_enabled: clock.enabled,
         expected_cadence_seconds: clock.configured_cadence_seconds, cadence_seconds: Number(cadence.value),
@@ -1113,6 +619,8 @@ function renderClock(payload) {
 
 // ---------------------------------------------------------------------------
 // Auto-tasks
+registerOperationsReset(() => closeEditors("auto-task"));
+
 
 function lastEvaluationText(definition) {
   const evaluation = definition.last_evaluation;
@@ -1160,7 +668,7 @@ function autoTaskToggleButton(payload, definition) {
     return runOperation({
       selection, key, feedbackId: "auto-task-operation-feedback",
       pending: `${verb} ${definition.name}…`, failure: "Auto-task change failed",
-      render: () => { if (lastAutoTasks) renderAutoTasks(lastAutoTasks); },
+      render: () => { if (operationsState.lastAutoTasks) renderAutoTasks(operationsState.lastAutoTasks); },
       request: () => postJson("/api/auto-tasks/toggle", {
         name: definition.name, expected_enabled: definition.enabled, enabled: nextEnabled,
       }),
@@ -1202,7 +710,7 @@ function autoTaskMintButton(payload, definition) {
     return runOperation({
       selection, key, feedbackId: "auto-task-operation-feedback",
       pending: `Minting ${definition.name} now…`, failure: "Manual mint failed",
-      render: () => { if (lastAutoTasks) renderAutoTasks(lastAutoTasks); },
+      render: () => { if (operationsState.lastAutoTasks) renderAutoTasks(operationsState.lastAutoTasks); },
       request: () => postJson("/api/auto-tasks/mint", {
         name: definition.name, acknowledge_unconditional: true,
       }),
@@ -1223,12 +731,6 @@ function autoTaskChip(text, tone = "") {
   return el("span", { class: `operation-chip mono ${tone}`.trim(), text });
 }
 
-function taskLink(taskId, workspaceId) {
-  const link = el("a", { class: "mono operation-run-link operation-task-link operation-link", text: taskId, title: `Open ${taskId}` });
-  bindTaskLink(link, taskId, { workspace: workspaceId || "" });
-  return link;
-}
-
 function autoTaskEditKey(definition) {
   return `auto-task-schedule:${getWorkspace()}:${definition.name}`;
 }
@@ -1241,7 +743,7 @@ function autoTaskEditButton(payload, definition) {
     reason: definition.plugin_inactive ? "Seeded by a plugin that is off here" : actionReason(payload, "auto_task_schedule"),
     onOpen: () => {
       openEditor(key, "auto-task", autoTaskDraft(definition.schedule), { schedule: definition.schedule });
-      renderAutoTasks(lastAutoTasks || payload, { force: true });
+      renderAutoTasks(operationsState.lastAutoTasks || payload, { force: true });
     },
   });
 }
@@ -1265,7 +767,7 @@ function autoTaskEditor(definition) {
     },
     onClose: (saved) => {
       if (saved) fetchAndRenderAutoTasks()?.catch?.(() => {});
-      else if (lastAutoTasks) renderAutoTasks(lastAutoTasks, { force: true });
+      else if (operationsState.lastAutoTasks) renderAutoTasks(operationsState.lastAutoTasks, { force: true });
     },
   });
 }
@@ -1347,8 +849,8 @@ function syncAutoTaskSchedulerNote() {
   const note = $("auto-tasks-scheduler-note");
   if (!note) return;
   const workspace = selectedWorkspaceName();
-  const scheduler = workspace && lastOperations
-    ? (lastOperations.routines || []).find((routine) => routine.source === workspace && jobIdFromTarget(routine.target) === "auto_task_scheduler_pipeline")
+  const scheduler = workspace && operationsState.lastOperations
+    ? (operationsState.lastOperations.routines || []).find((routine) => routine.source === workspace && jobIdFromTarget(routine.target) === "auto_task_scheduler_pipeline")
     : null;
   note.textContent = "";
   note.className = "operation-control-note auto-tasks-scheduler-note";
@@ -1371,7 +873,7 @@ function syncAutoTaskSchedulerNote() {
 
 function renderAutoTasks(payload, { force = false } = {}) {
   noteCronZone(payload);
-  lastAutoTasks = payload;
+  operationsState.lastAutoTasks = payload;
   const body = $("auto-tasks-body");
   if (!body) return;
   // An open schedule editor holds a draft: leave the rows alone until it closes.
@@ -1441,6 +943,7 @@ function renderAutoTasks(payload, { force = false } = {}) {
 
 const JOB_RUN_LIMIT = 100;
 let lastJobs = null;
+registerOperationsReset(() => { lastJobs = null; });
 
 function jobFamily(jobId) {
   if (/sweep|gc|pilot|triage|scheduler/.test(jobId)) return "sweep";
@@ -1548,7 +1051,7 @@ function jobRow(job, workspace) {
   const key = `job:run:${workspace.id}:${job.id}`;
   const runReason = jobFamily(job.id) === "delivery"
     ? "Delivery jobs require task input or a delivery window. Use Ship or Drain."
-    : controlReason(lastOperations, "job_run");
+    : controlReason(operationsState.lastOperations, "job_run");
   const pending = pendingOperations.has(key);
   const run = el("button", { class: "operation-button primary job-run", text: pending ? "Submitting…" : "Run ▸", title: runReason || `Run ${job.id} in ${workspace.name}` });
   run.type = "button";
@@ -1664,7 +1167,7 @@ function renderJobs(payload) {
     count.textContent = `${running.length} run${running.length === 1 ? "" : "s"} in flight · ${workspace.name}`;
     return;
   }
-  const catalog = jobCatalog(lastOperations, runs, workspace.name);
+  const catalog = jobCatalog(operationsState.lastOperations, runs, workspace.name);
   if (catalog.size === 0) {
     body.appendChild(el("div", { class: "empty-state", text: "No job has been referenced by a routine or run in this workspace recently." }));
   } else {
@@ -1688,7 +1191,7 @@ function renderJobs(payload) {
 }
 
 export function fetchAndRenderJobs() {
-  const live = context.getJobsSubtab?.() === "live";
+  const live = operationsState.context.getJobsSubtab?.() === "live";
   const bodyId = live ? "jobs-live-body" : "jobs-body";
   const countId = live ? "jobs-live-count" : "jobs-count";
   if (!selectedWorkspace()) {
@@ -1702,9 +1205,9 @@ export function fetchAndRenderJobs() {
     (payload) => {
       // Only a fresh catalogue/live read adopts its routines snapshot. A
       // repaint from cached jobs must retain a newer Routines readback.
-      lastOperations = payload.routines;
-      noteCronZone(lastOperations);
-      updateRoutineFailureBadge(scopedRoutines(lastOperations));
+      operationsState.lastOperations = payload.routines;
+      noteCronZone(operationsState.lastOperations);
+      updateRoutineFailureBadge(scopedRoutines(operationsState.lastOperations));
       renderJobs(payload);
     }, countId);
 }
@@ -2057,7 +1560,7 @@ function autoDrainQueuedCancel(payload, runId) {
       if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `Cancelling queued window ${runId} failed: ${error.message}`);
     } finally {
       pendingOperations.delete(key);
-      if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
+      if (operationsState.lastAutoDrain) renderAutoDrain(operationsState.lastAutoDrain);
     }
   });
   return button;
@@ -2419,7 +1922,7 @@ function autoDrainStartButton(payload, form) {
         : `Submission outcome unknown: ${error.message}. Check the window and run history before starting again; this request was not retried.`);
     } finally {
       pendingOperations.delete(key);
-      if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
+      if (operationsState.lastAutoDrain) renderAutoDrain(operationsState.lastAutoDrain);
     }
   });
   return button;
@@ -2549,7 +2052,7 @@ function autoDrainStopButton(payload) {
       if (visit.isCurrent()) feedback("auto-drain-operation-feedback", "error", `${copy.label === "Stop" ? "Stopping admissions" : "Settling"} failed: ${error.message}`);
     } finally {
       pendingOperations.delete(key);
-      if (lastAutoDrain) renderAutoDrain(lastAutoDrain);
+      if (operationsState.lastAutoDrain) renderAutoDrain(operationsState.lastAutoDrain);
     }
   });
   return button;
@@ -2567,13 +2070,6 @@ function autoDrainStopNote(payload) {
 
 // A missing figure is unknown, not zero: `Number(null)` is 0, which would
 // read a payload that simply lacks the field as "0 free slots".
-function autoDrainNumber(value) {
-  return value == null || value === "" ? NaN : Number(value);
-}
-
-// Capacity in words: how many leaf runs hold a slot against the limit, a bar
-// that shows any overflow past the limit, and one sentence on what a window
-// started now would do with that.
 function autoDrainCapacity(capacity, counts, blocked) {
   const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
   const limit = autoDrainNumber(capacity.max_active_leaf_runs);
@@ -2719,7 +2215,7 @@ function autoDrainThrottleLine(capacity) {
 // readiness snapshot of the selected workspace.
 export function drainHolderCounts() {
   const counts = new Map();
-  const tasks = Array.isArray(lastAutoDrain?.tasks) ? lastAutoDrain.tasks : [];
+  const tasks = Array.isArray(operationsState.lastAutoDrain?.tasks) ? operationsState.lastAutoDrain.tasks : [];
   for (const entry of tasks) {
     if (!entry || entry.eligible === true) continue;
     for (const holder of drainReadinessView(entry).badge?.holders || []) counts.set(holder, (counts.get(holder) || 0) + 1);
@@ -2822,373 +2318,8 @@ function autoDrainProviderAuth(failures) {
 }
 
 // A recorded forecast object, or null when the field is absent or not an object.
-function asForecast(value) {
-  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
-}
-
-function forecastBuiltAt(forecast) {
-  return typeof forecast?.forecast_at === "string" && forecast.forecast_at ? forecast.forecast_at : "";
-}
-
-// `detail` and `stall.friction_id` are not rendered: a persisted starvation
-// sentence names a task id, and a friction id is not the hold itself.
-function forecastHoldDetail(item) {
-  const percent = Number(item?.percent);
-  const minute = Number(item?.minute);
-  if (item?.resource && Number.isFinite(percent) && Number.isFinite(minute)) {
-    return `${item.resource} ${percent.toFixed(0)}% at +${minute}m`;
-  }
-  return "waiting for the protected queue head to fit";
-}
-
-function forecastAmount(resource, value) {
-  const amount = Number(value);
-  if (!Number.isFinite(amount)) return "";
-  if (resource === "cpu") return `${amount.toFixed(1)} cores`;
-  const units = ["bytes", "KiB", "MiB", "GiB", "TiB"];
-  let size = amount;
-  let unit = 0;
-  while (size >= 1024 && unit < units.length - 1) {
-    size /= 1024;
-    unit += 1;
-  }
-  const text = unit === 0 ? String(Math.round(size)) : size.toFixed(size >= 10 ? 0 : 1);
-  return `${text} ${units[unit]}`;
-}
-
-function forecastTaskRef(forecast, taskId) {
-  const title = forecast.task_titles?.[taskId];
-  const link = taskLink(String(taskId), selectedWorkspace()?.id);
-  if (!title) return link;
-  return el("span", { class: "drain-forecast-task-name" }, [link, " ", String(title)]);
-}
-
-function forecastHasDecisions(forecast) {
-  if (!forecast) return false;
-  const admitted = Array.isArray(forecast.admitted) && forecast.admitted.some(task => task?.task_id);
-  const skipped = Array.isArray(forecast.skipped) && forecast.skipped.some(task => task?.task_id);
-  return admitted || skipped || Boolean(forecast.head?.task_id && (forecast.head.protected === true || forecast.head.stall?.stuck === true));
-}
-
-function forecastTime(at) {
-  const node = el("time", { class: "drain-forecast-when", text: time(at), title: String(at) });
-  node.dateTime = String(at);
-  return node;
-}
-
-// The minutes a forecast's recorded series spans.
-const FORECAST_SERIES_MINUTES = 60;
-
-// `resource`'s recorded first hour of percents, or null for a record written
-// before the series was kept or from an unmeasured host.
-function forecastSeries(forecast, resource) {
-  const series = asForecast(forecast.series);
-  const bucket = Number(series?.bucket_minutes);
-  const points = series?.[`${resource}_percent`];
-  if (!(bucket > 0) || !Array.isArray(points) || points.length < 2) return null;
-  const values = points.map(value => (value == null ? NaN : Number(value)));
-  return values.every(Number.isFinite) ? { bucket, values } : null;
-}
-
-// The series as a line over 0–60 minutes on a 0–100% scale (taller when a
-// point or the limit is above it), the admit threshold as a dashed line, and
-// a dot on the highest point labelled with the peak's minute. That point is
-// the peak's bucket whenever the peak falls within the hour; otherwise the
-// label names the bucket, and the row's text the peak.
-function forecastSpark(series, peak, admitNumber, label, hypothetical) {
-  const { bucket, values } = series;
-  const limited = Number.isFinite(admitNumber);
-  const top = Math.max(100, ...values, limited ? admitNumber : 0);
-  const x = index => Math.min(100, index * bucket / FORECAST_SERIES_MINUTES * 100);
-  const y = value => 100 - Math.max(0, value) / top * 100;
-  const highest = values.indexOf(Math.max(...values));
-  const peakMinute = Number(peak?.minute);
-  const inHour = Number.isFinite(peakMinute) && peakMinute <= FORECAST_SERIES_MINUTES && Math.ceil(peakMinute / bucket) === highest;
-  const minute = inHour ? peakMinute : highest * bucket;
-  const extra = limited
-    ? [svg("line", { x1: 0, x2: 1000, y1: (y(admitNumber) * 10).toFixed(1), y2: (y(admitNumber) * 10).toFixed(1), class: "drain-forecast-spark-limit", "vector-effect": "non-scaling-stroke" })]
-    : [];
-  const line = sparkline(values.map((value, index) => ({ x: x(index), y: y(value) })), { className: "drain-forecast-spark-svg", lineClass: "drain-forecast-spark-line", extra });
-  const left = x(highest);
-  const edge = left > 75 ? " end" : left < 25 ? " start" : "";
-  const marker = el("span", { class: "drain-forecast-spark-peak", style: { left: `${left}%`, top: `${y(values[highest])}%` } });
-  const chart = el("span", { class: `drain-forecast-spark${hypothetical ? " hypothetical" : ""}`, role: "img", "aria-label": label }, [
-    el("span", { class: `drain-forecast-spark-label${edge}`, text: `+${minute}m`, style: { left: `${left}%` }, "aria-hidden": "true" }),
-    el("span", { class: "drain-forecast-spark-plot", "aria-hidden": "true" }, [line, marker]),
-  ]);
-  chart.dataset.peakMinute = String(minute);
-  return chart;
-}
-
-// Each peak against its admit threshold, with both figures beside it: a
-// sparkline of the forecast's first hour when the record keeps one, or else
-// (and always in the Tasks dock) a meter whose fill is the peak and whose
-// tick is the threshold. The amount,
-// minute and headroom (in percentage points) are in the row's tooltip and
-// read aloud. A shadow forecast's chart is marked hypothetical.
-function forecastPeaks(forecast) {
-  const headroom = asForecast(forecast.headroom);
-  const hypothetical = forecast.mode === "shadow";
-  const rows = ["cpu", "memory"].map((resource) => {
-    const peak = asForecast(forecast[`${resource}_peak`]);
-    if (!peak || (!Number.isFinite(Number(peak.value)) && !Number.isFinite(Number(peak.percent)))) return null;
-    const percent = Number(peak.percent);
-    const known = Number.isFinite(percent);
-    const figure = known ? `${percent.toFixed(1)}%` : "host capacity unknown";
-    const amount = forecastAmount(resource, peak.value);
-    const when = Number.isFinite(Number(peak.minute)) ? `at +${peak.minute}m` : "";
-    const admitKey = resource === "cpu" ? "admit_cpu_percent" : "admit_memory_percent";
-    const roomKey = resource === "cpu" ? "cpu_percent" : "memory_percent";
-    // An unmeasured host sends its headroom as null, and Number(null) is 0.
-    const admitNumber = headroom?.[admitKey] == null ? NaN : Number(headroom[admitKey]);
-    const admit = headroom
-      ? (Number.isFinite(admitNumber) ? `admit ${headroom[admitKey]}%` : "admit threshold unknown")
-      : "";
-    const roomNumber = headroom?.[roomKey] == null ? NaN : Number(headroom[roomKey]);
-    const room = headroom ? (Number.isFinite(roomNumber) ? `headroom ${roomNumber.toFixed(1)}` : "headroom unknown") : "";
-    const over = Number.isFinite(roomNumber) && roomNumber < 0;
-    const name = resource === "cpu" ? "CPU" : "Memory";
-    const detail = `${name} peak ${[`${figure}${amount ? ` (${amount})` : ""}`, when, admit, room].filter(Boolean).join(" · ")}`;
-    const series = known ? forecastSeries(forecast, resource) : null;
-    const clamp = value => `${Math.min(100, Math.max(0, value))}%`;
-    const meter = el("span", { class: "drain-forecast-meter", "aria-hidden": "true" }, [
-      known ? el("span", { class: "drain-forecast-fill", style: { width: clamp(percent) } }) : null,
-      Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-tick", style: { left: clamp(admitNumber) } }) : null,
-    ]);
-    // With a series the chart leads and the meter follows it for the narrow
-    // Tasks dock, which draws the meter instead (drain.css, tasks.css).
-    const graphic = [meter];
-    if (series) {
-      const limit = Number.isFinite(admitNumber) ? `admit limit ${admitNumber}%` : "admit limit unknown";
-      const label = `${hypothetical ? "Hypothetical " : ""}${name} forecast over the next ${FORECAST_SERIES_MINUTES} minutes: peak ${figure} ${when}, ${limit}`;
-      graphic.unshift(forecastSpark(series, peak, admitNumber, label, hypothetical));
-    }
-    // The figure reads as the peak against its admit threshold, then when it
-    // peaks, the amount and how far it sits from that ceiling, in percentage
-    // points.
-    const margin = Number.isFinite(roomNumber)
-      ? `${Math.abs(roomNumber).toFixed(1)} pts ${roomNumber < 0 ? "over" : "under"} the ceiling`
-      : "";
-    return el("div", { class: `drain-forecast-peak${over ? " over" : ""}`, title: detail }, [
-      el("dt", { text: name }),
-      el("dd", { class: "drain-forecast-bar" }, graphic),
-      el("dd", { class: "drain-forecast-figure" }, [
-        el("span", { class: "drain-forecast-figure-main mono", "aria-hidden": "true" }, [
-          known ? `${percent.toFixed(1)}%` : "host capacity unknown",
-          Number.isFinite(admitNumber) ? el("span", { class: "drain-forecast-threshold", text: ` / ${admitNumber}%` }) : null,
-        ]),
-        el("span", { class: "drain-forecast-figure-sub", "aria-hidden": "true", text: [when ? `peak ${when}` : "", amount, margin].filter(Boolean).join(" · ") }),
-        el("span", { class: "visually-hidden", text: detail }),
-      ]),
-    ]);
-  }).filter(Boolean);
-  if (rows.length === 0) return null;
-  const list = el("dl", { class: "drain-forecast-peaks" }, rows);
-  list.setAttribute("aria-label", "Forecast peaks against admit thresholds");
-  return list;
-}
-
-// Live decisions use present tense; a shadow decision says what this pass
-// would do rather than what it will do.
-function forecastVerbs(hypothetical) {
-  return {
-    admit: hypothetical ? "Would admit " : "Admitted ",
-    hold: hypothetical ? "Would hold " : "Held ",
-    guard: hypothetical ? "Starvation guard would protect " : "Starvation guard protects ",
-    stuck: hypothetical ? "Stuck head (shadow; hypothetical): " : "Stuck head: ",
-    improved: "has not improved",
-  };
-}
-
-function forecastDecisions(forecast, hypothetical) {
-  const items = [];
-  const verbs = forecastVerbs(hypothetical);
-  for (const task of Array.isArray(forecast.admitted) ? forecast.admitted : []) {
-    if (!task?.task_id) continue;
-    const notes = [`profile ${task.profile_source || "unknown"}`];
-    if (task.idle_host) notes.push(String(task.idle_host));
-    // An admitted task stays on one line; its full text is the tooltip.
-    const item = el("li", { class: "drain-forecast-task admitted" }, [
-      verbs.admit,
-      forecastTaskRef(forecast, task.task_id),
-      ` · ${notes.join(" · ")}`,
-    ]);
-    item.title = item.textContent;
-    items.push(item);
-  }
-  for (const task of Array.isArray(forecast.skipped) ? forecast.skipped : []) {
-    if (!task?.task_id) continue;
-    items.push(el("li", { class: "drain-forecast-task held" }, [
-      verbs.hold,
-      forecastTaskRef(forecast, task.task_id),
-      ` · ${forecastHoldDetail(task)} · profile ${task.profile_source || "unknown"}`,
-    ]));
-  }
-  if (forecast.head?.protected === true && forecast.head.task_id) {
-    items.push(el("li", { class: "drain-forecast-task held" }, [
-      verbs.guard,
-      forecastTaskRef(forecast, forecast.head.task_id),
-    ]));
-  }
-  const stall = forecast.head?.stall;
-  if (stall?.stuck === true && forecast.head.task_id) {
-    const miss = forecast.head.miss || {};
-    const resource = miss.resource || "resource";
-    const profile = miss.profile_key
-      ? `profile ${miss.profile_key} via ${miss.profile_source || "?"}`
-      : `profile ${miss.profile_source || "none"}`;
-    const baseline = Number.isFinite(Number(miss.baseline_percent))
-      ? `${Number(miss.baseline_percent).toFixed(0)}%`
-      : "unmeasured";
-    const since = stall.since ? time(stall.since) : "unknown";
-    items.push(el("li", { class: "drain-forecast-task held" }, [
-      verbs.stuck,
-      forecastTaskRef(forecast, forecast.head.task_id),
-      ` — ${forecastHoldDetail(miss)} (${profile}; ${resource} baseline ${baseline}) ${verbs.improved} over ${stall.passes ?? "?"} protected passes since ${since}.`,
-    ]));
-  }
-  if (items.length === 0) return null;
-  const list = el("ul", { class: "drain-forecast-tasks" }, items);
-  const label = hypothetical ? "Hypothetical forecast decisions" : "Forecast decisions";
-  list.setAttribute("aria-label", label);
-  return list;
-}
-
-function forecastHead(label, ...meta) {
-  return el("div", { class: "drain-forecast-head" }, [
-    el("span", { class: "drain-section-label", text: label }),
-    el("span", { class: "drain-forecast-meta" }, meta.filter(Boolean)),
-  ]);
-}
-
-function forecastBlock(forecast, { retained, windowNote = null }) {
-  const hypothetical = forecast.mode === "shadow";
-  const at = forecastBuiltAt(forecast);
-  const block = el("div", { class: retained ? "drain-forecast-retained" : "drain-forecast-built" });
-  block.dataset.forecastMode = forecast.mode || "";
-  block.append(
-    forecastHead(
-      retained ? "Last forecast" : "Forecast",
-      at ? forecastTime(at) : null,
-      at ? " · " : null,
-      el("span", { class: `drain-forecast-mode${hypothetical ? " shadow" : ""}`, text: hypothetical ? "shadow · hypothetical" : (forecast.mode || "forecast") }),
-    ),
-    ...[
-      windowNote ? el("p", { class: "drain-forecast-ended", text: windowNote }) : null,
-      forecastPeaks(forecast),
-      retained ? null : forecastDecisions(forecast, hypothetical),
-    ].filter(Boolean),
-  );
-  return block;
-}
-
-function clearBacklogForecastCache() {
-  backlogForecastCache = { revision: null, status: "pending", summary: null };
-  backlogForecastFlight = null;
-}
-
-// Paint the settled summary into the admission section. Pending, and a
-// revision that is not the one on screen, leave the slot empty so the card
-// does not shift while the read is in flight.
-function placeBacklogForecast(section) {
-  if (!section) return;
-  section.querySelector(":scope > .drain-backlog-forecast")?.remove();
-  if (backlogForecastCache.revision !== getWorkspaceRevision() || backlogForecastCache.status === "pending") return;
-  const summary = backlogForecastCache.status === "ready" ? backlogForecastCache.summary : null;
-  section.append(drainBacklogForecastLink(summary));
-}
-
-function paintBacklogForecast() {
-  placeBacklogForecast($("auto-drain-body")?.querySelector(".drain-forecast"));
-}
-
-// The default backlog forecast, independent of the drain refresh. A failure or a
-// payload with no time-to-drain estimate becomes the muted line and never
-// rejects the drain card. Aggregate and unselected views do not ask.
-function refreshBacklogForecast() {
-  const tab = context?.getTab?.();
-  // The forecast is shown in the Tasks dock. Other
-  // dashboard polls refresh readiness without needing this optional read.
-  if (!selectedWorkspace() || isAggregateView() || tab !== "tasks") return Promise.resolve();
-  const revision = getWorkspaceRevision();
-  if (backlogForecastFlight && backlogForecastFlight.revision === revision) return backlogForecastFlight.promise;
-  const promise = fetchBacklogForecast().then((payload) => {
-    if (getWorkspaceRevision() !== revision || !selectedWorkspace()) return;
-    const summary = backlogForecastSummary(payload);
-    backlogForecastCache = { revision, status: summary ? "ready" : "unavailable", summary };
-  }).catch(() => {
-    if (getWorkspaceRevision() !== revision || !selectedWorkspace()) return;
-    backlogForecastCache = { revision, status: "unavailable", summary: null };
-  }).finally(() => {
-    if (backlogForecastFlight?.promise === promise) backlogForecastFlight = null;
-    if (getWorkspaceRevision() === revision) paintBacklogForecast();
-  });
-  backlogForecastFlight = { revision, promise };
-  return promise;
-}
-
-// A retained forecast whose drain has ended, with no pull drain and no
-// winding-down children, is not a live window. Shared occupancy is read apart
-// from the drain's own phase, so the note claims nothing is running only when
-// that count is exactly zero. A positive count names the other work, and an
-// unknown count says only that the window ended.
-function retainedWindowNote(payload, forecast) {
-  if (forecast?.drain_live !== false) return null;
-  const capacity = payload?.capacity || {};
-  if (capacity.pull_drain_run_id) return null;
-  const phase = capacity.drain_phase;
-  if (phase != null && phase !== "idle") return null;
-  const busy = autoDrainNumber(capacity.active_leaf_runs ?? capacity.occupancy?.active_leaf_runs);
-  if (busy === 0) return "window ended · nothing running";
-  if (busy > 0) return "window ended · other work running";
-  return "window ended";
-}
-
-// The last local pass's gap-fit forecast. Readiness puts the pass on
-// `capacity.admission_forecast` and the last forecast that was actually built
-// on `capacity.last_admission_forecast`. A pass that built none says so, unless
-// a retained forecast stands in and this pass decided nothing of its own.
-// The backlog summary, when settled, is the last child of this section.
-function autoDrainForecast(payload) {
-  const capacity = payload?.capacity || {};
-  const current = asForecast(capacity.admission_forecast);
-  const last = asForecast(capacity.last_admission_forecast);
-  const section = el("div", { class: "drain-forecast", role: "group", "aria-label": "Admission forecast" });
-  const currentBuilt = forecastBuiltAt(current);
-  const currentRetained = currentBuilt && current.drain_live === false;
-  if (currentBuilt && !currentRetained) {
-    section.dataset.forecastState = "built";
-    section.append(forecastBlock(current, { retained: false }));
-    placeBacklogForecast(section);
-    return section;
-  }
-  const retainedForecast = currentRetained ? current : last;
-  const retained = forecastBuiltAt(retainedForecast);
-  section.dataset.forecastState = retained ? "retained" : "none";
-  const decisions = !currentRetained && forecastHasDecisions(current)
-    ? forecastDecisions(current, current.mode === "shadow")
-    : null;
-  if (decisions || !retained) {
-    section.append(forecastHead("Forecast", el("span", { class: "drain-forecast-state", text: "no forecast this pass" })));
-    if (decisions) section.append(decisions);
-  }
-  if (retained) {
-    section.append(forecastBlock(retainedForecast, {
-      retained: true,
-      windowNote: retainedWindowNote(payload, retainedForecast),
-    }));
-  }
-  placeBacklogForecast(section);
-  return section;
-}
-
-// The status card reads top to bottom: the live window's figures (if any),
-// the slots it competes for and why nothing more starts, any provider or crew
-// hold, the last admission forecast, the backlog forecast summary under it,
-// then the run and Stop. Its deadline sits
-// in the header. Start a window is its own card, hidden in a read-only view.
 function renderAutoDrain(payload) {
-  lastAutoDrain = payload;
+  operationsState.lastAutoDrain = payload;
   setDrainReadiness(payload);
   const body = $("auto-drain-body");
   if (!body) return;
@@ -3228,6 +2359,12 @@ function clearStartCard(id) {
   const card = $(id);
   if (card) card.hidden = true;
 }
+
+registerOperationsReset(() => {
+  announcedDrainState = null;
+  updateDrainIndicators("idle", "idle");
+  clearStartCard("auto-drain-quick-start");
+});
 
 // The Tasks dock's Start card: window length, parallel tasks and admission
 // control, then what happens after a task ships (completion, proposed tasks,
@@ -3308,91 +2445,15 @@ function autoDrainStartFoot(payload, form) {
 // A panel poll paints the snapshot it already has. Opening the fleet card
 // refetches only once that snapshot is older than the fleet cadence. The
 // indicator timer, not this poll, is what asks the hosts again.
-function loadFleetSnapshot({ refreshWhenStale, onPartial = null }) {
-  const seen = peekFleetDrains();
-  if (seen && (!refreshWhenStale || seen.fresh)) return Promise.resolve(seen.payload);
-  return fetchFleetDrains({ onPartial });
-}
-
-let aggregateFleetToken = 0;
-
-function paintAggregateFleet(payload) {
-  setDrainReadiness({});
-  updateDrainIndicators('fleet', 'Fleet drains');
-  const card = $("auto-drain-panel");
-  if (card) {
-    card.dataset.drainState = 'fleet';
-    const title = card.querySelector('.drain-title');
-    if (title) title.textContent = 'Fleet drains';
-  }
-  const pill = $("auto-drain-phase");
-  if (pill) pill.dataset.drainState = 'fleet';
-  const dot = $("auto-drain-dot");
-  if (dot) dot.className = 'drain-dot';
-  const body = $("auto-drain-body");
-  if (body) replaceFleetDrains(body, payload, context.selectFleetScope);
-  clearStartCard("auto-drain-quick-start");
-  const label = $("auto-drain-phase-label");
-  if (label) label.textContent = "Fleet";
-  const when = $("auto-drain-when");
-  if (when) when.textContent = "";
-  renderFleetIndicator(payload);
-}
-
-function paintFleetSurfaces(payload) {
-  renderFleetIndicator(payload);
-  const card = $("auto-drain-panel");
-  if (card?.dataset.drainState !== "fleet") return;
-  const body = $("auto-drain-body");
-  if (body) replaceFleetDrains(body, payload, context.selectFleetScope);
-}
-
-let fleetRefreshStarted = false;
-
-// One read after hosts are known, then again on the fleet cadence. This is
-// not a panel-poll job: a view's 30s refresh must not fan out to every host.
-export function startFleetIndicatorRefresh() {
-  const refresh = () => fetchFleetDrains({ force: true, onPartial: payload => paintFleetSurfaces(payload) }).then(payload => {
-    const seen = peekFleetDrains();
-    if (seen && seen.payload === payload) paintFleetSurfaces(payload);
-  });
-  const arm = () => {
-    const timer = setTimeout(() => {
-      if (document.hidden) {
-        arm();
-        return;
-      }
-      refresh().catch(error => console.error(error)).finally(arm);
-    }, FLEET_CACHE_MS);
-    if (typeof timer === "object" && typeof timer.unref === "function") timer.unref();
-  };
-  if (!fleetRefreshStarted) {
-    fleetRefreshStarted = true;
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) return;
-      const seen = peekFleetDrains();
-      if (seen?.fresh) return;
-      refresh().catch(error => console.error(error));
-    });
-    arm();
-  }
-  const seen = peekFleetDrains();
-  if (seen?.fresh) {
-    paintFleetSurfaces(seen.payload);
-    return Promise.resolve(seen.payload);
-  }
-  return fetchFleetDrains({ onPartial: payload => paintFleetSurfaces(payload) }).then(payload => {
-    paintFleetSurfaces(payload);
-    return payload;
-  });
-}
+configureOperationsFleetCallbacks({ updateDrainIndicators, clearStartCard });
+configureOperationsRefresh(fetchAndRenderOperations);
 
 function fetchAndRenderAutoDrain() {
   const workspace = selectedWorkspace();
   if (!workspace) {
-    const token = ++aggregateFleetToken;
+    const token = ++operationsState.aggregateFleetToken;
     const revision = getWorkspaceRevision();
-    const guard = () => token === aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
+    const guard = () => token === operationsState.aggregateFleetToken && revision === getWorkspaceRevision() && !selectedWorkspace();
     return requestPanel("auto-drain-body", "fleet", () => loadFleetSnapshot({ refreshWhenStale: true, onPartial: payload => { if (guard()) paintAggregateFleet(payload); } }), payload => {
       paintAggregateFleet(payload);
     }, "auto-drain-phase-label");
@@ -3419,30 +2480,13 @@ function fetchAndRenderAutoDrain() {
 
 // The chrome always names the fleet, including when an idle default workspace
 // is selected. The status card describes the selected workspace.
-function renderFleetIndicator(payload) {
-  const global = $("global-drain-state");
-  if (!global) return;
-  global.hidden = false;
-  const label = fleetDrainLabel(payload);
-  const active = payload.items.some(row => ['draining', 'pulling'].includes(row.phase));
-  global.dataset.drainState = active ? 'draining' : payload.items.some(row => row.phase === 'winding_down') ? 'winding_down' : 'idle';
-  global.setAttribute('aria-label', `${label}. Open fleet drains`);
-  global.querySelector('.global-drain-label').textContent = label;
-  global.querySelector('.global-drain-running').textContent = '';
-  // Open the fleet through the same scope switch used by its rows.
-  if (!global.dataset.fleetWired) {
-    global.addEventListener('click', () => context.selectFleetScope(null, null));
-    global.dataset.fleetWired = 'true';
-  }
-}
-
 function throwFirstPanelError(results) {
   const errors = results.filter(result => result.status === "rejected").map(result => result.reason);
   // Preserve transport classification even if a different panel also fails.
   if (errors.length) throw errors.find(error => error.networkFailure) || errors[0];
 }
 
-export async function fetchAndRenderOperations(subtab = context.getOperationsSubtab()) {
+export async function fetchAndRenderOperations(subtab = operationsState.context.getOperationsSubtab()) {
   if (subtab === "auto-tasks") {
     await fetchAndRenderAutoTasks();
     return;
