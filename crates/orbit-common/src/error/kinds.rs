@@ -436,7 +436,9 @@ pub struct PrivateVcsFailure {
 }
 
 /// Stable decision-request and channel refusal codes shared by all transports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Deserialized where a refusal crosses a process boundary intact (a plugin
+/// backend's host route).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionRefusalCode {
     ChannelNotRegistered,

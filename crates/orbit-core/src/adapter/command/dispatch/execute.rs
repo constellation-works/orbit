@@ -396,6 +396,36 @@ impl OrbitRuntime {
         {
             session_context.trace_id = Some(audit_execution_id("tool-call"));
         }
+        // A plugin backend's decision-channel callbacks read a store its
+        // sandbox denies, so its descendants hand them to the host that
+        // spawned it, which audits what it dispatches. A route that did not
+        // answer is this caller's to audit; never answered locally instead.
+        if let Some(outcome) =
+            orbit_tools::plugin::forward_host_routed_callback(&self.global_root(), name, &input)
+        {
+            let error = match outcome {
+                orbit_tools::plugin::HostRouteOutcome::Answered(result) => {
+                    mark_tool_audit_recorded();
+                    return result.map(|value| ToolDispatchOutcome {
+                        value,
+                        audit_recorded: false,
+                    });
+                }
+                orbit_tools::plugin::HostRouteOutcome::Unanswered(error) => error,
+            };
+            return self.execute_tool_dispatch_with(
+                name,
+                input,
+                ToolDispatchAuditContext {
+                    agent_override,
+                    model_override,
+                    entry_point,
+                    session_context: Some(session_context),
+                    brokered: None,
+                },
+                |_| Err(error),
+            );
+        }
         // The broker audits dispatched plugin calls and host-credentialed
         // reads. Listener refusals and unusable responses belong to this
         // caller's audit boundary; never execute them locally as a fallback.

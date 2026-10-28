@@ -24,7 +24,7 @@ use orbit_types::plugin::{
 use orbit_types::policy::ResolvedFsProfile;
 use serde_json::Value;
 
-use super::callback::{PLUGIN_CALLBACK_FD, PluginCallbackSession};
+use super::callback::{PLUGIN_CALLBACK_FD, PLUGIN_HOST_ROUTE_FD, PluginCallbackSession};
 use super::loader::physical_with_missing_tail;
 use crate::builtin::proc::spawn::enforce_program_allowlist;
 use crate::{TIMEOUT_SLOW_MS, ToolContext, upsert_env};

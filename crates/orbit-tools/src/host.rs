@@ -266,6 +266,21 @@ pub trait OrbitToolHost: Send + Sync {
         Ok(())
     }
 
+    /// Run one callback a plugin backend's child forwarded over its host
+    /// route (`plugin::HOST_ROUTED_CALLBACK_TOOLS`), through the same audited
+    /// dispatch a callback the child ran itself would take.
+    ///
+    /// The route calls this with the child's callback session resolved for
+    /// the current thread, so the dispatch derives the caller from that
+    /// session. Implementations must not add authority of their own: the
+    /// spawning caller's capabilities are not the callback's. Hosts without a
+    /// workspace runtime refuse.
+    fn execute_host_routed_callback(&self, tool: &str, _input: Value) -> Result<Value, OrbitError> {
+        Err(OrbitError::PolicyDenied(format!(
+            "this host cannot answer '{tool}' for a plugin backend"
+        )))
+    }
+
     fn task_scope(&self) -> OrbitTaskScope;
 }
 

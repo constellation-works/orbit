@@ -19,6 +19,11 @@
 //! `docs/design/plugins/1_scope.md` §4.3), so an unreadable directory refuses
 //! a missing credential even after the child clears its environment.
 //!
+//! The two callbacks that read the decision-channel key store, which no
+//! plugin child may read, run on the host instead: the host hands the child a
+//! route back to itself beside the credential and answers those calls under
+//! the session it minted ([`host_route`]).
+//!
 //! **A descriptor is a credential only if the host wrote what is on it.** A
 //! backend can open any file it likes on the number, so three things must
 //! agree: the descriptor is a regular file, it parses as a current-schema
@@ -48,10 +53,15 @@ use serde::{Deserialize, Serialize};
 
 use crate::upsert_env;
 
+mod host_route;
 mod resolution;
 mod session;
 mod storage;
 
+pub use self::host_route::{
+    HOST_ROUTED_CALLBACK_TOOLS, HostRouteOutcome, PLUGIN_HOST_ROUTE_FD,
+    forward_host_routed_callback, is_host_routed_callback_tool,
+};
 pub use self::resolution::*;
 pub use self::session::*;
 pub use self::storage::*;
