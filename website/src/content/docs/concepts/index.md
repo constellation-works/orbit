@@ -83,6 +83,7 @@ one layer: what it guarantees and what it refuses. For commands, see the
 ### Run unattended
 
 - **Bounded drains.** `orbit run auto --for 4h --concurrency 8` ships the backlog until the time window closes. `orbit run readiness` previews what would run without starting anything. Or ask your agent to run one: the `orbit-orchestrate` skill prepares the backlog, starts the drain, and works through failed runs.
+- **Scheduled task starts.** A task's optional `not_before` holds it until its earliest start time. The hold lifts on the next admission pass; approval and the other admission checks still apply. See [Scheduled tasks](./scheduling/#scheduled-tasks).
 - **Opt-in completion.** `--complete` merges PRs once GitHub allows it and closes tasks after the merge is verified. For distributed handoffs, the owner can instead authorize completion with `workflow.distributed_completion = "done"`; see [delivery workflows](../getting-started/workflows/#completing-work-with---complete).
 - **Continuous review.** The shipped `code-review`, `qa-sweep`, and `security-review` auto-tasks read everything that landed since their last run, verify findings against live code, and file confirmed ones as tasks with `file:line` evidence.
 - **Recurring work as data.** Scheduled task templates live in `.orbit/auto_tasks/*.yaml`, and one machine scheduler (`orbit clock`) runs routines and auto-tasks.

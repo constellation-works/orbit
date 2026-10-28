@@ -14,6 +14,11 @@ notes, and history. Its bundle lives under
 
 Every task needs an observable outcome. Don't file one as a scratch note.
 
+The dashboard also shows estimated regression riskiness from task size and
+completed-task history. Before a diff exists, size is the declared path
+count; in review or done, a resolvable diff supplies the changed-line count.
+Insufficient history is shown as no estimate.
+
 A task can also declare `required_tools`: Orbit tools its agent needs beyond
 the activity's baseline. They are fixed at creation; see
 [Transition rules](#transition-rules). An operator can also grant named
@@ -257,6 +262,14 @@ remove its ID from `--dependencies`.
 
 Only dispatch holds a task back. A manual `orbit task update --status in-progress` isn't
 checked against the task's dependencies, so unmet dependencies don't refuse it.
+
+A task can also set an optional `not_before` earliest start. While it is in
+the future, dispatchers hold a backlog task as scheduled without changing its
+status. The hold lifts on the first admission pass after that time; approval,
+dependencies and other admission checks still apply. An operator's explicit
+`orbit run ship <id> --ignore-schedule` can start named tasks early and records
+the override in history. See [Scheduled tasks](../scheduling/#scheduled-tasks)
+for setting, clearing and listing schedules.
 
 ### Friction resolution
 
