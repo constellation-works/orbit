@@ -314,7 +314,14 @@ async function revalidateAuditTail(path, head) {
   let cursor = head.nextBefore;
   let nextBefore = cursor;
   while (cursor) {
-    const page = await fetchJsonPage(`${path}&before=${encodeURIComponent(cursor)}`);
+    let page;
+    try {
+      page = await fetchJsonPage(`${path}&before=${encodeURIComponent(cursor)}`);
+    } catch {
+      // Keep a successful head even if an older page failed. Discard the
+      // partial walk so the merge falls back to the complete prior tail.
+      return head;
+    }
     for (const ev of page.body) {
       // Rows older than the loaded tail were never on screen; they stay
       // behind the Load older cursor rather than joining the retained tail.
@@ -346,8 +353,8 @@ function mergeAuditHead(path, head, pageable) {
     const exhausted = rows.length < AUDIT_LIMIT && !head.nextBefore;
     if (exhausted || headOldest <= prior[0].id) {
       // A revalidated head carries the tail the server returned afresh; only
-      // an unrevalidated one (no older page to fetch) falls back to the prior
-      // rows by ID.
+      // an unrevalidated one (including a failed tail fetch) falls back to
+      // the prior rows by ID.
       let tail;
       let tailNextBefore;
       if (head.tailRevalidated) {
