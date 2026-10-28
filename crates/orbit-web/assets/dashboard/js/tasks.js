@@ -1,7 +1,7 @@
 // Orbit dashboard task-domain rendering and actions.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, teardownNode, isAggregateView, isHttpUrl, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, formatDateTime, formatClock, formatDate, formatDayHeading, onClockZoneChange, statusPill, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
+import { captureWorkspaceVisit, findRegisteredHost, getHost, getRegisteredHosts, getServingHost, getWorkspace, onWorkspaceChange, panelCanRender, el, infoHint, fetchJson, patchJson, postJson, syncNodes, isAggregateView, isHttpUrl, hostWriteRefusal, makeToggleRow, makeDisclosure, makeRowDisclosure, enableRovingRows, makeCopyButton, copyText, copyWithFeedback, runHref, bindTaskLink, clockStamp, formatDateTime, submissionNoticeLines, stateCell, fmtDuration, elapsedDurationInfo } from './common.js';
 import { renderMarkdown, renderMarkdownInline } from './markdown.js';
 import { buildInlineFieldEditor } from './field-editor.js';
 import { DRAIN_POOLS, backlogReadiness, drainReadinessFor, drainReadinessView, drainWaitSignature } from './drain-waits.js';
@@ -11,6 +11,11 @@ import { buildAttentionCallout, buildDeliveryPanel, buildDeliveryProgress, build
 import { $, taskState, setRenderer, rerender, taskList, searchQueryValue, activeStatusSet, setSearchQuery, setActiveStatuses, statusOrder, statusTransitions, statusTransition, fmtAbsTimeValue, absTimeNode, refreshTasks, defaultActiveStatuses, tasksMeta, canMutateTask, aggregateRefusalTitle, taskWorkspacePath, taskMutationPath, GITHUB_PR_REF_SYSTEM, pullRequestLink, actionErrorNode, plural } from './task-shared.js';
 import { scheduleFeedbackExpiry, buildMutationFeedback, crewOptionsSignature, feedbackSignature, explicitCrewValue, isConfiguredCrewValue, hasStaleExplicitCrew, resolvedCrewName, defaultCrewOptionText, crewOptionTitle } from './task-crew.js';
 export { normalizeCrewPayload, cacheCrewPayload, hasCrewOptions } from './task-crew.js';
+import * as taskShared from './task-shared.js';
+import * as taskHistory from './task-history.js';
+import * as taskReadiness from './task-readiness.js';
+import * as taskEvidence from './task-evidence.js';
+export { buildArtifacts } from './task-evidence.js';
 import { applyUpdatedTask, clearTaskDataCaches, currentCrewTask, forgetTaskDetailLoad, loadTaskDetail, mergeTaskRecord, taskDetailState, taskDrainSignature, taskDrainState } from './task-data.js';
 
 let settleMergedInFlight = false;
@@ -92,7 +97,6 @@ const TRIAGE_REFUSAL_MS = 20000;
 // message, kept with the action like a refused Triage.
 const recoveryRefusals = new Map();
 const RECOVERY_REFUSAL_MS = 20000;
-const OPERATOR_RECORD_REFUSAL_MS = 20000;
 // Fix PR: whether the server would start an out-of-run auto-fix of a review
 // task's pull request, keyed like the ship guard. Read once when the panel
 // shows the task and again after FIX_PR_READINESS_MS or a start, so a list
@@ -122,10 +126,6 @@ function pruneQuickActionErrors(now = Date.now()) {
     }
   }
   return pruned;
-}
-
-function taskDispatchIdentity(task) {
-  return `${task.workspace_id || getWorkspace() || ''}:${task.id}`;
 }
 
 // Groups read in the order a person has to act on them: tasks waiting on a
@@ -221,8 +221,8 @@ function filterTasks(tasks, context) {
   const activeStatuses = activeStatusSet(context);
   return tasks.filter((t) => {
     if (!activeStatuses.has(t.status)) return false;
-    if (notReadyOnly && !isNotReady(t)) return false;
-    if (pilotWarningsOnly && !pilotWarnings(t).length) return false;
+    if (notReadyOnly && !taskReadiness.isNotReady(t)) return false;
+    if (pilotWarningsOnly && !taskReadiness.pilotWarnings(t).length) return false;
     if (!q) return true;
     return (
       (t.id && t.id.toLowerCase().includes(q)) ||
@@ -882,315 +882,6 @@ function buildOsBadges(task) {
 // Readiness: what a proposed or backlog task still lacks before automation
 // approves or admits it. The server attaches it to those statuses only, with
 // `preparing` set while a task-pilot run holds the task.
-function readinessOf(task) {
-  const readiness = task && task.readiness;
-  return readiness && typeof readiness === "object" ? readiness : null;
-}
-
-// Blocking gaps first. The sort is stable, so server order holds within a severity.
-function readinessGaps(readiness) {
-  const gaps = Array.isArray(readiness.gaps) ? readiness.gaps.filter((gap) => gap && gap.code) : [];
-  return gaps.sort((a, b) => Number(b.severity === "blocking") - Number(a.severity === "blocking"));
-}
-
-function isNotReady(task) {
-  const readiness = readinessOf(task);
-  return Boolean(readiness) && readiness.ready === false;
-}
-
-function readinessSignature(task) {
-  const readiness = readinessOf(task);
-  if (!readiness) return "";
-  const gaps = readinessGaps(readiness).map((gap) => `${gap.code}/${gap.severity}`).join(",");
-  return `${readiness.ready}:${readiness.preparing ? "p" : ""}:${gaps}`;
-}
-
-// The row chip, in the os-badge slot: `preparing` while a pilot run holds the
-// task, amber when a gap blocks automation, muted when every gap is advisory,
-// and nothing for a task that lacks nothing. The tooltip lists each gap.
-function buildReadinessBadge(task) {
-  const readiness = readinessOf(task);
-  if (!readiness) return [];
-  if (readiness.preparing) {
-    return [el("span", {
-      class: "readiness-badge readiness-preparing mono",
-      text: "preparing",
-      title: "A task-pilot run is preparing this task; its readiness settles when the run does",
-    })];
-  }
-  const gaps = readinessGaps(readiness);
-  if (gaps.length === 0) return [];
-  const blocking = readiness.ready === false;
-  return [el("span", {
-    class: `readiness-badge ${blocking ? "readiness-blocking" : "readiness-advisory"} mono`,
-    text: `${blocking ? "not ready" : "advisory"} · ${gaps.length}`,
-    title: gaps.map((gap) => `${gap.severity}: ${gap.message}`).join("\n"),
-  })];
-}
-
-// Core supplies only the findings that hold promotion; clients do not
-// reinterpret pilot assessments or read the drain's latest-pass snapshot.
-function pilotWarnings(task) {
-  return Array.isArray(task.pilot_warnings) ? task.pilot_warnings : [];
-}
-
-function buildPilotWarningBadge(task) {
-  const count = pilotWarnings(task).length;
-  return count ? [el("span", {
-    class: "chip pilot-warning-chip",
-    role: "img",
-    "aria-label": `Pilot warnings: ${count} holding findings`,
-  }, [el("span", { text: "⚠", "aria-hidden": "true" }), ` pilot warnings · ${count}`])] : [];
-}
-
-function deliveryAttentionLabel(attention) {
-  if (!attention) return null;
-  if (attention.blocker === "failed_checks") return "CI failed";
-  if (attention.blocker === "conflict") return "conflict";
-  if (attention.blocker) return String(attention.blocker).replaceAll("_", " ");
-  if (attention.run_state) return "run failed";
-  return "delivery stuck";
-}
-
-function deliveryAttentionTitle(task, attention) {
-  const parts = [];
-  if (attention.failed_step_id) parts.push(`failed step ${attention.failed_step_id}`);
-  if (attention.blocker) parts.push(`blocker ${attention.blocker}`);
-  if (attention.head_sha) parts.push(`head ${attention.head_sha}`);
-  if (attention.attempt != null && attention.budget != null) parts.push(`auto-fix attempt ${attention.attempt} of ${attention.budget}`);
-  if (attention.run_state) parts.push(`delivery run ${attention.run_state}`);
-  if (attention.repairing) parts.push("a live run is repairing the pull request");
-  if (attention.as_of) parts.push(`as of ${attention.as_of}`);
-  return parts.length ? `${task.status} · ${deliveryAttentionLabel(attention)}: ${parts.join(", ")}` : `${task.status} · ${deliveryAttentionLabel(attention)}`;
-}
-
-function buildDeliveryAttentionBadge(task) {
-  const attention = task.delivery_attention;
-  if (!attention) return [];
-  const label = deliveryAttentionLabel(attention);
-  return [el("span", {
-    class: "delivery-attention-badge",
-    role: "img",
-    "aria-label": deliveryAttentionTitle(task, attention),
-    title: deliveryAttentionTitle(task, attention),
-    text: `${task.status} · ${label}`,
-  })];
-}
-
-function buildDeliveryAttentionBanner(task) {
-  const attention = task.delivery_attention;
-  if (!attention) return null;
-  const lines = [];
-  if (attention.failed_step_id) lines.push(`Failed step: ${attention.failed_step_id}`);
-  if (attention.blocker) lines.push(`Blocker: ${attention.blocker}`);
-  if (attention.head_sha) lines.push(`Observed head: ${attention.head_sha}`);
-  if (attention.attempt != null && attention.budget != null) lines.push(`Auto-fix attempt ${attention.attempt} of ${attention.budget}`);
-  if (attention.run_state) lines.push(`Delivery run: ${attention.run_state}`);
-  lines.push(attention.repairing ? "A live run is watching or repairing the pull request." : "No live run is repairing the pull request.");
-  if (attention.as_of) lines.push(`As of ${attention.as_of}`);
-  const actions = el("div", { class: "task-attention-actions" });
-  if (attention.run_id) {
-    if (task.job_run_navigable !== false) {
-      const run = el("a", { class: "attention-action", text: "View run" });
-      run.href = runHref(attention.run_id, task.workspace_id ? { workspace: task.workspace_id } : {});
-      run.addEventListener("click", (event) => event.stopPropagation());
-      actions.appendChild(run);
-    } else {
-      actions.appendChild(el("span", { class: "attention-action", text: `Run ${attention.run_id}` }));
-    }
-  }
-  const pullRequest = pullRequestLink(task);
-  if (pullRequest) {
-    const pr = el("a", { class: "attention-action", text: pullRequest.number ? `PR #${pullRequest.number}` : "Pull request" });
-    pr.href = pullRequest.url;
-    pr.rel = "noopener noreferrer";
-    pr.target = "_blank";
-    pr.addEventListener("click", (event) => event.stopPropagation());
-    actions.appendChild(pr);
-  } else if (attention.pr_number) {
-    actions.appendChild(el("span", { class: "attention-action", text: `PR #${attention.pr_number}` }));
-  }
-  return el("section", { class: "task-attention warning delivery-attention", "aria-label": "Delivery needs attention" }, [
-    el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
-    el("div", { class: "task-attention-content" }, [
-      el("h3", { class: "task-attention-title", text: `Delivery needs attention · ${deliveryAttentionLabel(attention)}` }),
-      ...lines.map((line) => el("p", { class: "task-attention-body", text: line })),
-      actions.children.length ? actions : null,
-    ]),
-  ]);
-}
-
-function buildPilotWarnings(task) {
-  const findings = pilotWarnings(task);
-  if (!findings.length) return null;
-  const labels = {
-    utility_warnings: "Utility", surface_warnings: "Surface",
-    validation_tool_warnings: "Validation tool", blocked_by: "Prerequisite",
-    adr_conflicts: "Conflict",
-  };
-  const content = el("div", { class: "task-attention-content" }, [
-    el("h3", { class: "task-attention-title", text: "Pilot warnings" }),
-    el("p", { class: "task-attention-body", text: "The drain holds this task until an operator approves it or edits it so the next pilot pass is clean." }),
-    el("ul", { class: "pilot-warning-findings" }, findings.map(finding => el("li", {}, [
-      el("strong", { text: `${labels[finding.kind] || String(finding.kind).replaceAll("_", " ")}: ` }),
-      el("span", { text: finding.text }),
-    ]))),
-  ]);
-  return el("section", { class: "task-attention warning pilot-warnings", "aria-label": "Pilot warnings" }, [
-    el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
-    content,
-  ]);
-}
-
-// Admission holds apply beyond proposed promotion warnings. When the decision
-// channel carries this hold, its existing answer controls are the action set.
-function buildPilotAdmissionHold(task, detail, context) {
-  if (!task.resolvable_pilot_admission_hold) return null;
-  if ((task.open_decisions || []).some(request => request.gate === "pilot_admission")) return null;
-  const content = el("div", { class: "task-attention-content" }, [
-    el("h3", { class: "task-attention-title", text: "Pilot admission hold" }),
-  ]);
-  content.appendChild(el("p", {
-    class: "task-attention-body operator-record-note",
-    text: "Clear hold records that the held requirement is satisfied; Approve anyway records a deliberate override. Each records your evidence with the decision and releases the hold exactly as the same written record from the command line does.",
-  }));
-  const actions = el("div", { class: "task-attention-actions operator-record-actions" });
-  const mutable = canMutateTask(task);
-  const disabledTitle = mutable ? "" : aggregateRefusalTitle("Operator record", "record an operator decision");
-  const clear = el("button", {
-    class: "attention-action primary pilot-admission-clear",
-    type: "button",
-    text: "Clear hold",
-    title: disabledTitle || "Record that the held requirement is satisfied, with your evidence; this clears the pilot admission hold",
-  });
-  clear.disabled = !mutable;
-  clear.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, clear, context, { kind: "pilot", verdict: "clear" }); });
-  actions.appendChild(clear);
-  const approve = el("button", {
-    class: "attention-action pilot-admission-approve-anyway",
-    type: "button",
-    text: "Approve anyway",
-    title: disabledTitle || "Record a deliberate override of the pilot admission hold, with your reason; the task is admitted despite the finding",
-  });
-  approve.disabled = !mutable;
-  approve.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, approve, context, { kind: "pilot", verdict: "approve-anyway" }); });
-  actions.appendChild(approve);
-  content.appendChild(actions);
-  const refusal = taskState.operatorRecordRefusals.get(taskDispatchIdentity(task));
-  if (refusal) content.appendChild(actionErrorNode(refusal));
-  return el("section", { class: "task-attention warning pilot-admission-hold", "aria-label": "Pilot admission hold" }, [
-    el("span", { class: "task-attention-icon", "aria-hidden": "true" }),
-    content,
-  ]);
-}
-
-function operatorRecordSignature(task) {
-  return taskState.operatorRecordRefusals.get(taskDispatchIdentity(task)) || "";
-}
-
-// One-click operator records: pilot-admission decisions and post-deploy
-// measurements. Each explains what the record does in a confirmation, asks
-// for the required evidence, then posts through the typed operator route,
-// which writes the same record the command line writes. A refusal shows its
-// typed code and message inline and changes nothing.
-async function runOperatorRecord(task, detail, btnNode, context, request) {
-  const visit = captureWorkspaceVisit();
-  const key = taskDispatchIdentity(task);
-  if (!canMutateTask(task)) return;
-  let suffix;
-  let body;
-  let successText;
-  if (request.kind === "pilot") {
-    const approveAnyway = request.verdict === "approve-anyway";
-    const explain = approveAnyway
-      ? `Approve anyway for ${task.id}? This records a deliberate override of the pilot admission hold with your reason, and the task is admitted despite the finding.`
-      : `Clear hold for ${task.id}? This records that the held requirement is satisfied, with your evidence, and clears the pilot admission hold.`;
-    if (typeof window.confirm !== "function" || !window.confirm(explain)) return;
-    if (typeof window.prompt !== "function") return;
-    const evidence = window.prompt(
-      approveAnyway
-        ? `Reason for approving ${task.id} anyway (recorded with the decision):`
-        : `Evidence that the hold on ${task.id} is satisfied (recorded with the decision):`,
-      "",
-    );
-    if (evidence === null) return;
-    if (!evidence.trim()) {
-      const message = "[pilot_admission_evidence_required] pilot admission needs evidence; it is recorded with the decision";
-      taskState.operatorRecordRefusals.set(key, message);
-      rerender(context);
-      return;
-    }
-    suffix = "/pilot-admission";
-    body = { verdict: request.verdict, evidence: evidence.trim() };
-    successText = approveAnyway ? `${task.id}: pilot admission hold approved anyway` : `${task.id}: pilot admission hold cleared`;
-  } else {
-    const criterion = request.criterion;
-    if (typeof window.confirm !== "function" || !window.confirm(
-      `Mark criterion ${criterion} met for ${task.id}? This records that the deployed build met criterion ${criterion}, with your measurement evidence, and settles that owed criterion.`,
-    )) return;
-    if (typeof window.prompt !== "function") return;
-    const evidence = window.prompt(`Measurement evidence for criterion ${criterion} on ${task.id} (recorded with the result):`, "");
-    if (evidence === null) return;
-    if (!evidence.trim()) {
-      const message = "[post_deploy_evidence_required] post-deploy record needs evidence; it is recorded with the measurement";
-      taskState.operatorRecordRefusals.set(key, message);
-      rerender(context);
-      return;
-    }
-    suffix = "/post-deploy";
-    body = { criterion, evidence: evidence.trim() };
-    successText = `${task.id}: criterion ${criterion} recorded met`;
-  }
-  const requestPath = visit.path(taskMutationPath(task, suffix));
-  taskState.operatorRecordRefusals.delete(key);
-  for (const b of detail.querySelectorAll(".action, .attention-action")) b.disabled = true;
-  try {
-    await postJson(requestPath, body);
-  } catch (error) {
-    if (!visit.isCurrent()) return;
-    const code = error && error.code ? error.code : "operator_record_refused";
-    const message = `[${code}] ${error.message || String(error)}`;
-    taskState.operatorRecordRefusals.set(key, message);
-    rerender(context);
-    setTimeout(() => {
-      if (taskState.operatorRecordRefusals.get(key) !== message) return;
-      taskState.operatorRecordRefusals.delete(key);
-      rerender(context);
-    }, OPERATOR_RECORD_REFUSAL_MS);
-    return;
-  }
-  if (!visit.isCurrent()) return;
-  taskState.taskActionNotice = successText;
-  await refreshTasks(context);
-}
-
-// The readiness dot beside a backlog task's ID: the pool colour, its words as
-// the dot's label and the full wait in the tooltip. A row the snapshot does
-// not mention keeps a hidden dot and says nothing.
-function buildReadinessDot(task) {
-  const readiness = drainReadinessFor(task.id);
-  if (!readiness) return el("span", { class: "ready-dot none", "aria-hidden": "true" });
-  const dot = el("span", { class: "ready-dot", role: "img", "aria-label": readiness.label, title: readiness.title });
-  dot.dataset.pool = readiness.pool;
-  return dot;
-}
-
-// A backlog row's second line after its ID: the readiness dot and why the
-// task is or is not starting, in the drain snapshot's own words. The dot's
-// label already says it to assistive technology, so the visible words are
-// hidden from it rather than read twice.
-function buildRowReason(task) {
-  const dot = buildReadinessDot(task);
-  const readiness = drainReadinessFor(task.id);
-  if (!readiness) return el("span", { class: "row-reason none" }, [dot]);
-  const words = readiness.badge ? readiness.badge.text : readiness.label;
-  const text = `${words.charAt(0).toUpperCase()}${words.slice(1)}`.replace(/\bmacos\b/g, "macOS");
-  return el("span", { class: "row-reason" }, [
-    dot,
-    el("span", { class: "row-reason-text", text, title: readiness.title, "aria-hidden": "true" }),
-  ]);
-}
-
 // `[source] Rest of the title`: the bracketed source prefixes become tag chips
 // beside the title (`[auto-task]` reads as an "auto-task" chip), so the title
 // starts with the problem it names.
@@ -1234,99 +925,6 @@ function buildRunCell(task) {
 function runCellSignature(task) {
   const { host, elapsed, files } = runCellParts(task);
   return JSON.stringify([host, elapsed, files]);
-}
-
-// A task id in the Readiness card: a link to that task in the same workspace,
-// which opens it even when the Tasks filter hides it.
-function readinessTaskLink(taskId, workspace) {
-  const link = el("a", { class: "relation-target mono", text: taskId, title: `Open ${taskId}` });
-  return bindTaskLink(link, taskId, workspace ? { workspace } : {});
-}
-
-// The Readiness card leads with the pool, then links every reported blocker.
-// Without an entry it says whether a read is pending, failed or found nothing,
-// and never claims a pool.
-function buildDrainReadiness(drain, workspace) {
-  const entry = drain && drain.entry;
-  if (!entry) {
-    const text = drain && drain.pending
-      ? "Checking whether the drain can take this task…"
-      : `Drain readiness unknown${drain && drain.error ? `: ${drain.error}` : ""}.`;
-    return el("div", { class: "readiness-drain readiness-note", text });
-  }
-  const view = drainReadinessView(entry);
-  const badge = view.badge;
-  const dot = el("span", { class: "ready-dot", "aria-hidden": "true" });
-  dot.dataset.pool = view.pool;
-  const head = el("div", { class: "readiness-drain-head" }, [
-    dot,
-    el("strong", { text: view.poolLabel }),
-    ...(badge && view.pool !== "locks" ? [el("span", { class: "readiness-drain-reason", text: `· ${badge.text}` })] : []),
-  ]);
-  const wrap = el("div", { class: "readiness-drain" }, [head]);
-  wrap.dataset.pool = view.pool;
-  const line = (label, children) => el("div", { class: "readiness-drain-line" }, [
-    el("span", { class: "label", text: label }),
-    el("span", { class: "readiness-drain-value" }, children),
-  ]);
-  if (!badge) {
-    wrap.appendChild(el("div", { class: "readiness-fix", text: view.title }));
-    return wrap;
-  }
-  if (badge.holders.length) {
-    wrap.appendChild(line("Held by", badge.holders.map(id => readinessTaskLink(id, workspace))));
-  } else if (view.pool === "locks" && !badge.runIds.length) {
-    wrap.appendChild(line("Held by", [el("span", { text: "Lock holder unavailable" })]));
-  }
-  if (badge.runIds.length) {
-    wrap.appendChild(line("Live run", badge.runIds.map(runId => {
-      const run = el("a", { class: "mono", text: runId });
-      run.href = runHref(runId, workspace ? { workspace } : {});
-      return run;
-    })));
-  }
-  if (badge.dependencies.length > 0) {
-    wrap.appendChild(line("Depends on", badge.dependencies.map(({ taskId, status }) =>
-      el("span", { class: "readiness-dependency" }, [
-        readinessTaskLink(taskId, workspace),
-        status ? el("span", { class: "readiness-fix", text: status }) : null,
-      ]))));
-  }
-  if (badge.detail) wrap.appendChild(el("div", { class: "readiness-message", text: badge.detail }));
-  return wrap;
-}
-
-// The detail's Readiness card: why the drain is or is not taking the task,
-// then each preparation gap with its severity and its fix. "Ready" is claimed
-// only for a task the drain reports eligible with nothing missing.
-function buildReadinessBlock(readiness, drain, workspace) {
-  const wrap = el("div", { class: "value readiness-list" });
-  if (drain) wrap.appendChild(buildDrainReadiness(drain, workspace));
-  if (!readiness) return wrap;
-  if (readiness.preparing) {
-    wrap.appendChild(el("div", {
-      class: "readiness-note",
-      text: "A task-pilot run is preparing this task; these gaps settle when it finishes.",
-    }));
-  }
-  const gaps = readinessGaps(readiness);
-  if (gaps.length === 0) {
-    const eligible = drain && drain.entry && drain.entry.eligible === true;
-    wrap.appendChild(el("div", { class: "readiness-note", text: eligible ? "Ready: nothing is missing." : "No preparation gaps." }));
-    return wrap;
-  }
-  wrap.appendChild(el("span", { class: "readiness-gap-count", text: `${gaps.length} ${gaps.length === 1 ? "gap" : "gaps"}` }));
-  for (const gap of gaps) {
-    const severity = gap.severity === "blocking" ? "blocking" : "advisory";
-    wrap.appendChild(el("div", { class: "readiness-gap" }, [
-      el("span", { class: `readiness-badge readiness-${severity} mono`, text: severity }),
-      el("div", { class: "readiness-gap-body" }, [
-        el("div", { class: "readiness-message", text: gap.message || gap.code }),
-        ...(gap.fix ? [el("div", { class: "readiness-fix", text: `Fix: ${gap.fix}` })] : []),
-      ]),
-    ]));
-  }
-  return wrap;
 }
 
 function buildExternalRefs(refs) {
@@ -1531,391 +1129,6 @@ function buildRelationRow(key, label, targets, context) {
   ]);
   relationRow.dataset.relation = key;
   return relationRow;
-}
-
-// ORB-11333: the settled before-PR review gate. Every value comes from the
-// certificate the gate wrote; nothing here is inferred from status or tags.
-function buildReviewGate(review) {
-  const wrap = el("div", { class: "review-gate" });
-  if (review.unreadable) {
-    wrap.appendChild(el("div", { text: `review evidence unreadable: ${review.unreadable}` }));
-    return wrap;
-  }
-  const reviewer = review.reviewer || {};
-  const consumed = review.consumed || {};
-  const budget = review.budget || {};
-  const lines = [
-    `verdict: ${review.verdict}${review.assurance ? ` (${review.assurance})` : ""}`,
-    `reviewer: ${reviewer.crew ?? "—"} · ${reviewer.provider ?? "—"} / ${reviewer.model ?? "—"}${reviewer.same_model_as_implementer ? " · same model as implementer" : ""}`,
-    `base ${review.base?.commit ?? "—"} → reviewed ${review.reviewed_candidate?.commit ?? "—"} → final ${review.final_candidate?.commit ?? "—"}`,
-    `reviewer commit: ${Array.isArray(review.repair_commits) && review.repair_commits.length ? review.repair_commits.map((c) => `${c.commit.slice(0, 12)} by ${c.author}`).join(", ") : "none"}`,
-    `findings: ${Array.isArray(review.findings) ? review.findings.length : 0} · validation: ${Array.isArray(review.validation) ? review.validation.length : 0} record(s), complete: ${review.validation_complete ? "yes" : "no"}`,
-    `reviewer runtime: ${consumed.seconds ?? 0}s of ${budget.minutes ?? "?"} min`,
-  ];
-  if (Array.isArray(review.validation_limitations) && review.validation_limitations.length) {
-    lines.push(`not established: ${review.validation_limitations.join("; ")}`);
-  }
-  if (Array.isArray(review.retained_obligations) && review.retained_obligations.length) {
-    lines.push(`retained from earlier report revisions: ${review.retained_obligations.map((o) => `${o.validation?.command ?? "?"} ${o.validation?.outcome ?? "?"}`).join(", ")}`);
-  }
-  if (review.escalation) lines.push(`escalation: ${review.escalation}`);
-  if (Array.isArray(review.landings) && review.landings.length) {
-    for (const landing of review.landings) {
-      lines.push(`landing ${landing.landed?.commit ?? "?"}: ${landing.transformation} · ${landing.covered ? "covered" : `uncovered (${landing.reason ?? "unknown"})`}`);
-    }
-  }
-  if (Array.isArray(review.stale_reasons) && review.stale_reasons.length) {
-    lines.push(`stale gate reasons: ${review.stale_reasons.join(", ")}`);
-  }
-  for (const line of lines) wrap.appendChild(el("div", { text: line }));
-  return wrap;
-}
-
-function taskDecisionState(task, context) {
-  const key = task.open_decisions.map((request) => request.id).join(",");
-  const existing = taskState.taskDecisionLoads.get(task.id);
-  if (existing && existing.key === key) return existing;
-  const load = { key, pending: true, error: null, requests: new Map() };
-  taskState.taskDecisionLoads.set(task.id, load);
-  const visit = captureWorkspaceVisit();
-  const settle = () => {
-    load.pending = false;
-    if (taskState.taskDecisionLoads.get(task.id) === load && visit.isCurrent()) {
-      rerender(context);
-    }
-  };
-  fetchJson(taskWorkspacePath(task, `/api/decisions?task_id=${encodeURIComponent(task.id)}`)).then(
-    (body) => {
-      for (const request of (body && body.items) || []) load.requests.set(request.id, request);
-      settle();
-    },
-    (error) => {
-      load.error = error.message || String(error);
-      settle();
-    },
-  );
-  return load;
-}
-
-// What the detail paints from the decision read, so its repaint follows the read.
-function decisionSignature(task) {
-  const load = taskState.taskDecisionLoads.get(task.id);
-  return load ? `${load.pending}|${load.error || ""}|${load.requests.size}` : "";
-}
-
-// Open human decision requests on this task, one row per request with a
-// button per allowed answer, each beside its label and consequence. Answering
-// posts to the decisions API, which applies the answer in core as the human
-// writer — the same apply step as `orbit decision answer` — and the detail
-// then re-reads the task, whose request now reads answered and drops out of
-// `open_decisions`. The answer id stays the submitted key.
-function buildOpenDecisions(task, detail, context) {
-  const wrap = el("div", { class: "decision-requests" });
-  const mutable = canMutateTask(task);
-  const load = taskDecisionState(task, context);
-  for (const request of task.open_decisions) {
-    const row = el("div", { class: "decision-request" });
-    row.appendChild(el("div", {
-      text: `${request.gate} decision needed (${request.id}), expires ${request.expires_at}`,
-    }));
-    const described = new Map(
-      ((load.requests.get(request.id) || {}).answers || []).map((answer) => [String(answer.id), answer]),
-    );
-    const allowed = (request.answers || []).map(String).filter((id) => described.has(id));
-    if (!allowed.length) {
-      let text = "Loading answer options…";
-      if (!load.pending) {
-        text = load.error
-          ? `Answer options could not be loaded: ${load.error}`
-          : "Answer options are unavailable for this request.";
-      }
-      row.appendChild(el("div", { class: "decision-pending", role: "status", text }));
-      if (!load.pending) {
-        const retry = el("button", { class: "action", type: "button", text: "Retry" });
-        retry.addEventListener("click", (e) => {
-          e.stopPropagation();
-          taskState.taskDecisionLoads.delete(task.id);
-          rerender(context);
-        });
-        row.appendChild(retry);
-      }
-      wrap.appendChild(row);
-      continue;
-    }
-    const note = el("input", {
-      class: "decision-note",
-      type: "text",
-      placeholder: "note / evidence (optional)",
-    });
-    row.appendChild(note);
-    const options = el("div", { class: "decision-answers" });
-    for (const answerId of allowed) {
-      const answer = described.get(answerId);
-      const option = el("div", { class: "decision-option" });
-      const btn = el("button", {
-        class: "action decision-answer",
-        type: "button",
-        text: answer.label,
-        title: `Answer ${request.id} with option ${answerId}`,
-      });
-      btn.disabled = !mutable;
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        answerDecision(task, detail, request.id, answerId, note.value.trim(), btn, context);
-      });
-      option.appendChild(btn);
-      option.appendChild(el("span", { class: "decision-consequence", text: answer.consequence }));
-      options.appendChild(option);
-    }
-    row.appendChild(options);
-    wrap.appendChild(row);
-  }
-  return wrap;
-}
-
-async function answerDecision(task, detail, requestId, answer, note, btnNode, context) {
-  const visit = captureWorkspaceVisit();
-  if (!canMutateTask(task)) return;
-  const requestPath = visit.path(
-    taskWorkspacePath(task, `/api/decisions/${encodeURIComponent(requestId)}/answer`),
-  );
-  const prior = detail.querySelector(".action-error");
-  if (prior) prior.remove();
-  btnNode.disabled = true;
-  try {
-    await postJson(requestPath, note ? { answer, note } : { answer });
-  } catch (error) {
-    if (!visit.isCurrent()) return;
-    btnNode.disabled = false;
-    detail.prepend(actionErrorNode(`decision answer: ${error.message || String(error)}`));
-    return;
-  }
-  if (!visit.isCurrent()) return;
-  taskState.taskActionNotice = `${task.id}: decision ${requestId} answered (${answer})`;
-  forgetTaskDetailLoad(task.id);
-  await refreshTasks(context);
-}
-
-function buildOwedCriteria(owed, task, detail, context) {
-  const wrap = el("div", { class: "owed-criteria" });
-  for (const entry of owed) {
-    const parts = [
-      `${entry.criterion}. [${entry.state}] on ${entry.host}: ${entry.command} (target ${entry.target})`,
-    ];
-    if (entry.candidate_evidence) parts.push(`candidate: ${entry.candidate_evidence}`);
-    if (entry.evidence) parts.push(`recorded by ${entry.recorded_by ?? "—"}: ${entry.evidence}`);
-    const row = el("div", { class: "owed-criterion" }, [
-      el("span", { text: parts.join(" · ") }),
-    ]);
-    if (task && detail && context && entry.state !== "met") {
-      const mutable = canMutateTask(task);
-      const mark = el("button", {
-        class: "action post-deploy-mark-met",
-        type: "button",
-        text: "Mark met",
-        title: mutable
-          ? `Record that the deployed build met criterion ${entry.criterion}, with your measurement evidence; this settles the owed criterion`
-          : aggregateRefusalTitle("Mark met", "record a post-deploy measurement"),
-      });
-      mark.disabled = !mutable;
-      mark.addEventListener("click", (e) => { e.stopPropagation(); runOperatorRecord(task, detail, mark, context, { kind: "post-deploy", criterion: entry.criterion }); });
-      row.appendChild(mark);
-    }
-    wrap.appendChild(row);
-  }
-  if (task && detail && context) {
-    const refusal = taskState.operatorRecordRefusals.get(taskDispatchIdentity(task));
-    if (refusal) wrap.appendChild(actionErrorNode(refusal));
-  }
-  return wrap;
-}
-
-function fmtSize(bytes) {
-  const value = Number(bytes);
-  if (!Number.isFinite(value) || value < 0) return "0 bytes";
-  if (value < 1024) return `${value} bytes`;
-  const kb = value / 1024;
-  if (kb < 1024) return `${kb.toFixed(kb < 10 ? 1 : 0)} KB`;
-  const mb = kb / 1024;
-  return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
-}
-
-function artifactUrl(task, path) {
-  const encodedPath = String(path)
-    .split("/")
-    .map((part) => encodeURIComponent(part))
-    .join("/");
-  return taskMutationPath(task, `/artifacts/${encodedPath}`);
-}
-
-function artifactMediaType(artifact, response) {
-  return String(
-    response.headers.get("content-type") || artifact.media_type || "application/octet-stream",
-  ).split(";")[0].trim().toLowerCase();
-}
-
-function renderArtifactText(mediaType, text) {
-  const rendered = mediaType === "text/markdown" ? renderMarkdown(text) : null;
-  if (rendered !== null) {
-    const view = el("div", { class: "markdown-body" });
-    view.innerHTML = rendered;
-    return view;
-  }
-  return el("pre", { text });
-}
-
-// The raster formats the server will serve inline. This mirrors the artifact
-// policy in orbit-types (`inline_safe_artifact_media_type`), which the artifact
-// route enforces with `nosniff`: SVG and HTML are viewable formats that also
-// host script, so they are deliberately absent and fall through to download.
-const INLINE_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
-const ARTIFACT_FETCH_TIMEOUT_MS = 30000;
-
-function artifactFileName(path) {
-  return String(path).split("/").pop() || String(path);
-}
-
-function buildArtifactDownloadLink(artifact, objectUrl, text) {
-  const link = el("a", { text: text || `Download ${artifact.path}` });
-  link.href = objectUrl;
-  link.download = artifactFileName(artifact.path);
-  return link;
-}
-
-// A blob URL pins its bytes until revoked. `syncNodes` tears down a detail it
-// replaces, so the preview releases them when the task detail goes away.
-function releaseOnTeardown(node, objectUrl) {
-  node.teardown = () => URL.revokeObjectURL(objectUrl);
-  return node;
-}
-
-function buildArtifactImage(artifact, blob) {
-  const objectUrl = URL.createObjectURL(blob);
-  const figure = releaseOnTeardown(el("div", { class: "artifact-image-view" }), objectUrl);
-  const image = el("img", { class: "artifact-image" });
-  image.src = objectUrl;
-  // The path is the only description the artifact carries, so it is a more
-  // useful alt text than a generic label for anyone reading without the image.
-  image.alt = String(artifact.path);
-  image.loading = "lazy";
-  // A stored artifact can be truncated or mislabeled. When the browser cannot
-  // decode it, say so and still offer the bytes rather than leaving a broken
-  // image icon behind.
-  image.addEventListener("error", () => {
-    figure.replaceChildren(
-      el("div", {
-        class: "artifact-error",
-        text: `Unable to display ${artifact.path}: the image could not be decoded.`,
-      }),
-      buildArtifactDownloadLink(artifact, objectUrl),
-    );
-  });
-  const open = el("a", { class: "artifact-open", text: "Open" });
-  open.href = objectUrl;
-  open.target = "_blank";
-  open.rel = "noopener";
-  const actions = el("div", { class: "artifact-actions" });
-  actions.appendChild(open);
-  actions.appendChild(buildArtifactDownloadLink(artifact, objectUrl, "Download"));
-  figure.appendChild(image);
-  figure.appendChild(actions);
-  return figure;
-}
-
-function buildArtifactPreview(artifact, response) {
-  const mediaType = artifactMediaType(artifact, response);
-  if (INLINE_IMAGE_MEDIA_TYPES.has(mediaType)) {
-    return response.blob().then((blob) => buildArtifactImage(artifact, blob));
-  }
-  if (
-    mediaType === "text/markdown" ||
-    mediaType === "application/json" ||
-    mediaType.endsWith("/yaml") ||
-    mediaType.endsWith("+yaml") ||
-    mediaType.startsWith("text/")
-  ) {
-    return response.text().then((text) => renderArtifactText(mediaType, text));
-  }
-  return response.blob().then((blob) => {
-    const objectUrl = URL.createObjectURL(blob);
-    return releaseOnTeardown(buildArtifactDownloadLink(artifact, objectUrl), objectUrl);
-  });
-}
-
-export function buildArtifacts(task) {
-  const wrap = el("div", { class: "artifacts" });
-  for (const [index, artifact] of task.artifacts.entries()) {
-    const path = String(artifact.path || "");
-    const mediaType = String(artifact.media_type || "application/octet-stream");
-    const row = el("div", {
-      class: "artifact-row",
-      text: `${path} · ${mediaType} · ${fmtSize(artifact.size_bytes)}`,
-    });
-    const preview = el("div", { class: "artifact-preview" });
-    // Artifact paths are free-form, so the position in the list is what makes a
-    // stable id the row's `aria-controls` can point at.
-    preview.id = `artifact-preview-${task.id}-${index}`;
-    preview.hidden = true;
-
-    // Disclosure lives on the preview's `hidden` flag; keeping the two in one
-    // setter is what stops the announced state from drifting from the visible one.
-    const revealPreview = (visible) => {
-      preview.hidden = !visible;
-      row.setAttribute("aria-expanded", String(visible));
-    };
-
-    // The preview owns its read. Retiring the task detail aborts a read in
-    // flight, and a preview that resolves anyway is released at once: teardown
-    // has already passed over this subtree, so a blob URL mounted into it later
-    // would never be revoked.
-    let request = null;
-    let retired = false;
-    preview.teardown = () => {
-      retired = true;
-      if (request) request.abort();
-    };
-
-    makeToggleRow(row, {
-      expanded: false,
-      controls: preview.id,
-      onToggle: async (e) => {
-        e.stopPropagation();
-        if (preview.dataset.loaded === "true" || request) {
-          revealPreview(preview.hidden);
-          return;
-        }
-        revealPreview(true);
-        preview.textContent = "loading...";
-        // Same 30s bound as fetchJson, covering the body read too, so a
-        // stalled artifact read ends in an error instead of "loading..." forever.
-        const controller = new AbortController();
-        request = controller;
-        const timeout = setTimeout(() => controller.abort(), ARTIFACT_FETCH_TIMEOUT_MS);
-        try {
-          if (isAggregateView() && !task.workspace_id) throw new Error("task workspace is unknown");
-          const response = await fetch(artifactUrl(task, path), { signal: controller.signal });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const view = await buildArtifactPreview(artifact, response);
-          if (retired) {
-            teardownNode(view);
-            return;
-          }
-          preview.replaceChildren(view);
-          preview.dataset.loaded = "true";
-        } catch (error) {
-          if (retired) return;
-          const reason = error && error.name === "AbortError" ? "request timed out after 30 seconds" : error.message;
-          preview.textContent = `Unable to load ${path}: ${reason}`;
-        } finally {
-          clearTimeout(timeout);
-          request = null;
-        }
-      },
-    });
-    wrap.appendChild(row);
-    wrap.appendChild(preview);
-  }
-  return wrap;
 }
 
 /* ORB-12235: the task fields the expanded detail can edit in place. Each entry
@@ -3308,13 +2521,13 @@ function buildTaskDetail(task, context, drain = null) {
   // The folded sections read as one group of disclosure rows.
   const disclosures = el("div", { class: "detail-disclosures" });
   if (Array.isArray(task.owed_criteria) && task.owed_criteria.length) {
-    addField(disclosures, "Owed after deploy", buildOwedCriteria(task.owed_criteria, task, detail, context), true, false, {
+    addField(disclosures, "Owed after deploy", taskEvidence.buildOwedCriteria(task.owed_criteria, task, detail, context), true, false, {
       count: task.owed_criteria.length,
     });
   }
 
   if (Array.isArray(task.open_decisions) && task.open_decisions.length) {
-    addField(disclosures, "Decision needed", buildOpenDecisions(task, detail, context), true, false, {
+    addField(disclosures, "Decision needed", taskEvidence.buildOpenDecisions(task, detail, context), true, false, {
       count: task.open_decisions.length,
     });
   }
@@ -3328,7 +2541,7 @@ function buildTaskDetail(task, context, drain = null) {
   }
 
   if (task.review && typeof task.review === "object") {
-    addField(disclosures, "Review gate", buildReviewGate(task.review), true, true);
+    addField(disclosures, "Review gate", taskEvidence.buildReviewGate(task.review), true, true);
   }
   if (disclosures.children.length) leftCol.appendChild(disclosures);
 
@@ -3345,7 +2558,7 @@ function buildTaskDetail(task, context, drain = null) {
 
   // The overview leads; context, history, runs, artifacts and the thread each
   // have a tab of their own, so the pane shows one subject at a time.
-  const history = buildTaskHistory(task, context);
+  const history = taskHistory.buildTaskHistory(task, context);
   const artifacts = Array.isArray(task.artifacts) ? task.artifacts.length : 0;
   const comments = Array.isArray(task.comments) ? task.comments.length : 0;
   const runs = el("div", { class: "task-runs", id: `detail-${task.id}-runs` });
@@ -3392,7 +2605,7 @@ function buildTaskDetail(task, context, drain = null) {
       name: "artifacts",
       label: "Artifacts",
       count: artifacts,
-      content: artifacts > 0 ? buildArtifacts(task) : el("p", { class: "field-empty", text: "No artifacts attached." }),
+      content: artifacts > 0 ? taskEvidence.buildArtifacts(task) : el("p", { class: "field-empty", text: "No artifacts attached." }),
     },
     {
       name: "comments",
@@ -3411,11 +2624,11 @@ function buildTaskDetail(task, context, drain = null) {
   if (blockCallout) band.appendChild(blockCallout);
   const whyStuck = buildWhyStuckCard(task);
   if (whyStuck) band.appendChild(whyStuck);
-  const pilotCallout = buildPilotWarnings(task);
+  const pilotCallout = taskReadiness.buildPilotWarnings(task);
   if (pilotCallout) band.appendChild(pilotCallout);
-  const admissionCallout = buildPilotAdmissionHold(task, detail, context);
+  const admissionCallout = taskReadiness.buildPilotAdmissionHold(task, detail, context);
   if (admissionCallout) band.appendChild(admissionCallout);
-  const deliveryAttentionBanner = buildDeliveryAttentionBanner(task);
+  const deliveryAttentionBanner = taskReadiness.buildDeliveryAttentionBanner(task);
   if (deliveryAttentionBanner) band.appendChild(deliveryAttentionBanner);
   band.appendChild(attentionSlot);
   band.appendChild(progressSlot);
@@ -3649,8 +2862,8 @@ function buildDeliveryCard(task, drain, context, { editor, showsEditor }) {
     if (!visible.length) continue;
     rows.push(buildRelationRow(key, label, visible, context));
   }
-  const readiness = readinessOf(task);
-  if (readiness || drain) rows.push(row("readiness", "Readiness", buildReadinessBlock(readiness, drain, task.workspace_id)));
+  const readiness = taskReadiness.readinessOf(task);
+  if (readiness || drain) rows.push(row("readiness", "Readiness", taskReadiness.buildReadinessBlock(readiness, drain, task.workspace_id)));
   // ORB-00037: in the aggregate ("All workspaces") view each task carries its
   // owning workspace's filesystem location (home-abbreviated to ~ server-side);
   // show it in full here since the row only has room for the short name badge.
@@ -3732,413 +2945,6 @@ function buildRunWorktreeValue(recorded, noun, unrecorded) {
   value.appendChild(el("span", { class: "fact-note", text: "unavailable" }));
   if (unrecorded) value.appendChild(infoHint(unrecorded));
   return value;
-}
-
-// ORB-17931: the History tab as a timeline. Entries are grouped under a day
-// heading, each row names its actor, a sentence built from the entry's fields
-// and the raw event name (so it can still be grepped). A note that parses as
-// JSON becomes a key/value details panel behind a disclosure instead of
-// raw text. Display only: the entries are the API's, unchanged.
-const HISTORY_CATEGORIES = [
-  { key: "lifecycle", label: "Lifecycle" },
-  { key: "context", label: "Context" },
-  { key: "crew", label: "Crew" },
-  { key: "run", label: "Runs" },
-  { key: "warning", label: "Warnings" },
-  { key: "other", label: "Other" },
-];
-
-const HISTORY_EVENT_CATEGORY = {
-  created: "lifecycle",
-  status_changed: "lifecycle",
-  started: "lifecycle",
-  proposal_approved: "lifecycle",
-  review_approved: "lifecycle",
-  operator_requeued: "lifecycle",
-  context_creation_authorized: "context",
-  context_files_pruned: "context",
-  context_files_restored: "context",
-  context_files_widened: "context",
-  crew_assigned: "crew",
-  crew_redrawn: "crew",
-  claimed: "run",
-  run_finished: "run",
-  pull_request: "run",
-  landing_completed: "run",
-  transient_infra_requeued: "warning",
-  escalated: "warning",
-};
-
-// Two entries of one event with the same payload recorded this close together
-// are one write seen twice (the task's owner and the system both log a grant).
-const HISTORY_MERGE_WINDOW_MS = 5000;
-
-function historyText(text) {
-  return document.createTextNode(text);
-}
-
-// The note as text, and as a JSON object or array when it is one.
-function parseHistoryNote(note) {
-  const text = typeof note === "string" ? note.trim() : "";
-  if (text && (text[0] === "{" || text[0] === "[")) {
-    try {
-      const json = JSON.parse(text);
-      if (json && typeof json === "object") return { text, json };
-    } catch (_) {
-      // Not JSON after all; the note reads as text.
-    }
-  }
-  return { text, json: null };
-}
-
-function historyStatusFlow(entry) {
-  if (!entry.from_status || !entry.to_status) return null;
-  return el("span", { class: "history-flow" }, [
-    statusPill(entry.from_status),
-    el("span", { class: "history-arrow", text: "→", "aria-label": "to" }),
-    statusPill(entry.to_status),
-  ]);
-}
-
-// "assigned crew `opus` from pool:hard": the crew and, when named, its pool.
-// The wording of a note is not a contract, so a note that does not read this
-// way stays visible as text.
-function historyCrewParts(verb, text) {
-  const match = /crew\s+`?([\w.:-]+)`?(?:\s+from\s+`?([\w.:/-]+)`?)?/i.exec(text);
-  if (!match) return { parts: [`${verb} a crew`] };
-  const parts = [`${verb} crew `, el("strong", { text: match[1] })];
-  if (match[2]) parts.push(` from ${match[2]}`);
-  const rest = text.replace(match[0], "").replace(/[\s.]/g, "");
-  return rest ? { parts, note: text } : { parts, note: "" };
-}
-
-function historyPullRequestParts(text) {
-  const number = /\/pull\/(\d+)|#(\d+)/.exec(text);
-  if (!number) return { parts: ["opened a pull request"] };
-  const label = `#${number[1] || number[2]}`;
-  const url = /https?:\/\/\S+/.exec(text);
-  const target = url && isHttpUrl(url[0]) ? el("a", { text: label }) : el("strong", { text: label });
-  if (url && isHttpUrl(url[0])) {
-    target.href = url[0];
-    target.target = "_blank";
-    target.rel = "noopener noreferrer";
-  }
-  const rest = text.replace(url ? url[0] : number[0], "").replace(/[\s.#\d]/g, "");
-  return { parts: ["opened pull request ", target], note: rest ? text : "" };
-}
-
-function historyCountLabel(count, noun) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-// The structured payload of an entry: a JSON note, else its typed decision.
-function historyStructured(entry, parsed) {
-  if (parsed.json) return parsed.json;
-  const decision = entry.decision;
-  return decision && typeof decision === "object" ? decision : null;
-}
-
-function historyJsonSummary(data) {
-  if (Array.isArray(data)) return historyCountLabel(data.length, "item");
-  const pairs = Object.entries(data)
-    .filter(([, value]) => value == null || typeof value !== "object")
-    .slice(0, 2)
-    .map(([key, value]) => {
-      const text = String(value);
-      return `${key}: ${text.length > 40 ? `${text.slice(0, 40)}…` : text}`;
-    });
-  return pairs.length ? pairs.join(" · ") : historyCountLabel(Object.keys(data).length, "field");
-}
-
-// The sentence after the actor, as `{ parts, note, fallback }`. `note` is the
-// text still to show under the sentence; absent, the note's own text shows.
-function describeHistoryEntry(entry, parsed, data) {
-  const text = parsed.json ? "" : parsed.text;
-  switch (entry.event) {
-    case "created":
-      return { parts: ["created the task"] };
-    case "status_changed": {
-      const flow = historyStatusFlow(entry);
-      return flow ? { parts: ["changed status ", flow] } : { parts: ["changed status"] };
-    }
-    case "started": {
-      const flow = historyStatusFlow(entry);
-      return flow ? { parts: ["started work ", flow] } : { parts: ["started work"] };
-    }
-    case "claimed":
-      return { parts: ["claimed the task"] };
-    case "crew_assigned":
-      return historyCrewParts("assigned", text);
-    case "crew_redrawn":
-      return historyCrewParts("redrew", text);
-    case "proposal_approved":
-      return { parts: ["approved the proposal"] };
-    case "review_approved":
-      return { parts: ["approved the review"] };
-    case "context_creation_authorized": {
-      if (!data || !Array.isArray(data.selectors)) return { parts: ["authorized context creation"] };
-      if (data.selectors.length === 0) return { parts: ["revoked context creation authorization"] };
-      const parts = ["authorized context: ", el("strong", { text: historyCountLabel(data.selectors.length, "selector") })];
-      if (data.generation) parts.push(` · generation ${data.generation}`);
-      return { parts, summarized: true };
-    }
-    case "context_files_pruned":
-    case "context_files_restored":
-    case "context_files_widened": {
-      const verb = entry.event.slice("context_files_".length);
-      const selectors = data && Array.isArray(data.selectors) ? data.selectors : null;
-      if (!selectors) return { parts: [`${verb} context files`] };
-      return { parts: [`${verb} context: `, el("strong", { text: historyCountLabel(selectors.length, "selector") })], summarized: true };
-    }
-    case "run_finished":
-      return { parts: ["finished a run"] };
-    case "pull_request":
-      return historyPullRequestParts(text);
-    case "landing_completed":
-      return { parts: ["completed landing"] };
-    case "operator_requeued":
-      return { parts: ["requeued the task"] };
-    case "transient_infra_requeued":
-      return { parts: ["requeued the task after a transient infrastructure failure"] };
-    case "escalated":
-      return { parts: ["escalated the task"] };
-    default:
-      return { parts: [entry.event || "(no event)"], fallback: true };
-  }
-}
-
-// Consecutive entries of one event carrying an identical payload, recorded by
-// different actors within a few seconds, are one group.
-function groupHistoryEntries(entries) {
-  const groups = [];
-  for (const item of entries) {
-    const group = groups[groups.length - 1];
-    const last = group && group.items[group.items.length - 1];
-    const same = last
-      && last.entry.event === item.entry.event
-      && last.entry.from_status === item.entry.from_status
-      && last.entry.to_status === item.entry.to_status
-      && item.parsed.text !== ""
-      && last.parsed.text === item.parsed.text
-      && !group.items.some((member) => member.entry.by === item.entry.by)
-      && Math.abs(item.time - last.time) <= HISTORY_MERGE_WINDOW_MS;
-    if (same) group.items.push(item);
-    else groups.push({ items: [item], category: item.category });
-  }
-  return groups;
-}
-
-function historyValueNode(value) {
-  if (Array.isArray(value)) {
-    return el("div", { class: "history-kv-list" }, value.map((item) =>
-      el("div", { class: "history-kv-item", text: typeof item === "string" ? item : JSON.stringify(item) })));
-  }
-  if (value && typeof value === "object") return el("span", { text: JSON.stringify(value) });
-  return el("span", { text: value == null ? "null" : String(value) });
-}
-
-function buildHistoryDetails(group, data, context, id) {
-  const first = group.items[0];
-  const list = el("dl", { class: "history-kv" });
-  const add = (key, valueNode) => {
-    list.appendChild(el("dt", { text: key }));
-    list.appendChild(el("dd", {}, [valueNode]));
-  };
-  if (data && !Array.isArray(data)) {
-    for (const [key, value] of Object.entries(data)) add(key, historyValueNode(value));
-  } else if (data) {
-    add("items", historyValueNode(data));
-  }
-  add(group.items.length > 1 ? `recorded ×${group.items.length}` : "recorded", el("div", { class: "history-kv-list" },
-    group.items.map((item) => el("div", { class: "history-kv-item" }, [
-      el("strong", { text: item.entry.by || "?" }),
-      historyText(" · "),
-      absTimeNode(context, item.entry.at),
-    ]))));
-  const details = el("div", { class: "history-details", id }, [list]);
-  if (data) {
-    const raw = first.parsed.json ? first.parsed.text : JSON.stringify(data);
-    const copy = el("button", { class: "history-copy", text: "Copy raw JSON", title: "Copy the recorded payload" });
-    copy.type = "button";
-    copy.addEventListener("click", (event) => {
-      event.stopPropagation();
-      copyWithFeedback(copy, raw);
-    });
-    details.appendChild(el("div", { class: "history-details-actions" }, [copy]));
-  }
-  return details;
-}
-
-function buildHistoryRow(task, context, group, expandedKeys) {
-  const first = group.items[0];
-  const entry = first.entry;
-  const data = historyStructured(entry, first.parsed);
-  const described = describeHistoryEntry(entry, first.parsed, data);
-  const category = HISTORY_CATEGORIES.find((candidate) => candidate.key === group.category);
-
-  const sentence = el("span", { class: "history-sentence" }, [
-    el("span", { class: "actor", text: entry.by || "?" }),
-    historyText(described.fallback ? ": " : " "),
-  ]);
-  for (const part of described.parts) sentence.appendChild(typeof part === "string" ? historyText(part) : part);
-  if (group.items.length > 1) {
-    sentence.appendChild(el("span", {
-      class: "history-merge",
-      text: `×${group.items.length}`,
-      title: `Recorded ${group.items.length} times by ${group.items.map((item) => item.entry.by || "?").join(", ")}`,
-    }));
-  }
-
-  // A payload shows as a short summary; its fields wait in the details panel.
-  const body = el("div", { class: "history-main" }, [sentence]);
-  const note = described.note !== undefined ? described.note : (data ? "" : first.parsed.text);
-  if (data && !described.summarized) {
-    body.appendChild(el("span", { class: "history-summary", text: historyJsonSummary(data) }));
-  }
-  if (note) body.appendChild(el("span", { class: "history-note", text: note }));
-
-  const head = el("div", { class: "history-head" }, [
-    body,
-    el("span", { class: "history-event", text: entry.event || "?" }),
-  ]);
-  const row = el("div", { class: "history-line" });
-  row.dataset.category = group.category;
-  const time = el("span", { class: "history-time", text: formatClock(entry.at, { zone: false }), title: fmtAbsTimeValue(context, entry.at) });
-  const node = el("span", { class: "history-node", title: category ? category.label : "" }, [el("span", { class: "history-dot" })]);
-  node.setAttribute("aria-hidden", "true");
-  row.append(time, node);
-
-  const content = el("div", { class: "history-content" }, [head]);
-  row.appendChild(content);
-
-  const expandable = Boolean(data) || group.items.length > 1;
-  if (expandable) {
-    const key = `${task.id}:${first.index}`;
-    const id = `history-${task.id}-${first.index}`.replace(/[^\w-]/g, "-");
-    const details = buildHistoryDetails(group, data, context, id);
-    const toggle = el("button", { class: "history-toggle", text: "Details" });
-    const setOpen = (open) => {
-      details.hidden = !open;
-      toggle.setAttribute("aria-expanded", String(open));
-      row.classList.toggle("expanded", open);
-      if (open) expandedKeys.add(key);
-      else expandedKeys.delete(key);
-    };
-    makeDisclosure(head, toggle, {
-      expanded: false,
-      controls: id,
-      onToggle: (event) => {
-        // A click on text being selected, or on a link, is not a toggle.
-        if (event && event.target && event.target.closest && event.target.closest("a")) return;
-        setOpen(details.hidden);
-      },
-    });
-    body.appendChild(toggle);
-    content.appendChild(details);
-    setOpen(expandedKeys.has(key));
-  }
-  return row;
-}
-
-// Every meaningful history entry as a timeline, newest first by default.
-function buildTaskHistory(task, context) {
-  // ORB-10311: legacy bare `commented` stubs are comment noise; the thread has
-  // its own tab.
-  const meaningful = Array.isArray(task.history) ? task.history.filter((h) => h && h.event !== "commented") : [];
-  if (meaningful.length === 0) {
-    return { count: 0, node: el("p", { class: "field-empty", text: "No history recorded." }) };
-  }
-  const items = meaningful.map((entry, index) => ({
-    entry,
-    index,
-    time: Date.parse(entry.at),
-    parsed: parseHistoryNote(entry.note),
-    category: HISTORY_EVENT_CATEGORY[entry.event] || "other",
-  }));
-  // Recorded order is chronological; an unreadable time keeps the recorded
-  // order rather than guessing.
-  if (items.every((item) => Number.isFinite(item.time))) items.sort((a, b) => a.time - b.time || a.index - b.index);
-  const groups = groupHistoryEntries(items);
-  const counts = { all: items.length };
-  for (const item of items) counts[item.category] = (counts[item.category] || 0) + 1;
-
-  const view = { filter: "all", newestFirst: true };
-  const expandedKeys = new Set();
-  const timeline = el("div", { class: "history-timeline" });
-  const chips = [];
-  const orders = [];
-
-  const render = () => {
-    const shown = groups.filter((group) => view.filter === "all" || group.category === view.filter);
-    if (view.newestFirst) shown.reverse();
-    const days = [];
-    for (const group of shown) {
-      const at = group.items[0].entry.at;
-      const day = formatDate(at);
-      let section = days[days.length - 1];
-      if (!section || section.day !== day) {
-        section = { day, heading: formatDayHeading(at), rows: [] };
-        days.push(section);
-      }
-      section.rows.push(group);
-    }
-    timeline.replaceChildren(...days.map((section) => el("div", { class: "history-day" }, [
-      el("div", { class: "history-day-head", text: section.heading }),
-      ...section.rows.map((group) => buildHistoryRow(task, context, group, expandedKeys)),
-    ])));
-  };
-
-  const choose = (buttons, activeOf) => {
-    for (const button of buttons) button.setAttribute("aria-pressed", String(activeOf(button)));
-  };
-  const chip = (key, label) => {
-    const button = el("button", { class: "history-chip" }, [
-      historyText(label),
-      el("span", { class: "history-chip-count", text: String(counts[key] || 0) }),
-    ]);
-    button.type = "button";
-    button.dataset.filter = key;
-    button.addEventListener("click", () => {
-      view.filter = key;
-      choose(chips, (candidate) => candidate.dataset.filter === view.filter);
-      render();
-    });
-    chips.push(button);
-    return button;
-  };
-  const order = (newestFirst, label) => {
-    const button = el("button", { class: "history-order", text: label });
-    button.type = "button";
-    button.dataset.order = newestFirst ? "newest" : "oldest";
-    button.addEventListener("click", () => {
-      view.newestFirst = newestFirst;
-      choose(orders, (candidate) => candidate.dataset.order === (view.newestFirst ? "newest" : "oldest"));
-      render();
-    });
-    orders.push(button);
-    return button;
-  };
-
-  const filters = el("div", { class: "history-filters", role: "group", "aria-label": "Filter history by category" }, [
-    chip("all", "All"),
-    ...HISTORY_CATEGORIES.filter((category) => counts[category.key]).map((category) => chip(category.key, category.label)),
-  ]);
-  const sort = el("div", { class: "history-order-toggle", role: "group", "aria-label": "Order" }, [
-    order(true, "Newest"),
-    order(false, "Oldest"),
-  ]);
-  choose(chips, (candidate) => candidate.dataset.filter === view.filter);
-  choose(orders, (candidate) => candidate.dataset.order === "newest");
-
-  const wrap = el("div", { class: "history-list" }, [
-    el("div", { class: "history-toolbar" }, [filters, sort]),
-    timeline,
-  ]);
-  render();
-  // Day headings and times follow the dashboard clock: repaint on a switch.
-  const stopClock = onClockZoneChange(render);
-  wrap.teardown = stopClock;
-  return { count: meaningful.length, node: wrap };
 }
 
 const DETAIL_TAB_NAMES = ["overview", "context_files", "delivery", "history", "runs", "artifacts", "comments"];
@@ -4366,7 +3172,7 @@ function buildActionsRow(task, detail, context, { includeLifecycle = true, inclu
   const actions = el("div", { class: `actions task-action-row ${kind}` });
   const mutable = canMutateTask(task);
   if (includeLifecycle && SHIP_STATUSES.has(task.status)) {
-    const shipped = taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task));
+    const shipped = taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task));
     const btn = el("button", {
       class: "action ship",
       text: shipped ? "shipping" : "ship",
@@ -4763,7 +3569,7 @@ function restoreActionFocus(actions, selector) {
 function pilotDisabledReason(task, mutable, running) {
   if (!mutable) return aggregateRefusalTitle("Run pilot", "run a pilot");
   if (running) return `A pilot run (${running.runId}) is already assessing this task`;
-  const readiness = readinessOf(task);
+  const readiness = taskReadiness.readinessOf(task);
   if (readiness && readiness.preparing) return "A task-pilot run is already preparing this task";
   return "";
 }
@@ -4771,7 +3577,7 @@ function pilotDisabledReason(task, mutable, running) {
 // Run pilot on a proposed task: one explicit task-pilot run for this task. It
 // refreshes the task's selectors and complexity; it never approves or ships it.
 function appendPilotControls(actions, task, detail, context, mutable) {
-  const running = pilotRunsByTask.get(taskDispatchIdentity(task));
+  const running = pilotRunsByTask.get(taskShared.taskDispatchIdentity(task));
   const reason = pilotDisabledReason(task, mutable, running);
   const btn = el("button", {
     class: "action pilot",
@@ -4789,7 +3595,7 @@ function appendPilotControls(actions, task, detail, context, mutable) {
     link.href = runHref(running.runId, task.workspace_id ? { workspace: task.workspace_id } : {});
     actions.appendChild(link);
   }
-  const refusal = pilotRefusals.get(taskDispatchIdentity(task));
+  const refusal = pilotRefusals.get(taskShared.taskDispatchIdentity(task));
   if (refusal) {
     const note = actionErrorNode(refusal);
     note.style.flexBasis = "100%";
@@ -4798,14 +3604,14 @@ function appendPilotControls(actions, task, detail, context, mutable) {
 }
 
 function pilotSignature(task) {
-  const key = taskDispatchIdentity(task);
+  const key = taskShared.taskDispatchIdentity(task);
   const running = pilotRunsByTask.get(key);
   return `${running ? running.runId : ""}|${pilotRefusals.get(key) || ""}`;
 }
 
 async function runPilot(task, detail, btnNode, context) {
   const visit = captureWorkspaceVisit();
-  const key = taskDispatchIdentity(task);
+  const key = taskShared.taskDispatchIdentity(task);
   if (!canMutateTask(task) || pilotRunsByTask.has(key)) return;
   const requestPath = visit.path(taskMutationPath(task, "/pilot"));
   pilotRefusals.delete(key);
@@ -4889,7 +3695,7 @@ function triageDisabledReason(task, mutable, running) {
 // bounded rule); it never approves, promotes or edits the task itself.
 function appendTriageControls(actions, task, detail, context, mutable) {
   const triage = escalationTriage(task);
-  const running = triageRunsByTask.get(taskDispatchIdentity(task))
+  const running = triageRunsByTask.get(taskShared.taskDispatchIdentity(task))
     || (triage && triage.run_id ? { runId: String(triage.run_id) } : null);
   const reason = triageDisabledReason(task, mutable, running);
   const subjectWords = triage && triage.subject === "block"
@@ -4911,7 +3717,7 @@ function appendTriageControls(actions, task, detail, context, mutable) {
     link.href = runHref(running.runId, task.workspace_id ? { workspace: task.workspace_id } : {});
     actions.appendChild(link);
   }
-  const refusal = triageRefusals.get(taskDispatchIdentity(task));
+  const refusal = triageRefusals.get(taskShared.taskDispatchIdentity(task));
   if (refusal) {
     const note = actionErrorNode(refusal);
     note.style.flexBasis = "100%";
@@ -4920,14 +3726,14 @@ function appendTriageControls(actions, task, detail, context, mutable) {
 }
 
 function triageSignature(task) {
-  const key = taskDispatchIdentity(task);
+  const key = taskShared.taskDispatchIdentity(task);
   const running = triageRunsByTask.get(key);
   return `${running ? running.runId : ""}|${triageRefusals.get(key) || ""}`;
 }
 
 async function runTriage(task, detail, btnNode, context) {
   const visit = captureWorkspaceVisit();
-  const key = taskDispatchIdentity(task);
+  const key = taskShared.taskDispatchIdentity(task);
   if (!canMutateTask(task) || triageRunsByTask.has(key)) return;
   const requestPath = visit.path(taskMutationPath(task, "/triage"));
   triageRefusals.delete(key);
@@ -5021,7 +3827,7 @@ function appendRecoveryControls(actions, task, detail, context, mutable) {
     settle.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, settle, context, "settle"); });
     actions.appendChild(settle);
   }
-  const refusal = recoveryRefusals.get(taskDispatchIdentity(task));
+  const refusal = recoveryRefusals.get(taskShared.taskDispatchIdentity(task));
   if (refusal) {
     const note = actionErrorNode(refusal);
     note.style.flexBasis = "100%";
@@ -5030,12 +3836,12 @@ function appendRecoveryControls(actions, task, detail, context, mutable) {
 }
 
 function recoverySignature(task) {
-  return recoveryRefusals.get(taskDispatchIdentity(task)) || "";
+  return recoveryRefusals.get(taskShared.taskDispatchIdentity(task)) || "";
 }
 
 async function runRecovery(task, detail, btnNode, context, kind) {
   const visit = captureWorkspaceVisit();
-  const key = taskDispatchIdentity(task);
+  const key = taskShared.taskDispatchIdentity(task);
   if (!canMutateTask(task)) return;
   let body;
   let suffix;
@@ -5134,7 +3940,7 @@ function fixPrReasonText(reason, detail) {
 // missing, stale or for another pull request. Never more than one read in
 // flight per task.
 function fixPrState(task, context) {
-  const key = taskDispatchIdentity(task);
+  const key = taskShared.taskDispatchIdentity(task);
   const prNumber = taskPullRequestNumber(task);
   const entry = fixPrReadiness.get(key);
   const fresh = entry && entry.prNumber === prNumber && (entry.pending || Date.now() - entry.at < FIX_PR_READINESS_MS);
@@ -5186,7 +3992,7 @@ function appendFixPrControls(actions, task, detail, context, mutable) {
     runFixPr(task, detail, btn, context, data);
   });
   actions.appendChild(btn);
-  const feedback = fixPrFeedback.get(taskDispatchIdentity(task));
+  const feedback = fixPrFeedback.get(taskShared.taskDispatchIdentity(task));
   if (feedback) {
     const note = feedback.ok
       ? el("div", { class: "task-action-notice", text: feedback.text, role: "status" })
@@ -5214,7 +4020,7 @@ function refreshFixPrControls(wrap, task, context) {
 }
 
 function fixPrSignature(task) {
-  const key = taskDispatchIdentity(task);
+  const key = taskShared.taskDispatchIdentity(task);
   const entry = fixPrReadiness.get(key);
   const state = entry ? `${entry.pending}|${entry.error}|${JSON.stringify(entry.data)}` : "";
   const feedback = fixPrFeedback.get(key);
@@ -5233,7 +4039,7 @@ function showFixPrFeedback(key, feedback, context) {
 
 async function runFixPr(task, detail, btnNode, context, readiness) {
   const visit = captureWorkspaceVisit();
-  const key = taskDispatchIdentity(task);
+  const key = taskShared.taskDispatchIdentity(task);
   if (!canMutateTask(task)) return;
   const number = readiness.pr_number || taskPullRequestNumber(task);
   if (!window.confirm(`Hand pull request #${number} back to its delivery for an auto-fix? A repair agent pushes to the same branch; the pull request is merged only if its delivery was started to complete it.`)) return;
@@ -5273,10 +4079,10 @@ async function runFixPr(task, detail, btnNode, context, readiness) {
    surfaced so the operator can see the click took effect. */
 async function shipTask(task, detail, btnNode, context) {
   const visit = captureWorkspaceVisit();
-  const dispatchKey = taskDispatchIdentity(task);
+  const dispatchKey = taskShared.taskDispatchIdentity(task);
   const requestPath = visit.path(taskWorkspacePath(task, "/api/workflows/ship"));
   if (!canMutateTask(task)) return;
-  if (taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
+  if (taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task))) return;
   taskState.shipInFlightTaskIds.add(dispatchKey);
   const prior = detail.querySelector(".action-error");
   if (prior) prior.remove();
@@ -5597,7 +4403,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   if (!drain) return;
   const signature = taskDrainSignature(drain);
   if (current.dataset.drainSignature !== signature) {
-    const replacement = buildReadinessBlock(readinessOf(readinessTask), drain, readinessTask.workspace_id);
+    const replacement = taskReadiness.buildReadinessBlock(taskReadiness.readinessOf(readinessTask), drain, readinessTask.workspace_id);
     replacement.dataset.drainSignature = signature;
     const parent = current.parentNode;
     if (!parent) return;
@@ -5678,7 +4484,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${ptask.id}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${decisionSignature(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask.id)}-${fixPrSignature(ptask)}-${taskEvidence.decisionSignature(ptask)}`;
   return wrap;
 }
 
@@ -5709,7 +4515,7 @@ function quickActionSignature(task) {
   const host = machine && machine.machine_id ? `${machine.machine_id}:${machine.machine_name || ""}` : "";
   const navigable = task.job_run_navigable === false ? "0" : "1";
   const pullRequest = pullRequestLink(task);
-  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}:${state.at || ""}` : ""}`;
+  return `${task.job_run_id || ""}-${navigable}-${host}-${pullRequest ? pullRequest.url : ""}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task))}-${state ? `${state.kind}:${state.text}:${state.at || ""}` : ""}`;
 }
 
 function summaryExecutionLocation(machine) {
@@ -5802,7 +4608,7 @@ function buildQuickAction(task, context) {
     spec = { kind: "ship", text: "Ship", title: `Ship ${task.id}: dispatch it through the pipeline with its own crew` };
   }
   if (!spec) return cell;
-  const pending = (state && state.kind === "pending") || (spec.kind === "ship" && taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task)));
+  const pending = (state && state.kind === "pending") || (spec.kind === "ship" && taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task)));
   // Ship reads in the accent while nothing holds the task, and quietly while
   // the drain snapshot says it waits; it ships either way.
   const ready = spec.kind === "ship" && drainReadinessFor(task.id)?.pool === "eligible";
@@ -5880,11 +4686,11 @@ function buildQuickActionError(task, context) {
 
 async function runQuickAction(task, kind, context) {
   const visit = captureWorkspaceVisit();
-  const dispatchKey = taskDispatchIdentity(task);
+  const dispatchKey = taskShared.taskDispatchIdentity(task);
   const requestPath = visit.path(kind === "ship" ? taskWorkspacePath(task, "/api/workflows/ship") : taskMutationPath(task, "/approve"));
   if (!canRunQuickAction(task)) return;
   if (quickActionState.get(task.id)?.kind === "pending") return;
-  if (kind === "ship" && taskState.shipInFlightTaskIds.has(taskDispatchIdentity(task))) return;
+  if (kind === "ship" && taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(task))) return;
   quickActionState.set(task.id, { kind: "pending", text: kind });
   if (kind === "ship") taskState.shipInFlightTaskIds.add(dispatchKey);
   rerender(context);
@@ -6173,7 +4979,7 @@ export function renderTasks(tasks, context) {
       const run = RUN_GROUPS.has(t.status);
       // Basic hash based on row presentation parameters (selection is painted
       // apart, by syncRowSelection)
-      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
+      const rowHash = `${JSON.stringify(t.pilot_warnings || [])}-${JSON.stringify(t.delivery_attention || null)}-${t.id}-${t.title}-${t.status}-${JSON.stringify(t.os_requirement || null)}-${(t.tags || []).filter(isOsTag).join(",")}-${t.not_before || ""}-${t.scheduled_hold}-${Boolean(t.not_before && Date.parse(t.not_before) > Date.now())}-${taskReadiness.readinessSignature(t)}-${t.status === "backlog" ? drainWaitSignature(t.id) : ""}-${run ? runCellSignature(t) : ""}-${t.crew || ""}-${t.resolved_crew || ""}-${t.workspace_id || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, t.id)}-${quickActionSignature(t)}-${foldedStatusSignature(t.id)}-${riskinessSignature(t)}`;
       const existingRow = existingRowNodes.get(rowKey);
       let row = existingRow && existingRow.dataset.hash === rowHash ? existingRow : null;
       if (!row) {
@@ -6183,7 +4989,7 @@ export function renderTasks(tasks, context) {
         // action; the grid draws it under the title.
         const meta = el("span", { class: "row-meta" }, [
           makeCopyButton(t.id, { class: "id mono", title: "Copy task ID" }),
-          t.status === "backlog" ? buildRowReason(t) : null,
+          t.status === "backlog" ? taskReadiness.buildRowReason(t) : null,
           run ? buildRunCell(t) : null,
           buildRiskRowPart(t),
         ]);
@@ -6194,9 +5000,9 @@ export function renderTasks(tasks, context) {
             : null,
           ...buildOsBadges(t),
           buildScheduledChip(t, context),
-          ...buildReadinessBadge(t),
-          ...buildPilotWarningBadge(t),
-          ...buildDeliveryAttentionBadge(t),
+          ...taskReadiness.buildReadinessBadge(t),
+          ...taskReadiness.buildPilotWarningBadge(t),
+          ...taskReadiness.buildDeliveryAttentionBadge(t),
           ...prefixes.map((label) => el("span", { class: "title-tag", text: label, title: `[${label}]` })),
         ].filter(Boolean);
         // The title is the row's disclosure: the row holds the copy-id button,
@@ -6367,7 +5173,7 @@ function buildListTaskDetail(t, drafts, existing, context) {
   // its read state instead; a detail rendered from the cached projection must
   // not be rebuilt just because a refresh has a read in flight.
   const readState = state.task ? "" : `${state.pending}-${state.error || ""}`;
-  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${taskState.shipInFlightTaskIds.has(taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${operatorRecordSignature(t)}-${fixPrSignature(t)}-${decisionSignature(t)}`;
+  const baseHash = `${JSON.stringify(state.task || t)}-${readState}-${crewOptionsSignature()}-${detailFeedbackSignature(t.id)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(t))}-${pilotSignature(t)}-${triageSignature(t)}-${recoverySignature(t)}-${taskReadiness.operatorRecordSignature(t)}-${fixPrSignature(t)}-${taskEvidence.decisionSignature(t)}`;
   const detailHash = `${baseHash}-${taskDrainSignature(drain)}`;
   const existingDetail = existing.get(key);
   if (existingDetail && existingDetail.dataset.hash === detailHash) return existingDetail;
