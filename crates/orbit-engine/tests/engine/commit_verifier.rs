@@ -1,6 +1,7 @@
 //! Task commit boundary contracts: staged rename delivery and refusal of
 //! unknown fields for no-diff and already-landed evidence [ORB-13881], and
-//! refusal of nested repositories that would deliver as gitlinks [ORB-15265].
+//! refusal of nested repositories that would deliver as gitlinks [ORB-15265],
+//! and an implementer's invalid-finding report rejecting its task [ORB-19635].
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
@@ -20,6 +21,7 @@ const TASK_ID: &str = "T1";
 const RUN_ID: &str = "jrun-verifier-test";
 
 mod already_landed;
+mod finding_invalid;
 
 struct VerifierHost {
     repo: PathBuf,
@@ -30,6 +32,7 @@ struct VerifierHost {
     unknown_artifact_read: Mutex<Option<(String, usize)>>,
     bulk_reads: Mutex<usize>,
     pr_config: Mutex<orbit_engine::PrConfig>,
+    rejected_findings: Mutex<Vec<orbit_types::workflow::handoff::FindingInvalidReport>>,
 }
 
 impl VerifierHost {
@@ -43,6 +46,7 @@ impl VerifierHost {
             unknown_artifact_read: Mutex::default(),
             bulk_reads: Mutex::default(),
             pr_config: Mutex::default(),
+            rejected_findings: Mutex::default(),
         }
     }
 
@@ -195,6 +199,15 @@ impl orbit_engine::test_support::NullRuntimeHost for VerifierHost {
 
     fn repo_root(&self) -> Result<String, OrbitError> {
         Ok(self.repo.to_string_lossy().into_owned())
+    }
+
+    fn reject_invalid_finding(
+        &self,
+        report: &orbit_types::workflow::handoff::FindingInvalidReport,
+        _base_branch: &str,
+    ) -> Result<(), OrbitError> {
+        self.rejected_findings.lock().unwrap().push(report.clone());
+        Ok(())
     }
 }
 

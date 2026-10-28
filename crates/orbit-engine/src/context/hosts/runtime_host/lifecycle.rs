@@ -126,6 +126,17 @@ macro_rules! lifecycle_methods {
             task_id: &str,
             update: TaskAutomationUpdate,
         ) -> Result<(), OrbitError>;
+        /// Record a verified implementer report that the review finding
+        /// `report.task_id` names does not exist at `report.tested_head`: a
+        /// REJECTED finding verdict that moves the task to `rejected`.
+        /// Refused for a task that is not a review-filed bug, and when the
+        /// verdict could not be recorded. A replay of this run's own recorded
+        /// rejection succeeds. Hosts without task records refuse.
+        fn reject_invalid_finding(
+            &self,
+            report: &orbit_types::workflow::handoff::FindingInvalidReport,
+            base_branch: &str,
+        ) -> Result<(), OrbitError>;
 
         /// Append an exact `file:` selector to `task_id` for each of `paths` its
         /// selectors do not cover, recording `step` and `activity` as the

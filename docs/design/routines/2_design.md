@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-10-26
+last_updated: 2026-10-28
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -534,6 +534,13 @@ it must touch one of those paths. An `--approve-proposed` drain applies the same
 Without that proof (no commit cited, an unknown SHA, none on the base branch, or only
 commits unrelated to the finding) the task stays proposed with that reason. The routine is a scheduling surface only: an
 operator-triggered run of the job behaves identically to a scheduled fire.
+
+Every task-pilot run, not only a sweep's, may also judge a review-filed bug wrong: a
+`finding_invalid` result with `path:line` evidence at the pinned revision is never promoted
+(drain approval holds it as `finding_invalid`), and after the pilot write apply records a
+REJECTED finding verdict and rejects the task. The same result on any other task is an invalid
+assessment
+([finding verification §8](../finding-verification/2_design.md#8-default-rejection-routes)).
 
 Publication shares that release boundary. A job can fail because the repository already
 records a version, tag, or artifact its operator has not published or promoted yet; the

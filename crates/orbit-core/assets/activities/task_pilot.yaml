@@ -178,6 +178,15 @@ spec:
                   type: string
                 evidence:
                   type: string
+            finding_invalid:
+              description: >
+                Only for a review-filed bug: the defect as described does not
+                exist at source_revision. Apply records a REJECTED finding
+                verdict with this evidence and rejects the task.
+              type: [object, "null"]
+              properties:
+                evidence:
+                  type: string
             adr_conflicts:
               type: array
               items:
@@ -634,6 +643,17 @@ spec:
       for another task's delivery only here, never in utility or surface warnings.
       Prerequisites already in `dependencies` or `blocked_by` relations need no
       holding finding.
+    - `finding_invalid`: only for a review-filed bug (type `bug` tagged
+      `code-review`, `delivery-code-review`, `security-review` or
+      `qa-sweep`). Read the cited code at `source_revision` and decide
+      whether the defect exists there. Return `{"evidence":"..."}` with
+      `path:line` citations at `source_revision` only when it does not: the
+      code does not do what the finding claims, or the claimed consequence
+      cannot happen. It is a read-only judgement, never "already fixed"
+      (`already_landed`), a duplicate (`duplicate_of`) or "not worth fixing"
+      (an operator decision). Apply rejects the task with your evidence, so
+      return `verified_no_diff` with empty `context_files_after`. Otherwise,
+      and for every other task, return null.
     - `adr_conflicts`: only concrete conflicts with current code or a current
       contract; a historical ADR alone is no reason to block or reshape work.
     - `blocked_by` and `adr_conflicts` are arrays of plain strings, never
@@ -643,8 +663,9 @@ spec:
       source_revision)".
     - `utility_warnings` and `surface_warnings` are arrays of
       `{"text":"<finding and citation>","holds_promotion":true|false}`.
-    - `duplicate_of`, `already_landed`, `release_action_required`: null, or an
-      object with concrete evidence (shapes in Return), never a bare boolean.
+    - `duplicate_of`, `already_landed`, `release_action_required`,
+      `finding_invalid`: null, or an object with concrete evidence (shapes in
+      Return), never a bare boolean.
       A prior done repair is evidence to inspect, not immunity: when the
       failure is from the current integration revision and the defect is still
       present, leave `duplicate_of` and `already_landed` null and return
@@ -759,6 +780,7 @@ spec:
         "duplicate_of":null,
         "already_landed":null,
         "release_action_required":null,
+        "finding_invalid":null,
         "adr_conflicts":[],
         "utility_warnings":[],
         "surface_warnings":[],
@@ -772,8 +794,8 @@ spec:
     },"error":null}
 
     When set, `duplicate_of` is `{"task_id":"...","evidence":"..."}`,
-    `already_landed` is `{"evidence":"..."}`, and `release_action_required` is
-    `{"action":"...","evidence":"..."}`. A requested `explore_brief` is
+    `already_landed` and `finding_invalid` are `{"evidence":"..."}`, and
+    `release_action_required` is `{"action":"...","evidence":"..."}`. A requested `explore_brief` is
     `{"change":[{"target":"file:...","what":"..."}],"call_path":[],"pattern":[],"tests":[],"gotchas":[],"out_of_scope":[],"maps":[],"confidence":"high|medium|low"}`.
   tool_disallow_list:
     - orbit.agent.invoke

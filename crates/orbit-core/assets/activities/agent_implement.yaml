@@ -415,6 +415,16 @@ spec:
       not a reason to block on `sandbox.seatbelt_unavailable`). Any other
       old, missing, failed or unavailable check rules this path out: report
       a validation blocker.
+    - Invalid review finding: for a `bug` tagged `code-review`,
+      `delivery-code-review`, `security-review` or `qa-sweep`, confirm the
+      defect at your base before editing. If it does not exist there (the
+      code does not do what the finding claims, or the consequence cannot
+      happen; not "already fixed", not "not worth fixing"), change nothing,
+      run no gates, and attach `finding-invalid.json` with `path:line`
+      evidence at your base, using the schema in that reference's Invalid
+      review finding section. The pipeline rejects the task and lands
+      nothing. Claimed mode cannot reject the owner's task: return
+      `result.blocker` `{kind: "finding_invalid", evidence}` instead.
 
     Final-recovery resume
 

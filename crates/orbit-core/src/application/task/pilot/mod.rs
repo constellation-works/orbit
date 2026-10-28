@@ -184,6 +184,11 @@ pub(super) const CONTEXT_EVIDENCE_RETAINED: &str = "context_evidence_retained";
 /// evidence can leave the lock footprint and persisted in the assessment.
 pub(super) const CONTEXT_EVIDENCE_DROPPED: &str = "context_evidence_dropped";
 
+/// The pilot's finding that a review-filed bug's defect does not exist at
+/// the pinned revision: null, or `{"evidence": "..."}` citing `path:line`.
+/// Apply records it as a REJECTED finding verdict and rejects the task.
+pub(super) const FINDING_INVALID: &str = "finding_invalid";
+
 /// Assessment field apply attaches when it rewrote a model formatting slip
 /// (today a scalar or missing `evidence_gaps`) instead of rejecting it.
 pub(super) const PILOT_NORMALIZATIONS: &str = "pilot_normalizations";

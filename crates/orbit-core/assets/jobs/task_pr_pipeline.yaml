@@ -452,8 +452,10 @@ spec:
         pr_number: "{{ steps.pr_open.output.pr_number }}"
         pr_url: "{{ steps.pr_open.output.pr_url }}"
 
+    # A verified finding-invalid report already rejected its task at
+    # `commit`, so nothing is promoted for it.
     - id: promote_no_diff
-      when: "{{ steps.commit.output.skipped_no_diff_expected }} == true"
+      when: "{{ steps.commit.output.skipped_no_diff_expected }} == true && {{ steps.commit.output.decision }} != verified_finding_invalid"
       recovery_activity: step_failure_recovery
       target: activity:pr_promote
       default_input:
@@ -818,10 +820,11 @@ spec:
     # A no-diff bundle delivered nothing to merge; its validation is the
     # delivery, so completion needs no PR. Verified no-diff and already-landed
     # runs take this route with their full evidence checkpoint; they create no
-    # new code delivery and do not acquire the side-effect-only task tag.
+    # new code delivery and do not acquire the side-effect-only task tag. A
+    # verified finding-invalid run already rejected its task at `commit`.
     - id: complete_no_diff
       stage: { id: publish, label: Publish }
-      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true"
+      when: "{{ input.completion }} == done && {{ steps.commit.output.skipped_no_diff_expected }} == true && {{ steps.commit.output.decision }} != verified_finding_invalid"
       recovery_activity: step_failure_recovery
       target: activity:pr_complete
       default_input:

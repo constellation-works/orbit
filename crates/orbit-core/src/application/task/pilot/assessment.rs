@@ -14,7 +14,7 @@ use crate::application::task::{MachineRequirement, NativeOsRequirement};
 
 use super::input::{required_string, required_string_array, string_array_value};
 use super::source::{GitPathKind, SourceSnapshot};
-use super::{CONTEXT_EVIDENCE_DROPPED, VALIDATION_TOOL_WARNINGS};
+use super::{CONTEXT_EVIDENCE_DROPPED, FINDING_INVALID, VALIDATION_TOOL_WARNINGS};
 
 pub(super) struct ValidatedSelectors {
     pub(super) values: Vec<String>,
@@ -231,9 +231,14 @@ pub(in super::super) fn member_ready(assessment: &Value) -> bool {
                         .all(|finding| !super::promotion::finding_holds_promotion(field, finding))
                 })
         })
-        && ["duplicate_of", "already_landed", "release_action_required"]
-            .iter()
-            .all(|field| assessment.get(field).is_none_or(Value::is_null))
+        && [
+            "duplicate_of",
+            "already_landed",
+            "release_action_required",
+            FINDING_INVALID,
+        ]
+        .iter()
+        .all(|field| assessment.get(field).is_none_or(Value::is_null))
 }
 
 /// Coerce a formatting slip in `evidence_gaps` into the array the contract
@@ -354,6 +359,7 @@ pub(super) fn validate_recommendations(
         "release_action_required",
         &["action", "evidence"],
     )?;
+    validate_optional_finding(action, task_id, assessment, FINDING_INVALID, &["evidence"])?;
     Ok(complexity)
 }
 

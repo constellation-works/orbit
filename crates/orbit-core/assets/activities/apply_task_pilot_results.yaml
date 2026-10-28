@@ -39,7 +39,12 @@ spec:
     `ci-failure-sweep`, `delivery-code-review` or `auto-task:*`) is archived
     with a system comment when every cited commit exists and at least one is
     an ancestor of the base branch (`closed`, `covering_commits`); otherwise
-    it stays proposed (`not_closed_reason`).
+    it stays proposed (`not_closed_reason`). A `finding_invalid` assessment
+    is accepted only for a review-filed bug with non-empty evidence and a
+    pinned source revision; after the pilot write it records a REJECTED
+    finding verdict with the pilot's evidence and moves the task to
+    `rejected` (`finding_rejection`), ahead of any archive, under any
+    authority.
   input_schema_json:
     type: object
     # No `crew`: this apply step is deterministic and runs no agent, so it has

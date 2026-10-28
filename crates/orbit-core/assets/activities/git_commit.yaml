@@ -36,6 +36,9 @@ spec:
           verified_already_landed only after checking the task's structured
           no-diff.json or already-landed.json and validation artifacts.
           Callers must recheck that evidence at promotion and completion.
+          A task's finding-invalid.json for this run, verified against the
+          clean pinned HEAD, instead returns verified_finding_invalid after
+          the host rejects the review finding; nothing is delivered for it.
       allow_empty:
         type: boolean
         description: >

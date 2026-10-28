@@ -393,6 +393,14 @@ impl RuntimeHost for OrbitRuntime {
         claims::record_claim_handoff(self, handoff)
     }
 
+    fn reject_invalid_finding(
+        &self,
+        report: &orbit_types::workflow::handoff::FindingInvalidReport,
+        base_branch: &str,
+    ) -> Result<(), OrbitError> {
+        task_automation::reject_invalid_finding(self, report, base_branch)
+    }
+
     fn widen_task_context_files(
         &self,
         task_id: &str,

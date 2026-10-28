@@ -29,6 +29,7 @@ mod blockers;
 mod ci_sweep_races;
 mod creation;
 mod crew_selection;
+mod finding_invalid;
 mod freshness;
 mod inspection;
 mod malformed_input;
