@@ -318,3 +318,133 @@ fn valid_plugin_seeded_preset_applies_and_records_provenance() {
         "the preset must enable the auto-task:\n{task}\n{text}"
     );
 }
+
+/// Install and enable a plugin that ships job `digest` and a disabled routine
+/// `digest` targeting it, the shape a distribution's own plugin has.
+fn install_job_plugin(machine: &Machine, work: &Path, namespace: &str) {
+    let root = machine
+        .home
+        .join(format!("plugin-sources/{namespace}/.orbit-plugin"));
+    let definitions = [
+        (
+            "activities",
+            "schemaVersion: 2\nkind: Activity\nmetadata:\n  name: digest\nspec:\n  type: deterministic\n  description: Fixture activity.\n  action: sleep\n  config: {}\n",
+        ),
+        (
+            "jobs",
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: digest\nspec:\n  state: enabled\n  steps:\n    - id: digest\n      target: activity:digest\n",
+        ),
+        (
+            "routines",
+            "schemaVersion: 1\nname: digest\ndescription: Fixture routine.\nenabled: false\ntrigger:\n  cron: '0 3 * * *'\ntarget: job:digest\n",
+        ),
+    ];
+    fs::create_dir_all(root.join("bin")).expect("plugin bin directory");
+    let backend = root.join("bin/backend.sh");
+    fs::write(
+        &backend,
+        "#!/bin/sh\nprintf '{\"ok\":true,\"output\":{}}\\n'\n",
+    )
+    .expect("plugin backend");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&backend, fs::Permissions::from_mode(0o755)).expect("chmod backend");
+    }
+    let mut manifest = format!(
+        "schemaVersion: 2\nkind: Plugin\nmetadata:\n  name: {namespace}\n  version: 0.1.0\n  description: Preset fixture plugin.\nspec:\n  backend:\n    type: exec\n    command: bin/backend.sh\n  tools:\n    - name: ping\n      description: Answer.\n      execution_kind: read_only\n      input_schema:\n        type: object\n  definitions:\n"
+    );
+    for (kind, body) in definitions {
+        fs::create_dir_all(root.join(kind)).expect("plugin definition directory");
+        fs::write(root.join(kind).join("digest.yaml"), body).expect("plugin definition");
+        manifest.push_str(&format!("    {kind}: [{kind}/*.yaml]\n"));
+    }
+    fs::write(root.join("plugin.yaml"), manifest).expect("plugin manifest");
+    let added = machine.run(
+        work,
+        &[
+            "plugin",
+            "add",
+            root.to_str().expect("plugin source"),
+            "--enable",
+        ],
+    );
+    assert!(
+        added.status.success(),
+        "the fixture plugin must install enabled: {}",
+        output_text(&added)
+    );
+}
+
+/// ORB-19267: a routine an enabled plugin seeded, whose target job only that
+/// plugin supplies, passes the pre-write check and ends enabled. The same
+/// routine is still refused before any write while its plugin is disabled.
+#[test]
+fn preset_enables_routine_whose_target_job_an_enabled_plugin_supplies() {
+    let machine = Machine::new();
+    let work = machine.repo("plugin-target");
+    let init = machine.run(&work, &["workspace", "init", "--name", "plugin-target"]);
+    assert!(
+        init.status.success(),
+        "the workspace must initialize: {}",
+        output_text(&init)
+    );
+    install_job_plugin(&machine, &work, "digestor");
+    let seeded = work.join(".orbit/routines/digestor-digest.yaml");
+    let routine = fs::read_to_string(&seeded).expect("the plugin seeds its routine");
+    assert!(
+        routine.contains("target: job:digest") && routine.contains("enabled: false"),
+        "the seeded routine targets the plugin's job, switched off:\n{routine}"
+    );
+    let preset = machine.repos.join("plugin-target.toml");
+    write_preset(&preset, "plugin-target", &["digestor-digest"], &[]);
+    let init_with_preset = |machine: &Machine| {
+        machine.run(
+            &work,
+            &[
+                "workspace",
+                "init",
+                "--name",
+                "plugin-target",
+                "--force",
+                "--preset",
+                preset.to_str().expect("preset path"),
+            ],
+        )
+    };
+
+    let disabled = machine.run(&work, &["plugin", "disable", "digestor"]);
+    assert!(disabled.status.success(), "{}", output_text(&disabled));
+    let refused = init_with_preset(&machine);
+    let text = output_text(&refused);
+    assert!(
+        !refused.status.success()
+            && text.contains("digestor-digest")
+            && text.contains("job:digest"),
+        "a target only a disabled plugin supplies must refuse, naming routine and target: {text}"
+    );
+    assert!(
+        !work.join(".orbit/state/workspace-preset.json").exists(),
+        "a refused preset must not record provenance: {text}"
+    );
+
+    let enabled = machine.run(&work, &["plugin", "enable", "digestor"]);
+    assert!(enabled.status.success(), "{}", output_text(&enabled));
+    let applied = init_with_preset(&machine);
+    let text = output_text(&applied);
+    assert!(
+        applied.status.success(),
+        "a routine targeting an enabled plugin's job must pass the preset check: {text}"
+    );
+    let routine = fs::read_to_string(&seeded).expect("routine bytes");
+    assert!(
+        routine.contains("enabled: true"),
+        "the preset must enable the plugin-seeded routine:\n{routine}\n{text}"
+    );
+    let provenance = fs::read_to_string(work.join(".orbit/state/workspace-preset.json"))
+        .expect("applied preset provenance");
+    assert!(
+        provenance.contains("plugin-target"),
+        "provenance must name the applied preset:\n{provenance}"
+    );
+}
